@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["bitrouter-core"]
+
+[package]
+name = "bitrouter"
+version = "0.0.0"
+edition = "2024"
+description = "BitRouter core"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
