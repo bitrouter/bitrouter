@@ -7,5 +7,17 @@ name = "bitrouter"
 version = "0.0.0"
 
 [[package]]
+name = "bitrouter-anthropic"
+version = "0.0.0"
+
+[[package]]
 name = "bitrouter-core"
+version = "0.0.0"
+
+[[package]]
+name = "bitrouter-google"
+version = "0.0.0"
+
+[[package]]
+name = "bitrouter-openai"
 version = "0.0.0"

@@ -1,0 +1,1 @@
+# BitRouter Google Adapter

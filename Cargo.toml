@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["bitrouter-core"]
+members = ["bitrouter-anthropic","bitrouter-core", "bitrouter-google", "bitrouter-openai"]
 
 [package]
 name = "bitrouter"
