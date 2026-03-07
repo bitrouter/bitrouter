@@ -273,7 +273,7 @@ impl OpenAiChatCompletionsModel {
             Ok(text) if text.trim().is_empty() => None,
             Ok(text) => serde_json::from_str::<JsonValue>(&text)
                 .ok()
-                .or_else(|| Some(JsonValue::String(text))),
+                .or(Some(JsonValue::String(text))),
             Err(_) => None,
         };
 

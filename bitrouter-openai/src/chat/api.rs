@@ -337,11 +337,10 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiChatMessa
 }
 
 fn convert_user_content(content: &[LanguageModelUserContent]) -> Result<OpenAiUserMessageContent> {
-    if content.len() == 1 {
-        if let LanguageModelUserContent::Text { text, .. } = &content[0] {
+    if content.len() == 1
+        && let LanguageModelUserContent::Text { text, .. } = &content[0] {
             return Ok(OpenAiUserMessageContent::Text(text.clone()));
         }
-    }
 
     let mut parts = Vec::new();
     for item in content {
@@ -536,14 +535,13 @@ impl OpenAiSseParser {
         }
 
         if !self.buffer.is_empty() {
-            if let Ok(event) = String::from_utf8(self.buffer.clone()) {
-                if let Some(payload) = extract_sse_data(&event) {
+            if let Ok(event) = String::from_utf8(self.buffer.clone())
+                && let Some(payload) = extract_sse_data(&event) {
                     let mut parts = self.parse_payload(payload);
                     parts.extend(self.state.finish_parts());
                     self.buffer.clear();
                     return parts;
                 }
-            }
             self.buffer.clear();
         }
 
@@ -751,8 +749,8 @@ impl OpenAiStreamState {
         let mut tool_indices = self.tool_inputs.keys().copied().collect::<Vec<_>>();
         tool_indices.sort_unstable();
         for index in tool_indices {
-            if let Some(tool_state) = self.tool_inputs.get(&index) {
-                if tool_state.started {
+            if let Some(tool_state) = self.tool_inputs.get(&index)
+                && tool_state.started {
                     parts.push(LanguageModelStreamPart::ToolInputEnd {
                         id: tool_state
                             .id
@@ -761,7 +759,6 @@ impl OpenAiStreamState {
                         provider_metadata: None,
                     });
                 }
-            }
         }
 
         parts.push(LanguageModelStreamPart::Finish {
