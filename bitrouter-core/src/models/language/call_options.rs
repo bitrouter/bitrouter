@@ -1,9 +1,9 @@
 //! Options for calling a language model, including prompt, generation parameters, tools, and provider-specific options
 
-use crate::models::shared::{
-    provider::ProviderOptions,
-    types::{JsonSchema, Record},
-};
+use http::HeaderMap;
+use tokio_util::sync::CancellationToken;
+
+use crate::models::shared::{provider::ProviderOptions, types::JsonSchema};
 
 use super::{
     prompt::LanguageModelPrompt, tool::LanguageModelTool, tool_choice::LanguageModelToolChoice,
@@ -41,9 +41,9 @@ pub struct LanguageModelCallOptions {
     /// Whether to include raw chunks in the response
     pub include_raw_chunks: Option<bool>,
     /// Signal to abort the request
-    pub abort_signal: Option<()>,
+    pub abort_signal: Option<CancellationToken>,
     /// Custom headers to include in the request
-    pub headers: Option<Record<String, String>>,
+    pub headers: Option<HeaderMap>,
 
     /// Provider-specific options that can be used to pass additional information to the provider or control provider-specific behavior
     pub provider_options: Option<ProviderOptions>,

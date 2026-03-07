@@ -1,11 +1,9 @@
 use std::pin::Pin;
 
 use futures_core::Stream;
+use http::HeaderMap;
 
-use crate::models::{
-    language::stream_part::LanguageModelStreamPart,
-    shared::{headers::Headers, types::JsonValue},
-};
+use crate::models::{language::stream_part::LanguageModelStreamPart, shared::types::JsonValue};
 
 /// Represents the result of a streaming language model call.
 pub struct LanguageModelStreamResult {
@@ -20,12 +18,12 @@ pub struct LanguageModelStreamResult {
 /// Represents the request sent to a language model provider for a streaming call.
 #[derive(Debug, Clone)]
 pub struct LanguageModelStreamResultRequest {
-    pub headers: Option<Headers>,
+    pub headers: Option<HeaderMap>,
     pub body: Option<JsonValue>,
 }
 
 /// Represents the response received from a language model provider for a streaming call.
 #[derive(Debug, Clone)]
 pub struct LanguageModelStreamResultResponse {
-    pub headers: Option<Headers>,
+    pub headers: Option<HeaderMap>,
 }

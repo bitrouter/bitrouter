@@ -1,4 +1,5 @@
 use http::HeaderMap;
+use tokio_util::sync::CancellationToken;
 
 use crate::models::{image::file::ImageModelFile, shared::provider::ProviderOptions};
 
@@ -22,7 +23,7 @@ pub struct ImageModelCallOptions {
     /// Optional provider-specific options for the image generation model.
     pub provider_options: Option<ProviderOptions>,
     /// An optional signal to abort the image generation request.
-    pub abort_signal: Option<()>,
+    pub abort_signal: Option<CancellationToken>,
     /// Optional HTTP headers to include in the image generation request.
     pub headers: Option<HeaderMap>,
 }

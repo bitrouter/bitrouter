@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use crate::models::shared::types::Record;
+use crate::{errors::Result, models::shared::types::Record};
 
 use super::{
     call_options::LanguageModelCallOptions, generate_result::LanguageModelGenerateResult,
@@ -24,11 +24,11 @@ pub trait LanguageModel {
     fn generate(
         &self,
         options: LanguageModelCallOptions,
-    ) -> impl Future<Output = LanguageModelGenerateResult>;
+    ) -> impl Future<Output = Result<LanguageModelGenerateResult>>;
 
     /// Generates content based on the given options, but returns a stream of partial results.
     fn stream(
         &self,
         options: LanguageModelCallOptions,
-    ) -> impl Future<Output = LanguageModelStreamResult>;
+    ) -> impl Future<Output = Result<LanguageModelStreamResult>>;
 }

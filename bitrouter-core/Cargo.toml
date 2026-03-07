@@ -13,3 +13,5 @@ http = "1.4.0"
 regex = { version = "1.12" }
 schemars = { version = "1.2", default-features = false, features = ["std"] }
 serde_json = { version = "1.0" }
+thiserror = { version = "2.0" }
+tokio-util = { version = "0.7" }
