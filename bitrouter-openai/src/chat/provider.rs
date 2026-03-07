@@ -342,18 +342,15 @@ impl LanguageModel for OpenAiChatCompletionsModel {
         async move { supported_urls }
     }
 
-    fn generate(
+    async fn generate(
         &self,
         options: LanguageModelCallOptions,
-    ) -> impl Future<Output = Result<LanguageModelGenerateResult>> {
-        async move { self.generate_impl(options).await }
+    ) -> Result<LanguageModelGenerateResult> {
+        self.generate_impl(options).await
     }
 
-    fn stream(
-        &self,
-        options: LanguageModelCallOptions,
-    ) -> impl Future<Output = Result<LanguageModelStreamResult>> {
-        async move { self.stream_impl(options).await }
+    async fn stream(&self, options: LanguageModelCallOptions) -> Result<LanguageModelStreamResult> {
+        self.stream_impl(options).await
     }
 }
 
