@@ -8,8 +8,11 @@ use super::{
 };
 
 pub trait LanguageModel {
-    const PROVIDER_NAME: &'static str;
-    const MODEL_ID: &'static str;
+    /// Provider name, e.g. "openai", "anthropic", etc.
+    fn provider_name(&self) -> &str;
+
+    /// Model ID
+    fn model_id(&self) -> &str;
 
     /// Media type -> Regex for supported URLs of that media type
     fn supported_urls(&self) -> impl Future<Output = Record<String, Regex>>;
