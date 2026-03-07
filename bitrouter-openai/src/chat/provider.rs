@@ -273,7 +273,7 @@ impl OpenAiChatCompletionsModel {
             Ok(text) if text.trim().is_empty() => None,
             Ok(text) => serde_json::from_str::<JsonValue>(&text)
                 .ok()
-                .or_else(|| Some(JsonValue::String(text))),
+                .or(Some(JsonValue::String(text))),
             Err(_) => None,
         };
 
@@ -342,18 +342,15 @@ impl LanguageModel for OpenAiChatCompletionsModel {
         async move { supported_urls }
     }
 
-    fn generate(
+    async fn generate(
         &self,
         options: LanguageModelCallOptions,
-    ) -> impl Future<Output = Result<LanguageModelGenerateResult>> {
-        async move { self.generate_impl(options).await }
+    ) -> Result<LanguageModelGenerateResult> {
+        self.generate_impl(options).await
     }
 
-    fn stream(
-        &self,
-        options: LanguageModelCallOptions,
-    ) -> impl Future<Output = Result<LanguageModelStreamResult>> {
-        async move { self.stream_impl(options).await }
+    async fn stream(&self, options: LanguageModelCallOptions) -> Result<LanguageModelStreamResult> {
+        self.stream_impl(options).await
     }
 }
 

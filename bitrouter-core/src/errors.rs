@@ -3,6 +3,16 @@ use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, BitrouterError>;
 
+#[derive(Debug, Clone)]
+pub struct ProviderErrorContext {
+    pub status_code: Option<u16>,
+    pub error_type: Option<String>,
+    pub code: Option<String>,
+    pub param: Option<String>,
+    pub request_id: Option<String>,
+    pub body: Option<JsonValue>,
+}
+
 #[derive(Debug, Clone, Error)]
 pub enum BitrouterError {
     #[error("{provider} does not support {feature}")]
@@ -42,13 +52,8 @@ pub enum BitrouterError {
     #[error("provider error: {message}")]
     Provider {
         provider: String,
-        status_code: Option<u16>,
-        error_type: Option<String>,
-        code: Option<String>,
-        param: Option<String>,
         message: String,
-        request_id: Option<String>,
-        body: Option<JsonValue>,
+        context: Box<ProviderErrorContext>,
     },
     #[error("stream protocol failure: {message}")]
     StreamProtocol {
@@ -123,23 +128,13 @@ impl BitrouterError {
 
     pub fn provider_error(
         provider: impl Into<String>,
-        status_code: Option<u16>,
-        error_type: Option<String>,
-        code: Option<String>,
-        param: Option<String>,
         message: impl Into<String>,
-        request_id: Option<String>,
-        body: Option<JsonValue>,
+        context: ProviderErrorContext,
     ) -> Self {
         Self::Provider {
             provider: provider.into(),
-            status_code,
-            error_type,
-            code,
-            param,
             message: message.into(),
-            request_id,
-            body,
+            context: Box::new(context),
         }
     }
 

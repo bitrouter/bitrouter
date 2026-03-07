@@ -2,7 +2,7 @@ use std::{collections::HashMap, pin::Pin};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bitrouter_core::{
-    errors::{BitrouterError, Result},
+    errors::{BitrouterError, ProviderErrorContext, Result},
     models::{
         language::{
             call_options::LanguageModelCallOptions,
@@ -155,23 +155,27 @@ pub(super) fn parse_openai_error(
     match parsed {
         Some(envelope) => BitrouterError::provider_error(
             OPENAI_PROVIDER_NAME,
-            Some(status_code),
-            envelope.error.error_type,
-            envelope.error.code.and_then(json_value_to_string),
-            envelope.error.param,
             envelope.error.message,
-            request_id,
-            body,
+            ProviderErrorContext {
+                status_code: Some(status_code),
+                error_type: envelope.error.error_type,
+                code: envelope.error.code.and_then(json_value_to_string),
+                param: envelope.error.param,
+                request_id,
+                body,
+            },
         ),
         None => BitrouterError::provider_error(
             OPENAI_PROVIDER_NAME,
-            Some(status_code),
-            None,
-            None,
-            None,
             format!("OpenAI returned HTTP {status_code}"),
-            request_id,
-            body,
+            ProviderErrorContext {
+                status_code: Some(status_code),
+                error_type: None,
+                code: None,
+                param: None,
+                request_id,
+                body,
+            },
         ),
     }
 }
@@ -337,10 +341,10 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiChatMessa
 }
 
 fn convert_user_content(content: &[LanguageModelUserContent]) -> Result<OpenAiUserMessageContent> {
-    if content.len() == 1 {
-        if let LanguageModelUserContent::Text { text, .. } = &content[0] {
-            return Ok(OpenAiUserMessageContent::Text(text.clone()));
-        }
+    if content.len() == 1
+        && let LanguageModelUserContent::Text { text, .. } = &content[0]
+    {
+        return Ok(OpenAiUserMessageContent::Text(text.clone()));
     }
 
     let mut parts = Vec::new();
@@ -536,13 +540,13 @@ impl OpenAiSseParser {
         }
 
         if !self.buffer.is_empty() {
-            if let Ok(event) = String::from_utf8(self.buffer.clone()) {
-                if let Some(payload) = extract_sse_data(&event) {
-                    let mut parts = self.parse_payload(payload);
-                    parts.extend(self.state.finish_parts());
-                    self.buffer.clear();
-                    return parts;
-                }
+            if let Ok(event) = String::from_utf8(self.buffer.clone())
+                && let Some(payload) = extract_sse_data(&event)
+            {
+                let mut parts = self.parse_payload(payload);
+                parts.extend(self.state.finish_parts());
+                self.buffer.clear();
+                return parts;
             }
             self.buffer.clear();
         }
@@ -751,16 +755,16 @@ impl OpenAiStreamState {
         let mut tool_indices = self.tool_inputs.keys().copied().collect::<Vec<_>>();
         tool_indices.sort_unstable();
         for index in tool_indices {
-            if let Some(tool_state) = self.tool_inputs.get(&index) {
-                if tool_state.started {
-                    parts.push(LanguageModelStreamPart::ToolInputEnd {
-                        id: tool_state
-                            .id
-                            .clone()
-                            .unwrap_or_else(|| format!("tool-{index}")),
-                        provider_metadata: None,
-                    });
-                }
+            if let Some(tool_state) = self.tool_inputs.get(&index)
+                && tool_state.started
+            {
+                parts.push(LanguageModelStreamPart::ToolInputEnd {
+                    id: tool_state
+                        .id
+                        .clone()
+                        .unwrap_or_else(|| format!("tool-{index}")),
+                    provider_metadata: None,
+                });
             }
         }
 
@@ -926,15 +930,10 @@ mod tests {
         );
 
         match error {
-            BitrouterError::Provider {
-                status_code,
-                code,
-                request_id,
-                ..
-            } => {
-                assert_eq!(status_code, Some(429));
-                assert_eq!(code.as_deref(), Some("rate_limit_exceeded"));
-                assert_eq!(request_id.as_deref(), Some("req_123"));
+            BitrouterError::Provider { context, .. } => {
+                assert_eq!(context.status_code, Some(429));
+                assert_eq!(context.code.as_deref(), Some("rate_limit_exceeded"));
+                assert_eq!(context.request_id.as_deref(), Some("req_123"));
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
