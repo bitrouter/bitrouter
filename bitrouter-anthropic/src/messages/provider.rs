@@ -74,6 +74,8 @@ impl AnthropicMessagesModel {
             client,
             config,
             model_id: model_id.into(),
+            // Anthropic requires base64-encoded image data; it does not
+            // natively support image URLs, so no URL patterns are matched.
             supported_urls: HashMap::new(),
         }
     }

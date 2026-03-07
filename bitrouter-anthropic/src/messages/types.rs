@@ -348,21 +348,20 @@ pub(super) fn empty_usage() -> LanguageModelUsage {
     }
 }
 
-#[allow(dead_code)]
-pub(super) fn json_value_to_string(value: JsonValue) -> Option<String> {
-    match value {
-        JsonValue::String(value) => Some(value),
-        JsonValue::Number(value) => Some(value.to_string()),
-        JsonValue::Bool(value) => Some(value.to_string()),
-        JsonValue::Null => None,
-        other => Some(other.to_string()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use bitrouter_core::models::language::usage::LanguageModelUsage;
+
+    fn json_value_to_string(value: JsonValue) -> Option<String> {
+        match value {
+            JsonValue::String(value) => Some(value),
+            JsonValue::Number(value) => Some(value.to_string()),
+            JsonValue::Bool(value) => Some(value.to_string()),
+            JsonValue::Null => None,
+            other => Some(other.to_string()),
+        }
+    }
 
     #[test]
     fn maps_end_turn_finish_reason() {
