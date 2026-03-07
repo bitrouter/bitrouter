@@ -46,27 +46,16 @@ impl OpenAiResponsesModel {
         model_id: impl Into<String>,
         config: OpenAiConfig,
     ) -> Self {
+        let http_url_regex = Regex::new(r"^https?://").expect("static regex must compile");
         Self {
             client,
             config,
             model_id: model_id.into(),
             supported_urls: HashMap::from([
-                (
-                    "image/png".to_owned(),
-                    Regex::new(r"^https?://").expect("static regex must compile"),
-                ),
-                (
-                    "image/jpeg".to_owned(),
-                    Regex::new(r"^https?://").expect("static regex must compile"),
-                ),
-                (
-                    "image/webp".to_owned(),
-                    Regex::new(r"^https?://").expect("static regex must compile"),
-                ),
-                (
-                    "image/gif".to_owned(),
-                    Regex::new(r"^https?://").expect("static regex must compile"),
-                ),
+                ("image/png".to_owned(), http_url_regex.clone()),
+                ("image/jpeg".to_owned(), http_url_regex.clone()),
+                ("image/webp".to_owned(), http_url_regex.clone()),
+                ("image/gif".to_owned(), http_url_regex),
             ]),
         }
     }
