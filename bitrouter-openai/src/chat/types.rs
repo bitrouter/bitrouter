@@ -480,6 +480,7 @@ pub(super) fn json_value_to_string(value: JsonValue) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitrouter_core::models::language::usage::LanguageModelUsage;
 
     #[test]
     fn maps_tool_finish_reason() {
@@ -487,5 +488,415 @@ mod tests {
             map_finish_reason(Some("tool_calls")),
             LanguageModelFinishReason::FunctionCall
         );
+    }
+
+    #[test]
+    fn maps_all_finish_reasons() {
+        assert_eq!(
+            map_finish_reason(Some("stop")),
+            LanguageModelFinishReason::Stop
+        );
+        assert_eq!(map_finish_reason(None), LanguageModelFinishReason::Stop);
+        assert_eq!(
+            map_finish_reason(Some("length")),
+            LanguageModelFinishReason::Length
+        );
+        assert_eq!(
+            map_finish_reason(Some("function_call")),
+            LanguageModelFinishReason::FunctionCall
+        );
+        assert_eq!(
+            map_finish_reason(Some("content_filter")),
+            LanguageModelFinishReason::ContentFilter
+        );
+        assert_eq!(
+            map_finish_reason(Some("error")),
+            LanguageModelFinishReason::Error
+        );
+        assert_eq!(
+            map_finish_reason(Some("unknown")),
+            LanguageModelFinishReason::Other("unknown".to_owned())
+        );
+    }
+
+    #[test]
+    fn deserializes_chat_completion_response() {
+        let raw = json!({
+            "id": "chatcmpl-abc123",
+            "object": "chat.completion",
+            "created": 1710000000,
+            "model": "gpt-4o-2024-05-13",
+            "system_fingerprint": "fp_abc123",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! How can I help you today?"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 8,
+                "total_tokens": 18
+            }
+        });
+
+        let response: OpenAiChatCompletionResponse =
+            serde_json::from_value(raw).expect("should deserialize");
+        assert_eq!(response.id, "chatcmpl-abc123");
+        assert_eq!(response.model, "gpt-4o-2024-05-13");
+        assert_eq!(response.system_fingerprint.as_deref(), Some("fp_abc123"));
+        assert_eq!(response.choices.len(), 1);
+        assert_eq!(
+            response.choices[0].message.content.as_deref(),
+            Some("Hello! How can I help you today?")
+        );
+        assert_eq!(response.choices[0].finish_reason.as_deref(), Some("stop"));
+        let usage = response.usage.as_ref().unwrap();
+        assert_eq!(usage.prompt_tokens, Some(10));
+        assert_eq!(usage.completion_tokens, Some(8));
+    }
+
+    #[test]
+    fn deserializes_tool_call_response() {
+        let raw = json!({
+            "id": "chatcmpl-tool456",
+            "created": 1710000001,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"location\":\"Hong Kong\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 20,
+                "total_tokens": 70
+            }
+        });
+
+        let response: OpenAiChatCompletionResponse =
+            serde_json::from_value(raw).expect("should deserialize");
+        assert!(response.choices[0].message.content.is_none());
+        let tool_calls = response.choices[0]
+            .message
+            .tool_calls
+            .as_ref()
+            .expect("should have tool_calls");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call_abc");
+        assert_eq!(tool_calls[0].kind, "function");
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+        assert_eq!(
+            tool_calls[0].function.arguments,
+            "{\"location\":\"Hong Kong\"}"
+        );
+    }
+
+    #[test]
+    fn deserializes_streaming_chunk_with_text_delta() {
+        let raw = json!({
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "created": 1710000002,
+            "model": "gpt-4o-mini",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "Hello"
+                },
+                "finish_reason": null
+            }]
+        });
+
+        let chunk: OpenAiChatCompletionChunk =
+            serde_json::from_value(raw).expect("should deserialize");
+        assert_eq!(chunk.id, "chatcmpl-stream");
+        assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hello"));
+        assert!(chunk.choices[0].finish_reason.is_none());
+    }
+
+    #[test]
+    fn deserializes_streaming_chunk_with_tool_call_delta() {
+        let raw = json!({
+            "id": "chatcmpl-stream2",
+            "created": 1710000003,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_xyz",
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "arguments": "{\"q\":"
+                        }
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+
+        let chunk: OpenAiChatCompletionChunk =
+            serde_json::from_value(raw).expect("should deserialize");
+        let tool_calls = chunk.choices[0]
+            .delta
+            .tool_calls
+            .as_ref()
+            .expect("should have tool_calls");
+        assert_eq!(tool_calls[0].index, 0);
+        assert_eq!(tool_calls[0].id.as_deref(), Some("call_xyz"));
+        let func = tool_calls[0].function.as_ref().unwrap();
+        assert_eq!(func.name.as_deref(), Some("search"));
+        assert_eq!(func.arguments.as_deref(), Some("{\"q\":"));
+    }
+
+    #[test]
+    fn deserializes_error_envelope() {
+        let raw = json!({
+            "error": {
+                "message": "Rate limit exceeded",
+                "type": "rate_limit_error",
+                "param": null,
+                "code": "rate_limit_exceeded"
+            }
+        });
+
+        let envelope: OpenAiErrorEnvelope =
+            serde_json::from_value(raw).expect("should deserialize");
+        assert_eq!(envelope.error.message, "Rate limit exceeded");
+        assert_eq!(
+            envelope.error.error_type.as_deref(),
+            Some("rate_limit_error")
+        );
+        assert!(envelope.error.param.is_none());
+        assert_eq!(
+            envelope.error.code,
+            Some(JsonValue::String("rate_limit_exceeded".to_owned()))
+        );
+    }
+
+    #[test]
+    fn deserializes_usage_with_cache_and_reasoning_details() {
+        let raw = json!({
+            "prompt_tokens": 200,
+            "completion_tokens": 150,
+            "total_tokens": 350,
+            "prompt_tokens_details": {
+                "cached_tokens": 50
+            },
+            "completion_tokens_details": {
+                "reasoning_tokens": 30
+            }
+        });
+
+        let usage: OpenAiUsage = serde_json::from_value(raw).expect("should deserialize");
+        assert_eq!(usage.prompt_tokens, Some(200));
+        assert_eq!(usage.completion_tokens, Some(150));
+        assert_eq!(usage.total_tokens, Some(350));
+        assert_eq!(
+            usage.prompt_tokens_details.as_ref().unwrap().cached_tokens,
+            Some(50)
+        );
+        assert_eq!(
+            usage
+                .completion_tokens_details
+                .as_ref()
+                .unwrap()
+                .reasoning_tokens,
+            Some(30)
+        );
+    }
+
+    #[test]
+    fn from_usage_computes_cache_and_reasoning() {
+        let usage = OpenAiUsage {
+            prompt_tokens: Some(200),
+            completion_tokens: Some(150),
+            total_tokens: Some(350),
+            prompt_tokens_details: Some(OpenAiPromptTokensDetails {
+                cached_tokens: Some(50),
+            }),
+            completion_tokens_details: Some(OpenAiCompletionTokensDetails {
+                reasoning_tokens: Some(30),
+            }),
+        };
+
+        let converted: LanguageModelUsage = usage.into();
+        assert_eq!(converted.input_tokens.total, Some(200));
+        assert_eq!(converted.input_tokens.no_cache, Some(150)); // 200 - 50
+        assert_eq!(converted.input_tokens.cache_read, Some(50));
+        assert_eq!(converted.output_tokens.total, Some(150));
+        assert_eq!(converted.output_tokens.reasoning, Some(30));
+        assert!(converted.raw.is_some());
+    }
+
+    #[test]
+    fn serializes_request_round_trip() {
+        let request = OpenAiChatCompletionsRequest {
+            model: "gpt-4o".to_owned(),
+            messages: vec![
+                OpenAiChatMessageParam::System {
+                    content: "You are helpful.".to_owned(),
+                },
+                OpenAiChatMessageParam::User {
+                    content: OpenAiUserMessageContent::Text("Hi".to_owned()),
+                },
+            ],
+            stream: Some(false),
+            stream_options: None,
+            max_completion_tokens: Some(1024),
+            temperature: Some(0.7),
+            top_p: None,
+            stop: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            response_format: None,
+            seed: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+        };
+
+        let json_val = serde_json::to_value(&request).expect("should serialize");
+        assert_eq!(json_val["model"], "gpt-4o");
+        assert_eq!(json_val["max_completion_tokens"], 1024);
+        assert!(json_val["temperature"].as_f64().unwrap() - 0.7 < 0.001);
+        // Optional None fields should be absent (skip_serializing_if)
+        assert!(json_val.get("top_p").is_none());
+        assert!(json_val.get("tools").is_none());
+
+        // Round-trip
+        let deserialized: OpenAiChatCompletionsRequest =
+            serde_json::from_value(json_val).expect("should deserialize");
+        assert_eq!(deserialized.model, "gpt-4o");
+        assert_eq!(deserialized.max_completion_tokens, Some(1024));
+    }
+
+    #[test]
+    fn serializes_message_param_roles() {
+        let system = OpenAiChatMessageParam::System {
+            content: "system prompt".to_owned(),
+        };
+        let val = serde_json::to_value(&system).unwrap();
+        assert_eq!(val["role"], "system");
+        assert_eq!(val["content"], "system prompt");
+
+        let tool = OpenAiChatMessageParam::Tool {
+            tool_call_id: "call_123".to_owned(),
+            content: "result".to_owned(),
+        };
+        let val = serde_json::to_value(&tool).unwrap();
+        assert_eq!(val["role"], "tool");
+        assert_eq!(val["tool_call_id"], "call_123");
+    }
+
+    #[test]
+    fn from_tool_choice_variants() {
+        use bitrouter_core::models::language::tool_choice::LanguageModelToolChoice;
+
+        let auto = OpenAiToolChoice::from(&LanguageModelToolChoice::Auto);
+        assert!(matches!(auto, OpenAiToolChoice::Mode(ref m) if m == "auto"));
+
+        let none = OpenAiToolChoice::from(&LanguageModelToolChoice::None);
+        assert!(matches!(none, OpenAiToolChoice::Mode(ref m) if m == "none"));
+
+        let required = OpenAiToolChoice::from(&LanguageModelToolChoice::Required);
+        assert!(matches!(required, OpenAiToolChoice::Mode(ref m) if m == "required"));
+
+        let named = OpenAiToolChoice::from(&LanguageModelToolChoice::Tool {
+            tool_name: "my_func".to_owned(),
+        });
+        match named {
+            OpenAiToolChoice::Named { kind, function } => {
+                assert_eq!(kind, "function");
+                assert_eq!(function.name, "my_func");
+            }
+            other => panic!("expected Named, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_response_format_variants() {
+        use bitrouter_core::models::language::call_options::LanguageModelResponseFormat;
+
+        let text = OpenAiResponseFormat::from(&LanguageModelResponseFormat::Text);
+        assert!(matches!(text, OpenAiResponseFormat::Text));
+
+        let json_obj = OpenAiResponseFormat::from(&LanguageModelResponseFormat::Json {
+            schema: None,
+            name: None,
+            description: None,
+        });
+        assert!(matches!(json_obj, OpenAiResponseFormat::JsonObject));
+
+        let json_schema = OpenAiResponseFormat::from(&LanguageModelResponseFormat::Json {
+            schema: Some(schemars::Schema::default()),
+            name: Some("output".to_owned()),
+            description: Some("test".to_owned()),
+        });
+        match json_schema {
+            OpenAiResponseFormat::JsonSchema { json_schema } => {
+                assert_eq!(json_schema.name, "output");
+                assert_eq!(json_schema.description.as_deref(), Some("test"));
+                assert_eq!(json_schema.strict, Some(true));
+            }
+            other => panic!("expected JsonSchema, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_from_function_tool_succeeds() {
+        use bitrouter_core::models::language::tool::LanguageModelTool;
+
+        let tool = LanguageModelTool::Function {
+            name: "search".to_owned(),
+            description: Some("Search the web".to_owned()),
+            input_schema: schemars::Schema::default(),
+            input_examples: vec![],
+            strict: Some(true),
+            provider_options: None,
+        };
+
+        let converted = OpenAiChatTool::try_from(&tool).expect("should convert");
+        assert_eq!(converted.kind, "function");
+        assert_eq!(converted.function.name, "search");
+        assert_eq!(
+            converted.function.description.as_deref(),
+            Some("Search the web")
+        );
+        assert_eq!(converted.function.strict, Some(true));
+    }
+
+    #[test]
+    fn try_from_provider_tool_fails() {
+        use bitrouter_core::models::language::tool::{LanguageModelTool, ProviderToolId};
+
+        let tool = LanguageModelTool::Provider {
+            id: ProviderToolId {
+                provider_name: "openai".to_owned(),
+                tool_id: "code_interpreter".to_owned(),
+            },
+            name: "code_interpreter".to_owned(),
+            args: std::collections::HashMap::new(),
+            provider_options: None,
+        };
+
+        let result = OpenAiChatTool::try_from(&tool);
+        assert!(result.is_err());
     }
 }

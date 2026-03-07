@@ -7,23 +7,21 @@ use bitrouter_core::{
             call_options::LanguageModelCallOptions,
             generate_result::LanguageModelGenerateResult,
             language_model::LanguageModel,
-            stream_part::LanguageModelStreamPart,
             stream_result::{
                 LanguageModelStreamResult, LanguageModelStreamResultRequest,
                 LanguageModelStreamResultResponse,
             },
         },
-        shared::{types::JsonValue, warnings::Warning},
+        shared::types::JsonValue,
     },
 };
 use regex::Regex;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
-use serde_json::json;
 use tokio::{select, sync::mpsc};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
 
-use super::api::{OpenAiSseParser, parse_openai_error, send_stream_part};
+use super::api::{ByteStream, drive_sse_stream, parse_openai_error};
 use super::types::{
     OPENAI_PROVIDER_NAME, OpenAiChatCompletionResponse, OpenAiChatCompletionsRequest,
 };
@@ -183,81 +181,19 @@ impl OpenAiChatCompletionsModel {
         }
 
         let include_raw_chunks = options.include_raw_chunks.unwrap_or(false);
-        let mut bytes_stream = response.bytes_stream();
         let abort_signal = options.abort_signal.clone();
+        let bytes_stream: ByteStream = Box::pin(
+            response
+                .bytes_stream()
+                .map(|r| r.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)),
+        );
         let (sender, receiver) = mpsc::channel(32);
-        tokio::spawn(async move {
-            let mut parser = OpenAiSseParser::new(include_raw_chunks);
-            if send_stream_part(
-                &sender,
-                LanguageModelStreamPart::StreamStart {
-                    warnings: Vec::<Warning>::new(),
-                },
-            )
-            .await
-            .is_err()
-            {
-                return;
-            }
-
-            loop {
-                let next_chunk = if let Some(token) = abort_signal.as_ref() {
-                    select! {
-                        _ = token.cancelled() => {
-                            let _ = send_stream_part(
-                                &sender,
-                                LanguageModelStreamPart::Error {
-                                    error: json!({
-                                        "provider": OPENAI_PROVIDER_NAME,
-                                        "kind": "cancelled",
-                                        "message": "streaming chat completion was cancelled",
-                                    }),
-                                },
-                            ).await;
-                            return;
-                        }
-                        chunk = bytes_stream.next() => chunk,
-                    }
-                } else {
-                    bytes_stream.next().await
-                };
-
-                match next_chunk {
-                    Some(Ok(chunk)) => {
-                        for part in parser.push_bytes(&chunk) {
-                            if send_stream_part(&sender, part).await.is_err() {
-                                return;
-                            }
-                        }
-                        if parser.is_finished() {
-                            return;
-                        }
-                    }
-                    Some(Err(error)) => {
-                        let _ = send_stream_part(
-                            &sender,
-                            LanguageModelStreamPart::Error {
-                                error: json!({
-                                    "provider": OPENAI_PROVIDER_NAME,
-                                    "kind": "transport",
-                                    "message": error.to_string(),
-                                }),
-                            },
-                        )
-                        .await;
-                        return;
-                    }
-                    None => {
-                        for part in parser.finish() {
-                            if send_stream_part(&sender, part).await.is_err() {
-                                return;
-                            }
-                        }
-                        return;
-                    }
-                }
-            }
-        });
+        tokio::spawn(drive_sse_stream(
+            bytes_stream,
+            abort_signal,
+            sender,
+            include_raw_chunks,
+        ));
         let stream = Box::pin(ReceiverStream::new(receiver));
 
         Ok(LanguageModelStreamResult {

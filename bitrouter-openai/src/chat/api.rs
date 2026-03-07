@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, pin::Pin};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bitrouter_core::{
@@ -22,9 +22,12 @@ use bitrouter_core::{
         shared::{provider::ProviderMetadata, types::JsonValue, warnings::Warning},
     },
 };
+use bytes::Bytes;
 use reqwest::header::HeaderMap;
 use serde_json::json;
-use tokio::sync::mpsc;
+use tokio::{select, sync::mpsc};
+use tokio_stream::{Stream, StreamExt};
+use tokio_util::sync::CancellationToken;
 
 use super::types::{
     OPENAI_PROVIDER_NAME, OpenAiChatCompletionChunk, OpenAiChatCompletionResponse,
@@ -773,7 +776,95 @@ impl OpenAiStreamState {
     }
 }
 
-pub(super) async fn send_stream_part(
+/// A boxed byte stream used by the SSE driver, abstracting over the transport.
+pub(super) type ByteStream = Pin<
+    Box<
+        dyn Stream<Item = std::result::Result<Bytes, Box<dyn std::error::Error + Send + Sync>>>
+            + Send,
+    >,
+>;
+
+/// Reads chunks from `bytes_stream`, parses SSE events, and forwards
+/// [`LanguageModelStreamPart`]s into `sender`.  Respects `abort_signal`.
+pub(super) async fn drive_sse_stream(
+    mut bytes_stream: ByteStream,
+    abort_signal: Option<CancellationToken>,
+    sender: mpsc::Sender<LanguageModelStreamPart>,
+    include_raw_chunks: bool,
+) {
+    let mut parser = OpenAiSseParser::new(include_raw_chunks);
+    if send_stream_part(
+        &sender,
+        LanguageModelStreamPart::StreamStart {
+            warnings: Vec::<Warning>::new(),
+        },
+    )
+    .await
+    .is_err()
+    {
+        return;
+    }
+
+    loop {
+        let next_chunk = if let Some(token) = abort_signal.as_ref() {
+            select! {
+                _ = token.cancelled() => {
+                    let _ = send_stream_part(
+                        &sender,
+                        LanguageModelStreamPart::Error {
+                            error: json!({
+                                "provider": OPENAI_PROVIDER_NAME,
+                                "kind": "cancelled",
+                                "message": "streaming chat completion was cancelled",
+                            }),
+                        },
+                    ).await;
+                    return;
+                }
+                chunk = bytes_stream.next() => chunk,
+            }
+        } else {
+            bytes_stream.next().await
+        };
+
+        match next_chunk {
+            Some(Ok(chunk)) => {
+                for part in parser.push_bytes(&chunk) {
+                    if send_stream_part(&sender, part).await.is_err() {
+                        return;
+                    }
+                }
+                if parser.is_finished() {
+                    return;
+                }
+            }
+            Some(Err(error)) => {
+                let _ = send_stream_part(
+                    &sender,
+                    LanguageModelStreamPart::Error {
+                        error: json!({
+                            "provider": OPENAI_PROVIDER_NAME,
+                            "kind": "transport",
+                            "message": error.to_string(),
+                        }),
+                    },
+                )
+                .await;
+                return;
+            }
+            None => {
+                for part in parser.finish() {
+                    if send_stream_part(&sender, part).await.is_err() {
+                        return;
+                    }
+                }
+                return;
+            }
+        }
+    }
+}
+
+async fn send_stream_part(
     sender: &mpsc::Sender<LanguageModelStreamPart>,
     part: LanguageModelStreamPart,
 ) -> std::result::Result<(), ()> {
@@ -896,5 +987,433 @@ mod tests {
             request.messages[0],
             OpenAiChatMessageParam::User { .. }
         ));
+    }
+
+    // ── SSE parser unit tests ──────────────────────────────────────────
+
+    fn sse_event(data: &str) -> Vec<u8> {
+        format!("data: {data}\n\n").into_bytes()
+    }
+
+    #[test]
+    fn sse_parser_text_stream() {
+        let mut parser = OpenAiSseParser::new(false);
+
+        let chunk1 = json!({
+            "id": "c1", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": null}]
+        });
+        let chunk2 = json!({
+            "id": "c1", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+        });
+
+        let parts = parser.push_bytes(&sse_event(&chunk1.to_string()));
+        assert!(
+            matches!(&parts[0], LanguageModelStreamPart::ResponseMetadata { id, .. } if id.as_deref() == Some("c1"))
+        );
+        assert!(matches!(
+            &parts[1],
+            LanguageModelStreamPart::TextStart { .. }
+        ));
+        assert!(
+            matches!(&parts[2], LanguageModelStreamPart::TextDelta { delta, .. } if delta == "Hello")
+        );
+
+        let parts = parser.push_bytes(&sse_event(&chunk2.to_string()));
+        assert!(
+            matches!(&parts[0], LanguageModelStreamPart::TextDelta { delta, .. } if delta == " world")
+        );
+
+        let done_parts = parser.push_bytes(&sse_event("[DONE]"));
+        // [DONE] triggers finish_parts
+        assert!(
+            done_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::TextEnd { .. }))
+        );
+        assert!(
+            done_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
+        assert!(parser.is_finished());
+    }
+
+    #[test]
+    fn sse_parser_tool_call_stream() {
+        let mut parser = OpenAiSseParser::new(false);
+
+        let chunk1 = json!({
+            "id": "c2", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {
+                "tool_calls": [{"index": 0, "id": "call_a", "type": "function",
+                    "function": {"name": "search", "arguments": ""}}]
+            }, "finish_reason": null}]
+        });
+        let chunk2 = json!({
+            "id": "c2", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {
+                "tool_calls": [{"index": 0, "function": {"arguments": "{\"q\":"}}]
+            }, "finish_reason": null}]
+        });
+        let chunk3 = json!({
+            "id": "c2", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {
+                "tool_calls": [{"index": 0, "function": {"arguments": "\"hi\"}"}}]
+            }, "finish_reason": "tool_calls"}]
+        });
+
+        let parts = parser.push_bytes(&sse_event(&chunk1.to_string()));
+        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::ToolInputStart { tool_name, .. } if tool_name == "search")));
+
+        let parts = parser.push_bytes(&sse_event(&chunk2.to_string()));
+        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::ToolInputDelta { delta, .. } if delta == "{\"q\":")));
+
+        let parts = parser.push_bytes(&sse_event(&chunk3.to_string()));
+        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::ToolInputDelta { delta, .. } if delta == "\"hi\"}")));
+
+        let done_parts = parser.push_bytes(&sse_event("[DONE]"));
+        assert!(
+            done_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ToolInputEnd { .. }))
+        );
+        assert!(done_parts.iter().any(|p| matches!(p, LanguageModelStreamPart::Finish { finish_reason, .. }
+            if matches!(finish_reason, bitrouter_core::models::language::finish_reason::LanguageModelFinishReason::FunctionCall)
+        )));
+    }
+
+    #[test]
+    fn sse_parser_handles_error_envelope() {
+        let mut parser = OpenAiSseParser::new(false);
+
+        let error = json!({
+            "error": {
+                "message": "Server overloaded",
+                "type": "server_error",
+                "param": null,
+                "code": null
+            }
+        });
+        let parts = parser.push_bytes(&sse_event(&error.to_string()));
+        assert!(parser.is_finished());
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Error { error }
+                    if error["message"] == "Server overloaded"
+                ))
+        );
+    }
+
+    #[test]
+    fn sse_parser_incremental_byte_delivery() {
+        let mut parser = OpenAiSseParser::new(false);
+
+        let full_event = sse_event(
+            &json!({
+                "id": "c3", "created": 1, "model": "gpt-4o",
+                "choices": [{"index": 0, "delta": {"content": "Hi"}, "finish_reason": null}]
+            })
+            .to_string(),
+        );
+
+        // Feed bytes one at a time — parser should buffer until a full event arrives
+        let mut accumulated = Vec::new();
+        for &byte in &full_event[..full_event.len() - 1] {
+            let parts = parser.push_bytes(&[byte]);
+            accumulated.extend(parts);
+        }
+        // No parts should have been emitted yet (event boundary not reached)
+        assert!(accumulated.is_empty());
+
+        // Feed the last byte to complete the event
+        let parts = parser.push_bytes(&[*full_event.last().unwrap()]);
+        assert!(parts.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::TextDelta { delta, .. } if delta == "Hi")
+        ));
+    }
+
+    #[test]
+    fn sse_parser_raw_chunks_when_enabled() {
+        let mut parser = OpenAiSseParser::new(true);
+        let chunk = json!({
+            "id": "c4", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": "X"}, "finish_reason": null}]
+        });
+        let parts = parser.push_bytes(&sse_event(&chunk.to_string()));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Raw { .. }))
+        );
+    }
+
+    #[test]
+    fn sse_parser_crlf_events() {
+        let mut parser = OpenAiSseParser::new(false);
+        let chunk = json!({
+            "id": "c5", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": null}]
+        });
+        let event = format!("data: {}\r\n\r\n", chunk);
+        let parts = parser.push_bytes(event.as_bytes());
+        assert!(parts.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::TextDelta { delta, .. } if delta == "ok")
+        ));
+    }
+
+    #[test]
+    fn sse_parser_finish_flushes_remaining_buffer() {
+        let mut parser = OpenAiSseParser::new(false);
+        let chunk = json!({
+            "id": "c6", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": "last"}, "finish_reason": "stop"}]
+        });
+        // Push event without the trailing \n\n (simulate connection drop mid-event)
+        let partial = format!("data: {}", chunk);
+        let parts = parser.push_bytes(partial.as_bytes());
+        assert!(parts.is_empty(), "no event boundary yet");
+
+        let final_parts = parser.finish();
+        assert!(final_parts.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::TextDelta { delta, .. } if delta == "last")
+        ));
+        assert!(
+            final_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
+    }
+
+    // ── drive_sse_stream integration tests ─────────────────────────────
+
+    fn make_byte_stream(chunks: Vec<Vec<u8>>) -> ByteStream {
+        Box::pin(tokio_stream::iter(chunks.into_iter().map(|c| {
+            Ok(Bytes::from(c))
+                as std::result::Result<Bytes, Box<dyn std::error::Error + Send + Sync>>
+        })))
+    }
+
+    async fn collect_parts(
+        bytes_stream: ByteStream,
+        abort_signal: Option<CancellationToken>,
+        include_raw: bool,
+    ) -> Vec<LanguageModelStreamPart> {
+        let (sender, mut receiver) = mpsc::channel(64);
+        tokio::spawn(drive_sse_stream(
+            bytes_stream,
+            abort_signal,
+            sender,
+            include_raw,
+        ));
+        let mut parts = Vec::new();
+        while let Some(part) = receiver.recv().await {
+            parts.push(part);
+        }
+        parts
+    }
+
+    #[tokio::test]
+    async fn drive_stream_text_completion() {
+        let chunk1 = json!({
+            "id": "s1", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": null}]
+        });
+        let chunk2 = json!({
+            "id": "s1", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+        });
+
+        let events = vec![
+            sse_event(&chunk1.to_string()),
+            sse_event(&chunk2.to_string()),
+            sse_event("[DONE]"),
+        ];
+
+        let parts = collect_parts(make_byte_stream(events), None, false).await;
+
+        assert!(matches!(
+            &parts[0],
+            LanguageModelStreamPart::StreamStart { .. }
+        ));
+        assert!(matches!(
+            &parts[1],
+            LanguageModelStreamPart::ResponseMetadata { .. }
+        ));
+        assert!(matches!(
+            &parts[2],
+            LanguageModelStreamPart::TextStart { .. }
+        ));
+        assert!(
+            matches!(&parts[3], LanguageModelStreamPart::TextDelta { delta, .. } if delta == "Hello")
+        );
+        assert!(
+            matches!(&parts[4], LanguageModelStreamPart::TextDelta { delta, .. } if delta == " world")
+        );
+        assert!(matches!(&parts[5], LanguageModelStreamPart::TextEnd { .. }));
+        assert!(matches!(&parts[6], LanguageModelStreamPart::Finish { .. }));
+    }
+
+    #[tokio::test]
+    async fn drive_stream_transport_error() {
+        let chunk = sse_event(
+            &json!({
+                "id": "e1", "created": 1, "model": "gpt-4o",
+                "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": null}]
+            })
+            .to_string(),
+        );
+
+        let items: Vec<std::result::Result<Bytes, Box<dyn std::error::Error + Send + Sync>>> = vec![
+            Ok(Bytes::from(chunk)),
+            Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset",
+            ))),
+        ];
+        let stream: ByteStream = Box::pin(tokio_stream::iter(items));
+
+        let parts = collect_parts(stream, None, false).await;
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Error { error }
+                    if error["kind"] == "transport"
+                ))
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_stream_parallel_handling() {
+        let make_events = |id: &str, text: &str| {
+            let chunk = json!({
+                "id": id, "created": 1, "model": "gpt-4o",
+                "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": "stop"}]
+            });
+            vec![sse_event(&chunk.to_string()), sse_event("[DONE]")]
+        };
+
+        let (parts_a, parts_b) = tokio::join!(
+            collect_parts(make_byte_stream(make_events("a", "alpha")), None, false),
+            collect_parts(make_byte_stream(make_events("b", "beta")), None, false),
+        );
+
+        // Both streams should complete independently
+        assert!(parts_a.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::TextDelta { delta, .. } if delta == "alpha")
+        ));
+        assert!(parts_b.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::TextDelta { delta, .. } if delta == "beta")
+        ));
+        assert!(
+            parts_a
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
+        assert!(
+            parts_b
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_stream_cancellation() {
+        use tokio_stream::wrappers::ReceiverStream;
+
+        let cancel_token = CancellationToken::new();
+        let (byte_tx, byte_rx) = tokio::sync::mpsc::channel::<
+            std::result::Result<Bytes, Box<dyn std::error::Error + Send + Sync>>,
+        >(16);
+
+        let stream: ByteStream = Box::pin(ReceiverStream::new(byte_rx));
+        let (part_tx, mut part_rx) = mpsc::channel(64);
+
+        let token = cancel_token.clone();
+        tokio::spawn(drive_sse_stream(stream, Some(token), part_tx, false));
+
+        // Send one valid chunk
+        let chunk = json!({
+            "id": "cancel", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": "start"}, "finish_reason": null}]
+        });
+        byte_tx
+            .send(Ok(Bytes::from(sse_event(&chunk.to_string()))))
+            .await
+            .unwrap();
+
+        // Receive StreamStart + metadata + text parts
+        let mut received = Vec::new();
+        for _ in 0..4 {
+            if let Some(part) = part_rx.recv().await {
+                received.push(part);
+            }
+        }
+        assert!(received.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::TextDelta { delta, .. } if delta == "start")
+        ));
+
+        // Cancel the stream
+        cancel_token.cancel();
+
+        // Should receive a cancellation error
+        let mut saw_cancel = false;
+        while let Some(part) = part_rx.recv().await {
+            if matches!(&part, LanguageModelStreamPart::Error { error } if error["kind"] == "cancelled")
+            {
+                saw_cancel = true;
+                break;
+            }
+        }
+        assert!(saw_cancel, "should have received cancellation error");
+
+        // Channel should close after cancellation
+        assert!(part_rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn drive_stream_with_raw_chunks() {
+        let chunk = json!({
+            "id": "r1", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": "hey"}, "finish_reason": "stop"}]
+        });
+        let events = vec![sse_event(&chunk.to_string()), sse_event("[DONE]")];
+
+        let parts = collect_parts(make_byte_stream(events), None, true).await;
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Raw { .. }))
+        );
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_stream_connection_drop() {
+        // Stream ends without sending [DONE] — finish() should still produce final parts
+        let chunk = json!({
+            "id": "d1", "created": 1, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": "abrupt"}, "finish_reason": "stop"}]
+        });
+        let events = vec![sse_event(&chunk.to_string())];
+
+        let parts = collect_parts(make_byte_stream(events), None, false).await;
+        assert!(parts.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::TextDelta { delta, .. } if delta == "abrupt")
+        ));
+        // Should still get Finish from the parser's finish() call
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
     }
 }
