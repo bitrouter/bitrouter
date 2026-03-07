@@ -8,9 +8,8 @@ license = "Apache-2.0"
 repository = "https://github.com/AIMOverse/bitrouter"
 
 [dependencies]
-futures-core = "0.3.32"
-futures-util = "0.3.32"
-regex = "1.12.3"
+futures-core = { version = "0.3" }
+http = "1.4.0"
+regex = { version = "1.12" }
 schemars = { version = "1.2", default-features = false, features = ["std"] }
-serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }

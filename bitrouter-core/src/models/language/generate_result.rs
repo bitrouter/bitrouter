@@ -1,7 +1,7 @@
+use http::HeaderMap;
+
 use crate::models::shared::{
-    provider::ProviderMetadata,
-    types::{JsonValue, Record, TimestampMillis},
-    warnings::Warning,
+    provider::ProviderMetadata, types::TimestampMillis, warnings::Warning,
 };
 
 use super::{
@@ -9,30 +9,45 @@ use super::{
     usage::LanguageModelUsage,
 };
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// Represents the result of a Language Model generation.
+#[derive(Debug, Clone)]
 pub struct LanguageModelGenerateResult {
     /// The generated content
     pub content: LanguageModelContent,
     /// The finish reason, if the generation is complete
     pub finish_reason: LanguageModelFinishReason,
+    /// The usage information for this generation
     pub usage: LanguageModelUsage,
+    /// Provider-specific metadata for this generation result
     pub provider_metadata: Option<ProviderMetadata>,
-    pub request: Option<LanguageModelRequest>,
-    pub response_metadata: Option<LanguageModelResponse>,
+    /// The original request that led to this generation result, if available
+    pub request: Option<LanguageModelRawRequest>,
+    /// The original response from the provider, if available
+    pub response_metadata: Option<LanguageModelRawResponse>,
+    /// Any warnings related to this generation result
     pub warnings: Option<Vec<Warning>>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct LanguageModelRequest {
-    pub body: JsonValue,
+/// Represents the raw request sent to a Language Model provider.
+#[derive(Debug, Clone)]
+pub struct LanguageModelRawRequest {
+    /// The request headers as a map of header name to value
+    pub headers: Option<HeaderMap>,
+    /// The request body as JSON value
+    pub body: serde_json::Value,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LanguageModelResponse {
+/// Represents the raw response received from a Language Model provider.
+#[derive(Debug, Clone)]
+pub struct LanguageModelRawResponse {
+    /// The unique identifier for this response
     pub id: Option<String>,
+    /// The timestamp when the response was received, in milliseconds since the Unix epoch
     pub timestamp: Option<TimestampMillis>,
+    /// The model identifier used for this response
     pub model_id: Option<String>,
-    pub headers: Option<Record<String, String>>,
-    pub body: Option<JsonValue>,
+    /// The response headers as a map of header name to value
+    pub headers: Option<HeaderMap>,
+    /// The response body as JSON value
+    pub body: Option<serde_json::Value>,
 }

@@ -6,42 +6,35 @@ use crate::models::shared::{
 
 use super::{finish_reason::LanguageModelFinishReason, usage::LanguageModelUsage};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+/// Represents a part of a streaming response from a language model provider.
+#[derive(Debug, Clone)]
 pub enum LanguageModelStreamPart {
-    #[serde(rename_all = "camelCase")]
     TextStart {
         id: String,
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
     TextDelta {
         id: String,
         delta: String,
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
     TextEnd {
         id: String,
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
     ReasoningStart {
         id: String,
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
     ReasoningDelta {
         id: String,
         delta: String,
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
     ReasoningEnd {
         id: String,
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
     ToolInputStart {
         id: String,
         tool_name: String,
@@ -50,19 +43,16 @@ pub enum LanguageModelStreamPart {
         title: Option<String>,
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
     ToolInputDelta {
         id: String,
         delta: String,
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
     ToolInputEnd {
         id: String,
         provider_metadata: Option<ProviderMetadata>,
     },
     /// type: "file"
-    #[serde(rename_all = "camelCase")]
     File {
         /// The file data as bytes
         data: Vec<u8>,
@@ -72,7 +62,6 @@ pub enum LanguageModelStreamPart {
         provider_metadata: Option<ProviderMetadata>,
     },
     /// type: "tool-approval-request"
-    #[serde(rename_all = "camelCase")]
     ToolApprovalRequest {
         /// The approval ID
         approval_id: String,
@@ -82,7 +71,6 @@ pub enum LanguageModelStreamPart {
         provider_metadata: Option<ProviderMetadata>,
     },
     /// type: "url-source"
-    #[serde(rename_all = "camelCase")]
     UrlSource {
         /// The URL source ID
         id: String,
@@ -94,7 +82,6 @@ pub enum LanguageModelStreamPart {
         provider_metadata: Option<ProviderMetadata>,
     },
     /// type: "document-source"
-    #[serde(rename_all = "camelCase")]
     DocumentSource {
         /// The document source ID
         id: String,
@@ -108,7 +95,6 @@ pub enum LanguageModelStreamPart {
         provider_metadata: Option<ProviderMetadata>,
     },
     /// type: "tool-call"
-    #[serde(rename_all = "camelCase")]
     ToolCall {
         /// The tool call ID
         tool_call_id: String,
@@ -124,7 +110,6 @@ pub enum LanguageModelStreamPart {
         provider_metadata: Option<ProviderMetadata>,
     },
     /// type: "tool-result"
-    #[serde(rename_all = "camelCase")]
     ToolResult {
         /// The tool call ID
         tool_call_id: String,
@@ -142,22 +127,23 @@ pub enum LanguageModelStreamPart {
         /// Provider-specific metadata
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
-    StreamStart { warnings: Vec<Warning> },
-    #[serde(rename_all = "camelCase")]
+    StreamStart {
+        warnings: Vec<Warning>,
+    },
     ResponseMetadata {
         id: Option<String>,
         timestamp: Option<TimestampMillis>,
         model_id: Option<String>,
     },
-    #[serde(rename_all = "camelCase")]
     Finish {
         usage: LanguageModelUsage,
         finish_reason: LanguageModelFinishReason,
         provider_metadata: Option<ProviderMetadata>,
     },
-    #[serde(rename_all = "camelCase")]
-    Raw { raw_value: JsonValue },
-    #[serde(rename_all = "camelCase")]
-    Error { error: JsonValue },
+    Raw {
+        raw_value: JsonValue,
+    },
+    Error {
+        error: JsonValue,
+    },
 }

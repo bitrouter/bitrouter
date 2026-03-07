@@ -1,15 +1,15 @@
 use crate::models::shared::types::JsonValue;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Represents the token usage information for a language model call.
+#[derive(Debug, Clone)]
 pub struct LanguageModelUsage {
     pub input_tokens: LanguageModelInputTokens,
     pub output_tokens: LanguageModelOutputTokens,
     pub raw: Option<JsonValue>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Represents the token usage information for the input to a language model call.
+#[derive(Debug, Clone)]
 pub struct LanguageModelInputTokens {
     pub total: Option<u32>,
     pub no_cache: Option<u32>,
@@ -17,8 +17,8 @@ pub struct LanguageModelInputTokens {
     pub cache_write: Option<u32>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Represents the token usage information for the output from a language model call.
+#[derive(Debug, Clone)]
 pub struct LanguageModelOutputTokens {
     pub total: Option<u32>,
     pub text: Option<u32>,
