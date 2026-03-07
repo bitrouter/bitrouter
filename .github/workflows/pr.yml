@@ -1,0 +1,22 @@
+name: Validate PR Title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ytanikin/pr-conventional-commits@1.4.2
+        with:
+          task_types: '["feat","fix","docs","test","ci","refactor","perf","chore","revert"]'
+          add_label: true
+          add_scope_label: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
