@@ -8,3 +8,18 @@ license = "Apache-2.0"
 repository = "https://github.com/AIMOverse/bitrouter"
 
 [dependencies]
+base64 = { version = "0.22" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.0" }
+bytes = { version = "1" }
+regex = { version = "1.12" }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+schemars = { version = "1.2", default-features = false, features = ["std"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tokio-stream = { version = "0.1" }
+tokio-util = { version = "0.7" }

@@ -36,6 +36,19 @@ version = "0.0.0"
 [[package]]
 name = "bitrouter-anthropic"
 version = "0.0.0"
+dependencies = [
+ "base64",
+ "bitrouter-core",
+ "bytes",
+ "regex",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+]
 
 [[package]]
 name = "bitrouter-core"
