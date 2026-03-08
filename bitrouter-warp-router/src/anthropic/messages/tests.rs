@@ -17,6 +17,7 @@ use bitrouter_core::{
     },
 };
 use regex::Regex;
+use serde_json::Value;
 use std::collections::HashMap;
 
 use super::filters::messages_filter;
@@ -91,8 +92,70 @@ impl LanguageModel for MockModel {
         &self,
         _options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
-        unimplemented!("stream not used in this test")
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let _ = tx
+            .send(
+                bitrouter_core::models::language::stream_part::LanguageModelStreamPart::TextDelta {
+                    id: "0".to_owned(),
+                    delta: "Hello".to_owned(),
+                    provider_metadata: None,
+                },
+            )
+            .await;
+        let _ = tx
+            .send(
+                bitrouter_core::models::language::stream_part::LanguageModelStreamPart::Finish {
+                    usage: LanguageModelUsage {
+                        input_tokens: LanguageModelInputTokens {
+                            total: Some(12),
+                            no_cache: None,
+                            cache_read: None,
+                            cache_write: None,
+                        },
+                        output_tokens: LanguageModelOutputTokens {
+                            total: Some(6),
+                            text: None,
+                            reasoning: None,
+                        },
+                        raw: None,
+                    },
+                    finish_reason: LanguageModelFinishReason::Stop,
+                    provider_metadata: None,
+                },
+            )
+            .await;
+
+        Ok(LanguageModelStreamResult {
+            stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            request: None,
+            response: None,
+        })
     }
+}
+
+fn parse_sse_body(body: &[u8]) -> Vec<(Option<String>, String)> {
+    String::from_utf8_lossy(body)
+        .replace("\r\n", "\n")
+        .split("\n\n")
+        .filter_map(|frame| {
+            let mut event = None;
+            let mut data_parts = Vec::new();
+
+            for line in frame.lines() {
+                if let Some(value) = line.strip_prefix("event:") {
+                    event = Some(value.trim().to_owned());
+                } else if let Some(value) = line.strip_prefix("data:") {
+                    data_parts.push(value.trim().to_owned());
+                }
+            }
+
+            if data_parts.is_empty() {
+                None
+            } else {
+                Some((event, data_parts.join("\n")))
+            }
+        })
+        .collect()
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -153,6 +216,59 @@ async fn messages_with_system() {
         .await;
 
     assert_eq!(res.status(), 200);
+}
+
+#[tokio::test]
+async fn messages_streaming_sends_sse_events() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let filter = messages_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "stream": true,
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/messages")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+
+    let events = parse_sse_body(res.body());
+    assert_eq!(events.len(), 3);
+
+    assert_eq!(events[0].0.as_deref(), Some("content_block_delta"));
+    let delta: Value = serde_json::from_str(&events[0].1).unwrap();
+    assert_eq!(delta["type"], "content_block_delta");
+    assert_eq!(delta["index"], 0);
+    assert_eq!(delta["delta"]["type"], "text_delta");
+    assert_eq!(delta["delta"]["text"], "Hello");
+
+    assert_eq!(events[1].0.as_deref(), Some("message_delta"));
+    let finish: Value = serde_json::from_str(&events[1].1).unwrap();
+    assert_eq!(finish["type"], "message_delta");
+    assert_eq!(finish["delta"]["type"], "message_delta");
+    assert_eq!(finish["delta"]["stop_reason"], "end_turn");
+    assert_eq!(finish["message"]["model"], "claude-3-5-sonnet-20241022");
+    assert_eq!(finish["message"]["role"], "assistant");
+    assert!(
+        finish["message"]["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("msg-")
+    );
+
+    assert_eq!(events[2].0, None);
+    assert_eq!(events[2].1, "[DONE]");
 }
 
 #[tokio::test]
