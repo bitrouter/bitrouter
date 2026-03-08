@@ -1,3 +1,4 @@
+use dynosaur::dynosaur;
 use regex::Regex;
 
 use crate::{errors::Result, models::shared::types::Record};
@@ -9,12 +10,16 @@ use super::{
 
 /// The main trait for a language model provider, which can generate content based on a prompt and options.
 ///
-/// Each implementation represents a provider + API kind (e.g. "OpenAI chat completions",
-/// "Anthropic messages"). The model ID is passed per-request, allowing a single provider
-/// instance to serve any model it supports.
+/// Each implementation represents a concrete upstream model instance (e.g. "gpt-4o via OpenAI chat completions",
+/// "claude-3-5-sonnet via Anthropic messages"). The model ID is stored on the instance,
+/// not passed per-request.
+#[dynosaur(pub DynLanguageModel = dyn(box) LanguageModel)]
 pub trait LanguageModel {
     /// Provider name, e.g. "openai", "anthropic", etc.
     fn provider_name(&self) -> &str;
+
+    /// The upstream model ID, e.g. "gpt-4o", "claude-3-5-sonnet-20241022", etc.
+    fn model_id(&self) -> &str;
 
     /// Media type -> Regex for supported URLs of that media type
     ///

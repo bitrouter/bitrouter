@@ -288,10 +288,11 @@ impl TryFrom<&LanguageModelUserContent> for OpenAiResponseInputContent {
 
 impl OpenAiResponsesRequest {
     pub(crate) fn from_call_options(
+        model_id: &str,
         options: &LanguageModelCallOptions,
         stream: bool,
     ) -> Result<Self> {
-        let model = options.model_id.clone();
+        let model = model_id.to_owned();
         if options.top_k.is_some() {
             return Err(BitrouterError::unsupported(
                 OPENAI_PROVIDER_NAME,
@@ -1372,8 +1373,8 @@ mod tests {
     #[test]
     fn builds_image_prompt_request() {
         let request = OpenAiResponsesRequest::from_call_options(
+            "gpt-4.1-mini",
             &LanguageModelCallOptions {
-                model_id: "gpt-4.1-mini".to_owned(),
                 prompt: vec![LanguageModelMessage::User {
                     content: vec![
                         LanguageModelUserContent::Text {

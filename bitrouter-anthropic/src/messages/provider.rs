@@ -48,18 +48,28 @@ impl AnthropicConfig {
 
 #[derive(Clone)]
 pub struct AnthropicMessagesModel {
+    model_id: String,
     client: reqwest::Client,
     config: AnthropicConfig,
     supported_urls: HashMap<String, Regex>,
 }
 
 impl AnthropicMessagesModel {
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self::with_client(reqwest::Client::new(), AnthropicConfig::new(api_key))
+    pub fn new(model_id: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self::with_client(
+            model_id,
+            reqwest::Client::new(),
+            AnthropicConfig::new(api_key),
+        )
     }
 
-    pub fn with_client(client: reqwest::Client, config: AnthropicConfig) -> Self {
+    pub fn with_client(
+        model_id: impl Into<String>,
+        client: reqwest::Client,
+        config: AnthropicConfig,
+    ) -> Self {
         Self {
+            model_id: model_id.into(),
             client,
             config,
             // Anthropic requires base64-encoded image data; it does not
@@ -72,7 +82,7 @@ impl AnthropicMessagesModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        let request = AnthropicMessagesRequest::from_call_options(&options, false)?;
+        let request = AnthropicMessagesRequest::from_call_options(&self.model_id, &options, false)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(ANTHROPIC_PROVIDER_NAME),
@@ -130,7 +140,7 @@ impl AnthropicMessagesModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
-        let request = AnthropicMessagesRequest::from_call_options(&options, true)?;
+        let request = AnthropicMessagesRequest::from_call_options(&self.model_id, &options, true)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(ANTHROPIC_PROVIDER_NAME),
@@ -298,6 +308,10 @@ impl AnthropicMessagesModel {
 impl LanguageModel for AnthropicMessagesModel {
     fn provider_name(&self) -> &str {
         ANTHROPIC_PROVIDER_NAME
+    }
+
+    fn model_id(&self) -> &str {
+        &self.model_id
     }
 
     fn supported_urls(&self) -> impl Future<Output = HashMap<String, Regex>> {

@@ -12,8 +12,6 @@ use super::{
 /// Options for calling a language model
 #[derive(Debug, Clone)]
 pub struct LanguageModelCallOptions {
-    /// The ID of the model to call. This ID is passed to the provider directly.
-    pub model_id: String,
     /// The prompt to send to the language model, which is a sequence of messages from the system, user, assistant, and tools
     pub prompt: LanguageModelPrompt,
     /// Whether to stream the response as it's generated, or return it all at once when complete

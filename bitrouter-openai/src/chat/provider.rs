@@ -51,18 +51,24 @@ impl OpenAiConfig {
 
 #[derive(Clone)]
 pub struct OpenAiChatCompletionsModel {
+    model_id: String,
     client: reqwest::Client,
     config: OpenAiConfig,
     supported_urls: HashMap<String, Regex>,
 }
 
 impl OpenAiChatCompletionsModel {
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self::with_client(reqwest::Client::new(), OpenAiConfig::new(api_key))
+    pub fn new(model_id: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self::with_client(model_id, reqwest::Client::new(), OpenAiConfig::new(api_key))
     }
 
-    pub fn with_client(client: reqwest::Client, config: OpenAiConfig) -> Self {
+    pub fn with_client(
+        model_id: impl Into<String>,
+        client: reqwest::Client,
+        config: OpenAiConfig,
+    ) -> Self {
         Self {
+            model_id: model_id.into(),
             client,
             config,
             supported_urls: HashMap::from([
@@ -90,7 +96,8 @@ impl OpenAiChatCompletionsModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        let request = OpenAiChatCompletionsRequest::from_call_options(&options, false)?;
+        let request =
+            OpenAiChatCompletionsRequest::from_call_options(&self.model_id, &options, false)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),
@@ -148,7 +155,8 @@ impl OpenAiChatCompletionsModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
-        let request = OpenAiChatCompletionsRequest::from_call_options(&options, true)?;
+        let request =
+            OpenAiChatCompletionsRequest::from_call_options(&self.model_id, &options, true)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),
@@ -320,6 +328,10 @@ impl OpenAiChatCompletionsModel {
 impl LanguageModel for OpenAiChatCompletionsModel {
     fn provider_name(&self) -> &str {
         OPENAI_PROVIDER_NAME
+    }
+
+    fn model_id(&self) -> &str {
+        &self.model_id
     }
 
     fn supported_urls(&self) -> impl Future<Output = HashMap<String, Regex>> {
