@@ -11,5 +11,8 @@ pub struct RoutingTarget {
 /// A routing table that maps incoming model names to routing targets (provider + model ID).
 pub trait RoutingTable {
     /// Routes an incoming model name to a routing target.
-    fn route(&self, incoming_model_name: &str) -> impl Future<Output = Result<RoutingTarget>>;
+    fn route(
+        &self,
+        incoming_model_name: &str,
+    ) -> impl Future<Output = Result<RoutingTarget>> + Send;
 }

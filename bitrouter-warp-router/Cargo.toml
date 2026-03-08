@@ -2,6 +2,30 @@
 name = "bitrouter-warp-router"
 version = "0.0.0"
 edition = "2024"
+description = "BitRouter Warp Router - reusable warp server components for AI model routing"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/AIMOverse/bitrouter"
+
+[features]
+default = ["openai", "anthropic"]
+openai = ["bitrouter-openai"]
+anthropic = ["bitrouter-anthropic"]
+google = ["bitrouter-google"]
 
 [dependencies]
+bitrouter-core = { path = "../bitrouter-core", version = "0.0" }
+bitrouter-openai = { path = "../bitrouter-openai", version = "0.0", optional = true }
+bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.0", optional = true }
+bitrouter-google = { path = "../bitrouter-google", version = "0.0", optional = true }
+futures-core = { version = "0.3" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tokio-stream = { version = "0.1" }
 warp = { version = "0.4.2" }
+
+[dev-dependencies]
+regex = { version = "1.12" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+warp = { version = "0.4.2", features = ["test"] }

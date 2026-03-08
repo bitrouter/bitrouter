@@ -1,16 +1,19 @@
 use crate::{
     errors::Result,
-    models::{image::image_model::DynImageModel, language::language_model::DynLanguageModel},
+    models::{image::image_model::BoxImageModel, language::language_model::BoxLanguageModel},
     routers::routing_table::RoutingTarget,
 };
 
 /// A router that routes to the appropriate language model implementation based on the routing target.
 pub trait LanguageModelRouter {
     /// Routes to the appropriate language model implementation based on the routing target.
+    ///
+    /// Returns a [`BoxLanguageModel`] which is Send + Sync safe and can hold any
+    /// concrete model type, enabling multi-provider routing from a single method.
     fn route_model(
         &self,
         target: RoutingTarget,
-    ) -> impl Future<Output = Result<Box<DynLanguageModel<'static>>>>;
+    ) -> impl Future<Output = Result<BoxLanguageModel>> + Send;
 }
 
 /// A router that routes to the appropriate image model implementation based on the routing target.
@@ -19,5 +22,5 @@ pub trait ImageModelRouter {
     fn route_model(
         &self,
         target: RoutingTarget,
-    ) -> impl Future<Output = Result<Box<DynImageModel<'static>>>>;
+    ) -> impl Future<Output = Result<BoxImageModel>> + Send;
 }
