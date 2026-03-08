@@ -24,14 +24,12 @@ pub trait LanguageModel {
     /// Generates content based on the given options.
     fn generate(
         &self,
-        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> impl Future<Output = Result<LanguageModelGenerateResult>>;
 
     /// Generates content based on the given options, but returns a stream of partial results.
     fn stream(
         &self,
-        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> impl Future<Output = Result<LanguageModelStreamResult>>;
 }

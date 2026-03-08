@@ -56,11 +56,9 @@ impl OpenAiResponsesModel {
 
     async fn generate_impl(
         &self,
-        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        let request =
-            OpenAiResponsesRequest::from_call_options(model_id.to_owned(), &options, false)?;
+        let request = OpenAiResponsesRequest::from_call_options(&options, false)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),
@@ -116,11 +114,9 @@ impl OpenAiResponsesModel {
 
     async fn stream_impl(
         &self,
-        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
-        let request =
-            OpenAiResponsesRequest::from_call_options(model_id.to_owned(), &options, true)?;
+        let request = OpenAiResponsesRequest::from_call_options(&options, true)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),
@@ -298,18 +294,16 @@ impl LanguageModel for OpenAiResponsesModel {
 
     async fn generate(
         &self,
-        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        self.generate_impl(model_id, options).await
+        self.generate_impl(options).await
     }
 
     async fn stream(
         &self,
-        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
-        self.stream_impl(model_id, options).await
+        self.stream_impl(options).await
     }
 }
 

@@ -95,10 +95,10 @@ impl OpenAiChatCompletionResponse {
 
 impl OpenAiChatCompletionsRequest {
     pub(super) fn from_call_options(
-        model: String,
         options: &LanguageModelCallOptions,
         stream: bool,
     ) -> Result<Self> {
+        let model = options.model_id.clone();
         if options.top_k.is_some() {
             return Err(BitrouterError::unsupported(
                 OPENAI_PROVIDER_NAME,
@@ -942,8 +942,8 @@ mod tests {
     #[test]
     fn builds_image_prompt_request() {
         let request = OpenAiChatCompletionsRequest::from_call_options(
-            "gpt-4o-mini".to_owned(),
             &LanguageModelCallOptions {
+                model_id: "gpt-4o-mini".to_owned(),
                 prompt: vec![LanguageModelMessage::User {
                     content: vec![
                         LanguageModelUserContent::Text {
