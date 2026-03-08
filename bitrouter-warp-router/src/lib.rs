@@ -4,3 +4,4 @@ pub mod anthropic;
 pub mod openai;
 
 mod error;
+pub(crate) mod util;

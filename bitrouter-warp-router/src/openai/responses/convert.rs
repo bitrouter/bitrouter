@@ -9,6 +9,7 @@ use bitrouter_core::models::language::{
 };
 
 use super::types::*;
+use crate::util::{generate_id, now_unix};
 
 /// Extracts the model name from a responses request body.
 pub fn extract_model_name(request: &ResponsesRequest) -> &str {
@@ -155,21 +156,4 @@ fn extract_text_content(content: &LanguageModelContent) -> String {
         LanguageModelContent::Text { text, .. } => text.clone(),
         _ => String::new(),
     }
-}
-
-fn generate_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{nanos:x}")
-}
-
-fn now_unix() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
 }

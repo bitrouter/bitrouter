@@ -9,6 +9,7 @@ use bitrouter_core::{
 use warp::Filter;
 
 use crate::error::{BadRequest, BitrouterRejection};
+use crate::util::generate_id;
 
 use super::{convert, types::ChatCompletionRequest};
 
@@ -118,15 +119,6 @@ async fn handle_stream(
 
     let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     Ok(Box::new(warp::sse::reply(sse_stream)))
-}
-
-fn generate_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{nanos:x}")
 }
 
 /// Creates a rejection handler that converts [`BitrouterRejection`] and [`BadRequest`]

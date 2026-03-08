@@ -10,6 +10,7 @@ use bitrouter_core::models::language::{
 };
 
 use super::types::*;
+use crate::util::generate_id;
 
 /// Extracts the model name from a messages request body.
 pub fn extract_model_name(request: &MessagesRequest) -> &str {
@@ -183,13 +184,4 @@ fn map_finish_reason(reason: &LanguageModelFinishReason) -> String {
         LanguageModelFinishReason::Error => "end_turn".to_owned(),
         LanguageModelFinishReason::Other(_) => "end_turn".to_owned(),
     }
-}
-
-fn generate_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{nanos:x}")
 }

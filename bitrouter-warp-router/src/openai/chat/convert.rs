@@ -10,6 +10,7 @@ use bitrouter_core::models::language::{
 };
 
 use super::types::*;
+use crate::util::{generate_id, now_unix};
 
 /// Extracts the model name from a chat completion request body.
 pub fn extract_model_name(request: &ChatCompletionRequest) -> &str {
@@ -198,21 +199,4 @@ fn map_finish_reason(reason: &LanguageModelFinishReason) -> String {
         LanguageModelFinishReason::Error => "stop".to_owned(),
         LanguageModelFinishReason::Other(_) => "stop".to_owned(),
     }
-}
-
-fn generate_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{nanos:x}")
-}
-
-fn now_unix() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
 }
