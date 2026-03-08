@@ -6,8 +6,6 @@ use crate::models::{image::file::ImageModelFile, shared::provider::ProviderOptio
 /// The options for calling an image generation model.
 #[derive(Debug, Clone)]
 pub struct ImageModelCallOptions {
-    /// The ID of the model to call. This ID is passed to the provider directly.
-    pub model_id: String,
     /// An optional prompt to guide the image generation, if supported by the model.
     pub prompt: Option<String>,
     /// The number of images to generate.

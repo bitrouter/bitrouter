@@ -87,10 +87,11 @@ impl AnthropicMessageResponse {
 
 impl AnthropicMessagesRequest {
     pub(super) fn from_call_options(
+        model_id: &str,
         options: &LanguageModelCallOptions,
         stream: bool,
     ) -> Result<Self> {
-        let model = options.model_id.clone();
+        let model = model_id.to_owned();
         let mut warnings = Vec::new();
 
         if options.presence_penalty.is_some() {
