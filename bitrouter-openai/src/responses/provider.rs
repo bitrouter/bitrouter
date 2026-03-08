@@ -299,10 +299,7 @@ impl LanguageModel for OpenAiResponsesModel {
         self.generate_impl(options).await
     }
 
-    async fn stream(
-        &self,
-        options: LanguageModelCallOptions,
-    ) -> Result<LanguageModelStreamResult> {
+    async fn stream(&self, options: LanguageModelCallOptions) -> Result<LanguageModelStreamResult> {
         self.stream_impl(options).await
     }
 }
