@@ -32,25 +32,19 @@ use super::api::{
 pub struct OpenAiResponsesModel {
     client: reqwest::Client,
     config: OpenAiConfig,
-    model_id: String,
     supported_urls: HashMap<String, Regex>,
 }
 
 impl OpenAiResponsesModel {
-    pub fn new(model_id: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self::with_client(reqwest::Client::new(), model_id, OpenAiConfig::new(api_key))
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_client(reqwest::Client::new(), OpenAiConfig::new(api_key))
     }
 
-    pub fn with_client(
-        client: reqwest::Client,
-        model_id: impl Into<String>,
-        config: OpenAiConfig,
-    ) -> Self {
+    pub fn with_client(client: reqwest::Client, config: OpenAiConfig) -> Self {
         let http_url_regex = Regex::new(r"^https?://").expect("static regex must compile");
         Self {
             client,
             config,
-            model_id: model_id.into(),
             supported_urls: HashMap::from([
                 ("image/png".to_owned(), http_url_regex.clone()),
                 ("image/jpeg".to_owned(), http_url_regex.clone()),
@@ -62,10 +56,11 @@ impl OpenAiResponsesModel {
 
     async fn generate_impl(
         &self,
+        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
         let request =
-            OpenAiResponsesRequest::from_call_options(self.model_id.clone(), &options, false)?;
+            OpenAiResponsesRequest::from_call_options(model_id.to_owned(), &options, false)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),
@@ -121,10 +116,11 @@ impl OpenAiResponsesModel {
 
     async fn stream_impl(
         &self,
+        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
         let request =
-            OpenAiResponsesRequest::from_call_options(self.model_id.clone(), &options, true)?;
+            OpenAiResponsesRequest::from_call_options(model_id.to_owned(), &options, true)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),
@@ -295,10 +291,6 @@ impl LanguageModel for OpenAiResponsesModel {
         OPENAI_PROVIDER_NAME
     }
 
-    fn model_id(&self) -> &str {
-        &self.model_id
-    }
-
     fn supported_urls(&self) -> impl Future<Output = HashMap<String, Regex>> {
         let supported_urls = self.supported_urls.clone();
         async move { supported_urls }
@@ -306,13 +298,18 @@ impl LanguageModel for OpenAiResponsesModel {
 
     async fn generate(
         &self,
+        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        self.generate_impl(options).await
+        self.generate_impl(model_id, options).await
     }
 
-    async fn stream(&self, options: LanguageModelCallOptions) -> Result<LanguageModelStreamResult> {
-        self.stream_impl(options).await
+    async fn stream(
+        &self,
+        model_id: &str,
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        self.stream_impl(model_id, options).await
     }
 }
 

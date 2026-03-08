@@ -50,28 +50,18 @@ impl AnthropicConfig {
 pub struct AnthropicMessagesModel {
     client: reqwest::Client,
     config: AnthropicConfig,
-    model_id: String,
     supported_urls: HashMap<String, Regex>,
 }
 
 impl AnthropicMessagesModel {
-    pub fn new(model_id: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self::with_client(
-            reqwest::Client::new(),
-            model_id,
-            AnthropicConfig::new(api_key),
-        )
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_client(reqwest::Client::new(), AnthropicConfig::new(api_key))
     }
 
-    pub fn with_client(
-        client: reqwest::Client,
-        model_id: impl Into<String>,
-        config: AnthropicConfig,
-    ) -> Self {
+    pub fn with_client(client: reqwest::Client, config: AnthropicConfig) -> Self {
         Self {
             client,
             config,
-            model_id: model_id.into(),
             // Anthropic requires base64-encoded image data; it does not
             // natively support image URLs, so no URL patterns are matched.
             supported_urls: HashMap::new(),
@@ -80,10 +70,11 @@ impl AnthropicMessagesModel {
 
     async fn generate_impl(
         &self,
+        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
         let request =
-            AnthropicMessagesRequest::from_call_options(self.model_id.clone(), &options, false)?;
+            AnthropicMessagesRequest::from_call_options(model_id.to_owned(), &options, false)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(ANTHROPIC_PROVIDER_NAME),
@@ -139,10 +130,11 @@ impl AnthropicMessagesModel {
 
     async fn stream_impl(
         &self,
+        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
         let request =
-            AnthropicMessagesRequest::from_call_options(self.model_id.clone(), &options, true)?;
+            AnthropicMessagesRequest::from_call_options(model_id.to_owned(), &options, true)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(ANTHROPIC_PROVIDER_NAME),
@@ -312,10 +304,6 @@ impl LanguageModel for AnthropicMessagesModel {
         ANTHROPIC_PROVIDER_NAME
     }
 
-    fn model_id(&self) -> &str {
-        &self.model_id
-    }
-
     fn supported_urls(&self) -> impl Future<Output = HashMap<String, Regex>> {
         let supported_urls = self.supported_urls.clone();
         async move { supported_urls }
@@ -323,12 +311,17 @@ impl LanguageModel for AnthropicMessagesModel {
 
     async fn generate(
         &self,
+        model_id: &str,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        self.generate_impl(options).await
+        self.generate_impl(model_id, options).await
     }
 
-    async fn stream(&self, options: LanguageModelCallOptions) -> Result<LanguageModelStreamResult> {
-        self.stream_impl(options).await
+    async fn stream(
+        &self,
+        model_id: &str,
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        self.stream_impl(model_id, options).await
     }
 }
