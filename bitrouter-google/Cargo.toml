@@ -5,6 +5,6 @@ edition = "2024"
 description = "BitRouter Google Adapter"
 authors = ["Archer <archer@bitrouter.ai>"]
 license = "Apache-2.0"
-repository = "https://github.com/AIMOverse/bitrouter"
+repository = "https://github.com/bitrouter/bitrouter"
 
 [dependencies]
