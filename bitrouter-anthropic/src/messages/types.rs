@@ -83,12 +83,8 @@ pub enum AnthropicStreamEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AnthropicDelta {
-    TextDelta {
-        text: String,
-    },
-    InputJsonDelta {
-        partial_json: String,
-    },
+    TextDelta { text: String },
+    InputJsonDelta { partial_json: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,15 +306,10 @@ pub(super) fn map_finish_reason(stop_reason: Option<&str>) -> LanguageModelFinis
     }
 }
 
-pub(super) fn anthropic_metadata(
-    stop_sequence: Option<String>,
-) -> Option<ProviderMetadata> {
+pub(super) fn anthropic_metadata(stop_sequence: Option<String>) -> Option<ProviderMetadata> {
     let mut inner = HashMap::new();
     if let Some(stop_sequence) = stop_sequence {
-        inner.insert(
-            "stop_sequence".to_owned(),
-            JsonValue::String(stop_sequence),
-        );
+        inner.insert("stop_sequence".to_owned(), JsonValue::String(stop_sequence));
     }
 
     if inner.is_empty() {
@@ -652,10 +643,7 @@ mod tests {
             "usage": {"output_tokens": 15}
         }"#;
         let event: AnthropicStreamEvent = serde_json::from_str(json).unwrap();
-        assert!(matches!(
-            event,
-            AnthropicStreamEvent::MessageDelta { .. }
-        ));
+        assert!(matches!(event, AnthropicStreamEvent::MessageDelta { .. }));
     }
 
     #[test]
@@ -669,10 +657,7 @@ mod tests {
         }"#;
         let envelope: AnthropicErrorEnvelope = serde_json::from_str(json).unwrap();
         assert_eq!(envelope.error.error_type, "invalid_request_error");
-        assert_eq!(
-            envelope.error.message,
-            "max_tokens must be less than 4096"
-        );
+        assert_eq!(envelope.error.message, "max_tokens must be less than 4096");
     }
 
     #[test]
@@ -737,14 +722,8 @@ mod tests {
             json_value_to_string(JsonValue::String("hello".to_owned())),
             Some("hello".to_owned())
         );
-        assert_eq!(
-            json_value_to_string(json!(42)),
-            Some("42".to_owned())
-        );
-        assert_eq!(
-            json_value_to_string(json!(true)),
-            Some("true".to_owned())
-        );
+        assert_eq!(json_value_to_string(json!(42)), Some("42".to_owned()));
+        assert_eq!(json_value_to_string(json!(true)), Some("true".to_owned()));
         assert_eq!(json_value_to_string(JsonValue::Null), None);
     }
 

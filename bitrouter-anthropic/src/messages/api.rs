@@ -32,9 +32,9 @@ use tokio_util::sync::CancellationToken;
 use super::types::{
     ANTHROPIC_PROVIDER_NAME, AnthropicContentBlock, AnthropicDelta, AnthropicErrorEnvelope,
     AnthropicImageSource, AnthropicInputContentBlock, AnthropicMessageContent,
-    AnthropicMessageParam, AnthropicMessageResponse, AnthropicMessagesRequest, AnthropicStreamEvent,
-    AnthropicTool, AnthropicToolChoice, AnthropicUsage, STREAM_TEXT_ID, anthropic_metadata,
-    empty_usage, map_finish_reason,
+    AnthropicMessageParam, AnthropicMessageResponse, AnthropicMessagesRequest,
+    AnthropicStreamEvent, AnthropicTool, AnthropicToolChoice, AnthropicUsage, STREAM_TEXT_ID,
+    anthropic_metadata, empty_usage, map_finish_reason,
 };
 
 // ── Default max tokens ──────────────────────────────────────────────────────
@@ -309,9 +309,7 @@ fn convert_prompt(
     Ok((system_text, messages))
 }
 
-fn convert_user_content(
-    content: &[LanguageModelUserContent],
-) -> Result<AnthropicMessageContent> {
+fn convert_user_content(content: &[LanguageModelUserContent]) -> Result<AnthropicMessageContent> {
     if content.len() == 1
         && let LanguageModelUserContent::Text { text, .. } = &content[0]
     {
@@ -434,16 +432,18 @@ fn convert_assistant_content(
         }
     }
 
-    if blocks.len() == 1 {
-        if let AnthropicInputContentBlock::Text { text } = &blocks[0] {
-            return Ok(AnthropicMessageContent::Text(text.clone()));
-        }
+    if blocks.len() == 1
+        && let AnthropicInputContentBlock::Text { text } = &blocks[0]
+    {
+        return Ok(AnthropicMessageContent::Text(text.clone()));
     }
 
     Ok(AnthropicMessageContent::Blocks(blocks))
 }
 
-fn convert_tool_results(content: &[LanguageModelToolResult]) -> Result<Vec<AnthropicInputContentBlock>> {
+fn convert_tool_results(
+    content: &[LanguageModelToolResult],
+) -> Result<Vec<AnthropicInputContentBlock>> {
     let mut blocks = Vec::new();
     for item in content {
         match item {
@@ -486,9 +486,7 @@ fn stringify_tool_output(output: &LanguageModelToolResultOutput) -> Result<(Stri
         LanguageModelToolResultOutput::ExecutionDenied { reason, .. } => {
             Ok((reason.clone(), Some(true)))
         }
-        LanguageModelToolResultOutput::ErrorText { value, .. } => {
-            Ok((value.clone(), Some(true)))
-        }
+        LanguageModelToolResultOutput::ErrorText { value, .. } => Ok((value.clone(), Some(true))),
         LanguageModelToolResultOutput::ErrorJson { value, .. } => serde_json::to_string(value)
             .map(|s| (s, Some(true)))
             .map_err(|error| {
@@ -696,7 +694,8 @@ struct AnthropicStreamState {
     text_started: bool,
     tool_inputs: HashMap<u32, AnthropicToolInputState>,
     usage: Option<LanguageModelUsage>,
-    finish_reason: Option<bitrouter_core::models::language::finish_reason::LanguageModelFinishReason>,
+    finish_reason:
+        Option<bitrouter_core::models::language::finish_reason::LanguageModelFinishReason>,
     finished: bool,
 }
 
@@ -781,10 +780,7 @@ impl AnthropicStreamState {
                     let mut parts = Vec::new();
                     if entry.started && !entry.buffered_delta.is_empty() {
                         parts.push(LanguageModelStreamPart::ToolInputDelta {
-                            id: entry
-                                .id
-                                .clone()
-                                .unwrap_or_else(|| format!("tool-{index}")),
+                            id: entry.id.clone().unwrap_or_else(|| format!("tool-{index}")),
                             delta: std::mem::take(&mut entry.buffered_delta),
                             provider_metadata: None,
                         });
@@ -1004,7 +1000,10 @@ mod tests {
     use super::*;
     use bitrouter_core::models::language::{
         finish_reason::LanguageModelFinishReason,
-        prompt::{LanguageModelMessage, LanguageModelToolResult, LanguageModelToolResultOutput, LanguageModelUserContent},
+        prompt::{
+            LanguageModelMessage, LanguageModelToolResult, LanguageModelToolResultOutput,
+            LanguageModelUserContent,
+        },
         stream_part::LanguageModelStreamPart,
     };
 
@@ -1015,11 +1014,10 @@ mod tests {
     }
 
     fn make_byte_stream(chunks: Vec<Vec<u8>>) -> ByteStream {
-        Box::pin(tokio_stream::iter(
-            chunks
-                .into_iter()
-                .map(|c| Ok(Bytes::from(c)) as std::result::Result<Bytes, Box<dyn std::error::Error + Send + Sync>>),
-        ))
+        Box::pin(tokio_stream::iter(chunks.into_iter().map(|c| {
+            Ok(Bytes::from(c))
+                as std::result::Result<Bytes, Box<dyn std::error::Error + Send + Sync>>
+        })))
     }
 
     // ── error parsing tests ─────────────────────────────────────────────────
@@ -1062,11 +1060,7 @@ mod tests {
                 "message": "Overloaded"
             }
         });
-        let error = parse_anthropic_error(
-            529,
-            Some("req-abc123".to_owned()),
-            Some(body),
-        );
+        let error = parse_anthropic_error(529, Some("req-abc123".to_owned()), Some(body));
         match error {
             BitrouterError::Provider { context, .. } => {
                 assert_eq!(context.request_id.as_deref(), Some("req-abc123"));
@@ -1122,7 +1116,10 @@ mod tests {
             AnthropicMessageContent::Blocks(blocks) => {
                 assert_eq!(blocks.len(), 2);
                 assert!(matches!(blocks[0], AnthropicInputContentBlock::Text { .. }));
-                assert!(matches!(blocks[1], AnthropicInputContentBlock::Image { .. }));
+                assert!(matches!(
+                    blocks[1],
+                    AnthropicInputContentBlock::Image { .. }
+                ));
             }
             _ => panic!("expected blocks content"),
         }
@@ -1182,13 +1179,21 @@ mod tests {
             "message_start",
             r#"{"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}"#,
         ));
-        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::ResponseMetadata { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ResponseMetadata { .. }))
+        );
 
         let parts = parser.push_bytes(&sse_event(
             "content_block_start",
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
         ));
-        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::TextStart { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::TextStart { .. }))
+        );
 
         let parts = parser.push_bytes(&sse_event(
             "content_block_delta",
@@ -1220,11 +1225,12 @@ mod tests {
         ));
         assert!(parts.is_empty());
 
-        let parts = parser.push_bytes(&sse_event(
-            "message_stop",
-            r#"{"type":"message_stop"}"#,
-        ));
-        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::TextEnd { .. })));
+        let parts = parser.push_bytes(&sse_event("message_stop", r#"{"type":"message_stop"}"#));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::TextEnd { .. }))
+        );
         assert!(parts.iter().any(|p| matches!(
             p,
             LanguageModelStreamPart::Finish {
@@ -1266,7 +1272,11 @@ mod tests {
             "content_block_stop",
             r#"{"type":"content_block_stop","index":0}"#,
         ));
-        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::ToolInputEnd { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ToolInputEnd { .. }))
+        );
     }
 
     #[test]
@@ -1283,25 +1293,34 @@ mod tests {
             "error",
             r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
         ));
-        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::Error { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Error { .. }))
+        );
         assert!(parser.is_finished());
     }
 
     #[test]
     fn parser_with_raw_chunks() {
         let mut parser = AnthropicSseParser::new(true);
-        let parts = parser.push_bytes(&sse_event(
-            "ping",
-            r#"{"type":"ping"}"#,
-        ));
-        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::Raw { .. })));
+        let parts = parser.push_bytes(&sse_event("ping", r#"{"type":"ping"}"#));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Raw { .. }))
+        );
     }
 
     #[test]
     fn parser_finish_emits_finish_part() {
         let mut parser = AnthropicSseParser::new(false);
         let parts = parser.finish();
-        assert!(parts.iter().any(|p| matches!(p, LanguageModelStreamPart::Finish { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
     }
 
     #[test]
@@ -1317,9 +1336,11 @@ mod tests {
         for byte in &event {
             all_parts.extend(parser.push_bytes(&[*byte]));
         }
-        assert!(all_parts
-            .iter()
-            .any(|p| matches!(p, LanguageModelStreamPart::ResponseMetadata { .. })));
+        assert!(
+            all_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ResponseMetadata { .. }))
+        );
     }
 
     // ── drive_sse_stream integration tests ──────────────────────────────────
@@ -1347,10 +1368,7 @@ mod tests {
                 "message_delta",
                 r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
             ),
-            sse_event(
-                "message_stop",
-                r#"{"type":"message_stop"}"#,
-            ),
+            sse_event("message_stop", r#"{"type":"message_stop"}"#),
         ];
 
         let stream = make_byte_stream(chunks);
@@ -1362,22 +1380,30 @@ mod tests {
             parts.push(part);
         }
 
-        assert!(parts
-            .iter()
-            .any(|p| matches!(p, LanguageModelStreamPart::StreamStart { .. })));
-        assert!(parts
-            .iter()
-            .any(|p| matches!(p, LanguageModelStreamPart::ResponseMetadata { .. })));
-        assert!(parts
-            .iter()
-            .any(|p| matches!(p, LanguageModelStreamPart::TextStart { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::StreamStart { .. }))
+        );
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ResponseMetadata { .. }))
+        );
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::TextStart { .. }))
+        );
         assert!(parts.iter().any(|p| matches!(
             p,
             LanguageModelStreamPart::TextDelta { delta, .. } if delta == "Hi there!"
         )));
-        assert!(parts
-            .iter()
-            .any(|p| matches!(p, LanguageModelStreamPart::TextEnd { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::TextEnd { .. }))
+        );
         assert!(parts.iter().any(|p| matches!(
             p,
             LanguageModelStreamPart::Finish {
@@ -1411,12 +1437,16 @@ mod tests {
             parts.push(part);
         }
 
-        assert!(parts
-            .iter()
-            .any(|p| matches!(p, LanguageModelStreamPart::StreamStart { .. })));
-        assert!(parts
-            .iter()
-            .any(|p| matches!(p, LanguageModelStreamPart::Error { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::StreamStart { .. }))
+        );
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Error { .. }))
+        );
     }
 
     #[tokio::test]
@@ -1440,9 +1470,11 @@ mod tests {
             parts.push(part);
         }
 
-        assert!(parts
-            .iter()
-            .any(|p| matches!(p, LanguageModelStreamPart::Error { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Error { .. }))
+        );
     }
 
     #[test]
