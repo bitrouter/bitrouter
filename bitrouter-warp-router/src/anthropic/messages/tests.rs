@@ -7,7 +7,7 @@ use bitrouter_core::{
         content::LanguageModelContent,
         finish_reason::LanguageModelFinishReason,
         generate_result::LanguageModelGenerateResult,
-        language_model::{BoxLanguageModel, LanguageModel},
+        language_model::{DynLanguageModel, LanguageModel},
         stream_result::LanguageModelStreamResult,
         usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
     },
@@ -35,8 +35,8 @@ impl RoutingTable for MockTable {
 
 struct MockRouter;
 impl LanguageModelRouter for MockRouter {
-    async fn route_model(&self, target: RoutingTarget) -> Result<BoxLanguageModel> {
-        Ok(BoxLanguageModel::new(MockModel {
+    async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+        Ok(DynLanguageModel::new_box(MockModel {
             model_id: target.model_id,
         }))
     }
