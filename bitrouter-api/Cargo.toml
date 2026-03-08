@@ -1,8 +1,8 @@
 [package]
-name = "bitrouter-warp-router"
+name = "bitrouter-api"
 version = "0.0.0"
 edition = "2024"
-description = "BitRouter Warp Router - reusable warp server components for AI model routing"
+description = "BitRouter API - reusable warp server components for AI model routing"
 authors = ["Archer <archer@bitrouter.ai>"]
 license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"

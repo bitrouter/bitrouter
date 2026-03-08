@@ -51,6 +51,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitrouter-api"
+version = "0.0.0"
+dependencies = [
+ "bitrouter-anthropic",
+ "bitrouter-core",
+ "bitrouter-google",
+ "bitrouter-openai",
+ "futures-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "warp",
+]
+
+[[package]]
 name = "bitrouter-core"
 version = "0.0.0"
 dependencies = [
@@ -83,23 +100,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
-]
-
-[[package]]
-name = "bitrouter-warp-router"
-version = "0.0.0"
-dependencies = [
- "bitrouter-anthropic",
- "bitrouter-core",
- "bitrouter-google",
- "bitrouter-openai",
- "futures-core",
- "regex",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "warp",
 ]
 
 [[package]]
