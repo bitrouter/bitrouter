@@ -5,5 +5,5 @@ members = [
     "bitrouter-anthropic",
     "bitrouter-core",
     "bitrouter-google",
-    "bitrouter-openai",
+    "bitrouter-openai", "bitrouter-warp-router",
 ]
