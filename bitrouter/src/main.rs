@@ -3,10 +3,12 @@ use std::path::PathBuf;
 use bitrouter_runtime::AppRuntime;
 use clap::{Parser, Subcommand};
 
+type DefaultRuntime = AppRuntime<bitrouter_config::ConfigRoutingTable>;
+
 #[derive(Debug, Parser)]
 #[command(name = "bitrouter", version, about = "BitRouter CLI")]
 struct Cli {
-    #[arg(long, global = true, default_value = "bitrouter.toml")]
+    #[arg(long, global = true, default_value = "bitrouter.yaml")]
     config: PathBuf,
 
     /// Run server without the TUI (headless mode)
@@ -19,12 +21,14 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Show runtime status
-    Status,
+    /// Start the API server (foreground)
+    Serve,
     /// Start as background daemon
     Start,
     /// Stop the daemon
     Stop,
+    /// Show runtime status
+    Status,
     /// Restart the daemon
     Restart,
 }
@@ -39,37 +43,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         init_tracing();
     }
 
-    let runtime = match &cli.command {
-        None | Some(Command::Status) => {
-            AppRuntime::load(&cli.config).unwrap_or_else(|_| AppRuntime::scaffold(&cli.config))
-        }
-        _ => AppRuntime::load(&cli.config)?,
+    let runtime: DefaultRuntime = match &cli.command {
+        Some(Command::Serve) => DefaultRuntime::scaffold(cli.config.clone()),
+        _ => DefaultRuntime::load(&cli.config)
+            .unwrap_or_else(|_| DefaultRuntime::scaffold(cli.config.clone())),
     };
 
     match cli.command {
-        None => run_interactive(runtime, cli.headless).await?,
-        Some(Command::Status) => {
-            let status = runtime.status();
-            println!("config: {}", status.config_file.display());
-            println!("runtime: {}", status.runtime_dir.display());
-            println!("listen: {}", status.listen_addr);
+        None => run_default(runtime, cli.headless).await?,
+        Some(Command::Serve) => {
+            let model_router = bitrouter_runtime::Router::new(
+                reqwest::Client::new(),
+                runtime.config().providers.clone(),
+            );
+            runtime.serve(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
         Some(Command::Stop) => runtime.stop().await?,
+        Some(Command::Status) => {
+            let status = runtime.status();
+            println!("config:    {}", status.config_file.display());
+            println!("runtime:   {}", status.runtime_dir.display());
+            println!("listen:    {}", status.listen_addr);
+            println!("providers: {}", status.providers.join(", "));
+            if !status.models.is_empty() {
+                println!("models:    {}", status.models.join(", "));
+            }
+        }
         Some(Command::Restart) => runtime.restart().await?,
     }
 
     Ok(())
 }
 
-async fn run_interactive(
-    runtime: AppRuntime,
+async fn run_default(
+    runtime: DefaultRuntime,
     headless: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let status = runtime.status();
 
+    let model_router =
+        bitrouter_runtime::Router::new(reqwest::Client::new(), runtime.config().providers.clone());
+
     if headless {
-        runtime.serve().await?;
+        runtime.serve(model_router).await?;
         return Ok(());
     }
 
@@ -81,21 +98,22 @@ async fn run_interactive(
             route_count: 0,    // TODO: populate from routing table
         };
 
-        let server_handle = tokio::spawn(async move {
-            if let Err(e) = runtime.serve().await {
-                tracing::error!("server error: {e}");
+        tokio::select! {
+            result = runtime.serve(model_router) => {
+                if let Err(e) = result {
+                    tracing::error!("server error: {e}");
+                }
             }
-        });
-
-        bitrouter_tui::run(tui_config).await?;
-
-        server_handle.abort();
+            result = bitrouter_tui::run(tui_config) => {
+                result?;
+            }
+        }
     }
 
     #[cfg(not(feature = "tui"))]
     {
         let _ = status;
-        runtime.serve().await?;
+        runtime.serve(model_router).await?;
     }
 
     Ok(())

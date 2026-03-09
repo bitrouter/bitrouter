@@ -1,0 +1,15 @@
+[package]
+name = "bitrouter-config"
+version = "0.0.0"
+edition = "2024"
+description = "BitRouter configuration, provider registry, and routing table"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+
+[dependencies]
+bitrouter-core = { path = "../bitrouter-core", version = "0.0" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+serde_yaml = { version = "0.9" }
+thiserror = { version = "2.0" }

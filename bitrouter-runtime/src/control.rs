@@ -1,4 +1,4 @@
-use crate::{config::RuntimePaths, error::Result};
+use crate::{error::Result, paths::RuntimePaths};
 
 #[derive(Debug, Clone)]
 pub struct ControlClient {
