@@ -8,9 +8,14 @@ license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 
 [dependencies]
+bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.0" }
 bitrouter-api = { path = "../bitrouter-api", version = "0.0" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.0" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.0" }
+bitrouter-openai = { path = "../bitrouter-openai", version = "0.0" }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+] }
 serde_json = { version = "1.0" }
 thiserror = { version = "2.0" }
 tokio = { version = "1", features = ["net", "rt", "signal", "sync", "time"] }
