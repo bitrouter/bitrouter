@@ -6,17 +6,17 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 BitRouter is organized as a set of focused crates:
 
-| Crate | Responsibility |
-| ----- | -------------- |
-| `bitrouter` | Thin CLI entry point that parses commands, resolves runtime paths, and launches the runtime |
-| `bitrouter-runtime` | Application assembly, runtime path resolution, daemon lifecycle, and Warp server bootstrapping |
-| `bitrouter-api` | Reusable Warp filters for provider-compatible HTTP endpoints |
-| `bitrouter-config` | YAML loading, `.env` support, environment substitution, built-in providers, and config-backed routing |
-| `bitrouter-core` | Shared model traits, router contracts, errors, and transport-neutral types |
-| `bitrouter-openai` | OpenAI-compatible language model adapters |
-| `bitrouter-anthropic` | Anthropic Messages adapter |
-| `bitrouter-google` | Google Generative AI adapter |
-| `bitrouter-tui` | Terminal UI used by the default interactive `bitrouter` flow |
+| Crate                 | Responsibility                                                                                        |
+| --------------------- | ----------------------------------------------------------------------------------------------------- |
+| `bitrouter`           | Thin CLI entry point that parses commands, resolves runtime paths, and launches the runtime           |
+| `bitrouter-runtime`   | Application assembly, runtime path resolution, daemon lifecycle, and Warp server bootstrapping        |
+| `bitrouter-api`       | Reusable Warp filters for provider-compatible HTTP endpoints                                          |
+| `bitrouter-config`    | YAML loading, `.env` support, environment substitution, built-in providers, and config-backed routing |
+| `bitrouter-core`      | Shared model traits, router contracts, errors, and transport-neutral types                            |
+| `bitrouter-openai`    | OpenAI-compatible language model adapters                                                             |
+| `bitrouter-anthropic` | Anthropic Messages adapter                                                                            |
+| `bitrouter-google`    | Google Generative AI adapter                                                                          |
+| `bitrouter-tui`       | Terminal UI used by the default interactive `bitrouter` flow                                          |
 
 ## Request Flow
 
@@ -69,12 +69,12 @@ The reusable HTTP filters live in `bitrouter-api`.
 
 ### Filters currently provided
 
-| Route | Crate module |
-| ----- | ------------ |
-| `GET /health` | `bitrouter-runtime::ServerPlan` |
-| `POST /v1/chat/completions` | `bitrouter_api::router::openai::chat::filters` |
-| `POST /v1/responses` | `bitrouter_api::router::openai::responses::filters` |
-| `POST /v1/messages` | `bitrouter_api::router::anthropic::messages::filters` |
+| Route                               | Crate module                                               |
+| ----------------------------------- | ---------------------------------------------------------- |
+| `GET /health`                       | `bitrouter-runtime::ServerPlan`                            |
+| `POST /v1/chat/completions`         | `bitrouter_api::router::openai::chat::filters`             |
+| `POST /v1/responses`                | `bitrouter_api::router::openai::responses::filters`        |
+| `POST /v1/messages`                 | `bitrouter_api::router::anthropic::messages::filters`      |
 | `POST /v1beta/models/:model_action` | `bitrouter_api::router::google::generate_content::filters` |
 
 `ServerPlan` currently wires `/health`, OpenAI chat completions, OpenAI responses, and Anthropic messages into the default runtime server. The Google-compatible filter is available from `bitrouter-api` and can be added directly when you build a custom service.

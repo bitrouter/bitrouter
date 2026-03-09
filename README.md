@@ -43,10 +43,16 @@ If you only want the foreground API server, run:
 bitrouter serve
 ```
 
-If you want the default startup flow without the TUI, run:
+If you want to use the foreground TUI app, run:
 
 ```bash
-bitrouter --headless
+bitrouter
+```
+
+If you want to start the local proxy service at background, run:
+
+```bash
+bitrouter start
 ```
 
 ## CLI Overview
@@ -58,13 +64,13 @@ bitrouter --headless
 
 ### Subcommands
 
-| Command | What it does |
-| ------- | ------------ |
-| `serve` | Start the API server in the foreground |
-| `start` | Start BitRouter as a background daemon |
-| `stop` | Stop the running daemon |
-| `status` | Print resolved paths, listen address, configured providers, and daemon status |
-| `restart` | Restart the background daemon |
+| Command   | What it does                                                                  |
+| --------- | ----------------------------------------------------------------------------- |
+| `serve`   | Start the API server in the foreground                                        |
+| `start`   | Start BitRouter as a background daemon                                        |
+| `stop`    | Stop the running daemon                                                       |
+| `status`  | Print resolved paths, listen address, configured providers, and daemon status |
+| `restart` | Restart the background daemon                                                 |
 
 ### Global path options
 
@@ -75,8 +81,6 @@ These flags are available on the top-level command and on each subcommand:
 - `--env-file <PATH>` — override `<home>/.env`
 - `--run-dir <PATH>` — override `<home>/run`
 - `--logs-dir <PATH>` — override `<home>/logs`
-
-`--headless` is only used by the default `bitrouter` startup path. The explicit `serve` subcommand is already server-only.
 
 ## Configuration and `BITROUTER_HOME`
 
