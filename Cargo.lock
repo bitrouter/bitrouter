@@ -206,6 +206,7 @@ dependencies = [
  "bitrouter-api",
  "bitrouter-config",
  "bitrouter-core",
+ "bitrouter-google",
  "bitrouter-openai",
  "libc",
  "reqwest",

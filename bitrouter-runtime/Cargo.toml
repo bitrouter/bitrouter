@@ -6,12 +6,14 @@ description = "BitRouter runtime assembly for CLI and daemon execution"
 authors = ["Archer <archer@bitrouter.ai>"]
 license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
+readme = "README.md"
 
 [dependencies]
 bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.0" }
 bitrouter-api = { path = "../bitrouter-api", version = "0.0" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.0" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.0" }
+bitrouter-google = { path = "../bitrouter-google", version = "0.0" }
 bitrouter-openai = { path = "../bitrouter-openai", version = "0.0" }
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
