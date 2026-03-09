@@ -1,2 +1,2 @@
+shared-version = true
 pre-release-commit-message = "chore(release): publish v{{version}}"
-tag-message = "chore(release): publish v{{version}}"
