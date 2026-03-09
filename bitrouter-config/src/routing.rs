@@ -80,11 +80,7 @@ impl ConfigRoutingTable {
         ))
     }
 
-    fn select_endpoint(
-        &self,
-        model_name: &str,
-        config: &ModelConfig,
-    ) -> Result<ResolvedTarget> {
+    fn select_endpoint(&self, model_name: &str, config: &ModelConfig) -> Result<ResolvedTarget> {
         if config.endpoints.is_empty() {
             return Err(BitrouterError::invalid_request(
                 None,
@@ -161,9 +157,7 @@ mod tests {
     #[test]
     fn direct_provider_routing_with_slash_in_model() {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
-        let target = table
-            .resolve("openai:deepseek/deepseek-v3")
-            .unwrap();
+        let target = table.resolve("openai:deepseek/deepseek-v3").unwrap();
         assert_eq!(target.provider_name, "openai");
         assert_eq!(target.model_id, "deepseek/deepseek-v3");
     }

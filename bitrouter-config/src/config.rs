@@ -52,7 +52,7 @@ impl BitrouterConfig {
     /// 6. Apply `env_prefix` auto-overrides
     pub fn load_from_file(path: &Path) -> crate::error::Result<Self> {
         let raw =
-            std::fs::read_to_string(path).map_err(|e| crate::error::RuntimeError::ConfigRead {
+            std::fs::read_to_string(path).map_err(|e| crate::error::ConfigError::ConfigRead {
                 path: path.to_path_buf(),
                 source: e,
             })?;
@@ -63,17 +63,17 @@ impl BitrouterConfig {
     pub fn load_from_str(raw: &str) -> crate::error::Result<Self> {
         // First pass: extract env_file before full substitution
         let pre: PreConfig = serde_yaml::from_str(raw)
-            .map_err(|e| crate::error::RuntimeError::ConfigParse(e.to_string()))?;
+            .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
 
         // Load environment
         let env = load_env(pre.env_file.as_deref());
 
         // Second pass: substitute env vars in the YAML tree, then deserialize
         let yaml_value: serde_yaml::Value = serde_yaml::from_str(raw)
-            .map_err(|e| crate::error::RuntimeError::ConfigParse(e.to_string()))?;
+            .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
         let substituted = substitute_in_value(yaml_value, &env);
         let mut config: BitrouterConfig = serde_yaml::from_value(substituted)
-            .map_err(|e| crate::error::RuntimeError::ConfigParse(e.to_string()))?;
+            .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
 
         // Merge built-in providers with user overrides
         let mut providers = builtin_providers();
@@ -253,28 +253,6 @@ pub struct ModelConfig {
     pub strategy: RoutingStrategy,
 
     pub endpoints: Vec<ModelEndpoint>,
-}
-
-// ── Runtime paths ────────────────────────────────────────────────────
-
-/// Paths derived from the config file location (not serialized).
-#[derive(Debug, Clone)]
-pub struct RuntimePaths {
-    pub config_file: PathBuf,
-    pub runtime_dir: PathBuf,
-    pub log_dir: PathBuf,
-}
-
-impl RuntimePaths {
-    pub fn from_config_path(config_file: impl Into<PathBuf>) -> Self {
-        let config_file = config_file.into();
-        let base = config_file.parent().unwrap_or_else(|| Path::new("."));
-        Self {
-            runtime_dir: base.join("run"),
-            log_dir: base.join("logs"),
-            config_file,
-        }
-    }
 }
 
 #[cfg(test)]

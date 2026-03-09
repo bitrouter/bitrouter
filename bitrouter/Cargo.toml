@@ -8,6 +8,7 @@ license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 
 [dependencies]
+bitrouter-config = { path = "../bitrouter-config", version = "0.0" }
 bitrouter-runtime = { path = "../bitrouter-runtime", version = "0.0" }
 clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

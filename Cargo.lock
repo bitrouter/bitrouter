@@ -83,6 +83,7 @@ checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 name = "bitrouter"
 version = "0.0.0"
 dependencies = [
+ "bitrouter-config",
  "bitrouter-runtime",
  "clap",
  "tokio",
@@ -121,6 +122,17 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "warp",
+]
+
+[[package]]
+name = "bitrouter-config"
+version = "0.0.0"
+dependencies = [
+ "bitrouter-core",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
 ]
 
 [[package]]
@@ -176,10 +188,8 @@ name = "bitrouter-runtime"
 version = "0.0.0"
 dependencies = [
  "bitrouter-api",
+ "bitrouter-config",
  "bitrouter-core",
- "serde",
- "serde_json",
- "serde_yaml",
  "thiserror",
  "tokio",
  "tracing",
