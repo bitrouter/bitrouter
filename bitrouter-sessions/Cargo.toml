@@ -1,0 +1,16 @@
+[package]
+name = "bitrouter-sessions"
+version = "0.0.0"
+edition = "2024"
+description = "BitRouter Sessions - in-memory session, blob, and object catalog implementations"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+
+[dependencies]
+bitrouter-core = { path = "../bitrouter-core", version = "0.0" }
+serde_json = { version = "1.0" }
+tokio = { version = "1", features = ["sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
