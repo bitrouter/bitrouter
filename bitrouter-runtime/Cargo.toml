@@ -6,6 +6,7 @@ description = "BitRouter runtime assembly for CLI and daemon execution"
 authors = ["Archer <archer@bitrouter.ai>"]
 license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
+readme = "README.md"
 
 [dependencies]
 bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.0" }
