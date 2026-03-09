@@ -191,9 +191,11 @@ dependencies = [
  "bitrouter-config",
  "bitrouter-core",
  "libc",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
+ "warp",
 ]
 
 [[package]]
