@@ -1,0 +1,15 @@
+[package]
+name = "bitrouter-auth"
+version = "0.0.0"
+edition = "2024"
+description = "BitRouter Auth - in-memory authentication and account service implementations"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+
+[dependencies]
+bitrouter-core = { path = "../bitrouter-core", version = "0.0" }
+tokio = { version = "1", features = ["sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
