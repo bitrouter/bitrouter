@@ -11,9 +11,10 @@ pub fn load_env(env_file: Option<&str>) -> HashMap<String, String> {
 
     // Load from .env file first (lower priority)
     if let Some(path) = env_file
-        && let Ok(vars) = load_dotenv(Path::new(path)) {
-            env.extend(vars);
-        }
+        && let Ok(vars) = load_dotenv(Path::new(path))
+    {
+        env.extend(vars);
+    }
 
     // Process environment overrides .env file
     for (key, value) in std::env::vars() {
