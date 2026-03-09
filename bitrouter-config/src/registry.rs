@@ -266,10 +266,7 @@ mod tests {
         assert!(providers.contains_key("openai"));
         assert!(providers.contains_key("anthropic"));
         assert!(providers.contains_key("google"));
-        assert_eq!(
-            providers["openai"].api_protocol,
-            Some(ApiProtocol::Openai)
-        );
+        assert_eq!(providers["openai"].api_protocol, Some(ApiProtocol::Openai));
         assert_eq!(
             providers["anthropic"].api_protocol,
             Some(ApiProtocol::Anthropic)
@@ -344,10 +341,7 @@ mod tests {
 
         let leaf = &resolved["leaf"];
         assert_eq!(leaf.api_protocol, Some(ApiProtocol::Openai)); // from root
-        assert_eq!(
-            leaf.api_base.as_deref(),
-            Some("https://mid.example.com/v1")
-        ); // from mid
+        assert_eq!(leaf.api_base.as_deref(), Some("https://mid.example.com/v1")); // from mid
         assert_eq!(leaf.api_key.as_deref(), Some("leaf-key")); // own value
     }
 

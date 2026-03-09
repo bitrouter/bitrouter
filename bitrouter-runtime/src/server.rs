@@ -1,4 +1,6 @@
-use crate::{config::BitrouterConfig, error::Result};
+use bitrouter_config::BitrouterConfig;
+
+use crate::error::Result;
 
 #[derive(Debug, Clone)]
 pub struct ServerPlan {

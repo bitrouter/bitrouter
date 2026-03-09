@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use bitrouter_runtime::AppRuntime;
 use clap::{Parser, Subcommand};
 
+type DefaultRuntime = AppRuntime<bitrouter_config::ConfigRoutingTable>;
+
 #[derive(Debug, Parser)]
 #[command(name = "bitrouter", version, about = "BitRouter CLI")]
 struct Cli {
@@ -26,9 +28,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     init_tracing();
 
-    let runtime = match cli.command {
-        Command::Serve => AppRuntime::scaffold(cli.config),
-        _ => AppRuntime::load(&cli.config).unwrap_or_else(|_| AppRuntime::scaffold(cli.config)),
+    let runtime: DefaultRuntime = match cli.command {
+        Command::Serve => DefaultRuntime::scaffold(cli.config),
+        _ => DefaultRuntime::load(&cli.config)
+            .unwrap_or_else(|_| DefaultRuntime::scaffold(cli.config)),
     };
 
     match cli.command {
