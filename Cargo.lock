@@ -58,6 +58,7 @@ dependencies = [
  "bitrouter-core",
  "bitrouter-google",
  "bitrouter-openai",
+ "bytes",
  "futures-core",
  "regex",
  "serde",
