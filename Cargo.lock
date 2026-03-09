@@ -95,6 +95,10 @@ name = "bitrouter-google"
 version = "0.0.0"
 
 [[package]]
+name = "bitrouter-migrate"
+version = "0.0.0"
+
+[[package]]
 name = "bitrouter-openai"
 version = "0.0.0"
 dependencies = [
@@ -109,6 +113,13 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+]
+
+[[package]]
+name = "bitrouter-seaorm"
+version = "0.0.0"
+dependencies = [
+ "bitrouter-core",
 ]
 
 [[package]]

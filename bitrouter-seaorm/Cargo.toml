@@ -1,0 +1,11 @@
+[package]
+name = "bitrouter-seaorm"
+version = "0.0.0"
+edition = "2024"
+description = "BitRouter SeaORM - SeaORM-backed repository and service implementations"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+
+[dependencies]
+bitrouter-core = { path = "../bitrouter-core", version = "0.0" }

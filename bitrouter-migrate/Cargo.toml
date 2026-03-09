@@ -1,0 +1,10 @@
+[package]
+name = "bitrouter-migrate"
+version = "0.0.0"
+edition = "2024"
+description = "BitRouter Migrate - database migrations for the BitRouter server schema"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+
+[dependencies]
