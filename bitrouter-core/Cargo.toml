@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-core"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 description = "BitRouter core"
 authors = ["Archer <archer@bitrouter.ai>"]
