@@ -8,40 +8,94 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[arg(long, global = true, default_value = "bitrouter.toml")]
     config: PathBuf,
+
+    /// Run server without the TUI (headless mode)
+    #[arg(long)]
+    headless: bool,
+
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Serve,
-    Start,
-    Stop,
+    /// Show runtime status
     Status,
+    /// Start as background daemon
+    Start,
+    /// Stop the daemon
+    Stop,
+    /// Restart the daemon
     Restart,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    init_tracing();
+    let use_tui = cli.command.is_none() && !cli.headless;
 
-    let runtime = match cli.command {
-        Command::Serve => AppRuntime::scaffold(cli.config),
-        _ => AppRuntime::load(&cli.config).unwrap_or_else(|_| AppRuntime::scaffold(cli.config)),
+    // Skip tracing init when TUI owns the terminal — logs corrupt the alternate screen
+    if !use_tui {
+        init_tracing();
+    }
+
+    let runtime = match &cli.command {
+        None | Some(Command::Status) => {
+            AppRuntime::load(&cli.config).unwrap_or_else(|_| AppRuntime::scaffold(&cli.config))
+        }
+        _ => AppRuntime::load(&cli.config)?,
     };
 
     match cli.command {
-        Command::Serve => runtime.serve().await?,
-        Command::Start => runtime.start().await?,
-        Command::Stop => runtime.stop().await?,
-        Command::Status => {
+        None => run_interactive(runtime, cli.headless).await?,
+        Some(Command::Status) => {
             let status = runtime.status();
             println!("config: {}", status.config_file.display());
             println!("runtime: {}", status.runtime_dir.display());
             println!("listen: {}", status.listen_addr);
         }
-        Command::Restart => runtime.restart().await?,
+        Some(Command::Start) => runtime.start().await?,
+        Some(Command::Stop) => runtime.stop().await?,
+        Some(Command::Restart) => runtime.restart().await?,
+    }
+
+    Ok(())
+}
+
+async fn run_interactive(
+    runtime: AppRuntime,
+    headless: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let status = runtime.status();
+
+    if headless {
+        runtime.serve().await?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "tui")]
+    {
+        let tui_config = bitrouter_tui::TuiConfig {
+            listen_addr: status.listen_addr,
+            providers: vec![], // TODO: populate from config
+            route_count: 0,   // TODO: populate from routing table
+        };
+
+        let server_handle = tokio::spawn(async move {
+            if let Err(e) = runtime.serve().await {
+                tracing::error!("server error: {e}");
+            }
+        });
+
+        bitrouter_tui::run(tui_config).await?;
+
+        server_handle.abort();
+    }
+
+    #[cfg(not(feature = "tui"))]
+    {
+        let _ = status;
+        runtime.serve().await?;
     }
 
     Ok(())

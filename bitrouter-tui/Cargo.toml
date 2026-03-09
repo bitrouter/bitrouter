@@ -1,0 +1,15 @@
+[package]
+name = "bitrouter-tui"
+version = "0.0.0"
+edition = "2024"
+description = "Interactive terminal UI for BitRouter"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio = { version = "1", features = ["sync", "time"] }
+futures = "0.3"
+anyhow = "1"
