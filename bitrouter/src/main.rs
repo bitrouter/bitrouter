@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "bitrouter", version, about = "BitRouter CLI")]
 struct Cli {
-    #[arg(long, global = true, default_value = "bitrouter.toml")]
+    #[arg(long, global = true, default_value = "bitrouter.yaml")]
     config: PathBuf,
     #[command(subcommand)]
     command: Command,
@@ -37,9 +37,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Stop => runtime.stop().await?,
         Command::Status => {
             let status = runtime.status();
-            println!("config: {}", status.config_file.display());
-            println!("runtime: {}", status.runtime_dir.display());
-            println!("listen: {}", status.listen_addr);
+            println!("config:    {}", status.config_file.display());
+            println!("runtime:   {}", status.runtime_dir.display());
+            println!("listen:    {}", status.listen_addr);
+            println!("providers: {}", status.providers.join(", "));
+            if !status.models.is_empty() {
+                println!("models:    {}", status.models.join(", "));
+            }
         }
         Command::Restart => runtime.restart().await?,
     }

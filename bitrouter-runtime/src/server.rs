@@ -11,7 +11,7 @@ impl ServerPlan {
     }
 
     pub async fn serve(self) -> Result<()> {
-        tracing::info!(listen_addr = %self.config.listen_addr, "runtime server scaffold is not wired yet");
+        tracing::info!(listen = %self.config.server.listen, "runtime server scaffold is not wired yet");
         Ok(())
     }
 }

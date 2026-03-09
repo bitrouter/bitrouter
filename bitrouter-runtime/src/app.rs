@@ -4,6 +4,7 @@ use crate::{
     config::{BitrouterConfig, RuntimePaths},
     control::ControlClient,
     error::{Result, RuntimeError},
+    routing::ConfigRoutingTable,
     server::ServerPlan,
 };
 
@@ -16,19 +17,13 @@ pub struct AppRuntime {
 impl AppRuntime {
     pub fn load(config_path: impl AsRef<Path>) -> Result<Self> {
         let config_file = config_path.as_ref().to_path_buf();
-        if !config_file.exists() {
-            return Err(RuntimeError::MissingConfig(config_file));
-        }
-
-        Ok(Self {
-            config: BitrouterConfig::default(),
-            paths: RuntimePaths::from_config_path(config_file),
-        })
+        let config = BitrouterConfig::load_from_file(&config_file)?;
+        let paths = RuntimePaths::from_config_path(config_file);
+        Ok(Self { config, paths })
     }
 
     pub fn scaffold(config_path: impl Into<PathBuf>) -> Self {
         let config_file = config_path.into();
-
         Self {
             config: BitrouterConfig::default(),
             paths: RuntimePaths::from_config_path(config_file),
@@ -39,6 +34,14 @@ impl AppRuntime {
         &self.paths
     }
 
+    pub fn config(&self) -> &BitrouterConfig {
+        &self.config
+    }
+
+    pub fn routing_table(&self) -> ConfigRoutingTable {
+        ConfigRoutingTable::new(self.config.providers.clone(), self.config.models.clone())
+    }
+
     pub fn control_client(&self) -> ControlClient {
         ControlClient::new(self.paths.clone())
     }
@@ -47,7 +50,9 @@ impl AppRuntime {
         RuntimeStatus {
             config_file: self.paths.config_file.clone(),
             runtime_dir: self.paths.runtime_dir.clone(),
-            listen_addr: self.config.listen_addr,
+            listen_addr: self.config.server.listen,
+            providers: self.config.providers.keys().cloned().collect(),
+            models: self.config.models.keys().cloned().collect(),
         }
     }
 
@@ -79,4 +84,6 @@ pub struct RuntimeStatus {
     pub config_file: PathBuf,
     pub runtime_dir: PathBuf,
     pub listen_addr: std::net::SocketAddr,
+    pub providers: Vec<String>,
+    pub models: Vec<String>,
 }
