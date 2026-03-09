@@ -106,16 +106,14 @@ pub fn resolve_providers(
     // Apply env_prefix auto-overrides (always wins when non-empty)
     for provider in providers.values_mut() {
         if let Some(prefix) = &provider.env_prefix {
-            if let Some(key) = env.get(&format!("{prefix}_API_KEY")) {
-                if !key.is_empty() {
+            if let Some(key) = env.get(&format!("{prefix}_API_KEY"))
+                && !key.is_empty() {
                     provider.api_key = Some(key.clone());
                 }
-            }
-            if let Some(url) = env.get(&format!("{prefix}_BASE_URL")) {
-                if !url.is_empty() {
+            if let Some(url) = env.get(&format!("{prefix}_BASE_URL"))
+                && !url.is_empty() {
                     provider.api_base = Some(url.clone());
                 }
-            }
         }
     }
 
@@ -146,8 +144,8 @@ fn resolve_derives(
     resolve_derives(providers, &parent_name, visited);
 
     // Clone parent fields, then overlay child's explicit values
-    if let Some(parent) = providers.get(&parent_name).cloned() {
-        if let Some(child) = providers.get_mut(name) {
+    if let Some(parent) = providers.get(&parent_name).cloned()
+        && let Some(child) = providers.get_mut(name) {
             if child.api_protocol.is_none() {
                 child.api_protocol = parent.api_protocol;
             }
@@ -168,7 +166,6 @@ fn resolve_derives(
             }
             child.derives = None;
         }
-    }
 }
 
 #[cfg(test)]

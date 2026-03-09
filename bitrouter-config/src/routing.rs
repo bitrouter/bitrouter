@@ -57,8 +57,8 @@ impl ConfigRoutingTable {
     /// Resolves an incoming model name to a full target with any per-endpoint overrides.
     pub fn resolve(&self, incoming: &str) -> Result<ResolvedTarget> {
         // Strategy 1: "provider:model_id" → direct route if provider is known
-        if let Some((prefix, suffix)) = incoming.split_once(':') {
-            if self.providers.contains_key(prefix) {
+        if let Some((prefix, suffix)) = incoming.split_once(':')
+            && self.providers.contains_key(prefix) {
                 return Ok(ResolvedTarget {
                     provider_name: prefix.to_owned(),
                     model_id: suffix.to_owned(),
@@ -66,7 +66,6 @@ impl ConfigRoutingTable {
                     api_base_override: None,
                 });
             }
-        }
 
         // Strategy 2: lookup in models section
         if let Some(model_config) = self.models.get(incoming) {
