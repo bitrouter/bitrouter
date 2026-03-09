@@ -37,12 +37,17 @@ impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
     }
 
     pub fn status(&self) -> RuntimeStatus {
+        let daemon_pid = crate::daemon::DaemonManager::new(self.paths.clone())
+            .is_running()
+            .ok()
+            .flatten();
         RuntimeStatus {
             config_file: self.paths.config_file.clone(),
             runtime_dir: self.paths.runtime_dir.clone(),
             listen_addr: self.config.server.listen,
             providers: self.config.providers.keys().cloned().collect(),
             models: self.config.models.keys().cloned().collect(),
+            daemon_pid,
         }
     }
 
@@ -122,4 +127,6 @@ pub struct RuntimeStatus {
     pub listen_addr: std::net::SocketAddr,
     pub providers: Vec<String>,
     pub models: Vec<String>,
+    /// PID of the running daemon, or `None` if no daemon is active.
+    pub daemon_pid: Option<u32>,
 }

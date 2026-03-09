@@ -60,6 +60,20 @@ pub fn render(frame: &mut Frame, app: &App) {
     )));
     lines.push(Line::from(""));
 
+    // Daemon status
+    let daemon_line = match app.config.daemon_pid {
+        Some(pid) => Line::from(Span::styled(
+            format!("Daemon running (pid {pid})"),
+            Style::default().fg(Color::Green),
+        )),
+        None => Line::from(Span::styled(
+            "Daemon stopped",
+            Style::default().fg(Color::Yellow),
+        )),
+    };
+    lines.push(daemon_line);
+    lines.push(Line::from(""));
+
     // Server info
     let info_style = Style::default().fg(Color::Gray);
     lines.push(Line::from(Span::styled(

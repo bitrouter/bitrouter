@@ -62,6 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Stop) => runtime.stop().await?,
         Some(Command::Status) => {
             let status = runtime.status();
+            match status.daemon_pid {
+                Some(pid) => println!("daemon:    running (pid {pid})"),
+                None => println!("daemon:    stopped"),
+            }
             println!("config:    {}", status.config_file.display());
             println!("runtime:   {}", status.runtime_dir.display());
             println!("listen:    {}", status.listen_addr);
@@ -96,6 +100,7 @@ async fn run_default(
             listen_addr: status.listen_addr,
             providers: vec![], // TODO: populate from config
             route_count: 0,    // TODO: populate from routing table
+            daemon_pid: status.daemon_pid,
         };
 
         tokio::select! {

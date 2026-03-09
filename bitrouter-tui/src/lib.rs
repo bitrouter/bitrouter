@@ -19,6 +19,7 @@ pub struct TuiConfig {
     pub listen_addr: SocketAddr,
     pub providers: Vec<String>,
     pub route_count: usize,
+    pub daemon_pid: Option<u32>,
 }
 
 pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
