@@ -46,8 +46,8 @@ where
 {
     // The path segment is like "gemini-2.0-flash:generateContent" or
     // "gemini-2.0-flash:streamGenerateContent"
-    let is_stream =
-        request.stream.unwrap_or(false) || model_action.contains(":streamGenerateContent");
+    let action = model_action.rsplit_once(':').map(|(_, a)| a).unwrap_or("");
+    let is_stream = request.stream.unwrap_or(false) || action == "streamGenerateContent";
 
     // Extract model name from the path segment (before the colon)
     let model_from_path = model_action.split(':').next().unwrap_or(&model_action);
