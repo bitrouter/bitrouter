@@ -186,19 +186,17 @@ pub enum RouterEvent {
 
 Get a working TUI that shows the BitRouter logo and basic info on launch. No event infrastructure, no dashboard — just the welcome screen with server running in the background. `bitrouter-core` stays untouched.
 
-- [ ] Create `bitrouter-tui/Cargo.toml` with ratatui, crossterm, tokio deps (no bitrouter-core dep yet)
-- [ ] Implement `lib.rs` — public `run(config: TuiConfig) -> Result<()>` entry point (owns terminal setup/teardown)
-- [ ] Implement `app.rs` — minimal `App` struct, running flag, key handling (just `q` / `Ctrl+C` to quit)
-- [ ] Implement `event.rs` — terminal input events only (crossterm `EventStream`)
-- [ ] Implement `ui/mod.rs` + `ui/welcome.rs` — two-column layout:
-  - Left: ASCII logo, "Open Intelligence Router" tagline
-  - Right: server status (listen address), configured providers, route count
-- [ ] Add `tui` feature flag (default on) to `bitrouter/Cargo.toml`, depend on `bitrouter-tui`
-- [ ] Update `bitrouter/src/main.rs`:
+- [x] Create `bitrouter-tui/Cargo.toml` with ratatui, crossterm, tokio deps (no bitrouter-core dep yet)
+- [x] Implement `lib.rs` — public `run(config: TuiConfig) -> Result<()>` entry point (owns terminal setup/teardown)
+- [x] Implement `app.rs` — minimal `App` struct, running flag, key handling (just `q` / `Ctrl+C` to quit)
+- [x] Implement `event.rs` — terminal input events only (crossterm `EventStream`)
+- [x] Implement `ui/mod.rs` + `ui/welcome.rs` — responsive ASCII logo (large/small based on terminal width), "Open Intelligence Router for LLM Agents" tagline, server info
+- [x] Add `tui` feature flag (default on) to `bitrouter/Cargo.toml`, depend on `bitrouter-tui`
+- [x] Update `bitrouter/src/main.rs`:
   - Bare `bitrouter` → spawn server task + launch TUI (blocks until quit)
   - `bitrouter --headless` → server only (current `serve` behavior)
   - On TUI quit → abort server, restore terminal, exit cleanly
-- [ ] Pass `TuiConfig` from runtime config (listen addr, provider names) — simple struct, no Arc/shared state
+- [x] Pass `TuiConfig` from runtime config (listen addr, provider names) — simple struct, no Arc/shared state
 
 ### Phase 2: Event infrastructure (`bitrouter-core`, `bitrouter-api`)
 
