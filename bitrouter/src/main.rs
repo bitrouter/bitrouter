@@ -1,3 +1,57 @@
-fn main() {
-    println!("Hello, world!");
+use std::path::PathBuf;
+
+use bitrouter_runtime::AppRuntime;
+use clap::{Parser, Subcommand};
+
+#[derive(Debug, Parser)]
+#[command(name = "bitrouter", version, about = "BitRouter CLI")]
+struct Cli {
+    #[arg(long, global = true, default_value = "bitrouter.toml")]
+    config: PathBuf,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    Serve,
+    Start,
+    Stop,
+    Status,
+    Restart,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+    init_tracing();
+
+    let runtime = match cli.command {
+        Command::Serve => AppRuntime::scaffold(cli.config),
+        _ => AppRuntime::load(&cli.config).unwrap_or_else(|_| AppRuntime::scaffold(cli.config)),
+    };
+
+    match cli.command {
+        Command::Serve => runtime.serve().await?,
+        Command::Start => runtime.start().await?,
+        Command::Stop => runtime.stop().await?,
+        Command::Status => {
+            let status = runtime.status();
+            println!("config: {}", status.config_file.display());
+            println!("runtime: {}", status.runtime_dir.display());
+            println!("listen: {}", status.listen_addr);
+        }
+        Command::Restart => runtime.restart().await?,
+    }
+
+    Ok(())
+}
+
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
 }

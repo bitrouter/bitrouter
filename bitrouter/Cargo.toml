@@ -6,3 +6,9 @@ description = "BitRouter"
 authors = ["Archer <archer@bitrouter.ai>"]
 license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
+
+[dependencies]
+bitrouter-runtime = { path = "../bitrouter-runtime", version = "0.0" }
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
