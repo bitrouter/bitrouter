@@ -70,7 +70,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         format!(
             "{} provider{} configured",
             app.config.providers.len(),
-            if app.config.providers.len() == 1 { "" } else { "s" }
+            if app.config.providers.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
         ),
         info_style,
     )));

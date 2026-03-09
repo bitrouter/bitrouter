@@ -78,7 +78,7 @@ async fn run_interactive(
         let tui_config = bitrouter_tui::TuiConfig {
             listen_addr: status.listen_addr,
             providers: vec![], // TODO: populate from config
-            route_count: 0,   // TODO: populate from routing table
+            route_count: 0,    // TODO: populate from routing table
         };
 
         let server_handle = tokio::spawn(async move {
