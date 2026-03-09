@@ -54,6 +54,22 @@ impl Router {
             default_headers,
         })
     }
+
+    fn build_google_config(&self, provider: &ProviderConfig) -> Result<GoogleConfig> {
+        let api_key = provider.api_key.clone().unwrap_or_default();
+        let base_url = provider
+            .api_base
+            .clone()
+            .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
+
+        let default_headers = parse_headers(provider.default_headers.as_ref())?;
+
+        Ok(GoogleConfig {
+            api_key,
+            base_url,
+            default_headers,
+        })
+    }
 }
 
 impl LanguageModelRouter for Router {
@@ -96,11 +112,15 @@ impl LanguageModelRouter for Router {
                 );
                 Ok(DynLanguageModel::new_box(model))
             }
-            ApiProtocol::Google => Err(BitrouterError::unsupported(
-                &target.provider_name,
-                "google provider",
-                Some("Google provider is not yet implemented".into()),
-            )),
+            ApiProtocol::Google => {
+                let config = self.build_google_config(provider)?;
+                let model = GoogleGenerativeAiModel::with_client(
+                    target.model_id,
+                    self.client.clone(),
+                    config,
+                );
+                Ok(DynLanguageModel::new_box(model))
+            }
         }
     }
 }
@@ -131,4 +151,5 @@ fn parse_headers(headers: Option<&HashMap<String, String>>) -> Result<HeaderMap>
 
 // Re-export provider types under short aliases for readability.
 use bitrouter_anthropic::messages::provider::{AnthropicConfig, AnthropicMessagesModel};
+use bitrouter_google::generate_content::provider::{GoogleConfig, GoogleGenerativeAiModel};
 use bitrouter_openai::chat::provider::{OpenAiChatCompletionsModel, OpenAiConfig};
