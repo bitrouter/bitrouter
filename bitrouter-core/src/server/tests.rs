@@ -1,5 +1,5 @@
 use super::{
-    auth::{AuthContext, AuthDecision, Authenticator, AuthScope, AuthSubject},
+    auth::{AuthContext, AuthDecision, AuthScope, AuthSubject, Authenticator},
     errors::ServerError,
     ids::{AccountId, RequestId},
     pagination::{Page, PaginationRequest},
@@ -8,10 +8,7 @@ use super::{
 struct MockAuthenticator;
 
 impl Authenticator for MockAuthenticator {
-    async fn authenticate(
-        &self,
-        context: AuthContext,
-    ) -> super::errors::Result<AuthDecision> {
+    async fn authenticate(&self, context: AuthContext) -> super::errors::Result<AuthDecision> {
         if context.authorization.is_some() {
             Ok(AuthDecision::allow(
                 AuthSubject::Account {
@@ -20,7 +17,9 @@ impl Authenticator for MockAuthenticator {
                 context.required_scopes,
             ))
         } else {
-            Ok(AuthDecision::deny(ServerError::unauthorized("missing token")))
+            Ok(AuthDecision::deny(ServerError::unauthorized(
+                "missing token",
+            )))
         }
     }
 }
@@ -28,17 +27,16 @@ impl Authenticator for MockAuthenticator {
 #[test]
 fn authenticator_contract_supports_async_impls() {
     let authenticator = MockAuthenticator;
-    let future = authenticator
-        .authenticate(AuthContext {
-            request_id: RequestId::from("req_123"),
-            method: http::Method::GET,
-            path: "/v1/sessions".to_owned(),
-            authorization: Some("Bearer test".to_owned()),
-            remote_addr: None,
-            required_scopes: vec![AuthScope::SessionsRead],
-        });
+    let future = authenticator.authenticate(AuthContext {
+        request_id: RequestId::from("req_123"),
+        method: http::Method::GET,
+        path: "/v1/sessions".to_owned(),
+        authorization: Some("Bearer test".to_owned()),
+        remote_addr: None,
+        required_scopes: vec![AuthScope::SessionsRead],
+    });
 
-    let _ = future;
+    std::mem::drop(future);
 }
 
 #[test]

@@ -1,8 +1,8 @@
 use std::future::Future;
 
 use super::{
-    ids::{AccountId, ApiKeyId, RequestId},
     errors::Result,
+    ids::{AccountId, ApiKeyId, RequestId},
     time::Timestamp,
 };
 

@@ -1,7 +1,7 @@
 use std::{convert::Infallible, sync::Arc};
 
 use bitrouter_core::server::{
-    auth::{AuthContext, AuthDecision, Authenticator, AuthScope},
+    auth::{AuthContext, AuthDecision, AuthScope, Authenticator},
     errors::ServerError,
     ids::RequestId,
 };
@@ -10,7 +10,10 @@ use warp::{Filter, Rejection, Reply, http};
 use crate::util::generate_id;
 
 #[derive(Debug)]
-struct AuthRejection(ServerError);
+struct AuthRejection {
+    request_id: RequestId,
+    error: ServerError,
+}
 
 impl warp::reject::Reject for AuthRejection {}
 
@@ -43,9 +46,10 @@ async fn handle_authentication<T>(
 where
     T: Authenticator + Send + Sync + 'static,
 {
+    let request_id = RequestId::from(request_id.unwrap_or_else(generate_id));
     let decision = authenticator
         .authenticate(AuthContext {
-            request_id: RequestId::from(request_id.unwrap_or_else(generate_id)),
+            request_id: request_id.clone(),
             method,
             path: path.as_str().to_owned(),
             authorization,
@@ -53,69 +57,93 @@ where
             required_scopes: (*required_scopes).clone(),
         })
         .await
-        .map_err(|error| warp::reject::custom(AuthRejection(error)))?;
+        .map_err(|error| {
+            warp::reject::custom(AuthRejection {
+                request_id: request_id.clone(),
+                error,
+            })
+        })?;
 
     match decision {
         AuthDecision::Allow { .. } => Ok(decision),
-        AuthDecision::Deny(error) => Err(warp::reject::custom(AuthRejection(error))),
+        AuthDecision::Deny(error) => Err(warp::reject::custom(AuthRejection { request_id, error })),
     }
 }
 
 pub async fn rejection_handler(err: Rejection) -> Result<impl Reply, Infallible> {
-    let (code, message, error_type) = if let Some(AuthRejection(error)) = err.find::<AuthRejection>()
-    {
-        match error {
-            ServerError::InvalidInput { message } => {
-                (warp::http::StatusCode::BAD_REQUEST, message.clone(), "invalid_input")
+    let (code, message, error_type, request_id) =
+        if let Some(rejection) = err.find::<AuthRejection>() {
+            match &rejection.error {
+                ServerError::InvalidInput { message } => (
+                    warp::http::StatusCode::BAD_REQUEST,
+                    message.clone(),
+                    "invalid_input",
+                    Some(rejection.request_id.to_string()),
+                ),
+                ServerError::Unauthorized { message } => (
+                    warp::http::StatusCode::UNAUTHORIZED,
+                    message.clone(),
+                    "unauthorized",
+                    Some(rejection.request_id.to_string()),
+                ),
+                ServerError::Forbidden { message } => (
+                    warp::http::StatusCode::FORBIDDEN,
+                    message.clone(),
+                    "forbidden",
+                    Some(rejection.request_id.to_string()),
+                ),
+                ServerError::NotFound { resource } => (
+                    warp::http::StatusCode::NOT_FOUND,
+                    resource.clone(),
+                    "not_found",
+                    Some(rejection.request_id.to_string()),
+                ),
+                ServerError::Conflict { message } => (
+                    warp::http::StatusCode::CONFLICT,
+                    message.clone(),
+                    "conflict",
+                    Some(rejection.request_id.to_string()),
+                ),
+                ServerError::RateLimited { message, .. } => (
+                    warp::http::StatusCode::TOO_MANY_REQUESTS,
+                    message.clone(),
+                    "rate_limited",
+                    Some(rejection.request_id.to_string()),
+                ),
+                ServerError::Unavailable { message } => (
+                    warp::http::StatusCode::SERVICE_UNAVAILABLE,
+                    message.clone(),
+                    "unavailable",
+                    Some(rejection.request_id.to_string()),
+                ),
+                ServerError::Internal { message } => (
+                    warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    message.clone(),
+                    "internal_error",
+                    Some(rejection.request_id.to_string()),
+                ),
             }
-            ServerError::Unauthorized { message } => {
-                (warp::http::StatusCode::UNAUTHORIZED, message.clone(), "unauthorized")
-            }
-            ServerError::Forbidden { message } => {
-                (warp::http::StatusCode::FORBIDDEN, message.clone(), "forbidden")
-            }
-            ServerError::NotFound { resource } => (
+        } else if err.is_not_found() {
+            (
                 warp::http::StatusCode::NOT_FOUND,
-                resource.clone(),
+                "not found".to_owned(),
                 "not_found",
-            ),
-            ServerError::Conflict { message } => {
-                (warp::http::StatusCode::CONFLICT, message.clone(), "conflict")
-            }
-            ServerError::RateLimited { message, .. } => (
-                warp::http::StatusCode::TOO_MANY_REQUESTS,
-                message.clone(),
-                "rate_limited",
-            ),
-            ServerError::Unavailable { message } => (
-                warp::http::StatusCode::SERVICE_UNAVAILABLE,
-                message.clone(),
-                "unavailable",
-            ),
-            ServerError::Internal { message } => (
+                None,
+            )
+        } else {
+            (
                 warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-                message.clone(),
+                "internal server error".to_owned(),
                 "internal_error",
-            ),
-        }
-    } else if err.is_not_found() {
-        (
-            warp::http::StatusCode::NOT_FOUND,
-            "not found".to_owned(),
-            "not_found",
-        )
-    } else {
-        (
-            warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "internal server error".to_owned(),
-            "internal_error",
-        )
-    };
+                None,
+            )
+        };
 
     let json = warp::reply::json(&serde_json::json!({
         "error": {
             "message": message,
             "type": error_type,
+            "request_id": request_id,
         }
     }));
 

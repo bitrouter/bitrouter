@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bitrouter_core::server::{
-    auth::{AuthContext, AuthDecision, Authenticator, AuthScope, AuthSubject},
+    auth::{AuthContext, AuthDecision, AuthScope, AuthSubject, Authenticator},
     errors::{Result, ServerError},
     ids::{AccountId, RequestId},
 };
@@ -23,7 +23,9 @@ impl Authenticator for MockAuthenticator {
                 context.required_scopes,
             ))
         } else {
-            Ok(AuthDecision::deny(ServerError::unauthorized("missing bearer token")))
+            Ok(AuthDecision::deny(ServerError::unauthorized(
+                "missing bearer token",
+            )))
         }
     }
 }
@@ -75,7 +77,10 @@ async fn auth_context_filter_allows_authenticated_requests() {
 async fn auth_context_filter_maps_domain_denials_to_http_errors() {
     let authenticator = Arc::new(MockAuthenticator);
     let filter = warp::path("protected")
-        .and(auth_context_filter(authenticator, vec![AuthScope::Inference]))
+        .and(auth_context_filter(
+            authenticator,
+            vec![AuthScope::Inference],
+        ))
         .map(|_: AuthDecision| warp::reply())
         .recover(rejection_handler);
 

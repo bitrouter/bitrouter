@@ -66,10 +66,7 @@ pub trait BlobReader {
         request: GetBlobRequest,
     ) -> impl Future<Output = Result<BlobMetadata>> + Send;
 
-    fn get_blob(
-        &self,
-        request: GetBlobRequest,
-    ) -> impl Future<Output = Result<Vec<u8>>> + Send;
+    fn get_blob(&self, request: GetBlobRequest) -> impl Future<Output = Result<Vec<u8>>> + Send;
 }
 
 pub trait BlobWriter {
@@ -78,10 +75,7 @@ pub trait BlobWriter {
         request: PutBlobRequest,
     ) -> impl Future<Output = Result<BlobMetadata>> + Send;
 
-    fn delete_blob(
-        &self,
-        request: DeleteBlobRequest,
-    ) -> impl Future<Output = Result<()>> + Send;
+    fn delete_blob(&self, request: DeleteBlobRequest) -> impl Future<Output = Result<()>> + Send;
 }
 
 pub trait BlobStore: BlobReader + BlobWriter {}
