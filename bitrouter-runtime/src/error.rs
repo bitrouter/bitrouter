@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf};
+use std::io;
 
 use thiserror::Error;
 
@@ -8,8 +8,10 @@ pub type Result<T> = std::result::Result<T, RuntimeError>;
 pub enum RuntimeError {
     #[error("unsupported operation: {0}")]
     Unsupported(&'static str),
-    #[error("configuration file not found: {0}")]
-    MissingConfig(PathBuf),
+    #[error("daemon error: {0}")]
+    Daemon(String),
+    #[error(transparent)]
+    Config(#[from] bitrouter_config::ConfigError),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 }

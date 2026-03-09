@@ -15,3 +15,7 @@ target
 
 # Misc
 **/.DS_Store
+
+# CLI generated
+logs
+run

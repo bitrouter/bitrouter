@@ -8,7 +8,7 @@ license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 
 [features]
-default = ["openai", "anthropic"]
+default = ["openai", "anthropic", "google"]
 openai = ["bitrouter-openai"]
 anthropic = ["bitrouter-anthropic"]
 google = ["bitrouter-google"]
