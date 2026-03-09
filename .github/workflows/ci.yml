@@ -49,6 +49,75 @@ jobs:
         with:
           args: --all-features
 
+  feature-build:
+    name: stable / build / ${{ matrix.crate }} / ${{ matrix.feature_set }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: bitrouter
+            feature_set: no-features
+            cargo_args: --no-default-features
+          - crate: bitrouter
+            feature_set: tui
+            cargo_args: --no-default-features --features tui
+          - crate: bitrouter
+            feature_set: all-features
+            cargo_args: --all-features
+          - crate: bitrouter-api
+            feature_set: no-features
+            cargo_args: --no-default-features
+          - crate: bitrouter-api
+            feature_set: openai
+            cargo_args: --no-default-features --features openai
+          - crate: bitrouter-api
+            feature_set: anthropic
+            cargo_args: --no-default-features --features anthropic
+          - crate: bitrouter-api
+            feature_set: google
+            cargo_args: --no-default-features --features google
+          - crate: bitrouter-api
+            feature_set: all-features
+            cargo_args: --all-features
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build crate
+        run: cargo build -p ${{ matrix.crate }} ${{ matrix.cargo_args }}
+
+  runtime-cross-platform:
+    name: stable / bitrouter-runtime / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build bitrouter-runtime
+        run: cargo build -p bitrouter-runtime
+
+      - name: Test bitrouter-runtime
+        run: cargo test -p bitrouter-runtime
+
   test:
     name: stable / test
     runs-on: ubuntu-latest
