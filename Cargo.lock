@@ -177,6 +177,7 @@ dependencies = [
  "bitrouter-api",
  "bitrouter-config",
  "bitrouter-core",
+ "libc",
  "thiserror",
  "tokio",
  "tracing",

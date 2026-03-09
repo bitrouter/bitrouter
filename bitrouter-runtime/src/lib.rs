@@ -1,5 +1,6 @@
 pub mod app;
 pub mod control;
+pub mod daemon;
 pub mod error;
 pub mod paths;
 pub mod server;
