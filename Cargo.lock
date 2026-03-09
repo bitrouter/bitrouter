@@ -112,6 +112,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitrouter-sessions"
+version = "0.0.0"
+dependencies = [
+ "bitrouter-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
