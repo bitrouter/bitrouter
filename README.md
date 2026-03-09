@@ -25,11 +25,11 @@ As LLM agents grow more autonomous, humans can no longer hand-pick the best mode
 
 | Crate | Description |
 |---|---|
-| `bitrouter-core` | Core traits, models, and error types |
+| `bitrouter-core` | Core traits, models, error types, and server-side product contracts |
 | `bitrouter-openai` | OpenAI adapter (Chat Completions & Responses API) |
 | `bitrouter-anthropic` | Anthropic adapter (Messages API) |
 | `bitrouter-google` | Google adapter (Gemini API) |
-| `bitrouter-warp-router` | HTTP routing layer via Warp |
+| `bitrouter-api` | HTTP routing layer via Warp |
 | `bitrouter` | Top-level re-export crate |
 
 ## Quick Start
