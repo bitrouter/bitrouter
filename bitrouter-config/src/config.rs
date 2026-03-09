@@ -12,8 +12,7 @@ use crate::registry::{builtin_providers, merge_provider, resolve_providers};
 // ── Top-level configuration ──────────────────────────────────────────
 
 /// Root configuration file, typically `bitrouter.yaml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BitrouterConfig {
     #[serde(default)]
     pub server: ServerConfig,
@@ -30,7 +29,6 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub models: HashMap<String, ModelConfig>,
 }
-
 
 impl BitrouterConfig {
     /// Full config loading pipeline:

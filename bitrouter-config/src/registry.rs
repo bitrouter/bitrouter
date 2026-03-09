@@ -107,13 +107,15 @@ pub fn resolve_providers(
     for provider in providers.values_mut() {
         if let Some(prefix) = &provider.env_prefix {
             if let Some(key) = env.get(&format!("{prefix}_API_KEY"))
-                && !key.is_empty() {
-                    provider.api_key = Some(key.clone());
-                }
+                && !key.is_empty()
+            {
+                provider.api_key = Some(key.clone());
+            }
             if let Some(url) = env.get(&format!("{prefix}_BASE_URL"))
-                && !url.is_empty() {
-                    provider.api_base = Some(url.clone());
-                }
+                && !url.is_empty()
+            {
+                provider.api_base = Some(url.clone());
+            }
         }
     }
 
@@ -145,27 +147,28 @@ fn resolve_derives(
 
     // Clone parent fields, then overlay child's explicit values
     if let Some(parent) = providers.get(&parent_name).cloned()
-        && let Some(child) = providers.get_mut(name) {
-            if child.api_protocol.is_none() {
-                child.api_protocol = parent.api_protocol;
-            }
-            if child.api_base.is_none() {
-                child.api_base = parent.api_base;
-            }
-            if child.api_key.is_none() {
-                child.api_key = parent.api_key;
-            }
-            if child.auth.is_none() {
-                child.auth = parent.auth;
-            }
-            if child.env_prefix.is_none() {
-                child.env_prefix = parent.env_prefix;
-            }
-            if child.default_headers.is_none() {
-                child.default_headers = parent.default_headers;
-            }
-            child.derives = None;
+        && let Some(child) = providers.get_mut(name)
+    {
+        if child.api_protocol.is_none() {
+            child.api_protocol = parent.api_protocol;
         }
+        if child.api_base.is_none() {
+            child.api_base = parent.api_base;
+        }
+        if child.api_key.is_none() {
+            child.api_key = parent.api_key;
+        }
+        if child.auth.is_none() {
+            child.auth = parent.auth;
+        }
+        if child.env_prefix.is_none() {
+            child.env_prefix = parent.env_prefix;
+        }
+        if child.default_headers.is_none() {
+            child.default_headers = parent.default_headers;
+        }
+        child.derives = None;
+    }
 }
 
 #[cfg(test)]
