@@ -1,151 +1,66 @@
 use std::collections::HashMap;
 
+use serde::Deserialize;
+
 use crate::config::{ApiProtocol, ProviderConfig};
+
+// ── Compile-time embedded provider definitions ──────────────────────
+
+const PROVIDER_DEFS: &[(&str, &str)] = &[
+    ("openai", include_str!("../providers/openai.yaml")),
+    ("anthropic", include_str!("../providers/anthropic.yaml")),
+    ("google", include_str!("../providers/google.yaml")),
+];
+
+/// Raw YAML shape for built-in provider files.
+#[derive(Debug, Deserialize)]
+struct ProviderDef {
+    api_protocol: ApiProtocol,
+    api_base: String,
+    env_prefix: String,
+    #[serde(default)]
+    models: Vec<String>,
+}
+
+/// A built-in provider with its configuration and known model IDs.
+#[derive(Debug, Clone)]
+pub struct BuiltinProvider {
+    pub config: ProviderConfig,
+    pub models: Vec<String>,
+}
+
+/// Returns the full built-in provider definitions including model lists.
+pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
+    PROVIDER_DEFS
+        .iter()
+        .map(|(name, yaml)| {
+            let def: ProviderDef = serde_yaml::from_str(yaml)
+                .unwrap_or_else(|e| panic!("invalid built-in provider YAML '{name}': {e}"));
+            (
+                (*name).to_owned(),
+                BuiltinProvider {
+                    config: ProviderConfig {
+                        api_protocol: Some(def.api_protocol),
+                        api_base: Some(def.api_base),
+                        env_prefix: Some(def.env_prefix),
+                        ..Default::default()
+                    },
+                    models: def.models,
+                },
+            )
+        })
+        .collect()
+}
 
 /// Returns the built-in provider registry with defaults for well-known providers.
 ///
 /// Users override these by declaring the same provider name in their config file.
 /// Custom providers can `derives` from any of these to inherit settings.
 pub fn builtin_providers() -> HashMap<String, ProviderConfig> {
-    let mut p = HashMap::new();
-
-    // ── OpenAI-compatible providers ──────────────────────────────
-
-    p.insert(
-        "openai".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.openai.com/v1".into()),
-            env_prefix: Some("OPENAI".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "openrouter".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://openrouter.ai/api/v1".into()),
-            env_prefix: Some("OPENROUTER".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "deepseek".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.deepseek.com/v1".into()),
-            env_prefix: Some("DEEPSEEK".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "mistral".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.mistral.ai/v1".into()),
-            env_prefix: Some("MISTRAL".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "groq".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.groq.com/openai/v1".into()),
-            env_prefix: Some("GROQ".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "together".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.together.xyz/v1".into()),
-            env_prefix: Some("TOGETHER".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "fireworks".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.fireworks.ai/inference/v1".into()),
-            env_prefix: Some("FIREWORKS".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "xai".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.x.ai/v1".into()),
-            env_prefix: Some("XAI".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "perplexity".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.perplexity.ai".into()),
-            env_prefix: Some("PERPLEXITY".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "cerebras".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.cerebras.ai/v1".into()),
-            env_prefix: Some("CEREBRAS".into()),
-            ..Default::default()
-        },
-    );
-
-    p.insert(
-        "sambanova".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Openai),
-            api_base: Some("https://api.sambanova.ai/v1".into()),
-            env_prefix: Some("SAMBANOVA".into()),
-            ..Default::default()
-        },
-    );
-
-    // ── Anthropic-protocol providers ────────────────────────────
-
-    p.insert(
-        "anthropic".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Anthropic),
-            api_base: Some("https://api.anthropic.com".into()),
-            env_prefix: Some("ANTHROPIC".into()),
-            ..Default::default()
-        },
-    );
-
-    // ── Google-protocol providers ───────────────────────────────
-
-    p.insert(
-        "google".into(),
-        ProviderConfig {
-            api_protocol: Some(ApiProtocol::Google),
-            api_base: Some("https://generativelanguage.googleapis.com".into()),
-            env_prefix: Some("GOOGLE".into()),
-            ..Default::default()
-        },
-    );
-
-    p
+    builtin_provider_defs()
+        .into_iter()
+        .map(|(name, bp)| (name, bp.config))
+        .collect()
 }
 
 /// Merges a user-provided provider config on top of a base config.

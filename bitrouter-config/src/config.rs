@@ -355,7 +355,5 @@ providers:
         assert!(config.providers.contains_key("openai"));
         assert!(config.providers.contains_key("anthropic"));
         assert!(config.providers.contains_key("google"));
-        assert!(config.providers.contains_key("openrouter"));
-        assert!(config.providers.contains_key("deepseek"));
     }
 }

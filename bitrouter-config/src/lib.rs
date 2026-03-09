@@ -9,4 +9,5 @@ pub use config::{
     ProviderConfig, RoutingStrategy, ServerConfig,
 };
 pub use error::{ConfigError, Result};
+pub use registry::{BuiltinProvider, builtin_provider_defs};
 pub use routing::{ConfigRoutingTable, ResolvedTarget};
