@@ -86,6 +86,7 @@ dependencies = [
  "bitrouter-config",
  "bitrouter-runtime",
  "clap",
+ "reqwest",
  "tokio",
  "tracing-subscriber",
 ]
@@ -174,10 +175,13 @@ dependencies = [
 name = "bitrouter-runtime"
 version = "0.0.0"
 dependencies = [
+ "bitrouter-anthropic",
  "bitrouter-api",
  "bitrouter-config",
  "bitrouter-core",
+ "bitrouter-openai",
  "libc",
+ "reqwest",
  "serde_json",
  "thiserror",
  "tokio",

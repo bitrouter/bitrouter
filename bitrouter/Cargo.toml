@@ -11,5 +11,8 @@ repository = "https://github.com/bitrouter/bitrouter"
 bitrouter-config = { path = "../bitrouter-config", version = "0.0" }
 bitrouter-runtime = { path = "../bitrouter-runtime", version = "0.0" }
 clap = { version = "4.5", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

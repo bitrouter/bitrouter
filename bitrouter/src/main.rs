@@ -35,7 +35,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     match cli.command {
-        Command::Serve => runtime.serve(bitrouter_runtime::server::StubModelRouter).await?,
+        Command::Serve => {
+            let model_router = bitrouter_runtime::Router::new(
+                reqwest::Client::new(),
+                runtime.config().providers.clone(),
+            );
+            runtime.serve(model_router).await?
+        }
         Command::Start => runtime.start().await?,
         Command::Stop => runtime.stop().await?,
         Command::Status => {
