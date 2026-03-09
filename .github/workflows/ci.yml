@@ -124,10 +124,7 @@ jobs:
           tool: nextest
 
       - name: Test bitrouter-runtime with nextest
-        uses: actions-rs/cargo@v1
-        with:
-          command: nextest
-          args: run --no-tests pass -p bitrouter-runtime
+        run: cargo nextest run --no-tests pass -p bitrouter-runtime
 
   test:
     name: stable / test
@@ -149,7 +146,4 @@ jobs:
           tool: nextest
 
       - name: Test with latest nextest release
-        uses: actions-rs/cargo@v1
-        with:
-          command: nextest
-          args: run --all-features
+        run: cargo nextest run --all-features
