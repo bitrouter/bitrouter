@@ -17,10 +17,6 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub server: ServerConfig,
 
-    /// Optional path to a `.env` file.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env_file: Option<String>,
-
     /// Provider definitions (merged on top of built-in providers).
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
@@ -34,30 +30,28 @@ impl BitrouterConfig {
     /// Full config loading pipeline:
     ///
     /// 1. Read and parse YAML
-    /// 2. Optionally load a `.env` file
+    /// 2. Load `.env` file (provided externally by the runtime)
     /// 3. Substitute `${VAR}` references in all string values
     /// 4. Merge user providers on top of the built-in registry
     /// 5. Resolve `derives` chains
     /// 6. Apply `env_prefix` auto-overrides
-    pub fn load_from_file(path: &Path) -> crate::error::Result<Self> {
+    pub fn load_from_file(path: &Path, env_file: Option<&Path>) -> crate::error::Result<Self> {
         let raw =
             std::fs::read_to_string(path).map_err(|e| crate::error::ConfigError::ConfigRead {
                 path: path.to_path_buf(),
                 source: e,
             })?;
-        Self::load_from_str(&raw)
+        Self::load_from_str(&raw, env_file)
     }
 
     /// Loads from an in-memory YAML string (useful for testing).
-    pub fn load_from_str(raw: &str) -> crate::error::Result<Self> {
-        // First pass: extract env_file before full substitution
-        let pre: PreConfig = serde_yaml::from_str(raw)
-            .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
+    ///
+    /// The optional `env_file` path is resolved by the caller (runtime layer).
+    pub fn load_from_str(raw: &str, env_file: Option<&Path>) -> crate::error::Result<Self> {
+        // Load environment (.env + process env)
+        let env = load_env(env_file);
 
-        // Load environment
-        let env = load_env(pre.env_file.as_deref());
-
-        // Second pass: substitute env vars in the YAML tree, then deserialize
+        // Substitute env vars in the YAML tree, then deserialize
         let yaml_value: serde_yaml::Value = serde_yaml::from_str(raw)
             .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
         let substituted = substitute_in_value(yaml_value, &env);
@@ -79,13 +73,6 @@ impl BitrouterConfig {
 
         Ok(config)
     }
-}
-
-/// Minimal pre-parse to extract `env_file` before full substitution.
-#[derive(Deserialize)]
-struct PreConfig {
-    #[serde(default)]
-    env_file: Option<String>,
 }
 
 // ── Server configuration ─────────────────────────────────────────────
@@ -265,7 +252,7 @@ providers:
   openai:
     api_key: "sk-test"
 "#;
-        let config = BitrouterConfig::load_from_str(yaml).unwrap();
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
         assert_eq!(config.server.listen, "127.0.0.1:9090".parse().unwrap());
         // Should have all builtins + user override merged
         assert!(config.providers.contains_key("openai"));
@@ -285,7 +272,7 @@ providers:
     api_base: "https://api.mycompany.com/v1"
     api_key: "sk-custom"
 "#;
-        let config = BitrouterConfig::load_from_str(yaml).unwrap();
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
         let p = &config.providers["my-company"];
         assert_eq!(p.api_protocol, Some(ApiProtocol::Openai)); // inherited
         assert_eq!(p.api_base.as_deref(), Some("https://api.mycompany.com/v1")); // overridden
@@ -310,7 +297,7 @@ models:
         model_id: gpt-4o
         api_key: "sk-key-b"
 "#;
-        let config = BitrouterConfig::load_from_str(yaml).unwrap();
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
         let model = &config.models["my-gpt4"];
         assert_eq!(model.strategy, RoutingStrategy::LoadBalance);
         assert_eq!(model.endpoints.len(), 2);
@@ -330,7 +317,7 @@ providers:
       params:
         chain_id: 1
 "#;
-        let config = BitrouterConfig::load_from_str(yaml).unwrap();
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
         let p = &config.providers["aimo"];
         assert!(matches!(p.auth, Some(AuthConfig::Custom { .. })));
         if let Some(AuthConfig::Custom { method, .. }) = &p.auth {
@@ -340,7 +327,7 @@ providers:
 
     #[test]
     fn empty_yaml_gets_full_builtins() {
-        let config = BitrouterConfig::load_from_str("{}").unwrap();
+        let config = BitrouterConfig::load_from_str("{}", None).unwrap();
         assert!(config.providers.contains_key("openai"));
         assert!(config.providers.contains_key("anthropic"));
         assert!(config.providers.contains_key("google"));

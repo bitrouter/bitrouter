@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use bitrouter_runtime::AppRuntime;
+use bitrouter_runtime::{AppRuntime, PathOverrides, resolve_home};
 use clap::{Parser, Subcommand};
 
 type DefaultRuntime = AppRuntime<bitrouter_config::ConfigRoutingTable>;
@@ -8,8 +8,25 @@ type DefaultRuntime = AppRuntime<bitrouter_config::ConfigRoutingTable>;
 #[derive(Debug, Parser)]
 #[command(name = "bitrouter", version, about = "BitRouter CLI")]
 struct Cli {
-    #[arg(long, global = true, default_value = "bitrouter.yaml")]
-    config: PathBuf,
+    /// BitRouter home directory (overrides automatic resolution)
+    #[arg(long, global = true)]
+    home_dir: Option<PathBuf>,
+
+    /// Path to config file (overrides <home>/bitrouter.yaml)
+    #[arg(long, global = true)]
+    config_file: Option<PathBuf>,
+
+    /// Path to .env file (overrides <home>/.env)
+    #[arg(long, global = true)]
+    env_file: Option<PathBuf>,
+
+    /// Path to runtime directory (overrides <home>/run)
+    #[arg(long, global = true)]
+    run_dir: Option<PathBuf>,
+
+    /// Path to logs directory (overrides <home>/logs)
+    #[arg(long, global = true)]
+    logs_dir: Option<PathBuf>,
 
     /// Run server without the TUI (headless mode)
     #[arg(long)]
@@ -43,11 +60,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         init_tracing();
     }
 
-    let runtime: DefaultRuntime = match &cli.command {
-        Some(Command::Serve) => DefaultRuntime::scaffold(cli.config.clone()),
-        _ => DefaultRuntime::load(&cli.config)
-            .unwrap_or_else(|_| DefaultRuntime::scaffold(cli.config.clone())),
+    // Resolve home directory + apply any per-path overrides
+    let paths = resolve_home(cli.home_dir.as_deref());
+    let overrides = PathOverrides {
+        config_file: cli.config_file,
+        env_file: cli.env_file,
+        runtime_dir: cli.run_dir,
+        log_dir: cli.logs_dir,
     };
+    let paths = overrides.apply(paths);
+
+    let runtime: DefaultRuntime =
+        DefaultRuntime::load(paths.clone()).unwrap_or_else(|_| DefaultRuntime::scaffold(paths));
 
     match cli.command {
         None => run_default(runtime, cli.headless).await?,
@@ -62,6 +86,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Stop) => runtime.stop().await?,
         Some(Command::Status) => {
             let status = runtime.status();
+            match status.daemon_pid {
+                Some(pid) => println!("daemon:    running (pid {pid})"),
+                None => println!("daemon:    stopped"),
+            }
+            println!("home:      {}", status.home_dir.display());
             println!("config:    {}", status.config_file.display());
             println!("runtime:   {}", status.runtime_dir.display());
             println!("listen:    {}", status.listen_addr);
@@ -96,6 +125,7 @@ async fn run_default(
             listen_addr: status.listen_addr,
             providers: vec![], // TODO: populate from config
             route_count: 0,    // TODO: populate from routing table
+            daemon_pid: status.daemon_pid,
         };
 
         tokio::select! {

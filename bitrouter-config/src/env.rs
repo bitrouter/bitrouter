@@ -6,12 +6,12 @@ use std::path::Path;
 /// optionally supplemented by a `.env` file.
 ///
 /// Precedence (highest wins): process environment > `.env` file.
-pub fn load_env(env_file: Option<&str>) -> HashMap<String, String> {
+pub fn load_env(env_file: Option<&Path>) -> HashMap<String, String> {
     let mut env = HashMap::new();
 
     // Load from .env file first (lower priority)
     if let Some(path) = env_file
-        && let Ok(vars) = load_dotenv(Path::new(path))
+        && let Ok(vars) = load_dotenv(path)
     {
         env.extend(vars);
     }

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::routing_table::RoutingTable;
@@ -37,12 +37,18 @@ impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
     }
 
     pub fn status(&self) -> RuntimeStatus {
+        let daemon_pid = crate::daemon::DaemonManager::new(self.paths.clone())
+            .is_running()
+            .ok()
+            .flatten();
         RuntimeStatus {
+            home_dir: self.paths.home_dir.clone(),
             config_file: self.paths.config_file.clone(),
             runtime_dir: self.paths.runtime_dir.clone(),
             listen_addr: self.config.server.listen,
             providers: self.config.providers.keys().cloned().collect(),
             models: self.config.models.keys().cloned().collect(),
+            daemon_pid,
         }
     }
 
@@ -85,10 +91,11 @@ impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
 
 /// Convenience constructors for the default `ConfigRoutingTable`.
 impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
-    pub fn load(config_path: impl AsRef<Path>) -> Result<Self> {
-        let config_file = config_path.as_ref().to_path_buf();
-        let config = BitrouterConfig::load_from_file(&config_file)?;
-        let paths = RuntimePaths::from_config_path(config_file);
+    /// Load config from resolved paths. The `.env` file (if it exists) is loaded
+    /// automatically from `paths.env_file`.
+    pub fn load(paths: RuntimePaths) -> Result<Self> {
+        let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
+        let config = BitrouterConfig::load_from_file(&paths.config_file, env_file)?;
         let routing_table = bitrouter_config::ConfigRoutingTable::new(
             config.providers.clone(),
             config.models.clone(),
@@ -100,16 +107,16 @@ impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
         })
     }
 
-    pub fn scaffold(config_path: impl Into<PathBuf>) -> Self {
-        let config_file = config_path.into();
+    /// Build a runtime with default config (no file on disk).
+    pub fn scaffold(paths: RuntimePaths) -> Self {
         let config = BitrouterConfig::default();
         let routing_table = bitrouter_config::ConfigRoutingTable::new(
             config.providers.clone(),
             config.models.clone(),
         );
         Self {
-            paths: RuntimePaths::from_config_path(config_file),
             config,
+            paths,
             routing_table,
         }
     }
@@ -117,9 +124,12 @@ impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeStatus {
+    pub home_dir: PathBuf,
     pub config_file: PathBuf,
     pub runtime_dir: PathBuf,
     pub listen_addr: std::net::SocketAddr,
     pub providers: Vec<String>,
     pub models: Vec<String>,
+    /// PID of the running daemon, or `None` if no daemon is active.
+    pub daemon_pid: Option<u32>,
 }
