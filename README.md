@@ -23,14 +23,16 @@ As LLM agents grow more autonomous, humans can no longer hand-pick the best mode
 
 ## Crate Structure
 
-| Crate | Description |
-|---|---|
-| `bitrouter-core` | Core traits, models, and error types |
-| `bitrouter-openai` | OpenAI adapter (Chat Completions & Responses API) |
-| `bitrouter-anthropic` | Anthropic adapter (Messages API) |
-| `bitrouter-google` | Google adapter (Gemini API) |
-| `bitrouter-warp-router` | HTTP routing layer via Warp |
-| `bitrouter` | Top-level re-export crate |
+| Crate                 | Description                                                                 |
+| --------------------- | --------------------------------------------------------------------------- |
+| `bitrouter`           | CLI binary for `serve`, `start`, `stop`, `status`, and `restart`            |
+| `bitrouter-runtime`   | Runtime assembly, server bootstrap, daemon lifecycle, and provider router   |
+| `bitrouter-api`       | Reusable Warp filters for provider-compatible HTTP endpoints                |
+| `bitrouter-config`    | YAML config loading, env substitution, builtin registry, and routing table  |
+| `bitrouter-core`      | Transport-neutral model traits, routing contracts, shared types, and errors |
+| `bitrouter-openai`    | OpenAI adapter for Chat Completions and Responses APIs                      |
+| `bitrouter-anthropic` | Anthropic adapter for the Messages API                                      |
+| `bitrouter-google`    | Google adapter crate for Gemini-facing request and response translation     |
 
 ## Quick Start
 
@@ -46,42 +48,65 @@ bitrouter start
 
 ## Supported Providers
 
-| Provider | Status | Notes |
-|---|---|---|
-| OpenAI | ✅ | Chat Completions + Responses API |
-| Anthropic | ✅ | Messages API |
-| Google | ✅ | Gemini API |
+| Provider  | Status | Notes                            |
+| --------- | ------ | -------------------------------- |
+| OpenAI    | ✅     | Chat Completions + Responses API |
+| Anthropic | ✅     | Messages API                     |
+| Google    | ✅     | Generative AI API                |
 
 Want to see another provider supported? [Open an issue](https://github.com/AIMOverse/bitrouter/issues) or submit a PR — contributions are welcome. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
 
 ## Architecture
 
-```
-                         ┌─────────────────┐
-                         │   LLM Agent     │
-                         └────────┬────────┘
-                                  │ request
-                                  ▼
-                         ┌─────────────────┐
-                         │  RoutingTable   │  ← maps model name → (provider, model_id)
-                         └────────┬────────┘
-                                  │ RoutingTarget
-                                  ▼
-               ┌──────────────────────────────────────┐
-               │      LanguageModelRouter /           │
-               │      ImageModelRouter                │  ← resolves target → provider impl
-               └────┬─────────┬──────────┬────────────┘
-                    │         │          │
-                    ▼         ▼          ▼
-              ┌─────────┐ ┌──────────┐ ┌────────┐
-              │ OpenAI  │ │Anthropic │ │ Google │    ← LanguageModel / ImageModel trait
-              └─────────┘ └──────────┘ └────────┘
+```mermaid
+flowchart LR
+      Agent[LLM agent or client] --> CLI[bitrouter CLI or daemon]
+      CLI --> Runtime[bitrouter-runtime\nAppRuntime + ServerPlan]
+      Runtime --> Config[bitrouter-config\nBitrouterConfig + ConfigRoutingTable]
+      Runtime --> API[bitrouter-api\nWarp filters for OpenAI and Anthropic-compatible routes]
+      API --> Table[RoutingTable trait\nresolve alias -> provider:model]
+      Table --> Router[LanguageModelRouter\ninstantiate provider client]
+      Router --> OpenAI[bitrouter-openai]
+      Router --> Anthropic[bitrouter-anthropic]
+      Router --> Google[bitrouter-google]
+      Config --> Registry[Builtin provider registry\nplus user YAML overrides]
 ```
 
-- **`LanguageModel` / `ImageModel`** — provider trait that each adapter implements (`generate`, `stream`)
-- **`RoutingTable`** — maps an incoming model name to a `RoutingTarget` (provider + model ID)
-- **`LanguageModelRouter` / `ImageModelRouter`** — resolves a `RoutingTarget` to a concrete provider instance
-- **Provider adapters** — translate BitRouter types to/from each provider's native API
+- **`bitrouter`** drives the product surface: CLI commands either scaffold a config for `serve` or load an existing runtime for daemon control commands.
+- **`bitrouter-runtime`** owns process lifecycle and HTTP serving. It wires the routing table, provider configs, and Warp server into a runnable application.
+- **`bitrouter-config`** loads `bitrouter.yaml`, expands `${ENV_VAR}` references, merges builtin provider definitions, and builds the config-backed routing table.
+- **`bitrouter-api`** exposes provider-shaped HTTP routes such as OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and `/health`.
+- **`bitrouter-core`** defines the shared routing and model contracts used by runtime, config, API, and provider adapters.
+- **Provider crates** translate BitRouter requests into upstream provider APIs and implement the core model traits used by the router.
+
+## Crate Dependency Graph
+
+```mermaid
+flowchart TD
+      bitrouter[bitrouter] --> bitrouter_runtime[bitrouter-runtime]
+      bitrouter[bitrouter] --> bitrouter_config[bitrouter-config]
+
+      bitrouter_runtime --> bitrouter_api[bitrouter-api]
+      bitrouter_runtime --> bitrouter_config
+      bitrouter_runtime --> bitrouter_core[bitrouter-core]
+      bitrouter_runtime --> bitrouter_openai[bitrouter-openai]
+      bitrouter_runtime --> bitrouter_anthropic[bitrouter-anthropic]
+      bitrouter_runtime --> bitrouter_google[bitrouter-google]
+
+      bitrouter_api --> bitrouter_core
+      bitrouter_api -. default feature .-> bitrouter_openai
+      bitrouter_api -. default feature .-> bitrouter_anthropic
+      bitrouter_api -. default feature .-> bitrouter_google
+
+      bitrouter_config --> bitrouter_core
+      bitrouter_openai --> bitrouter_core
+      bitrouter_anthropic --> bitrouter_core
+      bitrouter_google --> bitrouter_core
+```
+
+`bitrouter-core` sits at the center of the workspace: every routing, API, config, and provider crate depends on its shared contracts. `bitrouter-runtime` is the assembly layer above that core, while `bitrouter` is the thin CLI binary on top.
+
+Current implementation note: the Google crate is part of the workspace and is wired into the dependency graph, but the runtime router still returns `unsupported` for `ApiProtocol::Google` requests today.
 
 ## Roadmap
 
@@ -116,13 +141,13 @@ We welcome contributions of all kinds — bug fixes, new providers, documentatio
 
 ### Branch Naming
 
-| Prefix | Purpose |
-|---|---|
-| `feat/` | New features |
-| `fix/` | Bug fixes |
-| `docs/` | Documentation |
-| `refactor/` | Code refactoring |
-| `chore/` | Maintenance tasks |
+| Prefix      | Purpose           |
+| ----------- | ----------------- |
+| `feat/`     | New features      |
+| `fix/`      | Bug fixes         |
+| `docs/`     | Documentation     |
+| `refactor/` | Code refactoring  |
+| `chore/`    | Maintenance tasks |
 
 For larger changes, please open an issue first to discuss the approach. If you have questions, join us on [Discord](https://discord.gg/G3zVrZDa5C).
 
