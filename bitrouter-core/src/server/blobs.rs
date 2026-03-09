@@ -54,15 +54,9 @@ pub trait BlobStore {
         data: Vec<u8>,
     ) -> impl Future<Output = ServerResult<BlobMetadata>> + Send;
 
-    fn get_blob(
-        &self,
-        id: &BlobId,
-    ) -> impl Future<Output = ServerResult<BlobContent>> + Send;
+    fn get_blob(&self, id: &BlobId) -> impl Future<Output = ServerResult<BlobContent>> + Send;
 
-    fn delete_blob(
-        &self,
-        id: &BlobId,
-    ) -> impl Future<Output = ServerResult<()>> + Send;
+    fn delete_blob(&self, id: &BlobId) -> impl Future<Output = ServerResult<()>> + Send;
 }
 
 /// Catalog for named object bindings.

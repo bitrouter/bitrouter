@@ -34,10 +34,7 @@ pub struct UsageEvent {
 
 /// Records usage events.
 pub trait UsageMeter {
-    fn record(
-        &self,
-        event: UsageEvent,
-    ) -> impl Future<Output = ServerResult<()>> + Send;
+    fn record(&self, event: UsageEvent) -> impl Future<Output = ServerResult<()>> + Send;
 }
 
 /// Enforces per-key or per-account rate limits.

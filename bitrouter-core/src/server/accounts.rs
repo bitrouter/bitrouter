@@ -66,20 +66,15 @@ pub trait AccountService {
         request: CreateAccountRequest,
     ) -> impl Future<Output = ServerResult<Account>> + Send;
 
-    fn get_account(
-        &self,
-        id: &AccountId,
-    ) -> impl Future<Output = ServerResult<Account>> + Send;
+    fn get_account(&self, id: &AccountId) -> impl Future<Output = ServerResult<Account>> + Send;
 
     fn list_accounts(
         &self,
         page: PageRequest,
     ) -> impl Future<Output = ServerResult<CursorPage<Account>>> + Send;
 
-    fn suspend_account(
-        &self,
-        id: &AccountId,
-    ) -> impl Future<Output = ServerResult<Account>> + Send;
+    fn suspend_account(&self, id: &AccountId)
+    -> impl Future<Output = ServerResult<Account>> + Send;
 }
 
 /// Service for managing API keys.
@@ -96,10 +91,7 @@ pub trait ApiKeyService {
         page: PageRequest,
     ) -> impl Future<Output = ServerResult<CursorPage<ApiKeyRecord>>> + Send;
 
-    fn revoke_key(
-        &self,
-        key_id: &ApiKeyId,
-    ) -> impl Future<Output = ServerResult<()>> + Send;
+    fn revoke_key(&self, key_id: &ApiKeyId) -> impl Future<Output = ServerResult<()>> + Send;
 }
 
 /// Service for initial admin bootstrap (first-run setup).

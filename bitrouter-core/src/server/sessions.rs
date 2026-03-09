@@ -61,10 +61,7 @@ pub trait SessionWriteService {
         mutation: SessionMutation,
     ) -> impl Future<Output = ServerResult<SessionDetail>> + Send;
 
-    fn delete_session(
-        &self,
-        id: &SessionId,
-    ) -> impl Future<Output = ServerResult<()>> + Send;
+    fn delete_session(&self, id: &SessionId) -> impl Future<Output = ServerResult<()>> + Send;
 }
 
 /// Combined session service (convenience trait).
