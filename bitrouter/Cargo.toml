@@ -8,12 +8,18 @@ license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
+[features]
+default = ["tui"]
+tui = ["dep:bitrouter-tui"]
+
 [dependencies]
 bitrouter-config = { path = "../bitrouter-config", version = "0.0" }
 bitrouter-runtime = { path = "../bitrouter-runtime", version = "0.0" }
+bitrouter-tui = { path = "../bitrouter-tui", version = "0.0", optional = true }
 clap = { version = "4.5", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
