@@ -22,8 +22,8 @@ pub(crate) fn spawn_daemon(paths: &RuntimePaths) -> Result<u32> {
     let exe = std::env::current_exe()?;
 
     let child = Command::new(exe)
-        .arg("--config")
-        .arg(&paths.config_file)
+        .arg("--home-dir")
+        .arg(&paths.home_dir)
         .arg("serve")
         .stdout(stdout)
         .stderr(stderr)
