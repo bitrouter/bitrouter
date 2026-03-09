@@ -5,7 +5,7 @@ use bitrouter_core::routers::routing_table::RoutingTable;
 
 use crate::{
     control::ControlClient,
-    error::{Result, RuntimeError},
+    error::Result,
     paths::RuntimePaths,
     server::ServerPlan,
 };
@@ -56,21 +56,24 @@ impl<R: RoutingTable + Send + Sync> AppRuntime<R> {
     }
 
     pub async fn start(&self) -> Result<()> {
-        Err(RuntimeError::Unsupported(
-            "service-manager integration is not scaffolded yet",
-        ))
+        let dm = crate::daemon::DaemonManager::new(self.paths.clone());
+        let pid = dm.start().await?;
+        println!("bitrouter daemon started (pid {pid})");
+        Ok(())
     }
 
     pub async fn stop(&self) -> Result<()> {
-        Err(RuntimeError::Unsupported(
-            "service-manager integration is not scaffolded yet",
-        ))
+        let dm = crate::daemon::DaemonManager::new(self.paths.clone());
+        dm.stop().await?;
+        println!("bitrouter daemon stopped");
+        Ok(())
     }
 
     pub async fn restart(&self) -> Result<()> {
-        Err(RuntimeError::Unsupported(
-            "service-manager integration is not scaffolded yet",
-        ))
+        let dm = crate::daemon::DaemonManager::new(self.paths.clone());
+        let pid = dm.restart().await?;
+        println!("bitrouter daemon restarted (pid {pid})");
+        Ok(())
     }
 }
 

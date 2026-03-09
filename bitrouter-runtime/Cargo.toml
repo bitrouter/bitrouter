@@ -12,5 +12,8 @@ bitrouter-api = { path = "../bitrouter-api", version = "0.0" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.0" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.0" }
 thiserror = { version = "2.0" }
-tokio = { version = "1", features = ["net", "rt", "signal", "sync"] }
+tokio = { version = "1", features = ["net", "rt", "signal", "sync", "time"] }
 tracing = { version = "0.1" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
