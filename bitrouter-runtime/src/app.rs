@@ -3,12 +3,7 @@ use std::path::{Path, PathBuf};
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::routing_table::RoutingTable;
 
-use crate::{
-    control::ControlClient,
-    error::Result,
-    paths::RuntimePaths,
-    server::ServerPlan,
-};
+use crate::{control::ControlClient, error::Result, paths::RuntimePaths};
 
 pub struct AppRuntime<R> {
     config: BitrouterConfig,
@@ -16,7 +11,7 @@ pub struct AppRuntime<R> {
     routing_table: R,
 }
 
-impl<R: RoutingTable + Send + Sync> AppRuntime<R> {
+impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
     pub fn new(config: BitrouterConfig, paths: RuntimePaths, routing_table: R) -> Self {
         Self {
             config,
@@ -51,8 +46,19 @@ impl<R: RoutingTable + Send + Sync> AppRuntime<R> {
         }
     }
 
-    pub async fn serve(self) -> Result<()> {
-        ServerPlan::new(self.config).serve().await
+    pub async fn serve<M>(self, model_router: M) -> Result<()>
+    where
+        M: bitrouter_core::routers::model_router::LanguageModelRouter + Send + Sync + 'static,
+    {
+        use crate::server::ServerPlan;
+        use std::sync::Arc;
+        ServerPlan::new(
+            self.config,
+            Arc::new(self.routing_table),
+            Arc::new(model_router),
+        )
+        .serve()
+        .await
     }
 
     pub async fn start(&self) -> Result<()> {
