@@ -94,7 +94,7 @@ impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
     /// Load config from resolved paths. The `.env` file (if it exists) is loaded
     /// automatically from `paths.env_file`.
     pub fn load(paths: RuntimePaths) -> Result<Self> {
-        let env_file = paths.env_file.exists().then(|| paths.env_file.as_path());
+        let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
         let config = BitrouterConfig::load_from_file(&paths.config_file, env_file)?;
         let routing_table = bitrouter_config::ConfigRoutingTable::new(
             config.providers.clone(),
