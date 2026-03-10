@@ -1,19 +1,16 @@
 [workspace]
-# Disable changelog for all packages by default
-changelog_update = false
-# Disable git releases for all packages by default
-git_release_enable = false
-# Disable git tags for all packages by default
-git_tag_enable = false
+changelog_update = false          # Disable changelog for all packages by default
+git_release_enable = false        # Disable git releases for all packages by default
+git_tag_enable = false            # Disable git tags for all packages by default
+pr_branch_prefix = "release-plz/" # PR branch prefix
+pr_labels = ["release"]           # add the `release` label to the release Pull Request
 
 # Only the main binary package gets a tag, release, and changelog entry.
 [[package]]
 name = "bitrouter"
-# Single changelog at the repository root
-changelog_path = "CHANGELOG.md"
+changelog_path = "CHANGELOG.md" # Single changelog at the repository root
 changelog_update = true
-# Include commits from all sub-crates in the bitrouter changelog
-changelog_include = [
+changelog_include = [           # Include commits from all sub-crates in the bitrouter changelog
     "bitrouter-core",
     "bitrouter-openai",
     "bitrouter-anthropic",
@@ -22,12 +19,9 @@ changelog_include = [
     "bitrouter-api",
     "bitrouter-runtime",
 ]
-# Customize the git tag name (e.g. v0.1.5 instead of bitrouter-v0.1.5)
-git_tag_name = "v{{ version }}"
-# Enable git tags for this package
-git_tag_enable = true
-# Enable git releases for this package
-git_release_enable = true
+git_tag_name = "v{{ version }}" # Customize the git tag name (e.g. v0.1.5 instead of bitrouter-v0.1.5)
+git_tag_enable = true           # Enable git tags for this package
+git_release_enable = true       # Enable git releases for this package
 
 [changelog]
 body = """
