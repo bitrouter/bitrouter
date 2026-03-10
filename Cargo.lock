@@ -317,6 +317,7 @@ dependencies = [
 name = "bitrouter-runtime"
 version = "0.2.0"
 dependencies = [
+ "bitrouter-accounts",
  "bitrouter-anthropic",
  "bitrouter-api",
  "bitrouter-config",
@@ -324,12 +325,17 @@ dependencies = [
  "bitrouter-google",
  "bitrouter-openai",
  "dirs",
+ "hex",
  "libc",
  "reqwest",
+ "sea-orm",
+ "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
  "warp",
 ]
 
