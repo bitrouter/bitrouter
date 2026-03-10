@@ -34,11 +34,19 @@ pub enum Relation {
         to = "super::session::Column::Id"
     )]
     Session,
+    #[sea_orm(has_many = "super::session_file::Entity")]
+    SessionFiles,
 }
 
 impl Related<super::session::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Session.def()
+    }
+}
+
+impl Related<super::session_file::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::SessionFiles.def()
     }
 }
 

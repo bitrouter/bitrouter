@@ -8,6 +8,7 @@ mod m20260310_000001_create_accounts;
 mod m20260310_000002_create_api_keys;
 mod m20260310_000003_create_sessions;
 mod m20260310_000004_create_messages;
+mod m20260310_000005_create_session_files;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -20,6 +21,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260310_000002_create_api_keys::Migration),
             Box::new(m20260310_000003_create_sessions::Migration),
             Box::new(m20260310_000004_create_messages::Migration),
+            Box::new(m20260310_000005_create_session_files::Migration),
         ]
     }
 }
