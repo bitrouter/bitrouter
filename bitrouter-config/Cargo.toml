@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-config"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "BitRouter configuration, provider registry, and routing table"
 authors = ["Archer <archer@bitrouter.ai>"]
