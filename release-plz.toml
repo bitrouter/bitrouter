@@ -10,7 +10,7 @@ git_tag_enable = false
 [[package]]
 name = "bitrouter"
 # Single changelog at the repository root
-changelog_path = "./CHANGELOG.md"
+changelog_path = "../CHANGELOG.md"
 changelog_update = true
 # Include commits from all sub-crates in the bitrouter changelog
 changelog_include = [
