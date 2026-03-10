@@ -123,12 +123,13 @@ async fn resolve_identity(
 
     // Check master key.
     if let Some(ref master_hash) = ctx.master_key_hash
-        && constant_time_eq(&credential_hash, master_hash) {
-            return Ok(Identity {
-                account_id: AccountId::new(),
-                scope: Scope::Admin,
-            });
-        }
+        && constant_time_eq(&credential_hash, master_hash)
+    {
+        return Ok(Identity {
+            account_id: AccountId::new(),
+            scope: Scope::Admin,
+        });
+    }
 
     // Check virtual key in DB.
     if let Some(ref db) = ctx.db {

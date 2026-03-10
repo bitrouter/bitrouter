@@ -146,9 +146,7 @@ fn require_admin(identity: &Identity) -> Result<(), warp::Rejection> {
     if identity.scope >= Scope::Admin {
         Ok(())
     } else {
-        Err(warp::reject::custom(Unauthorized(
-            "admin access required",
-        )))
+        Err(warp::reject::custom(Unauthorized("admin access required")))
     }
 }
 

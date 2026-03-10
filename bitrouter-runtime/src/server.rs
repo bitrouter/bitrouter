@@ -74,22 +74,13 @@ where
 
         // Model API routes — gated by protocol-appropriate auth.
         let chat = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
-            openai::chat::filters::chat_completions_filter(
-                self.table.clone(),
-                self.router.clone(),
-            ),
+            openai::chat::filters::chat_completions_filter(self.table.clone(), self.router.clone()),
         );
         let messages = auth_gate(auth::anthropic_auth(auth_ctx.clone())).and(
-            anthropic::messages::filters::messages_filter(
-                self.table.clone(),
-                self.router.clone(),
-            ),
+            anthropic::messages::filters::messages_filter(self.table.clone(), self.router.clone()),
         );
         let responses = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
-            openai::responses::filters::responses_filter(
-                self.table.clone(),
-                self.router.clone(),
-            ),
+            openai::responses::filters::responses_filter(self.table.clone(), self.router.clone()),
         );
 
         // Key management routes — always mounted (returns 404 if no DB, since
@@ -127,7 +118,7 @@ where
 /// filter's handler signature.
 fn auth_gate(
     auth: impl Filter<Extract = (bitrouter_accounts::identity::Identity,), Error = warp::Rejection>
-        + Clone,
+    + Clone,
 ) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
     auth.map(|_| ()).untuple_one()
 }
