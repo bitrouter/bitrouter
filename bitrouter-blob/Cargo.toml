@@ -1,0 +1,24 @@
+[package]
+name = "bitrouter-blob"
+version = "0.2.0"
+edition = "2024"
+description = "BitRouter blob storage backends"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+readme = "README.md"
+
+[features]
+default = ["fs"]
+fs = ["tokio/fs"]
+# Future backends:
+# s3 = ["aws-sdk-s3", "aws-config"]
+# gcs = ["google-cloud-storage"]
+
+[dependencies]
+bitrouter-core = { path = "../bitrouter-core", version = "0.2" }
+tokio = { version = "1", features = ["io-util"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
