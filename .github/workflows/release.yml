@@ -46,10 +46,11 @@ jobs:
             exit 1
           fi
 
+          version_pattern="${version//./\\.}"
           expected_subject="chore(release): publish v${version}"
-          if [[ "$commit_subject" != "$expected_subject" ]]; then
+          if [[ ! "$commit_subject" =~ ^chore\(release\):\ publish\ v${version_pattern}(\ \(#[0-9]+\))?$ ]]; then
             echo "Release commit subject does not match crate version." >&2
-            echo "Expected: $expected_subject" >&2
+            echo "Expected: ${expected_subject} or ${expected_subject} (#<pr-number>)" >&2
             echo "Actual:   $commit_subject" >&2
             exit 1
           fi
