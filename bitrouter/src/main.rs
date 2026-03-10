@@ -70,7 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Handle init before loading runtime
     if matches!(cli.command, Some(Command::Init)) {
-        return init::run_init(&paths).map_err(Into::into);
+        init::run_init(&paths)?;
+        return Ok(());
     }
 
     let use_tui = cli.command.is_none() && !cli.headless;
@@ -80,8 +81,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         init_tracing();
     }
 
-    let runtime: DefaultRuntime =
-        DefaultRuntime::load(paths.clone()).unwrap_or_else(|_| DefaultRuntime::scaffold(paths));
+    let mut runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
+        .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+
+    // Auto-init: when launching in TUI mode with no providers, run the setup
+    // wizard first so the user lands in a fully configured TUI.
+    if use_tui && !runtime.config().has_configured_providers() {
+        let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+        if is_interactive {
+            eprintln!();
+            eprintln!("  No providers configured. Starting setup wizard...");
+            eprintln!();
+
+            match init::run_init(&paths) {
+                Ok(init::InitOutcome::Configured) => {
+                    // Reload runtime with the newly written config
+                    runtime = DefaultRuntime::load(paths.clone())
+                        .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+                }
+                Ok(init::InitOutcome::Cancelled) => {
+                    // User cancelled — fall through to TUI with empty state
+                }
+                Err(e) => {
+                    eprintln!("  Setup wizard failed: {e}");
+                    eprintln!("  Continuing with empty configuration...");
+                    eprintln!();
+                }
+            }
+        }
+    }
 
     // First-run guidance
     if !use_tui {
