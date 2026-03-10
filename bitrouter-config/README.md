@@ -14,3 +14,5 @@ config-backed routing table used by the runtime.
 - Environment expansion in `env`
 - Builtin provider registry in `registry`
 - Routing resolution in `routing`
+- Provider auto-detection from environment variables in `detect`
+- Config file generation and `.env` writing in `writer`
