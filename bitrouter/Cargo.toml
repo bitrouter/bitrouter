@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2024"
 description = "BitRouter"
 authors = ["Archer <archer@bitrouter.ai>"]

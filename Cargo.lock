@@ -93,7 +93,7 @@ checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
 name = "bitrouter"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "bitrouter-config",
  "bitrouter-runtime",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-anthropic"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "base64",
  "bitrouter-core",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-api"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "bitrouter-anthropic",
  "bitrouter-core",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-config"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "bitrouter-core",
  "serde",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-core"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "dynosaur",
  "futures-core",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-google"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "base64",
  "bitrouter-core",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-openai"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "base64",
  "bitrouter-core",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-runtime"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "bitrouter-anthropic",
  "bitrouter-api",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-tui"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "crossterm",
