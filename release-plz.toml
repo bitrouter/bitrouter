@@ -1,0 +1,46 @@
+[workspace]
+# Disable changelog for all packages by default
+changelog_update = false
+# Disable git releases for all packages by default
+git_release_enable = false
+# Disable git tags for all packages by default
+git_tag_enable = false
+
+# Only the main binary package gets a tag, release, and changelog entry.
+[[package]]
+name = "bitrouter"
+# Single changelog at the repository root
+changelog_path = "./CHANGELOG.md"
+changelog_update = true
+# Include commits from all sub-crates in the bitrouter changelog
+changelog_include = [
+    "bitrouter-core",
+    "bitrouter-openai",
+    "bitrouter-anthropic",
+    "bitrouter-google",
+    "bitrouter-config",
+    "bitrouter-api",
+    "bitrouter-runtime",
+]
+# Customize the git tag name (e.g. v0.1.5 instead of bitrouter-v0.1.5)
+git_tag_name = "v{{ version }}"
+# Enable git tags for this package
+git_tag_enable = true
+# Enable git releases for this package
+git_release_enable = true
+
+[changelog]
+body = """
+
+## `{{ package }}` - [{{ version }}]{%- if release_link -%}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+{%- if commit.scope -%}
+- *({{commit.scope}})* {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message }}{%- if commit.links %} ({% for link in commit.links %}[{{link.text}}]({{link.href}}) {% endfor -%}){% endif %}
+{% else -%}
+- {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message }}
+{% endif -%}
+{% endfor -%}
+{% endfor -%}
+"""
