@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-anthropic"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2024"
 description = "BitRouter Anthropic Adapter"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -10,7 +10,7 @@ readme = "README.md"
 
 [dependencies]
 base64 = { version = "0.22" }
-bitrouter-core = { path = "../bitrouter-core", version = "0.1" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.2" }
 bytes = { version = "1" }
 regex = { version = "1.12" }
 reqwest = { version = "0.12", default-features = false, features = [

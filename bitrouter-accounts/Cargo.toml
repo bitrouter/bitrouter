@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-accounts"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2024"
 description = "BitRouter account and session management"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -9,7 +9,7 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [dependencies]
-bitrouter-core = { path = "../bitrouter-core", version = "0.1" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.2" }
 sea-orm = { version = "1.1", default-features = false, features = [
     "macros",
     "with-chrono",

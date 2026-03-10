@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2024"
 description = "BitRouter"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -13,9 +13,9 @@ default = ["tui"]
 tui = ["dep:bitrouter-tui"]
 
 [dependencies]
-bitrouter-config = { path = "../bitrouter-config", version = "0.1" }
-bitrouter-runtime = { path = "../bitrouter-runtime", version = "0.1" }
-bitrouter-tui = { path = "../bitrouter-tui", version = "0.1", optional = true }
+bitrouter-config = { path = "../bitrouter-config", version = "0.2" }
+bitrouter-runtime = { path = "../bitrouter-runtime", version = "0.2" }
+bitrouter-tui = { path = "../bitrouter-tui", version = "0.2", optional = true }
 clap = { version = "4.5", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
