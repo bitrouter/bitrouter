@@ -30,10 +30,7 @@ pub fn detect_providers(env: &HashMap<String, String>) -> Vec<DetectedProvider> 
                 return None;
             }
             let base_var = format!("{prefix}_BASE_URL");
-            let has_base_url = env
-                .get(&base_var)
-                .map(|v| !v.is_empty())
-                .unwrap_or(false);
+            let has_base_url = env.get(&base_var).map(|v| !v.is_empty()).unwrap_or(false);
             Some(DetectedProvider {
                 name: name.clone(),
                 env_prefix: prefix.to_owned(),

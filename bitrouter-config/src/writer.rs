@@ -43,7 +43,10 @@ pub struct InitResult {
 ///
 /// If `overwrite` is false and a `.env` already exists, new keys are merged
 /// without overwriting existing non-empty values.
-pub fn write_init_config(options: &InitOptions, overwrite: bool) -> crate::error::Result<InitResult> {
+pub fn write_init_config(
+    options: &InitOptions,
+    overwrite: bool,
+) -> crate::error::Result<InitResult> {
     // Ensure directories exist
     std::fs::create_dir_all(&options.home_dir).map_err(|e| {
         crate::error::ConfigError::ConfigRead {
@@ -172,7 +175,11 @@ fn generate_env_content(options: &InitOptions) -> String {
 
     // Custom providers
     for cp in &options.custom_providers {
-        let key_value = options.api_keys.get(&cp.name).map(|s| s.as_str()).unwrap_or("");
+        let key_value = options
+            .api_keys
+            .get(&cp.name)
+            .map(|s| s.as_str())
+            .unwrap_or("");
         content.push_str(&format!("{}={key_value}\n", cp.env_key_var));
     }
 
@@ -193,19 +200,11 @@ fn merge_env_file(env_path: &Path, options: &InitOptions) -> String {
             .and_then(|bp| bp.config.env_prefix.as_deref())
             .unwrap_or(&fallback);
         let key_var = format!("{prefix}_API_KEY");
-        let key_value = options
-            .api_keys
-            .get(name)
-            .cloned()
-            .unwrap_or_default();
+        let key_value = options.api_keys.get(name).cloned().unwrap_or_default();
         new_vars.insert(key_var, key_value);
     }
     for cp in &options.custom_providers {
-        let key_value = options
-            .api_keys
-            .get(&cp.name)
-            .cloned()
-            .unwrap_or_default();
+        let key_value = options.api_keys.get(&cp.name).cloned().unwrap_or_default();
         new_vars.insert(cp.env_key_var.clone(), key_value);
     }
 
@@ -249,7 +248,10 @@ fn merge_env_file(env_path: &Path, options: &InitOptions) -> String {
     }
     for cp in &options.custom_providers {
         if !seen.contains(&cp.env_key_var) {
-            let value = new_vars.get(&cp.env_key_var).map(|s| s.as_str()).unwrap_or("");
+            let value = new_vars
+                .get(&cp.env_key_var)
+                .map(|s| s.as_str())
+                .unwrap_or("");
             lines.push(format!("{}={value}", cp.env_key_var));
         }
     }

@@ -64,7 +64,11 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
     if !detected.is_empty() {
         println!("  Detected API keys in environment:");
         for d in &detected {
-            println!("    ✓ {} ({})", provider_display_name(&d.name), d.api_key_var);
+            println!(
+                "    ✓ {} ({})",
+                provider_display_name(&d.name),
+                d.api_key_var
+            );
         }
         println!();
     }
@@ -155,10 +159,12 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
 
     // ── Collect API keys for custom providers ───────────────────────
     for cp in &custom_providers {
-        let env_key = std::env::var(&cp.env_key_var).ok().filter(|v| !v.is_empty());
+        let env_key = std::env::var(&cp.env_key_var)
+            .ok()
+            .filter(|v| !v.is_empty());
 
         let key = if let Some(existing) = &env_key {
-            let masked = mask_key(&existing);
+            let masked = mask_key(existing);
             let use_existing = Confirm::with_theme(&theme)
                 .with_prompt(format!(
                     "{} API key detected ({masked}). Use this?",
@@ -191,9 +197,11 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
     let all_provider_names: Vec<String> = selected_providers
         .iter()
         .map(|n| provider_display_name(n).to_owned())
-        .chain(custom_providers.iter().map(|cp| {
-            format!("{} (derives: {})", cp.name, cp.derives)
-        }))
+        .chain(
+            custom_providers
+                .iter()
+                .map(|cp| format!("{} (derives: {})", cp.name, cp.derives)),
+        )
         .collect();
 
     println!();
@@ -316,9 +324,7 @@ fn prompt_custom_provider(
     let env_prefix = name.to_uppercase().replace('-', "_");
     let env_key_var = format!("{env_prefix}_API_KEY");
 
-    println!(
-        "  → {name} (derives: {derives}, base: {api_base}, env: {env_key_var})"
-    );
+    println!("  → {name} (derives: {derives}, base: {api_base}, env: {env_key_var})");
 
     Ok(Some(CustomProviderInit {
         name,
