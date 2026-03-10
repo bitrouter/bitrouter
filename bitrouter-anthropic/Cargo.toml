@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-anthropic"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "BitRouter Anthropic Adapter"
 authors = ["Archer <archer@bitrouter.ai>"]

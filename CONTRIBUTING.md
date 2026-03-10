@@ -64,7 +64,7 @@ BitRouter releases are prepared locally and published from GitHub Actions after 
 3. Open the release PR and rebase it onto `main` before merging.
 4. After the release commit reaches `main`, `.github/workflows/release.yml` recreates the `bitrouter-v<version>` tag on the merged `main` commit, builds the `bitrouter` binary for Linux, macOS, and Windows, and publishes a GitHub Release using `git-cliff` notes.
 
-The GitHub Release workflow expects the merged commit subject to be `chore(release): publish v<version>`.
+The GitHub Release workflow expects the merged commit subject to be `chore(release): publish v<version>`, with an optional GitHub-appended PR suffix like `(#33)`.
 
 ## Updating Built-In Provider Support
 
