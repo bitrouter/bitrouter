@@ -55,17 +55,6 @@ We prefer contributions that are:
 - validated with the existing Rust tooling
 - accompanied by docs updates when public behavior changes
 
-## Release Process
-
-BitRouter releases are prepared locally and published from GitHub Actions after the release PR lands on `main`.
-
-1. Run `cargo-release` locally to bump the workspace version and create the release commit.
-2. Regenerate `CHANGELOG.md` with `git-cliff -o CHANGELOG.md` and include it in the release PR.
-3. Open the release PR and rebase it onto `main` before merging.
-4. After the release commit reaches `main`, `.github/workflows/release.yml` recreates the `bitrouter-v<version>` tag on the merged `main` commit, builds the `bitrouter` binary for Linux, macOS, and Windows, and publishes a GitHub Release using `git-cliff` notes.
-
-The GitHub Release workflow expects the merged commit subject to be `chore(release): publish v<version>`, with an optional GitHub-appended PR suffix like `(#33)`.
-
 ## Updating Built-In Provider Support
 
 Built-in providers are defined in YAML files under [`bitrouter-config/providers`](bitrouter-config/providers) and loaded by `bitrouter-config/src/registry.rs`.
