@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-runtime"
-version = "0.2.0"
+version = { workspace = true }
 edition = "2024"
 description = "BitRouter runtime assembly for CLI and daemon execution"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -9,6 +9,7 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [dependencies]
+bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.2" }
 bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.2" }
 bitrouter-api = { path = "../bitrouter-api", version = "0.2" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.2" }
@@ -16,13 +17,18 @@ bitrouter-core = { path = "../bitrouter-core", version = "0.2" }
 bitrouter-google = { path = "../bitrouter-google", version = "0.2" }
 bitrouter-openai = { path = "../bitrouter-openai", version = "0.2" }
 dirs = "6"
+hex = "0.4"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }
+sea-orm = { version = "1.1", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
+sha2 = "0.10"
 thiserror = { version = "2.0" }
 tokio = { version = "1", features = ["net", "rt", "signal", "sync", "time"] }
 tracing = { version = "0.1" }
+uuid = { version = "1", features = ["v4"] }
 warp = { version = "0.4.2", features = ["server"] }
 
 [target.'cfg(unix)'.dependencies]

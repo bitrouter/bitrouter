@@ -17,6 +17,12 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub server: ServerConfig,
 
+    /// Master API key for admin operations (key generation, account management).
+    /// When set, all API endpoints require authentication: either this master key
+    /// or a virtual key generated from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_key: Option<String>,
+
     /// Provider definitions (merged on top of built-in providers).
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
