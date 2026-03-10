@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-api"
-version = "0.2.0"
+version = { workspace = true }
 edition = "2024"
 description = "BitRouter API - reusable warp server components for AI model routing"
 authors = ["Archer <archer@bitrouter.ai>"]

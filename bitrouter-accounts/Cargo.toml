@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-accounts"
-version = "0.2.1"
+version = { workspace = true }
 edition = "2024"
 description = "BitRouter account and session management"
 authors = ["Archer <archer@bitrouter.ai>"]
