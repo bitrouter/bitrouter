@@ -100,10 +100,7 @@ impl<'db> AccountService<'db> {
         Ok(())
     }
 
-    pub async fn list_api_keys(
-        &self,
-        account_id: AccountId,
-    ) -> Result<Vec<api_key::Model>, DbErr> {
+    pub async fn list_api_keys(&self, account_id: AccountId) -> Result<Vec<api_key::Model>, DbErr> {
         api_key::Entity::find()
             .filter(api_key::Column::AccountId.eq(account_id.0))
             .filter(api_key::Column::RevokedAt.is_null())

@@ -11,8 +11,8 @@ use warp::{Filter, Reply};
 use crate::identity::Identity;
 use crate::service::SessionService;
 
-use super::with_db;
 use super::accounts::{DbError, Forbidden};
+use super::with_db;
 
 /// Mount session routes under `/sessions`.
 pub fn session_routes<A>(
@@ -54,7 +54,10 @@ where
         .and(with_db(db.clone()))
         .and_then(handle_delete_session);
 
-    list.or(create).or(get_messages).or(append_message).or(delete)
+    list.or(create)
+        .or(get_messages)
+        .or(append_message)
+        .or(delete)
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,8 +191,9 @@ async fn handle_append_message(
         return Err(warp::reject::custom(Forbidden));
     }
 
-    let payload_str = serde_json::to_string(&req.payload)
-        .map_err(|_| warp::reject::custom(DbError(sea_orm::DbErr::Custom("invalid payload".into()))))?;
+    let payload_str = serde_json::to_string(&req.payload).map_err(|_| {
+        warp::reject::custom(DbError(sea_orm::DbErr::Custom("invalid payload".into())))
+    })?;
 
     let msg = svc
         .append_message(session_id, &req.role, &payload_str)
