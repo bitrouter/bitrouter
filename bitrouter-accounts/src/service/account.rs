@@ -78,11 +78,10 @@ impl<'db> AccountService<'db> {
         match row {
             Some(k) => {
                 // Check expiry.
-                if let Some(exp) = k.expires_at {
-                    if Utc::now().naive_utc() > exp {
+                if let Some(exp) = k.expires_at
+                    && Utc::now().naive_utc() > exp {
                         return Ok(None);
                     }
-                }
                 let aid = AccountId(k.account_id);
                 Ok(Some((aid, k)))
             }

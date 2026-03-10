@@ -10,7 +10,9 @@ use std::fmt;
 use uuid::Uuid;
 
 /// Opaque account identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
 pub struct AccountId(pub Uuid);
 
 impl AccountId {
