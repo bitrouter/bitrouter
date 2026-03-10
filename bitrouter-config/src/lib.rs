@@ -1,13 +1,17 @@
 pub mod config;
+pub mod detect;
 pub mod env;
 pub mod error;
 pub mod registry;
 pub mod routing;
+pub mod writer;
 
 pub use config::{
     ApiProtocol, AuthConfig, BitrouterConfig, ControlEndpoint, ModelConfig, ModelEndpoint,
     ProviderConfig, RoutingStrategy, ServerConfig,
 };
+pub use detect::{DetectedProvider, detect_providers, detect_providers_from_env};
 pub use error::{ConfigError, Result};
 pub use registry::{BuiltinProvider, builtin_provider_defs};
 pub use routing::{ConfigRoutingTable, ResolvedTarget};
+pub use writer::{CustomProviderInit, InitOptions, InitResult, write_init_config};

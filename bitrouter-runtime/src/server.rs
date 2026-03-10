@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use bitrouter_api::router::{anthropic, openai};
+use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::{model_router::LanguageModelRouter, routing_table::RoutingTable};
 use sea_orm::DatabaseConnection;
@@ -82,6 +82,12 @@ where
         let responses = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
             openai::responses::filters::responses_filter(self.table.clone(), self.router.clone()),
         );
+        let generate_content = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
+            google::generate_content::filters::generate_content_filter(
+                self.table.clone(),
+                self.router.clone(),
+            ),
+        );
 
         // Key management routes — always mounted (returns 404 if no DB, since
         // the filter will not match without the DB anyway).
@@ -91,6 +97,7 @@ where
             .or(chat)
             .or(messages)
             .or(responses)
+            .or(generate_content)
             .or(key_mgmt)
             .recover(handle_auth_rejection)
             .with(warp::trace::request());

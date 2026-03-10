@@ -17,6 +17,7 @@ bitrouter-config = { path = "../bitrouter-config", version = "0.2" }
 bitrouter-runtime = { path = "../bitrouter-runtime", version = "0.2" }
 bitrouter-tui = { path = "../bitrouter-tui", version = "0.2", optional = true }
 clap = { version = "4.5", features = ["derive"] }
+dialoguer = "0.11"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }
