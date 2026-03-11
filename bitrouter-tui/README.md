@@ -7,12 +7,16 @@ Built with [Ratatui](https://ratatui.rs/) + Crossterm.
 ## UX
 
 ```
-$ bitrouter                  → TUI + server (default, interactive)
+$ bitrouter                  → setup wizard (first run) → TUI + server
+$ bitrouter                  → TUI + server (subsequent runs)
 $ bitrouter --headless       → server only (CI, production, systemd)
+$ bitrouter init             → run setup wizard explicitly
 $ bitrouter status           → one-shot info, exits
 ```
 
-On launch, the TUI displays the BitRouter logo and initializes the server. The terminal is fully owned by the TUI. Quitting (`q` / `Ctrl+C`) gracefully shuts down both the TUI and the server.
+On first launch with no providers configured, BitRouter automatically runs the interactive setup wizard (`bitrouter init`) before entering the TUI. After setup completes, the runtime reloads and the TUI launches with the new configuration. If the user cancels setup, the TUI launches in its empty state.
+
+On subsequent launches, the TUI displays the BitRouter logo and initializes the server. The terminal is fully owned by the TUI. Quitting (`q` / `Ctrl+C`) gracefully shuts down both the TUI and the server.
 
 ## Architecture
 

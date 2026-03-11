@@ -33,6 +33,23 @@ pub struct BitrouterConfig {
 }
 
 impl BitrouterConfig {
+    /// Returns true if at least one provider has an API key configured.
+    pub fn has_configured_providers(&self) -> bool {
+        self.providers.values().any(|p| p.api_key.is_some())
+    }
+
+    /// Returns the names of providers that have API keys configured.
+    pub fn configured_provider_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .providers
+            .iter()
+            .filter(|(_, p)| p.api_key.is_some())
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
     /// Full config loading pipeline:
     ///
     /// 1. Read and parse YAML

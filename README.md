@@ -35,39 +35,52 @@ As LLM agents grow more autonomous, humans can no longer hand-pick the best mode
 # Install
 cargo install bitrouter
 
-# Start the default interactive experience (TUI + API server)
+# Launch — runs the setup wizard on first run, then starts the TUI + API server
 bitrouter
 ```
 
-If you only want the foreground API server, run:
+On first launch, if no providers are configured, BitRouter automatically runs an interactive setup wizard that walks you through provider selection, API key entry, and configuration. After setup completes, the TUI and API server start with your new configuration.
+
+You can also run the setup wizard explicitly at any time:
+
+```bash
+bitrouter init
+```
+
+For a headless API server (no TUI):
 
 ```bash
 bitrouter serve
 ```
 
-If you want to use the foreground TUI app, run:
-
-```bash
-bitrouter
-```
-
-If you want to start the local proxy service at background, run:
+To run as a background daemon:
 
 ```bash
 bitrouter start
+```
+
+### Zero-config mode
+
+If you have provider API keys in your environment (e.g. `OPENAI_API_KEY`), BitRouter auto-detects them and enables direct routing without any configuration file:
+
+```bash
+export OPENAI_API_KEY=sk-...
+bitrouter serve
+# Use "openai:gpt-4o" as the model name
 ```
 
 ## CLI Overview
 
 `bitrouter` has two ways to run:
 
-- `bitrouter` starts the default interactive runtime. With the default `tui` feature enabled, this launches the TUI and API server together.
+- `bitrouter` starts the default interactive runtime. On first run with no providers configured, the setup wizard runs automatically. With the default `tui` feature enabled, this then launches the TUI and API server together.
 - `bitrouter [COMMAND]` runs an explicit operational command.
 
 ### Subcommands
 
 | Command   | What it does                                                                  |
 | --------- | ----------------------------------------------------------------------------- |
+| `init`    | Interactive setup wizard for provider configuration                           |
 | `serve`   | Start the API server in the foreground                                        |
 | `start`   | Start BitRouter as a background daemon                                        |
 | `stop`    | Stop the running daemon                                                       |
@@ -110,6 +123,8 @@ The scaffolded `.gitignore` ignores `logs/`, `run/`, and `.env`. The runtime aut
 
 ### Minimal configuration
 
+The easiest way to create a configuration is to run `bitrouter init`, which generates `bitrouter.yaml` and `.env` interactively. You can also write the config manually:
+
 ```yaml
 server:
   listen: 127.0.0.1:8787
@@ -128,6 +143,24 @@ models:
 
 Provider definitions are merged on top of BitRouter's built-in provider registry, so you can start by overriding only the fields you need. Environment-variable references like `${OPENAI_API_KEY}` are expanded during config loading.
 
+### Custom providers
+
+`bitrouter init` supports adding custom OpenAI-compatible or Anthropic-compatible providers. You can also define them manually in `bitrouter.yaml`:
+
+```yaml
+providers:
+  openrouter:
+    derives: openai
+    api_base: "https://openrouter.ai/api/v1"
+    api_key: "${OPENROUTER_API_KEY}"
+  moonshot-anthropic:
+    derives: anthropic
+    api_base: "https://api.moonshot.ai/anthropic"
+    api_key: "${MOONSHOT_API_KEY}"
+```
+
+The `derives` field inherits protocol handling from the named built-in provider, so any service with an OpenAI-compatible or Anthropic-compatible API works out of the box.
+
 ## Supported Providers
 
 | Provider  | Status | Notes                            |
@@ -142,6 +175,9 @@ Want to see another provider supported? [Open an issue](https://github.com/AIMOv
 
 - [x] Core routing engine and provider abstractions
 - [x] OpenAI, Anthropic, and Google adapters
+- [x] Interactive setup wizard (`bitrouter init`) with auto-detection
+- [x] Custom provider support (OpenAI-compatible / Anthropic-compatible)
+- [x] Cross-protocol routing (e.g. OpenAI format → Anthropic provider)
 - [ ] MCP & A2A protocol support
 - [ ] TUI observability dashboard
 - [ ] Telemetry and usage analytics

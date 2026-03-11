@@ -49,8 +49,11 @@ where
     let action = model_action.rsplit_once(':').map(|(_, a)| a).unwrap_or("");
     let is_stream = request.stream.unwrap_or(false) || action == "streamGenerateContent";
 
-    // Extract model name from the path segment (before the colon)
-    let model_from_path = model_action.split(':').next().unwrap_or(&model_action);
+    // Extract model name from the path segment (everything before the last colon)
+    let model_from_path = model_action
+        .rsplit_once(':')
+        .map(|(before, _)| before)
+        .unwrap_or(&model_action);
 
     // Use the model from the request body if specified, otherwise use path
     let incoming_model = if request.model.is_empty() {

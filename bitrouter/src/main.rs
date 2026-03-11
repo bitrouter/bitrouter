@@ -1,3 +1,5 @@
+mod init;
+
 use std::path::PathBuf;
 
 use bitrouter_runtime::{AppRuntime, PathOverrides, resolve_home};
@@ -38,6 +40,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Interactive setup wizard
+    Init,
     /// Start the API server (foreground)
     Serve,
     /// Start as background daemon
@@ -53,6 +57,23 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+
+    // Resolve paths early — init needs them but not a loaded runtime
+    let paths = resolve_home(cli.home_dir.as_deref());
+    let overrides = PathOverrides {
+        config_file: cli.config_file.clone(),
+        env_file: cli.env_file.clone(),
+        runtime_dir: cli.run_dir.clone(),
+        log_dir: cli.logs_dir.clone(),
+    };
+    let paths = overrides.apply(paths);
+
+    // Handle init before loading runtime
+    if matches!(cli.command, Some(Command::Init)) {
+        init::run_init(&paths)?;
+        return Ok(());
+    }
+
     let use_tui = cli.command.is_none() && !cli.headless;
 
     // Skip tracing init when TUI owns the terminal — logs corrupt the alternate screen
@@ -60,18 +81,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         init_tracing();
     }
 
-    // Resolve home directory + apply any per-path overrides
-    let paths = resolve_home(cli.home_dir.as_deref());
-    let overrides = PathOverrides {
-        config_file: cli.config_file,
-        env_file: cli.env_file,
-        runtime_dir: cli.run_dir,
-        log_dir: cli.logs_dir,
-    };
-    let paths = overrides.apply(paths);
+    let mut runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
+        .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
 
-    let runtime: DefaultRuntime =
-        DefaultRuntime::load(paths.clone()).unwrap_or_else(|_| DefaultRuntime::scaffold(paths));
+    // Auto-init: when launching in TUI mode with no providers, run the setup
+    // wizard first so the user lands in a fully configured TUI.
+    if use_tui && !runtime.config().has_configured_providers() {
+        let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+        if is_interactive {
+            eprintln!();
+            eprintln!("  No providers configured. Starting setup wizard...");
+            eprintln!();
+
+            match init::run_init(&paths) {
+                Ok(init::InitOutcome::Configured) => {
+                    // Reload runtime with the newly written config
+                    runtime = DefaultRuntime::load(paths.clone())
+                        .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+                }
+                Ok(init::InitOutcome::Cancelled) => {
+                    // User cancelled — fall through to TUI with empty state
+                }
+                Err(e) => {
+                    eprintln!("  Setup wizard failed: {e}");
+                    eprintln!("  Continuing with empty configuration...");
+                    eprintln!();
+                }
+            }
+        }
+    }
+
+    // First-run guidance
+    if !use_tui {
+        print_first_run_guidance(&runtime);
+    }
 
     match cli.command {
         None => run_default(runtime, cli.headless).await?,
@@ -100,9 +143,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Some(Command::Restart) => runtime.restart().await?,
+        Some(Command::Init) => unreachable!(),
     }
 
     Ok(())
+}
+
+fn print_first_run_guidance(runtime: &DefaultRuntime) {
+    if runtime.config().has_configured_providers() {
+        return;
+    }
+
+    let detected = bitrouter_config::detect_providers_from_env();
+    if detected.is_empty() {
+        eprintln!("No providers configured and no API keys found in environment.");
+        eprintln!("Run `bitrouter init` to set up providers interactively.");
+        eprintln!();
+    } else {
+        let names: Vec<&str> = detected.iter().map(|d| d.name.as_str()).collect();
+        eprintln!(
+            "Auto-detected providers from environment: {}",
+            names.join(", ")
+        );
+        eprintln!("Direct routing is available (e.g., \"openai:gpt-4o\").");
+        eprintln!("Run `bitrouter init` to save a permanent configuration.");
+        eprintln!();
+    }
 }
 
 async fn run_default(

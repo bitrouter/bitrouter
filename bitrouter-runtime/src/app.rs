@@ -108,8 +108,13 @@ impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
     }
 
     /// Build a runtime with default config (no file on disk).
+    ///
+    /// Loads builtin providers with env_prefix resolution so that
+    /// environment-provided API keys (e.g. `OPENAI_API_KEY`) are
+    /// automatically picked up even without a config file.
     pub fn scaffold(paths: RuntimePaths) -> Self {
-        let config = BitrouterConfig::default();
+        let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
+        let config = BitrouterConfig::load_from_str("{}", env_file).unwrap_or_default();
         let routing_table = bitrouter_config::ConfigRoutingTable::new(
             config.providers.clone(),
             config.models.clone(),
