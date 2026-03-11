@@ -7,35 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## `bitrouter` - [0.2.4](https://github.com/bitrouter/bitrouter/compare/v0.2.3...v0.2.4) - 2026-03-11
+## [0.2.4](https://github.com/bitrouter/bitrouter/compare/v0.2.3...v0.2.4) - 2026-03-11
 
 ### Added
 - *(api)* add GET /v1/routes endpoint ([#43](https://github.com/bitrouter/bitrouter/pull/43))
 
-## `bitrouter` - [0.2.3](https://github.com/bitrouter/bitrouter/compare/v0.2.2...v0.2.3) - 2026-03-11
+## [0.2.3](https://github.com/bitrouter/bitrouter/compare/v0.2.2...v0.2.3) - 2026-03-11
 
 ### Added
 - add init wizard, provider auto-detection, and Google API route ([#41](https://github.com/bitrouter/bitrouter/pull/41))
 
-## `bitrouter` - [0.2.3](https://github.com/bitrouter/bitrouter/compare/v0.2.2...v0.2.3) - 2026-03-11
-
-### Added
-- add init wizard, provider auto-detection, and Google API route ([#41](https://github.com/bitrouter/bitrouter/pull/41))
-
-## `bitrouter` - [0.2.2](https://github.com/bitrouter/bitrouter/compare/v0.2.0...v0.2.2) - 2026-03-10
+## [0.2.2](https://github.com/bitrouter/bitrouter/compare/v0.2.0...v0.2.2) - 2026-03-10
 
 ### Added
 - *(runtime)* add basic api key auth ([#39](https://github.com/bitrouter/bitrouter/pull/39))
-
-## `bitrouter` - [0.2.2](https://github.com/bitrouter/bitrouter/compare/v0.2.0...v0.2.2) - 2026-03-10
-
-### Added
-- *(runtime)* add basic api key auth ([#39](https://github.com/bitrouter/bitrouter/pull/39))
-
-## `bitrouter` - [0.2.2](https://github.com/bitrouter/bitrouter/compare/v0.2.0...v0.2.2) - 2026-03-10
-
-### Added
-- *(runtime)* basic auth
 
 ### Other
 - *(repo)* use unified workspace package
