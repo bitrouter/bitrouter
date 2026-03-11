@@ -1,4 +1,4 @@
-name: Validate PR Title
+name: PR
 
 on:
   pull_request:
@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   pr-title:
+    name: validate title
     runs-on: ubuntu-latest
     steps:
       - uses: ytanikin/pr-conventional-commits@1.4.2
