@@ -33,6 +33,10 @@ struct Cli {
     #[arg(long, global = true)]
     logs_dir: Option<PathBuf>,
 
+    /// Database connection URL (overrides env vars and config file)
+    #[arg(long = "db", global = true)]
+    database_url: Option<String>,
+
     /// Run server without the TUI (headless mode)
     #[arg(long)]
     headless: bool,
@@ -117,6 +121,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // First-run guidance
     if !use_tui {
         print_first_run_guidance(&runtime);
+    }
+
+    // Connect to database for commands that start the server.
+    let serves = cli.command.is_none() || matches!(cli.command, Some(Command::Serve));
+    if serves {
+        let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
+        let db_url = crate::runtime::resolve_database_url(
+            cli.database_url.as_deref(),
+            &runtime.config,
+            &paths.home_dir,
+            env_file,
+        );
+        match sea_orm::Database::connect(&db_url).await {
+            Ok(db) => {
+                if let Err(e) = crate::runtime::migrate(&db).await {
+                    tracing::warn!("database migration failed: {e}");
+                }
+                runtime.db = Some(std::sync::Arc::new(db));
+            }
+            Err(e) => {
+                tracing::warn!("database connection failed ({db_url}): {e}");
+            }
+        }
     }
 
     match cli.command {

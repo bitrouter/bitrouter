@@ -31,6 +31,11 @@ where
         }
     }
 
+    pub fn with_db(mut self, db: Arc<DatabaseConnection>) -> Self {
+        self.db = Some(db);
+        self
+    }
+
     pub async fn serve(self) -> Result<()> {
         let addr = self.config.server.listen;
 

@@ -9,8 +9,11 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["tui"]
+default = ["tui", "sqlite", "postgres"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
+sqlite = ["bitrouter-accounts/sqlite"]
+postgres = ["bitrouter-accounts/postgres"]
+mysql = ["bitrouter-accounts/mysql"]
 
 [dependencies]
 # Internal crates
@@ -31,6 +34,9 @@ dirs = "6"
 hex = "0.4"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 sea-orm = { version = "1.1", default-features = false }
+sea-orm-migration = { version = "1.1", default-features = false, features = [
+    "runtime-tokio-rustls",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 sha2 = "0.10"
