@@ -8,10 +8,10 @@ BitRouter is organized as a set of focused crates:
 
 | Crate                 | Responsibility                                                                                        |
 | --------------------- | ----------------------------------------------------------------------------------------------------- |
-| `bitrouter`           | Thin CLI entry point that parses commands, resolves runtime paths, and launches the runtime           |
+| `bitrouter`           | CLI entry point with setup wizard, auto-init on first run, and runtime launch                        |
 | `bitrouter-runtime`   | Application assembly, runtime path resolution, daemon lifecycle, and Warp server bootstrapping        |
 | `bitrouter-api`       | Reusable Warp filters for provider-compatible HTTP endpoints                                          |
-| `bitrouter-config`    | YAML loading, `.env` support, environment substitution, built-in providers, and config-backed routing |
+| `bitrouter-config`    | YAML loading, `.env` support, environment substitution, built-in providers, config-backed routing, provider auto-detection, and config generation |
 | `bitrouter-core`      | Shared model traits, router contracts, errors, and transport-neutral types                            |
 | `bitrouter-openai`    | OpenAI-compatible language model adapters                                                             |
 | `bitrouter-anthropic` | Anthropic Messages adapter                                                                            |
@@ -77,7 +77,7 @@ The reusable HTTP filters live in `bitrouter-api`.
 | `POST /v1/messages`                 | `bitrouter_api::router::anthropic::messages::filters`      |
 | `POST /v1beta/models/:model_action` | `bitrouter_api::router::google::generate_content::filters` |
 
-`ServerPlan` currently wires `/health`, OpenAI chat completions, OpenAI responses, and Anthropic messages into the default runtime server. The Google-compatible filter is available from `bitrouter-api` and can be added directly when you build a custom service.
+`ServerPlan` wires all five routes into the default runtime server. All filters are also independently importable from `bitrouter-api` for custom service composition.
 
 ## Building Your Own Router Service
 

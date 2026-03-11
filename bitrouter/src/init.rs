@@ -4,7 +4,16 @@ use bitrouter_config::{
     CustomProviderInit, InitOptions, builtin_provider_defs, detect_providers_from_env,
 };
 use bitrouter_runtime::RuntimePaths;
-use dialoguer::{Confirm, Input, Password, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, theme::ColorfulTheme};
+
+/// Outcome of the init wizard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitOutcome {
+    /// Config was written successfully.
+    Configured,
+    /// User cancelled or selected no providers.
+    Cancelled,
+}
 
 /// Display name and config key for each builtin provider.
 const PROVIDERS: &[(&str, &str)] = &[
@@ -13,7 +22,7 @@ const PROVIDERS: &[(&str, &str)] = &[
     ("google", "Google"),
 ];
 
-pub fn run_init(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error::Error>> {
     let theme = ColorfulTheme::default();
 
     // Check if running in a terminal
@@ -45,10 +54,8 @@ pub fn run_init(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>> 
 
     if config_exists && !overwrite {
         println!("Setup cancelled. Existing configuration preserved.");
-        return Ok(());
+        return Ok(InitOutcome::Cancelled);
     }
-
-    // Auto-detect providers from environment
     let detected = detect_providers_from_env();
     let detected_names: Vec<&str> = detected.iter().map(|d| d.name.as_str()).collect();
 
@@ -104,7 +111,7 @@ pub fn run_init(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>> 
     if selected_providers.is_empty() && custom_providers.is_empty() {
         println!();
         println!("No providers selected. Run `bitrouter init` again anytime.");
-        return Ok(());
+        return Ok(InitOutcome::Cancelled);
     }
 
     // ── Collect API keys for builtin providers ──────────────────────
@@ -212,7 +219,7 @@ pub fn run_init(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>> 
 
     if !confirm {
         println!("Setup cancelled.");
-        return Ok(());
+        return Ok(InitOutcome::Cancelled);
     }
 
     // Write config
@@ -255,7 +262,7 @@ pub fn run_init(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>> 
     } else if let Some(cp) = result.providers_configured.first() {
         (cp.clone(), "model-id".to_owned())
     } else {
-        return Ok(());
+        return Ok(InitOutcome::Configured);
     };
 
     println!("  Test with:");
@@ -266,7 +273,7 @@ pub fn run_init(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>> 
     );
     println!();
 
-    Ok(())
+    Ok(InitOutcome::Configured)
 }
 
 /// Prompt the user to define a custom provider.
@@ -329,7 +336,7 @@ fn prompt_api_key(
     theme: &ColorfulTheme,
     provider_name: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let key: String = Password::with_theme(theme)
+    let key: String = dialoguer::Password::with_theme(theme)
         .with_prompt(format!("{} API key", provider_display_name(provider_name)))
         .interact()?;
 
