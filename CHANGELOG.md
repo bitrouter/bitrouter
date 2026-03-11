@@ -11,38 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⛰️ Features
 
-
-- *(config)* Add per-model metadata and token pricing to provider config ([#66](https://github.com/bitrouter/bitrouter/pull/66)) - ([7ba1ee1](https://github.com/bitrouter/bitrouter/commit/7ba1ee1e29b927b49e9089885e0ecd57565a854a))
+- _(config)_ Add per-model metadata and token pricing to provider config ([#66](https://github.com/bitrouter/bitrouter/pull/66)) - ([7ba1ee1](https://github.com/bitrouter/bitrouter/commit/7ba1ee1e29b927b49e9089885e0ecd57565a854a))
 - Replace API key auth with self-signed EdDSA JWTs ([#62](https://github.com/bitrouter/bitrouter/pull/62)) - ([87f1879](https://github.com/bitrouter/bitrouter/commit/87f187942eff11e9e576c96157f5ccc96685e762))
-
 
 ## [0.3.0](https://github.com/bitrouter/bitrouter/compare/v0.2.5...v0.3.0)
 
 ### ⛰️ Features
 
-
-- *(bitrouter)* Implement database configuration and connection ([#57](https://github.com/bitrouter/bitrouter/pull/57)) - ([ea272b9](https://github.com/bitrouter/bitrouter/commit/ea272b998045fd215e7377bbca6f0d2c6ed9d691))
-
+- _(bitrouter)_ Implement database configuration and connection ([#57](https://github.com/bitrouter/bitrouter/pull/57)) - ([ea272b9](https://github.com/bitrouter/bitrouter/commit/ea272b998045fd215e7377bbca6f0d2c6ed9d691))
 
 ## [0.2.5](https://github.com/bitrouter/bitrouter/compare/v0.2.4...v0.2.5) - 2026-03-11
 
 ### Added
-- *(bitrouter)* embed runtime and tui into `bitrouter` bin ([#51](https://github.com/bitrouter/bitrouter/pull/51))
+
+- _(bitrouter)_ embed runtime and tui into `bitrouter` bin ([#51](https://github.com/bitrouter/bitrouter/pull/51))
 
 ## [0.2.4](https://github.com/bitrouter/bitrouter/compare/v0.2.3...v0.2.4) - 2026-03-11
 
 ### Added
-- *(api)* add GET /v1/routes endpoint ([#43](https://github.com/bitrouter/bitrouter/pull/43))
+
+- _(api)_ add GET /v1/routes endpoint ([#43](https://github.com/bitrouter/bitrouter/pull/43))
 
 ## [0.2.3](https://github.com/bitrouter/bitrouter/compare/v0.2.2...v0.2.3) - 2026-03-11
 
 ### Added
+
 - add init wizard, provider auto-detection, and Google API route ([#41](https://github.com/bitrouter/bitrouter/pull/41))
 
 ## [0.2.2](https://github.com/bitrouter/bitrouter/compare/v0.2.0...v0.2.2) - 2026-03-10
 
 ### Added
-- *(runtime)* add basic api key auth ([#39](https://github.com/bitrouter/bitrouter/pull/39))
+
+- _(runtime)_ add basic api key auth ([#39](https://github.com/bitrouter/bitrouter/pull/39))
 
 ### Other
-- *(repo)* use unified workspace package
+
+- _(repo)_ use unified workspace package
