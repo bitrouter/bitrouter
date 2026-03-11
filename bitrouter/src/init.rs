@@ -4,7 +4,7 @@ use bitrouter_config::{
     CustomProviderInit, InitOptions, builtin_provider_defs, detect_providers_from_env,
 };
 use bitrouter_runtime::RuntimePaths;
-use dialoguer::{Confirm, Input, Password, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, theme::ColorfulTheme};
 
 /// Outcome of the init wizard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,8 +56,6 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         println!("Setup cancelled. Existing configuration preserved.");
         return Ok(InitOutcome::Cancelled);
     }
-
-    // Auto-detect providers from environment
     let detected = detect_providers_from_env();
     let detected_names: Vec<&str> = detected.iter().map(|d| d.name.as_str()).collect();
 
@@ -338,7 +336,7 @@ fn prompt_api_key(
     theme: &ColorfulTheme,
     provider_name: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let key: String = Password::with_theme(theme)
+    let key: String = dialoguer::Password::with_theme(theme)
         .with_prompt(format!("{} API key", provider_display_name(provider_name)))
         .interact()?;
 

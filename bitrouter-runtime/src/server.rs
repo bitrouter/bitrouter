@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use bitrouter_api::router::{anthropic, google, openai};
+use bitrouter_api::router::{anthropic, google, openai, routes};
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::{model_router::LanguageModelRouter, routing_table::RoutingTable};
 use sea_orm::DatabaseConnection;
@@ -72,6 +72,9 @@ where
             .and(warp::get())
             .map(|| warp::reply::json(&serde_json::json!({ "status": "ok" })));
 
+        // Route listing — no auth required.
+        let route_list = routes::routes_filter(self.table.clone());
+
         // Model API routes — gated by protocol-appropriate auth.
         let chat = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
             openai::chat::filters::chat_completions_filter(self.table.clone(), self.router.clone()),
@@ -94,6 +97,7 @@ where
         let key_mgmt = keys::key_routes(auth_ctx.clone(), self.db.clone());
 
         let routes = health
+            .or(route_list)
             .or(chat)
             .or(messages)
             .or(responses)
