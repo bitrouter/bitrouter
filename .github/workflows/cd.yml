@@ -20,7 +20,7 @@ defaults:
 jobs:
   upload-assets:
     name: ${{ matrix.target }}
-    if: github.repository_owner == 'bitrouter' && startsWith(github.event.release.name, 'v')
+    if: github.repository_owner == 'bitrouter' && startsWith(github.event.release.tag_name, 'v')
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
