@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::config::{ApiProtocol, ProviderConfig};
+use crate::config::{ApiProtocol, ModelInfo, ProviderConfig};
 
 // ── Compile-time embedded provider definitions ──────────────────────
 
@@ -19,7 +19,7 @@ struct ProviderDef {
     api_base: String,
     env_prefix: String,
     #[serde(default)]
-    models: Vec<String>,
+    models: HashMap<String, ModelInfo>,
 }
 
 /// A built-in provider with its configuration and known model IDs.
@@ -36,6 +36,7 @@ pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
         .map(|(name, yaml)| {
             let def: ProviderDef = serde_yaml::from_str(yaml)
                 .unwrap_or_else(|e| panic!("invalid built-in provider YAML '{name}': {e}"));
+            let models: Vec<String> = def.models.keys().cloned().collect();
             (
                 (*name).to_owned(),
                 BuiltinProvider {
@@ -43,9 +44,14 @@ pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
                         api_protocol: Some(def.api_protocol),
                         api_base: Some(def.api_base),
                         env_prefix: Some(def.env_prefix),
+                        models: if def.models.is_empty() {
+                            None
+                        } else {
+                            Some(def.models)
+                        },
                         ..Default::default()
                     },
-                    models: def.models,
+                    models,
                 },
             )
         })
@@ -86,6 +92,9 @@ pub fn merge_provider(base: &mut ProviderConfig, overlay: ProviderConfig) {
     }
     if overlay.default_headers.is_some() {
         base.default_headers = overlay.default_headers;
+    }
+    if overlay.models.is_some() {
+        base.models = overlay.models;
     }
 }
 
@@ -166,6 +175,9 @@ fn resolve_derives(
         }
         if child.default_headers.is_none() {
             child.default_headers = parent.default_headers;
+        }
+        if child.models.is_none() {
+            child.models = parent.models;
         }
         child.derives = None;
     }
@@ -327,5 +339,129 @@ mod tests {
 
         assert_eq!(base.api_base.as_deref(), Some("https://base.com/v1")); // kept
         assert_eq!(base.api_key.as_deref(), Some("overlay-key")); // overridden
+    }
+
+    #[test]
+    fn builtin_providers_carry_model_catalogs() {
+        let defs = builtin_provider_defs();
+        let openai = &defs["openai"];
+        assert!(!openai.models.is_empty());
+        assert!(openai.models.contains(&"gpt-4o".to_owned()));
+        // Also on config
+        let models = openai.config.models.as_ref().unwrap();
+        assert!(models.contains_key("gpt-4o"));
+    }
+
+    #[test]
+    fn merge_provider_overlay_replaces_models() {
+        use crate::config::ModelInfo;
+
+        let mut base = ProviderConfig {
+            models: Some(HashMap::from([
+                ("model-a".into(), ModelInfo::default()),
+                ("model-b".into(), ModelInfo::default()),
+            ])),
+            ..Default::default()
+        };
+        let overlay = ProviderConfig {
+            models: Some(HashMap::from([(
+                "model-c".into(),
+                ModelInfo {
+                    name: Some("Model C".into()),
+                    ..Default::default()
+                },
+            )])),
+            ..Default::default()
+        };
+        merge_provider(&mut base, overlay);
+
+        let models = base.models.as_ref().unwrap();
+        assert_eq!(models.len(), 1);
+        assert!(models.contains_key("model-c"));
+    }
+
+    #[test]
+    fn merge_provider_no_overlay_keeps_base_models() {
+        use crate::config::ModelInfo;
+
+        let mut base = ProviderConfig {
+            models: Some(HashMap::from([("model-a".into(), ModelInfo::default())])),
+            ..Default::default()
+        };
+        let overlay = ProviderConfig::default();
+        merge_provider(&mut base, overlay);
+
+        assert!(base.models.as_ref().unwrap().contains_key("model-a"));
+    }
+
+    #[test]
+    fn derives_inherits_models() {
+        use crate::config::ModelInfo;
+
+        let mut providers = HashMap::new();
+        providers.insert(
+            "parent".into(),
+            ProviderConfig {
+                api_protocol: Some(ApiProtocol::Openai),
+                models: Some(HashMap::from([(
+                    "parent-model".into(),
+                    ModelInfo {
+                        name: Some("Parent Model".into()),
+                        ..Default::default()
+                    },
+                )])),
+                ..Default::default()
+            },
+        );
+        providers.insert(
+            "child".into(),
+            ProviderConfig {
+                derives: Some("parent".into()),
+                ..Default::default()
+            },
+        );
+
+        let env = HashMap::new();
+        let resolved = resolve_providers(providers, &env);
+
+        let child = &resolved["child"];
+        let models = child.models.as_ref().unwrap();
+        assert!(models.contains_key("parent-model"));
+        assert_eq!(models["parent-model"].name.as_deref(), Some("Parent Model"));
+    }
+
+    #[test]
+    fn derives_child_models_override_parent() {
+        use crate::config::ModelInfo;
+
+        let mut providers = HashMap::new();
+        providers.insert(
+            "parent".into(),
+            ProviderConfig {
+                api_protocol: Some(ApiProtocol::Openai),
+                models: Some(HashMap::from([("model-a".into(), ModelInfo::default())])),
+                ..Default::default()
+            },
+        );
+        providers.insert(
+            "child".into(),
+            ProviderConfig {
+                derives: Some("parent".into()),
+                models: Some(HashMap::from([(
+                    "child-model".into(),
+                    ModelInfo::default(),
+                )])),
+                ..Default::default()
+            },
+        );
+
+        let env = HashMap::new();
+        let resolved = resolve_providers(providers, &env);
+
+        let child = &resolved["child"];
+        let models = child.models.as_ref().unwrap();
+        // Child's own models take precedence, parent models not inherited
+        assert!(models.contains_key("child-model"));
+        assert!(!models.contains_key("model-a"));
     }
 }

@@ -204,6 +204,92 @@ pub struct ProviderConfig {
     /// Extra default HTTP headers sent with every request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_headers: Option<HashMap<String, String>>,
+
+    /// Per-model metadata and pricing catalog.
+    ///
+    /// Keys are upstream model IDs (e.g. `"gpt-4o"`). Values carry optional
+    /// display name, description, context length, supported modalities, and
+    /// token pricing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<HashMap<String, ModelInfo>>,
+}
+
+// ── Model metadata & pricing ─────────────────────────────────────────
+
+/// Media modality supported by a model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Modality {
+    Text,
+    Image,
+    Audio,
+    Video,
+}
+
+/// Metadata and pricing for a single model offered by a provider.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelInfo {
+    /// Human-readable display name (e.g. "GPT-4o").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Brief description of the model's capabilities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Maximum context window in tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u64>,
+
+    /// Input modalities the model accepts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_modalities: Vec<Modality>,
+
+    /// Output modalities the model can produce.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<Modality>,
+
+    /// Token pricing per million tokens.
+    #[serde(default)]
+    pub pricing: ModelPricing,
+}
+
+/// Token pricing per million tokens for a model.
+///
+/// Field names mirror the sub-category fields of `LanguageModelInputTokens`
+/// and `LanguageModelOutputTokens` from `bitrouter-core` for cross-provider
+/// compatibility. Defaults to `0.0` for all fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelPricing {
+    #[serde(default)]
+    pub input_tokens: InputTokenPricing,
+    #[serde(default)]
+    pub output_tokens: OutputTokenPricing,
+}
+
+/// Input token pricing per million tokens.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InputTokenPricing {
+    /// Cost per million non-cached input tokens.
+    #[serde(default)]
+    pub no_cache: f64,
+    /// Cost per million cache-read input tokens.
+    #[serde(default)]
+    pub cache_read: f64,
+    /// Cost per million cache-write input tokens.
+    #[serde(default)]
+    pub cache_write: f64,
+}
+
+/// Output token pricing per million tokens.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OutputTokenPricing {
+    /// Cost per million text output tokens.
+    #[serde(default)]
+    pub text: f64,
+    /// Cost per million reasoning output tokens.
+    #[serde(default)]
+    pub reasoning: f64,
 }
 
 /// Authentication configuration.
@@ -365,5 +451,113 @@ providers:
         assert!(config.providers.contains_key("openai"));
         assert!(config.providers.contains_key("anthropic"));
         assert!(config.providers.contains_key("google"));
+    }
+
+    #[test]
+    fn model_info_round_trips_through_yaml() {
+        let yaml = r#"
+name: "GPT-4o"
+description: "Multimodal flagship model"
+context_length: 128000
+input_modalities:
+  - text
+  - image
+output_modalities:
+  - text
+pricing:
+  input_tokens:
+    no_cache: 2.50
+    cache_read: 1.25
+    cache_write: 2.50
+  output_tokens:
+    text: 10.00
+    reasoning: 10.00
+"#;
+        let info: ModelInfo = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(info.name.as_deref(), Some("GPT-4o"));
+        assert_eq!(
+            info.description.as_deref(),
+            Some("Multimodal flagship model")
+        );
+        assert_eq!(info.context_length, Some(128000));
+        assert_eq!(info.input_modalities, vec![Modality::Text, Modality::Image]);
+        assert_eq!(info.output_modalities, vec![Modality::Text]);
+        assert_eq!(info.pricing.input_tokens.no_cache, 2.50);
+        assert_eq!(info.pricing.input_tokens.cache_read, 1.25);
+        assert_eq!(info.pricing.input_tokens.cache_write, 2.50);
+        assert_eq!(info.pricing.output_tokens.text, 10.00);
+        assert_eq!(info.pricing.output_tokens.reasoning, 10.00);
+
+        // Round-trip
+        let serialized = serde_yaml::to_string(&info).unwrap();
+        let deserialized: ModelInfo = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, info.name);
+        assert_eq!(deserialized.pricing.input_tokens.no_cache, 2.50);
+    }
+
+    #[test]
+    fn empty_model_info_deserializes_to_defaults() {
+        let info: ModelInfo = serde_yaml::from_str("{}").unwrap();
+        assert!(info.name.is_none());
+        assert!(info.description.is_none());
+        assert!(info.context_length.is_none());
+        assert!(info.input_modalities.is_empty());
+        assert!(info.output_modalities.is_empty());
+        assert_eq!(info.pricing.input_tokens.no_cache, 0.0);
+        assert_eq!(info.pricing.output_tokens.text, 0.0);
+    }
+
+    #[test]
+    fn load_with_provider_model_metadata() {
+        let yaml = r#"
+providers:
+  openai:
+    api_key: "sk-test"
+    models:
+      gpt-4o:
+        name: "GPT-4o"
+        context_length: 128000
+        input_modalities: [text, image]
+        output_modalities: [text]
+        pricing:
+          input_tokens:
+            no_cache: 2.50
+          output_tokens:
+            text: 10.00
+      gpt-4o-mini:
+        name: "GPT-4o Mini"
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        let openai = &config.providers["openai"];
+        let models = openai.models.as_ref().unwrap();
+
+        let gpt4o = &models["gpt-4o"];
+        assert_eq!(gpt4o.name.as_deref(), Some("GPT-4o"));
+        assert_eq!(gpt4o.context_length, Some(128000));
+        assert_eq!(
+            gpt4o.input_modalities,
+            vec![Modality::Text, Modality::Image]
+        );
+        assert_eq!(gpt4o.pricing.input_tokens.no_cache, 2.50);
+        assert_eq!(gpt4o.pricing.output_tokens.text, 10.00);
+
+        let mini = &models["gpt-4o-mini"];
+        assert_eq!(mini.name.as_deref(), Some("GPT-4o Mini"));
+        assert_eq!(mini.pricing.input_tokens.no_cache, 0.0); // default
+    }
+
+    #[test]
+    fn derives_inherits_model_catalog() {
+        let yaml = r#"
+providers:
+  my-openai:
+    derives: openai
+    api_key: "sk-custom"
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        let my_openai = &config.providers["my-openai"];
+        // Should inherit the built-in openai models catalog
+        let models = my_openai.models.as_ref().unwrap();
+        assert!(models.contains_key("gpt-4o"));
     }
 }
