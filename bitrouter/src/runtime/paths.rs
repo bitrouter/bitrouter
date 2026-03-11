@@ -146,6 +146,7 @@ fn scaffold_home(home: &Path) -> std::io::Result<()> {
 logs/
 run/
 .env
+.keys/
 ",
         )?;
     }

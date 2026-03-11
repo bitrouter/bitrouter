@@ -1,60 +1,49 @@
-//! Authentication filters for the bitrouter gateway.
+//! JWT authentication filters for the bitrouter gateway.
 //!
-//! Implements a LiteLLM-style key model:
+//! Implements self-signed EdDSA (Ed25519) JWT authentication:
 //!
-//! - A **master key** (configured in `bitrouter.yaml`) grants [`Scope::Admin`]
-//!   access — it can call API endpoints and manage accounts/keys.
-//! - **Virtual keys** (created via the `/key/generate` endpoint using the master
-//!   key) grant [`Scope::Api`] access — they can call API endpoints only.
+//! - The JWT `iss` claim carries the signer's public key (base64url).
+//! - The server verifies the Ed25519 signature **before** any DB interaction.
+//! - On first contact the server auto-creates an account for the public key.
+//! - Rotated public keys are recognized and rejected (not auto-registered).
 //!
 //! Credentials are extracted from the protocol-appropriate header:
 //!
 //! | Protocol   | Header                          |
 //! |------------|---------------------------------|
-//! | OpenAI     | `Authorization: Bearer <key>`   |
-//! | Anthropic  | `x-api-key: <key>`              |
-//! | Management | `Authorization: Bearer <key>`   |
+//! | OpenAI     | `Authorization: Bearer <jwt>`   |
+//! | Anthropic  | `x-api-key: <jwt>`              |
+//! | Management | `Authorization: Bearer <jwt>`   |
 //!
-//! When no `master_key` is configured, auth is disabled and all requests are
+//! When no database is configured, auth is disabled and all requests are
 //! allowed through (open proxy mode).
 
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
-use sha2::{Digest, Sha256};
 use warp::Filter;
 
 use bitrouter_accounts::identity::{AccountId, Identity, Scope};
 use bitrouter_accounts::service::AccountService;
+use bitrouter_core::jwt::claims::TokenScope;
+use bitrouter_core::jwt::{keys as jwt_keys, token as jwt_token};
 
 /// Shared auth state passed into filters.
 #[derive(Clone)]
-pub struct AuthContext {
-    /// The configured master key (SHA-256 hash), if any.
-    master_key_hash: Option<String>,
-    /// Database connection for virtual key lookups.
+pub struct JwtAuthContext {
+    /// Database connection for account lookups (auto-creation).
     db: Option<DatabaseConnection>,
 }
 
-impl AuthContext {
-    pub fn new(master_key: Option<&str>, db: Option<DatabaseConnection>) -> Self {
-        Self {
-            master_key_hash: master_key.map(hash_key),
-            db,
-        }
+impl JwtAuthContext {
+    pub fn new(db: Option<DatabaseConnection>) -> Self {
+        Self { db }
     }
 
-    /// Returns `true` when no master key is configured (open proxy mode).
+    /// Returns `true` when no database is configured (open proxy mode).
     pub fn is_open(&self) -> bool {
-        self.master_key_hash.is_none()
+        self.db.is_none()
     }
-}
-
-/// SHA-256 hash a key string, returning hex-encoded digest.
-pub fn hash_key(key: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(key.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 // ── credential extraction ─────────────────────────────────────
@@ -110,59 +99,71 @@ pub fn any_credential() -> impl Filter<Extract = (String,), Error = warp::Reject
 
 // ── identity resolution ───────────────────────────────────────
 
-/// Resolve a credential string to an [`Identity`].
+/// Resolve a JWT credential string to an [`Identity`].
 ///
-/// 1. If the credential matches the master key → Admin identity.
-/// 2. Otherwise, look up the hash in the accounts DB → Api identity.
-/// 3. If neither matches → reject.
+/// Security-critical ordering:
+/// 1. Decode JWT (unverified) to extract `iss` (public key).
+/// 2. Verify Ed25519 signature — crypto only, no DB.
+/// 3. Check expiration.
+/// 4. Look up / auto-create account in DB.
+/// 5. Build Identity with account-relative scope.
 async fn resolve_identity(
     credential: &str,
-    ctx: &AuthContext,
+    ctx: &JwtAuthContext,
 ) -> Result<Identity, warp::Rejection> {
-    let credential_hash = hash_key(credential);
+    // 1. Decode unverified to extract the public key.
+    let unverified_claims = jwt_token::decode_unverified(credential)
+        .map_err(|_| warp::reject::custom(Unauthorized("malformed JWT")))?;
 
-    // Check master key.
-    if let Some(ref master_hash) = ctx.master_key_hash
-        && constant_time_eq(&credential_hash, master_hash)
-    {
-        return Ok(Identity {
-            account_id: AccountId::new(),
-            scope: Scope::Admin,
-        });
-    }
+    // 2. Verify signature using the public key from `iss`.
+    let verifying_key = jwt_keys::decode_public_key(&unverified_claims.iss)
+        .map_err(|_| warp::reject::custom(Unauthorized("invalid public key in JWT iss")))?;
 
-    // Check virtual key in DB.
-    if let Some(ref db) = ctx.db {
-        let svc = AccountService::new(db);
-        if let Ok(Some((account_id, _key))) = svc.resolve_api_key(&credential_hash).await {
-            return Ok(Identity {
-                account_id,
-                scope: Scope::Api,
-            });
-        }
-    }
+    let claims = jwt_token::verify(credential, &verifying_key)
+        .map_err(|_| warp::reject::custom(Unauthorized("invalid JWT signature")))?;
 
-    Err(warp::reject::custom(Unauthorized("invalid API key")))
-}
+    // 3. Check expiration.
+    jwt_token::check_expiration(&claims)
+        .map_err(|_| warp::reject::custom(Unauthorized("JWT expired")))?;
 
-/// Constant-time string comparison to prevent timing attacks.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.bytes()
-        .zip(b.bytes())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+    // 4. Resolve account from DB.
+    let Some(ref db) = ctx.db else {
+        return Err(warp::reject::custom(Unauthorized(
+            "authentication requires a database",
+        )));
+    };
+
+    let svc = AccountService::new(db);
+    let account = svc
+        .find_or_create_by_pubkey(&claims.iss)
+        .await
+        .map_err(|_| warp::reject::custom(Unauthorized("account lookup failed")))?;
+
+    let Some(account) = account else {
+        return Err(warp::reject::custom(Unauthorized(
+            "public key has been rotated — generate a new token with your current key",
+        )));
+    };
+
+    // 5. Build identity with account-relative scope.
+    let scope = match claims.scope {
+        TokenScope::Admin => Scope::Admin,
+        TokenScope::Api => Scope::Api,
+    };
+
+    Ok(Identity {
+        account_id: AccountId(account.id),
+        scope,
+    })
 }
 
 // ── composite auth filters ────────────────────────────────────
 
 /// Build an auth filter for OpenAI-protocol routes (`Authorization: Bearer`).
 ///
-/// When auth is disabled (no master key), returns a passthrough identity.
+/// When auth is disabled (no DB), returns a passthrough identity.
 pub fn openai_auth(
-    ctx: Arc<AuthContext>,
+    ctx: Arc<JwtAuthContext>,
 ) -> impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone {
     if ctx.is_open() {
         return open_identity().boxed();
@@ -170,7 +171,7 @@ pub fn openai_auth(
     let ctx = ctx.clone();
     bearer_credential()
         .and(warp::any().map(move || ctx.clone()))
-        .and_then(|credential: String, ctx: Arc<AuthContext>| async move {
+        .and_then(|credential: String, ctx: Arc<JwtAuthContext>| async move {
             resolve_identity(&credential, &ctx).await
         })
         .boxed()
@@ -178,9 +179,9 @@ pub fn openai_auth(
 
 /// Build an auth filter for Anthropic-protocol routes (`x-api-key`).
 ///
-/// When auth is disabled (no master key), returns a passthrough identity.
+/// When auth is disabled (no DB), returns a passthrough identity.
 pub fn anthropic_auth(
-    ctx: Arc<AuthContext>,
+    ctx: Arc<JwtAuthContext>,
 ) -> impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone {
     if ctx.is_open() {
         return open_identity().boxed();
@@ -188,7 +189,7 @@ pub fn anthropic_auth(
     let ctx = ctx.clone();
     x_api_key_credential()
         .and(warp::any().map(move || ctx.clone()))
-        .and_then(|credential: String, ctx: Arc<AuthContext>| async move {
+        .and_then(|credential: String, ctx: Arc<JwtAuthContext>| async move {
             resolve_identity(&credential, &ctx).await
         })
         .boxed()
@@ -196,9 +197,9 @@ pub fn anthropic_auth(
 
 /// Build an auth filter for management routes. Accepts both Bearer and x-api-key.
 ///
-/// When auth is disabled (no master key), returns a passthrough identity.
+/// When auth is disabled (no DB), returns a passthrough identity.
 pub fn management_auth(
-    ctx: Arc<AuthContext>,
+    ctx: Arc<JwtAuthContext>,
 ) -> impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone {
     if ctx.is_open() {
         return open_identity().boxed();
@@ -206,7 +207,7 @@ pub fn management_auth(
     let ctx = ctx.clone();
     any_credential()
         .and(warp::any().map(move || ctx.clone()))
-        .and_then(|credential: String, ctx: Arc<AuthContext>| async move {
+        .and_then(|credential: String, ctx: Arc<JwtAuthContext>| async move {
             resolve_identity(&credential, &ctx).await
         })
         .boxed()

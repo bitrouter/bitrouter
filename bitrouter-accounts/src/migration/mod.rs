@@ -9,6 +9,7 @@ pub mod m20260310_000002_create_api_keys;
 pub mod m20260310_000003_create_sessions;
 pub mod m20260310_000004_create_messages;
 pub mod m20260310_000005_create_session_files;
+pub mod m20260311_000006_jwt_auth;
 
 use sea_orm_migration::MigrationTrait;
 
@@ -20,5 +21,6 @@ pub fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         Box::new(m20260310_000003_create_sessions::Migration),
         Box::new(m20260310_000004_create_messages::Migration),
         Box::new(m20260310_000005_create_session_files::Migration),
+        Box::new(m20260311_000006_jwt_auth::Migration),
     ]
 }

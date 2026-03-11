@@ -6,9 +6,8 @@ use bitrouter_core::routers::{model_router::LanguageModelRouter, routing_table::
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
-use crate::runtime::auth::{self, AuthContext, Unauthorized};
+use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
 use crate::runtime::error::Result;
-use crate::runtime::keys;
 
 pub struct ServerPlan<T, R> {
     config: BitrouterConfig,
@@ -39,9 +38,8 @@ where
     pub async fn serve(self) -> Result<()> {
         let addr = self.config.server.listen;
 
-        // Build auth context.
-        let auth_ctx = Arc::new(AuthContext::new(
-            self.config.master_key.as_deref(),
+        // Build JWT auth context.
+        let auth_ctx = Arc::new(JwtAuthContext::new(
             self.db.as_ref().map(|db| db.as_ref().clone()),
         ));
 
@@ -69,33 +67,51 @@ where
             ),
         );
 
-        // Key management routes — always mounted (returns 404 if no DB, since
-        // the filter will not match without the DB anyway).
-        let key_mgmt = keys::key_routes(auth_ctx.clone(), self.db.clone());
+        // Build the full route tree. Account/session management routes are
+        // only mounted when a database is configured.
+        if let Some(ref db) = self.db {
+            let db_conn = db.as_ref().clone();
+            let mgmt_auth = auth::management_auth(auth_ctx.clone());
+            let acct =
+                bitrouter_accounts::filters::account_routes(db_conn.clone(), mgmt_auth.clone());
+            let sess = bitrouter_accounts::filters::session_routes(db_conn, mgmt_auth);
 
-        let routes = health
-            .or(route_list)
-            .or(chat)
-            .or(messages)
-            .or(responses)
-            .or(generate_content)
-            .or(key_mgmt)
-            .recover(handle_auth_rejection)
-            .with(warp::trace::request());
+            let all = health
+                .or(route_list)
+                .or(chat)
+                .or(messages)
+                .or(responses)
+                .or(generate_content)
+                .or(acct)
+                .or(sess)
+                .recover(handle_auth_rejection)
+                .with(warp::trace::request());
 
-        let server = warp::serve(routes)
-            .bind(addr)
-            .await
-            .graceful(shutdown_signal());
-
-        if auth_ctx.is_open() {
-            tracing::info!(%addr, "server listening (auth disabled — no master_key configured)");
+            tracing::info!(%addr, "server listening (JWT auth enabled)");
+            let server = warp::serve(all)
+                .bind(addr)
+                .await
+                .graceful(shutdown_signal());
+            server.run().await;
         } else {
-            tracing::info!(%addr, "server listening (auth enabled)");
-        }
-        server.run().await;
-        tracing::info!("server stopped");
+            let all = health
+                .or(route_list)
+                .or(chat)
+                .or(messages)
+                .or(responses)
+                .or(generate_content)
+                .recover(handle_auth_rejection)
+                .with(warp::trace::request());
 
+            tracing::info!(%addr, "server listening (auth disabled — no database configured)");
+            let server = warp::serve(all)
+                .bind(addr)
+                .await
+                .graceful(shutdown_signal());
+            server.run().await;
+        }
+
+        tracing::info!("server stopped");
         Ok(())
     }
 }
