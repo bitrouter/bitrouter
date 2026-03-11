@@ -6,8 +6,6 @@ pub type Result<T> = std::result::Result<T, RuntimeError>;
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
-    #[error("unsupported operation: {0}")]
-    Unsupported(&'static str),
     #[error("daemon error: {0}")]
     Daemon(String),
     #[error(transparent)]

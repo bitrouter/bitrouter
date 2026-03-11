@@ -3,39 +3,15 @@ use std::path::PathBuf;
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::routing_table::RoutingTable;
 
-use crate::runtime::{control::ControlClient, error::Result, paths::RuntimePaths};
+use crate::runtime::{error::Result, paths::RuntimePaths};
 
 pub struct AppRuntime<R> {
-    config: BitrouterConfig,
-    paths: RuntimePaths,
-    routing_table: R,
+    pub config: BitrouterConfig,
+    pub paths: RuntimePaths,
+    pub routing_table: R,
 }
 
 impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
-    pub fn new(config: BitrouterConfig, paths: RuntimePaths, routing_table: R) -> Self {
-        Self {
-            config,
-            paths,
-            routing_table,
-        }
-    }
-
-    pub fn paths(&self) -> &RuntimePaths {
-        &self.paths
-    }
-
-    pub fn config(&self) -> &BitrouterConfig {
-        &self.config
-    }
-
-    pub fn routing_table(&self) -> &R {
-        &self.routing_table
-    }
-
-    pub fn control_client(&self) -> ControlClient {
-        ControlClient::new(self.paths.clone())
-    }
-
     pub fn status(&self) -> RuntimeStatus {
         let daemon_pid = crate::runtime::daemon::DaemonManager::new(self.paths.clone())
             .is_running()

@@ -89,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Auto-init: when launching in TUI mode with no providers, run the setup
     // wizard first so the user lands in a fully configured TUI.
-    if use_tui && !runtime.config().has_configured_providers() {
+    if use_tui && !runtime.config.has_configured_providers() {
         let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
         if is_interactive {
             eprintln!();
@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Serve) => {
             let model_router = crate::runtime::Router::new(
                 reqwest::Client::new(),
-                runtime.config().providers.clone(),
+                runtime.config.providers.clone(),
             );
             runtime.serve(model_router).await?
         }
@@ -153,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_first_run_guidance(runtime: &DefaultRuntime) {
-    if runtime.config().has_configured_providers() {
+    if runtime.config.has_configured_providers() {
         return;
     }
 
@@ -181,7 +181,7 @@ async fn run_default(
     let status = runtime.status();
 
     let model_router =
-        crate::runtime::Router::new(reqwest::Client::new(), runtime.config().providers.clone());
+        crate::runtime::Router::new(reqwest::Client::new(), runtime.config.providers.clone());
 
     if headless {
         runtime.serve(model_router).await?;
