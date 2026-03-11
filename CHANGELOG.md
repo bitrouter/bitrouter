@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## `bitrouter` - [0.2.3](https://github.com/bitrouter/bitrouter/compare/v0.2.2...v0.2.3) - 2026-03-11
+
+### Added
+- add init wizard, provider auto-detection, and Google API route ([#41](https://github.com/bitrouter/bitrouter/pull/41))
+
 ## `bitrouter` - [0.2.2](https://github.com/bitrouter/bitrouter/compare/v0.2.0...v0.2.2) - 2026-03-10
 
 ### Added
