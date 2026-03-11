@@ -6,17 +6,17 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 BitRouter is organized as a set of focused crates:
 
-| Crate                 | Responsibility                                                                                        |
-| --------------------- | ----------------------------------------------------------------------------------------------------- |
-| `bitrouter`           | CLI entry point with setup wizard, auto-init on first run, and runtime launch                        |
-| `bitrouter-runtime`   | Application assembly, runtime path resolution, daemon lifecycle, and Warp server bootstrapping        |
-| `bitrouter-api`       | Reusable Warp filters for provider-compatible HTTP endpoints                                          |
+| Crate                 | Responsibility                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bitrouter`           | CLI entry point with setup wizard, auto-init on first run, and runtime launch                                                                     |
+| `bitrouter-runtime`   | Application assembly, runtime path resolution, daemon lifecycle, and Warp server bootstrapping                                                    |
+| `bitrouter-api`       | Reusable Warp filters for provider-compatible HTTP endpoints                                                                                      |
 | `bitrouter-config`    | YAML loading, `.env` support, environment substitution, built-in providers, config-backed routing, provider auto-detection, and config generation |
-| `bitrouter-core`      | Shared model traits, router contracts, errors, and transport-neutral types                            |
-| `bitrouter-openai`    | OpenAI-compatible language model adapters                                                             |
-| `bitrouter-anthropic` | Anthropic Messages adapter                                                                            |
-| `bitrouter-google`    | Google Generative AI adapter                                                                          |
-| `bitrouter-tui`       | Terminal UI used by the default interactive `bitrouter` flow                                          |
+| `bitrouter-core`      | Shared model traits, router contracts, errors, and transport-neutral types                                                                        |
+| `bitrouter-openai`    | OpenAI-compatible language model adapters                                                                                                         |
+| `bitrouter-anthropic` | Anthropic Messages adapter                                                                                                                        |
+| `bitrouter-google`    | Google Generative AI adapter                                                                                                                      |
+| `bitrouter-tui`       | Terminal UI used by the default interactive `bitrouter` flow                                                                                      |
 
 ## Request Flow
 
