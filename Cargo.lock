@@ -209,15 +209,33 @@ dependencies = [
 name = "bitrouter"
 version = "0.2.4"
 dependencies = [
+ "anyhow",
+ "bitrouter-accounts",
+ "bitrouter-anthropic",
+ "bitrouter-api",
  "bitrouter-config",
- "bitrouter-runtime",
- "bitrouter-tui",
+ "bitrouter-core",
+ "bitrouter-google",
+ "bitrouter-openai",
  "clap",
+ "crossterm",
  "dialoguer",
+ "dirs",
+ "futures",
+ "hex",
+ "libc",
+ "ratatui",
  "reqwest",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "warp",
 ]
 
 [[package]]
@@ -334,43 +352,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
-]
-
-[[package]]
-name = "bitrouter-runtime"
-version = "0.2.4"
-dependencies = [
- "bitrouter-accounts",
- "bitrouter-anthropic",
- "bitrouter-api",
- "bitrouter-config",
- "bitrouter-core",
- "bitrouter-google",
- "bitrouter-openai",
- "dirs",
- "hex",
- "libc",
- "reqwest",
- "sea-orm",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "warp",
-]
-
-[[package]]
-name = "bitrouter-tui"
-version = "0.2.4"
-dependencies = [
- "anyhow",
- "crossterm",
- "futures",
- "ratatui",
- "tokio",
 ]
 
 [[package]]

@@ -1,8 +1,8 @@
 use std::fs;
 use std::process::{Command, Stdio};
 
-use crate::error::{Result, RuntimeError};
-use crate::paths::RuntimePaths;
+use crate::runtime::error::{Result, RuntimeError};
+use crate::runtime::paths::RuntimePaths;
 
 /// Spawn the bitrouter server as a detached daemon process.
 ///

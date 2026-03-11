@@ -1,8 +1,8 @@
 use std::fs;
 use std::process::{Command, Stdio};
 
-use crate::error::{Result, RuntimeError};
-use crate::paths::RuntimePaths;
+use crate::runtime::error::{Result, RuntimeError};
+use crate::runtime::paths::RuntimePaths;
 
 const DETACHED_PROCESS: u32 = 0x0000_0008;
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;

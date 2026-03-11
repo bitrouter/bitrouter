@@ -6,9 +6,9 @@ use bitrouter_core::routers::{model_router::LanguageModelRouter, routing_table::
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
-use crate::auth::{self, AuthContext, Unauthorized};
-use crate::error::Result;
-use crate::keys;
+use crate::runtime::auth::{self, AuthContext, Unauthorized};
+use crate::runtime::error::Result;
+use crate::runtime::keys;
 
 /// A stub model router that rejects all requests with a descriptive error.
 ///
