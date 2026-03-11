@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/bitrouter/bitrouter/compare/v0.2.5...v0.3.0)
+
+### ⛰️ Features
+
+
+- *(bitrouter)* Implement database configuration and connection ([#57](https://github.com/bitrouter/bitrouter/pull/57)) - ([ea272b9](https://github.com/bitrouter/bitrouter/commit/ea272b998045fd215e7377bbca6f0d2c6ed9d691))
+
+
 ## [0.2.5](https://github.com/bitrouter/bitrouter/compare/v0.2.4...v0.2.5) - 2026-03-11
 
 ### Added
