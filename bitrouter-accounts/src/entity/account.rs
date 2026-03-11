@@ -9,23 +9,25 @@ use uuid::Uuid;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
-    #[sea_orm(unique)]
     pub name: String,
+    /// Ed25519 public key (base64url-encoded), used for JWT authentication.
+    #[sea_orm(unique)]
+    pub master_pubkey: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
-    #[sea_orm(has_many = "super::api_key::Entity")]
-    ApiKeys,
+    #[sea_orm(has_many = "super::rotated_pubkey::Entity")]
+    RotatedPubkeys,
     #[sea_orm(has_many = "super::session::Entity")]
     Sessions,
 }
 
-impl Related<super::api_key::Entity> for Entity {
+impl Related<super::rotated_pubkey::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::ApiKeys.def()
+        Relation::RotatedPubkeys.def()
     }
 }
 
