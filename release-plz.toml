@@ -25,6 +25,11 @@ git_tag_enable = true                # Enable git tags for this package
 git_release_enable = true            # Enable git releases for this package
 
 [changelog]
+header = """# Changelog
+
+## [Unreleased]
+"""
+
 body = """
 
 {% macro print_commit(commit) -%}
