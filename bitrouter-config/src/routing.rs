@@ -3,10 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitrouter_core::{
     errors::{BitrouterError, Result},
-    routers::routing_table::{RoutingTable, RoutingTarget},
+    routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget},
 };
 
-use crate::config::{ModelConfig, ProviderConfig, RoutingStrategy};
+use crate::config::{ApiProtocol, ModelConfig, ProviderConfig, RoutingStrategy};
 
 /// A routing target with full resolution context including any per-endpoint overrides.
 #[derive(Debug, Clone)]
@@ -117,6 +117,32 @@ impl RoutingTable for ConfigRoutingTable {
             provider_name: resolved.provider_name,
             model_id: resolved.model_id,
         })
+    }
+
+    fn list_routes(&self) -> Vec<RouteEntry> {
+        let mut entries = Vec::new();
+        for (model_name, model_config) in &self.models {
+            if let Some(endpoint) = model_config.endpoints.first() {
+                let protocol = self
+                    .providers
+                    .get(&endpoint.provider)
+                    .and_then(|p| p.api_protocol.as_ref())
+                    .map(|p| match p {
+                        ApiProtocol::Openai => "openai",
+                        ApiProtocol::Anthropic => "anthropic",
+                        ApiProtocol::Google => "google",
+                    })
+                    .unwrap_or("openai")
+                    .to_owned();
+                entries.push(RouteEntry {
+                    model: model_name.clone(),
+                    provider: endpoint.provider.clone(),
+                    protocol,
+                });
+            }
+        }
+        entries.sort_by(|a, b| a.model.cmp(&b.model));
+        entries
     }
 }
 
