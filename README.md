@@ -50,6 +50,12 @@ bitrouter init
 For a headless API server (no TUI):
 
 ```bash
+bitrouter --headless
+```
+
+To run a single foreground server command explicitly:
+
+```bash
 bitrouter serve
 ```
 
@@ -74,6 +80,7 @@ bitrouter serve
 `bitrouter` has two ways to run:
 
 - `bitrouter` starts the default interactive runtime. On first run with no providers configured, the setup wizard runs automatically. With the default `tui` feature enabled, this then launches the TUI and API server together.
+- `bitrouter --headless` starts the default runtime without the TUI.
 - `bitrouter [COMMAND]` runs an explicit operational command.
 
 ### Subcommands
@@ -86,8 +93,11 @@ bitrouter serve
 | `stop`    | Stop the running daemon                                                       |
 | `status`  | Print resolved paths, listen address, configured providers, and daemon status |
 | `restart` | Restart the background daemon                                                 |
+| `account` | Manage local Ed25519 account keypairs used to sign BitRouter JWTs             |
+| `keygen`  | Sign a JWT with the active account key                                        |
+| `keys`    | List, inspect, and remove locally stored JWTs                                 |
 
-### Global path options
+### Global options
 
 These flags are available on the top-level command and on each subcommand:
 
@@ -96,6 +106,28 @@ These flags are available on the top-level command and on each subcommand:
 - `--env-file <PATH>` — override `<home>/.env`
 - `--run-dir <PATH>` — override `<home>/run`
 - `--logs-dir <PATH>` — override `<home>/logs`
+- `--db <DATABASE_URL>` — override the database URL from environment variables and config
+
+Top-level runtime flags:
+
+- `--headless` — run the default runtime without the TUI
+
+### Local account and JWT helpers
+
+BitRouter can generate and manage local Ed25519 account keys under `<home>/.keys`, then use the active account to mint JWTs for API access:
+
+```bash
+# Generate a local account keypair and set it active
+bitrouter account --generate-key
+
+# Create an API token for that account and save it locally
+bitrouter keygen --exp 30d --models openai:gpt-4o --name default
+
+# Inspect or remove saved tokens
+bitrouter keys --list
+bitrouter keys --show default
+bitrouter keys --rm default
+```
 
 ## Configuration and `BITROUTER_HOME`
 
