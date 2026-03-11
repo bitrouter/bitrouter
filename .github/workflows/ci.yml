@@ -97,8 +97,8 @@ jobs:
       - name: Build crate
         run: cargo build -p ${{ matrix.crate }} ${{ matrix.cargo_args }}
 
-  runtime-cross-platform:
-    name: stable / bitrouter-runtime / ${{ matrix.os }}
+  cross-platform:
+    name: stable / build / bitrouter / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -115,16 +115,16 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build bitrouter-runtime
-        run: cargo build -p bitrouter-runtime
+      - name: Build bitrouter
+        run: cargo build -p bitrouter
 
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
           tool: nextest
 
-      - name: Test bitrouter-runtime with nextest
-        run: cargo nextest run --no-tests=pass -p bitrouter-runtime
+      - name: Test bitrouter with nextest
+        run: cargo nextest run --no-tests=pass -p bitrouter
 
   test:
     name: stable / test

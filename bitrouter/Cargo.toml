@@ -10,17 +10,49 @@ readme = "README.md"
 
 [features]
 default = ["tui"]
-tui = ["dep:bitrouter-tui"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
 
 [dependencies]
+# Internal crates
+bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.2" }
+bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.2" }
+bitrouter-api = { path = "../bitrouter-api", version = "0.2" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.2" }
-bitrouter-runtime = { path = "../bitrouter-runtime", version = "0.2" }
-bitrouter-tui = { path = "../bitrouter-tui", version = "0.2", optional = true }
+bitrouter-core = { path = "../bitrouter-core", version = "0.2" }
+bitrouter-google = { path = "../bitrouter-google", version = "0.2" }
+bitrouter-openai = { path = "../bitrouter-openai", version = "0.2" }
+
+# CLI
 clap = { version = "4.5", features = ["derive"] }
-dialoguer = "0.11"
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
+dialoguer = "0.12"
+
+# Runtime
+dirs = "6"
+hex = "0.4"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+sea-orm = { version = "1.1", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+sha2 = "0.10"
+thiserror = { version = "2.0" }
+tokio = { version = "1", features = [
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
 ] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4"] }
+warp = { version = "0.4.2", features = ["server"] }
+
+# TUI (optional)
+ratatui = { version = "0.30", optional = true }
+crossterm = { version = "0.29", features = ["event-stream"], optional = true }
+futures = { version = "0.3", optional = true }
+anyhow = { version = "1", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
+use crate::runtime::RuntimePaths;
 use bitrouter_config::{
     CustomProviderInit, InitOptions, builtin_provider_defs, detect_providers_from_env,
 };
-use bitrouter_runtime::RuntimePaths;
 use dialoguer::{Confirm, Input, theme::ColorfulTheme};
 
 /// Outcome of the init wizard.

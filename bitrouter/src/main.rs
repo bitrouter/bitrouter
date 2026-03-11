@@ -1,8 +1,11 @@
 mod init;
+mod runtime;
+#[cfg(feature = "tui")]
+mod tui;
 
 use std::path::PathBuf;
 
-use bitrouter_runtime::{AppRuntime, PathOverrides, resolve_home};
+use crate::runtime::{AppRuntime, PathOverrides, resolve_home};
 use clap::{Parser, Subcommand};
 
 type DefaultRuntime = AppRuntime<bitrouter_config::ConfigRoutingTable>;
@@ -86,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Auto-init: when launching in TUI mode with no providers, run the setup
     // wizard first so the user lands in a fully configured TUI.
-    if use_tui && !runtime.config().has_configured_providers() {
+    if use_tui && !runtime.config.has_configured_providers() {
         let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
         if is_interactive {
             eprintln!();
@@ -119,9 +122,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         None => run_default(runtime, cli.headless).await?,
         Some(Command::Serve) => {
-            let model_router = bitrouter_runtime::Router::new(
+            let model_router = crate::runtime::Router::new(
                 reqwest::Client::new(),
-                runtime.config().providers.clone(),
+                runtime.config.providers.clone(),
             );
             runtime.serve(model_router).await?
         }
@@ -150,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_first_run_guidance(runtime: &DefaultRuntime) {
-    if runtime.config().has_configured_providers() {
+    if runtime.config.has_configured_providers() {
         return;
     }
 
@@ -178,7 +181,7 @@ async fn run_default(
     let status = runtime.status();
 
     let model_router =
-        bitrouter_runtime::Router::new(reqwest::Client::new(), runtime.config().providers.clone());
+        crate::runtime::Router::new(reqwest::Client::new(), runtime.config.providers.clone());
 
     if headless {
         runtime.serve(model_router).await?;
@@ -187,7 +190,7 @@ async fn run_default(
 
     #[cfg(feature = "tui")]
     {
-        let tui_config = bitrouter_tui::TuiConfig {
+        let tui_config = crate::tui::TuiConfig {
             listen_addr: status.listen_addr,
             providers: vec![], // TODO: populate from config
             route_count: 0,    // TODO: populate from routing table
@@ -200,7 +203,7 @@ async fn run_default(
                     tracing::error!("server error: {e}");
                 }
             }
-            result = bitrouter_tui::run(tui_config) => {
+            result = crate::tui::run(tui_config) => {
                 result?;
             }
         }

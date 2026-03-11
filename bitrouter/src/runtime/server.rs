@@ -6,31 +6,9 @@ use bitrouter_core::routers::{model_router::LanguageModelRouter, routing_table::
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
-use crate::auth::{self, AuthContext, Unauthorized};
-use crate::error::Result;
-use crate::keys;
-
-/// A stub model router that rejects all requests with a descriptive error.
-///
-/// Used when the server starts without a real provider-backed router. Health
-/// checks and other non-model endpoints still work; only model API requests
-/// will return an error.
-pub struct StubModelRouter;
-
-impl LanguageModelRouter for StubModelRouter {
-    async fn route_model(
-        &self,
-        _target: bitrouter_core::routers::routing_table::RoutingTarget,
-    ) -> bitrouter_core::errors::Result<
-        Box<bitrouter_core::models::language::language_model::DynLanguageModel<'static>>,
-    > {
-        Err(bitrouter_core::errors::BitrouterError::unsupported(
-            "runtime",
-            "model routing",
-            Some("no model router configured — configure providers to enable API endpoints".into()),
-        ))
-    }
-}
+use crate::runtime::auth::{self, AuthContext, Unauthorized};
+use crate::runtime::error::Result;
+use crate::runtime::keys;
 
 pub struct ServerPlan<T, R> {
     config: BitrouterConfig,
@@ -51,12 +29,6 @@ where
             router,
             db: None,
         }
-    }
-
-    /// Set the database connection for virtual key lookups and key management.
-    pub fn with_db(mut self, db: DatabaseConnection) -> Self {
-        self.db = Some(Arc::new(db));
-        self
     }
 
     pub async fn serve(self) -> Result<()> {

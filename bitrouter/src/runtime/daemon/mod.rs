@@ -14,8 +14,8 @@ use pid::PidFile;
 
 use std::time::Duration;
 
-use crate::error::{Result, RuntimeError};
-use crate::paths::RuntimePaths;
+use crate::runtime::error::{Result, RuntimeError};
+use crate::runtime::paths::RuntimePaths;
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);

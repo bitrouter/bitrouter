@@ -3,41 +3,17 @@ use std::path::PathBuf;
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::routing_table::RoutingTable;
 
-use crate::{control::ControlClient, error::Result, paths::RuntimePaths};
+use crate::runtime::{error::Result, paths::RuntimePaths};
 
 pub struct AppRuntime<R> {
-    config: BitrouterConfig,
-    paths: RuntimePaths,
-    routing_table: R,
+    pub config: BitrouterConfig,
+    pub paths: RuntimePaths,
+    pub routing_table: R,
 }
 
 impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
-    pub fn new(config: BitrouterConfig, paths: RuntimePaths, routing_table: R) -> Self {
-        Self {
-            config,
-            paths,
-            routing_table,
-        }
-    }
-
-    pub fn paths(&self) -> &RuntimePaths {
-        &self.paths
-    }
-
-    pub fn config(&self) -> &BitrouterConfig {
-        &self.config
-    }
-
-    pub fn routing_table(&self) -> &R {
-        &self.routing_table
-    }
-
-    pub fn control_client(&self) -> ControlClient {
-        ControlClient::new(self.paths.clone())
-    }
-
     pub fn status(&self) -> RuntimeStatus {
-        let daemon_pid = crate::daemon::DaemonManager::new(self.paths.clone())
+        let daemon_pid = crate::runtime::daemon::DaemonManager::new(self.paths.clone())
             .is_running()
             .ok()
             .flatten();
@@ -56,7 +32,7 @@ impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
     where
         M: bitrouter_core::routers::model_router::LanguageModelRouter + Send + Sync + 'static,
     {
-        use crate::server::ServerPlan;
+        use crate::runtime::server::ServerPlan;
         use std::sync::Arc;
         ServerPlan::new(
             self.config,
@@ -68,21 +44,21 @@ impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
     }
 
     pub async fn start(&self) -> Result<()> {
-        let dm = crate::daemon::DaemonManager::new(self.paths.clone());
+        let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
         let pid = dm.start().await?;
         println!("bitrouter daemon started (pid {pid})");
         Ok(())
     }
 
     pub async fn stop(&self) -> Result<()> {
-        let dm = crate::daemon::DaemonManager::new(self.paths.clone());
+        let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
         dm.stop().await?;
         println!("bitrouter daemon stopped");
         Ok(())
     }
 
     pub async fn restart(&self) -> Result<()> {
-        let dm = crate::daemon::DaemonManager::new(self.paths.clone());
+        let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
         let pid = dm.restart().await?;
         println!("bitrouter daemon restarted (pid {pid})");
         Ok(())

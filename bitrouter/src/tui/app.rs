@@ -3,9 +3,9 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io::Stdout;
 
-use crate::TuiConfig;
-use crate::event::EventHandler;
-use crate::ui;
+use crate::tui::TuiConfig;
+use crate::tui::event::EventHandler;
+use crate::tui::ui;
 
 pub struct App {
     pub running: bool,

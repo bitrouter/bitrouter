@@ -13,7 +13,7 @@ use warp::Filter;
 use bitrouter_accounts::identity::{Identity, Scope};
 use bitrouter_accounts::service::AccountService;
 
-use crate::auth::{self, AuthContext, Unauthorized, hash_key};
+use crate::runtime::auth::{self, AuthContext, Unauthorized, hash_key};
 
 // ── request / response DTOs ───────────────────────────────────
 

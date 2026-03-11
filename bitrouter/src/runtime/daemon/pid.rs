@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::error::{Result, RuntimeError};
+use crate::runtime::error::{Result, RuntimeError};
 
 /// Manages a PID file at `<runtime_dir>/bitrouter.pid`.
 pub(crate) struct PidFile {
