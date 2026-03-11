@@ -25,17 +25,24 @@ jobs:
       - &install-rust
         name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
           command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
 
   # Create a PR with the new versions and changelog, preparing the next release.
   release-plz-pr:
     name: Release-plz PR
     runs-on: ubuntu-latest
+    needs: release-plz-release
     permissions:
       contents: write
       pull-requests: write
@@ -45,9 +52,15 @@ jobs:
     steps:
       - *checkout
       - *install-rust
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
