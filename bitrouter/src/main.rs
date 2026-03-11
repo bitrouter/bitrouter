@@ -1,4 +1,3 @@
-mod cli;
 mod init;
 mod runtime;
 #[cfg(feature = "tui")]
@@ -7,7 +6,6 @@ mod tui;
 use std::path::PathBuf;
 
 use crate::runtime::{AppRuntime, PathOverrides, resolve_home};
-use bitrouter_core::jwt::claims::{BudgetScope, TokenScope};
 use clap::{Parser, Subcommand};
 
 type DefaultRuntime = AppRuntime<bitrouter_config::ConfigRoutingTable>;
@@ -61,67 +59,6 @@ enum Command {
     Status,
     /// Restart the daemon
     Restart,
-
-    /// Manage local Ed25519 account keypairs
-    Account {
-        /// Generate a new Ed25519 keypair and set as active
-        #[arg(short, long)]
-        generate_key: bool,
-
-        /// List all local account keys
-        #[arg(short, long)]
-        list: bool,
-
-        /// Set active account by index or pubkey prefix
-        #[arg(long)]
-        set: Option<String>,
-    },
-
-    /// Sign a JWT with the active master key
-    Keygen {
-        /// Token scope: admin or api
-        #[arg(long, default_value = "api")]
-        scope: String,
-
-        /// Expiration duration (e.g., "5m", "1h", "30d", "never")
-        #[arg(long)]
-        exp: Option<String>,
-
-        /// Comma-separated list of allowed model patterns
-        #[arg(long, value_delimiter = ',')]
-        models: Option<Vec<String>>,
-
-        /// Budget limit in micro USD
-        #[arg(long)]
-        budget: Option<u64>,
-
-        /// Budget scope: session or account
-        #[arg(long)]
-        budget_scope: Option<String>,
-
-        /// Budget range (e.g., "rounds:10", "duration:3600s")
-        #[arg(long)]
-        budget_range: Option<String>,
-
-        /// Optional label for saving the token locally
-        #[arg(long)]
-        name: Option<String>,
-    },
-
-    /// Manage locally-stored JWTs for the active account
-    Keys {
-        /// List saved tokens
-        #[arg(short, long)]
-        list: bool,
-
-        /// Show decoded claims of a token (by name or index)
-        #[arg(long)]
-        show: Option<String>,
-
-        /// Remove a saved token (by name or index)
-        #[arg(long)]
-        rm: Option<String>,
-    },
 }
 
 #[tokio::main]
@@ -142,64 +79,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if matches!(cli.command, Some(Command::Init)) {
         init::run_init(&paths)?;
         return Ok(());
-    }
-
-    // Handle key management commands — these only need paths, not a full runtime.
-    let keys_dir = paths.home_dir.join(".keys");
-    match cli.command {
-        Some(Command::Account {
-            generate_key,
-            list,
-            set,
-        }) => {
-            cli::account::run(&keys_dir, generate_key, list, set)?;
-            return Ok(());
-        }
-        Some(Command::Keygen {
-            scope,
-            exp,
-            models,
-            budget,
-            budget_scope,
-            budget_range,
-            name,
-        }) => {
-            let scope = match scope.as_str() {
-                "admin" => TokenScope::Admin,
-                "api" => TokenScope::Api,
-                other => {
-                    return Err(
-                        format!("invalid scope \"{other}\" — use \"admin\" or \"api\"").into(),
-                    );
-                }
-            };
-            let budget_scope = budget_scope
-                .as_deref()
-                .map(|s| match s {
-                    "session" => Ok(BudgetScope::Session),
-                    "account" => Ok(BudgetScope::Account),
-                    other => Err(format!(
-                        "invalid budget scope \"{other}\" — use \"session\" or \"account\""
-                    )),
-                })
-                .transpose()?;
-            let opts = cli::keygen::KeygenOpts {
-                scope,
-                exp,
-                models,
-                budget,
-                budget_scope,
-                budget_range,
-                name,
-            };
-            cli::keygen::run(&keys_dir, opts)?;
-            return Ok(());
-        }
-        Some(Command::Keys { list, show, rm }) => {
-            cli::keys::run(&keys_dir, list, show, rm)?;
-            return Ok(());
-        }
-        _ => {}
     }
 
     let use_tui = cli.command.is_none() && !cli.headless;
@@ -294,11 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Some(Command::Restart) => runtime.restart().await?,
-        Some(
-            Command::Init | Command::Account { .. } | Command::Keygen { .. } | Command::Keys { .. },
-        ) => {
-            unreachable!()
-        }
+        Some(Command::Init) => unreachable!(),
     }
 
     Ok(())

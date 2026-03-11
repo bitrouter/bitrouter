@@ -2,6 +2,7 @@ pub mod app;
 pub mod auth;
 pub mod daemon;
 pub mod error;
+pub mod keys;
 pub mod migration;
 pub mod paths;
 pub mod router;

@@ -1,21 +1,25 @@
-//! Rotated public key entity.
-//!
-//! Stores previously-active master public keys after key rotation.
-//! Prevents auto-creation of orphan accounts when old JWTs are presented.
+//! API key entity.
 
 use chrono::NaiveDateTime;
 use sea_orm::entity::prelude::*;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "rotated_pubkeys")]
+#[sea_orm(table_name = "api_keys")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub account_id: Uuid,
+    /// A human-readable label for this key.
+    pub name: String,
+    /// Prefix of the key shown to the user (e.g. "sk-abc...").
+    pub prefix: String,
+    /// SHA-256 hash of the full key. The plaintext is never stored.
     #[sea_orm(unique)]
-    pub pubkey: String,
-    pub rotated_at: NaiveDateTime,
+    pub key_hash: String,
+    pub created_at: NaiveDateTime,
+    pub expires_at: Option<NaiveDateTime>,
+    pub revoked_at: Option<NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
