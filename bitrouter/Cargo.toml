@@ -17,13 +17,13 @@ mysql = ["bitrouter-accounts/mysql"]
 
 [dependencies]
 # Internal crates
-bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.2" }
-bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.2" }
-bitrouter-api = { path = "../bitrouter-api", version = "0.2" }
-bitrouter-config = { path = "../bitrouter-config", version = "0.2" }
-bitrouter-core = { path = "../bitrouter-core", version = "0.2" }
-bitrouter-google = { path = "../bitrouter-google", version = "0.2" }
-bitrouter-openai = { path = "../bitrouter-openai", version = "0.2" }
+bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.3" }
+bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.3" }
+bitrouter-api = { path = "../bitrouter-api", version = "0.3" }
+bitrouter-config = { path = "../bitrouter-config", version = "0.3" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.3" }
+bitrouter-google = { path = "../bitrouter-google", version = "0.3" }
+bitrouter-openai = { path = "../bitrouter-openai", version = "0.3" }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
