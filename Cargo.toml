@@ -3,4 +3,4 @@ resolver = "3"
 members = ["bitrouter", "bitrouter-*"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
