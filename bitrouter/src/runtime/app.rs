@@ -141,17 +141,17 @@ pub fn resolve_database_url(
 
     // 2. Environment variable (.env + system env)
     let env = bitrouter_config::env::load_env(env_file);
-    if let Some(url) = env.get("BITROUTER_DATABASE_URL") {
-        if !url.is_empty() {
-            return url.clone();
-        }
+    if let Some(url) = env.get("BITROUTER_DATABASE_URL")
+        && !url.is_empty()
+    {
+        return url.clone();
     }
 
     // 3. Configuration file
-    if let Some(url) = &config.database.url {
-        if !url.is_empty() {
-            return url.clone();
-        }
+    if let Some(url) = &config.database.url
+        && !url.is_empty()
+    {
+        return url.clone();
     }
 
     // 4. Default: sqlite at BITROUTER_HOME
