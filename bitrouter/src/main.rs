@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Handle init before loading runtime
     if matches!(cli.command, Some(Command::Init)) {
-        return init::run_init(&paths).map_err(Into::into);
+        return init::run_init(&paths);
     }
 
     let use_tui = cli.command.is_none() && !cli.headless;
