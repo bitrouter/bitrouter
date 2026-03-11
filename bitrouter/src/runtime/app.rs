@@ -1,7 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::routing_table::RoutingTable;
+use sea_orm::DatabaseConnection;
 
 use crate::runtime::{error::Result, paths::RuntimePaths};
 
@@ -9,6 +11,7 @@ pub struct AppRuntime<R> {
     pub config: BitrouterConfig,
     pub paths: RuntimePaths,
     pub routing_table: R,
+    pub db: Option<Arc<DatabaseConnection>>,
 }
 
 impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
@@ -33,14 +36,15 @@ impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
         M: bitrouter_core::routers::model_router::LanguageModelRouter + Send + Sync + 'static,
     {
         use crate::runtime::server::ServerPlan;
-        use std::sync::Arc;
-        ServerPlan::new(
+        let mut plan = ServerPlan::new(
             self.config,
             Arc::new(self.routing_table),
             Arc::new(model_router),
-        )
-        .serve()
-        .await
+        );
+        if let Some(db) = self.db {
+            plan = plan.with_db(db);
+        }
+        plan.serve().await
     }
 
     pub async fn start(&self) -> Result<()> {
@@ -80,6 +84,7 @@ impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
             config,
             paths,
             routing_table,
+            db: None,
         })
     }
 
@@ -99,6 +104,7 @@ impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
             config,
             paths,
             routing_table,
+            db: None,
         }
     }
 }
@@ -113,4 +119,42 @@ pub struct RuntimeStatus {
     pub models: Vec<String>,
     /// PID of the running daemon, or `None` if no daemon is active.
     pub daemon_pid: Option<u32>,
+}
+
+/// Resolve the database URL.
+///
+/// Priority (highest wins):
+/// 1. Explicit `--db` CLI argument
+/// 2. `BITROUTER_DATABASE_URL` environment variable (system env + `.env` file)
+/// 3. `database.url` from configuration file (already env-substituted)
+/// 4. Default: `sqlite://<home_dir>/bitrouter.db?mode=rwc`
+pub fn resolve_database_url(
+    cli_url: Option<&str>,
+    config: &BitrouterConfig,
+    home_dir: &Path,
+    env_file: Option<&Path>,
+) -> String {
+    // 1. CLI argument
+    if let Some(url) = cli_url {
+        return url.to_owned();
+    }
+
+    // 2. Environment variable (.env + system env)
+    let env = bitrouter_config::env::load_env(env_file);
+    if let Some(url) = env.get("BITROUTER_DATABASE_URL") {
+        if !url.is_empty() {
+            return url.clone();
+        }
+    }
+
+    // 3. Configuration file
+    if let Some(url) = &config.database.url {
+        if !url.is_empty() {
+            return url.clone();
+        }
+    }
+
+    // 4. Default: sqlite at BITROUTER_HOME
+    let db_path = home_dir.join("bitrouter.db");
+    format!("sqlite://{}?mode=rwc", db_path.display())
 }

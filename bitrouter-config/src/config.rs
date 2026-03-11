@@ -23,6 +23,10 @@ pub struct BitrouterConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_key: Option<String>,
 
+    /// Database configuration.
+    #[serde(default)]
+    pub database: DatabaseConfig,
+
     /// Provider definitions (merged on top of built-in providers).
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
@@ -96,6 +100,19 @@ impl BitrouterConfig {
 
         Ok(config)
     }
+}
+
+// ── Database configuration ────────────────────────────────────────────
+
+/// Database connection configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DatabaseConfig {
+    /// Database connection URL.
+    ///
+    /// Supports `sqlite://`, `postgres://`, and `mysql://` schemes.
+    /// Accepts `${VAR}` environment variable placeholders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 // ── Server configuration ─────────────────────────────────────────────

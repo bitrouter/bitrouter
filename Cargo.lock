@@ -1211,6 +1211,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+
+[[package]]
 name = "h2"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1760,6 +1766,7 @@ version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -2794,6 +2801,7 @@ checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
 dependencies = [
  "aws-lc-rs",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
@@ -2959,6 +2967,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sea-orm-cli"
+version = "1.1.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c94492e2ab6c045b4cc38013809ce255d14c3d352c9f0d11e6b920e2adc948ad"
+dependencies = [
+ "chrono",
+ "glob",
+ "regex",
+ "sea-schema",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "sea-orm-macros"
 version = "1.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2980,6 +3005,7 @@ checksum = "7315c0cadb7e60fb17ee2bb282aa27d01911fc2a7e5836ec1d4ac37d19250bb4"
 dependencies = [
  "async-trait",
  "sea-orm",
+ "sea-orm-cli",
  "sea-schema",
  "tracing",
  "tracing-subscriber",
@@ -3034,7 +3060,9 @@ checksum = "2239ff574c04858ca77485f112afea1a15e53135d3097d0c86509cef1def1338"
 dependencies = [
  "futures",
  "sea-query",
+ "sea-query-binder",
  "sea-schema-derive",
+ "sqlx",
 ]
 
 [[package]]
@@ -3317,14 +3345,18 @@ dependencies = [
  "memchr",
  "once_cell",
  "percent-encoding",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
  "smallvec",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
  "tracing",
  "url",
  "uuid",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -3361,6 +3393,7 @@ dependencies = [
  "sqlx-postgres",
  "sqlx-sqlite",
  "syn 2.0.117",
+ "tokio",
  "url",
 ]
 
@@ -4293,6 +4326,24 @@ name = "webpki-root-certs"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "804f18a4ac2676ffb4e8b5b5fa9ae38af06df08162314f96a68d2a363e21a8ca"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.6",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22cfaf3c063993ff62e73cb4311efde4db1efb31ab78a3e5c457939ad5cc0bed"
 dependencies = [
  "rustls-pki-types",
 ]

@@ -7,8 +7,8 @@ pub mod routing;
 pub mod writer;
 
 pub use config::{
-    ApiProtocol, AuthConfig, BitrouterConfig, ControlEndpoint, ModelConfig, ModelEndpoint,
-    ProviderConfig, RoutingStrategy, ServerConfig,
+    ApiProtocol, AuthConfig, BitrouterConfig, ControlEndpoint, DatabaseConfig, ModelConfig,
+    ModelEndpoint, ProviderConfig, RoutingStrategy, ServerConfig,
 };
 pub use detect::{DetectedProvider, detect_providers, detect_providers_from_env};
 pub use error::{ConfigError, Result};

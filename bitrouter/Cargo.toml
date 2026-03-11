@@ -9,8 +9,11 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["tui"]
+default = ["tui", "sqlite", "postgres"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
+sqlite = ["bitrouter-accounts/sqlite"]
+postgres = ["bitrouter-accounts/postgres"]
+mysql = ["bitrouter-accounts/mysql"]
 
 [dependencies]
 # Internal crates
