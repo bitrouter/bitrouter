@@ -74,6 +74,9 @@ impl MasterKeypair {
 
     /// Deserialize from the JSON format stored in `master.json`.
     pub fn from_json(json: &MasterKeyJson) -> Result<Self, JwtError> {
+        if json.algorithm != "eddsa" {
+            return Err(JwtError::InvalidKeypair);
+        }
         let bytes = URL_SAFE_NO_PAD
             .decode(&json.secret_key)
             .map_err(|_| JwtError::InvalidKeypair)?;
@@ -134,5 +137,13 @@ mod tests {
         let b64 = kp.public_key_b64();
         let vk = decode_public_key(&b64).expect("valid public key");
         assert_eq!(vk, kp.verifying_key());
+    }
+
+    #[test]
+    fn from_json_rejects_wrong_algorithm() {
+        let kp = MasterKeypair::generate();
+        let mut json = kp.to_json();
+        json.algorithm = "rsa".to_string();
+        assert!(MasterKeypair::from_json(&json).is_err());
     }
 }

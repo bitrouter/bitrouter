@@ -21,7 +21,7 @@ pub fn account_routes<A>(
 where
     A: Filter<Extract = (Identity,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
-    warp::path!("accounts" / "me")
+    warp::path!("accounts")
         .and(warp::get())
         .and(auth.clone())
         .and(with_db(db.clone()))

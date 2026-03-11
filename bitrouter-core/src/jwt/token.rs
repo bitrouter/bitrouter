@@ -65,13 +65,14 @@ pub fn verify(token: &str, verifying_key: &VerifyingKey) -> Result<BitrouterClai
 /// know which key to verify against. **Never trust claims from this function
 /// without a subsequent `verify()` call.**
 pub fn decode_unverified(token: &str) -> Result<BitrouterClaims, JwtError> {
-    let mut parts = token.splitn(3, '.');
-    let _header = parts
-        .next()
-        .ok_or_else(|| JwtError::MalformedToken("missing header".into()))?;
-    let payload_b64 = parts
-        .next()
-        .ok_or_else(|| JwtError::MalformedToken("missing payload".into()))?;
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err(JwtError::MalformedToken(
+            "expected exactly 3 segments (header.payload.signature)".into(),
+        ));
+    }
+    let _header = parts[0];
+    let payload_b64 = parts[1];
 
     let payload = URL_SAFE_NO_PAD
         .decode(payload_b64)
@@ -87,9 +88,9 @@ pub fn check_expiration(claims: &BitrouterClaims) -> Result<(), JwtError> {
     if let Some(exp) = claims.exp {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        if now > exp {
+            .map_err(|_| JwtError::Expired)?
+            .as_secs();
+        if now >= exp {
             return Err(JwtError::Expired);
         }
     }

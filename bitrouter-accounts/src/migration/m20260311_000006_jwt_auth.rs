@@ -27,16 +27,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // 2. Make accounts.name nullable (auto-created accounts have generated names).
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Accounts::Table)
-                    .modify_column(ColumnDef::new(Accounts::Name).string().null())
-                    .to_owned(),
-            )
-            .await?;
-
         // 3. Create rotated_pubkeys table for key rotation history.
         manager
             .create_table(
@@ -112,15 +102,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Accounts::Table)
-                    .modify_column(ColumnDef::new(Accounts::Name).string().not_null())
-                    .to_owned(),
-            )
-            .await?;
-
         Ok(())
     }
 }
@@ -129,7 +110,6 @@ impl MigrationTrait for Migration {
 enum Accounts {
     Table,
     Id,
-    Name,
     MasterPubkey,
 }
 
