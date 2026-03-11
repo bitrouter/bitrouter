@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/bitrouter/bitrouter/compare/v0.3.0...v0.4.0)
+
+### ⛰️ Features
+
+
+- Replace API key auth with self-signed EdDSA JWTs ([#59](https://github.com/bitrouter/bitrouter/pull/59)) - ([5ec5875](https://github.com/bitrouter/bitrouter/commit/5ec5875c89ad53d36d2451f50f7d57cbfde28076))
+
+
 ## [0.3.0](https://github.com/bitrouter/bitrouter/compare/v0.2.5...v0.3.0)
 
 ### ⛰️ Features

@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bitrouter-accounts",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-accounts"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bitrouter-core",
  "chrono",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-anthropic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "bitrouter-core",
@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-api"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bitrouter-anthropic",
  "bitrouter-core",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-blob"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bitrouter-core",
  "tempfile",
@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-config"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bitrouter-core",
  "serde",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "dynosaur",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-google"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "bitrouter-core",
@@ -372,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-openai"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "bitrouter-core",
