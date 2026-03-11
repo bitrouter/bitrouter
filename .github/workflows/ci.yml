@@ -98,7 +98,7 @@ jobs:
         run: cargo build -p ${{ matrix.crate }} ${{ matrix.cargo_args }}
 
   cross-platform:
-    name: stable / bitrouter / ${{ matrix.os }}
+    name: stable / build / bitrouter / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
