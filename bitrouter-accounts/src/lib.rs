@@ -4,7 +4,8 @@
 //!
 //! - **Entity types** — [`Account`](entity::account), [`ApiKey`](entity::api_key),
 //!   [`Session`](entity::session), [`Message`](entity::message) backed by sea-orm.
-//! - **Migrations** — Schema management via [`Migrator`](migration::Migrator).
+//! - **Migrations** — Individual migration steps exported via
+//!   [`migration::migrations()`](migration::migrations).
 //! - **Services** — [`AccountService`](service::AccountService) and
 //!   [`SessionService`](service::SessionService) for data operations.
 //! - **Warp filter builders** — [`filters`] module exposes route constructors

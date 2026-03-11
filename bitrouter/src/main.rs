@@ -135,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         match sea_orm::Database::connect(&db_url).await {
             Ok(db) => {
-                if let Err(e) = bitrouter_accounts::migration::run(&db).await {
+                if let Err(e) = crate::runtime::migrate(&db).await {
                     tracing::warn!("database migration failed: {e}");
                 }
                 runtime.db = Some(std::sync::Arc::new(db));
