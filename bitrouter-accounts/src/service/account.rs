@@ -116,7 +116,14 @@ impl<'db> AccountService<'db> {
                 pubkey: Set(old_pubkey.clone()),
                 rotated_at: Set(now),
             };
-            rotated.insert(self.db).await?;
+            rotated_pubkey::Entity::insert(rotated)
+                .on_conflict(
+                    sea_orm::sea_query::OnConflict::column(rotated_pubkey::Column::Pubkey)
+                        .do_nothing()
+                        .to_owned(),
+                )
+                .exec(self.db)
+                .await?;
         }
 
         // Update the account with the new pubkey.
