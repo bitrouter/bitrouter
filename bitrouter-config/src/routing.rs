@@ -6,7 +6,9 @@ use bitrouter_core::{
     routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget},
 };
 
-use crate::config::{ApiProtocol, ModelConfig, ProviderConfig, RoutingStrategy};
+use crate::config::{
+    ApiProtocol, ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy,
+};
 
 /// A routing target with full resolution context including any per-endpoint overrides.
 #[derive(Debug, Clone)]
@@ -52,6 +54,29 @@ impl ConfigRoutingTable {
     /// Returns a reference to the resolved provider configurations.
     pub fn providers(&self) -> &HashMap<String, ProviderConfig> {
         &self.providers
+    }
+
+    /// Returns the model metadata for a given provider and model ID.
+    ///
+    /// Falls back to [`ModelInfo::default()`] for unknown providers or
+    /// unconfigured models.
+    pub fn model_info(&self, provider_name: &str, model_id: &str) -> ModelInfo {
+        self.providers
+            .get(provider_name)
+            .and_then(|p| p.models.as_ref())
+            .and_then(|models| models.get(model_id))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Returns the token pricing for a given provider and model ID.
+    ///
+    /// Convenience wrapper around [`model_info`](Self::model_info) that
+    /// returns only the pricing component. Falls back to
+    /// [`ModelPricing::default()`] (all zeros) for unknown providers or
+    /// unconfigured models.
+    pub fn model_pricing(&self, provider_name: &str, model_id: &str) -> ModelPricing {
+        self.model_info(provider_name, model_id).pricing
     }
 
     /// Resolves an incoming model name to a full target with any per-endpoint overrides.
@@ -149,7 +174,9 @@ impl RoutingTable for ConfigRoutingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ApiProtocol, ModelEndpoint};
+    use crate::config::{
+        ApiProtocol, InputTokenPricing, Modality, ModelEndpoint, OutputTokenPricing,
+    };
 
     fn test_providers() -> HashMap<String, ProviderConfig> {
         let mut p = HashMap::new();
@@ -332,5 +359,79 @@ mod tests {
         let table = ConfigRoutingTable::new(test_providers(), models);
         let result = table.resolve("empty");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn model_pricing_returns_configured_values() {
+        let mut providers = test_providers();
+        providers.get_mut("openai").unwrap().models = Some(HashMap::from([(
+            "gpt-4o".into(),
+            ModelInfo {
+                pricing: ModelPricing {
+                    input_tokens: InputTokenPricing {
+                        no_cache: 2.50,
+                        cache_read: 1.25,
+                        cache_write: 2.50,
+                    },
+                    output_tokens: OutputTokenPricing {
+                        text: 10.00,
+                        reasoning: 10.00,
+                    },
+                },
+                ..Default::default()
+            },
+        )]));
+        let table = ConfigRoutingTable::new(providers, HashMap::new());
+
+        let pricing = table.model_pricing("openai", "gpt-4o");
+        assert_eq!(pricing.input_tokens.no_cache, 2.50);
+        assert_eq!(pricing.input_tokens.cache_read, 1.25);
+        assert_eq!(pricing.output_tokens.text, 10.00);
+    }
+
+    #[test]
+    fn model_pricing_unknown_model_returns_zeros() {
+        let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
+        let pricing = table.model_pricing("openai", "nonexistent");
+        assert_eq!(pricing.input_tokens.no_cache, 0.0);
+        assert_eq!(pricing.output_tokens.text, 0.0);
+    }
+
+    #[test]
+    fn model_pricing_unknown_provider_returns_zeros() {
+        let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
+        let pricing = table.model_pricing("unknown-provider", "gpt-4o");
+        assert_eq!(pricing.input_tokens.no_cache, 0.0);
+    }
+
+    #[test]
+    fn model_info_returns_full_metadata() {
+        let mut providers = test_providers();
+        providers.get_mut("openai").unwrap().models = Some(HashMap::from([(
+            "gpt-4o".into(),
+            ModelInfo {
+                name: Some("GPT-4o".into()),
+                description: Some("Multimodal model".into()),
+                context_length: Some(128000),
+                input_modalities: vec![Modality::Text, Modality::Image],
+                output_modalities: vec![Modality::Text],
+                ..Default::default()
+            },
+        )]));
+        let table = ConfigRoutingTable::new(providers, HashMap::new());
+
+        let info = table.model_info("openai", "gpt-4o");
+        assert_eq!(info.name.as_deref(), Some("GPT-4o"));
+        assert_eq!(info.context_length, Some(128000));
+        assert_eq!(info.input_modalities, vec![Modality::Text, Modality::Image]);
+    }
+
+    #[test]
+    fn model_info_unknown_returns_defaults() {
+        let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
+        let info = table.model_info("openai", "nonexistent");
+        assert!(info.name.is_none());
+        assert!(info.context_length.is_none());
+        assert!(info.input_modalities.is_empty());
     }
 }

@@ -2,6 +2,6 @@ api_protocol: anthropic
 api_base: https://api.anthropic.com
 env_prefix: ANTHROPIC
 models:
-  - claude-sonnet-4-20250514
-  - claude-3.5-haiku-20241022
-  - claude-3-opus-20240229
+  claude-sonnet-4-20250514: {}
+  claude-3.5-haiku-20241022: {}
+  claude-3-opus-20240229: {}
