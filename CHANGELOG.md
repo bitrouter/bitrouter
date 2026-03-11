@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/bitrouter/bitrouter/compare/v0.3.0...v0.4.0)
+
+### ⛰️ Features
+
+
+- *(config)* Add per-model metadata and token pricing to provider config ([#66](https://github.com/bitrouter/bitrouter/pull/66)) - ([7ba1ee1](https://github.com/bitrouter/bitrouter/commit/7ba1ee1e29b927b49e9089885e0ecd57565a854a))
+- Replace API key auth with self-signed EdDSA JWTs ([#62](https://github.com/bitrouter/bitrouter/pull/62)) - ([87f1879](https://github.com/bitrouter/bitrouter/commit/87f187942eff11e9e576c96157f5ccc96685e762))
+
+
 ## [0.3.0](https://github.com/bitrouter/bitrouter/compare/v0.2.5...v0.3.0)
 
 ### ⛰️ Features

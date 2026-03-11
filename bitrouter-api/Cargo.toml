@@ -15,10 +15,10 @@ anthropic = ["bitrouter-anthropic"]
 google = ["bitrouter-google"]
 
 [dependencies]
-bitrouter-core = { path = "../bitrouter-core", version = "0.3" }
-bitrouter-openai = { path = "../bitrouter-openai", version = "0.3", optional = true }
-bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.3", optional = true }
-bitrouter-google = { path = "../bitrouter-google", version = "0.3", optional = true }
+bitrouter-core = { path = "../bitrouter-core", version = "0.4" }
+bitrouter-openai = { path = "../bitrouter-openai", version = "0.4", optional = true }
+bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.4", optional = true }
+bitrouter-google = { path = "../bitrouter-google", version = "0.4", optional = true }
 futures-core = { version = "0.3" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
