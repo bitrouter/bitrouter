@@ -18,9 +18,7 @@ bitrouter-google = { path = "../bitrouter-google", version = "0.2" }
 bitrouter-openai = { path = "../bitrouter-openai", version = "0.2" }
 dirs = "6"
 hex = "0.4"
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 sea-orm = { version = "1.1", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
