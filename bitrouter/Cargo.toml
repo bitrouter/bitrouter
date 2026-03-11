@@ -24,7 +24,7 @@ bitrouter-openai = { path = "../bitrouter-openai", version = "0.2" }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
-dialoguer = "0.11"
+dialoguer = "0.12"
 
 # Runtime
 dirs = "6"
@@ -49,8 +49,8 @@ uuid = { version = "1", features = ["v4"] }
 warp = { version = "0.4.2", features = ["server"] }
 
 # TUI (optional)
-ratatui = { version = "0.29", optional = true }
-crossterm = { version = "0.28", features = ["event-stream"], optional = true }
+ratatui = { version = "0.30", optional = true }
+crossterm = { version = "0.29", features = ["event-stream"], optional = true }
 futures = { version = "0.3", optional = true }
 anyhow = { version = "1", optional = true }
 
