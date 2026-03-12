@@ -7,8 +7,8 @@
 //! Dynamic routes are ephemeral — they are lost when the process exits.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::errors::{BitrouterError, Result};
 
@@ -79,12 +79,12 @@ impl<T: RoutingTable + Sync> RoutingTable for DynamicRoutingTable<T> {
     fn list_routes(&self) -> Vec<RouteEntry> {
         let mut entries = self.inner.list_routes();
 
-        // Collect dynamic route model names to detect shadowed config routes.
-        let mut dynamic_models = std::collections::HashSet::new();
-
         if let Ok(routes) = self.routes.read() {
+            // Remove config entries that are shadowed by dynamic routes.
+            entries.retain(|e| !routes.contains_key(&e.model));
+
+            // Append dynamic route entries.
             for (model, data) in routes.iter() {
-                dynamic_models.insert(model.clone());
                 if let Some(ep) = data.endpoints.first() {
                     entries.push(RouteEntry {
                         model: model.clone(),
@@ -95,15 +95,6 @@ impl<T: RoutingTable + Sync> RoutingTable for DynamicRoutingTable<T> {
                 }
             }
         }
-
-        // Remove config entries that are shadowed by dynamic routes.
-        entries.dedup_by(|a, b| {
-            if dynamic_models.contains(&a.model) && a.model == b.model {
-                true
-            } else {
-                false
-            }
-        });
 
         entries.sort_by(|a, b| a.model.cmp(&b.model));
         entries
@@ -126,17 +117,19 @@ impl<T: RoutingTable + Sync> AdminRoutingTable for DynamicRoutingTable<T> {
             counter: AtomicUsize::new(0),
         };
 
-        let mut routes = self.routes.write().map_err(|_| {
-            BitrouterError::transport(None, "routing table lock poisoned")
-        })?;
+        let mut routes = self
+            .routes
+            .write()
+            .map_err(|_| BitrouterError::transport(None, "routing table lock poisoned"))?;
         routes.insert(route.model, data);
         Ok(())
     }
 
     fn remove_route(&self, model: &str) -> Result<bool> {
-        let mut routes = self.routes.write().map_err(|_| {
-            BitrouterError::transport(None, "routing table lock poisoned")
-        })?;
+        let mut routes = self
+            .routes
+            .write()
+            .map_err(|_| BitrouterError::transport(None, "routing table lock poisoned"))?;
         Ok(routes.remove(model).is_some())
     }
 
@@ -314,5 +307,25 @@ mod tests {
         let routes = table.list_routes();
         assert!(routes.iter().any(|r| r.model == "custom"));
         assert!(routes.iter().any(|r| r.model == "default"));
+    }
+
+    #[test]
+    fn dynamic_route_shadows_config_in_list() {
+        let table = DynamicRoutingTable::new(StaticTable);
+        table
+            .add_route(DynamicRoute {
+                model: "default".to_owned(),
+                strategy: RouteStrategy::Priority,
+                endpoints: vec![RouteEndpoint {
+                    provider: "anthropic".to_owned(),
+                    model_id: "claude-sonnet-4-20250514".to_owned(),
+                }],
+            })
+            .ok();
+
+        let routes = table.list_routes();
+        let defaults: Vec<_> = routes.iter().filter(|r| r.model == "default").collect();
+        assert_eq!(defaults.len(), 1);
+        assert_eq!(defaults[0].provider, "anthropic");
     }
 }

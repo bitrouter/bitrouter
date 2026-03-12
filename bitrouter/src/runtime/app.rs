@@ -71,7 +71,9 @@ impl<R: AdminRoutingTable + Send + Sync + 'static> AppRuntime<R> {
 
 /// Convenience constructors using `DynamicRoutingTable<ConfigRoutingTable>`.
 impl
-    AppRuntime<bitrouter_core::routers::dynamic::DynamicRoutingTable<bitrouter_config::ConfigRoutingTable>>
+    AppRuntime<
+        bitrouter_core::routers::dynamic::DynamicRoutingTable<bitrouter_config::ConfigRoutingTable>,
+    >
 {
     /// Load config from resolved paths. The `.env` file (if it exists) is loaded
     /// automatically from `paths.env_file`.

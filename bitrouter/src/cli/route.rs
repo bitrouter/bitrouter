@@ -16,9 +16,7 @@ pub fn run_list(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
 
     if !resp.status().is_success() {
         let body: serde_json::Value = resp.json()?;
-        let msg = body["error"]["message"]
-            .as_str()
-            .unwrap_or("unknown error");
+        let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
         return Err(format!("failed to list routes: {msg}").into());
     }
 
@@ -68,10 +66,7 @@ pub fn run_list(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Run the `route add` subcommand — creates or updates a dynamic route.
-pub fn run_add(
-    addr: SocketAddr,
-    opts: RouteAddOpts,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_add(addr: SocketAddr, opts: RouteAddOpts) -> Result<(), Box<dyn std::error::Error>> {
     let endpoints: Vec<serde_json::Value> = opts
         .endpoints
         .iter()
@@ -98,19 +93,14 @@ pub fn run_add(
         println!("route '{}' added", opts.model);
     } else {
         let body: serde_json::Value = resp.json()?;
-        let msg = body["error"]["message"]
-            .as_str()
-            .unwrap_or("unknown error");
+        let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
         return Err(format!("failed to add route: {msg}").into());
     }
     Ok(())
 }
 
 /// Run the `route rm` subcommand — removes a dynamic route.
-pub fn run_remove(
-    addr: SocketAddr,
-    name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_remove(addr: SocketAddr, name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let url = format!("http://{addr}/admin/routes/{name}");
     let client = reqwest::blocking::Client::new();
     let resp = client.delete(&url).send()?;
@@ -119,9 +109,7 @@ pub fn run_remove(
         println!("route '{name}' removed");
     } else {
         let body: serde_json::Value = resp.json()?;
-        let msg = body["error"]["message"]
-            .as_str()
-            .unwrap_or("unknown error");
+        let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
         return Err(format!("failed to remove route: {msg}").into());
     }
     Ok(())
