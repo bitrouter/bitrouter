@@ -50,19 +50,13 @@ bitrouter init
 For a headless API server (no TUI):
 
 ```bash
-bitrouter --headless
-```
-
-To run a single foreground server command explicitly:
-
-```bash
-bitrouter serve
+bitrouter start
 ```
 
 To run as a background daemon:
 
 ```bash
-bitrouter start
+bitrouter start -d
 ```
 
 ### Zero-config mode
@@ -71,7 +65,7 @@ If you have provider API keys in your environment (e.g. `OPENAI_API_KEY`), BitRo
 
 ```bash
 export OPENAI_API_KEY=sk-...
-bitrouter serve
+bitrouter start
 # Use "openai:gpt-4o" as the model name
 ```
 
@@ -80,22 +74,22 @@ bitrouter serve
 `bitrouter` has two ways to run:
 
 - `bitrouter` starts the default interactive runtime. On first run with no providers configured, the setup wizard runs automatically. With the default `tui` feature enabled, this then launches the TUI and API server together.
-- `bitrouter --headless` starts the default runtime without the TUI.
+- `bitrouter start` starts the API server in the foreground (without the TUI).
 - `bitrouter [COMMAND]` runs an explicit operational command.
 
 ### Subcommands
 
-| Command   | What it does                                                                  |
-| --------- | ----------------------------------------------------------------------------- |
-| `init`    | Interactive setup wizard for provider configuration                           |
-| `serve`   | Start the API server in the foreground                                        |
-| `start`   | Start BitRouter as a background daemon                                        |
-| `stop`    | Stop the running daemon                                                       |
-| `status`  | Print resolved paths, listen address, configured providers, and daemon status |
-| `restart` | Restart the background daemon                                                 |
-| `account` | Manage local Ed25519 account keypairs used to sign BitRouter JWTs             |
-| `keygen`  | Sign a JWT with the active account key                                        |
-| `keys`    | List, inspect, and remove locally stored JWTs                                 |
+| Command    | What it does                                                                  |
+| ---------- | ----------------------------------------------------------------------------- |
+| `init`     | Interactive setup wizard for provider configuration                           |
+| `start`    | Start the API server in the foreground                                        |
+| `start -d` | Start BitRouter as a background daemon                                        |
+| `stop`     | Stop the running daemon                                                       |
+| `status`   | Print resolved paths, listen address, configured providers, and daemon status |
+| `restart`  | Restart the background daemon                                                 |
+| `account`  | Manage local Ed25519 account keypairs used to sign BitRouter JWTs             |
+| `keygen`   | Sign a JWT with the active account key                                        |
+| `keys`     | List, inspect, and remove locally stored JWTs                                 |
 
 ### Global options
 
@@ -107,10 +101,6 @@ These flags are available on the top-level command and on each subcommand:
 - `--run-dir <PATH>` — override `<home>/run`
 - `--logs-dir <PATH>` — override `<home>/logs`
 - `--db <DATABASE_URL>` — override the database URL from environment variables and config
-
-Top-level runtime flags:
-
-- `--headless` — run the default runtime without the TUI
 
 ### Local account and JWT helpers
 

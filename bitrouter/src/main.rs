@@ -39,8 +39,8 @@ struct Cli {
     #[arg(long = "db", global = true)]
     database_url: Option<String>,
 
-    /// Run server without the TUI (headless mode)
-    #[arg(long)]
+    /// [DEPRECATED] Use `bitrouter start` instead
+    #[arg(long, hide = true)]
     headless: bool,
 
     #[command(subcommand)]
@@ -52,9 +52,14 @@ enum Command {
     /// Interactive setup wizard
     Init,
     /// Start the API server (foreground)
+    #[command(hide = true)]
     Serve,
-    /// Start as background daemon
-    Start,
+    /// Start the API server in the foreground, or as a background daemon with -d
+    Start {
+        /// Run as a background daemon instead of in the foreground
+        #[arg(short, long)]
+        daemon: bool,
+    },
     /// Stop the daemon
     Stop,
     /// Show runtime status
@@ -131,6 +136,10 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+
+    if cli.headless {
+        eprintln!("warning: --headless is deprecated; use `bitrouter start` instead");
+    }
 
     // Skip update check in TUI mode — the alternate screen would hide it.
     let use_tui = cli.command.is_none() && !cli.headless;
@@ -273,7 +282,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Connect to database for commands that start the server.
-    let serves = cli.command.is_none() || matches!(cli.command, Some(Command::Serve));
+    let serves = cli.command.is_none()
+        || matches!(cli.command, Some(Command::Serve))
+        || matches!(cli.command, Some(Command::Start { daemon: false }));
     if serves {
         let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
         let db_url = crate::runtime::resolve_database_url(
@@ -297,14 +308,14 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         None => run_default(runtime, cli.headless).await?,
-        Some(Command::Serve) => {
+        Some(Command::Serve) | Some(Command::Start { daemon: false }) => {
             let model_router = crate::runtime::Router::new(
                 reqwest::Client::new(),
                 runtime.config.providers.clone(),
             );
             runtime.serve(model_router).await?
         }
-        Some(Command::Start) => runtime.start().await?,
+        Some(Command::Start { daemon: true }) => runtime.start().await?,
         Some(Command::Stop) => runtime.stop().await?,
         Some(Command::Status) => {
             let status = runtime.status();

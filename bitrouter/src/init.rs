@@ -248,8 +248,8 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
     );
     println!();
     println!("  Start the server:");
-    println!("    bitrouter serve     # foreground");
-    println!("    bitrouter start     # background daemon");
+    println!("    bitrouter start       # foreground");
+    println!("    bitrouter start -d    # background daemon");
     println!();
 
     // Show example curl for the first provider

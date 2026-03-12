@@ -11,8 +11,8 @@ runtime crate and keeps the executable layer intentionally thin.
 ## Commands
 
 - `init` to run the interactive setup wizard
-- `serve` to run the HTTP server in the foreground
-- `start`, `stop`, and `restart` to manage the daemon
+- `start` to run the HTTP server in the foreground
+- `start -d`, `stop`, and `restart` to manage the background daemon
 - `status` to print current runtime information
 
 ## First-Run Behavior
