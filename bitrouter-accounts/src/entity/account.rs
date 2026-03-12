@@ -10,7 +10,8 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub name: String,
-    /// Ed25519 public key (base64url-encoded), used for JWT authentication.
+    /// CAIP-10 identity string (e.g. `solana:5eykt...:BASE58_KEY`), used for
+    /// JWT authentication.
     #[sea_orm(unique)]
     pub master_pubkey: Option<String>,
     pub created_at: NaiveDateTime,

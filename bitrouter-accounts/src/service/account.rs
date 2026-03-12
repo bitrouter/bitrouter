@@ -47,11 +47,15 @@ impl<'db> AccountService<'db> {
             .await
     }
 
-    /// Create a new account with the given public key.
-    /// The account name is auto-generated from the pubkey prefix.
+    /// Create a new account with the given CAIP-10 identity.
+    /// The account name is auto-generated from the address suffix.
     pub async fn create_with_pubkey(&self, pubkey: &str) -> Result<account::Model, DbErr> {
         let now = Utc::now().naive_utc();
-        let name = format!("account-{}", &pubkey[..16.min(pubkey.len())]);
+        // Extract the address portion from CAIP-10 (last segment after ':').
+        let addr = pubkey.rsplit(':').next().unwrap_or(pubkey);
+        let suffix_len = 16.min(addr.len());
+        let suffix = &addr[addr.len() - suffix_len..];
+        let name = format!("account-{suffix}");
         let model = account::ActiveModel {
             id: Set(Uuid::new_v4()),
             name: Set(name),

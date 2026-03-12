@@ -62,9 +62,9 @@ enum Command {
     /// Restart the daemon
     Restart,
 
-    /// Manage local Ed25519 account keypairs
+    /// Manage local web3 account keypairs
     Account {
-        /// Generate a new Ed25519 keypair and set as active
+        /// Generate a new web3 master key and set as active
         #[arg(short, long)]
         generate_key: bool,
 
@@ -79,6 +79,10 @@ enum Command {
 
     /// Sign a JWT with the active master key
     Keygen {
+        /// Chain to sign with: "solana" or "base"
+        #[arg(long, default_value = "solana")]
+        chain: String,
+
         /// Token scope: admin or api
         #[arg(long, default_value = "api")]
         scope: String,
@@ -156,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         Some(Command::Keygen {
+            chain,
             scope,
             exp,
             models,
@@ -184,6 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .transpose()?;
             let opts = cli::keygen::KeygenOpts {
+                chain,
                 scope,
                 exp,
                 models,

@@ -1,23 +1,30 @@
 //! JWT claims types for the BitRouter authentication protocol.
 //!
-//! These types define the payload of a BitRouter JWT. The token header is
-//! always `{ "alg": "EdDSA", "typ": "JWT" }`. The `iss` claim carries the
-//! signer's Ed25519 public key (base64url-encoded), which the server uses
-//! both for signature verification and account resolution.
+//! These types define the payload of a BitRouter JWT. The `iss` claim carries
+//! the signer's CAIP-10 account identifier (e.g.
+//! `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:<base58_pubkey>`), which the
+//! server uses for both signature verification and account resolution.
 
 use serde::{Deserialize, Serialize};
 
 /// JWT claims for BitRouter authentication tokens.
 ///
-/// Tokens are self-signed by the account holder's Ed25519 master key. The
-/// public key in `iss` is the sole identity — the token has zero knowledge
-/// of the underlying account ID or server-side state.
+/// Tokens are self-signed by the account holder's web3 wallet key. The
+/// CAIP-10 address in `iss` is the sole identity — the token has zero
+/// knowledge of the underlying account ID or server-side state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BitrouterClaims {
-    /// Ed25519 public key of the signer, base64url-encoded (32 bytes).
-    /// The server uses this to (a) verify the signature and (b) resolve or
-    /// auto-create the associated account.
+    /// CAIP-10 account identifier of the signer.
+    ///
+    /// Examples:
+    /// - `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:DRpb..."`
+    /// - `"eip155:8453:0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B"`
     pub iss: String,
+
+    /// CAIP-2 chain identifier indicating which chain was used to sign.
+    ///
+    /// Examples: `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"`, `"eip155:8453"`.
+    pub chain: String,
 
     /// Issued-at UNIX timestamp (seconds since epoch).
     #[serde(skip_serializing_if = "Option::is_none")]

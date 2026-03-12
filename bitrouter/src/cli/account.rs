@@ -23,7 +23,10 @@ pub fn run(keys_dir: &Path, generate: bool, list: bool, set: Option<String>) -> 
 fn generate_key(keys_dir: &Path) -> Result<(), String> {
     let kp = MasterKeypair::generate();
     let prefix = kp.public_key_prefix();
-    let pubkey = kp.public_key_b64();
+    let sol_addr = kp.solana_pubkey_b58();
+    let evm_addr = kp
+        .evm_address_string()
+        .map_err(|e| format!("failed to derive EVM address: {e}"))?;
 
     let key_dir = keys_dir.join(&prefix);
     fs::create_dir_all(&key_dir).map_err(|e| format!("failed to create key directory: {e}"))?;
@@ -41,8 +44,9 @@ fn generate_key(keys_dir: &Path) -> Result<(), String> {
     // Set as active.
     write_active(keys_dir, &prefix)?;
 
-    println!("Generated Ed25519 keypair");
-    println!("  pubkey:  {pubkey}");
+    println!("Generated web3 master key");
+    println!("  solana:  {sol_addr}");
+    println!("  evm:     {evm_addr}");
     println!("  prefix:  {prefix}");
     println!("  path:    {}", key_dir.display());
     println!("  active:  yes");
@@ -66,9 +70,14 @@ fn list_keys(keys_dir: &Path) -> Result<(), String> {
             ""
         };
 
-        let pubkey = load_pubkey(dir).unwrap_or_else(|_| "???".to_string());
         println!("  [{i}] {prefix}{marker}");
-        println!("       pubkey: {pubkey}");
+        match load_addresses(dir) {
+            Ok((sol, evm)) => {
+                println!("       sol: {sol}");
+                println!("       evm: {evm}");
+            }
+            Err(_) => println!("       addresses: ???"),
+        }
     }
 
     Ok(())
@@ -161,15 +170,27 @@ fn list_key_dirs(keys_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     Ok(dirs)
 }
 
-/// Load the full public key (b64) from a key directory's master.json.
-fn load_pubkey(key_dir: &Path) -> Result<String, String> {
+/// Load CAIP-10 wallet addresses from a key directory's master.json.
+///
+/// Returns `(solana_caip10, evm_caip10)` strings for display.
+fn load_addresses(key_dir: &Path) -> Result<(String, String), String> {
+    use bitrouter_core::jwt::chain::Chain;
+
     let data = fs::read_to_string(key_dir.join("master.json"))
         .map_err(|e| format!("failed to read master.json: {e}"))?;
     let json: MasterKeyJson =
         serde_json::from_str(&data).map_err(|e| format!("invalid master.json: {e}"))?;
     let kp = MasterKeypair::from_json(&json)
         .map_err(|e| format!("invalid keypair in master.json: {e}"))?;
-    Ok(kp.public_key_b64())
+    let sol = kp
+        .caip10(&Chain::solana_mainnet())
+        .map_err(|e| format!("solana caip10: {e}"))?
+        .format();
+    let evm = kp
+        .caip10(&Chain::base())
+        .map_err(|e| format!("evm caip10: {e}"))?
+        .format();
+    Ok((sol, evm))
 }
 
 /// Load the active MasterKeypair from the keys directory.

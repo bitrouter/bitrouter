@@ -180,5 +180,8 @@ fn read_token_summary(path: &Path) -> String {
         _ => "all-models".to_string(),
     };
 
-    format!("scope={scope}  {exp_info}  {models_info}")
+    format!(
+        "scope={scope}  chain={}  {exp_info}  {models_info}",
+        claims.chain
+    )
 }
