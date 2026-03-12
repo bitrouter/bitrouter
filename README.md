@@ -48,13 +48,7 @@ You can also run the setup wizard explicitly at any time:
 bitrouter init
 ```
 
-For a headless API server (no TUI):
-
-```bash
-bitrouter --headless
-```
-
-To run a single foreground server command explicitly:
+For a foreground API server without the TUI:
 
 ```bash
 bitrouter serve
@@ -81,8 +75,7 @@ bitrouter serve
 `bitrouter` has two ways to run:
 
 - `bitrouter` starts the default interactive runtime. On first run with no providers configured, the setup wizard runs automatically. With the default `tui` feature enabled, this then launches the TUI and API server together.
-- `bitrouter --headless` starts the default runtime without the TUI.
-- `bitrouter [COMMAND]` runs an explicit operational command.
+- `bitrouter [COMMAND]` runs an explicit operational command such as `serve` for a foreground server or `start` for a background daemon.
 
 ### Subcommands
 
@@ -108,10 +101,6 @@ These flags are available on the top-level command and on each subcommand:
 - `--run-dir <PATH>` — override `<home>/run`
 - `--logs-dir <PATH>` — override `<home>/logs`
 - `--db <DATABASE_URL>` — override the database URL from environment variables and config
-
-Top-level runtime flags:
-
-- `--headless` — run the default runtime without the TUI
 
 ### Local account and JWT helpers
 
