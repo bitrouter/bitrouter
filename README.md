@@ -226,7 +226,7 @@ guardrails:
     internal_ticket: warn
 ```
 
-This lets you briefly define a local firewall policy for secrets, credentials,
+This lets you quickly define a local firewall policy for secrets, credentials,
 PII, or custom patterns without changing any application code. For more detail,
 see [`bitrouter-guardrails/README.md`](bitrouter-guardrails/README.md).
 
