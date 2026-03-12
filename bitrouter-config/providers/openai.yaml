@@ -2,10 +2,1041 @@ api_protocol: openai
 api_base: https://api.openai.com/v1
 env_prefix: OPENAI
 models:
-  gpt-4o: {}
-  gpt-4o-mini: {}
-  gpt-4-turbo: {}
-  gpt-3.5-turbo: {}
-  o1: {}
-  o1-mini: {}
-  o3-mini: {}
+  chatgpt-4o-latest:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+      output_tokens:
+        text: 15.0
+  gpt-3.5-turbo:
+    context_length: 16385
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+      output_tokens:
+        text: 1.5
+  gpt-3.5-turbo-0125:
+    context_length: 16385
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+      output_tokens:
+        text: 1.5
+  gpt-3.5-turbo-0301:
+    context_length: 4097
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+      output_tokens:
+        text: 2.0
+  gpt-3.5-turbo-0613:
+    context_length: 4097
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+      output_tokens:
+        text: 2.0
+  gpt-3.5-turbo-1106:
+    context_length: 16385
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+  gpt-3.5-turbo-16k:
+    context_length: 16385
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+      output_tokens:
+        text: 4.0
+  gpt-3.5-turbo-16k-0613:
+    context_length: 16385
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+      output_tokens:
+        text: 4.0
+  gpt-4:
+    context_length: 8192
+    pricing:
+      input_tokens:
+        no_cache: 30.0
+      output_tokens:
+        text: 60.0
+  gpt-4-0125-preview:
+    context_length: 128000
+    pricing:
+      input_tokens:
+        no_cache: 10.0
+      output_tokens:
+        text: 30.0
+  gpt-4-0314:
+    context_length: 8192
+    pricing:
+      input_tokens:
+        no_cache: 30.0
+      output_tokens:
+        text: 60.0
+  gpt-4-0613:
+    context_length: 8192
+    pricing:
+      input_tokens:
+        no_cache: 30.0
+      output_tokens:
+        text: 60.0
+  gpt-4-1106-preview:
+    context_length: 128000
+    pricing:
+      input_tokens:
+        no_cache: 10.0
+      output_tokens:
+        text: 30.0
+  gpt-4-1106-vision-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 10.0
+      output_tokens:
+        text: 30.0
+  gpt-4-32k:
+    context_length: 32768
+    pricing:
+      input_tokens:
+        no_cache: 60.0
+      output_tokens:
+        text: 120.0
+  gpt-4-32k-0314:
+    context_length: 32768
+    pricing:
+      input_tokens:
+        no_cache: 60.0
+      output_tokens:
+        text: 120.0
+  gpt-4-32k-0613:
+    context_length: 32768
+    pricing:
+      input_tokens:
+        no_cache: 60.0
+      output_tokens:
+        text: 120.0
+  gpt-4-turbo:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 10.0
+      output_tokens:
+        text: 30.0
+  gpt-4-turbo-2024-04-09:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 10.0
+      output_tokens:
+        text: 30.0
+  gpt-4-turbo-preview:
+    context_length: 128000
+    pricing:
+      input_tokens:
+        no_cache: 10.0
+      output_tokens:
+        text: 30.0
+  gpt-4-vision-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 10.0
+      output_tokens:
+        text: 30.0
+  gpt-4.1:
+    context_length: 1047576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.5
+      output_tokens:
+        text: 8.0
+  gpt-4.1-2025-04-14:
+    context_length: 1047576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.5
+      output_tokens:
+        text: 8.0
+  gpt-4.1-mini:
+    context_length: 1047576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.1
+      output_tokens:
+        text: 1.6
+  gpt-4.1-mini-2025-04-14:
+    context_length: 1047576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.1
+      output_tokens:
+        text: 1.6
+  gpt-4.1-nano:
+    context_length: 1047576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  gpt-4.1-nano-2025-04-14:
+    context_length: 1047576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  gpt-4.5-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 75.0
+        cache_read: 37.5
+      output_tokens:
+        text: 150.0
+  gpt-4.5-preview-2025-02-27:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 75.0
+        cache_read: 37.5
+      output_tokens:
+        text: 150.0
+  gpt-4o:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 1.25
+      output_tokens:
+        text: 10.0
+  gpt-4o-2024-05-13:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+      output_tokens:
+        text: 15.0
+  gpt-4o-2024-08-06:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 1.25
+      output_tokens:
+        text: 10.0
+  gpt-4o-2024-11-20:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 1.25
+      output_tokens:
+        text: 10.0
+  gpt-4o-audio-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+      output_tokens:
+        text: 10.0
+  gpt-4o-audio-preview-2024-10-01:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+      output_tokens:
+        text: 10.0
+  gpt-4o-audio-preview-2024-12-17:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+      output_tokens:
+        text: 10.0
+  gpt-4o-audio-preview-2025-06-03:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+      output_tokens:
+        text: 10.0
+  gpt-4o-mini:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.075
+      output_tokens:
+        text: 0.6
+  gpt-4o-mini-2024-07-18:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.075
+      output_tokens:
+        text: 0.6
+  gpt-4o-mini-audio-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+      output_tokens:
+        text: 0.6
+  gpt-4o-mini-audio-preview-2024-12-17:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+      output_tokens:
+        text: 0.6
+  gpt-4o-mini-realtime-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.3
+      output_tokens:
+        text: 2.4
+  gpt-4o-mini-realtime-preview-2024-12-17:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.3
+      output_tokens:
+        text: 2.4
+  gpt-4o-mini-search-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.075
+      output_tokens:
+        text: 0.6
+  gpt-4o-mini-search-preview-2025-03-11:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.075
+      output_tokens:
+        text: 0.6
+  gpt-4o-realtime-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+        cache_read: 2.5
+      output_tokens:
+        text: 20.0
+  gpt-4o-realtime-preview-2024-10-01:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+        cache_read: 2.5
+      output_tokens:
+        text: 20.0
+  gpt-4o-realtime-preview-2024-12-17:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+        cache_read: 2.5
+      output_tokens:
+        text: 20.0
+  gpt-4o-realtime-preview-2025-06-03:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+        cache_read: 2.5
+      output_tokens:
+        text: 20.0
+  gpt-4o-search-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 1.25
+      output_tokens:
+        text: 10.0
+  gpt-4o-search-preview-2025-03-11:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 1.25
+      output_tokens:
+        text: 10.0
+  gpt-5:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gpt-5-2025-08-07:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gpt-5-chat:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gpt-5-chat-latest:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gpt-5-mini:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 2.0
+  gpt-5-mini-2025-08-07:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 2.0
+  gpt-5-nano:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.05
+        cache_read: 0.005
+      output_tokens:
+        text: 0.4
+  gpt-5-nano-2025-08-07:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.05
+        cache_read: 0.005
+      output_tokens:
+        text: 0.4
+  gpt-5-search-api:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gpt-5-search-api-2025-10-14:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gpt-5.1:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gpt-5.1-2025-11-13:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gpt-5.1-chat-latest:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gpt-5.2:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.75
+        cache_read: 0.175
+      output_tokens:
+        text: 14.0
+  gpt-5.2-2025-12-11:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.75
+        cache_read: 0.175
+      output_tokens:
+        text: 14.0
+  gpt-5.2-chat-latest:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.75
+        cache_read: 0.175
+      output_tokens:
+        text: 14.0
+  gpt-5.3-chat-latest:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.75
+        cache_read: 0.175
+      output_tokens:
+        text: 14.0
+  gpt-5.4:
+    context_length: 1050000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+      output_tokens:
+        text: 15.0
+  gpt-5.4-2026-03-05:
+    context_length: 1050000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+      output_tokens:
+        text: 15.0
+  gpt-audio:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+      output_tokens:
+        text: 10.0
+  gpt-audio-1.5:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+      output_tokens:
+        text: 10.0
+  gpt-audio-2025-08-28:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+      output_tokens:
+        text: 10.0
+  gpt-audio-mini:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 2.4
+  gpt-audio-mini-2025-10-06:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 2.4
+  gpt-audio-mini-2025-12-15:
+    context_length: 128000
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 2.4
+  gpt-realtime:
+    context_length: 32000
+    input_modalities:
+      - text
+      - image
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 4.0
+        cache_read: 0.4
+      output_tokens:
+        text: 16.0
+  gpt-realtime-1.5:
+    context_length: 32000
+    input_modalities:
+      - text
+      - image
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 4.0
+        cache_read: 0.4
+      output_tokens:
+        text: 16.0
+  gpt-realtime-2025-08-28:
+    context_length: 32000
+    input_modalities:
+      - text
+      - image
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 4.0
+        cache_read: 0.4
+      output_tokens:
+        text: 16.0
+  gpt-realtime-mini:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 2.4
+  gpt-realtime-mini-2025-10-06:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.06
+      output_tokens:
+        text: 2.4
+  gpt-realtime-mini-2025-12-15:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.06
+      output_tokens:
+        text: 2.4
+  o1:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+        cache_read: 7.5
+      output_tokens:
+        text: 60.0
+  o1-2024-12-17:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+        cache_read: 7.5
+      output_tokens:
+        text: 60.0
+  o1-mini:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.55
+      output_tokens:
+        text: 4.4
+  o1-mini-2024-09-12:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 1.5
+      output_tokens:
+        text: 12.0
+  o1-preview:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+        cache_read: 7.5
+      output_tokens:
+        text: 60.0
+  o1-preview-2024-09-12:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+        cache_read: 7.5
+      output_tokens:
+        text: 60.0
+  o3:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.5
+      output_tokens:
+        text: 8.0
+  o3-2025-04-16:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.5
+      output_tokens:
+        text: 8.0
+  o3-mini:
+    context_length: 200000
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.55
+      output_tokens:
+        text: 4.4
+  o3-mini-2025-01-31:
+    context_length: 200000
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.55
+      output_tokens:
+        text: 4.4
+  o4-mini:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.275
+      output_tokens:
+        text: 4.4
+  o4-mini-2025-04-16:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.275
+      output_tokens:
+        text: 4.4

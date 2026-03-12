@@ -2,7 +2,662 @@ api_protocol: google
 api_base: https://generativelanguage.googleapis.com
 env_prefix: GOOGLE
 models:
-  gemini-2.5-flash: {}
-  gemini-2.5-flash-lite: {}
-  gemini-1.5-pro: {}
-  gemini-1.5-flash: {}
+  gemini-1.5-flash:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+      output_tokens:
+        text: 0.3
+  gemini-1.5-flash-001:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.0187
+        cache_write: 1.0
+      output_tokens:
+        text: 0.3
+  gemini-1.5-flash-002:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.0187
+        cache_write: 1.0
+      output_tokens:
+        text: 0.3
+  gemini-1.5-flash-8b:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+  gemini-1.5-flash-8b-exp-0827:
+    context_length: 1000000
+    input_modalities:
+      - text
+      - image
+  gemini-1.5-flash-8b-exp-0924:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+  gemini-1.5-flash-exp-0827:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+  gemini-1.5-flash-latest:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+      output_tokens:
+        text: 0.3
+  gemini-1.5-pro:
+    context_length: 2097152
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.5
+      output_tokens:
+        text: 10.5
+  gemini-1.5-pro-001:
+    context_length: 2097152
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.5
+      output_tokens:
+        text: 10.5
+  gemini-1.5-pro-002:
+    context_length: 2097152
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.5
+      output_tokens:
+        text: 10.5
+  gemini-1.5-pro-exp-0801:
+    context_length: 2097152
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.5
+      output_tokens:
+        text: 10.5
+  gemini-1.5-pro-exp-0827:
+    context_length: 2097152
+    input_modalities:
+      - text
+      - image
+  gemini-1.5-pro-latest:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.5
+      output_tokens:
+        text: 1.05
+  gemini-2.0-flash:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  gemini-2.0-flash-001:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  gemini-2.0-flash-exp:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    output_modalities:
+      - text
+      - image
+  gemini-2.0-flash-lite:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.0187
+      output_tokens:
+        text: 0.3
+  gemini-2.0-flash-lite-001:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.0187
+      output_tokens:
+        text: 0.3
+  gemini-2.0-flash-lite-preview-02-05:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.0187
+      output_tokens:
+        text: 0.3
+  gemini-2.0-flash-live-001:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.35
+        cache_read: 0.075
+      output_tokens:
+        text: 1.5
+  gemini-2.0-flash-preview-image-generation:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  gemini-2.0-flash-thinking-exp:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    output_modalities:
+      - text
+      - image
+  gemini-2.0-flash-thinking-exp-01-21:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    output_modalities:
+      - text
+      - image
+  gemini-2.0-pro-exp-02-05:
+    context_length: 2097152
+    input_modalities:
+      - text
+      - image
+      - audio
+  gemini-2.5-computer-use-preview-10-2025:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+      output_tokens:
+        text: 10.0
+  gemini-2.5-flash:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.03
+      output_tokens:
+        text: 2.5
+        reasoning: 2.5
+  gemini-2.5-flash-lite:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+      output_tokens:
+        text: 0.4
+        reasoning: 0.4
+  gemini-2.5-flash-lite-preview-06-17:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+        reasoning: 0.4
+  gemini-2.5-flash-lite-preview-09-2025:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+      output_tokens:
+        text: 0.4
+        reasoning: 0.4
+  gemini-2.5-flash-native-audio-latest:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 2.5
+  gemini-2.5-flash-native-audio-preview-09-2025:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 2.5
+  gemini-2.5-flash-native-audio-preview-12-2025:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - audio
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 2.5
+  gemini-2.5-flash-preview-04-17:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.0375
+      output_tokens:
+        text: 0.6
+        reasoning: 3.5
+  gemini-2.5-flash-preview-05-20:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.075
+      output_tokens:
+        text: 2.5
+        reasoning: 2.5
+  gemini-2.5-flash-preview-09-2025:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.075
+      output_tokens:
+        text: 2.5
+        reasoning: 2.5
+  gemini-2.5-pro:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gemini-2.5-pro-exp-03-25:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+  gemini-2.5-pro-preview-03-25:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gemini-2.5-pro-preview-05-06:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gemini-2.5-pro-preview-06-05:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gemini-2.5-pro-preview-tts:
+    context_length: 1048576
+    output_modalities:
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gemini-3-flash-preview:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+        cache_read: 0.05
+      output_tokens:
+        text: 3.0
+        reasoning: 3.0
+  gemini-3-pro-preview:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.2
+      output_tokens:
+        text: 12.0
+  gemini-3.1-flash-lite-preview:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 1.5
+        reasoning: 1.5
+  gemini-3.1-pro-preview:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.2
+      output_tokens:
+        text: 12.0
+  gemini-3.1-pro-preview-customtools:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.2
+      output_tokens:
+        text: 12.0
+  gemini-exp-1114:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+  gemini-exp-1206:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.03
+      output_tokens:
+        text: 2.5
+        reasoning: 2.5
+  gemini-flash-latest:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.03
+      output_tokens:
+        text: 2.5
+        reasoning: 2.5
+  gemini-flash-lite-latest:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+      output_tokens:
+        text: 0.4
+        reasoning: 0.4
+  gemini-gemma-2-27b-it:
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.35
+      output_tokens:
+        text: 1.05
+  gemini-gemma-2-9b-it:
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.35
+      output_tokens:
+        text: 1.05
+  gemini-pro:
+    context_length: 32760
+    pricing:
+      input_tokens:
+        no_cache: 0.35
+      output_tokens:
+        text: 1.05
+  gemini-pro-latest:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  gemini-pro-vision:
+    context_length: 30720
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.35
+      output_tokens:
+        text: 1.05
+  gemini-robotics-er-1.5-preview:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - video
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 2.5
+        reasoning: 2.5
+  gemma-3-27b-it:
+    context_length: 131072
+    input_modalities:
+      - text
+      - image
+  learnlm-1.5-pro-experimental:
+    context_length: 32767
+    input_modalities:
+      - text
+      - image

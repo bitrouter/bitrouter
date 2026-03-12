@@ -1,0 +1,800 @@
+api_protocol: openai
+api_base: https://openrouter.ai/api/v1
+env_prefix: OPENROUTER
+models:
+  anthropic/claude-3-haiku:
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+      output_tokens:
+        text: 1.25
+  anthropic/claude-3.5-sonnet:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+      output_tokens:
+        text: 15.0
+  anthropic/claude-3.7-sonnet:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+      output_tokens:
+        text: 15.0
+  anthropic/claude-haiku-4.5:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.1
+        cache_write: 1.25
+      output_tokens:
+        text: 5.0
+  anthropic/claude-opus-4:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+        cache_read: 1.5
+        cache_write: 18.75
+      output_tokens:
+        text: 75.0
+  anthropic/claude-opus-4.1:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+        cache_read: 1.5
+        cache_write: 18.75
+      output_tokens:
+        text: 75.0
+  anthropic/claude-opus-4.5:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25.0
+  anthropic/claude-opus-4.6:
+    context_length: 1000000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25.0
+  anthropic/claude-sonnet-4:
+    context_length: 1000000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15.0
+  anthropic/claude-sonnet-4.5:
+    context_length: 1000000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15.0
+  anthropic/claude-sonnet-4.6:
+    context_length: 1000000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15.0
+  bytedance/ui-tars-1.5-7b:
+    context_length: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+      output_tokens:
+        text: 0.2
+  deepseek/deepseek-chat:
+    context_length: 65536
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.28
+  deepseek/deepseek-chat-v3-0324:
+    context_length: 65536
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.28
+  deepseek/deepseek-chat-v3.1:
+    context_length: 163840
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 0.8
+  deepseek/deepseek-r1:
+    context_length: 65336
+    pricing:
+      input_tokens:
+        no_cache: 0.55
+      output_tokens:
+        text: 2.19
+  deepseek/deepseek-r1-0528:
+    context_length: 65336
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+      output_tokens:
+        text: 2.15
+  deepseek/deepseek-v3.2:
+    context_length: 163840
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+      output_tokens:
+        text: 0.4
+  deepseek/deepseek-v3.2-exp:
+    context_length: 163840
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 0.4
+  google/gemini-2.0-flash-001:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+      output_tokens:
+        text: 0.4
+  google/gemini-2.5-flash:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 2.5
+  google/gemini-2.5-pro:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+      output_tokens:
+        text: 10.0
+  google/gemini-3-flash-preview:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+        cache_read: 0.05
+      output_tokens:
+        text: 3.0
+        reasoning: 3.0
+  google/gemini-3-pro-preview:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.2
+      output_tokens:
+        text: 12.0
+  google/gemini-3.1-pro-preview:
+    context_length: 1048576
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.2
+      output_tokens:
+        text: 12.0
+  gryphe/mythomax-l2-13b:
+    pricing:
+      input_tokens:
+        no_cache: 1.875
+      output_tokens:
+        text: 1.875
+  mancer/weaver:
+    pricing:
+      input_tokens:
+        no_cache: 5.625
+      output_tokens:
+        text: 5.625
+  meta-llama/llama-3-70b-instruct:
+    pricing:
+      input_tokens:
+        no_cache: 0.59
+      output_tokens:
+        text: 0.79
+  minimax/minimax-m2:
+    context_length: 204800
+    pricing:
+      input_tokens:
+        no_cache: 0.255
+      output_tokens:
+        text: 1.02
+  minimax/minimax-m2.1:
+    context_length: 204000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.27
+      output_tokens:
+        text: 1.2
+  minimax/minimax-m2.5:
+    context_length: 196608
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.15
+      output_tokens:
+        text: 1.1
+  mistralai/devstral-2512:
+    context_length: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+      output_tokens:
+        text: 0.6
+  mistralai/ministral-14b-2512:
+    context_length: 262144
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 0.2
+  mistralai/ministral-3b-2512:
+    context_length: 131072
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+      output_tokens:
+        text: 0.1
+  mistralai/ministral-8b-2512:
+    context_length: 262144
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+      output_tokens:
+        text: 0.15
+  mistralai/mistral-7b-instruct:
+    pricing:
+      input_tokens:
+        no_cache: 0.13
+      output_tokens:
+        text: 0.13
+  mistralai/mistral-large:
+    pricing:
+      input_tokens:
+        no_cache: 8.0
+      output_tokens:
+        text: 24.0
+  mistralai/mistral-large-2512:
+    context_length: 262144
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+      output_tokens:
+        text: 1.5
+  mistralai/mistral-small-3.1-24b-instruct:
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+      output_tokens:
+        text: 0.3
+  mistralai/mistral-small-3.2-24b-instruct:
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+      output_tokens:
+        text: 0.3
+  mistralai/mixtral-8x22b-instruct:
+    pricing:
+      input_tokens:
+        no_cache: 0.65
+      output_tokens:
+        text: 0.65
+  moonshotai/kimi-k2.5:
+    context_length: 262144
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.1
+      output_tokens:
+        text: 3.0
+  openai/gpt-3.5-turbo:
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+      output_tokens:
+        text: 2.0
+  openai/gpt-3.5-turbo-16k:
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+      output_tokens:
+        text: 4.0
+  openai/gpt-4:
+    pricing:
+      input_tokens:
+        no_cache: 30.0
+      output_tokens:
+        text: 60.0
+  openai/gpt-4.1:
+    context_length: 1047576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.5
+      output_tokens:
+        text: 8.0
+  openai/gpt-4.1-mini:
+    context_length: 1047576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.1
+      output_tokens:
+        text: 1.6
+  openai/gpt-4.1-nano:
+    context_length: 1047576
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  openai/gpt-4o:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+      output_tokens:
+        text: 10.0
+  openai/gpt-4o-2024-05-13:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+      output_tokens:
+        text: 15.0
+  openai/gpt-5:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  openai/gpt-5-chat:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  openai/gpt-5-codex:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  openai/gpt-5-mini:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 2.0
+  openai/gpt-5-nano:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.05
+        cache_read: 0.005
+      output_tokens:
+        text: 0.4
+  openai/gpt-5.1-codex-max:
+    context_length: 400000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  openai/gpt-5.2:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.75
+        cache_read: 0.175
+      output_tokens:
+        text: 14.0
+  openai/gpt-5.2-chat:
+    context_length: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.75
+        cache_read: 0.175
+      output_tokens:
+        text: 14.0
+  openai/gpt-5.2-codex:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.75
+        cache_read: 0.175
+      output_tokens:
+        text: 14.0
+  openai/gpt-5.2-pro:
+    context_length: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 21.0
+      output_tokens:
+        text: 168.0
+  openai/gpt-oss-120b:
+    context_length: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.18
+      output_tokens:
+        text: 0.8
+  openai/gpt-oss-20b:
+    context_length: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.02
+      output_tokens:
+        text: 0.1
+  openai/o1:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+        cache_read: 7.5
+      output_tokens:
+        text: 60.0
+  openai/o3-mini:
+    context_length: 128000
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+      output_tokens:
+        text: 4.4
+  openai/o3-mini-high:
+    context_length: 128000
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+      output_tokens:
+        text: 4.4
+  openrouter/auto:
+    context_length: 2000000
+    input_modalities:
+      - text
+      - image
+      - audio
+  openrouter/bodybuilder:
+    context_length: 128000
+  openrouter/free:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+  qwen/qwen-2.5-coder-32b-instruct:
+    context_length: 33792
+    pricing:
+      input_tokens:
+        no_cache: 0.18
+      output_tokens:
+        text: 0.18
+  qwen/qwen-vl-plus:
+    context_length: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.21
+      output_tokens:
+        text: 0.63
+  qwen/qwen3-235b-a22b-2507:
+    context_length: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.071
+      output_tokens:
+        text: 0.1
+  qwen/qwen3-235b-a22b-thinking-2507:
+    context_length: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.11
+      output_tokens:
+        text: 0.6
+  qwen/qwen3-coder:
+    context_length: 262100
+    pricing:
+      input_tokens:
+        no_cache: 0.22
+      output_tokens:
+        text: 0.95
+  qwen/qwen3-coder-plus:
+    context_length: 997952
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 5.0
+  qwen/qwen3.5-122b-a10b:
+    context_length: 262144
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 2.0
+  qwen/qwen3.5-27b:
+    context_length: 262144
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 2.4
+  qwen/qwen3.5-35b-a3b:
+    context_length: 262144
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+      output_tokens:
+        text: 2.0
+  qwen/qwen3.5-397b-a17b:
+    context_length: 262144
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 3.6
+  qwen/qwen3.5-flash-02-23:
+    context_length: 1000000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+      output_tokens:
+        text: 0.4
+  qwen/qwen3.5-plus-02-15:
+    context_length: 1000000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 2.4
+  switchpoint/router:
+    context_length: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.85
+      output_tokens:
+        text: 3.4
+  undi95/remm-slerp-l2-13b:
+    pricing:
+      input_tokens:
+        no_cache: 1.875
+      output_tokens:
+        text: 1.875
+  x-ai/grok-4:
+    context_length: 256000
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+      output_tokens:
+        text: 15.0
+  xiaomi/mimo-v2-flash:
+    context_length: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.09
+      output_tokens:
+        text: 0.29
+  z-ai/glm-4.6:
+    context_length: 202800
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 1.75
+  z-ai/glm-4.6:exacto:
+    context_length: 202800
+    pricing:
+      input_tokens:
+        no_cache: 0.45
+      output_tokens:
+        text: 1.9
+  z-ai/glm-4.7:
+    context_length: 202752
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 1.5
+  z-ai/glm-4.7-flash:
+    context_length: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.07
+      output_tokens:
+        text: 0.4
+  z-ai/glm-5:
+    context_length: 202752
+    pricing:
+      input_tokens:
+        no_cache: 0.8
+      output_tokens:
+        text: 2.56
