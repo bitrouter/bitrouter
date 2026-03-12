@@ -412,7 +412,8 @@ mod tests {
             ModelInfo {
                 name: Some("GPT-4o".into()),
                 description: Some("Multimodal model".into()),
-                context_length: Some(128000),
+                max_input_tokens: Some(128000),
+                max_output_tokens: Some(16384),
                 input_modalities: vec![Modality::Text, Modality::Image],
                 output_modalities: vec![Modality::Text],
                 ..Default::default()
@@ -422,7 +423,8 @@ mod tests {
 
         let info = table.model_info("openai", "gpt-4o");
         assert_eq!(info.name.as_deref(), Some("GPT-4o"));
-        assert_eq!(info.context_length, Some(128000));
+        assert_eq!(info.max_input_tokens, Some(128000));
+        assert_eq!(info.max_output_tokens, Some(16384));
         assert_eq!(info.input_modalities, vec![Modality::Text, Modality::Image]);
     }
 
@@ -431,7 +433,7 @@ mod tests {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         let info = table.model_info("openai", "nonexistent");
         assert!(info.name.is_none());
-        assert!(info.context_length.is_none());
+        assert!(info.max_input_tokens.is_none());
         assert!(info.input_modalities.is_empty());
     }
 }

@@ -3,7 +3,8 @@ api_base: https://api.anthropic.com
 env_prefix: ANTHROPIC
 models:
   claude-3-5-haiku-20241022:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 8192
     input_modalities:
       - text
       - image
@@ -15,7 +16,8 @@ models:
       output_tokens:
         text: 4.0
   claude-3-5-haiku-latest:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 8192
     input_modalities:
       - text
       - image
@@ -27,7 +29,8 @@ models:
       output_tokens:
         text: 5.0
   claude-3-5-sonnet-20240620:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 8192
     input_modalities:
       - text
       - image
@@ -39,7 +42,8 @@ models:
       output_tokens:
         text: 15.0
   claude-3-5-sonnet-20241022:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 8192
     input_modalities:
       - text
       - image
@@ -51,7 +55,8 @@ models:
       output_tokens:
         text: 15.0
   claude-3-5-sonnet-latest:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 8192
     input_modalities:
       - text
       - image
@@ -63,7 +68,8 @@ models:
       output_tokens:
         text: 15.0
   claude-3-7-sonnet-20250219:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -75,7 +81,8 @@ models:
       output_tokens:
         text: 15.0
   claude-3-7-sonnet-latest:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -87,7 +94,8 @@ models:
       output_tokens:
         text: 15.0
   claude-3-haiku-20240307:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 4096
     input_modalities:
       - text
       - image
@@ -99,7 +107,8 @@ models:
       output_tokens:
         text: 1.25
   claude-3-opus-20240229:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 4096
     input_modalities:
       - text
       - image
@@ -111,7 +120,8 @@ models:
       output_tokens:
         text: 75.0
   claude-3-opus-latest:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 4096
     input_modalities:
       - text
       - image
@@ -123,7 +133,8 @@ models:
       output_tokens:
         text: 75.0
   claude-4-opus-20250514:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 32000
     input_modalities:
       - text
       - image
@@ -135,7 +146,8 @@ models:
       output_tokens:
         text: 75.0
   claude-4-sonnet-20250514:
-    context_length: 1000000
+    max_input_tokens: 1000000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -147,7 +159,8 @@ models:
       output_tokens:
         text: 15.0
   claude-haiku-4-5:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -159,7 +172,8 @@ models:
       output_tokens:
         text: 5.0
   claude-haiku-4-5-20251001:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -171,7 +185,8 @@ models:
       output_tokens:
         text: 5.0
   claude-opus-4-1:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 32000
     input_modalities:
       - text
       - image
@@ -183,7 +198,8 @@ models:
       output_tokens:
         text: 75.0
   claude-opus-4-1-20250805:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 32000
     input_modalities:
       - text
       - image
@@ -195,7 +211,8 @@ models:
       output_tokens:
         text: 75.0
   claude-opus-4-20250514:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 32000
     input_modalities:
       - text
       - image
@@ -207,7 +224,8 @@ models:
       output_tokens:
         text: 75.0
   claude-opus-4-5:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -219,7 +237,8 @@ models:
       output_tokens:
         text: 25.0
   claude-opus-4-5-20251101:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -231,7 +250,8 @@ models:
       output_tokens:
         text: 25.0
   claude-opus-4-6:
-    context_length: 1000000
+    max_input_tokens: 1000000
+    max_output_tokens: 128000
     input_modalities:
       - text
       - image
@@ -243,7 +263,8 @@ models:
       output_tokens:
         text: 25.0
   claude-opus-4-6-20260205:
-    context_length: 1000000
+    max_input_tokens: 1000000
+    max_output_tokens: 128000
     input_modalities:
       - text
       - image
@@ -255,7 +276,8 @@ models:
       output_tokens:
         text: 25.0
   claude-sonnet-4-20250514:
-    context_length: 1000000
+    max_input_tokens: 1000000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -267,7 +289,8 @@ models:
       output_tokens:
         text: 15.0
   claude-sonnet-4-5:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -279,7 +302,8 @@ models:
       output_tokens:
         text: 15.0
   claude-sonnet-4-5-20250929:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
@@ -291,7 +315,8 @@ models:
       output_tokens:
         text: 15.0
   claude-sonnet-4-6:
-    context_length: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image

@@ -241,9 +241,20 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    /// Maximum context window in tokens.
+    /// Maximum input context window in tokens.
+    ///
+    /// Accepts both `max_input_tokens` and the legacy `context_length` name in
+    /// YAML; they map to the same field.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "context_length"
+    )]
+    pub max_input_tokens: Option<u64>,
+
+    /// Maximum number of output tokens the model can produce.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_length: Option<u64>,
+    pub max_output_tokens: Option<u64>,
 
     /// Input modalities the model accepts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -462,7 +473,8 @@ providers:
         let yaml = r#"
 name: "GPT-4o"
 description: "Multimodal flagship model"
-context_length: 128000
+max_input_tokens: 128000
+max_output_tokens: 16384
 input_modalities:
   - text
   - image
@@ -483,7 +495,8 @@ pricing:
             info.description.as_deref(),
             Some("Multimodal flagship model")
         );
-        assert_eq!(info.context_length, Some(128000));
+        assert_eq!(info.max_input_tokens, Some(128000));
+        assert_eq!(info.max_output_tokens, Some(16384));
         assert_eq!(info.input_modalities, vec![Modality::Text, Modality::Image]);
         assert_eq!(info.output_modalities, vec![Modality::Text]);
         assert_eq!(info.pricing.input_tokens.no_cache, 2.50);
@@ -497,6 +510,11 @@ pricing:
         let deserialized: ModelInfo = serde_yaml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.name, info.name);
         assert_eq!(deserialized.pricing.input_tokens.no_cache, 2.50);
+
+        // Legacy "context_length" alias still works
+        let legacy_yaml = "context_length: 200000";
+        let legacy: ModelInfo = serde_yaml::from_str(legacy_yaml).unwrap();
+        assert_eq!(legacy.max_input_tokens, Some(200000));
     }
 
     #[test]
@@ -504,7 +522,8 @@ pricing:
         let info: ModelInfo = serde_yaml::from_str("{}").unwrap();
         assert!(info.name.is_none());
         assert!(info.description.is_none());
-        assert!(info.context_length.is_none());
+        assert!(info.max_input_tokens.is_none());
+        assert!(info.max_output_tokens.is_none());
         assert!(info.input_modalities.is_empty());
         assert!(info.output_modalities.is_empty());
         assert_eq!(info.pricing.input_tokens.no_cache, 0.0);
@@ -520,7 +539,8 @@ providers:
     models:
       gpt-4o:
         name: "GPT-4o"
-        context_length: 128000
+        max_input_tokens: 128000
+        max_output_tokens: 16384
         input_modalities: [text, image]
         output_modalities: [text]
         pricing:
@@ -537,7 +557,8 @@ providers:
 
         let gpt4o = &models["gpt-4o"];
         assert_eq!(gpt4o.name.as_deref(), Some("GPT-4o"));
-        assert_eq!(gpt4o.context_length, Some(128000));
+        assert_eq!(gpt4o.max_input_tokens, Some(128000));
+        assert_eq!(gpt4o.max_output_tokens, Some(16384));
         assert_eq!(
             gpt4o.input_modalities,
             vec![Modality::Text, Modality::Image]
