@@ -67,4 +67,22 @@ jobs:
           target: ${{ matrix.target }}
           tar: all
           zip: windows
+          checksum: sha256
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-installer:
+    name: installer
+    if: github.repository_owner == 'bitrouter' && startsWith(github.event.release.tag_name, 'v')
+    needs: upload-assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Upload install script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" scripts/install.sh --clobber

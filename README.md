@@ -33,12 +33,20 @@ As LLM agents grow more autonomous, humans can no longer hand-pick the best mode
 ## Quick Start
 
 ```bash
-# Install
+# Install the latest pre-built binary
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/bitrouter/bitrouter/releases/latest/download/install.sh | sh
+
+# Or install from source with Cargo
 cargo install bitrouter
 
 # Launch — runs the setup wizard on first run, then starts the TUI + API server
 bitrouter
 ```
+
+The installer downloads the latest release for your host platform into
+`${BITROUTER_HOME:-$HOME/.bitrouter}/bin`, verifies the SHA-256 checksum, and
+updates the `bitrouter` symlink to point at the newest installed version.
 
 On first launch, if no providers are configured, BitRouter automatically runs an interactive setup wizard that walks you through provider selection, API key entry, and configuration. After setup completes, the TUI and API server start with your new configuration.
 
