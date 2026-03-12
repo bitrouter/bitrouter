@@ -10,6 +10,9 @@ use bitrouter_core::jwt::token;
 
 use crate::cli::account::load_active_keypair;
 
+const DEFAULT_CHAIN_NAME: &str = "solana";
+const LOCAL_ADMIN_JWT_EXPIRATION: &str = "5m";
+
 /// Parsed keygen options (from CLI flags).
 pub struct KeygenOpts {
     pub chain: String,
@@ -22,49 +25,31 @@ pub struct KeygenOpts {
     pub name: Option<String>,
 }
 
+struct SignJwtOpts {
+    chain_name: String,
+    scope: TokenScope,
+    exp_input: Option<String>,
+    models: Option<Vec<String>>,
+    budget: Option<u64>,
+    budget_scope: Option<BudgetScope>,
+    budget_range_input: Option<String>,
+}
+
 /// Run the `keygen` subcommand.
 pub fn run(keys_dir: &Path, opts: KeygenOpts) -> Result<(), String> {
     let (prefix, kp) = load_active_keypair(keys_dir)?;
-
-    let chain = parse_chain(&opts.chain)?;
-    let caip10 = kp
-        .caip10(&chain)
-        .map_err(|e| format!("failed to derive CAIP-10 identity: {e}"))?;
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("system clock error: {e}"))?
-        .as_secs();
-
-    let exp = parse_expiration(&opts.exp, now)?;
-
-    // Admin tokens must have an expiration.
-    if opts.scope == TokenScope::Admin && exp.is_none() {
-        return Err(
-            "Admin-scope tokens require --exp (e.g., --exp 5m). This limits replay window."
-                .to_string(),
-        );
-    }
-
-    let budget_range = opts
-        .budget_range
-        .as_deref()
-        .map(parse_budget_range)
-        .transpose()?;
-
-    let claims = BitrouterClaims {
-        iss: caip10.format(),
-        chain: chain.caip2(),
-        iat: Some(now),
-        exp,
-        scope: opts.scope,
-        models: opts.models,
-        budget: opts.budget,
-        budget_scope: opts.budget_scope,
-        budget_range,
-    };
-
-    let jwt = token::sign(&claims, &kp).map_err(|e| format!("failed to sign JWT: {e}"))?;
+    let jwt = sign_jwt(
+        &kp,
+        SignJwtOpts {
+            chain_name: opts.chain,
+            scope: opts.scope,
+            exp_input: opts.exp,
+            models: opts.models,
+            budget: opts.budget,
+            budget_scope: opts.budget_scope,
+            budget_range_input: opts.budget_range,
+        },
+    )?;
 
     // Save to disk if a name was provided.
     if let Some(ref name) = opts.name {
@@ -81,6 +66,68 @@ pub fn run(keys_dir: &Path, opts: KeygenOpts) -> Result<(), String> {
 
     println!("{jwt}");
     Ok(())
+}
+
+/// Generate a short-lived admin JWT for local daemon management requests.
+pub fn generate_local_admin_jwt(keys_dir: &Path) -> Result<String, String> {
+    let (_prefix, kp) = load_active_keypair(keys_dir)?;
+    let exp = LOCAL_ADMIN_JWT_EXPIRATION.to_owned();
+    sign_jwt(
+        &kp,
+        SignJwtOpts {
+            chain_name: DEFAULT_CHAIN_NAME.to_owned(),
+            scope: TokenScope::Admin,
+            exp_input: Some(exp),
+            models: None,
+            budget: None,
+            budget_scope: None,
+            budget_range_input: None,
+        },
+    )
+}
+
+fn sign_jwt(
+    kp: &bitrouter_core::jwt::keys::MasterKeypair,
+    opts: SignJwtOpts,
+) -> Result<String, String> {
+    let chain = parse_chain(&opts.chain_name)?;
+    let caip10 = kp
+        .caip10(&chain)
+        .map_err(|e| format!("failed to derive CAIP-10 identity: {e}"))?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("system clock error: {e}"))?
+        .as_secs();
+
+    let exp = parse_expiration(opts.exp_input.as_deref(), now)?;
+
+    if opts.scope == TokenScope::Admin && exp.is_none() {
+        return Err(
+            "Admin-scope tokens require --exp (e.g., --exp 5m). This limits replay window."
+                .to_string(),
+        );
+    }
+
+    let budget_range = opts
+        .budget_range_input
+        .as_deref()
+        .map(parse_budget_range)
+        .transpose()?;
+
+    let claims = BitrouterClaims {
+        iss: caip10.format(),
+        chain: chain.caip2(),
+        iat: Some(now),
+        exp,
+        scope: opts.scope,
+        models: opts.models,
+        budget: opts.budget,
+        budget_scope: opts.budget_scope,
+        budget_range,
+    };
+
+    token::sign(&claims, kp).map_err(|e| format!("failed to sign JWT: {e}"))
 }
 
 /// Parse a chain name into a [`Chain`].
@@ -100,9 +147,9 @@ fn parse_chain(s: &str) -> Result<Chain, String> {
 /// - `"never"` → `None`
 /// - Relative durations: `"5m"`, `"1h"`, `"30d"`, `"1y"`
 /// - Absolute UNIX timestamp as integer string
-fn parse_expiration(exp: &Option<String>, now: u64) -> Result<Option<u64>, String> {
+fn parse_expiration(exp: Option<&str>, now: u64) -> Result<Option<u64>, String> {
     let s = match exp {
-        Some(s) => s.as_str(),
+        Some(s) => s,
         None => return Ok(None),
     };
 
@@ -167,37 +214,28 @@ mod tests {
 
     #[test]
     fn parse_exp_none() {
-        assert_eq!(parse_expiration(&None, 1000).ok(), Some(None));
+        assert_eq!(parse_expiration(None, 1000).ok(), Some(None));
     }
 
     #[test]
     fn parse_exp_never() {
-        assert_eq!(
-            parse_expiration(&Some("never".to_string()), 1000).ok(),
-            Some(None)
-        );
+        assert_eq!(parse_expiration(Some("never"), 1000).ok(), Some(None));
     }
 
     #[test]
     fn parse_exp_minutes() {
-        assert_eq!(
-            parse_expiration(&Some("5m".to_string()), 1000).ok(),
-            Some(Some(1300))
-        );
+        assert_eq!(parse_expiration(Some("5m"), 1000).ok(), Some(Some(1300)));
     }
 
     #[test]
     fn parse_exp_hours() {
-        assert_eq!(
-            parse_expiration(&Some("1h".to_string()), 0).ok(),
-            Some(Some(3600))
-        );
+        assert_eq!(parse_expiration(Some("1h"), 0).ok(), Some(Some(3600)));
     }
 
     #[test]
     fn parse_exp_days() {
         assert_eq!(
-            parse_expiration(&Some("30d".to_string()), 0).ok(),
+            parse_expiration(Some("30d"), 0).ok(),
             Some(Some(30 * 86400))
         );
     }
@@ -205,7 +243,7 @@ mod tests {
     #[test]
     fn parse_exp_absolute() {
         assert_eq!(
-            parse_expiration(&Some("1700000000".to_string()), 0).ok(),
+            parse_expiration(Some("1700000000"), 0).ok(),
             Some(Some(1700000000))
         );
     }
@@ -231,5 +269,32 @@ mod tests {
     #[test]
     fn parse_budget_range_invalid() {
         assert!(parse_budget_range("invalid").is_err());
+    }
+
+    #[test]
+    fn sign_jwt_generates_admin_token_with_expiration() {
+        let kp = bitrouter_core::jwt::keys::MasterKeypair::generate();
+        let exp = LOCAL_ADMIN_JWT_EXPIRATION.to_owned();
+        let jwt = sign_jwt(
+            &kp,
+            SignJwtOpts {
+                chain_name: DEFAULT_CHAIN_NAME.to_owned(),
+                scope: TokenScope::Admin,
+                exp_input: Some(exp),
+                models: None,
+                budget: None,
+                budget_scope: None,
+                budget_range_input: None,
+            },
+        );
+        assert!(jwt.is_ok());
+        if let Ok(jwt) = jwt {
+            let claims = bitrouter_core::jwt::token::decode_unverified(&jwt);
+            assert!(claims.is_ok());
+            if let Ok(claims) = claims {
+                assert_eq!(claims.scope, TokenScope::Admin);
+                assert!(claims.exp.is_some());
+            }
+        }
     }
 }

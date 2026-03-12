@@ -266,12 +266,13 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
             let addr = runtime.config.server.listen;
             match action {
-                RouteAction::List => cli::route::run_list(addr)?,
+                RouteAction::List => cli::route::run_list(&keys_dir, addr)?,
                 RouteAction::Add {
                     model,
                     endpoints,
                     strategy,
                 } => cli::route::run_add(
+                    &keys_dir,
                     addr,
                     cli::route::RouteAddOpts {
                         model,
@@ -279,7 +280,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         strategy: Some(strategy),
                     },
                 )?,
-                RouteAction::Rm { model } => cli::route::run_remove(addr, &model)?,
+                RouteAction::Rm { model } => cli::route::run_remove(&keys_dir, addr, &model)?,
             }
             return Ok(());
         }
