@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/bitrouter/bitrouter/compare/v0.6.0...v0.6.1)
+
+
+### ⛰️ Features
+
+- *(api)* Runtime admin API for dynamic route management ([#87](https://github.com/bitrouter/bitrouter/pull/87)) - ([0c9c502](https://github.com/bitrouter/bitrouter/commit/0c9c50277a4f2494f6e946354e3faa336f3163a3))
+- *(api)* Add hooked router filters ([#90](https://github.com/bitrouter/bitrouter/pull/90)) - ([6ca74fc](https://github.com/bitrouter/bitrouter/commit/6ca74fcb838517145dd34407337ad091f1b914a3))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(cli)* Deprecated `bitrouter --headless` ([#88](https://github.com/bitrouter/bitrouter/pull/88)) - ([d4d7b49](https://github.com/bitrouter/bitrouter/commit/d4d7b49b1e2bc2a68f3f7d2b0db05eacc8074a32))
+
+
 ## [0.6.0](https://github.com/bitrouter/bitrouter/compare/v0.5.0...v0.6.0)
 
 
