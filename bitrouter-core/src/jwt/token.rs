@@ -10,7 +10,7 @@
 use alloy_primitives::Signature as EvmSignature;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::{Signature as Ed25519Signature, Verifier};
+use solana_signature::Signature as SolanaSignature;
 
 use crate::jwt::JwtError;
 use crate::jwt::chain::{Caip10, JwtAlgorithm};
@@ -173,14 +173,16 @@ fn decode_algorithm(header_dot_payload: &str) -> Result<JwtAlgorithm, JwtError> 
 
 /// Verify a SOL_EDDSA (Ed25519) signature.
 fn verify_sol_eddsa(message: &[u8], sig_bytes: &[u8], address_b58: &str) -> Result<(), JwtError> {
-    let verifying_key = crate::jwt::keys::decode_solana_pubkey(address_b58)?;
+    let pubkey = crate::jwt::keys::decode_solana_pubkey(address_b58)?;
 
-    let sig = Ed25519Signature::from_slice(sig_bytes)
+    let sig = SolanaSignature::try_from(sig_bytes)
         .map_err(|_| JwtError::Verification("invalid Ed25519 signature length".into()))?;
 
-    verifying_key
-        .verify(message, &sig)
-        .map_err(|_| JwtError::Verification("invalid Ed25519 signature".into()))
+    if !sig.verify(pubkey.as_ref(), message) {
+        return Err(JwtError::Verification("invalid Ed25519 signature".into()));
+    }
+
+    Ok(())
 }
 
 /// Verify an EIP191K (EIP-191 + secp256k1) signature.

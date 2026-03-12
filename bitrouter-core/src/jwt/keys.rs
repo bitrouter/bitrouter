@@ -11,9 +11,9 @@ use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use solana_keypair::{Keypair as SolanaKeypair, Signer as SolanaSigner};
+use solana_pubkey::Pubkey;
 
 use crate::jwt::JwtError;
 use crate::jwt::chain::{Caip10, Chain};
@@ -150,13 +150,10 @@ impl MasterKeypair {
 
 // ── Verification helpers (no private key needed) ──────────────
 
-/// Decode a base58-encoded Solana public key into an Ed25519 `VerifyingKey`.
-pub fn decode_solana_pubkey(b58: &str) -> Result<VerifyingKey, JwtError> {
-    let bytes = bs58::decode(b58)
-        .into_vec()
-        .map_err(|_| JwtError::InvalidPublicKey)?;
-    let bytes: [u8; 32] = bytes.try_into().map_err(|_| JwtError::InvalidPublicKey)?;
-    VerifyingKey::from_bytes(&bytes).map_err(|_| JwtError::InvalidPublicKey)
+/// Decode a base58-encoded Solana public key into a `Pubkey`.
+pub fn decode_solana_pubkey(b58: &str) -> Result<Pubkey, JwtError> {
+    b58.parse::<Pubkey>()
+        .map_err(|_| JwtError::InvalidPublicKey)
 }
 
 /// JSON-serializable format for the master key file.
@@ -240,9 +237,8 @@ mod tests {
     fn decode_solana_pubkey_roundtrip() {
         let kp = MasterKeypair::generate();
         let b58 = kp.solana_pubkey_b58();
-        let vk = decode_solana_pubkey(&b58).expect("decode");
-        // Re-encode the decoded public key bytes as base58 and compare.
-        assert_eq!(bs58::encode(vk.as_bytes()).into_string(), b58);
+        let pk = decode_solana_pubkey(&b58).expect("decode");
+        assert_eq!(bs58::encode(pk.to_bytes()).into_string(), b58);
     }
 
     #[test]
