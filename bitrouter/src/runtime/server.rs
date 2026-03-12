@@ -3,6 +3,7 @@ use std::sync::Arc;
 use bitrouter_api::router::{anthropic, google, openai, routes};
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::{model_router::LanguageModelRouter, routing_table::RoutingTable};
+use bitrouter_guardrails::{GuardedRouter, Guardrail};
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
@@ -38,6 +39,16 @@ where
     pub async fn serve(self) -> Result<()> {
         let addr = self.config.server.listen;
 
+        // Build guardrail engine from config and wrap the model router.
+        let guardrail = Arc::new(Guardrail::new(self.config.guardrails.clone()));
+        let guarded_router = Arc::new(GuardedRouter::new(self.router, guardrail.clone()));
+
+        if guardrail.is_disabled() {
+            tracing::info!("guardrails disabled");
+        } else {
+            tracing::info!("guardrails enabled");
+        }
+
         // Build JWT auth context.
         let auth_ctx = Arc::new(JwtAuthContext::new(
             self.db.as_ref().map(|db| db.as_ref().clone()),
@@ -51,19 +62,29 @@ where
         let route_list = routes::routes_filter(self.table.clone());
 
         // Model API routes — gated by protocol-appropriate auth.
+        // All routes use the guarded router for guardrail enforcement.
         let chat = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
-            openai::chat::filters::chat_completions_filter(self.table.clone(), self.router.clone()),
+            openai::chat::filters::chat_completions_filter(
+                self.table.clone(),
+                guarded_router.clone(),
+            ),
         );
         let messages = auth_gate(auth::anthropic_auth(auth_ctx.clone())).and(
-            anthropic::messages::filters::messages_filter(self.table.clone(), self.router.clone()),
+            anthropic::messages::filters::messages_filter(
+                self.table.clone(),
+                guarded_router.clone(),
+            ),
         );
         let responses = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
-            openai::responses::filters::responses_filter(self.table.clone(), self.router.clone()),
+            openai::responses::filters::responses_filter(
+                self.table.clone(),
+                guarded_router.clone(),
+            ),
         );
         let generate_content = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
             google::generate_content::filters::generate_content_filter(
                 self.table.clone(),
-                self.router.clone(),
+                guarded_router.clone(),
             ),
         );
 

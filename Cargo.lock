@@ -885,6 +885,7 @@ dependencies = [
  "bitrouter-config",
  "bitrouter-core",
  "bitrouter-google",
+ "bitrouter-guardrails",
  "bitrouter-openai",
  "clap",
  "crossterm",
@@ -968,6 +969,7 @@ name = "bitrouter-config"
 version = "0.5.0"
 dependencies = [
  "bitrouter-core",
+ "bitrouter-guardrails",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1014,6 +1016,19 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+]
+
+[[package]]
+name = "bitrouter-guardrails"
+version = "0.5.0"
+dependencies = [
+ "bitrouter-core",
+ "futures-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tracing",
 ]
 
 [[package]]
