@@ -11,9 +11,9 @@ use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
+use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
+use solana_keypair::{Keypair as SolanaKeypair, Signer as SolanaSigner};
 
 use crate::jwt::JwtError;
 use crate::jwt::chain::{Caip10, Chain};
@@ -21,8 +21,8 @@ use crate::jwt::chain::{Caip10, Chain};
 /// A master keypair for signing BitRouter JWTs across chains.
 ///
 /// Stores a 32-byte seed that deterministically derives:
-/// - Ed25519 keypair (Solana)
-/// - secp256k1 keypair (EVM)
+/// - Ed25519 keypair (Solana) via `solana-keypair`
+/// - secp256k1 keypair (EVM) via `alloy-signer-local`
 #[derive(Clone)]
 pub struct MasterKeypair {
     seed: [u8; 32],
@@ -31,9 +31,8 @@ pub struct MasterKeypair {
 impl MasterKeypair {
     /// Generate a new random 32-byte seed.
     pub fn generate() -> Self {
-        let signing_key = SigningKey::generate(&mut OsRng);
         Self {
-            seed: signing_key.to_bytes(),
+            seed: rand::random(),
         }
     }
 
@@ -49,19 +48,14 @@ impl MasterKeypair {
 
     // ── Ed25519 (Solana) ──────────────────────────────────────
 
-    /// Derive the Ed25519 signing key from the seed.
-    pub fn ed25519_signing_key(&self) -> SigningKey {
-        SigningKey::from_bytes(&self.seed)
-    }
-
-    /// Derive the Ed25519 verifying (public) key.
-    pub fn ed25519_verifying_key(&self) -> VerifyingKey {
-        self.ed25519_signing_key().verifying_key()
+    /// Build a Solana `Keypair` from this seed.
+    fn solana_keypair(&self) -> SolanaKeypair {
+        SolanaKeypair::new_from_array(self.seed)
     }
 
     /// Solana public key as a base58-encoded string.
     pub fn solana_pubkey_b58(&self) -> String {
-        bs58::encode(self.ed25519_verifying_key().as_bytes()).into_string()
+        self.solana_keypair().pubkey().to_string()
     }
 
     // ── secp256k1 (EVM) ───────────────────────────────────────
@@ -107,13 +101,14 @@ impl MasterKeypair {
 
     // ── Signing helpers ───────────────────────────────────────
 
-    /// Sign a byte slice using Ed25519 (Solana / SOL_EDDSA).
+    /// Sign a byte slice using Ed25519 (Solana / SOL_EDDSA) via the Solana SDK.
     ///
     /// Returns the 64-byte Ed25519 signature.
     pub fn sign_ed25519(&self, message: &[u8]) -> Vec<u8> {
-        use ed25519_dalek::Signer;
-        let key = self.ed25519_signing_key();
-        key.sign(message).to_vec()
+        self.solana_keypair()
+            .sign_message(message)
+            .as_ref()
+            .to_vec()
     }
 
     /// Sign a byte slice using EIP-191 prefixed secp256k1 (EVM / EIP191K).
@@ -246,7 +241,8 @@ mod tests {
         let kp = MasterKeypair::generate();
         let b58 = kp.solana_pubkey_b58();
         let vk = decode_solana_pubkey(&b58).expect("decode");
-        assert_eq!(vk, kp.ed25519_verifying_key());
+        // Re-encode the decoded public key bytes as base58 and compare.
+        assert_eq!(bs58::encode(vk.as_bytes()).into_string(), b58);
     }
 
     #[test]

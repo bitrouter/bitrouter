@@ -53,7 +53,8 @@ impl<'db> AccountService<'db> {
         let now = Utc::now().naive_utc();
         // Extract the address portion from CAIP-10 (last segment after ':').
         let addr = pubkey.rsplit(':').next().unwrap_or(pubkey);
-        let suffix = &addr[..16.min(addr.len())];
+        let suffix_len = 16.min(addr.len());
+        let suffix = &addr[addr.len() - suffix_len..];
         let name = format!("account-{suffix}");
         let model = account::ActiveModel {
             id: Set(Uuid::new_v4()),
