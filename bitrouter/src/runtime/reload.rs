@@ -82,13 +82,23 @@ impl RoutingTable for ReloadableTable {
 /// [`Router`] can be replaced at runtime when configuration changes.
 pub struct ReloadableRouter {
     inner: RwLock<Router>,
+    /// Shared HTTP client reused across reloads to preserve connection
+    /// pool state.
+    client: reqwest::Client,
 }
 
 impl ReloadableRouter {
     pub fn new(router: Router) -> Self {
+        let client = reqwest::Client::new();
         Self {
             inner: RwLock::new(router),
+            client,
         }
+    }
+
+    /// The shared HTTP client used by the inner router.
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
     }
 
     /// Replace the inner router. Acquires a write lock, blocking readers
@@ -129,7 +139,7 @@ pub fn reload_config(
         .map_err(|e| format!("failed to load config: {e}"))?;
 
     let new_table = ConfigRoutingTable::new(config.providers.clone(), config.models.clone());
-    let new_router = Router::new(reqwest::Client::new(), config.providers);
+    let new_router = Router::new(router.client().clone(), config.providers);
 
     table.swap(new_table);
     router.swap(new_router);
@@ -149,7 +159,7 @@ pub async fn listen_for_reload(
 ) {
     use tokio::signal::unix::{SignalKind, signal};
 
-    let mut hup = match signal(SignalKind::hangup()) {
+    let mut sighup_stream = match signal(SignalKind::hangup()) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("failed to register SIGHUP handler: {e}");
@@ -157,7 +167,7 @@ pub async fn listen_for_reload(
         }
     };
 
-    while hup.recv().await.is_some() {
+    while sighup_stream.recv().await.is_some() {
         tracing::info!("SIGHUP received — reloading configuration");
         match reload_config(&paths, &table, &router) {
             Ok(()) => tracing::info!("configuration reloaded successfully"),
