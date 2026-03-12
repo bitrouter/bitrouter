@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bitrouter_api::metrics::MetricsStore;
 use bitrouter_api::router::{anthropic, google, openai, routes};
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::{model_router::LanguageModelRouter, routing_table::RoutingTable};
@@ -43,6 +44,9 @@ where
             self.db.as_ref().map(|db| db.as_ref().clone()),
         ));
 
+        // Shared in-memory metrics store.
+        let metrics = Arc::new(MetricsStore::new());
+
         let health = warp::path("health")
             .and(warp::get())
             .map(|| warp::reply::json(&serde_json::json!({ "status": "ok" })));
@@ -50,20 +54,36 @@ where
         // Route listing — no auth required.
         let route_list = routes::routes_filter(self.table.clone());
 
+        // Metrics endpoint — no auth required.
+        let metrics_endpoint = bitrouter_api::router::metrics::metrics_filter(metrics.clone());
+
         // Model API routes — gated by protocol-appropriate auth.
         let chat = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
-            openai::chat::filters::chat_completions_filter(self.table.clone(), self.router.clone()),
+            openai::chat::filters::chat_completions_filter(
+                self.table.clone(),
+                self.router.clone(),
+                metrics.clone(),
+            ),
         );
         let messages = auth_gate(auth::anthropic_auth(auth_ctx.clone())).and(
-            anthropic::messages::filters::messages_filter(self.table.clone(), self.router.clone()),
+            anthropic::messages::filters::messages_filter(
+                self.table.clone(),
+                self.router.clone(),
+                metrics.clone(),
+            ),
         );
         let responses = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
-            openai::responses::filters::responses_filter(self.table.clone(), self.router.clone()),
+            openai::responses::filters::responses_filter(
+                self.table.clone(),
+                self.router.clone(),
+                metrics.clone(),
+            ),
         );
         let generate_content = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
             google::generate_content::filters::generate_content_filter(
                 self.table.clone(),
                 self.router.clone(),
+                metrics.clone(),
             ),
         );
 
@@ -78,6 +98,7 @@ where
 
             let all = health
                 .or(route_list)
+                .or(metrics_endpoint)
                 .or(chat)
                 .or(messages)
                 .or(responses)
@@ -96,6 +117,7 @@ where
         } else {
             let all = health
                 .or(route_list)
+                .or(metrics_endpoint)
                 .or(chat)
                 .or(messages)
                 .or(responses)

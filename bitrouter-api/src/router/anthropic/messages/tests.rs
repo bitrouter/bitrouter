@@ -22,6 +22,8 @@ use std::collections::HashMap;
 
 use super::filters::messages_filter;
 
+use crate::metrics::MetricsStore;
+
 // ── Mock implementations ────────────────────────────────────────────────────
 
 struct MockTable;
@@ -164,7 +166,8 @@ fn parse_sse_body(body: &[u8]) -> Vec<(Option<String>, String)> {
 async fn messages_generate() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "claude-3-5-sonnet-20241022",
@@ -196,7 +199,8 @@ async fn messages_generate() {
 async fn messages_with_system() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "claude-3-5-sonnet-20241022",
@@ -222,7 +226,8 @@ async fn messages_with_system() {
 async fn messages_streaming_sends_sse_events() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "claude-3-5-sonnet-20241022",
@@ -275,7 +280,8 @@ async fn messages_streaming_sends_sse_events() {
 async fn messages_wrong_method() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics);
 
     let res = warp::test::request()
         .method("GET")
@@ -290,7 +296,8 @@ async fn messages_wrong_method() {
 async fn messages_missing_max_tokens() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics);
 
     // Anthropic requires max_tokens
     let body = serde_json::json!({

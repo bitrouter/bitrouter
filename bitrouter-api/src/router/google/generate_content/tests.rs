@@ -22,6 +22,8 @@ use std::collections::HashMap;
 
 use super::filters::generate_content_filter;
 
+use crate::metrics::MetricsStore;
+
 // ── Mock implementations ────────────────────────────────────────────────────
 
 struct MockTable;
@@ -164,7 +166,8 @@ fn parse_sse_body(body: &[u8]) -> Vec<(Option<String>, String)> {
 async fn generate_content() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
@@ -198,7 +201,8 @@ async fn generate_content() {
 async fn generate_content_with_system() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
@@ -228,7 +232,8 @@ async fn generate_content_with_system() {
 async fn generate_content_streaming_sends_sse_events() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
@@ -274,7 +279,8 @@ async fn generate_content_streaming_sends_sse_events() {
 async fn generate_content_wrong_method() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics);
 
     let res = warp::test::request()
         .method("GET")
@@ -289,7 +295,8 @@ async fn generate_content_wrong_method() {
 async fn generate_content_stream_via_path() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics);
 
     // Stream indicated via path (:streamGenerateContent) without stream field in body
     let body = serde_json::json!({

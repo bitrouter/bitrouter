@@ -1,6 +1,7 @@
 //! Warp filters for Google Generative AI compatible endpoints.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use bitrouter_core::{
     models::language::language_model::LanguageModel,
@@ -9,6 +10,7 @@ use bitrouter_core::{
 use warp::Filter;
 
 use crate::error::BitrouterRejection;
+use crate::metrics::{MetricsStore, RequestMetrics};
 
 use super::{convert, types::GenerateContentRequest};
 
@@ -21,6 +23,7 @@ use super::{convert, types::GenerateContentRequest};
 pub fn generate_content_filter<T, R>(
     table: Arc<T>,
     router: Arc<R>,
+    metrics: Arc<MetricsStore>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
     T: RoutingTable + Send + Sync + 'static,
@@ -31,6 +34,7 @@ where
         .and(warp::body::json::<GenerateContentRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
+        .and(warp::any().map(move || metrics.clone()))
         .and_then(handle_generate_content)
 }
 
@@ -39,6 +43,7 @@ async fn handle_generate_content<T, R>(
     request: GenerateContentRequest,
     table: Arc<T>,
     router: Arc<R>,
+    metrics: Arc<MetricsStore>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
 where
     T: RoutingTable + Send + Sync + 'static,
@@ -67,6 +72,8 @@ where
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
+    let endpoint = format!("{}:{}", target.provider_name, target.model_id);
+
     let model = router
         .route_model(target)
         .await
@@ -75,25 +82,51 @@ where
     let model_id = model.model_id().to_owned();
     let options = convert::to_call_options(request);
 
+    let start = Instant::now();
+
     if is_stream {
-        handle_stream(&model, &model_id, options).await
+        let result = handle_stream(&model, &model_id, options).await;
+        let latency_ms = start.elapsed().as_millis() as u64;
+        metrics.record(RequestMetrics {
+            route: incoming_model,
+            endpoint,
+            latency_ms,
+            is_error: result.is_err(),
+            input_tokens: None,
+            output_tokens: None,
+        });
+        result
     } else {
-        handle_generate(&model, &model_id, options).await
+        let gen_result = model.generate(options).await;
+        let latency_ms = start.elapsed().as_millis() as u64;
+        match gen_result {
+            Ok(result) => {
+                let input_tokens = result.usage.input_tokens.total;
+                let output_tokens = result.usage.output_tokens.total;
+                metrics.record(RequestMetrics {
+                    route: incoming_model,
+                    endpoint,
+                    latency_ms,
+                    is_error: false,
+                    input_tokens,
+                    output_tokens,
+                });
+                let response = convert::from_generate_result(&model_id, result);
+                Ok(Box::new(warp::reply::json(&response)))
+            }
+            Err(e) => {
+                metrics.record(RequestMetrics {
+                    route: incoming_model,
+                    endpoint,
+                    latency_ms,
+                    is_error: true,
+                    input_tokens: None,
+                    output_tokens: None,
+                });
+                Err(warp::reject::custom(BitrouterRejection(e)))
+            }
+        }
     }
-}
-
-async fn handle_generate(
-    model: &(impl LanguageModel + ?Sized),
-    model_id: &str,
-    options: bitrouter_core::models::language::call_options::LanguageModelCallOptions,
-) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-    let result = model
-        .generate(options)
-        .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
-    let response = convert::from_generate_result(model_id, result);
-    Ok(Box::new(warp::reply::json(&response)))
 }
 
 async fn handle_stream(

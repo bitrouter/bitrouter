@@ -21,6 +21,8 @@ use std::collections::HashMap;
 
 use super::filters::chat_completions_filter;
 
+use crate::metrics::MetricsStore;
+
 // ── Mock implementations ────────────────────────────────────────────────────
 
 struct MockTable;
@@ -138,7 +140,8 @@ impl LanguageModel for MockModel {
 async fn chat_completions_generate() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = chat_completions_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = chat_completions_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "test-model",
@@ -170,7 +173,8 @@ async fn chat_completions_generate() {
 async fn chat_completions_wrong_method() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = chat_completions_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = chat_completions_filter(table, router, metrics);
 
     let res = warp::test::request()
         .method("GET")
@@ -185,7 +189,8 @@ async fn chat_completions_wrong_method() {
 async fn chat_completions_wrong_path() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = chat_completions_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = chat_completions_filter(table, router, metrics);
 
     let res = warp::test::request()
         .method("POST")
@@ -201,7 +206,8 @@ async fn chat_completions_wrong_path() {
 async fn chat_completions_system_and_user() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = chat_completions_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = chat_completions_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "test-model",
