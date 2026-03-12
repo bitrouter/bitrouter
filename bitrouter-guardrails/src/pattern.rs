@@ -1,5 +1,7 @@
 use regex::Regex;
 
+use crate::config::{CustomPatternDef, PatternDirection};
+
 /// Unique identifier for a built-in pattern.
 ///
 /// Each variant corresponds to a category of sensitive content that the
@@ -29,12 +31,25 @@ pub enum PatternId {
     SuspiciousCommands,
 }
 
-/// A compiled pattern with its regex and human-readable description.
+/// A compiled built-in pattern with its regex and human-readable description.
 #[derive(Debug, Clone)]
 pub struct CompiledPattern {
     pub id: PatternId,
     pub description: &'static str,
     pub regex: Regex,
+}
+
+/// A compiled user-defined custom pattern.
+#[derive(Debug, Clone)]
+pub struct CustomCompiledPattern {
+    /// The user-chosen name for this pattern.
+    pub name: String,
+    /// Human-readable description (generated from the name).
+    pub description: String,
+    /// The compiled regex.
+    pub regex: Regex,
+    /// Which direction(s) this pattern applies to.
+    pub direction: PatternDirection,
 }
 
 /// Returns all built-in patterns pre-compiled.
@@ -150,6 +165,30 @@ pub fn upgoing_pattern_ids() -> &'static [PatternId] {
 /// Returns the set of pattern IDs considered downgoing (inbound) patterns.
 pub fn downgoing_pattern_ids() -> &'static [PatternId] {
     &[PatternId::SuspiciousCommands]
+}
+
+/// Compile user-defined custom patterns from config. Invalid regexes are
+/// logged and skipped.
+pub fn compile_custom_patterns(defs: &[CustomPatternDef]) -> Vec<CustomCompiledPattern> {
+    defs.iter()
+        .filter_map(|def| match Regex::new(&def.regex) {
+            Ok(regex) => Some(CustomCompiledPattern {
+                name: def.name.clone(),
+                description: format!("custom pattern '{}'", def.name),
+                regex,
+                direction: def.direction,
+            }),
+            Err(e) => {
+                tracing::error!(
+                    name = %def.name,
+                    regex = %def.regex,
+                    error = %e,
+                    "failed to compile custom guardrail pattern — skipping"
+                );
+                None
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -307,5 +346,42 @@ mod tests {
             // Each pattern should have a non-empty description
             assert!(!p.description.is_empty());
         }
+    }
+
+    #[test]
+    fn compile_custom_patterns_valid() {
+        let defs = vec![CustomPatternDef {
+            name: "my_token".to_owned(),
+            regex: r"myapp_[A-Za-z0-9]{32}".to_owned(),
+            direction: PatternDirection::Upgoing,
+        }];
+        let compiled = compile_custom_patterns(&defs);
+        assert_eq!(compiled.len(), 1);
+        assert_eq!(compiled[0].name, "my_token");
+        assert_eq!(compiled[0].direction, PatternDirection::Upgoing);
+        assert!(
+            compiled[0]
+                .regex
+                .is_match("myapp_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH")
+        );
+    }
+
+    #[test]
+    fn compile_custom_patterns_invalid_regex_skipped() {
+        let defs = vec![
+            CustomPatternDef {
+                name: "good".to_owned(),
+                regex: r"abc".to_owned(),
+                direction: PatternDirection::Upgoing,
+            },
+            CustomPatternDef {
+                name: "bad".to_owned(),
+                regex: r"[invalid".to_owned(),
+                direction: PatternDirection::Upgoing,
+            },
+        ];
+        let compiled = compile_custom_patterns(&defs);
+        assert_eq!(compiled.len(), 1);
+        assert_eq!(compiled[0].name, "good");
     }
 }

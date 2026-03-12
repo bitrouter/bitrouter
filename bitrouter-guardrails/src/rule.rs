@@ -18,10 +18,12 @@ pub enum Action {
 /// A single guardrail violation detected during inspection.
 #[derive(Debug, Clone)]
 pub struct Violation {
-    /// The pattern that triggered this violation.
-    pub pattern_id: crate::pattern::PatternId,
+    /// The built-in pattern that triggered this violation (if any).
+    pub pattern_id: Option<crate::pattern::PatternId>,
+    /// The custom pattern name that triggered this violation (if any).
+    pub custom_name: Option<String>,
     /// Human-readable description of what was detected.
-    pub description: &'static str,
+    pub description: String,
     /// The action that was applied to this violation.
     pub action: Action,
     /// The matched substring (only populated for `Warn` and `Block`; empty for
@@ -68,8 +70,9 @@ mod tests {
     fn inspection_result_is_not_clean_with_violations() {
         let result = InspectionResult {
             violations: vec![Violation {
-                pattern_id: crate::pattern::PatternId::ApiKeys,
-                description: "API keys from common providers",
+                pattern_id: Some(crate::pattern::PatternId::ApiKeys),
+                custom_name: None,
+                description: "API keys from common providers".to_owned(),
                 action: Action::Warn,
                 matched: "sk-abc123".to_owned(),
             }],
