@@ -16,6 +16,7 @@ BitRouter is organized as a set of focused crates:
 | `bitrouter-openai`    | OpenAI-compatible language model adapters                                                                                                         |
 | `bitrouter-anthropic` | Anthropic Messages adapter                                                                                                                        |
 | `bitrouter-google`    | Google Generative AI adapter                                                                                                                      |
+| `bitrouter-guardrails`| Local firewall for AI agent traffic — pattern-based content inspection with warn, redact, and block actions                                       |
 | `bitrouter-tui`       | Terminal UI used by the default interactive `bitrouter` flow                                                                                      |
 
 ## Request Flow
