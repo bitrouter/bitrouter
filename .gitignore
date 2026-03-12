@@ -19,3 +19,6 @@ target
 # CLI generated
 logs
 run
+
+# Temporary directory
+temp
