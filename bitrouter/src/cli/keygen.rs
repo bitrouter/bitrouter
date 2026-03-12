@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use bitrouter_core::jwt::chain::Chain;
 use bitrouter_core::jwt::claims::{BitrouterClaims, BudgetRange, BudgetScope, TokenScope};
 use bitrouter_core::jwt::token;
 
@@ -11,6 +12,7 @@ use crate::cli::account::load_active_keypair;
 
 /// Parsed keygen options (from CLI flags).
 pub struct KeygenOpts {
+    pub chain: String,
     pub scope: TokenScope,
     pub exp: Option<String>,
     pub models: Option<Vec<String>>,
@@ -23,7 +25,11 @@ pub struct KeygenOpts {
 /// Run the `keygen` subcommand.
 pub fn run(keys_dir: &Path, opts: KeygenOpts) -> Result<(), String> {
     let (prefix, kp) = load_active_keypair(keys_dir)?;
-    let pubkey = kp.public_key_b64();
+
+    let chain = parse_chain(&opts.chain)?;
+    let caip10 = kp
+        .caip10(&chain)
+        .map_err(|e| format!("failed to derive CAIP-10 identity: {e}"))?;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -47,7 +53,8 @@ pub fn run(keys_dir: &Path, opts: KeygenOpts) -> Result<(), String> {
         .transpose()?;
 
     let claims = BitrouterClaims {
-        iss: pubkey,
+        iss: caip10.format(),
+        chain: chain.caip2(),
         iat: Some(now),
         exp,
         scope: opts.scope,
@@ -57,8 +64,7 @@ pub fn run(keys_dir: &Path, opts: KeygenOpts) -> Result<(), String> {
         budget_range,
     };
 
-    let jwt =
-        token::sign(&claims, kp.signing_key()).map_err(|e| format!("failed to sign JWT: {e}"))?;
+    let jwt = token::sign(&claims, &kp).map_err(|e| format!("failed to sign JWT: {e}"))?;
 
     // Save to disk if a name was provided.
     if let Some(ref name) = opts.name {
@@ -75,6 +81,17 @@ pub fn run(keys_dir: &Path, opts: KeygenOpts) -> Result<(), String> {
 
     println!("{jwt}");
     Ok(())
+}
+
+/// Parse a chain name into a [`Chain`].
+fn parse_chain(s: &str) -> Result<Chain, String> {
+    match s {
+        "solana" => Ok(Chain::solana_mainnet()),
+        "base" => Ok(Chain::base()),
+        other => Err(format!(
+            "unsupported chain \"{other}\" — use \"solana\" or \"base\""
+        )),
+    }
 }
 
 /// Parse an expiration string into an absolute UNIX timestamp.

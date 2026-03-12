@@ -9,7 +9,11 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [dependencies]
+alloy-primitives = { version = "1" }
+alloy-signer = { version = "1" }
+alloy-signer-local = { version = "1" }
 base64 = { version = "0.22" }
+bs58 = { version = "0.5" }
 dynosaur = "0.3.0"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 futures-core = { version = "0.3" }
@@ -19,5 +23,7 @@ regex = { version = "1.12" }
 schemars = { version = "1.2", default-features = false, features = ["std"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
+solana-keypair = { version = "2" }
+solana-signer = { version = "2" }
 thiserror = { version = "2.0" }
 tokio-util = { version = "0.7" }

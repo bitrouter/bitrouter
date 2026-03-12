@@ -23,7 +23,10 @@ pub fn run(keys_dir: &Path, generate: bool, list: bool, set: Option<String>) -> 
 fn generate_key(keys_dir: &Path) -> Result<(), String> {
     let kp = MasterKeypair::generate();
     let prefix = kp.public_key_prefix();
-    let pubkey = kp.public_key_b64();
+    let sol_addr = kp.solana_pubkey_b58();
+    let evm_addr = kp
+        .evm_address_string()
+        .map_err(|e| format!("failed to derive EVM address: {e}"))?;
 
     let key_dir = keys_dir.join(&prefix);
     fs::create_dir_all(&key_dir).map_err(|e| format!("failed to create key directory: {e}"))?;
@@ -41,8 +44,9 @@ fn generate_key(keys_dir: &Path) -> Result<(), String> {
     // Set as active.
     write_active(keys_dir, &prefix)?;
 
-    println!("Generated Ed25519 keypair");
-    println!("  pubkey:  {pubkey}");
+    println!("Generated web3 master key");
+    println!("  solana:  {sol_addr}");
+    println!("  evm:     {evm_addr}");
     println!("  prefix:  {prefix}");
     println!("  path:    {}", key_dir.display());
     println!("  active:  yes");
@@ -161,7 +165,7 @@ fn list_key_dirs(keys_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     Ok(dirs)
 }
 
-/// Load the full public key (b64) from a key directory's master.json.
+/// Load wallet addresses from a key directory's master.json.
 fn load_pubkey(key_dir: &Path) -> Result<String, String> {
     let data = fs::read_to_string(key_dir.join("master.json"))
         .map_err(|e| format!("failed to read master.json: {e}"))?;
@@ -169,7 +173,7 @@ fn load_pubkey(key_dir: &Path) -> Result<String, String> {
         serde_json::from_str(&data).map_err(|e| format!("invalid master.json: {e}"))?;
     let kp = MasterKeypair::from_json(&json)
         .map_err(|e| format!("invalid keypair in master.json: {e}"))?;
-    Ok(kp.public_key_b64())
+    Ok(kp.solana_pubkey_b58())
 }
 
 /// Load the active MasterKeypair from the keys directory.

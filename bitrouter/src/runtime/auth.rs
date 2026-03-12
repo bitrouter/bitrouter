@@ -26,7 +26,7 @@ use warp::Filter;
 use bitrouter_accounts::identity::{AccountId, Identity, Scope};
 use bitrouter_accounts::service::AccountService;
 use bitrouter_core::jwt::claims::TokenScope;
-use bitrouter_core::jwt::{keys as jwt_keys, token as jwt_token};
+use bitrouter_core::jwt::token as jwt_token;
 
 /// Shared auth state passed into filters.
 #[derive(Clone)]
@@ -102,31 +102,23 @@ pub fn any_credential() -> impl Filter<Extract = (String,), Error = warp::Reject
 /// Resolve a JWT credential string to an [`Identity`].
 ///
 /// Security-critical ordering:
-/// 1. Decode JWT (unverified) to extract `iss` (public key).
-/// 2. Verify Ed25519 signature — crypto only, no DB.
-/// 3. Check expiration.
-/// 4. Look up / auto-create account in DB.
-/// 5. Build Identity with account-relative scope.
+/// 1. Verify the JWT signature cryptographically (chain-aware: SOL_EDDSA or EIP191K).
+/// 2. Check expiration.
+/// 3. Look up / auto-create account in DB using CAIP-10 identity.
+/// 4. Build Identity with account-relative scope.
 async fn resolve_identity(
     credential: &str,
     ctx: &JwtAuthContext,
 ) -> Result<Identity, warp::Rejection> {
-    // 1. Decode unverified to extract the public key.
-    let unverified_claims = jwt_token::decode_unverified(credential)
-        .map_err(|_| warp::reject::custom(Unauthorized("malformed JWT")))?;
-
-    // 2. Verify signature using the public key from `iss`.
-    let verifying_key = jwt_keys::decode_public_key(&unverified_claims.iss)
-        .map_err(|_| warp::reject::custom(Unauthorized("invalid public key in JWT iss")))?;
-
-    let claims = jwt_token::verify(credential, &verifying_key)
+    // 1. Verify signature (detects algorithm from header, verifies against iss).
+    let claims = jwt_token::verify(credential)
         .map_err(|_| warp::reject::custom(Unauthorized("invalid JWT signature")))?;
 
-    // 3. Check expiration.
+    // 2. Check expiration.
     jwt_token::check_expiration(&claims)
         .map_err(|_| warp::reject::custom(Unauthorized("JWT expired")))?;
 
-    // 4. Resolve account from DB.
+    // 3. Resolve account from DB using CAIP-10 iss.
     let Some(ref db) = ctx.db else {
         return Err(warp::reject::custom(Unauthorized(
             "authentication requires a database",
@@ -145,7 +137,7 @@ async fn resolve_identity(
         )));
     };
 
-    // 5. Build identity with account-relative scope.
+    // 4. Build identity with account-relative scope.
     let scope = match claims.scope {
         TokenScope::Admin => Scope::Admin,
         TokenScope::Api => Scope::Api,
