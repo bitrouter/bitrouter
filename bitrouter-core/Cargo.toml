@@ -28,3 +28,7 @@ solana-signature = { version = "3", features = ["verify"] }
 solana-signer = { version = "3.0" }
 thiserror = { version = "2.0" }
 tokio-util = { version = "0.7" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+tokio-stream = { version = "0.1" }

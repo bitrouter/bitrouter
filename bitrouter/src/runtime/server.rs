@@ -3,6 +3,7 @@ use std::sync::Arc;
 use bitrouter_api::metrics::MetricsStore;
 use bitrouter_api::router::{anthropic, google, openai, routes};
 use bitrouter_config::BitrouterConfig;
+use bitrouter_core::hooks::HookedRouter;
 use bitrouter_core::routers::{model_router::LanguageModelRouter, routing_table::RoutingTable};
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
 use sea_orm::DatabaseConnection;
@@ -44,6 +45,12 @@ where
         let guardrail = Arc::new(Guardrail::new(self.config.guardrails.clone()));
         let guarded_router = Arc::new(GuardedRouter::new(self.router, guardrail.clone()));
 
+        // Wrap with generation hooks for side-effect observation (logging,
+        // token tracking, auditing). Hooks are invoked on borrowed core types
+        // after generate() and for each streaming part.
+        let hooks: Arc<[Arc<dyn bitrouter_core::hooks::GenerationHook>]> = Arc::from(Vec::new());
+        let hooked_router = Arc::new(HookedRouter::new(guarded_router, hooks));
+
         if guardrail.is_disabled() {
             tracing::info!("guardrails disabled");
         } else {
@@ -73,28 +80,28 @@ where
         let chat = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
             openai::chat::filters::chat_completions_filter(
                 self.table.clone(),
-                guarded_router.clone(),
+                hooked_router.clone(),
                 metrics.clone(),
             ),
         );
         let messages = auth_gate(auth::anthropic_auth(auth_ctx.clone())).and(
             anthropic::messages::filters::messages_filter(
                 self.table.clone(),
-                guarded_router.clone(),
+                hooked_router.clone(),
                 metrics.clone(),
             ),
         );
         let responses = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
             openai::responses::filters::responses_filter(
                 self.table.clone(),
-                guarded_router.clone(),
+                hooked_router.clone(),
                 metrics.clone(),
             ),
         );
         let generate_content = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
             google::generate_content::filters::generate_content_filter(
                 self.table.clone(),
-                guarded_router.clone(),
+                hooked_router.clone(),
                 metrics.clone(),
             ),
         );
