@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/bitrouter/bitrouter/compare/v0.4.0...v0.5.0)
+
+
+### ⛰️ Features
+
+- *(auth)* Web3 multi-chain wallet auth with CAIP-10 identity ([#72](https://github.com/bitrouter/bitrouter/pull/72)) - ([faeb05d](https://github.com/bitrouter/bitrouter/commit/faeb05da30c91ff8cdfcfc2bf566a90815940d4a))
+
+
 ## [0.4.0](https://github.com/bitrouter/bitrouter/compare/v0.3.0...v0.4.0)
 
 ### ⛰️ Features
