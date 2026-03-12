@@ -38,88 +38,69 @@ pub struct CompiledPattern {
 }
 
 /// Returns all built-in patterns pre-compiled.
+///
+/// Any pattern whose regex fails to compile (which should never happen with
+/// hardcoded strings) is silently skipped rather than panicking.
 pub fn builtin_patterns() -> Vec<CompiledPattern> {
-    vec![
-        // ── API keys ─────────────────────────────────────────────────
-        CompiledPattern {
-            id: PatternId::ApiKeys,
-            description: "API keys from common providers",
-            regex: Regex::new(concat!(
+    let defs: Vec<(PatternId, &str, &str)> = vec![
+        // ── Upgoing patterns ─────────────────────────────────────────
+        (
+            PatternId::ApiKeys,
+            "API keys from common providers",
+            concat!(
                 r"(?:",
-                // OpenAI
                 r"sk-[A-Za-z0-9_-]{20,}",
                 r"|",
-                // Anthropic
                 r"sk-ant-[A-Za-z0-9_-]{20,}",
                 r"|",
-                // AWS access key
                 r"AKIA[0-9A-Z]{16}",
                 r"|",
-                // GCP service account key
                 r"AIza[0-9A-Za-z_-]{35}",
                 r"|",
-                // GitHub PAT (classic / fine-grained)
                 r"gh[ps]_[A-Za-z0-9]{36,}",
                 r"|",
-                // Stripe
                 r"(?:sk|pk)_(?:test|live)_[A-Za-z0-9]{20,}",
                 r")",
-            ))
-            .unwrap_or_else(|e| unreachable!("builtin api_keys regex is invalid: {e}")),
-        },
-        // ── Private keys ─────────────────────────────────────────────
-        CompiledPattern {
-            id: PatternId::PrivateKeys,
-            description: "PEM-encoded private keys",
-            regex: Regex::new(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ED25519 )?PRIVATE KEY-----")
-                .unwrap_or_else(|e| unreachable!("builtin private_keys regex is invalid: {e}")),
-        },
-        // ── Credentials ──────────────────────────────────────────────
-        CompiledPattern {
-            id: PatternId::Credentials,
-            description: "Inline credentials and connection strings",
-            regex: Regex::new(concat!(
+            ),
+        ),
+        (
+            PatternId::PrivateKeys,
+            "PEM-encoded private keys",
+            r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ED25519 )?PRIVATE KEY-----",
+        ),
+        (
+            PatternId::Credentials,
+            "Inline credentials and connection strings",
+            concat!(
                 r"(?i:",
-                // password= / passwd= / secret=
                 r"(?:password|passwd|secret)\s*[=:]\s*\S+",
                 r"|",
-                // Basic auth header
                 r"basic\s+[A-Za-z0-9+/=]{10,}",
                 r"|",
-                // DB connection string with password
                 r"(?:postgres|mysql|mongodb)://[^:]+:[^@]+@",
                 r")",
-            ))
-            .unwrap_or_else(|e| unreachable!("builtin credentials regex is invalid: {e}")),
-        },
-        // ── PII: email addresses ─────────────────────────────────────
-        CompiledPattern {
-            id: PatternId::PiiEmails,
-            description: "Email addresses",
-            regex: Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-                .unwrap_or_else(|e| unreachable!("builtin pii_emails regex is invalid: {e}")),
-        },
-        // ── PII: phone numbers ───────────────────────────────────────
-        CompiledPattern {
-            id: PatternId::PiiPhoneNumbers,
-            description: "Phone numbers",
-            regex: Regex::new(r"(?:\+\d{1,3}[\s-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")
-                .unwrap_or_else(|e| unreachable!("builtin pii_phone regex is invalid: {e}")),
-        },
-        // ── IP addresses ─────────────────────────────────────────────
-        CompiledPattern {
-            id: PatternId::IpAddresses,
-            description: "IPv4 addresses (non-localhost)",
-            regex: Regex::new(
-                r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b",
-            )
-            .unwrap_or_else(|e| unreachable!("builtin ip_addresses regex is invalid: {e}")),
-        },
-        // ── Suspicious commands (downgoing) ──────────────────────────
-        CompiledPattern {
-            id: PatternId::SuspiciousCommands,
-            description: "Dangerous shell commands",
-            regex: Regex::new(concat!(
+            ),
+        ),
+        (
+            PatternId::PiiEmails,
+            "Email addresses",
+            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+        ),
+        (
+            PatternId::PiiPhoneNumbers,
+            "Phone numbers",
+            r"(?:\+\d{1,3}[\s-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}",
+        ),
+        (
+            PatternId::IpAddresses,
+            "IPv4 addresses (non-localhost)",
+            r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b",
+        ),
+        // ── Downgoing patterns ───────────────────────────────────────
+        (
+            PatternId::SuspiciousCommands,
+            "Dangerous shell commands",
+            concat!(
                 r"(?:",
                 r"rm\s+-rf\s+/",
                 r"|",
@@ -135,10 +116,23 @@ pub fn builtin_patterns() -> Vec<CompiledPattern> {
                 r"|",
                 r"wget\s+.*\|\s*(?:ba)?sh",
                 r")",
-            ))
-            .unwrap_or_else(|e| unreachable!("builtin suspicious_commands regex is invalid: {e}")),
-        },
-    ]
+            ),
+        ),
+    ];
+
+    defs.into_iter()
+        .filter_map(|(id, description, pattern)| match Regex::new(pattern) {
+            Ok(regex) => Some(CompiledPattern {
+                id,
+                description,
+                regex,
+            }),
+            Err(e) => {
+                tracing::error!(pattern_id = ?id, error = %e, "failed to compile builtin pattern — skipping");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Returns the set of pattern IDs considered upgoing (outbound) patterns.

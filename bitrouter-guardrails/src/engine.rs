@@ -585,16 +585,19 @@ mod tests {
         assert_eq!(violations.len(), 1);
 
         // The text in the prompt should have been redacted
-        if let LanguageModelMessage::User { content, .. } = &options.prompt[0] {
-            if let LanguageModelUserContent::Text { text, .. } = &content[0] {
-                assert!(text.contains(REDACTED_PLACEHOLDER));
-                assert!(!text.contains("sk-abc123"));
-            } else {
-                panic!("expected Text");
-            }
-        } else {
-            panic!("expected User");
-        }
+        assert!(matches!(
+            &options.prompt[0],
+            LanguageModelMessage::User { .. }
+        ));
+        let LanguageModelMessage::User { content, .. } = &options.prompt[0] else {
+            return;
+        };
+        assert!(matches!(&content[0], LanguageModelUserContent::Text { .. }));
+        let LanguageModelUserContent::Text { text, .. } = &content[0] else {
+            return;
+        };
+        assert!(text.contains(REDACTED_PLACEHOLDER));
+        assert!(!text.contains("sk-abc123"));
     }
 
     #[test]
