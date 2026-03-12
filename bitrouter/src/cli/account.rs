@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use bitrouter_core::jwt::keys::{MasterKeyJson, MasterKeypair};
+use bitrouter_core::auth::keys::{MasterKeyJson, MasterKeypair};
 
 /// Run the `account` subcommand.
 pub fn run(keys_dir: &Path, generate: bool, list: bool, set: Option<String>) -> Result<(), String> {
@@ -174,7 +174,7 @@ fn list_key_dirs(keys_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 ///
 /// Returns `(solana_caip10, evm_caip10)` strings for display.
 fn load_addresses(key_dir: &Path) -> Result<(String, String), String> {
-    use bitrouter_core::jwt::chain::Chain;
+    use bitrouter_core::auth::chain::Chain;
 
     let data = fs::read_to_string(key_dir.join("master.json"))
         .map_err(|e| format!("failed to read master.json: {e}"))?;

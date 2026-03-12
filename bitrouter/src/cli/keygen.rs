@@ -4,9 +4,9 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bitrouter_core::jwt::chain::Chain;
-use bitrouter_core::jwt::claims::{BitrouterClaims, BudgetRange, BudgetScope, TokenScope};
-use bitrouter_core::jwt::token;
+use bitrouter_core::auth::chain::Chain;
+use bitrouter_core::auth::claims::{BitrouterClaims, BudgetRange, BudgetScope, TokenScope};
+use bitrouter_core::auth::token;
 
 use crate::cli::account::load_active_keypair;
 
@@ -87,7 +87,7 @@ pub fn generate_local_admin_jwt(keys_dir: &Path) -> Result<String, String> {
 }
 
 fn sign_jwt(
-    kp: &bitrouter_core::jwt::keys::MasterKeypair,
+    kp: &bitrouter_core::auth::keys::MasterKeypair,
     opts: SignJwtOpts,
 ) -> Result<String, String> {
     let chain = parse_chain(&opts.chain_name)?;
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn sign_jwt_generates_admin_token_with_expiration() {
-        let kp = bitrouter_core::jwt::keys::MasterKeypair::generate();
+        let kp = bitrouter_core::auth::keys::MasterKeypair::generate();
         let exp = LOCAL_ADMIN_JWT_EXPIRATION.to_owned();
         let jwt = sign_jwt(
             &kp,
@@ -289,7 +289,7 @@ mod tests {
         );
         assert!(jwt.is_ok());
         if let Ok(jwt) = jwt {
-            let claims = bitrouter_core::jwt::token::decode_unverified(&jwt);
+            let claims = bitrouter_core::auth::token::decode_unverified(&jwt);
             assert!(claims.is_ok());
             if let Ok(claims) = claims {
                 assert_eq!(claims.scope, TokenScope::Admin);

@@ -7,7 +7,7 @@ mod tui;
 use std::path::PathBuf;
 
 use crate::runtime::{AppRuntime, PathOverrides, resolve_home};
-use bitrouter_core::jwt::claims::{BudgetScope, TokenScope};
+use bitrouter_core::auth::claims::{BudgetScope, TokenScope};
 use clap::{Parser, Subcommand};
 
 type DefaultRuntime = AppRuntime<

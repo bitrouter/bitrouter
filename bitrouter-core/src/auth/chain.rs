@@ -8,7 +8,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::jwt::JwtError;
+use crate::auth::JwtError;
 
 /// Solana mainnet genesis hash prefix (first 32 bytes, base58-encoded).
 const SOLANA_MAINNET_REF: &str = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";

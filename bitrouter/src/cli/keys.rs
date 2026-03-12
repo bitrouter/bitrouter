@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::Path;
 
-use bitrouter_core::jwt::claims::BitrouterClaims;
-use bitrouter_core::jwt::token;
+use bitrouter_core::auth::claims::BitrouterClaims;
+use bitrouter_core::auth::token;
 
 use crate::cli::account::load_active_keypair;
 
@@ -166,8 +166,8 @@ fn read_token_summary(path: &Path) -> String {
     };
 
     let scope = match claims.scope {
-        bitrouter_core::jwt::claims::TokenScope::Admin => "admin",
-        bitrouter_core::jwt::claims::TokenScope::Api => "api",
+        bitrouter_core::auth::claims::TokenScope::Admin => "admin",
+        bitrouter_core::auth::claims::TokenScope::Api => "api",
     };
 
     let exp_info = match claims.exp {
