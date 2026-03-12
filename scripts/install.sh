@@ -62,6 +62,25 @@ download_file() {
     fail "either curl or wget is required"
 }
 
+extract_tag_name() {
+    if have_cmd jq; then
+        jq -r '.tag_name // empty'
+        return
+    fi
+
+    if have_cmd python3; then
+        python3 -c 'import json, sys; print(json.load(sys.stdin).get("tag_name", ""))'
+        return
+    fi
+
+    if have_cmd python; then
+        python -c 'import json, sys; print(json.load(sys.stdin).get("tag_name", ""))'
+        return
+    fi
+
+    tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
 resolve_tag() {
     if [ -n "${BITROUTER_VERSION:-}" ]; then
         case "$BITROUTER_VERSION" in
@@ -77,7 +96,7 @@ resolve_tag() {
 
     latest_api_url=${BITROUTER_INSTALL_LATEST_API_URL:-"https://api.github.com/repos/${OWNER}/${REPO}/releases/latest"}
     release_json=$(download_text "$latest_api_url")
-    tag=$(printf '%s' "$release_json" | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    tag=$(printf '%s' "$release_json" | extract_tag_name)
 
     [ -n "$tag" ] || fail "failed to resolve the latest release tag"
     printf '%s\n' "$tag"
@@ -111,6 +130,13 @@ detect_target() {
                 libc="musl"
             elif [ -f /etc/alpine-release ]; then
                 libc="musl"
+            else
+                for loader in /lib/ld-musl-*.so.1 /lib64/ld-musl-*.so.1 /usr/lib/ld-musl-*.so.1; do
+                    if [ -e "$loader" ]; then
+                        libc="musl"
+                        break
+                    fi
+                done
             fi
             printf '%s-unknown-linux-%s\n' "$arch" "$libc"
             ;;
