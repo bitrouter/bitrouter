@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/bitrouter/bitrouter/compare/v0.5.0...v0.6.0)
+
+
+### ⛰️ Features
+
+- *(api)* Add per-route metrics endpoint ([#78](https://github.com/bitrouter/bitrouter/pull/78)) - ([4efc359](https://github.com/bitrouter/bitrouter/commit/4efc359f86fa48c54da8bcef640a766a4b9f14f5))
+- *(cli)* Automatic latest version check from GitHub releases ([#76](https://github.com/bitrouter/bitrouter/pull/76)) - ([5f43914](https://github.com/bitrouter/bitrouter/commit/5f43914c66bf011778ea9b732a36e71844b951c2))
+- *(core)* Implement hooked model ([#84](https://github.com/bitrouter/bitrouter/pull/84)) - ([712cbfd](https://github.com/bitrouter/bitrouter/commit/712cbfd8ab35a73362653f2bef8349c0df2a2540))
+- *(guardrail)* Implement guardrail and basic rules ([#77](https://github.com/bitrouter/bitrouter/pull/77)) - ([333a340](https://github.com/bitrouter/bitrouter/commit/333a340bcdbb8bdcff1962ea1e8238cc50508e92))
+
+
 ## [0.5.0](https://github.com/bitrouter/bitrouter/compare/v0.4.0...v0.5.0)
 
 

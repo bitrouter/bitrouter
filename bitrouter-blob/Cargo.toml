@@ -16,7 +16,7 @@ fs = ["tokio/fs"]
 # gcs = ["google-cloud-storage"]
 
 [dependencies]
-bitrouter-core = { path = "../bitrouter-core", version = "0.5" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.6" }
 tokio = { version = "1", features = ["io-util"] }
 
 [dev-dependencies]
