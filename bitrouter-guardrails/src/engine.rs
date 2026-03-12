@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use bitrouter_core::models::language::{
     call_options::LanguageModelCallOptions,
     content::LanguageModelContent,
@@ -35,9 +37,9 @@ impl Guardrail {
     pub fn new(config: GuardrailConfig) -> Self {
         let custom_patterns = compile_custom_patterns(&config.custom_patterns);
         Self {
+            config,
             patterns: builtin_patterns(),
             custom_patterns,
-            config,
         }
     }
 
@@ -103,7 +105,7 @@ impl Guardrail {
                 violations.push(Violation {
                     pattern_id: Some(pat.id),
                     custom_name: None,
-                    description: pat.description.to_owned(),
+                    description: Cow::Borrowed(pat.description),
                     action,
                     matched,
                 });
@@ -146,7 +148,7 @@ impl Guardrail {
                 violations.push(Violation {
                     pattern_id: None,
                     custom_name: Some(cpat.name.clone()),
-                    description: cpat.description.clone(),
+                    description: Cow::Owned(cpat.description.clone()),
                     action,
                     matched,
                 });
@@ -213,7 +215,7 @@ impl Guardrail {
                 violations.push(Violation {
                     pattern_id: Some(pat.id),
                     custom_name: None,
-                    description: pat.description.to_owned(),
+                    description: Cow::Borrowed(pat.description),
                     action,
                     matched,
                 });
@@ -256,7 +258,7 @@ impl Guardrail {
                 violations.push(Violation {
                     pattern_id: None,
                     custom_name: Some(cpat.name.clone()),
-                    description: cpat.description.clone(),
+                    description: Cow::Owned(cpat.description.clone()),
                     action,
                     matched,
                 });
@@ -521,12 +523,14 @@ impl Guardrail {
 
 /// Collect human-readable descriptions from block violations.
 fn violation_descriptions(violations: &[Violation]) -> String {
-    violations
-        .iter()
-        .filter(|v| v.action == Action::Block)
-        .map(|v| v.description.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
+    let mut result = String::new();
+    for v in violations.iter().filter(|v| v.action == Action::Block) {
+        if !result.is_empty() {
+            result.push_str(", ");
+        }
+        result.push_str(&v.description);
+    }
+    result
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

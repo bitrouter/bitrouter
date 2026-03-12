@@ -15,6 +15,8 @@ pub enum Action {
     Block,
 }
 
+use std::borrow::Cow;
+
 /// A single guardrail violation detected during inspection.
 #[derive(Debug, Clone)]
 pub struct Violation {
@@ -23,7 +25,7 @@ pub struct Violation {
     /// The custom pattern name that triggered this violation (if any).
     pub custom_name: Option<String>,
     /// Human-readable description of what was detected.
-    pub description: String,
+    pub description: Cow<'static, str>,
     /// The action that was applied to this violation.
     pub action: Action,
     /// The matched substring (only populated for `Warn` and `Block`; empty for
@@ -72,7 +74,7 @@ mod tests {
             violations: vec![Violation {
                 pattern_id: Some(crate::pattern::PatternId::ApiKeys),
                 custom_name: None,
-                description: "API keys from common providers".to_owned(),
+                description: Cow::Borrowed("API keys from common providers"),
                 action: Action::Warn,
                 matched: "sk-abc123".to_owned(),
             }],
