@@ -9,8 +9,9 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["tui", "sqlite", "postgres"]
+default = ["tui", "sqlite", "postgres", "hot-reload"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
+hot-reload = []
 sqlite = ["bitrouter-accounts/sqlite"]
 postgres = ["bitrouter-accounts/postgres"]
 mysql = ["bitrouter-accounts/mysql"]

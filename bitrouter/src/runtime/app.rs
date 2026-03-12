@@ -31,6 +31,7 @@ impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
         }
     }
 
+    #[cfg(not(feature = "hot-reload"))]
     pub async fn serve<M>(self, model_router: M) -> Result<()>
     where
         M: bitrouter_core::routers::model_router::LanguageModelRouter + Send + Sync + 'static,
@@ -67,10 +68,52 @@ impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
         println!("bitrouter daemon restarted (pid {pid})");
         Ok(())
     }
+
+    pub async fn reload(&self) -> Result<()> {
+        let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
+        dm.reload().await?;
+        println!("bitrouter daemon configuration reloaded");
+        Ok(())
+    }
 }
 
 /// Convenience constructors for the default `ConfigRoutingTable`.
 impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
+    /// Start the server with hot-reload support.
+    ///
+    /// Wraps the routing table and model router in [`RwLock`]-backed
+    /// wrappers so that configuration changes can be swapped in at
+    /// runtime (via SIGHUP on Unix) without restarting the process.
+    #[cfg(feature = "hot-reload")]
+    pub async fn serve(self, _model_router: crate::runtime::Router) -> Result<()> {
+        use crate::runtime::server::ServerPlan;
+
+        let reloadable_table = Arc::new(crate::runtime::reload::ReloadableTable::new(
+            self.routing_table,
+        ));
+        let reloadable_router = Arc::new(crate::runtime::reload::ReloadableRouter::new(
+            crate::runtime::Router::new(reqwest::Client::new(), self.config.providers.clone()),
+        ));
+
+        // On Unix, spawn a background task that listens for SIGHUP
+        // and reloads configuration in place.
+        #[cfg(unix)]
+        {
+            let paths = self.paths.clone();
+            let table_handle = reloadable_table.clone();
+            let router_handle = reloadable_router.clone();
+            tokio::spawn(async move {
+                crate::runtime::reload::listen_for_reload(paths, table_handle, router_handle).await;
+            });
+        }
+
+        let mut plan = ServerPlan::new(self.config, reloadable_table, reloadable_router);
+        if let Some(db) = self.db {
+            plan = plan.with_db(db);
+        }
+        plan.serve().await
+    }
+
     /// Load config from resolved paths. The `.env` file (if it exists) is loaded
     /// automatically from `paths.env_file`.
     pub fn load(paths: RuntimePaths) -> Result<Self> {

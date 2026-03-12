@@ -4,6 +4,8 @@ pub mod daemon;
 pub mod error;
 pub mod migration;
 pub mod paths;
+#[cfg(feature = "hot-reload")]
+pub mod reload;
 pub mod router;
 pub mod server;
 

@@ -83,3 +83,14 @@ pub(crate) fn signal_kill(pid: u32) -> Result<()> {
     }
     Ok(())
 }
+
+/// Request a configuration reload.
+///
+/// Windows does not support SIGHUP, so hot-reload is not available via
+/// signal. The daemon must be restarted instead.
+pub(crate) fn signal_reload(_pid: u32) -> Result<()> {
+    Err(RuntimeError::Daemon(
+        "hot-reload via signal is not supported on Windows — use `bitrouter restart` instead"
+            .into(),
+    ))
+}

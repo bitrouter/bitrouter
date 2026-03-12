@@ -115,4 +115,22 @@ impl DaemonManager {
         }
         self.start().await
     }
+
+    /// Send a reload signal to the running daemon so it re-reads its
+    /// configuration file without restarting.
+    ///
+    /// On Unix this sends `SIGHUP`. The daemon's hot-reload listener picks
+    /// up the signal and swaps the routing table and model router in place.
+    pub async fn reload(&self) -> Result<()> {
+        let pid = match self.is_running()? {
+            Some(pid) => pid,
+            None => {
+                return Err(RuntimeError::Daemon("daemon is not running".into()));
+            }
+        };
+
+        platform::signal_reload(pid)?;
+        tracing::info!(pid, "reload signal sent");
+        Ok(())
+    }
 }

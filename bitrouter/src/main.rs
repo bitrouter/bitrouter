@@ -61,6 +61,8 @@ enum Command {
     Status,
     /// Restart the daemon
     Restart,
+    /// Hot-reload configuration without restarting the daemon
+    Reload,
 
     /// Manage local web3 account keypairs
     Account {
@@ -300,6 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Some(Command::Restart) => runtime.restart().await?,
+        Some(Command::Reload) => runtime.reload().await?,
         Some(
             Command::Init | Command::Account { .. } | Command::Keygen { .. } | Command::Keys { .. },
         ) => {

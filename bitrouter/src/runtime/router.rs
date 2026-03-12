@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 
 use bitrouter_config::{ApiProtocol, ProviderConfig};
 use bitrouter_core::{
@@ -72,8 +73,14 @@ impl Router {
     }
 }
 
-impl LanguageModelRouter for Router {
-    async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+impl Router {
+    /// Synchronous model routing logic, factored out for reuse by the
+    /// hot-reload wrapper which needs to call this under a `RwLock` guard
+    /// without crossing an `.await` boundary.
+    pub(crate) fn route_model_sync(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Box<DynLanguageModel<'static>>> {
         let provider = self.providers.get(&target.provider_name).ok_or_else(|| {
             BitrouterError::invalid_request(
                 None,
@@ -97,7 +104,7 @@ impl LanguageModelRouter for Router {
             ApiProtocol::Openai => {
                 let config = self.build_openai_config(provider)?;
                 let model = OpenAiChatCompletionsModel::with_client(
-                    target.model_id,
+                    target.model_id.clone(),
                     self.client.clone(),
                     config,
                 );
@@ -106,7 +113,7 @@ impl LanguageModelRouter for Router {
             ApiProtocol::Anthropic => {
                 let config = self.build_anthropic_config(provider)?;
                 let model = AnthropicMessagesModel::with_client(
-                    target.model_id,
+                    target.model_id.clone(),
                     self.client.clone(),
                     config,
                 );
@@ -115,13 +122,22 @@ impl LanguageModelRouter for Router {
             ApiProtocol::Google => {
                 let config = self.build_google_config(provider)?;
                 let model = GoogleGenerativeAiModel::with_client(
-                    target.model_id,
+                    target.model_id.clone(),
                     self.client.clone(),
                     config,
                 );
                 Ok(DynLanguageModel::new_box(model))
             }
         }
+    }
+}
+
+impl LanguageModelRouter for Router {
+    fn route_model(
+        &self,
+        target: RoutingTarget,
+    ) -> impl Future<Output = Result<Box<DynLanguageModel<'static>>>> + Send {
+        std::future::ready(self.route_model_sync(&target))
     }
 }
 
