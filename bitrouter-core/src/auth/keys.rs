@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use solana_keypair::{Keypair as SolanaKeypair, Signer as SolanaSigner};
 use solana_pubkey::Pubkey;
 
-use crate::jwt::JwtError;
-use crate::jwt::chain::{Caip10, Chain};
+use crate::auth::JwtError;
+use crate::auth::chain::{Caip10, Chain};
 
 /// A master keypair for signing BitRouter JWTs across chains.
 ///

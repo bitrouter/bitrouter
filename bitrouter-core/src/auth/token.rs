@@ -12,10 +12,10 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use solana_signature::Signature as SolanaSignature;
 
-use crate::jwt::JwtError;
-use crate::jwt::chain::{Caip10, JwtAlgorithm};
-use crate::jwt::claims::BitrouterClaims;
-use crate::jwt::keys::MasterKeypair;
+use crate::auth::JwtError;
+use crate::auth::chain::{Caip10, JwtAlgorithm};
+use crate::auth::claims::BitrouterClaims;
+use crate::auth::keys::MasterKeypair;
 
 /// Sign a set of claims into a JWT string using the master keypair.
 ///
@@ -173,7 +173,7 @@ fn decode_algorithm(header_dot_payload: &str) -> Result<JwtAlgorithm, JwtError> 
 
 /// Verify a SOL_EDDSA (Ed25519) signature.
 fn verify_sol_eddsa(message: &[u8], sig_bytes: &[u8], address_b58: &str) -> Result<(), JwtError> {
-    let pubkey = crate::jwt::keys::decode_solana_pubkey(address_b58)?;
+    let pubkey = crate::auth::keys::decode_solana_pubkey(address_b58)?;
 
     let sig = SolanaSignature::try_from(sig_bytes)
         .map_err(|_| JwtError::Verification("invalid Ed25519 signature length".into()))?;
@@ -215,9 +215,9 @@ fn verify_eip191k(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jwt::chain::Chain;
-    use crate::jwt::claims::TokenScope;
-    use crate::jwt::keys::MasterKeypair;
+    use crate::auth::chain::Chain;
+    use crate::auth::claims::TokenScope;
+    use crate::auth::keys::MasterKeypair;
 
     fn test_claims_solana(kp: &MasterKeypair) -> BitrouterClaims {
         let chain = Chain::solana_mainnet();

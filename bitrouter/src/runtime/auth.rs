@@ -25,8 +25,8 @@ use warp::Filter;
 
 use bitrouter_accounts::identity::{AccountId, Identity, Scope};
 use bitrouter_accounts::service::AccountService;
-use bitrouter_core::jwt::claims::TokenScope;
-use bitrouter_core::jwt::token as jwt_token;
+use bitrouter_core::auth::claims::TokenScope;
+use bitrouter_core::auth::token as jwt_token;
 
 /// Shared auth state passed into filters.
 #[derive(Clone)]
