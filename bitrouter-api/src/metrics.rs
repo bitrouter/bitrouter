@@ -37,7 +37,11 @@ use serde::Serialize;
 ///
 /// When this limit is reached the oldest half of samples are discarded to keep
 /// memory usage bounded while preserving recent data for percentile accuracy.
-const MAX_LATENCY_SAMPLES: usize = 100_000;
+///
+/// This value is intentionally conservative to avoid excessive memory usage in
+/// deployments with many routes/endpoints while still keeping enough samples
+/// for stable percentile estimates.
+const MAX_LATENCY_SAMPLES: usize = 10_000;
 
 // ── Public types ────────────────────────────────────────────────────────────
 
