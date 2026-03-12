@@ -18,6 +18,7 @@ changelog_include = [           # Include commits from all sub-crates in the bit
     "bitrouter-google",
     "bitrouter-config",
     "bitrouter-api",
+    "bitrouter-guardrails",
 ]
 git_tag_name = "v{{ version }}"     # Customize the git tag name (e.g. v0.1.5 instead of bitrouter-v0.1.5)
 git_release_name = "v{{ version }}" # Match the tag name for the GitHub release title
