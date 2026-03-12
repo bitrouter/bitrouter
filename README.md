@@ -20,6 +20,7 @@ As LLM agents grow more autonomous, humans can no longer hand-pick the best mode
 - **Streaming & non-streaming** — first-class support for both modes
 - **CLI + TUI observability** — monitor and control agent sessions in real time
 - **Smart routing** — cost and performance optimization via configurable routing tables
+- **Agent firewall** — inspect agent traffic with `bitrouter-guardrails` and warn, redact, or block risky content
 - **High-performance proxy** — single Rust binary, async-first, minimal overhead
 - **Tool calling** — unified tool use across providers
 
@@ -192,6 +193,42 @@ providers:
 ```
 
 The `derives` field inherits protocol handling from the named built-in provider, so any service with an OpenAI-compatible or Anthropic-compatible API works out of the box.
+
+## Agent firewall with `bitrouter-guardrails`
+
+BitRouter includes an agent firewall powered by the `bitrouter-guardrails`
+package. It wraps the model router and inspects content at the proxy layer
+before requests go upstream and before responses come back downstream.
+
+Guardrail rules are configured under the `guardrails` key in `bitrouter.yaml`:
+
+- `upgoing` applies to outbound traffic (`user/tool -> model`)
+- `downgoing` applies to inbound traffic (`model -> user/tool`)
+- actions can be `warn`, `redact`, or `block`
+- `disabled_patterns` turns off built-in detectors you do not want
+- `custom_patterns` adds your own regex-based firewall rules
+
+```yaml
+guardrails:
+  enabled: true
+  disabled_patterns:
+    - pii_phone_numbers
+  custom_patterns:
+    - name: internal_ticket
+      regex: "INC-[0-9]{6}"
+      direction: both
+  upgoing:
+    api_keys: redact
+    private_keys: block
+  downgoing:
+    suspicious_commands: block
+  custom_downgoing:
+    internal_ticket: warn
+```
+
+This lets you briefly define a local firewall policy for secrets, credentials,
+PII, or custom patterns without changing any application code. For more detail,
+see [`bitrouter-guardrails/README.md`](bitrouter-guardrails/README.md).
 
 ## Supported Providers
 
