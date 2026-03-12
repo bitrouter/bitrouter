@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bitrouter_core::{
+    hooks::{GenerationHook, HookedRouter},
     models::language::language_model::LanguageModel,
     routers::{model_router::LanguageModelRouter, routing_table::RoutingTable},
 };
@@ -36,6 +37,40 @@ where
         .and(warp::any().map(move || router.clone()))
         .and(warp::any().map(move || metrics.clone()))
         .and_then(handle_generate_content)
+}
+
+/// Like [`generate_content_filter`], but accepts a per-request hooks filter.
+///
+/// The `hooks_filter` runs on every incoming request and produces a
+/// [`GenerationHook`] slice that is attached to the model for that single
+/// request via [`HookedRouter`]. This allows callers to inject per-request
+/// context (e.g. billing, auditing) into the generation lifecycle without
+/// modifying the shared router.
+///
+/// When the hooks filter produces an empty slice the wrapper is zero-cost.
+pub fn generate_content_filter_with_hooks<T, R, H>(
+    table: Arc<T>,
+    router: Arc<R>,
+    metrics: Arc<MetricsStore>,
+    hooks_filter: H,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: RoutingTable + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+    H: Filter<Extract = (Arc<[Arc<dyn GenerationHook>]>,), Error = warp::Rejection>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    warp::path!("v1beta" / "models" / String)
+        .and(warp::post())
+        .and(warp::body::json::<GenerateContentRequest>())
+        .and(warp::any().map(move || table.clone()))
+        .and(warp::any().map(move || router.clone()))
+        .and(warp::any().map(move || metrics.clone()))
+        .and(hooks_filter)
+        .and_then(handle_generate_content_with_hooks)
 }
 
 async fn handle_generate_content<T, R>(
@@ -102,7 +137,7 @@ where
                     output_tokens,
                 );
                 let response = convert::from_generate_result(&model_id, result);
-                Ok(Box::new(warp::reply::json(&response)))
+                Ok(Box::new(warp::reply::json(&response)) as Box<dyn warp::Reply>)
             }
             Err(e) => {
                 metrics.record_outcome(incoming_model, endpoint, start, true);
@@ -110,6 +145,22 @@ where
             }
         }
     }
+}
+
+async fn handle_generate_content_with_hooks<T, R>(
+    model_action: String,
+    request: GenerateContentRequest,
+    table: Arc<T>,
+    router: Arc<R>,
+    metrics: Arc<MetricsStore>,
+    hooks: Arc<[Arc<dyn GenerationHook>]>,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection>
+where
+    T: RoutingTable + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
+    let hooked = Arc::new(HookedRouter::new(router, hooks));
+    handle_generate_content(model_action, request, table, hooked, metrics).await
 }
 
 async fn handle_stream(
