@@ -408,7 +408,7 @@ mod tests {
     use clap::error::ErrorKind;
 
     #[test]
-    fn serve_subcommand_still_parses() {
+    fn serve_subcommand_parses_correctly() {
         let cli = Cli::try_parse_from(["bitrouter", "serve"]).ok();
         assert!(cli.is_some());
         assert!(matches!(
