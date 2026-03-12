@@ -1,6 +1,7 @@
 //! Warp filters for OpenAI Chat Completions compatible endpoints.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use bitrouter_core::{
     models::language::language_model::LanguageModel,
@@ -9,6 +10,7 @@ use bitrouter_core::{
 use warp::Filter;
 
 use crate::error::{BadRequest, BitrouterRejection};
+use crate::metrics::{MetricsStore, format_endpoint};
 use crate::util::generate_id;
 
 use super::{convert, types::ChatCompletionRequest};
@@ -22,6 +24,7 @@ use super::{convert, types::ChatCompletionRequest};
 pub fn chat_completions_filter<T, R>(
     table: Arc<T>,
     router: Arc<R>,
+    metrics: Arc<MetricsStore>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
     T: RoutingTable + Send + Sync + 'static,
@@ -32,6 +35,7 @@ where
         .and(warp::body::json::<ChatCompletionRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
+        .and(warp::any().map(move || metrics.clone()))
         .and_then(handle_chat_completion)
 }
 
@@ -39,6 +43,7 @@ async fn handle_chat_completion<T, R>(
     request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
+    metrics: Arc<MetricsStore>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
 where
     T: RoutingTable + Send + Sync + 'static,
@@ -53,6 +58,8 @@ where
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
+    let endpoint = format_endpoint(&target.provider_name, &target.model_id);
+
     // Get the concrete model instance from the router.
     let model = router
         .route_model(target)
@@ -62,25 +69,34 @@ where
     let model_id = model.model_id().to_owned();
     let options = convert::to_call_options(request);
 
+    let start = Instant::now();
+
     if is_stream {
-        handle_stream(&model, &model_id, options).await
+        let result = handle_stream(&model, &model_id, options).await;
+        metrics.record_outcome(incoming_model, endpoint, start, result.is_err());
+        result
     } else {
-        handle_generate(&model, &model_id, options).await
+        let gen_result = model.generate(options).await;
+        match gen_result {
+            Ok(result) => {
+                let input_tokens = result.usage.input_tokens.total;
+                let output_tokens = result.usage.output_tokens.total;
+                metrics.record_success(
+                    incoming_model,
+                    endpoint,
+                    start,
+                    input_tokens,
+                    output_tokens,
+                );
+                let response = convert::from_generate_result(&model_id, result);
+                Ok(Box::new(warp::reply::json(&response)))
+            }
+            Err(e) => {
+                metrics.record_outcome(incoming_model, endpoint, start, true);
+                Err(warp::reject::custom(BitrouterRejection(e)))
+            }
+        }
     }
-}
-
-async fn handle_generate(
-    model: &(impl LanguageModel + ?Sized),
-    model_id: &str,
-    options: bitrouter_core::models::language::call_options::LanguageModelCallOptions,
-) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-    let result = model
-        .generate(options)
-        .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
-    let response = convert::from_generate_result(model_id, result);
-    Ok(Box::new(warp::reply::json(&response)))
 }
 
 async fn handle_stream(

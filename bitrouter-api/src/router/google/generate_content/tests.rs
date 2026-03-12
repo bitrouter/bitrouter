@@ -22,6 +22,8 @@ use std::collections::HashMap;
 
 use super::filters::generate_content_filter;
 
+use crate::metrics::MetricsStore;
+
 // ── Mock implementations ────────────────────────────────────────────────────
 
 struct MockTable;
@@ -164,7 +166,8 @@ fn parse_sse_body(body: &[u8]) -> Vec<(Option<String>, String)> {
 async fn generate_content() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics.clone());
 
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
@@ -192,13 +195,31 @@ async fn generate_content() {
     assert_eq!(json["usageMetadata"]["candidatesTokenCount"], 6);
     assert_eq!(json["usageMetadata"]["totalTokenCount"], 18);
     assert_eq!(json["modelVersion"], "gemini-2.0-flash");
+
+    // Verify metrics were recorded for the generate request.
+    let snap = metrics.snapshot();
+    let route = snap
+        .routes
+        .get("gemini-2.0-flash")
+        .expect("route should exist");
+    assert_eq!(route.total_requests, 1);
+    assert_eq!(route.total_errors, 0);
+    assert_eq!(route.avg_input_tokens, Some(12));
+    assert_eq!(route.avg_output_tokens, Some(6));
+    let ep = route
+        .by_endpoint
+        .get("mock:gemini-2.0-flash")
+        .expect("endpoint should exist");
+    assert_eq!(ep.total_requests, 1);
+    assert_eq!(ep.total_errors, 0);
 }
 
 #[tokio::test]
 async fn generate_content_with_system() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
@@ -228,7 +249,8 @@ async fn generate_content_with_system() {
 async fn generate_content_streaming_sends_sse_events() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics.clone());
 
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
@@ -268,13 +290,24 @@ async fn generate_content_streaming_sends_sse_events() {
 
     // Third event: [DONE]
     assert_eq!(events[2].1, "[DONE]");
+
+    // Verify streaming request was counted (no token data for streams).
+    let snap = metrics.snapshot();
+    let route = snap
+        .routes
+        .get("gemini-2.0-flash")
+        .expect("route should exist");
+    assert_eq!(route.total_requests, 1);
+    assert_eq!(route.total_errors, 0);
+    assert_eq!(route.avg_input_tokens, None);
 }
 
 #[tokio::test]
 async fn generate_content_wrong_method() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics);
 
     let res = warp::test::request()
         .method("GET")
@@ -289,7 +322,8 @@ async fn generate_content_wrong_method() {
 async fn generate_content_stream_via_path() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = generate_content_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = generate_content_filter(table, router, metrics);
 
     // Stream indicated via path (:streamGenerateContent) without stream field in body
     let body = serde_json::json!({

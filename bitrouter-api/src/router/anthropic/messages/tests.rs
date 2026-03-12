@@ -22,6 +22,8 @@ use std::collections::HashMap;
 
 use super::filters::messages_filter;
 
+use crate::metrics::MetricsStore;
+
 // ── Mock implementations ────────────────────────────────────────────────────
 
 struct MockTable;
@@ -164,7 +166,8 @@ fn parse_sse_body(body: &[u8]) -> Vec<(Option<String>, String)> {
 async fn messages_generate() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics.clone());
 
     let body = serde_json::json!({
         "model": "claude-3-5-sonnet-20241022",
@@ -190,13 +193,31 @@ async fn messages_generate() {
     assert_eq!(json["stop_reason"], "end_turn");
     assert_eq!(json["usage"]["input_tokens"], 12);
     assert_eq!(json["usage"]["output_tokens"], 6);
+
+    // Verify metrics were recorded for the generate request.
+    let snap = metrics.snapshot();
+    let route = snap
+        .routes
+        .get("claude-3-5-sonnet-20241022")
+        .expect("route should exist");
+    assert_eq!(route.total_requests, 1);
+    assert_eq!(route.total_errors, 0);
+    assert_eq!(route.avg_input_tokens, Some(12));
+    assert_eq!(route.avg_output_tokens, Some(6));
+    let ep = route
+        .by_endpoint
+        .get("mock:claude-3-5-sonnet-20241022")
+        .expect("endpoint should exist");
+    assert_eq!(ep.total_requests, 1);
+    assert_eq!(ep.total_errors, 0);
 }
 
 #[tokio::test]
 async fn messages_with_system() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics);
 
     let body = serde_json::json!({
         "model": "claude-3-5-sonnet-20241022",
@@ -222,7 +243,8 @@ async fn messages_with_system() {
 async fn messages_streaming_sends_sse_events() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics.clone());
 
     let body = serde_json::json!({
         "model": "claude-3-5-sonnet-20241022",
@@ -269,13 +291,24 @@ async fn messages_streaming_sends_sse_events() {
 
     assert_eq!(events[2].0, None);
     assert_eq!(events[2].1, "[DONE]");
+
+    // Verify streaming request was counted (no token data for streams).
+    let snap = metrics.snapshot();
+    let route = snap
+        .routes
+        .get("claude-3-5-sonnet-20241022")
+        .expect("route should exist");
+    assert_eq!(route.total_requests, 1);
+    assert_eq!(route.total_errors, 0);
+    assert_eq!(route.avg_input_tokens, None);
 }
 
 #[tokio::test]
 async fn messages_wrong_method() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics);
 
     let res = warp::test::request()
         .method("GET")
@@ -290,7 +323,8 @@ async fn messages_wrong_method() {
 async fn messages_missing_max_tokens() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let filter = messages_filter(table, router);
+    let metrics = Arc::new(MetricsStore::new());
+    let filter = messages_filter(table, router, metrics);
 
     // Anthropic requires max_tokens
     let body = serde_json::json!({
