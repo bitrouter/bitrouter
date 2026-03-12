@@ -132,6 +132,28 @@ enum Command {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
+    // Skip update check in TUI mode — the alternate screen would hide it.
+    let use_tui = cli.command.is_none() && !cli.headless;
+    let update_check = if use_tui {
+        None
+    } else {
+        Some(tokio::spawn(cli::update_check::check_for_update()))
+    };
+
+    let result = run_cli(cli).await;
+
+    // Print update notice (if available) after the command finishes.
+    if let Some(handle) = update_check
+        && let Ok(Ok(Some(msg))) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), handle).await
+    {
+        eprintln!("{msg}");
+    }
+
+    result
+}
+
+async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve paths early — init needs them but not a loaded runtime
     let paths = resolve_home(cli.home_dir.as_deref());
     let overrides = PathOverrides {
