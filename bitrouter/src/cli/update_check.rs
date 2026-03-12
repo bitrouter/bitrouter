@@ -50,8 +50,14 @@ pub async fn check_for_update() -> Option<String> {
 }
 
 /// Returns `true` if `latest` is strictly newer than `current` (semver comparison).
+/// Pre-release and build-metadata suffixes (e.g. `1.0.0-beta`, `1.0.0+build`) are
+/// rejected so that only stable releases trigger an update notice.
 fn is_newer(latest: &str, current: &str) -> bool {
     let parse = |v: &str| -> Option<(u64, u64, u64)> {
+        // Reject pre-release / build-metadata suffixes
+        if v.contains('-') || v.contains('+') {
+            return None;
+        }
         let mut parts = v.split('.');
         let major = parts.next()?.parse().ok()?;
         let minor = parts.next()?.parse().ok()?;
@@ -92,5 +98,11 @@ mod tests {
         assert!(!is_newer("abc", "0.5.0"));
         assert!(!is_newer("0.5.0", "abc"));
         assert!(!is_newer("", ""));
+    }
+
+    #[test]
+    fn prerelease_version_not_newer() {
+        assert!(!is_newer("0.6.0-beta", "0.5.0"));
+        assert!(!is_newer("0.6.0+build.1", "0.5.0"));
     }
 }
