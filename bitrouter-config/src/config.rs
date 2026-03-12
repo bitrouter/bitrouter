@@ -21,6 +21,10 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub database: DatabaseConfig,
 
+    /// Guardrails configuration — local firewall for AI agent traffic.
+    #[serde(default)]
+    pub guardrails: bitrouter_guardrails::GuardrailConfig,
+
     /// Provider definitions (merged on top of built-in providers).
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,

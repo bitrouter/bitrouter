@@ -23,6 +23,7 @@ bitrouter-api = { path = "../bitrouter-api", version = "0.5" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.5" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.5" }
 bitrouter-google = { path = "../bitrouter-google", version = "0.5" }
+bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.5" }
 bitrouter-openai = { path = "../bitrouter-openai", version = "0.5" }
 
 # CLI
