@@ -153,6 +153,26 @@ struct EndpointData {
     latencies_ms: Vec<u64>,
 }
 
+/// Lightweight clone of [`RouteData`] used by [`MetricsStore::snapshot`] so
+/// that the read-lock can be released before percentile computation.
+struct ClonedRouteData {
+    total_requests: u64,
+    total_errors: u64,
+    latencies_ms: Vec<u64>,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
+    token_request_count: u64,
+    last_used: Option<SystemTime>,
+    endpoints: Vec<(String, ClonedEndpointData)>,
+}
+
+/// Lightweight clone of [`EndpointData`] used by [`MetricsStore::snapshot`].
+struct ClonedEndpointData {
+    total_requests: u64,
+    total_errors: u64,
+    latencies_ms: Vec<u64>,
+}
+
 // ── Implementation ──────────────────────────────────────────────────────────
 
 impl MetricsStore {
@@ -240,14 +260,72 @@ impl MetricsStore {
     }
 
     /// Produces a serialisable snapshot of all collected metrics.
+    ///
+    /// The read-lock is held only long enough to clone raw counters and latency
+    /// vectors. Expensive work (sorting for percentiles, computing averages) is
+    /// performed after the lock is released so that concurrent `record()` calls
+    /// are not blocked by a `/v1/metrics` request.
     pub fn snapshot(&self) -> MetricsSnapshot {
-        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let uptime_seconds = self.started_at.elapsed().as_secs();
 
-        let routes = inner
-            .routes
-            .iter()
+        // Clone raw data under a short-lived read lock.
+        let cloned_routes: Vec<(String, ClonedRouteData)> = {
+            let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+            inner
+                .routes
+                .iter()
+                .map(|(name, data)| {
+                    let endpoints: Vec<(String, ClonedEndpointData)> = data
+                        .endpoints
+                        .iter()
+                        .map(|(ep_name, ep)| {
+                            (
+                                ep_name.clone(),
+                                ClonedEndpointData {
+                                    total_requests: ep.total_requests,
+                                    total_errors: ep.total_errors,
+                                    latencies_ms: ep.latencies_ms.clone(),
+                                },
+                            )
+                        })
+                        .collect();
+
+                    (
+                        name.clone(),
+                        ClonedRouteData {
+                            total_requests: data.total_requests,
+                            total_errors: data.total_errors,
+                            latencies_ms: data.latencies_ms.clone(),
+                            total_input_tokens: data.total_input_tokens,
+                            total_output_tokens: data.total_output_tokens,
+                            token_request_count: data.token_request_count,
+                            last_used: data.last_used,
+                            endpoints,
+                        },
+                    )
+                })
+                .collect()
+            // lock released here
+        };
+
+        // Compute percentiles and build snapshots without holding the lock.
+        let routes = cloned_routes
+            .into_iter()
             .map(|(name, data)| {
+                let by_endpoint = data
+                    .endpoints
+                    .into_iter()
+                    .map(|(ep_name, ep)| {
+                        let ep_snap = EndpointSnapshot {
+                            total_requests: ep.total_requests,
+                            total_errors: ep.total_errors,
+                            latency_p50_ms: percentile(&ep.latencies_ms, 50.0),
+                            latency_p99_ms: percentile(&ep.latencies_ms, 99.0),
+                        };
+                        (ep_name, ep_snap)
+                    })
+                    .collect();
+
                 let route_snapshot = RouteSnapshot {
                     total_requests: data.total_requests,
                     total_errors: data.total_errors,
@@ -257,21 +335,9 @@ impl MetricsStore {
                     avg_input_tokens: avg(data.total_input_tokens, data.token_request_count),
                     avg_output_tokens: avg(data.total_output_tokens, data.token_request_count),
                     last_used: data.last_used.map(system_time_to_unix_secs),
-                    by_endpoint: data
-                        .endpoints
-                        .iter()
-                        .map(|(ep_name, ep)| {
-                            let ep_snap = EndpointSnapshot {
-                                total_requests: ep.total_requests,
-                                total_errors: ep.total_errors,
-                                latency_p50_ms: percentile(&ep.latencies_ms, 50.0),
-                                latency_p99_ms: percentile(&ep.latencies_ms, 99.0),
-                            };
-                            (ep_name.clone(), ep_snap)
-                        })
-                        .collect(),
+                    by_endpoint,
                 };
-                (name.clone(), route_snapshot)
+                (name, route_snapshot)
             })
             .collect();
 
