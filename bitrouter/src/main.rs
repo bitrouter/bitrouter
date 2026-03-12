@@ -39,10 +39,6 @@ struct Cli {
     #[arg(long = "db", global = true)]
     database_url: Option<String>,
 
-    /// Run server without the TUI (headless mode)
-    #[arg(long)]
-    headless: bool,
-
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -133,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     // Skip update check in TUI mode — the alternate screen would hide it.
-    let use_tui = cli.command.is_none() && !cli.headless;
+    let use_tui = cli.command.is_none() && cfg!(feature = "tui");
     let update_check = if use_tui {
         None
     } else {
@@ -230,7 +226,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    let use_tui = cli.command.is_none() && !cli.headless;
+    let use_tui = cli.command.is_none() && cfg!(feature = "tui");
 
     // Skip tracing init when TUI owns the terminal — logs corrupt the alternate screen
     if !use_tui {
@@ -296,7 +292,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match cli.command {
-        None => run_default(runtime, cli.headless).await?,
+        None => run_default(runtime).await?,
         Some(Command::Serve) => {
             let model_router = crate::runtime::Router::new(
                 reqwest::Client::new(),
@@ -354,19 +350,11 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
     }
 }
 
-async fn run_default(
-    runtime: DefaultRuntime,
-    headless: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::Error>> {
     let status = runtime.status();
 
     let model_router =
         crate::runtime::Router::new(reqwest::Client::new(), runtime.config.providers.clone());
-
-    if headless {
-        runtime.serve(model_router).await?;
-        return Ok(());
-    }
 
     #[cfg(feature = "tui")]
     {
@@ -396,6 +384,45 @@ async fn run_default(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn serve_subcommand_still_parses() {
+        let cli = Cli::try_parse_from(["bitrouter", "serve"]).ok();
+        assert!(matches!(
+            cli,
+            Some(Cli {
+                command: Some(Command::Serve),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn headless_flag_is_rejected() {
+        let err = Cli::try_parse_from(["bitrouter", "--headless"]).err();
+        assert!(matches!(
+            err.as_ref().map(clap::Error::kind),
+            Some(ErrorKind::UnknownArgument)
+        ));
+    }
+
+    #[test]
+    fn help_mentions_serve_but_not_headless() {
+        let mut command = Cli::command();
+        let mut help = Vec::new();
+        assert!(command.write_long_help(&mut help).is_ok());
+
+        let help = String::from_utf8(help).ok();
+        assert!(matches!(help.as_deref(), Some(text) if text.contains("serve")));
+        assert!(matches!(help.as_deref(), Some(text) if !text.contains("--headless")));
+    }
 }
 
 fn init_tracing() {
