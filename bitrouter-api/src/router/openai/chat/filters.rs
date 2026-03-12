@@ -10,7 +10,7 @@ use bitrouter_core::{
 use warp::Filter;
 
 use crate::error::{BadRequest, BitrouterRejection};
-use crate::metrics::{MetricsStore, RequestMetrics};
+use crate::metrics::{MetricsStore, format_endpoint};
 use crate::util::generate_id;
 
 use super::{convert, types::ChatCompletionRequest};
@@ -58,7 +58,7 @@ where
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
-    let endpoint = format!("{}:{}", target.provider_name, target.model_id);
+    let endpoint = format_endpoint(&target.provider_name, &target.model_id);
 
     // Get the concrete model instance from the router.
     let model = router
@@ -73,43 +73,26 @@ where
 
     if is_stream {
         let result = handle_stream(&model, &model_id, options).await;
-        let latency_ms = start.elapsed().as_millis() as u64;
-        metrics.record(RequestMetrics {
-            route: incoming_model,
-            endpoint,
-            latency_ms,
-            is_error: result.is_err(),
-            input_tokens: None,
-            output_tokens: None,
-        });
+        metrics.record_outcome(incoming_model, endpoint, start, result.is_err());
         result
     } else {
         let gen_result = model.generate(options).await;
-        let latency_ms = start.elapsed().as_millis() as u64;
         match gen_result {
             Ok(result) => {
                 let input_tokens = result.usage.input_tokens.total;
                 let output_tokens = result.usage.output_tokens.total;
-                metrics.record(RequestMetrics {
-                    route: incoming_model,
+                metrics.record_success(
+                    incoming_model,
                     endpoint,
-                    latency_ms,
-                    is_error: false,
+                    start,
                     input_tokens,
                     output_tokens,
-                });
+                );
                 let response = convert::from_generate_result(&model_id, result);
                 Ok(Box::new(warp::reply::json(&response)))
             }
             Err(e) => {
-                metrics.record(RequestMetrics {
-                    route: incoming_model,
-                    endpoint,
-                    latency_ms,
-                    is_error: true,
-                    input_tokens: None,
-                    output_tokens: None,
-                });
+                metrics.record_outcome(incoming_model, endpoint, start, true);
                 Err(warp::reject::custom(BitrouterRejection(e)))
             }
         }

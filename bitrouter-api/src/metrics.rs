@@ -75,6 +75,13 @@ pub struct RequestMetrics {
     pub output_tokens: Option<u32>,
 }
 
+/// Formats a `"provider:model_id"` endpoint identifier from routing target
+/// components. Used by all provider handlers to build the endpoint key before
+/// routing consumes the target.
+pub fn format_endpoint(provider_name: &str, model_id: &str) -> String {
+    format!("{provider_name}:{model_id}")
+}
+
 // ── Serialisable snapshot types ─────────────────────────────────────────────
 
 /// Top-level metrics snapshot returned by `GET /v1/metrics`.
@@ -189,6 +196,43 @@ impl MetricsStore {
             ep.total_errors += 1;
         }
         push_latency(&mut ep.latencies_ms, event.latency_ms);
+    }
+
+    /// Records a successful generate (non-streaming) request.
+    ///
+    /// This is a convenience wrapper used by provider handlers to reduce
+    /// duplicated recording logic across OpenAI, Anthropic and Google filters.
+    pub fn record_success(
+        &self,
+        route: String,
+        endpoint: String,
+        start: Instant,
+        input_tokens: Option<u32>,
+        output_tokens: Option<u32>,
+    ) {
+        self.record(RequestMetrics {
+            route,
+            endpoint,
+            latency_ms: start.elapsed().as_millis() as u64,
+            is_error: false,
+            input_tokens,
+            output_tokens,
+        });
+    }
+
+    /// Records a failed or stream-only request.
+    ///
+    /// `is_error` should be `true` for upstream failures and `false` for
+    /// streaming requests where token counts are unavailable.
+    pub fn record_outcome(&self, route: String, endpoint: String, start: Instant, is_error: bool) {
+        self.record(RequestMetrics {
+            route,
+            endpoint,
+            latency_ms: start.elapsed().as_millis() as u64,
+            is_error,
+            input_tokens: None,
+            output_tokens: None,
+        });
     }
 
     /// Produces a serialisable snapshot of all collected metrics.
