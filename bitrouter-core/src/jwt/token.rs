@@ -26,6 +26,15 @@ pub fn sign(claims: &BitrouterClaims, keypair: &MasterKeypair) -> Result<String,
     let caip10 = Caip10::parse(&claims.iss)?;
     let alg = caip10.chain.jwt_algorithm();
 
+    // Reject tokens where the explicit `chain` field contradicts `iss`.
+    let expected_chain = caip10.chain.caip2();
+    if claims.chain != expected_chain {
+        return Err(JwtError::Verification(format!(
+            "chain mismatch: claims.chain is {}, iss implies {}",
+            claims.chain, expected_chain
+        )));
+    }
+
     let header_b64 = URL_SAFE_NO_PAD.encode(alg.header_json().as_bytes());
     let payload = serde_json::to_vec(claims).map_err(|e| JwtError::Signing(e.to_string()))?;
     let payload_b64 = URL_SAFE_NO_PAD.encode(&payload);
@@ -77,6 +86,15 @@ pub fn verify(token: &str) -> Result<BitrouterClaims, JwtError> {
     if alg != expected_alg {
         return Err(JwtError::Verification(format!(
             "algorithm mismatch: header says {alg}, chain expects {expected_alg}"
+        )));
+    }
+
+    // Ensure the CAIP-2 chain in the claims matches the chain implied by iss.
+    let expected_chain = caip10.chain.caip2();
+    if claims.chain != expected_chain {
+        return Err(JwtError::Verification(format!(
+            "chain mismatch: claims.chain is {}, iss implies {}",
+            claims.chain, expected_chain
         )));
     }
 
@@ -376,5 +394,45 @@ mod tests {
     fn malformed_token_rejected() {
         assert!(decode_unverified("not-a-jwt").is_err());
         assert!(decode_unverified("a.b.c.d").is_err());
+    }
+
+    #[test]
+    fn sign_rejects_chain_mismatch() {
+        let kp = MasterKeypair::generate();
+        let sol_chain = Chain::solana_mainnet();
+        let caip10 = kp.caip10(&sol_chain).expect("caip10");
+        // iss is Solana but chain field claims EVM.
+        let bad_claims = BitrouterClaims {
+            iss: caip10.format(),
+            chain: Chain::base().caip2(),
+            iat: None,
+            exp: None,
+            scope: TokenScope::Api,
+            models: None,
+            budget: None,
+            budget_scope: None,
+            budget_range: None,
+        };
+        assert!(sign(&bad_claims, &kp).is_err());
+    }
+
+    #[test]
+    fn verify_rejects_chain_mismatch_in_payload() {
+        let kp = MasterKeypair::generate();
+        // Sign a valid Solana token, then tamper the chain field in the payload.
+        let claims = test_claims_solana(&kp);
+        let token = sign(&claims, &kp).expect("sign");
+
+        let parts: Vec<&str> = token.split('.').collect();
+        // Replace chain with EVM chain while keeping Solana iss.
+        let mut tampered_claims = claims.clone();
+        tampered_claims.chain = Chain::base().caip2();
+        let new_payload_b64 = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&tampered_claims)
+                .expect("ser")
+                .as_slice(),
+        );
+        let tampered = format!("{}.{}.{}", parts[0], new_payload_b64, parts[2]);
+        assert!(verify(&tampered).is_err());
     }
 }

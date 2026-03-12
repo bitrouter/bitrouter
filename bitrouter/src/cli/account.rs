@@ -70,9 +70,14 @@ fn list_keys(keys_dir: &Path) -> Result<(), String> {
             ""
         };
 
-        let pubkey = load_pubkey(dir).unwrap_or_else(|_| "???".to_string());
         println!("  [{i}] {prefix}{marker}");
-        println!("       pubkey: {pubkey}");
+        match load_addresses(dir) {
+            Ok((sol, evm)) => {
+                println!("       sol: {sol}");
+                println!("       evm: {evm}");
+            }
+            Err(_) => println!("       addresses: ???"),
+        }
     }
 
     Ok(())
@@ -165,15 +170,27 @@ fn list_key_dirs(keys_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     Ok(dirs)
 }
 
-/// Load wallet addresses from a key directory's master.json.
-fn load_pubkey(key_dir: &Path) -> Result<String, String> {
+/// Load CAIP-10 wallet addresses from a key directory's master.json.
+///
+/// Returns `(solana_caip10, evm_caip10)` strings for display.
+fn load_addresses(key_dir: &Path) -> Result<(String, String), String> {
+    use bitrouter_core::jwt::chain::Chain;
+
     let data = fs::read_to_string(key_dir.join("master.json"))
         .map_err(|e| format!("failed to read master.json: {e}"))?;
     let json: MasterKeyJson =
         serde_json::from_str(&data).map_err(|e| format!("invalid master.json: {e}"))?;
     let kp = MasterKeypair::from_json(&json)
         .map_err(|e| format!("invalid keypair in master.json: {e}"))?;
-    Ok(kp.solana_pubkey_b58())
+    let sol = kp
+        .caip10(&Chain::solana_mainnet())
+        .map_err(|e| format!("solana caip10: {e}"))?
+        .format();
+    let evm = kp
+        .caip10(&Chain::base())
+        .map_err(|e| format!("evm caip10: {e}"))?
+        .format();
+    Ok((sol, evm))
 }
 
 /// Load the active MasterKeypair from the keys directory.
