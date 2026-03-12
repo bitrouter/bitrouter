@@ -10,7 +10,9 @@ use crate::runtime::{AppRuntime, PathOverrides, resolve_home};
 use bitrouter_core::jwt::claims::{BudgetScope, TokenScope};
 use clap::{Parser, Subcommand};
 
-type DefaultRuntime = AppRuntime<bitrouter_config::ConfigRoutingTable>;
+type DefaultRuntime = AppRuntime<
+    bitrouter_core::routers::dynamic::DynamicRoutingTable<bitrouter_config::ConfigRoutingTable>,
+>;
 
 #[derive(Debug, Parser)]
 #[command(name = "bitrouter", version, about = "BitRouter CLI")]
@@ -57,6 +59,12 @@ enum Command {
     Status,
     /// Restart the daemon
     Restart,
+
+    /// Manage runtime routes (requires a running daemon)
+    Route {
+        #[command(subcommand)]
+        action: RouteAction,
+    },
 
     /// Manage local web3 account keypairs
     Account {
@@ -121,6 +129,30 @@ enum Command {
         /// Remove a saved token (by name or index)
         #[arg(long)]
         rm: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RouteAction {
+    /// List all routes (config-defined + dynamic)
+    List,
+    /// Add or update a dynamic route
+    Add {
+        /// Virtual model name (e.g., "research", "fast")
+        model: String,
+
+        /// Endpoints in "provider:model_id" format (at least one required)
+        #[arg(required = true, num_args = 1..)]
+        endpoints: Vec<String>,
+
+        /// Routing strategy: "priority" or "load_balance"
+        #[arg(long, default_value = "priority")]
+        strategy: String,
+    },
+    /// Remove a dynamic route
+    Rm {
+        /// Model name to remove
+        model: String,
     },
 }
 
@@ -230,6 +262,31 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli::keys::run(&keys_dir, list, show, rm)?;
             return Ok(());
         }
+        Some(Command::Route { action }) => {
+            // Route commands talk to a running daemon, so we only need the
+            // config to know the listen address.
+            let runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
+                .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+            let addr = runtime.config.server.listen;
+            match action {
+                RouteAction::List => cli::route::run_list(&keys_dir, addr)?,
+                RouteAction::Add {
+                    model,
+                    endpoints,
+                    strategy,
+                } => cli::route::run_add(
+                    &keys_dir,
+                    addr,
+                    cli::route::RouteAddOpts {
+                        model,
+                        endpoints,
+                        strategy: Some(strategy),
+                    },
+                )?,
+                RouteAction::Rm { model } => cli::route::run_remove(&keys_dir, addr, &model)?,
+            }
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -326,7 +383,11 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Restart) => runtime.restart().await?,
         Some(
-            Command::Init | Command::Account { .. } | Command::Keygen { .. } | Command::Keys { .. },
+            Command::Init
+            | Command::Account { .. }
+            | Command::Keygen { .. }
+            | Command::Keys { .. }
+            | Command::Route { .. },
         ) => {
             unreachable!()
         }

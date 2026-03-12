@@ -1,3 +1,4 @@
+pub mod admin;
 #[cfg(feature = "anthropic")]
 pub mod anthropic;
 #[cfg(feature = "google")]

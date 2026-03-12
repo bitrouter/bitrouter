@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bitrouter_config::BitrouterConfig;
-use bitrouter_core::routers::routing_table::RoutingTable;
+use bitrouter_core::routers::admin::AdminRoutingTable;
 use sea_orm::DatabaseConnection;
 
 use crate::runtime::{error::Result, paths::RuntimePaths};
@@ -14,7 +14,7 @@ pub struct AppRuntime<R> {
     pub db: Option<Arc<DatabaseConnection>>,
 }
 
-impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
+impl<R: AdminRoutingTable + Send + Sync + 'static> AppRuntime<R> {
     pub fn status(&self) -> RuntimeStatus {
         let daemon_pid = crate::runtime::daemon::DaemonManager::new(self.paths.clone())
             .is_running()
@@ -69,17 +69,23 @@ impl<R: RoutingTable + Send + Sync + 'static> AppRuntime<R> {
     }
 }
 
-/// Convenience constructors for the default `ConfigRoutingTable`.
-impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
+/// Convenience constructors using `DynamicRoutingTable<ConfigRoutingTable>`.
+impl
+    AppRuntime<
+        bitrouter_core::routers::dynamic::DynamicRoutingTable<bitrouter_config::ConfigRoutingTable>,
+    >
+{
     /// Load config from resolved paths. The `.env` file (if it exists) is loaded
     /// automatically from `paths.env_file`.
     pub fn load(paths: RuntimePaths) -> Result<Self> {
         let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
         let config = BitrouterConfig::load_from_file(&paths.config_file, env_file)?;
-        let routing_table = bitrouter_config::ConfigRoutingTable::new(
+        let config_table = bitrouter_config::ConfigRoutingTable::new(
             config.providers.clone(),
             config.models.clone(),
         );
+        let routing_table =
+            bitrouter_core::routers::dynamic::DynamicRoutingTable::new(config_table);
         Ok(Self {
             config,
             paths,
@@ -96,10 +102,12 @@ impl AppRuntime<bitrouter_config::ConfigRoutingTable> {
     pub fn scaffold(paths: RuntimePaths) -> Self {
         let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
         let config = BitrouterConfig::load_from_str("{}", env_file).unwrap_or_default();
-        let routing_table = bitrouter_config::ConfigRoutingTable::new(
+        let config_table = bitrouter_config::ConfigRoutingTable::new(
             config.providers.clone(),
             config.models.clone(),
         );
+        let routing_table =
+            bitrouter_core::routers::dynamic::DynamicRoutingTable::new(config_table);
         Self {
             config,
             paths,

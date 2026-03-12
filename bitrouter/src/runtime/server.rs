@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use bitrouter_api::metrics::MetricsStore;
-use bitrouter_api::router::{anthropic, google, openai, routes};
+use bitrouter_api::router::{admin, anthropic, google, openai, routes};
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::hooks::HookedRouter;
-use bitrouter_core::routers::{model_router::LanguageModelRouter, routing_table::RoutingTable};
+use bitrouter_core::routers::admin::AdminRoutingTable;
+use bitrouter_core::routers::model_router::LanguageModelRouter;
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
 use sea_orm::DatabaseConnection;
 use warp::Filter;
@@ -21,7 +22,7 @@ pub struct ServerPlan<T, R> {
 
 impl<T, R> ServerPlan<T, R>
 where
-    T: RoutingTable + Send + Sync + 'static,
+    T: AdminRoutingTable + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     pub fn new(config: BitrouterConfig, table: Arc<T>, router: Arc<R>) -> Self {
@@ -75,6 +76,10 @@ where
         // Metrics endpoint — no auth required.
         let metrics_endpoint = bitrouter_api::router::metrics::metrics_filter(metrics.clone());
 
+        // Admin route management — gated by management auth.
+        let admin_routes = auth_gate(auth::management_auth(auth_ctx.clone()))
+            .and(admin::admin_routes_filter(self.table.clone()));
+
         // Model API routes — gated by protocol-appropriate auth.
         // All routes use the guarded router for guardrail enforcement.
         let chat = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
@@ -118,6 +123,7 @@ where
             let all = health
                 .or(route_list)
                 .or(metrics_endpoint)
+                .or(admin_routes)
                 .or(chat)
                 .or(messages)
                 .or(responses)
@@ -137,6 +143,7 @@ where
             let all = health
                 .or(route_list)
                 .or(metrics_endpoint)
+                .or(admin_routes)
                 .or(chat)
                 .or(messages)
                 .or(responses)
