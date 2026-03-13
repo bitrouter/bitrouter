@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/bitrouter/bitrouter/compare/v0.6.1...v0.7.0)
+
+
+### 🚜 Refactor
+
+- *(core)* Refactor auth module ([#93](https://github.com/bitrouter/bitrouter/pull/93)) - ([c6042fa](https://github.com/bitrouter/bitrouter/commit/c6042fa5333258015cbc097acf8fcf27647a3e74))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(config)* Built-in provider update ([#91](https://github.com/bitrouter/bitrouter/pull/91)) - ([5fc2147](https://github.com/bitrouter/bitrouter/commit/5fc214733bfaddc732e518284bdd64b8d09b482f))
+
+
 ## [0.6.1](https://github.com/bitrouter/bitrouter/compare/v0.6.0...v0.6.1)
 
 
