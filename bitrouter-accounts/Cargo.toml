@@ -29,4 +29,4 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 uuid = { version = "1", features = ["v4", "serde"] }
-warp = { version = "0.4.2" }
+warp = { version = "0.4" }
