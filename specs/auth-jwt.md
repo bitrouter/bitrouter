@@ -104,6 +104,10 @@ The payload is a JSON object with this shape:
 - `exp`: Expiration UNIX timestamp in seconds.
   - Admin tokens are expected to include `exp`.
   - API tokens may omit `exp`.
+  - When `exp` is omitted, `bitrouter-core` does not apply a default expiration timestamp.
+  - A token without `exp` remains valid until some external policy rejects it, such as key rotation, budget exhaustion, or application-specific rules.
+  - For interoperable and safer deployments, issuers should prefer setting `exp` on API tokens instead of relying on indefinite validity.
+  - Short-lived API tokens are recommended.
 - `models`: Array of model-name patterns allowed for this token.
 - `budget`: Unsigned integer budget in micro-USD.
   - `1000000` means 1.000000 USD.
@@ -198,7 +202,7 @@ A verifier should reject the token if any of the following checks fail:
 5. `chain` does not equal the CAIP-2 chain implied by `iss`.
 6. `alg` does not match the chain namespace implied by `iss`.
 7. The signature does not verify against the identity embedded in `iss`.
-8. If `exp` is present, the current UNIX time is greater than or equal to `exp`.
+8. If `exp` is present, the token is valid only while `current_unix_time < exp`; once the clock reaches `exp`, the token must be rejected. This is the current `bitrouter-core` expiration rule.
 
 ## 7. Minimal examples
 
