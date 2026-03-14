@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bitrouter_api::metrics::MetricsStore;
-use bitrouter_api::router::{admin, anthropic, google, openai, routes};
+use bitrouter_api::router::{admin, anthropic, google, models, openai, routes};
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::hooks::HookedRouter;
 use bitrouter_core::routers::admin::AdminRoutingTable;
@@ -73,6 +73,9 @@ where
         // Route listing — no auth required.
         let route_list = routes::routes_filter(self.table.clone());
 
+        // Model listing — no auth required.
+        let model_list = models::models_filter(self.table.clone());
+
         // Metrics endpoint — no auth required.
         let metrics_endpoint = bitrouter_api::router::metrics::metrics_filter(metrics.clone());
 
@@ -122,6 +125,7 @@ where
 
             let all = health
                 .or(route_list)
+                .or(model_list)
                 .or(metrics_endpoint)
                 .or(admin_routes)
                 .or(chat)
@@ -142,6 +146,7 @@ where
         } else {
             let all = health
                 .or(route_list)
+                .or(model_list)
                 .or(metrics_endpoint)
                 .or(admin_routes)
                 .or(chat)

@@ -4,6 +4,7 @@ pub mod anthropic;
 #[cfg(feature = "google")]
 pub mod google;
 pub mod metrics;
+pub mod models;
 #[cfg(feature = "openai")]
 pub mod openai;
 pub mod routes;

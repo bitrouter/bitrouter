@@ -3,11 +3,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitrouter_core::{
     errors::{BitrouterError, Result},
-    routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget},
+    routers::routing_table::{ModelEntry, RouteEntry, RoutingTable, RoutingTarget},
 };
 
 use crate::config::{
-    ApiProtocol, ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy,
+    ApiProtocol, Modality, ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy,
 };
 
 /// A routing target with full resolution context including any per-endpoint overrides.
@@ -135,6 +135,16 @@ impl ConfigRoutingTable {
     }
 }
 
+fn modality_to_string(m: &Modality) -> String {
+    match m {
+        Modality::Text => "text",
+        Modality::Image => "image",
+        Modality::Audio => "audio",
+        Modality::Video => "video",
+    }
+    .to_owned()
+}
+
 impl RoutingTable for ConfigRoutingTable {
     async fn route(&self, incoming_model_name: &str) -> Result<RoutingTarget> {
         let resolved = self.resolve(incoming_model_name)?;
@@ -167,6 +177,40 @@ impl RoutingTable for ConfigRoutingTable {
             }
         }
         entries.sort_by(|a, b| a.model.cmp(&b.model));
+        entries
+    }
+
+    fn list_models(&self) -> Vec<ModelEntry> {
+        let mut entries = Vec::new();
+        for (provider_name, provider_config) in &self.providers {
+            // Only include providers that have an API key configured.
+            if provider_config.api_key.is_none() {
+                continue;
+            }
+            if let Some(models) = &provider_config.models {
+                for (model_id, info) in models {
+                    entries.push(ModelEntry {
+                        id: model_id.clone(),
+                        provider: provider_name.clone(),
+                        name: info.name.clone(),
+                        description: info.description.clone(),
+                        max_input_tokens: info.max_input_tokens,
+                        max_output_tokens: info.max_output_tokens,
+                        input_modalities: info
+                            .input_modalities
+                            .iter()
+                            .map(modality_to_string)
+                            .collect(),
+                        output_modalities: info
+                            .output_modalities
+                            .iter()
+                            .map(modality_to_string)
+                            .collect(),
+                    });
+                }
+            }
+        }
+        entries.sort_by(|a, b| a.provider.cmp(&b.provider).then(a.id.cmp(&b.id)));
         entries
     }
 }
