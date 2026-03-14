@@ -65,6 +65,6 @@ jobs:
         with:
           bin: bitrouter
           target: ${{ matrix.target }}
-          tar: all
+          tar: unix
           zip: windows
           token: ${{ secrets.GITHUB_TOKEN }}
