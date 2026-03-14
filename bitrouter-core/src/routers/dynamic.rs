@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::errors::{BitrouterError, Result};
 
 use super::admin::{AdminRoutingTable, DynamicRoute, RouteEndpoint, RouteStrategy};
-use super::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
+use super::routing_table::{ModelEntry, RouteEntry, RoutingTable, RoutingTarget};
 
 /// Internal representation of a dynamic route with its round-robin counter.
 struct DynamicRouteData {
@@ -98,6 +98,10 @@ impl<T: RoutingTable + Sync> RoutingTable for DynamicRoutingTable<T> {
 
         entries.sort_by(|a, b| a.model.cmp(&b.model));
         entries
+    }
+
+    fn list_models(&self) -> Vec<ModelEntry> {
+        self.inner.list_models()
     }
 }
 
