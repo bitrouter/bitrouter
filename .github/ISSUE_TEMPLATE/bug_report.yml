@@ -1,0 +1,89 @@
+name: Bug report
+description: Report a reproducible problem in BitRouter
+title: "[BUG] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please include a minimal, reproducible example when possible.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Clearly describe the problem you hit.
+      placeholder: BitRouter returns an upstream 500 when...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the exact steps needed to reproduce the bug.
+      placeholder: |
+        1. Run `bitrouter serve`
+        2. Send a request to `/v1/chat/completions`
+        3. Observe the error response
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+      placeholder: The request should succeed and return a streamed response.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+      placeholder: The server responds with a 500 and logs...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: BitRouter version
+      description: Which BitRouter version are you using?
+      placeholder: v0.8.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: What OS are you running on?
+      placeholder: Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: rust
+    attributes:
+      label: Rust version
+      description: If relevant, include the Rust toolchain version too.
+      placeholder: rustc 1.88.0
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Provider and config context
+      description: Include any relevant provider setup, routing details, or a minimal redacted `bitrouter.yaml`.
+      placeholder: |
+        Provider: OpenAI
+        Model: openai:gpt-4o
+
+        routes:
+          default: openai:gpt-4o
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, payloads, or screenshots
+      description: Add logs, request payloads, or screenshots that help explain the problem.
+      placeholder: Paste any relevant logs or screenshots here.
+      render: shell
+    validations:
+      required: false
