@@ -141,6 +141,7 @@ fn modality_to_string(m: &Modality) -> String {
         Modality::Image => "image",
         Modality::Audio => "audio",
         Modality::Video => "video",
+        Modality::File => "file",
     }
     .to_owned()
 }
