@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/bitrouter/bitrouter/compare/v0.7.1...v0.8.0)
+
+
+### ⛰️ Features
+
+- *(config)* Add `file` variant to `Modality` enum ([#110](https://github.com/bitrouter/bitrouter/pull/110)) - ([de04e02](https://github.com/bitrouter/bitrouter/commit/de04e02c0b00d60448e2c4c68efde2d849856998))
+
+
 ## [0.7.1](https://github.com/bitrouter/bitrouter/compare/v0.7.0...v0.7.1)
 
 
