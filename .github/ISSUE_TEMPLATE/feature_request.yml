@@ -1,0 +1,48 @@
+name: Feature request
+description: Propose a new BitRouter feature or enhancement
+title: "[FEATURE] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Please focus on the user problem and the expected BitRouter behavior.
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What are you trying to accomplish?
+      placeholder: I want to route traffic based on...
+    validations:
+      required: true
+  - type: textarea
+    id: current_limit
+    attributes:
+      label: Why is the current behavior insufficient?
+      description: Explain the gap in today's behavior.
+      placeholder: Today BitRouter cannot...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the expected UX, CLI, config, or API shape.
+      placeholder: Add a new config option / endpoint / CLI flow that...
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Provider constraints or compatibility notes
+      description: Mention any provider-specific limitations or compatibility requirements.
+      placeholder: This should work for OpenAI and Anthropic, but...
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any workarounds or alternative approaches you considered.
+      placeholder: I considered using...
+    validations:
+      required: false

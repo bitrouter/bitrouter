@@ -12,7 +12,9 @@ This guide covers how to report bugs, request features, submit pull requests, an
 
 ## Reporting Bugs
 
-Please open an issue with:
+Please use the bug report issue template so the title starts with `[BUG]`.
+
+Include:
 
 - a clear summary of the problem
 - steps to reproduce it
@@ -25,7 +27,9 @@ If the bug is related to configuration or routing, include a minimal redacted `b
 
 ## Requesting Features
 
-When proposing a feature, describe:
+Please use the feature request issue template so the title starts with `[FEATURE]`.
+
+Describe:
 
 - the use case you are trying to solve
 - why the current behavior is insufficient
