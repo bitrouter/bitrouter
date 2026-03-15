@@ -136,14 +136,7 @@ impl ConfigRoutingTable {
 }
 
 fn modality_to_string(m: &Modality) -> String {
-    match m {
-        Modality::Text => "text",
-        Modality::Image => "image",
-        Modality::Audio => "audio",
-        Modality::Video => "video",
-        Modality::File => "file",
-    }
-    .to_owned()
+    m.to_string()
 }
 
 impl RoutingTable for ConfigRoutingTable {
