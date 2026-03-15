@@ -1,4 +1,4 @@
-# Claude.md
+# BitRouter Development Guidelines
 
 ## Project Overview
 
@@ -23,56 +23,19 @@ The layering follows a strict bottom-up principle — each crate depends only on
 
 ---
 
-## Key Design Decisions
-
-### 1. Trait-Based Core with Dynamic Dispatch
-
-`bitrouter-core` defines the `LanguageModel` trait using `#[dynosaur]` for object-safe dynamic dispatch. This means:
-
-- Concrete provider types are erased behind `Box<DynLanguageModel>` at runtime.
-- The routing and API layers never know which provider they're talking to.
-- New providers are added by implementing `LanguageModel` — no changes to routing or API code.
-
-The two routing traits (`RoutingTable` for name → target resolution, `LanguageModelRouter` for target → model instantiation) are similarly trait-based, allowing full replacement of the routing strategy.
-
-### 2. Canonical Intermediate Representation
-
-All providers convert to/from a shared type system in `bitrouter-core`:
-
-- `LanguageModelCallOptions` (request)
-- `LanguageModelPrompt` / `LanguageModelMessage` (conversation)
-- `LanguageModelGenerateResult` (response)
-
-This means the API layer translates once (HTTP → core types), the provider layer translates once (core types → provider API), and the two are completely independent. Adding a new API surface or a new provider is an isolated change.
-
-### 3. Config-Driven Provider Registry with Inheritance
-
-Built-in provider definitions (OpenAI, Anthropic, Google) are embedded at compile time from YAML files in `bitrouter-config/providers/`. User config merges on top:
-
-- `derives: openai` lets a custom provider inherit all defaults from the built-in OpenAI definition.
-- `env_prefix` auto-loads `{PREFIX}_API_KEY` and `{PREFIX}_BASE_URL` from environment variables.
-- `${VAR}` substitution works in any YAML string value.
-
-This eliminates boilerplate — a minimal config just needs an API key.
-
-### 4. Reusable HTTP Filters (SDK Mode)
-
-`bitrouter-api` exposes Warp filters as composable building blocks. Each filter:
-
-- Accepts generic `Arc<dyn RoutingTable>` + `Arc<dyn LanguageModelRouter>`.
-- Handles deserialization, model routing, generation, and response serialization.
-- Is independently mountable — use only the OpenAI-compatible endpoint, or mix and match.
-
-To build your own service, import `bitrouter-api` and supply your own trait implementations. You don't need `bitrouter-runtime` or `bitrouter-config` at all.
-
----
-
 ## Guidelines
 
 1. **NEVER** use `#[allow(xxx)]` to bypass checks.
 2. **NEVER** re-export components in a public mod. If you already have a public mod: `pub mod a;`, you never re-export components inside it: `pub use a::A; // Don't do this`.
 3. **NEVER** use `.unwrap`, `.expect` or `panic!` to make the Rust program panic.
 4. **NEVER** over-design types, functions and methods that is never used in the feature or fix you are working on. We don't allow dead code.
+
+---
+
+## Contributing
+
+1. **ALWAYS** use the **conventional** git commit message format. It's highly recommended to put "what you modified" in the `scope`, instead of `description`. Recommended to write a brief `body`.
+2. **ALWAYS** use the format of **conventional** git commit message's header part for your PR title. We validate this.
 
 ---
 
