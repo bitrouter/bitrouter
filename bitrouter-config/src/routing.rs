@@ -7,7 +7,7 @@ use bitrouter_core::{
 };
 
 use crate::config::{
-    ApiProtocol, Modality, ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy,
+    ApiProtocol, ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy,
 };
 
 /// A routing target with full resolution context including any per-endpoint overrides.
@@ -135,10 +135,6 @@ impl ConfigRoutingTable {
     }
 }
 
-fn modality_to_string(m: &Modality) -> String {
-    m.to_string()
-}
-
 impl RoutingTable for ConfigRoutingTable {
     async fn route(&self, incoming_model_name: &str) -> Result<RoutingTarget> {
         let resolved = self.resolve(incoming_model_name)?;
@@ -193,12 +189,12 @@ impl RoutingTable for ConfigRoutingTable {
                         input_modalities: info
                             .input_modalities
                             .iter()
-                            .map(modality_to_string)
+                            .map(|modality| modality.to_string())
                             .collect(),
                         output_modalities: info
                             .output_modalities
                             .iter()
-                            .map(modality_to_string)
+                            .map(|modality| modality.to_string())
                             .collect(),
                     });
                 }
