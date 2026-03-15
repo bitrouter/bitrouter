@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
@@ -229,6 +230,18 @@ pub enum Modality {
     Audio,
     Video,
     File,
+}
+
+impl fmt::Display for Modality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::Audio => "audio",
+            Self::Video => "video",
+            Self::File => "file",
+        })
+    }
 }
 
 /// Metadata and pricing for a single model offered by a provider.
@@ -549,6 +562,15 @@ output_modalities:
         let deserialized: ModelInfo = serde_yaml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.input_modalities, info.input_modalities);
         assert_eq!(deserialized.output_modalities, info.output_modalities);
+    }
+
+    #[test]
+    fn modality_display_uses_lowercase_words() {
+        assert_eq!(Modality::Text.to_string(), "text");
+        assert_eq!(Modality::Image.to_string(), "image");
+        assert_eq!(Modality::Audio.to_string(), "audio");
+        assert_eq!(Modality::Video.to_string(), "video");
+        assert_eq!(Modality::File.to_string(), "file");
     }
 
     #[test]
