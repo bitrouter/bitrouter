@@ -228,6 +228,7 @@ pub enum Modality {
     Image,
     Audio,
     Video,
+    File,
 }
 
 /// Metadata and pricing for a single model offered by a provider.
@@ -528,6 +529,26 @@ pricing:
         assert!(info.output_modalities.is_empty());
         assert_eq!(info.pricing.input_tokens.no_cache, 0.0);
         assert_eq!(info.pricing.output_tokens.text, 0.0);
+    }
+
+    #[test]
+    fn file_modality_round_trips_through_yaml() {
+        let yaml = r#"
+input_modalities:
+  - text
+  - file
+output_modalities:
+  - text
+  - file
+"#;
+        let info: ModelInfo = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(info.input_modalities, vec![Modality::Text, Modality::File]);
+        assert_eq!(info.output_modalities, vec![Modality::Text, Modality::File]);
+
+        let serialized = serde_yaml::to_string(&info).unwrap();
+        let deserialized: ModelInfo = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.input_modalities, info.input_modalities);
+        assert_eq!(deserialized.output_modalities, info.output_modalities);
     }
 
     #[test]
