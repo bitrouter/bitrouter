@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/bitrouter/bitrouter/compare/v0.7.0...v0.7.1)
+
+
+### ⛰️ Features
+
+- *(api)* Add GET /v1/models endpoint with query filters ([#107](https://github.com/bitrouter/bitrouter/pull/107)) - ([a5d1b95](https://github.com/bitrouter/bitrouter/commit/a5d1b9546447ffc5b596e5725e7346c0421e4202))
+
+
 ## [0.7.0](https://github.com/bitrouter/bitrouter/compare/v0.6.1...v0.7.0)
 
 
