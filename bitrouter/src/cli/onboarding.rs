@@ -26,19 +26,36 @@ pub struct OnboardingState {
     /// Path to the master wallet file used during onboarding (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub master_wallet_path: Option<PathBuf>,
-    /// Embedded wallet address created via Swig (if any).
+    /// Embedded Swig wallet address (PDA).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedded_wallet_address: Option<String>,
-    /// Agent wallet metadata (if derived).
+    /// Embedded Swig wallet address for receiving funds (PDA).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_wallet: Option<AgentWalletState>,
+    pub wallet_address: Option<String>,
+    /// Hex-encoded 32-byte Swig wallet ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swig_id: Option<String>,
+    /// Solana RPC URL chosen during onboarding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpc_url: Option<String>,
+    /// Agent wallets derived from the embedded wallet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_wallets: Vec<AgentWalletState>,
 }
 
 /// Persisted agent wallet reference data (for display only; Swig is source of truth).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentWalletState {
+    /// Human-readable label (e.g. "default", "research-agent").
+    pub label: String,
+    /// On-chain public key of the agent authority.
     pub address: String,
+    /// Swig role ID for this agent.
+    pub role_id: u32,
+    /// Spend permissions.
     pub permissions: swig::AgentPermissions,
+    /// ISO 8601 creation timestamp.
+    pub created_at: String,
 }
 
 /// Discrete onboarding outcomes.
@@ -63,7 +80,10 @@ impl OnboardingState {
             status: OnboardingStatus::NotStarted,
             master_wallet_path: None,
             embedded_wallet_address: None,
-            agent_wallet: None,
+            wallet_address: None,
+            swig_id: None,
+            rpc_url: None,
+            agent_wallets: Vec::new(),
         }
     }
 }
@@ -92,20 +112,23 @@ pub fn save_state(home_dir: &Path, state: &OnboardingState) -> Result<(), String
     fs::write(&path, json).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
-/// Persist reference-only agent wallet metadata.
-pub fn save_agent_wallet(home_dir: &Path, agent: &AgentWalletState) -> Result<(), String> {
-    let path = home_dir.join("agent_wallet.json");
-    let json = serde_json::to_string_pretty(agent)
-        .map_err(|e| format!("failed to serialize agent wallet: {e}"))?;
-    fs::write(&path, json).map_err(|e| format!("failed to write agent_wallet.json: {e}"))
+/// Add an agent wallet entry to the persisted onboarding state.
+pub fn add_agent_wallet(home_dir: &Path, agent: AgentWalletState) -> Result<(), String> {
+    let mut state = load_state(home_dir);
+    // Replace if same label already exists.
+    state.agent_wallets.retain(|a| a.label != agent.label);
+    state.agent_wallets.push(agent);
+    save_state(home_dir, &state)
 }
 
-/// Load agent wallet metadata from disk.
+/// Load all agent wallets from onboarding state.
+pub fn load_agent_wallets(home_dir: &Path) -> Vec<AgentWalletState> {
+    load_state(home_dir).agent_wallets
+}
+
+/// Load the first (default) agent wallet, if any.
 pub fn load_agent_wallet(home_dir: &Path) -> Option<AgentWalletState> {
-    let path = home_dir.join("agent_wallet.json");
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|data| serde_json::from_str(&data).ok())
+    load_state(home_dir).agent_wallets.into_iter().next()
 }
 
 // ── Onboarding detection ──────────────────────────────────────
@@ -126,10 +149,13 @@ pub fn should_onboard(home_dir: &Path) -> bool {
 // ── Interactive onboarding flow ───────────────────────────────
 
 /// Outcome of the interactive onboarding flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OnboardingOutcome {
     /// User completed the cloud onboarding path.
-    CompletedCloud,
+    CompletedCloud {
+        /// Solana RPC URL chosen during onboarding.
+        rpc_url: String,
+    },
     /// User chose BYOK (bring your own keys).
     CompletedByok,
     /// User deferred (Ctrl-C, explicit skip).
@@ -180,21 +206,41 @@ pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std:
 
     let wallet_path = wallet_path.ok_or("no wallet path selected")?;
 
-    // ── Step 2: Passphrase prompt (sudo-like) ───────────────────
+    // ── Step 2: Solana RPC URL ──────────────────────────────────
+    println!();
+    let rpc_url: String = Input::with_theme(&theme)
+        .with_prompt("Solana RPC URL")
+        .default(swig::DEFAULT_RPC_URL.to_string())
+        .interact_text()?;
+
+    // ── Step 3: Passphrase prompt (sudo-like) ───────────────────
     println!();
     println!("  Creating a Swig embedded wallet requires your master wallet's signature.");
     let passphrase = prompt_passphrase(&theme)?;
-    let _ = &passphrase; // Will be used when signing
 
-    // ── Step 3: Create embedded wallet ──────────────────────────
+    // ── Step 4: Create embedded wallet ──────────────────────────
     println!();
     println!("  Creating Swig embedded wallet...");
-    match swig::create_embedded_wallet(&wallet_path, passphrase.as_bytes()) {
+    match swig::create_embedded_wallet(&wallet_path, passphrase.as_bytes(), &rpc_url) {
         Ok(info) => {
             println!("  ✓ Embedded wallet created: {}", info.address);
+            println!();
+            println!("  ┌─────────────────────────────────────────────────┐");
+            println!("  │  Fund your wallet to start making requests      │");
+            println!("  │                                                 │");
+            println!("  │  Send SOL (for tx fees) and USDC (for payments) │");
+            println!("  │  to the address below:                          │");
+            println!("  │                                                 │");
+            println!("  │  {:<47} │", info.wallet_address);
+            println!("  └─────────────────────────────────────────────────┘");
+            println!();
+
             let mut state = load_state(home_dir);
             state.master_wallet_path = Some(wallet_path.clone());
             state.embedded_wallet_address = Some(info.address);
+            state.wallet_address = Some(info.wallet_address);
+            state.swig_id = Some(info.swig_id);
+            state.rpc_url = Some(rpc_url.clone());
             save_state(home_dir, &state)?;
         }
         Err(e) => {
@@ -203,6 +249,7 @@ pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std:
             let mut state = load_state(home_dir);
             state.status = OnboardingStatus::FailedRecoverable;
             state.master_wallet_path = Some(wallet_path);
+            state.rpc_url = Some(rpc_url);
             save_state(home_dir, &state)?;
             return Ok(OnboardingOutcome::Deferred);
         }
@@ -216,9 +263,22 @@ pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std:
         .interact()?;
 
     if derive_agent {
-        match prompt_and_derive_agent(home_dir, &wallet_path, passphrase.as_bytes(), &theme)? {
+        let swig_account = load_state(home_dir)
+            .embedded_wallet_address
+            .ok_or("embedded wallet address missing")?;
+        match prompt_and_derive_agent(
+            home_dir,
+            &wallet_path,
+            passphrase.as_bytes(),
+            &rpc_url,
+            &swig_account,
+            &theme,
+        )? {
             Some(agent) => {
-                println!("  ✓ Agent wallet derived: {}", agent.address);
+                println!(
+                    "  ✓ Agent wallet derived: {} ({})",
+                    agent.address, agent.label
+                );
             }
             None => {
                 println!("  Agent wallet derivation skipped or failed.");
@@ -226,7 +286,7 @@ pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std:
         }
     }
 
-    // ── Step 5: Mark complete ───────────────────────────────────
+    // ── Step 6: Mark complete ───────────────────────────────────
     let mut state = load_state(home_dir);
     state.status = OnboardingStatus::CompletedCloud;
     save_state(home_dir, &state)?;
@@ -235,7 +295,7 @@ pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std:
     println!("  ✓ Onboarding complete!");
     println!();
 
-    Ok(OnboardingOutcome::CompletedCloud)
+    Ok(OnboardingOutcome::CompletedCloud { rpc_url })
 }
 
 // ── Wallet selection ──────────────────────────────────────────
@@ -370,12 +430,19 @@ fn prompt_and_derive_agent(
     home_dir: &Path,
     wallet_path: &Path,
     signature: &[u8],
+    rpc_url: &str,
+    swig_account: &str,
     theme: &ColorfulTheme,
 ) -> Result<Option<AgentWalletState>, Box<dyn std::error::Error>> {
     println!();
     println!("  Configure agent wallet spend limits (enforced by Swig on-chain).");
     println!("  Leave empty for no limit.");
     println!();
+
+    let label: String = Input::with_theme(theme)
+        .with_prompt("Agent label")
+        .default("default".into())
+        .interact_text()?;
 
     let per_tx_cap: String = Input::with_theme(theme)
         .with_prompt("Per-transaction cap (lamports, empty = unlimited)")
@@ -405,13 +472,24 @@ fn prompt_and_derive_agent(
 
     println!();
     println!("  Deriving agent wallet with Swig...");
-    match swig::derive_agent_wallet(wallet_path, signature, &permissions) {
-        Ok(info) => {
+    match swig::derive_agent_wallet(
+        wallet_path,
+        signature,
+        &permissions,
+        rpc_url,
+        &label,
+        home_dir,
+        swig_account,
+    ) {
+        Ok((info, _keypair_bytes)) => {
             let agent = AgentWalletState {
+                label: info.label.clone(),
                 address: info.address,
+                role_id: info.role_id,
                 permissions: info.permissions,
+                created_at: info.created_at,
             };
-            save_agent_wallet(home_dir, &agent)?;
+            add_agent_wallet(home_dir, agent.clone())?;
             Ok(Some(agent))
         }
         Err(e) => {

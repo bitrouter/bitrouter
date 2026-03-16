@@ -179,6 +179,10 @@ enum SudoAction {
         /// Expiration (e.g., "7d", "30d", "never")
         #[arg(long)]
         expiration: Option<String>,
+
+        /// Human-readable label for this agent wallet
+        #[arg(long, default_value = "default")]
+        label: Option<String>,
     },
     /// Update agent wallet permissions (requires master wallet signature)
     SetPermissions {
@@ -318,12 +322,14 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     per_tx_cap,
                     cumulative_cap,
                     expiration,
+                    label,
                 } => {
                     cli::sudo::run_derive_agent_wallet(
                         home,
                         per_tx_cap,
                         cumulative_cap,
                         expiration,
+                        label,
                     )?;
                 }
                 SudoAction::SetPermissions {
@@ -395,9 +401,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         if is_interactive {
             onboarding_ran = true;
             match cli::onboarding::run_onboarding(&paths.home_dir) {
-                Ok(cli::onboarding::OnboardingOutcome::CompletedCloud) => {
+                Ok(cli::onboarding::OnboardingOutcome::CompletedCloud { rpc_url }) => {
                     // Write cloud provider default config and reload runtime.
-                    if let Err(e) = write_cloud_provider_config(&paths) {
+                    if let Err(e) = write_cloud_provider_config(&paths, &rpc_url) {
                         eprintln!("  Warning: failed to write cloud config: {e}");
                     }
                     runtime = DefaultRuntime::load(paths.clone())
@@ -648,6 +654,7 @@ fn init_tracing() {
 /// config file (not yet registered in the builtin provider registry).
 fn write_cloud_provider_config(
     paths: &crate::runtime::RuntimePaths,
+    rpc_url: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
 
@@ -661,7 +668,10 @@ fn write_cloud_provider_config(
         return Ok(());
     }
 
-    let cloud_block = "\n\
+    let cloud_block = format!(
+        "\n\
+        # Solana RPC endpoint for Swig wallet operations\n\
+        solana_rpc_url: \"{rpc_url}\"\n\n\
         # BitRouter Cloud Node (added by onboarding)\n\
         # Uses x402 for request payments — only a wallet is needed.\n\
         providers:\n\
@@ -674,11 +684,12 @@ fn write_cloud_provider_config(
         \x20 default:\n\
         \x20   strategy: priority\n\
         \x20   endpoints:\n\
-        \x20     - provider: bitrouter-cloud\n";
+        \x20     - provider: bitrouter-cloud\n"
+    );
 
     // Append cloud config to existing file.
     let mut content = existing;
-    content.push_str(cloud_block);
+    content.push_str(&cloud_block);
 
     fs::create_dir_all(&paths.home_dir).map_err(|e| format!("failed to create home dir: {e}"))?;
     fs::write(config_path, content)
