@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/bitrouter/bitrouter/compare/v0.9.0...v0.10.0)
+
+
+### ⛰️ Features
+
+- *(cli)* Default provider onboarding ([#124](https://github.com/bitrouter/bitrouter/pull/124)) - ([65b48cb](https://github.com/bitrouter/bitrouter/commit/65b48cb358c23b0b25969c100456ffd9d142bf26))
+
+
 ## [0.9.0](https://github.com/bitrouter/bitrouter/compare/v0.8.1...v0.9.0)
 
 
