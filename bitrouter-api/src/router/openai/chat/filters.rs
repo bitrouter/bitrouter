@@ -185,34 +185,32 @@ where
         let gen_result = model.generate(options).await;
         match gen_result {
             Ok(result) => {
-                observer
-                    .on_request_success(RequestSuccessEvent {
-                        ctx: RequestContext {
-                            route: incoming_model,
-                            provider: provider_name,
-                            model: target_model_id,
-                            account_id,
-                            latency_ms: start.elapsed().as_millis() as u64,
-                        },
-                        usage: result.usage.clone(),
-                    })
-                    .await;
+                let event = RequestSuccessEvent {
+                    ctx: RequestContext {
+                        route: incoming_model,
+                        provider: provider_name,
+                        model: target_model_id,
+                        account_id,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                    },
+                    usage: result.usage.clone(),
+                };
+                tokio::spawn(async move { observer.on_request_success(event).await });
                 let response = convert::from_generate_result(&model_id, result);
                 Ok(Box::new(warp::reply::json(&response)) as Box<dyn warp::Reply>)
             }
             Err(e) => {
-                observer
-                    .on_request_failure(RequestFailureEvent {
-                        ctx: RequestContext {
-                            route: incoming_model,
-                            provider: provider_name,
-                            model: target_model_id,
-                            account_id,
-                            latency_ms: start.elapsed().as_millis() as u64,
-                        },
-                        error: e.clone(),
-                    })
-                    .await;
+                let event = RequestFailureEvent {
+                    ctx: RequestContext {
+                        route: incoming_model,
+                        provider: provider_name,
+                        model: target_model_id,
+                        account_id,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                    },
+                    error: e.clone(),
+                };
+                tokio::spawn(async move { observer.on_request_failure(event).await });
                 Err(warp::reject::custom(BitrouterRejection(e)))
             }
         }
@@ -284,6 +282,7 @@ async fn handle_stream_with_observe(
         use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;
         use tokio_stream::StreamExt as _;
         let mut usage = None;
+        let mut client_disconnected = false;
         while let Some(part) = stream.next().await {
             if let LanguageModelStreamPart::Finish {
                 usage: ref finish_usage,
@@ -296,6 +295,7 @@ async fn handle_stream_with_observe(
                 let data = serde_json::to_string(&chunk).unwrap_or_default();
                 let event = Ok(warp::sse::Event::default().data(data));
                 if tx.send(event).await.is_err() {
+                    client_disconnected = true;
                     break;
                 }
             }
@@ -305,29 +305,31 @@ async fn handle_stream_with_observe(
             .await;
 
         let latency_ms = start.elapsed().as_millis() as u64;
+        let ctx = RequestContext {
+            route,
+            provider,
+            model: target_model,
+            account_id,
+            latency_ms,
+        };
         if let Some(usage) = usage {
             observer
-                .on_request_success(RequestSuccessEvent {
-                    ctx: RequestContext {
-                        route,
-                        provider,
-                        model: target_model,
-                        account_id,
-                        latency_ms,
-                    },
-                    usage,
+                .on_request_success(RequestSuccessEvent { ctx, usage })
+                .await;
+        } else if client_disconnected {
+            observer
+                .on_request_failure(RequestFailureEvent {
+                    ctx,
+                    error: bitrouter_core::errors::BitrouterError::cancelled(
+                        None,
+                        "client disconnected during stream",
+                    ),
                 })
                 .await;
         } else {
             observer
                 .on_request_failure(RequestFailureEvent {
-                    ctx: RequestContext {
-                        route,
-                        provider,
-                        model: target_model,
-                        account_id,
-                        latency_ms,
-                    },
+                    ctx,
                     error: bitrouter_core::errors::BitrouterError::stream_protocol(
                         None,
                         "stream completed without finish event",

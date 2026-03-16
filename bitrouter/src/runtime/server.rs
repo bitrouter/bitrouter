@@ -93,12 +93,20 @@ where
         let metrics_collector = Arc::new(MetricsCollector::new());
         let observer: Arc<dyn ObserveCallback> = Arc::new(CompositeObserver::new(vec![
             spend_observer as Arc<dyn ObserveCallback>,
-            metrics_collector as Arc<dyn ObserveCallback>,
+            metrics_collector.clone() as Arc<dyn ObserveCallback>,
         ]));
 
         let health = warp::path("health")
             .and(warp::get())
             .map(|| warp::reply::json(&serde_json::json!({ "status": "ok" })));
+
+        // Metrics endpoint backed by the in-memory MetricsCollector.
+        let metrics_route = {
+            let mc = metrics_collector.clone();
+            warp::path!("v1" / "metrics")
+                .and(warp::get())
+                .map(move || warp::reply::json(&mc.snapshot()))
+        };
 
         // Route listing — no auth required.
         let route_list = routes::routes_filter(self.table.clone());
@@ -169,6 +177,7 @@ where
             let sess = bitrouter_accounts::filters::session_routes(db_conn, mgmt_auth);
 
             let all = health
+                .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
                 .or(admin_routes)
@@ -189,6 +198,7 @@ where
             server.run().await;
         } else {
             let all = health
+                .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
                 .or(admin_routes)
