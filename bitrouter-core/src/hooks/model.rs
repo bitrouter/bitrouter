@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::models::language::language_model::DynLanguageModel;
 
-use super::GenerationHook;
+use super::{GenerationContext, GenerationHook};
 
 /// A model wrapper that invokes [`GenerationHook`] callbacks after
 /// `generate()` completes and for each streaming part yielded by `stream()`.
@@ -52,8 +52,13 @@ impl crate::models::language::language_model::LanguageModel for HookedModel {
             }
         };
 
+        let ctx = GenerationContext {
+            model_id: self.inner.model_id(),
+            provider_name: self.inner.provider_name(),
+        };
+
         for hook in self.hooks.iter() {
-            hook.on_generate_result(&result);
+            hook.on_generate_result(&ctx, &result);
         }
 
         Ok(result)
@@ -74,7 +79,12 @@ impl crate::models::language::language_model::LanguageModel for HookedModel {
             }
         };
 
-        let hooked_stream = super::stream::HookedStream::new(result.stream, self.hooks.clone());
+        let hooked_stream = super::stream::HookedStream::new(
+            result.stream,
+            self.hooks.clone(),
+            self.inner.model_id().to_owned(),
+            self.inner.provider_name().to_owned(),
+        );
 
         Ok(
             crate::models::language::stream_result::LanguageModelStreamResult {
