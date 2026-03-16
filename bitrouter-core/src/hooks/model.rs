@@ -57,11 +57,6 @@ impl crate::models::language::language_model::LanguageModel for HookedModel {
             provider_name: self.inner.provider_name(),
         };
 
-        let ctx = GenerationContext {
-            model_id: self.inner.model_id(),
-            provider_name: self.inner.provider_name(),
-        };
-
         for hook in self.hooks.iter() {
             hook.on_generate_result(&ctx, &result);
         }
