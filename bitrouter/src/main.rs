@@ -130,6 +130,12 @@ enum Command {
         #[arg(long)]
         rm: Option<String>,
     },
+
+    /// Master-wallet signing operations with Swig
+    Sudo {
+        #[command(subcommand)]
+        action: SudoAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -154,6 +160,46 @@ enum RouteAction {
         /// Model name to remove
         model: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum SudoAction {
+    /// Create a Swig embedded wallet (requires master wallet signature)
+    CreateEmbeddedWallet,
+    /// Derive an agent wallet with spend limits (requires master wallet signature)
+    DeriveAgentWallet {
+        /// Maximum tokens per transaction (lamports)
+        #[arg(long)]
+        per_tx_cap: Option<u64>,
+
+        /// Cumulative spending cap (lamports)
+        #[arg(long)]
+        cumulative_cap: Option<u64>,
+
+        /// Expiration (e.g., "7d", "30d", "never")
+        #[arg(long)]
+        expiration: Option<String>,
+    },
+    /// Update agent wallet permissions (requires master wallet signature)
+    SetPermissions {
+        /// Agent wallet address (uses persisted address if omitted)
+        #[arg(long)]
+        agent: Option<String>,
+
+        /// Maximum tokens per transaction (lamports)
+        #[arg(long)]
+        per_tx_cap: Option<u64>,
+
+        /// Cumulative spending cap (lamports)
+        #[arg(long)]
+        cumulative_cap: Option<u64>,
+
+        /// Expiration (e.g., "7d", "30d", "never")
+        #[arg(long)]
+        expiration: Option<String>,
+    },
+    /// Display wallet info and persisted policy (no signing required)
+    ShowWallet,
 }
 
 #[tokio::main]
@@ -262,6 +308,44 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli::keys::run(&keys_dir, list, show, rm)?;
             return Ok(());
         }
+        Some(Command::Sudo { action }) => {
+            let home = &paths.home_dir;
+            match action {
+                SudoAction::CreateEmbeddedWallet => {
+                    cli::sudo::run_create_embedded_wallet(home)?;
+                }
+                SudoAction::DeriveAgentWallet {
+                    per_tx_cap,
+                    cumulative_cap,
+                    expiration,
+                } => {
+                    cli::sudo::run_derive_agent_wallet(
+                        home,
+                        per_tx_cap,
+                        cumulative_cap,
+                        expiration,
+                    )?;
+                }
+                SudoAction::SetPermissions {
+                    agent,
+                    per_tx_cap,
+                    cumulative_cap,
+                    expiration,
+                } => {
+                    cli::sudo::run_set_permissions(
+                        home,
+                        agent,
+                        per_tx_cap,
+                        cumulative_cap,
+                        expiration,
+                    )?;
+                }
+                SudoAction::ShowWallet => {
+                    cli::sudo::run_show_wallet(home)?;
+                }
+            }
+            return Ok(());
+        }
         Some(Command::Route { action }) => {
             // Route commands talk to a running daemon, so we only need the
             // config to know the listen address.
@@ -300,9 +384,48 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
         .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
 
+    // ── First-run onboarding gate ───────────────────────────────
+    // Auto-trigger cloud node onboarding on first serve/start when no
+    // onboarding marker exists. Only runs in interactive terminals.
+    let is_server_start =
+        cli.command.is_none() || matches!(cli.command, Some(Command::Serve | Command::Start));
+    let mut onboarding_ran = false;
+    if is_server_start && cli::onboarding::should_onboard(&paths.home_dir) {
+        let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+        if is_interactive {
+            onboarding_ran = true;
+            match cli::onboarding::run_onboarding(&paths.home_dir) {
+                Ok(cli::onboarding::OnboardingOutcome::CompletedCloud) => {
+                    // Write cloud provider default config and reload runtime.
+                    if let Err(e) = write_cloud_provider_config(&paths) {
+                        eprintln!("  Warning: failed to write cloud config: {e}");
+                    }
+                    runtime = DefaultRuntime::load(paths.clone())
+                        .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+                }
+                Ok(cli::onboarding::OnboardingOutcome::CompletedByok) => {
+                    // BYOK — no cloud config written.
+                    println!();
+                    println!("  To configure BYOK providers later, see:");
+                    println!("    https://github.com/bitrouter/bitrouter#provider-configuration");
+                    println!();
+                }
+                Ok(cli::onboarding::OnboardingOutcome::Deferred) => {
+                    // Will re-prompt on next serve/start.
+                }
+                Err(e) => {
+                    eprintln!("  Onboarding error: {e}");
+                    eprintln!("  Continuing without cloud provider...");
+                    eprintln!();
+                }
+            }
+        }
+    }
+
     // Auto-init: when launching in TUI mode with no providers, run the setup
     // wizard first so the user lands in a fully configured TUI.
-    if use_tui && !runtime.config.has_configured_providers() {
+    // Skip if onboarding already ran — the user chose their path.
+    if use_tui && !onboarding_ran && !runtime.config.has_configured_providers() {
         let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
         if is_interactive {
             eprintln!();
@@ -387,7 +510,8 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             | Command::Account { .. }
             | Command::Keygen { .. }
             | Command::Keys { .. }
-            | Command::Route { .. },
+            | Command::Route { .. }
+            | Command::Sudo { .. },
         ) => {
             unreachable!()
         }
@@ -516,4 +640,49 @@ fn init_tracing() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .try_init();
+}
+
+/// Write a cloud provider config entry to `bitrouter.yaml` after onboarding.
+///
+/// This generates a provider block for BitRouter Cloud Node directly in the
+/// config file (not yet registered in the builtin provider registry).
+fn write_cloud_provider_config(
+    paths: &crate::runtime::RuntimePaths,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs;
+
+    let config_path = &paths.config_file;
+
+    // Read existing config or start fresh.
+    let existing = fs::read_to_string(config_path).unwrap_or_default();
+
+    // If cloud provider is already configured, skip.
+    if existing.contains("bitrouter-cloud:") {
+        return Ok(());
+    }
+
+    let cloud_block = "\n\
+        # BitRouter Cloud Node (added by onboarding)\n\
+        # Uses x402 for request payments — only a wallet is needed.\n\
+        providers:\n\
+        \x20 bitrouter-cloud:\n\
+        \x20   api_base: \"https://cloud.bitrouter.ai/v1\"\n\
+        \x20   api_protocol: openai\n\
+        \x20   auth:\n\
+        \x20     type: x402\n\n\
+        models:\n\
+        \x20 default:\n\
+        \x20   strategy: priority\n\
+        \x20   endpoints:\n\
+        \x20     - provider: bitrouter-cloud\n";
+
+    // Append cloud config to existing file.
+    let mut content = existing;
+    content.push_str(cloud_block);
+
+    fs::create_dir_all(&paths.home_dir).map_err(|e| format!("failed to create home dir: {e}"))?;
+    fs::write(config_path, content)
+        .map_err(|e| format!("failed to write {}: {e}", config_path.display()))?;
+
+    Ok(())
 }
