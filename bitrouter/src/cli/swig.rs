@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 /// Default Solana mainnet RPC endpoint.
 pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 
-/// Mainnet USDC mint address.
-pub const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+/// Mainnet USDC mint address (only used by the swig feature).
+#[cfg(feature = "swig")]
+const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 

@@ -9,7 +9,7 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["tui", "sqlite", "postgres", "swig"]
+default = ["tui", "sqlite", "postgres"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
 sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
 postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
