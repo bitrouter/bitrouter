@@ -10,6 +10,18 @@ use crate::models::language::{
     generate_result::LanguageModelGenerateResult, stream_part::LanguageModelStreamPart,
 };
 
+/// Identity of the model that handled a generation.
+///
+/// Passed to every [`GenerationHook`] callback so hooks can attribute
+/// results without needing access to the original request.
+#[derive(Debug, Clone)]
+pub struct GenerationContext<'a> {
+    /// Upstream provider model ID (e.g. `"meta-llama/Llama-4-Maverick-17B-128E-Instruct"`).
+    pub model_id: &'a str,
+    /// Provider name (e.g. `"chutes-ai"`).
+    pub provider_name: &'a str,
+}
+
 /// A hook that observes generation lifecycle events for side-effect purposes
 /// (logging, metrics, token tracking, auditing).
 ///
@@ -18,7 +30,12 @@ use crate::models::language::{
 /// override the events they care about.
 pub trait GenerationHook: Send + Sync {
     /// Called after a non-streaming `generate()` call completes successfully.
-    fn on_generate_result(&self, _result: &LanguageModelGenerateResult) {}
+    fn on_generate_result(
+        &self,
+        _ctx: &GenerationContext<'_>,
+        _result: &LanguageModelGenerateResult,
+    ) {
+    }
 
     /// Called when `generate()` or `stream()` returns an error.
     fn on_generate_error(&self, _error: &BitrouterError) {}
@@ -28,7 +45,7 @@ pub trait GenerationHook: Send + Sync {
     /// To capture token usage from streaming responses, match on
     /// [`LanguageModelStreamPart::Finish`] which carries
     /// [`LanguageModelUsage`](crate::models::language::usage::LanguageModelUsage).
-    fn on_stream_part(&self, _part: &LanguageModelStreamPart) {}
+    fn on_stream_part(&self, _ctx: &GenerationContext<'_>, _part: &LanguageModelStreamPart) {}
 }
 
 #[cfg(test)]
@@ -99,7 +116,11 @@ mod tests {
     }
 
     impl GenerationHook for CountingHook {
-        fn on_generate_result(&self, _result: &LanguageModelGenerateResult) {
+        fn on_generate_result(
+            &self,
+            _ctx: &GenerationContext<'_>,
+            _result: &LanguageModelGenerateResult,
+        ) {
             self.generate_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -109,7 +130,7 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
 
-        fn on_stream_part(&self, _part: &LanguageModelStreamPart) {
+        fn on_stream_part(&self, _ctx: &GenerationContext<'_>, _part: &LanguageModelStreamPart) {
             self.stream_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -121,13 +142,20 @@ mod tests {
         impl GenerationHook for NoopHook {}
 
         let hook = NoopHook;
-        hook.on_generate_result(&test_generate_result());
+        let ctx = GenerationContext {
+            model_id: "test-model",
+            provider_name: "test-provider",
+        };
+        hook.on_generate_result(&ctx, &test_generate_result());
         hook.on_generate_error(&crate::errors::BitrouterError::transport(None, "test"));
-        hook.on_stream_part(&LanguageModelStreamPart::TextDelta {
-            id: "t1".into(),
-            delta: "hello".into(),
-            provider_metadata: None,
-        });
+        hook.on_stream_part(
+            &ctx,
+            &LanguageModelStreamPart::TextDelta {
+                id: "t1".into(),
+                delta: "hello".into(),
+                provider_metadata: None,
+            },
+        );
     }
 
     #[tokio::test]
@@ -160,7 +188,12 @@ mod tests {
         let inner: Pin<Box<dyn futures_core::Stream<Item = LanguageModelStreamPart> + Send>> =
             Box::pin(tokio_stream::iter(parts));
 
-        let hooked = HookedStream::new(inner, hooks);
+        let hooked = HookedStream::new(
+            inner,
+            hooks,
+            "test-model".to_owned(),
+            "test-provider".to_owned(),
+        );
         let mut hooked = Box::pin(hooked);
 
         use tokio_stream::StreamExt as _;
@@ -201,7 +234,12 @@ mod tests {
         let inner: Pin<Box<dyn futures_core::Stream<Item = LanguageModelStreamPart> + Send>> =
             Box::pin(tokio_stream::iter(parts));
 
-        let hooked = HookedStream::new(inner, hooks);
+        let hooked = HookedStream::new(
+            inner,
+            hooks,
+            "test-model".to_owned(),
+            "test-provider".to_owned(),
+        );
         let mut hooked = Box::pin(hooked);
 
         use tokio_stream::StreamExt as _;
@@ -225,9 +263,13 @@ mod tests {
     fn on_generate_result_invoked() {
         let hook = Arc::new(CountingHook::new());
         let result = test_generate_result();
+        let ctx = GenerationContext {
+            model_id: "test-model",
+            provider_name: "test-provider",
+        };
 
-        hook.on_generate_result(&result);
-        hook.on_generate_result(&result);
+        hook.on_generate_result(&ctx, &result);
+        hook.on_generate_result(&ctx, &result);
 
         assert_eq!(
             hook.generate_count
