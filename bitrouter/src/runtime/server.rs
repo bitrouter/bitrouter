@@ -1,12 +1,18 @@
 use std::sync::Arc;
 
-use bitrouter_api::metrics::MetricsStore;
 use bitrouter_api::router::{admin, anthropic, google, models, openai, routes};
 use bitrouter_config::BitrouterConfig;
-use bitrouter_core::hooks::HookedRouter;
+use bitrouter_core::observe::ObserveCallback;
 use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::model_router::LanguageModelRouter;
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
+use bitrouter_observe::composite::CompositeObserver;
+use bitrouter_observe::cost::Pricing;
+use bitrouter_observe::metrics::MetricsCollector;
+use bitrouter_observe::observer::SpendObserver;
+use bitrouter_observe::spend::memory::InMemorySpendStore;
+use bitrouter_observe::spend::sea_orm_store::SeaOrmSpendStore;
+use bitrouter_observe::spend::store;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
@@ -46,12 +52,6 @@ where
         let guardrail = Arc::new(Guardrail::new(self.config.guardrails.clone()));
         let guarded_router = Arc::new(GuardedRouter::new(self.router, guardrail.clone()));
 
-        // Wrap with generation hooks for side-effect observation (logging,
-        // token tracking, auditing). Hooks are invoked on borrowed core types
-        // after generate() and for each streaming part.
-        let hooks: Arc<[Arc<dyn bitrouter_core::hooks::GenerationHook>]> = Arc::from(Vec::new());
-        let hooked_router = Arc::new(HookedRouter::new(guarded_router, hooks));
-
         if guardrail.is_disabled() {
             tracing::info!("guardrails disabled");
         } else {
@@ -63,12 +63,50 @@ where
             self.db.as_ref().map(|db| db.as_ref().clone()),
         ));
 
-        // Shared in-memory metrics store.
-        let metrics = Arc::new(MetricsStore::new());
+        // Build spend store: SeaORM-backed if DB is available, otherwise in-memory.
+        let spend_store: Arc<dyn store::SpendStore> = match &self.db {
+            Some(db) => Arc::new(SeaOrmSpendStore::new(db.as_ref().clone())),
+            None => Arc::new(InMemorySpendStore::new()),
+        };
+
+        // Build pricing lookup from the config's provider definitions.
+        let providers = self.config.providers.clone();
+        let pricing_fn = move |provider: &str, model: &str| {
+            let mp = providers
+                .get(provider)
+                .and_then(|p| p.models.as_ref())
+                .and_then(|models| models.get(model))
+                .map(|info| &info.pricing)
+                .cloned()
+                .unwrap_or_default();
+            Pricing {
+                input_no_cache: mp.input_tokens.no_cache,
+                input_cache_read: mp.input_tokens.cache_read,
+                input_cache_write: mp.input_tokens.cache_write,
+                output_text: mp.output_tokens.text,
+                output_reasoning: mp.output_tokens.reasoning,
+            }
+        };
+
+        // Compose observers: spend tracking + metrics aggregation.
+        let spend_observer = Arc::new(SpendObserver::new(spend_store, Arc::new(pricing_fn)));
+        let metrics_collector = Arc::new(MetricsCollector::new());
+        let observer: Arc<dyn ObserveCallback> = Arc::new(CompositeObserver::new(vec![
+            spend_observer as Arc<dyn ObserveCallback>,
+            metrics_collector.clone() as Arc<dyn ObserveCallback>,
+        ]));
 
         let health = warp::path("health")
             .and(warp::get())
             .map(|| warp::reply::json(&serde_json::json!({ "status": "ok" })));
+
+        // Metrics endpoint backed by the in-memory MetricsCollector.
+        let metrics_route = {
+            let mc = metrics_collector.clone();
+            warp::path!("v1" / "metrics")
+                .and(warp::get())
+                .map(move || warp::reply::json(&mc.snapshot()))
+        };
 
         // Route listing — no auth required.
         let route_list = routes::routes_filter(self.table.clone());
@@ -76,43 +114,58 @@ where
         // Model listing — no auth required.
         let model_list = models::models_filter(self.table.clone());
 
-        // Metrics endpoint — no auth required.
-        let metrics_endpoint = bitrouter_api::router::metrics::metrics_filter(metrics.clone());
-
         // Admin route management — gated by management auth.
         let admin_routes = auth_gate(auth::management_auth(auth_ctx.clone()))
             .and(admin::admin_routes_filter(self.table.clone()));
 
-        // Model API routes — gated by protocol-appropriate auth.
-        // All routes use the guarded router for guardrail enforcement.
-        let chat = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
-            openai::chat::filters::chat_completions_filter(
-                self.table.clone(),
-                hooked_router.clone(),
-                metrics.clone(),
-            ),
+        // Build account filter that extracts account ID when auth is enabled,
+        // or always returns None when no database is configured.
+        let account_filter = if self.db.is_some() {
+            let auth_filter = auth::openai_auth(auth_ctx.clone());
+            warp::any()
+                .and(auth_filter)
+                .map(|id: bitrouter_accounts::identity::Identity| Some(id.account_id.0.to_string()))
+                .boxed()
+        } else {
+            warp::any().map(|| None::<String>).boxed()
+        };
+
+        let anthropic_account_filter = if self.db.is_some() {
+            let auth_filter = auth::anthropic_auth(auth_ctx.clone());
+            warp::any()
+                .and(auth_filter)
+                .map(|id: bitrouter_accounts::identity::Identity| Some(id.account_id.0.to_string()))
+                .boxed()
+        } else {
+            warp::any().map(|| None::<String>).boxed()
+        };
+
+        // Model API routes with observation.
+        let chat = openai::chat::filters::chat_completions_filter_with_observe(
+            self.table.clone(),
+            guarded_router.clone(),
+            observer.clone(),
+            account_filter.clone(),
         );
-        let messages = auth_gate(auth::anthropic_auth(auth_ctx.clone())).and(
-            anthropic::messages::filters::messages_filter(
-                self.table.clone(),
-                hooked_router.clone(),
-                metrics.clone(),
-            ),
+        let messages = anthropic::messages::filters::messages_filter_with_observe(
+            self.table.clone(),
+            guarded_router.clone(),
+            observer.clone(),
+            anthropic_account_filter,
         );
-        let responses = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
-            openai::responses::filters::responses_filter(
-                self.table.clone(),
-                hooked_router.clone(),
-                metrics.clone(),
-            ),
+        let responses = openai::responses::filters::responses_filter_with_observe(
+            self.table.clone(),
+            guarded_router.clone(),
+            observer.clone(),
+            account_filter.clone(),
         );
-        let generate_content = auth_gate(auth::openai_auth(auth_ctx.clone())).and(
-            google::generate_content::filters::generate_content_filter(
+        let generate_content =
+            google::generate_content::filters::generate_content_filter_with_observe(
                 self.table.clone(),
-                hooked_router.clone(),
-                metrics.clone(),
-            ),
-        );
+                guarded_router.clone(),
+                observer.clone(),
+                account_filter,
+            );
 
         // Build the full route tree. Account/session management routes are
         // only mounted when a database is configured.
@@ -124,9 +177,9 @@ where
             let sess = bitrouter_accounts::filters::session_routes(db_conn, mgmt_auth);
 
             let all = health
+                .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
-                .or(metrics_endpoint)
                 .or(admin_routes)
                 .or(chat)
                 .or(messages)
@@ -145,9 +198,9 @@ where
             server.run().await;
         } else {
             let all = health
+                .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
-                .or(metrics_endpoint)
                 .or(admin_routes)
                 .or(chat)
                 .or(messages)

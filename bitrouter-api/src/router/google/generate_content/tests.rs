@@ -11,6 +11,7 @@ use bitrouter_core::{
         stream_result::LanguageModelStreamResult,
         usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
     },
+    observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
     routers::{
         model_router::LanguageModelRouter,
         routing_table::{RoutingTable, RoutingTarget},
@@ -19,10 +20,10 @@ use bitrouter_core::{
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use warp::Filter;
 
-use super::filters::generate_content_filter;
-
-use crate::metrics::MetricsStore;
+use super::filters::{generate_content_filter, generate_content_filter_with_observe};
 
 // ── Mock implementations ────────────────────────────────────────────────────
 
@@ -166,8 +167,7 @@ fn parse_sse_body(body: &[u8]) -> Vec<(Option<String>, String)> {
 async fn generate_content() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = generate_content_filter(table, router, metrics.clone());
+    let filter = generate_content_filter(table, router);
 
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
@@ -195,31 +195,13 @@ async fn generate_content() {
     assert_eq!(json["usageMetadata"]["candidatesTokenCount"], 6);
     assert_eq!(json["usageMetadata"]["totalTokenCount"], 18);
     assert_eq!(json["modelVersion"], "gemini-2.0-flash");
-
-    // Verify metrics were recorded for the generate request.
-    let snap = metrics.snapshot();
-    let route = snap
-        .routes
-        .get("gemini-2.0-flash")
-        .expect("route should exist");
-    assert_eq!(route.total_requests, 1);
-    assert_eq!(route.total_errors, 0);
-    assert_eq!(route.avg_input_tokens, Some(12));
-    assert_eq!(route.avg_output_tokens, Some(6));
-    let ep = route
-        .by_endpoint
-        .get("mock:gemini-2.0-flash")
-        .expect("endpoint should exist");
-    assert_eq!(ep.total_requests, 1);
-    assert_eq!(ep.total_errors, 0);
 }
 
 #[tokio::test]
 async fn generate_content_with_system() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = generate_content_filter(table, router, metrics);
+    let filter = generate_content_filter(table, router);
 
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
@@ -249,8 +231,7 @@ async fn generate_content_with_system() {
 async fn generate_content_streaming_sends_sse_events() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = generate_content_filter(table, router, metrics.clone());
+    let filter = generate_content_filter(table, router);
 
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
@@ -290,24 +271,13 @@ async fn generate_content_streaming_sends_sse_events() {
 
     // Third event: [DONE]
     assert_eq!(events[2].1, "[DONE]");
-
-    // Verify streaming request was counted (no token data for streams).
-    let snap = metrics.snapshot();
-    let route = snap
-        .routes
-        .get("gemini-2.0-flash")
-        .expect("route should exist");
-    assert_eq!(route.total_requests, 1);
-    assert_eq!(route.total_errors, 0);
-    assert_eq!(route.avg_input_tokens, None);
 }
 
 #[tokio::test]
 async fn generate_content_wrong_method() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = generate_content_filter(table, router, metrics);
+    let filter = generate_content_filter(table, router);
 
     let res = warp::test::request()
         .method("GET")
@@ -322,8 +292,7 @@ async fn generate_content_wrong_method() {
 async fn generate_content_stream_via_path() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = generate_content_filter(table, router, metrics);
+    let filter = generate_content_filter(table, router);
 
     // Stream indicated via path (:streamGenerateContent) without stream field in body
     let body = serde_json::json!({
@@ -342,4 +311,107 @@ async fn generate_content_stream_via_path() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers()["content-type"], "text/event-stream");
+}
+
+// ── Mock observer ───────────────────────────────────────────────────────
+
+struct MockObserver {
+    success_count: AtomicU64,
+    failure_count: AtomicU64,
+}
+
+impl MockObserver {
+    fn new() -> Self {
+        Self {
+            success_count: AtomicU64::new(0),
+            failure_count: AtomicU64::new(0),
+        }
+    }
+}
+
+impl ObserveCallback for MockObserver {
+    fn on_request_success(
+        &self,
+        _event: RequestSuccessEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.success_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+
+    fn on_request_failure(
+        &self,
+        _event: RequestFailureEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.failure_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+}
+
+// ── Observe tests ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn generate_content_observe_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = generate_content_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "gemini-2.0-flash",
+        "contents": [
+            {"role": "user", "parts": [{"text": "Hello"}]}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1beta/models/gemini-2.0-flash:generateContent")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn generate_content_observe_streaming_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = generate_content_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "gemini-2.0-flash",
+        "contents": [
+            {"role": "user", "parts": [{"text": "Hello"}]}
+        ],
+        "stream": true
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1beta/models/gemini-2.0-flash:streamGenerateContent")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
 }

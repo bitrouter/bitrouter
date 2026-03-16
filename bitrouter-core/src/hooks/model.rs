@@ -42,7 +42,15 @@ impl crate::models::language::language_model::LanguageModel for HookedModel {
         options: crate::models::language::call_options::LanguageModelCallOptions,
     ) -> crate::errors::Result<crate::models::language::generate_result::LanguageModelGenerateResult>
     {
-        let result = self.inner.generate(options).await?;
+        let result = match self.inner.generate(options).await {
+            Ok(r) => r,
+            Err(e) => {
+                for hook in self.hooks.iter() {
+                    hook.on_generate_error(&e);
+                }
+                return Err(e);
+            }
+        };
 
         let ctx = GenerationContext {
             model_id: self.inner.model_id(),
@@ -61,7 +69,15 @@ impl crate::models::language::language_model::LanguageModel for HookedModel {
         options: crate::models::language::call_options::LanguageModelCallOptions,
     ) -> crate::errors::Result<crate::models::language::stream_result::LanguageModelStreamResult>
     {
-        let result = self.inner.stream(options).await?;
+        let result = match self.inner.stream(options).await {
+            Ok(r) => r,
+            Err(e) => {
+                for hook in self.hooks.iter() {
+                    hook.on_generate_error(&e);
+                }
+                return Err(e);
+            }
+        };
 
         let hooked_stream = super::stream::HookedStream::new(
             result.stream,

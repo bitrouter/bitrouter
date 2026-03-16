@@ -9,6 +9,7 @@ impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut all = Vec::new();
         all.extend(bitrouter_accounts::migration::migrations());
+        all.extend(bitrouter_observe::migration::migrations());
         all
     }
 }

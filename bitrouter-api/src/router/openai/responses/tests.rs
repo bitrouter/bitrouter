@@ -11,6 +11,7 @@ use bitrouter_core::{
         stream_result::LanguageModelStreamResult,
         usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
     },
+    observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
     routers::{
         model_router::LanguageModelRouter,
         routing_table::{RoutingTable, RoutingTarget},
@@ -19,10 +20,10 @@ use bitrouter_core::{
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use warp::Filter;
 
-use super::filters::responses_filter;
-
-use crate::metrics::MetricsStore;
+use super::filters::{responses_filter, responses_filter_with_observe};
 
 // ── Mock implementations ────────────────────────────────────────────────────
 
@@ -166,8 +167,7 @@ fn parse_sse_body(body: &[u8]) -> Vec<(Option<String>, String)> {
 async fn responses_generate_text_input() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = responses_filter(table, router, metrics.clone());
+    let filter = responses_filter(table, router);
 
     let body = serde_json::json!({
         "model": "gpt-4o",
@@ -190,27 +190,13 @@ async fn responses_generate_text_input() {
         json["output"][0]["content"][0]["text"],
         "Hello from responses!"
     );
-
-    // Verify metrics were recorded for the generate request.
-    let snap = metrics.snapshot();
-    let route = snap.routes.get("gpt-4o").expect("route should exist");
-    assert_eq!(route.total_requests, 1);
-    assert_eq!(route.total_errors, 0);
-    assert_eq!(route.avg_input_tokens, Some(8));
-    assert_eq!(route.avg_output_tokens, Some(4));
-    let ep = route
-        .by_endpoint
-        .get("mock:gpt-4o")
-        .expect("endpoint should exist");
-    assert_eq!(ep.total_requests, 1);
 }
 
 #[tokio::test]
 async fn responses_generate_messages_input() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = responses_filter(table, router, metrics);
+    let filter = responses_filter(table, router);
 
     let body = serde_json::json!({
         "model": "gpt-4o",
@@ -235,8 +221,7 @@ async fn responses_generate_messages_input() {
 async fn responses_streaming_sends_sse_events() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = responses_filter(table, router, metrics.clone());
+    let filter = responses_filter(table, router);
 
     let body = serde_json::json!({
         "model": "gpt-4o",
@@ -271,21 +256,13 @@ async fn responses_streaming_sends_sse_events() {
 
     assert_eq!(events[2].0, None);
     assert_eq!(events[2].1, "[DONE]");
-
-    // Verify streaming request was counted (no token data for streams).
-    let snap = metrics.snapshot();
-    let route = snap.routes.get("gpt-4o").expect("route should exist");
-    assert_eq!(route.total_requests, 1);
-    assert_eq!(route.total_errors, 0);
-    assert_eq!(route.avg_input_tokens, None);
 }
 
 #[tokio::test]
 async fn responses_wrong_method() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = responses_filter(table, router, metrics);
+    let filter = responses_filter(table, router);
 
     let res = warp::test::request()
         .method("GET")
@@ -294,4 +271,103 @@ async fn responses_wrong_method() {
         .await;
 
     assert_eq!(res.status(), 405);
+}
+
+// ── Mock observer ───────────────────────────────────────────────────────
+
+struct MockObserver {
+    success_count: AtomicU64,
+    failure_count: AtomicU64,
+}
+
+impl MockObserver {
+    fn new() -> Self {
+        Self {
+            success_count: AtomicU64::new(0),
+            failure_count: AtomicU64::new(0),
+        }
+    }
+}
+
+impl ObserveCallback for MockObserver {
+    fn on_request_success(
+        &self,
+        _event: RequestSuccessEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.success_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+
+    fn on_request_failure(
+        &self,
+        _event: RequestFailureEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.failure_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+}
+
+// ── Observe tests ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn responses_observe_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = responses_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "input": "Say hello"
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/responses")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn responses_observe_streaming_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = responses_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "input": "Say hello",
+        "stream": true
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/responses")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
 }
