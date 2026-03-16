@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/bitrouter/bitrouter/compare/v0.8.1...v0.9.0)
+
+
+### ⛰️ Features
+
+- *(hooks)* Propagate model context to GenerationHook callbacks ([#121](https://github.com/bitrouter/bitrouter/pull/121)) - ([3cdc613](https://github.com/bitrouter/bitrouter/commit/3cdc613ffcde58522575460e556598f7a87cc58f))
+- *(observe)* Add `bitrouter-observe` crate for spend tracking and metrics ([#119](https://github.com/bitrouter/bitrouter/pull/119)) - ([240f547](https://github.com/bitrouter/bitrouter/commit/240f547780962c9c2308a9e65b5c726990ba7a0c))
+
+
 ## [0.8.0](https://github.com/bitrouter/bitrouter/compare/v0.7.1...v0.8.0)
 
 
