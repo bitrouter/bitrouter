@@ -26,6 +26,10 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub guardrails: bitrouter_guardrails::GuardrailConfig,
 
+    /// Solana RPC endpoint used for Swig wallet operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solana_rpc_url: Option<String>,
+
     /// Provider definitions (merged on top of built-in providers).
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,

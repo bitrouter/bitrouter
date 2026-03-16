@@ -1,19 +1,24 @@
-//! JWT authentication filters for the bitrouter gateway.
+//! JWT and SIWG authentication filters for the bitrouter gateway.
 //!
-//! Implements self-signed EdDSA (Ed25519) JWT authentication:
+//! Implements self-signed EdDSA (Ed25519) JWT authentication and native SIWG
+//! (Sign-In with Google/Wallet) embedded wallet authentication:
 //!
-//! - The JWT `iss` claim carries the signer's public key (base64url).
-//! - The server verifies the Ed25519 signature **before** any DB interaction.
-//! - On first contact the server auto-creates an account for the public key.
-//! - Rotated public keys are recognized and rejected (not auto-registered).
+//! - **JWT path**: The JWT `iss` claim carries the signer's CAIP-10 identity.
+//!   The server verifies the Ed25519/EIP-191 signature before any DB interaction.
+//! - **SIWG path**: A SIWG credential is a signed challenge+nonce+timestamp.
+//!   The server verifies the signature, extracts the CAIP-10 identity, and
+//!   resolves an account — same as the JWT path.
+//!
+//! Both methods are accepted for all routes, including admin commands.
+//! On first contact the server auto-creates an account for the public key.
 //!
 //! Credentials are extracted from the protocol-appropriate header:
 //!
 //! | Protocol   | Header                          |
 //! |------------|---------------------------------|
-//! | OpenAI     | `Authorization: Bearer <jwt>`   |
-//! | Anthropic  | `x-api-key: <jwt>`              |
-//! | Management | `Authorization: Bearer <jwt>`   |
+//! | OpenAI     | `Authorization: Bearer <token>` |
+//! | Anthropic  | `x-api-key: <token>`            |
+//! | Management | `Authorization: Bearer <token>` |
 //!
 //! When no database is configured, auth is disabled and all requests are
 //! allowed through (open proxy mode).
@@ -99,14 +104,37 @@ pub fn any_credential() -> impl Filter<Extract = (String,), Error = warp::Reject
 
 // ── identity resolution ───────────────────────────────────────
 
-/// Resolve a JWT credential string to an [`Identity`].
+/// Resolve a credential string to an [`Identity`].
 ///
-/// Security-critical ordering:
-/// 1. Verify the JWT signature cryptographically (chain-aware: SOL_EDDSA or EIP191K).
-/// 2. Check expiration.
+/// Tries JWT first (the common case), then SIWG if JWT verification fails.
+/// Both paths resolve to the same account model via CAIP-10 identity.
+///
+/// Security-critical ordering (per method):
+/// 1. Verify signature cryptographically.
+/// 2. Check expiration / replay protection.
 /// 3. Look up / auto-create account in DB using CAIP-10 identity.
 /// 4. Build Identity with account-relative scope.
 async fn resolve_identity(
+    credential: &str,
+    ctx: &JwtAuthContext,
+) -> Result<Identity, warp::Rejection> {
+    // Try JWT first (most common path).
+    if let Ok(identity) = resolve_jwt_identity(credential, ctx).await {
+        return Ok(identity);
+    }
+
+    // Try SIWG if JWT didn't work.
+    if let Ok(identity) = resolve_siwg_identity(credential, ctx).await {
+        return Ok(identity);
+    }
+
+    Err(warp::reject::custom(Unauthorized(
+        "invalid credential — neither valid JWT nor SIWG",
+    )))
+}
+
+/// Resolve a JWT credential to an [`Identity`].
+async fn resolve_jwt_identity(
     credential: &str,
     ctx: &JwtAuthContext,
 ) -> Result<Identity, warp::Rejection> {
@@ -147,6 +175,50 @@ async fn resolve_identity(
         account_id: AccountId(account.id),
         scope,
     })
+}
+
+// ── SIWG (Sign-In With Wallet / Google) authentication ────────
+
+/// SIWG credential prefix used to distinguish from JWT tokens.
+const SIWG_CREDENTIAL_PREFIX: &str = "siwg:";
+
+/// Resolve a SIWG credential to an [`Identity`].
+///
+/// SIWG credentials are prefixed with `siwg:` followed by a base64url-encoded
+/// signed message containing the wallet's CAIP-10 identity, a nonce, and a
+/// timestamp.
+///
+/// # Placeholder
+/// The actual SIWG verification will be implemented when the Swig SDK is
+/// integrated. For now, this function detects the SIWG prefix and returns
+/// an error — it establishes the code path and rejection handling.
+async fn resolve_siwg_identity(
+    credential: &str,
+    ctx: &JwtAuthContext,
+) -> Result<Identity, warp::Rejection> {
+    // Only attempt if the credential looks like a SIWG token.
+    let _payload = credential
+        .strip_prefix(SIWG_CREDENTIAL_PREFIX)
+        .ok_or_else(|| warp::reject::custom(Unauthorized("not a SIWG credential")))?;
+
+    let Some(ref _db) = ctx.db else {
+        return Err(warp::reject::custom(Unauthorized(
+            "SIWG authentication requires a database",
+        )));
+    };
+
+    // TODO: Implement SIWG verification when Swig SDK is integrated.
+    // The real implementation will:
+    // 1. Decode the base64url payload into (message, signature, nonce, timestamp).
+    // 2. Verify the signature against the embedded CAIP-10 public key.
+    // 3. Check nonce for replay protection (requires DB or cache lookup).
+    // 4. Check timestamp for freshness.
+    // 5. Extract CAIP-10 identity and resolve account via AccountService.
+    // 6. Default scope: Api (unless elevated by server policy).
+
+    Err(warp::reject::custom(Unauthorized(
+        "SIWG authentication is not yet implemented — awaiting Swig SDK integration",
+    )))
 }
 
 // ── composite auth filters ────────────────────────────────────
