@@ -11,6 +11,7 @@ use bitrouter_core::{
         stream_result::LanguageModelStreamResult,
         usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
     },
+    observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
     routers::{
         model_router::LanguageModelRouter,
         routing_table::{RoutingTable, RoutingTarget},
@@ -18,8 +19,10 @@ use bitrouter_core::{
 };
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use warp::Filter;
 
-use super::filters::chat_completions_filter;
+use super::filters::{chat_completions_filter, chat_completions_filter_with_observe};
 
 // ── Mock implementations ────────────────────────────────────────────────────
 
@@ -223,4 +226,105 @@ async fn chat_completions_system_and_user() {
     assert_eq!(res.status(), 200);
     let json: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
     assert_eq!(json["choices"][0]["message"]["role"], "assistant");
+}
+
+// ── Mock observer ───────────────────────────────────────────────────────
+
+struct MockObserver {
+    success_count: AtomicU64,
+    failure_count: AtomicU64,
+}
+
+impl MockObserver {
+    fn new() -> Self {
+        Self {
+            success_count: AtomicU64::new(0),
+            failure_count: AtomicU64::new(0),
+        }
+    }
+}
+
+impl ObserveCallback for MockObserver {
+    fn on_request_success(
+        &self,
+        _event: RequestSuccessEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.success_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+
+    fn on_request_failure(
+        &self,
+        _event: RequestFailureEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.failure_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+}
+
+// ── Observe tests ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn chat_completions_observe_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = chat_completions_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hello"}]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    // Observer is dispatched via tokio::spawn; give it time to complete.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn chat_completions_observe_streaming_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = chat_completions_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stream": true
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    // Streaming observer runs in the spawned task; give it time to complete.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
 }

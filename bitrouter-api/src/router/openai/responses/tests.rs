@@ -11,6 +11,7 @@ use bitrouter_core::{
         stream_result::LanguageModelStreamResult,
         usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
     },
+    observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
     routers::{
         model_router::LanguageModelRouter,
         routing_table::{RoutingTable, RoutingTarget},
@@ -19,8 +20,10 @@ use bitrouter_core::{
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use warp::Filter;
 
-use super::filters::responses_filter;
+use super::filters::{responses_filter, responses_filter_with_observe};
 
 // ── Mock implementations ────────────────────────────────────────────────────
 
@@ -268,4 +271,103 @@ async fn responses_wrong_method() {
         .await;
 
     assert_eq!(res.status(), 405);
+}
+
+// ── Mock observer ───────────────────────────────────────────────────────
+
+struct MockObserver {
+    success_count: AtomicU64,
+    failure_count: AtomicU64,
+}
+
+impl MockObserver {
+    fn new() -> Self {
+        Self {
+            success_count: AtomicU64::new(0),
+            failure_count: AtomicU64::new(0),
+        }
+    }
+}
+
+impl ObserveCallback for MockObserver {
+    fn on_request_success(
+        &self,
+        _event: RequestSuccessEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.success_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+
+    fn on_request_failure(
+        &self,
+        _event: RequestFailureEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.failure_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+}
+
+// ── Observe tests ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn responses_observe_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = responses_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "input": "Say hello"
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/responses")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn responses_observe_streaming_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = responses_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "input": "Say hello",
+        "stream": true
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/responses")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
 }

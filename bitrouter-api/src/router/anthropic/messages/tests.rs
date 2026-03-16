@@ -11,6 +11,7 @@ use bitrouter_core::{
         stream_result::LanguageModelStreamResult,
         usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
     },
+    observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
     routers::{
         model_router::LanguageModelRouter,
         routing_table::{RoutingTable, RoutingTarget},
@@ -19,8 +20,10 @@ use bitrouter_core::{
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use warp::Filter;
 
-use super::filters::messages_filter;
+use super::filters::{messages_filter, messages_filter_with_observe};
 
 // ── Mock implementations ────────────────────────────────────────────────────
 
@@ -309,4 +312,105 @@ async fn messages_missing_max_tokens() {
 
     // Should fail because max_tokens is required in our type
     assert_ne!(res.status(), 200);
+}
+
+// ── Mock observer ───────────────────────────────────────────────────────
+
+struct MockObserver {
+    success_count: AtomicU64,
+    failure_count: AtomicU64,
+}
+
+impl MockObserver {
+    fn new() -> Self {
+        Self {
+            success_count: AtomicU64::new(0),
+            failure_count: AtomicU64::new(0),
+        }
+    }
+}
+
+impl ObserveCallback for MockObserver {
+    fn on_request_success(
+        &self,
+        _event: RequestSuccessEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.success_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+
+    fn on_request_failure(
+        &self,
+        _event: RequestFailureEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.failure_count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+}
+
+// ── Observe tests ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn messages_observe_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = messages_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "Hello"}]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/messages")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn messages_observe_streaming_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = messages_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "stream": true,
+        "messages": [{"role": "user", "content": "Hello"}]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/messages")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
 }
