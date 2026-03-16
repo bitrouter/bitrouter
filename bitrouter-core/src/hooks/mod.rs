@@ -5,6 +5,7 @@ mod stream;
 pub use model::HookedModel;
 pub use router::HookedRouter;
 
+use crate::errors::BitrouterError;
 use crate::models::language::{
     generate_result::LanguageModelGenerateResult, stream_part::LanguageModelStreamPart,
 };
@@ -18,6 +19,9 @@ use crate::models::language::{
 pub trait GenerationHook: Send + Sync {
     /// Called after a non-streaming `generate()` call completes successfully.
     fn on_generate_result(&self, _result: &LanguageModelGenerateResult) {}
+
+    /// Called when `generate()` or `stream()` returns an error.
+    fn on_generate_error(&self, _error: &BitrouterError) {}
 
     /// Called for each streaming part as it is yielded from the model stream.
     ///
@@ -80,6 +84,7 @@ mod tests {
     /// A test hook that counts invocations.
     struct CountingHook {
         generate_count: AtomicU32,
+        error_count: AtomicU32,
         stream_count: AtomicU32,
     }
 
@@ -87,6 +92,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 generate_count: AtomicU32::new(0),
+                error_count: AtomicU32::new(0),
                 stream_count: AtomicU32::new(0),
             }
         }
@@ -95,6 +101,11 @@ mod tests {
     impl GenerationHook for CountingHook {
         fn on_generate_result(&self, _result: &LanguageModelGenerateResult) {
             self.generate_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn on_generate_error(&self, _error: &crate::errors::BitrouterError) {
+            self.error_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
 
@@ -111,6 +122,7 @@ mod tests {
 
         let hook = NoopHook;
         hook.on_generate_result(&test_generate_result());
+        hook.on_generate_error(&crate::errors::BitrouterError::transport(None, "test"));
         hook.on_stream_part(&LanguageModelStreamPart::TextDelta {
             id: "t1".into(),
             delta: "hello".into(),
@@ -220,6 +232,20 @@ mod tests {
         assert_eq!(
             hook.generate_count
                 .load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+    }
+
+    #[test]
+    fn on_generate_error_invoked() {
+        let hook = Arc::new(CountingHook::new());
+        let error = crate::errors::BitrouterError::transport(None, "connection failed");
+
+        hook.on_generate_error(&error);
+        hook.on_generate_error(&error);
+
+        assert_eq!(
+            hook.error_count.load(std::sync::atomic::Ordering::SeqCst),
             2
         );
     }

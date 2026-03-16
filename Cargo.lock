@@ -886,6 +886,7 @@ dependencies = [
  "bitrouter-core",
  "bitrouter-google",
  "bitrouter-guardrails",
+ "bitrouter-observe",
  "bitrouter-openai",
  "clap",
  "crossterm",
@@ -1031,6 +1032,21 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tracing",
+]
+
+[[package]]
+name = "bitrouter-observe"
+version = "0.8.0"
+dependencies = [
+ "bitrouter-core",
+ "chrono",
+ "sea-orm",
+ "sea-orm-migration",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

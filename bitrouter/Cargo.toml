@@ -11,9 +11,9 @@ readme = "README.md"
 [features]
 default = ["tui", "sqlite", "postgres"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
-sqlite = ["bitrouter-accounts/sqlite"]
-postgres = ["bitrouter-accounts/postgres"]
-mysql = ["bitrouter-accounts/mysql"]
+sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
+postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
+mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
 
 [dependencies]
 # Internal crates
@@ -24,6 +24,7 @@ bitrouter-config = { path = "../bitrouter-config", version = "0.8" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.8" }
 bitrouter-google = { path = "../bitrouter-google", version = "0.8" }
 bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.8" }
+bitrouter-observe = { path = "../bitrouter-observe", version = "0.8" }
 bitrouter-openai = { path = "../bitrouter-openai", version = "0.8" }
 
 # CLI

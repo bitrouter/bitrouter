@@ -21,8 +21,6 @@ use std::collections::HashMap;
 
 use super::filters::chat_completions_filter;
 
-use crate::metrics::MetricsStore;
-
 // ── Mock implementations ────────────────────────────────────────────────────
 
 struct MockTable;
@@ -140,8 +138,7 @@ impl LanguageModel for MockModel {
 async fn chat_completions_generate() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = chat_completions_filter(table, router, metrics.clone());
+    let filter = chat_completions_filter(table, router);
 
     let body = serde_json::json!({
         "model": "test-model",
@@ -167,28 +164,13 @@ async fn chat_completions_generate() {
     );
     assert_eq!(json["choices"][0]["finish_reason"], "stop");
     assert!(json["usage"]["prompt_tokens"].as_u64().unwrap() > 0);
-
-    // Verify metrics were recorded for the generate request.
-    let snap = metrics.snapshot();
-    let route = snap.routes.get("test-model").expect("route should exist");
-    assert_eq!(route.total_requests, 1);
-    assert_eq!(route.total_errors, 0);
-    assert_eq!(route.avg_input_tokens, Some(10));
-    assert_eq!(route.avg_output_tokens, Some(5));
-    let ep = route
-        .by_endpoint
-        .get("mock:test-model")
-        .expect("endpoint should exist");
-    assert_eq!(ep.total_requests, 1);
-    assert_eq!(ep.total_errors, 0);
 }
 
 #[tokio::test]
 async fn chat_completions_wrong_method() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = chat_completions_filter(table, router, metrics);
+    let filter = chat_completions_filter(table, router);
 
     let res = warp::test::request()
         .method("GET")
@@ -203,8 +185,7 @@ async fn chat_completions_wrong_method() {
 async fn chat_completions_wrong_path() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = chat_completions_filter(table, router, metrics);
+    let filter = chat_completions_filter(table, router);
 
     let res = warp::test::request()
         .method("POST")
@@ -220,8 +201,7 @@ async fn chat_completions_wrong_path() {
 async fn chat_completions_system_and_user() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
-    let metrics = Arc::new(MetricsStore::new());
-    let filter = chat_completions_filter(table, router, metrics);
+    let filter = chat_completions_filter(table, router);
 
     let body = serde_json::json!({
         "model": "test-model",
