@@ -26,6 +26,7 @@ swig = [
 
 [dependencies]
 # Internal crates
+bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.9" }
 bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.9" }
 bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.9" }
 bitrouter-api = { path = "../bitrouter-api", version = "0.9" }

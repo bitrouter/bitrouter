@@ -134,6 +134,7 @@ mod tests {
             provider: "openai".into(),
             model: "gpt-4o".into(),
             account_id: Some("acct-1".into()),
+            agent_name: None,
             latency_ms: 250,
         }
     }

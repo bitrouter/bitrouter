@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_api::router::{admin, anthropic, google, models, openai, routes};
@@ -24,6 +25,7 @@ pub struct ServerPlan<T, R> {
     table: Arc<T>,
     router: Arc<R>,
     db: Option<Arc<DatabaseConnection>>,
+    agents_dir: PathBuf,
 }
 
 impl<T, R> ServerPlan<T, R>
@@ -31,12 +33,18 @@ where
     T: AdminRoutingTable + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
-    pub fn new(config: BitrouterConfig, table: Arc<T>, router: Arc<R>) -> Self {
+    pub fn new(
+        config: BitrouterConfig,
+        table: Arc<T>,
+        router: Arc<R>,
+        agents_dir: PathBuf,
+    ) -> Self {
         Self {
             config,
             table,
             router,
             db: None,
+            agents_dir,
         }
     }
 
@@ -95,6 +103,13 @@ where
             spend_observer as Arc<dyn ObserveCallback>,
             metrics_collector.clone() as Arc<dyn ObserveCallback>,
         ]));
+
+        // Build A2A agent card registry for discovery endpoints.
+        let a2a_registry = Arc::new(
+            bitrouter_a2a::file_registry::FileAgentCardRegistry::new(&self.agents_dir)
+                .map_err(|e| std::io::Error::other(e.to_string()))?,
+        );
+        tracing::info!(dir = %self.agents_dir.display(), "a2a agent registry loaded");
 
         let health = warp::path("health")
             .and(warp::get())
@@ -167,6 +182,10 @@ where
                 account_filter,
             );
 
+        // A2A discovery routes.
+        let a2a_well_known = bitrouter_a2a::filters::well_known_filter(a2a_registry.clone());
+        let a2a_agents = bitrouter_a2a::filters::agent_list_filter(a2a_registry);
+
         // Build the full route tree. Account/session management routes are
         // only mounted when a database is configured.
         if let Some(ref db) = self.db {
@@ -177,6 +196,8 @@ where
             let sess = bitrouter_accounts::filters::session_routes(db_conn, mgmt_auth);
 
             let all = health
+                .or(a2a_well_known)
+                .or(a2a_agents)
                 .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
@@ -198,6 +219,8 @@ where
             server.run().await;
         } else {
             let all = health
+                .or(a2a_well_known)
+                .or(a2a_agents)
                 .or(metrics_route)
                 .or(route_list)
                 .or(model_list)

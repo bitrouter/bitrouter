@@ -116,6 +116,12 @@ enum Command {
         name: Option<String>,
     },
 
+    /// A2A agent management and protocol client
+    A2a {
+        #[command(subcommand)]
+        action: A2aAction,
+    },
+
     /// Manage locally-stored JWTs for the active account
     Keys {
         /// List saved tokens
@@ -159,6 +165,81 @@ enum RouteAction {
     Rm {
         /// Model name to remove
         model: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum A2aAction {
+    /// Register a local agent card
+    Register {
+        /// Agent name (lowercase alphanumeric + hyphens)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Import full Agent Card from JSON file
+        #[arg(long, conflicts_with_all = ["description", "version", "provider_org"])]
+        card: Option<String>,
+
+        /// Agent description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Agent version
+        #[arg(long, default_value = "0.1.0")]
+        version: String,
+
+        /// Provider organization name
+        #[arg(long)]
+        provider_org: Option<String>,
+
+        /// Bind to JWT iss claim (CAIP-10 address)
+        #[arg(long)]
+        iss: Option<String>,
+
+        /// Base URL for the agent interface
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// List registered agents
+    List,
+    /// Show an agent's card
+    Show {
+        /// Agent name
+        name: String,
+    },
+    /// Remove a registered agent
+    Rm {
+        /// Agent name
+        name: String,
+    },
+    /// Discover a remote agent by fetching its Agent Card
+    Discover {
+        /// Base URL of the remote agent (e.g., https://agent.example.com)
+        url: String,
+    },
+    /// Send a task to a remote agent
+    Send {
+        /// Base URL of the remote agent
+        url: String,
+        /// Message to send
+        #[arg(long)]
+        message: String,
+    },
+    /// Check the status of a task
+    Status {
+        /// Base URL of the remote agent
+        url: String,
+        /// Task ID to check
+        #[arg(long)]
+        task: String,
+    },
+    /// Cancel a running task
+    Cancel {
+        /// Base URL of the remote agent
+        url: String,
+        /// Task ID to cancel
+        #[arg(long)]
+        task: String,
     },
 }
 
@@ -306,6 +387,39 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 name,
             };
             cli::keygen::run(&keys_dir, opts)?;
+            return Ok(());
+        }
+        Some(Command::A2a { action }) => {
+            let agents_dir = paths.home_dir.join("agents");
+            match action {
+                A2aAction::Register {
+                    name,
+                    card,
+                    description,
+                    version,
+                    provider_org,
+                    iss,
+                    url,
+                } => cli::a2a::run_register(
+                    &agents_dir,
+                    cli::a2a::RegisterOpts {
+                        name,
+                        card,
+                        description,
+                        version,
+                        provider_org,
+                        iss,
+                        url,
+                    },
+                )?,
+                A2aAction::List => cli::a2a::run_list(&agents_dir)?,
+                A2aAction::Show { name } => cli::a2a::run_show(&agents_dir, &name)?,
+                A2aAction::Rm { name } => cli::a2a::run_rm(&agents_dir, &name)?,
+                A2aAction::Discover { url } => cli::a2a::run_discover(&url).await?,
+                A2aAction::Send { url, message } => cli::a2a::run_send(&url, &message).await?,
+                A2aAction::Status { url, task } => cli::a2a::run_status(&url, &task).await?,
+                A2aAction::Cancel { url, task } => cli::a2a::run_cancel(&url, &task).await?,
+            }
             return Ok(());
         }
         Some(Command::Keys { list, show, rm }) => {
@@ -513,6 +627,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Restart) => runtime.restart().await?,
         Some(
             Command::Init
+            | Command::A2a { .. }
             | Command::Account { .. }
             | Command::Keygen { .. }
             | Command::Keys { .. }

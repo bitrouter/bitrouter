@@ -185,6 +185,7 @@ where
                         provider: provider_name,
                         model: target_model_id,
                         account_id,
+                        agent_name: None,
                         latency_ms: start.elapsed().as_millis() as u64,
                     },
                     usage: result.usage.clone(),
@@ -200,6 +201,7 @@ where
                         provider: provider_name,
                         model: target_model_id,
                         account_id,
+                        agent_name: None,
                         latency_ms: start.elapsed().as_millis() as u64,
                     },
                     error: e.clone(),
@@ -300,6 +302,7 @@ async fn handle_stream_with_observe(
             provider,
             model: target_model,
             account_id,
+            agent_name: None,
             latency_ms,
         };
         if let Some(usage) = usage {

@@ -22,6 +22,8 @@ pub struct RequestContext {
     pub model: String,
     /// The account that made the request, if authentication is enabled.
     pub account_id: Option<String>,
+    /// The A2A agent name resolved from the JWT identity, if available.
+    pub agent_name: Option<String>,
     /// End-to-end request latency in milliseconds.
     pub latency_ms: u64,
 }

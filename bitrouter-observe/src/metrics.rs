@@ -393,6 +393,7 @@ mod tests {
             provider: provider.into(),
             model: model.into(),
             account_id: None,
+            agent_name: None,
             latency_ms: 300,
         }
     }
@@ -459,6 +460,7 @@ mod tests {
                     provider: "openai".into(),
                     model: "gpt-4o-mini".into(),
                     account_id: None,
+                    agent_name: None,
                     latency_ms: 500,
                 },
                 error: bitrouter_core::errors::BitrouterError::transport(None, "timeout"),
