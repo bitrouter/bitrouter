@@ -251,7 +251,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Handle init before loading runtime
     if matches!(cli.command, Some(Command::Init)) {
-        init::run_init(&paths)?;
+        run_unified_init(&paths)?;
         return Ok(());
     }
 
@@ -646,6 +646,116 @@ fn init_tracing() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .try_init();
+}
+
+/// Unified `bitrouter init` entry point.
+///
+/// Detects existing onboarding state and offers Cloud vs BYOK mode selection.
+/// - Cloud: delegates to [`cli::onboarding::run_onboarding`], then writes cloud
+///   provider config.
+/// - BYOK: delegates to [`init::run_init`], then writes `onboarding.json` with
+///   `completed_byok` status.
+fn run_unified_init(
+    paths: &crate::runtime::RuntimePaths,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use cli::onboarding::{OnboardingStatus, load_state, save_state};
+    use dialoguer::{Select, theme::ColorfulTheme};
+
+    let theme = ColorfulTheme::default();
+    let home = &paths.home_dir;
+
+    // ── Idempotency: detect existing state ────────────────────
+    let state = load_state(home);
+    match state.status {
+        OnboardingStatus::CompletedCloud | OnboardingStatus::CompletedByok => {
+            let label = match state.status {
+                OnboardingStatus::CompletedCloud => "Cloud (Swig wallet)",
+                _ => "BYOK (bring your own keys)",
+            };
+            println!();
+            println!("  Onboarding already completed: {label}");
+            println!();
+
+            let choices = &["Reconfigure from scratch", "Exit"];
+            let selection = Select::with_theme(&theme)
+                .with_prompt("What would you like to do?")
+                .items(choices)
+                .default(1)
+                .interact()?;
+
+            if selection == 1 {
+                return Ok(());
+            }
+            // Fall through to re-run mode selection
+        }
+        OnboardingStatus::FailedRecoverable => {
+            println!();
+            println!("  Previous onboarding attempt failed. Resuming...");
+            println!();
+            // Fall through to mode selection — user can retry cloud or switch to BYOK
+        }
+        OnboardingStatus::NotStarted | OnboardingStatus::Deferred => {
+            // First run or previously deferred — proceed normally
+        }
+    }
+
+    // ── Mode selection ────────────────────────────────────────
+    println!();
+    println!("  BitRouter Setup");
+    println!("  ───────────────");
+    println!();
+    println!("  Choose how to connect to LLM providers:");
+    println!();
+
+    let choices = &[
+        "Cloud — use BitRouter Cloud Node with x402 payments (requires Solana wallet)",
+        "BYOK  — bring your own API keys (OpenAI, Anthropic, Google, custom)",
+    ];
+
+    let selection = Select::with_theme(&theme)
+        .with_prompt("Setup mode")
+        .items(choices)
+        .default(0)
+        .interact()?;
+
+    match selection {
+        // ── Cloud path ────────────────────────────────────────
+        0 => {
+            match cli::onboarding::run_onboarding(home)? {
+                cli::onboarding::OnboardingOutcome::CompletedCloud { rpc_url } => {
+                    if let Err(e) = write_cloud_provider_config(paths, &rpc_url) {
+                        eprintln!("  Warning: failed to write cloud config: {e}");
+                    }
+                }
+                cli::onboarding::OnboardingOutcome::CompletedByok => {
+                    // User switched to BYOK during onboarding (wallet skip)
+                }
+                cli::onboarding::OnboardingOutcome::Deferred => {
+                    // Will re-prompt on next run
+                }
+            }
+        }
+        // ── BYOK path ────────────────────────────────────────
+        _ => {
+            match init::run_init(paths)? {
+                init::InitOutcome::Configured => {
+                    let mut state = load_state(home);
+                    state.status = OnboardingStatus::CompletedByok;
+                    save_state(home, &state)?;
+                }
+                init::InitOutcome::Cancelled => {
+                    // User cancelled — write deferred so we re-prompt
+                    let mut state = load_state(home);
+                    if state.status == OnboardingStatus::NotStarted {
+                        state.status = OnboardingStatus::Deferred;
+                        save_state(home, &state)?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Write a cloud provider config entry to `bitrouter.yaml` after onboarding.
