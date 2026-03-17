@@ -9,7 +9,7 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["tui", "sqlite", "postgres"]
+default = ["tui", "sqlite", "postgres", "swig"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
 sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
 postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
@@ -17,11 +17,22 @@ mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
 swig = [
     "dep:bitrouter-swig-sdk",
     "dep:solana-client",
+    "dep:solana-hash",
     "dep:solana-instruction",
     "dep:solana-keypair",
+    "dep:solana-message",
     "dep:solana-pubkey",
     "dep:solana-transaction",
     "dep:spl-associated-token-account",
+    "dep:bincode",
+    "dep:hex",
+    "dep:rand",
+    "dep:x402-core",
+    "dep:x402-networks",
+    "x402-signer/svm",
+    "x402-signer/solana-rpc",
+    "x402-signer/reqwest",
+    "x402-networks/svm",
 ]
 
 [dependencies]
@@ -41,12 +52,14 @@ clap = { version = "4.5", features = ["derive"] }
 dialoguer = "0.12"
 
 # Runtime
+base64 = { version = "0.22" }
 dirs = "6"
 reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
     "json",
     "rustls",
 ] }
+reqwest-middleware = { version = "0.5" }
 sea-orm = { version = "1.1", default-features = false }
 sea-orm-migration = { version = "1.1", default-features = false, features = [
     "runtime-tokio-rustls",
@@ -74,13 +87,25 @@ futures = { version = "0.3", optional = true }
 anyhow = { version = "1", optional = true }
 
 # Embedded wallet (optional)
-bitrouter-swig-sdk = { version = "0.1", optional = true }
+bitrouter-swig-sdk = { version = "0.2", optional = true }
 solana-client = { version = "3.1", optional = true }
+solana-hash = { version = "3.1", optional = true }
 solana-instruction = { version = "3.2", optional = true }
 solana-keypair = { version = "3.1", optional = true }
+solana-message = { version = "3.1", optional = true }
 solana-pubkey = { version = "4.1", optional = true }
-solana-transaction = { version = "3.1", optional = true }
+solana-transaction = { version = "3.1", features = [
+    "bincode",
+], optional = true }
 spl-associated-token-account = { version = "8.0", optional = true, default-features = false }
+bincode = { version = "2.0", optional = true }
+hex = { version = "0.4", optional = true }
+rand = { version = "0.9", optional = true }
+
+# X402
+x402-core = { version = "2.4", optional = true }
+x402-networks = { version = "2.4", default-features = false, optional = true }
+x402-signer = { version = "2.4", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

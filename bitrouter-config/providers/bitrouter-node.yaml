@@ -1,0 +1,173 @@
+api_protocol: openai
+api_base: https://api.bitrouter.ai/v1
+env_prefix: BITROUTER_NODE
+models:
+  # ── Anthropic ──────────────────────────────────────────────
+  anthropic/claude-sonnet-4:
+    max_input_tokens: 1000000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15.0
+  anthropic/claude-sonnet-4.5:
+    max_input_tokens: 1000000
+    max_output_tokens: 1000000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15.0
+  anthropic/claude-opus-4:
+    max_input_tokens: 200000
+    max_output_tokens: 32000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+        cache_read: 1.5
+        cache_write: 18.75
+      output_tokens:
+        text: 75.0
+  anthropic/claude-haiku-4.5:
+    max_input_tokens: 200000
+    max_output_tokens: 200000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.1
+        cache_write: 1.25
+      output_tokens:
+        text: 5.0
+  # ── OpenAI ─────────────────────────────────────────────────
+  openai/gpt-4.1:
+    max_input_tokens: 1047576
+    max_output_tokens: 32768
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.5
+      output_tokens:
+        text: 8.0
+  openai/gpt-4.1-mini:
+    max_input_tokens: 1047576
+    max_output_tokens: 32768
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.1
+      output_tokens:
+        text: 1.6
+  openai/gpt-4.1-nano:
+    max_input_tokens: 1047576
+    max_output_tokens: 32768
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  openai/o3:
+    max_input_tokens: 200000
+    max_output_tokens: 100000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.5
+      output_tokens:
+        text: 8.0
+  openai/o3-mini:
+    max_input_tokens: 200000
+    max_output_tokens: 100000
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.275
+      output_tokens:
+        text: 4.4
+  openai/o4-mini:
+    max_input_tokens: 200000
+    max_output_tokens: 100000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.275
+      output_tokens:
+        text: 4.4
+  # ── Google ─────────────────────────────────────────────────
+  google/gemini-2.5-flash:
+    max_input_tokens: 1048576
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 2.5
+  google/gemini-2.5-pro:
+    max_input_tokens: 1048576
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+      output_tokens:
+        text: 10.0
+  # ── DeepSeek ───────────────────────────────────────────────
+  deepseek/deepseek-chat-v3.1:
+    max_input_tokens: 163840
+    max_output_tokens: 163840
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 0.8
+  deepseek/deepseek-r1-0528:
+    max_input_tokens: 65336
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+      output_tokens:
+        text: 2.15

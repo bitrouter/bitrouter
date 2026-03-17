@@ -25,11 +25,14 @@
 
 use std::sync::Arc;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
 use bitrouter_accounts::identity::{AccountId, Identity, Scope};
 use bitrouter_accounts::service::AccountService;
+use bitrouter_core::auth::chain::{Caip10, JwtAlgorithm};
 use bitrouter_core::auth::claims::TokenScope;
 use bitrouter_core::auth::token as jwt_token;
 
@@ -177,48 +180,123 @@ async fn resolve_jwt_identity(
     })
 }
 
-// ── SIWG (Sign-In With Wallet / Google) authentication ────────
+// ── SIWG (Sign-In With G) authentication ──────────────────────
 
 /// SIWG credential prefix used to distinguish from JWT tokens.
 const SIWG_CREDENTIAL_PREFIX: &str = "siwg:";
 
+/// Maximum age of a SIWG credential before it's considered stale (seconds).
+const SIWG_MAX_AGE_SECS: u64 = 300;
+
 /// Resolve a SIWG credential to an [`Identity`].
 ///
 /// SIWG credentials are prefixed with `siwg:` followed by a base64url-encoded
-/// signed message containing the wallet's CAIP-10 identity, a nonce, and a
-/// timestamp.
+/// JSON blob:
 ///
-/// # Placeholder
-/// The actual SIWG verification will be implemented when the Swig SDK is
-/// integrated. For now, this function detects the SIWG prefix and returns
-/// an error — it establishes the code path and rejection handling.
+/// ```json
+/// {
+///   "iss": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:<base58_pubkey>",
+///   "nonce": "<hex_string>",
+///   "iat": <unix_timestamp>,
+///   "sig": "<base64url_signature>"
+/// }
+/// ```
+///
+/// The signed message is the deterministic ASCII string:
+/// `bitrouter-siwg:{iss}:{nonce}:{iat}`
 async fn resolve_siwg_identity(
     credential: &str,
     ctx: &JwtAuthContext,
 ) -> Result<Identity, warp::Rejection> {
     // Only attempt if the credential looks like a SIWG token.
-    let _payload = credential
+    let encoded_payload = credential
         .strip_prefix(SIWG_CREDENTIAL_PREFIX)
         .ok_or_else(|| warp::reject::custom(Unauthorized("not a SIWG credential")))?;
 
-    let Some(ref _db) = ctx.db else {
+    let Some(ref db) = ctx.db else {
         return Err(warp::reject::custom(Unauthorized(
             "SIWG authentication requires a database",
         )));
     };
 
-    // TODO: Implement SIWG verification when Swig SDK is integrated.
-    // The real implementation will:
-    // 1. Decode the base64url payload into (message, signature, nonce, timestamp).
-    // 2. Verify the signature against the embedded CAIP-10 public key.
-    // 3. Check nonce for replay protection (requires DB or cache lookup).
-    // 4. Check timestamp for freshness.
-    // 5. Extract CAIP-10 identity and resolve account via AccountService.
-    // 6. Default scope: Api (unless elevated by server policy).
+    // 1. Decode the base64url payload.
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(encoded_payload)
+        .map_err(|_| warp::reject::custom(Unauthorized("invalid SIWG encoding")))?;
 
-    Err(warp::reject::custom(Unauthorized(
-        "SIWG authentication is not yet implemented — awaiting Swig SDK integration",
-    )))
+    #[derive(serde::Deserialize)]
+    struct SiwgPayload {
+        iss: String,
+        nonce: String,
+        iat: u64,
+        sig: String,
+    }
+
+    let payload: SiwgPayload = serde_json::from_slice(&payload_bytes)
+        .map_err(|_| warp::reject::custom(Unauthorized("invalid SIWG payload")))?;
+
+    // 2. Parse CAIP-10 identity and determine algorithm.
+    let caip10 = Caip10::parse(&payload.iss)
+        .map_err(|_| warp::reject::custom(Unauthorized("invalid CAIP-10 in SIWG")))?;
+
+    // 3. Reconstruct the signed message and verify signature.
+    let signed_message = format!(
+        "bitrouter-siwg:{}:{}:{}",
+        payload.iss, payload.nonce, payload.iat
+    );
+    let sig_bytes = URL_SAFE_NO_PAD
+        .decode(&payload.sig)
+        .map_err(|_| warp::reject::custom(Unauthorized("invalid SIWG signature encoding")))?;
+
+    let alg = caip10.chain.jwt_algorithm();
+    let verify_result = match alg {
+        JwtAlgorithm::SolEdDsa => {
+            jwt_token::verify_sol_eddsa(signed_message.as_bytes(), &sig_bytes, &caip10.address)
+        }
+        JwtAlgorithm::Eip191K => {
+            jwt_token::verify_eip191k(signed_message.as_bytes(), &sig_bytes, &caip10.address)
+        }
+    };
+    verify_result
+        .map_err(|_| warp::reject::custom(Unauthorized("SIWG signature verification failed")))?;
+
+    // 4. Check freshness — iat must be within SIWG_MAX_AGE_SECS of now.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| warp::reject::custom(Unauthorized("system clock error")))?
+        .as_secs();
+
+    let age = now.saturating_sub(payload.iat);
+    if age > SIWG_MAX_AGE_SECS {
+        return Err(warp::reject::custom(Unauthorized(
+            "SIWG credential expired",
+        )));
+    }
+    // Also reject credentials issued in the future (allows small clock skew).
+    if payload.iat > now + 60 {
+        return Err(warp::reject::custom(Unauthorized(
+            "SIWG credential issued in the future",
+        )));
+    }
+
+    // 5. Resolve account via CAIP-10 identity.
+    let svc = AccountService::new(db);
+    let account = svc
+        .find_or_create_by_pubkey(&payload.iss)
+        .await
+        .map_err(|_| warp::reject::custom(Unauthorized("account lookup failed")))?;
+
+    let Some(account) = account else {
+        return Err(warp::reject::custom(Unauthorized(
+            "public key has been rotated — use your current key",
+        )));
+    };
+
+    // 6. SIWG always gets API scope (admin requires JWT with explicit scope).
+    Ok(Identity {
+        account_id: AccountId(account.id),
+        scope: Scope::Api,
+    })
 }
 
 // ── composite auth filters ────────────────────────────────────

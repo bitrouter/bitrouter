@@ -10,6 +10,10 @@ const PROVIDER_DEFS: &[(&str, &str)] = &[
     ("openai", include_str!("../providers/openai.yaml")),
     ("anthropic", include_str!("../providers/anthropic.yaml")),
     ("google", include_str!("../providers/google.yaml")),
+    (
+        "bitrouter-node",
+        include_str!("../providers/bitrouter-node.yaml"),
+    ),
 ];
 
 /// Raw YAML shape for built-in provider files.
@@ -95,6 +99,9 @@ pub fn merge_provider(base: &mut ProviderConfig, overlay: ProviderConfig) {
     }
     if overlay.models.is_some() {
         base.models = overlay.models;
+    }
+    if overlay.x402.is_some() {
+        base.x402 = overlay.x402;
     }
 }
 

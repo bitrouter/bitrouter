@@ -1,5 +1,6 @@
 mod cli;
 mod init;
+mod payment;
 mod runtime;
 #[cfg(feature = "tui")]
 mod tui;
@@ -487,10 +488,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         None => run_default(runtime).await?,
         Some(Command::Serve) => {
-            let model_router = crate::runtime::Router::new(
-                reqwest::Client::new(),
-                runtime.config.providers.clone(),
-            );
+            let model_router = build_model_router(&runtime.config.providers);
             runtime.serve(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
@@ -548,11 +546,71 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
     }
 }
 
+fn build_model_router(
+    providers: &std::collections::HashMap<String, bitrouter_config::ProviderConfig>,
+) -> crate::runtime::Router {
+    let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+
+    #[cfg(feature = "swig")]
+    {
+        let mut router = crate::runtime::Router::new(client, providers.clone());
+        if let Some(payment_client) = try_build_payment_client() {
+            router = router.with_payment_client(payment_client);
+        }
+        router
+    }
+
+    #[cfg(not(feature = "swig"))]
+    crate::runtime::Router::new(client, providers.clone())
+}
+
+/// Try to construct a SWIG x402 payment client from environment variables.
+///
+/// Required env vars:
+/// - `SWIG_ACCOUNT`: Base58 SWIG account address
+/// - `SWIG_AUTHORITY_SEED`: Hex-encoded 32-byte Ed25519 seed
+/// - `SWIG_RPC_URL`: Solana RPC endpoint URL
+///
+/// Optional:
+/// - `SWIG_ROLE_ID`: Authority role ID (defaults to 0)
+#[cfg(feature = "swig")]
+fn try_build_payment_client() -> Option<reqwest_middleware::ClientWithMiddleware> {
+    let swig_account_str = std::env::var("SWIG_ACCOUNT").ok()?;
+    let seed_hex = std::env::var("SWIG_AUTHORITY_SEED").ok()?;
+    let rpc_url = std::env::var("SWIG_RPC_URL").ok()?;
+    let role_id: u32 = std::env::var("SWIG_ROLE_ID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let swig_account: solana_pubkey::Pubkey = swig_account_str.parse().ok()?;
+    let seed_bytes = hex::decode(&seed_hex).ok()?;
+    if seed_bytes.len() != 32 {
+        tracing::warn!("SWIG_AUTHORITY_SEED must be exactly 32 bytes (64 hex chars)");
+        return None;
+    }
+
+    let authority = solana_keypair::Keypair::new_from_array(seed_bytes.as_slice().try_into().ok()?);
+
+    tracing::info!(
+        swig_account = %swig_account_str,
+        rpc_url = %rpc_url,
+        role_id,
+        "x402 SWIG payment enabled"
+    );
+
+    Some(crate::payment::build_payment_client(
+        swig_account,
+        authority,
+        role_id,
+        &rpc_url,
+    ))
+}
+
 async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::Error>> {
     let status = runtime.status();
 
-    let model_router =
-        crate::runtime::Router::new(reqwest::Client::new(), runtime.config.providers.clone());
+    let model_router = build_model_router(&runtime.config.providers);
 
     #[cfg(feature = "tui")]
     {

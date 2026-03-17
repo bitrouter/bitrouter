@@ -17,6 +17,7 @@ use bitrouter_core::{
 };
 use regex::Regex;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use reqwest_middleware::ClientWithMiddleware;
 use tokio::{select, sync::mpsc};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
@@ -31,19 +32,23 @@ use super::api::{
 #[derive(Clone)]
 pub struct OpenAiResponsesModel {
     model_id: String,
-    client: reqwest::Client,
+    client: ClientWithMiddleware,
     config: OpenAiConfig,
     supported_urls: HashMap<String, Regex>,
 }
 
 impl OpenAiResponsesModel {
     pub fn new(model_id: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self::with_client(model_id, reqwest::Client::new(), OpenAiConfig::new(api_key))
+        Self::with_client(
+            model_id,
+            reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(),
+            OpenAiConfig::new(api_key),
+        )
     }
 
     pub fn with_client(
         model_id: impl Into<String>,
-        client: reqwest::Client,
+        client: ClientWithMiddleware,
         config: OpenAiConfig,
     ) -> Self {
         let http_url_regex = Regex::new(r"^https?://").expect("static regex must compile");
@@ -175,7 +180,7 @@ impl OpenAiResponsesModel {
         &self,
         request_body: &JsonValue,
         extra_headers: &Option<HeaderMap>,
-    ) -> Result<(reqwest::RequestBuilder, HeaderMap)> {
+    ) -> Result<(reqwest_middleware::RequestBuilder, HeaderMap)> {
         let endpoint = format!("{}/responses", self.config.base_url.trim_end_matches('/'));
         let headers = self.build_headers(extra_headers)?;
         let request_headers = headers.clone();
@@ -242,7 +247,7 @@ impl OpenAiResponsesModel {
 
     async fn send_request(
         &self,
-        builder: reqwest::RequestBuilder,
+        builder: reqwest_middleware::RequestBuilder,
         abort_signal: Option<CancellationToken>,
         operation: &str,
     ) -> Result<reqwest::Response> {

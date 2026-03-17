@@ -15,10 +15,10 @@ bytes = { version = "1" }
 regex = { version = "1.12" }
 reqwest = { version = "0.13", default-features = false, features = [
     "json",
-    "query",
     "rustls",
     "stream",
 ] }
+reqwest-middleware = { version = "0.5", features = ["json"] }
 schemars = { version = "1.2", default-features = false, features = ["std"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }

@@ -17,6 +17,7 @@ use bitrouter_core::{
 };
 use regex::Regex;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest_middleware::ClientWithMiddleware;
 use tokio::{select, sync::mpsc};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
@@ -48,19 +49,23 @@ impl GoogleConfig {
 #[derive(Clone)]
 pub struct GoogleGenerativeAiModel {
     model_id: String,
-    client: reqwest::Client,
+    client: ClientWithMiddleware,
     config: GoogleConfig,
     supported_urls: HashMap<String, Regex>,
 }
 
 impl GoogleGenerativeAiModel {
     pub fn new(model_id: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self::with_client(model_id, reqwest::Client::new(), GoogleConfig::new(api_key))
+        Self::with_client(
+            model_id,
+            reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(),
+            GoogleConfig::new(api_key),
+        )
     }
 
     pub fn with_client(
         model_id: impl Into<String>,
-        client: reqwest::Client,
+        client: ClientWithMiddleware,
         config: GoogleConfig,
     ) -> Self {
         Self {
@@ -189,24 +194,30 @@ impl GoogleGenerativeAiModel {
         request_body: &JsonValue,
         extra_headers: &Option<HeaderMap>,
         stream: bool,
-    ) -> Result<(reqwest::RequestBuilder, HeaderMap)> {
+    ) -> Result<(reqwest_middleware::RequestBuilder, HeaderMap)> {
         let action = if stream {
             "streamGenerateContent?alt=sse"
         } else {
             "generateContent"
         };
-        let endpoint = format!(
+        let mut endpoint = format!(
             "{}/v1beta/models/{}:{}",
             self.config.base_url.trim_end_matches('/'),
             self.model_id,
             action,
         );
+        // Append API key as a query parameter. The action string for streaming
+        // already contains `?alt=sse`, so we use `&` in that case.
+        let separator = if endpoint.contains('?') { '&' } else { '?' };
+        endpoint.push(separator);
+        endpoint.push_str("key=");
+        endpoint.push_str(&self.config.api_key);
+
         let headers = self.build_headers(extra_headers)?;
         let request_headers = headers.clone();
         let builder = self
             .client
             .post(endpoint)
-            .query(&[("key", &self.config.api_key)])
             .headers(headers)
             .json(request_body);
 
@@ -250,7 +261,7 @@ impl GoogleGenerativeAiModel {
 
     async fn send_request(
         &self,
-        builder: reqwest::RequestBuilder,
+        builder: reqwest_middleware::RequestBuilder,
         abort_signal: Option<CancellationToken>,
         operation: &str,
     ) -> Result<reqwest::Response> {

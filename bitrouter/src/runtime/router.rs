@@ -7,17 +7,38 @@ use bitrouter_core::{
     routers::{model_router::LanguageModelRouter, routing_table::RoutingTarget},
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest_middleware::ClientWithMiddleware;
 
 /// A model router backed by `reqwest` that instantiates concrete provider
 /// model objects on demand from [`ProviderConfig`] entries.
 pub struct Router {
-    client: reqwest::Client,
+    client: ClientWithMiddleware,
+    /// Client with x402 payment middleware attached (used when `x402: true`).
+    payment_client: Option<ClientWithMiddleware>,
     providers: HashMap<String, ProviderConfig>,
 }
 
 impl Router {
-    pub fn new(client: reqwest::Client, providers: HashMap<String, ProviderConfig>) -> Self {
-        Self { client, providers }
+    pub fn new(client: ClientWithMiddleware, providers: HashMap<String, ProviderConfig>) -> Self {
+        Self {
+            client,
+            payment_client: None,
+            providers,
+        }
+    }
+
+    #[cfg(feature = "swig")]
+    pub fn with_payment_client(mut self, payment_client: ClientWithMiddleware) -> Self {
+        self.payment_client = Some(payment_client);
+        self
+    }
+
+    fn client_for_provider(&self, provider: &ProviderConfig) -> &ClientWithMiddleware {
+        if provider.x402.unwrap_or(false) {
+            self.payment_client.as_ref().unwrap_or(&self.client)
+        } else {
+            &self.client
+        }
     }
 
     fn build_openai_config(&self, provider: &ProviderConfig) -> Result<OpenAiConfig> {
@@ -96,29 +117,21 @@ impl LanguageModelRouter for Router {
         match protocol {
             ApiProtocol::Openai => {
                 let config = self.build_openai_config(provider)?;
-                let model = OpenAiChatCompletionsModel::with_client(
-                    target.model_id,
-                    self.client.clone(),
-                    config,
-                );
+                let client = self.client_for_provider(provider).clone();
+                let model =
+                    OpenAiChatCompletionsModel::with_client(target.model_id, client, config);
                 Ok(DynLanguageModel::new_box(model))
             }
             ApiProtocol::Anthropic => {
                 let config = self.build_anthropic_config(provider)?;
-                let model = AnthropicMessagesModel::with_client(
-                    target.model_id,
-                    self.client.clone(),
-                    config,
-                );
+                let client = self.client_for_provider(provider).clone();
+                let model = AnthropicMessagesModel::with_client(target.model_id, client, config);
                 Ok(DynLanguageModel::new_box(model))
             }
             ApiProtocol::Google => {
                 let config = self.build_google_config(provider)?;
-                let model = GoogleGenerativeAiModel::with_client(
-                    target.model_id,
-                    self.client.clone(),
-                    config,
-                );
+                let client = self.client_for_provider(provider).clone();
+                let model = GoogleGenerativeAiModel::with_client(target.model_id, client, config);
                 Ok(DynLanguageModel::new_box(model))
             }
         }

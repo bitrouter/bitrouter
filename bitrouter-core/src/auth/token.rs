@@ -171,8 +171,12 @@ fn decode_algorithm(header_dot_payload: &str) -> Result<JwtAlgorithm, JwtError> 
     JwtAlgorithm::from_header(&header.alg)
 }
 
-/// Verify a SOL_EDDSA (Ed25519) signature.
-fn verify_sol_eddsa(message: &[u8], sig_bytes: &[u8], address_b58: &str) -> Result<(), JwtError> {
+/// Verify a SOL_EDDSA (Ed25519) signature against a base58 Solana public key.
+pub fn verify_sol_eddsa(
+    message: &[u8],
+    sig_bytes: &[u8],
+    address_b58: &str,
+) -> Result<(), JwtError> {
     let pubkey = crate::auth::keys::decode_solana_pubkey(address_b58)?;
 
     let sig = SolanaSignature::try_from(sig_bytes)
@@ -189,7 +193,7 @@ fn verify_sol_eddsa(message: &[u8], sig_bytes: &[u8], address_b58: &str) -> Resu
 ///
 /// Recovers the signer address from the EIP-191 prefixed message and
 /// compares it with the expected address from the CAIP-10 `iss`.
-fn verify_eip191k(
+pub fn verify_eip191k(
     message: &[u8],
     sig_bytes: &[u8],
     expected_address: &str,

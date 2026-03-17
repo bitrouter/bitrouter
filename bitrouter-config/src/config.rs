@@ -221,6 +221,14 @@ pub struct ProviderConfig {
     /// token pricing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub models: Option<HashMap<String, ModelInfo>>,
+
+    /// Enable x402 automatic payment for requests routed to this provider.
+    ///
+    /// When set to `true` the router will use a payment-enabled HTTP client
+    /// that intercepts `402 Payment Required` responses and signs a payment
+    /// header with the configured SWIG wallet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x402: Option<bool>,
 }
 
 // ── Model metadata & pricing ─────────────────────────────────────────
