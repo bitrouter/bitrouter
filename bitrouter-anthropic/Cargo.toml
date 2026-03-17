@@ -10,7 +10,7 @@ readme = "README.md"
 
 [dependencies]
 base64 = { version = "0.22" }
-bitrouter-core = { path = "../bitrouter-core", version = "0.9" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.10" }
 bytes = { version = "1" }
 regex = { version = "1.12" }
 reqwest = { version = "0.13", default-features = false, features = [
