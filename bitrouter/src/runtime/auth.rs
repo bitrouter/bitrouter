@@ -174,6 +174,10 @@ async fn resolve_jwt_identity(
     Ok(Identity {
         account_id: AccountId(account.id),
         scope,
+        models: claims.models,
+        budget: claims.budget,
+        budget_scope: claims.budget_scope,
+        budget_range: claims.budget_range,
     })
 }
 
@@ -278,11 +282,18 @@ pub fn management_auth(
 }
 
 /// Passthrough filter when auth is disabled — produces an anonymous admin identity.
+///
+/// Uses a deterministic all-zero UUID so open-mode spend logs are consistently
+/// attributable rather than scattered across random IDs.
 fn open_identity() -> impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone {
     warp::any().and_then(|| async {
         Ok::<_, warp::Rejection>(Identity {
-            account_id: AccountId::new(),
+            account_id: AccountId(uuid::Uuid::nil()),
             scope: Scope::Admin,
+            models: None,
+            budget: None,
+            budget_scope: None,
+            budget_range: None,
         })
     })
 }

@@ -150,7 +150,6 @@ mod inner {
 
     pub fn create_embedded_wallet(
         master_keypair_path: &Path,
-        _passphrase: &[u8],
         rpc_url: &str,
     ) -> Result<EmbeddedWalletInfo, String> {
         let master = load_keypair(master_keypair_path)?;
@@ -192,12 +191,12 @@ mod inner {
 
     pub fn derive_agent_wallet(
         master_keypair_path: &Path,
-        _passphrase: &[u8],
         permissions: &AgentPermissions,
         rpc_url: &str,
         label: &str,
         home_dir: &Path,
         swig_account_str: &str,
+        role_id: u32,
     ) -> Result<(AgentWalletInfo, Vec<u8>), String> {
         let master = load_keypair(master_keypair_path)?;
         let client = RpcClient::new(rpc_url.to_string());
@@ -234,11 +233,8 @@ mod inner {
         let sig = send_and_confirm(&client, &ixs, &[&master])?;
         eprintln!("  tx: {sig}");
 
-        // Role ID = role_counter at creation time. Since we can't read it from
-        // the account without parsing state, we infer it as 1 for the first
-        // added authority (master is role 0).
-        // For subsequent agents, the caller tracks the last role_id.
-        let role_id = 1; // TODO: read from on-chain state for accuracy
+        // Role ID = role_counter at creation time.
+        // The caller tracks role assignment via next_role_id in onboarding state.
 
         let info = AgentWalletInfo {
             address: agent_kp.pubkey().to_string(),
@@ -253,7 +249,6 @@ mod inner {
 
     pub fn set_agent_permissions(
         master_keypair_path: &Path,
-        _passphrase: &[u8],
         _agent_address: &str,
         permissions: &AgentPermissions,
         rpc_url: &str,
@@ -355,18 +350,7 @@ mod inner {
 
     /// Generate a random 32-byte ID.
     fn rand_id() -> [u8; 32] {
-        use std::collections::hash_map::RandomState;
-        use std::hash::{BuildHasher, Hasher};
-        let mut id = [0u8; 32];
-        for chunk in id.chunks_mut(8) {
-            let s = RandomState::new();
-            let mut h = s.build_hasher();
-            h.write_u64(0);
-            let val = h.finish();
-            let bytes = val.to_le_bytes();
-            chunk.copy_from_slice(&bytes[..chunk.len()]);
-        }
-        id
+        rand::random::<[u8; 32]>()
     }
 }
 
@@ -380,7 +364,6 @@ mod inner {
 
     pub fn create_embedded_wallet(
         _master_keypair_path: &Path,
-        _passphrase: &[u8],
         _rpc_url: &str,
     ) -> Result<EmbeddedWalletInfo, String> {
         Err(DISABLED.into())
@@ -388,19 +371,18 @@ mod inner {
 
     pub fn derive_agent_wallet(
         _master_keypair_path: &Path,
-        _passphrase: &[u8],
         _permissions: &AgentPermissions,
         _rpc_url: &str,
         _label: &str,
         _home_dir: &Path,
         _swig_account_str: &str,
+        _role_id: u32,
     ) -> Result<(AgentWalletInfo, Vec<u8>), String> {
         Err(DISABLED.into())
     }
 
     pub fn set_agent_permissions(
         _master_keypair_path: &Path,
-        _passphrase: &[u8],
         _agent_address: &str,
         _permissions: &AgentPermissions,
         _rpc_url: &str,
@@ -419,35 +401,33 @@ mod inner {
 
 pub fn create_embedded_wallet(
     master_keypair_path: &Path,
-    passphrase: &[u8],
     rpc_url: &str,
 ) -> Result<EmbeddedWalletInfo, String> {
-    inner::create_embedded_wallet(master_keypair_path, passphrase, rpc_url)
+    inner::create_embedded_wallet(master_keypair_path, rpc_url)
 }
 
 pub fn derive_agent_wallet(
     master_keypair_path: &Path,
-    passphrase: &[u8],
     permissions: &AgentPermissions,
     rpc_url: &str,
     label: &str,
     home_dir: &Path,
     swig_account_str: &str,
+    role_id: u32,
 ) -> Result<(AgentWalletInfo, Vec<u8>), String> {
     inner::derive_agent_wallet(
         master_keypair_path,
-        passphrase,
         permissions,
         rpc_url,
         label,
         home_dir,
         swig_account_str,
+        role_id,
     )
 }
 
 pub fn set_agent_permissions(
     master_keypair_path: &Path,
-    passphrase: &[u8],
     agent_address: &str,
     permissions: &AgentPermissions,
     rpc_url: &str,
@@ -456,7 +436,6 @@ pub fn set_agent_permissions(
 ) -> Result<AgentPermissions, String> {
     inner::set_agent_permissions(
         master_keypair_path,
-        passphrase,
         agent_address,
         permissions,
         rpc_url,

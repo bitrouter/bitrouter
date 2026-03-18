@@ -16,6 +16,7 @@ postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
 mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
 swig = [
     "dep:bitrouter-swig-sdk",
+    "dep:rand",
     "dep:solana-client",
     "dep:solana-instruction",
     "dep:solana-keypair",
@@ -26,16 +27,16 @@ swig = [
 
 [dependencies]
 # Internal crates
-bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.9" }
-bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.9" }
-bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.9" }
-bitrouter-api = { path = "../bitrouter-api", version = "0.9" }
-bitrouter-config = { path = "../bitrouter-config", version = "0.9" }
-bitrouter-core = { path = "../bitrouter-core", version = "0.9" }
-bitrouter-google = { path = "../bitrouter-google", version = "0.9" }
-bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.9" }
-bitrouter-observe = { path = "../bitrouter-observe", version = "0.9" }
-bitrouter-openai = { path = "../bitrouter-openai", version = "0.9" }
+bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.10" }
+bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.10" }
+bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.10" }
+bitrouter-api = { path = "../bitrouter-api", version = "0.10" }
+bitrouter-config = { path = "../bitrouter-config", version = "0.10" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.10" }
+bitrouter-google = { path = "../bitrouter-google", version = "0.10" }
+bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.10" }
+bitrouter-observe = { path = "../bitrouter-observe", version = "0.10" }
+bitrouter-openai = { path = "../bitrouter-openai", version = "0.10" }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -54,6 +55,7 @@ sea-orm-migration = { version = "1.1", default-features = false, features = [
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
+serde_yaml = { version = "0.9" }
 thiserror = { version = "2.0" }
 tokio = { version = "1", features = [
     "macros",
@@ -76,6 +78,7 @@ anyhow = { version = "1", optional = true }
 
 # Embedded wallet (optional)
 bitrouter-swig-sdk = { version = "0.1", optional = true }
+rand = { version = "0.9", optional = true }
 solana-client = { version = "3.1", optional = true }
 solana-instruction = { version = "3.2", optional = true }
 solana-keypair = { version = "3.1", optional = true }

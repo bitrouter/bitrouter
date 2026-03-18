@@ -6,8 +6,6 @@
 
 use std::path::Path;
 
-use dialoguer::theme::ColorfulTheme;
-
 use crate::cli::onboarding::{self, AgentWalletState};
 use crate::cli::swig;
 
@@ -34,7 +32,6 @@ fn resolve_swig_account(home_dir: &Path) -> Result<String, String> {
 
 /// Run `bitrouter sudo create-embedded-wallet`.
 pub fn run_create_embedded_wallet(home_dir: &Path) -> Result<(), String> {
-    let theme = ColorfulTheme::default();
     let state = onboarding::load_state(home_dir);
 
     let wallet_path = state
@@ -44,11 +41,8 @@ pub fn run_create_embedded_wallet(home_dir: &Path) -> Result<(), String> {
 
     let rpc_url = resolve_rpc_url(home_dir, None);
 
-    let passphrase = onboarding::prompt_passphrase(&theme)
-        .map_err(|e| format!("passphrase prompt failed: {e}"))?;
-
     println!("  Creating Swig embedded wallet...");
-    match swig::create_embedded_wallet(wallet_path, passphrase.as_bytes(), &rpc_url) {
+    match swig::create_embedded_wallet(wallet_path, &rpc_url) {
         Ok(info) => {
             println!("  ✓ Embedded wallet created: {}", info.address);
             println!("  Wallet address (for funding): {}", info.wallet_address);
@@ -73,7 +67,6 @@ pub fn run_derive_agent_wallet(
     expiration: Option<String>,
     label: Option<String>,
 ) -> Result<(), String> {
-    let theme = ColorfulTheme::default();
     let state = onboarding::load_state(home_dir);
 
     let wallet_path = state
@@ -83,9 +76,6 @@ pub fn run_derive_agent_wallet(
 
     let rpc_url = resolve_rpc_url(home_dir, None);
     let swig_account = resolve_swig_account(home_dir)?;
-
-    let passphrase = onboarding::prompt_passphrase(&theme)
-        .map_err(|e| format!("passphrase prompt failed: {e}"))?;
 
     let expires_at = match expiration.as_deref() {
         Some(s) => parse_expiration_flag(s)?,
@@ -99,16 +89,17 @@ pub fn run_derive_agent_wallet(
     };
 
     let label = label.unwrap_or_else(|| "default".to_string());
+    let role_id = state.next_role_id;
 
     println!("  Deriving agent wallet with Swig...");
     match swig::derive_agent_wallet(
         wallet_path,
-        passphrase.as_bytes(),
         &permissions,
         &rpc_url,
         &label,
         home_dir,
         &swig_account,
+        role_id,
     ) {
         Ok((info, _keypair_bytes)) => {
             println!(
@@ -126,6 +117,11 @@ pub fn run_derive_agent_wallet(
             };
             onboarding::add_agent_wallet(home_dir, agent)?;
 
+            // Increment role_id for the next agent wallet.
+            let mut state = onboarding::load_state(home_dir);
+            state.next_role_id = role_id + 1;
+            onboarding::save_state(home_dir, &state)?;
+
             Ok(())
         }
         Err(e) => Err(format!("failed to derive agent wallet: {e}")),
@@ -140,7 +136,6 @@ pub fn run_set_permissions(
     cumulative_cap: Option<u64>,
     expiration: Option<String>,
 ) -> Result<(), String> {
-    let theme = ColorfulTheme::default();
     let state = onboarding::load_state(home_dir);
 
     let wallet_path = state
@@ -168,9 +163,6 @@ pub fn run_set_permissions(
         (agent.address, agent.role_id)
     };
 
-    let passphrase = onboarding::prompt_passphrase(&theme)
-        .map_err(|e| format!("passphrase prompt failed: {e}"))?;
-
     let expires_at = match expiration.as_deref() {
         Some(s) => parse_expiration_flag(s)?,
         None => None,
@@ -185,7 +177,6 @@ pub fn run_set_permissions(
     println!("  Updating agent wallet permissions via Swig...");
     match swig::set_agent_permissions(
         wallet_path,
-        passphrase.as_bytes(),
         &agent_addr,
         &permissions,
         &rpc_url,
@@ -272,6 +263,30 @@ pub fn run_show_wallet(home_dir: &Path) -> Result<(), String> {
             print_permissions(&agent.permissions);
         }
     }
+
+    Ok(())
+}
+
+/// Run `bitrouter sudo list-agents` (no signing required).
+pub fn run_list_agents(home_dir: &Path) -> Result<(), String> {
+    let agents = onboarding::load_agent_wallets(home_dir);
+    if agents.is_empty() {
+        println!("  No agent wallets found.");
+        println!("  Derive one with: bitrouter sudo derive-agent-wallet");
+        return Ok(());
+    }
+
+    println!("  Agent Wallets");
+    println!("  ─────────────");
+    for agent in &agents {
+        println!();
+        println!("  Label:      {}", agent.label);
+        println!("  Address:    {}", agent.address);
+        println!("  Role ID:    {}", agent.role_id);
+        println!("  Created:    {}", agent.created_at);
+        print_permissions(&agent.permissions);
+    }
+    println!();
 
     Ok(())
 }

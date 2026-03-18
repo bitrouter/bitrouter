@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bitrouter_api::router::{admin, anthropic, google, models, openai, routes};
 use bitrouter_config::BitrouterConfig;
-use bitrouter_core::observe::ObserveCallback;
+use bitrouter_core::observe::{CallerContext, ObserveCallback};
 use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::model_router::LanguageModelRouter;
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
@@ -133,26 +133,38 @@ where
         let admin_routes = auth_gate(auth::management_auth(auth_ctx.clone()))
             .and(admin::admin_routes_filter(self.table.clone()));
 
-        // Build account filter that extracts account ID when auth is enabled,
-        // or always returns None when no database is configured.
+        // Build account filter that extracts caller context when auth is enabled,
+        // or returns a default (empty) caller context when no database is configured.
         let account_filter = if self.db.is_some() {
             let auth_filter = auth::openai_auth(auth_ctx.clone());
             warp::any()
                 .and(auth_filter)
-                .map(|id: bitrouter_accounts::identity::Identity| Some(id.account_id.0.to_string()))
+                .map(|id: bitrouter_accounts::identity::Identity| CallerContext {
+                    account_id: Some(id.account_id.0.to_string()),
+                    models: id.models,
+                    budget: id.budget,
+                    budget_scope: id.budget_scope,
+                    budget_range: id.budget_range,
+                })
                 .boxed()
         } else {
-            warp::any().map(|| None::<String>).boxed()
+            warp::any().map(CallerContext::default).boxed()
         };
 
         let anthropic_account_filter = if self.db.is_some() {
             let auth_filter = auth::anthropic_auth(auth_ctx.clone());
             warp::any()
                 .and(auth_filter)
-                .map(|id: bitrouter_accounts::identity::Identity| Some(id.account_id.0.to_string()))
+                .map(|id: bitrouter_accounts::identity::Identity| CallerContext {
+                    account_id: Some(id.account_id.0.to_string()),
+                    models: id.models,
+                    budget: id.budget,
+                    budget_scope: id.budget_scope,
+                    budget_range: id.budget_range,
+                })
                 .boxed()
         } else {
-            warp::any().map(|| None::<String>).boxed()
+            warp::any().map(CallerContext::default).boxed()
         };
 
         // Model API routes with observation.
