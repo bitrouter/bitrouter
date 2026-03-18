@@ -7,3 +7,21 @@ pub mod models;
 #[cfg(feature = "openai")]
 pub mod openai;
 pub mod routes;
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use bitrouter_core::observe::{CallerContext, ObserveCallback};
+
+/// Bundles observation-related context passed through streaming handlers.
+///
+/// Created at the call site and consumed inside `handle_stream_with_observe`
+/// to emit success/failure observation events after the stream completes.
+pub(crate) struct StreamObserveContext {
+    pub observer: Arc<dyn ObserveCallback>,
+    pub route: String,
+    pub provider: String,
+    pub target_model: String,
+    pub caller: CallerContext,
+    pub start: Instant,
+}

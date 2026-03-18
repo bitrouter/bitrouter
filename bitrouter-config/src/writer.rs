@@ -123,7 +123,7 @@ fn generate_config_yaml(options: &InitOptions) -> String {
     // Server section
     let listen = options
         .listen_addr
-        .unwrap_or_else(|| "127.0.0.1:8787".parse().unwrap());
+        .unwrap_or(SocketAddr::from(([127, 0, 0, 1], 8787)));
     yaml.push_str(&format!("server:\n  listen: \"{listen}\"\n\n"));
 
     // Providers section

@@ -46,17 +46,11 @@ impl OpenAiResponsesModel {
         client: reqwest::Client,
         config: OpenAiConfig,
     ) -> Self {
-        let http_url_regex = Regex::new(r"^https?://").expect("static regex must compile");
         Self {
             model_id: model_id.into(),
             client,
             config,
-            supported_urls: HashMap::from([
-                ("image/png".to_owned(), http_url_regex.clone()),
-                ("image/jpeg".to_owned(), http_url_regex.clone()),
-                ("image/webp".to_owned(), http_url_regex.clone()),
-                ("image/gif".to_owned(), http_url_regex),
-            ]),
+            supported_urls: crate::chat::provider::build_image_url_map(),
         }
     }
 

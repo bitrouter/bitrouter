@@ -210,7 +210,15 @@ fn content_blocks_to_language_model_content(
     }
 
     if blocks.len() == 1 {
-        return match blocks.into_iter().next().expect("length checked") {
+        // SAFETY: len() == 1 guarantees next() returns Some
+        let Some(block) = blocks.into_iter().next() else {
+            return Err(BitrouterError::invalid_response(
+                Some(ANTHROPIC_PROVIDER_NAME),
+                "expected single content block but iterator was empty",
+                Some(response_body),
+            ));
+        };
+        return match block {
             AnthropicContentBlock::Text { text } => Ok(LanguageModelContent::Text {
                 text,
                 provider_metadata,

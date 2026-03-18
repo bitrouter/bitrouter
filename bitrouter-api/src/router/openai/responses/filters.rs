@@ -181,12 +181,14 @@ where
         handle_stream_with_observe(
             &model,
             options,
-            observer,
-            incoming_model,
-            provider_name,
-            target_model_id,
-            caller,
-            start,
+            crate::router::StreamObserveContext {
+                observer,
+                route: incoming_model,
+                provider: provider_name,
+                target_model: target_model_id,
+                caller,
+                start,
+            },
         )
         .await
     } else {
@@ -260,16 +262,10 @@ async fn handle_stream(
     Ok(Box::new(warp::sse::reply(sse_stream)))
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_stream_with_observe(
     model: &(impl LanguageModel + ?Sized),
     options: bitrouter_core::models::language::call_options::LanguageModelCallOptions,
-    observer: Arc<dyn ObserveCallback>,
-    route: String,
-    provider: String,
-    target_model: String,
-    caller: CallerContext,
-    start: Instant,
+    ctx: crate::router::StreamObserveContext,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     let stream_result = model
         .stream(options)
@@ -278,6 +274,15 @@ async fn handle_stream_with_observe(
 
     let (tx, rx) =
         tokio::sync::mpsc::channel::<Result<warp::sse::Event, std::convert::Infallible>>(32);
+
+    let crate::router::StreamObserveContext {
+        observer,
+        route,
+        provider,
+        target_model,
+        caller,
+        start,
+    } = ctx;
 
     tokio::spawn(async move {
         let mut stream = stream_result.stream;

@@ -28,6 +28,23 @@ use super::types::{
 
 const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
+/// Builds the supported URL map for image MIME types.
+///
+/// The regex pattern is a compile-time constant that always compiles
+/// successfully, but we handle the error path to satisfy the no-panic
+/// guideline.
+pub(crate) fn build_image_url_map() -> HashMap<String, Regex> {
+    let Some(re) = Regex::new(r"^https?://").ok() else {
+        return HashMap::new();
+    };
+    HashMap::from([
+        ("image/png".to_owned(), re.clone()),
+        ("image/jpeg".to_owned(), re.clone()),
+        ("image/webp".to_owned(), re.clone()),
+        ("image/gif".to_owned(), re),
+    ])
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenAiConfig {
     pub api_key: String,
@@ -71,24 +88,7 @@ impl OpenAiChatCompletionsModel {
             model_id: model_id.into(),
             client,
             config,
-            supported_urls: HashMap::from([
-                (
-                    "image/png".to_owned(),
-                    Regex::new(r"^https?://").expect("static regex must compile"),
-                ),
-                (
-                    "image/jpeg".to_owned(),
-                    Regex::new(r"^https?://").expect("static regex must compile"),
-                ),
-                (
-                    "image/webp".to_owned(),
-                    Regex::new(r"^https?://").expect("static regex must compile"),
-                ),
-                (
-                    "image/gif".to_owned(),
-                    Regex::new(r"^https?://").expect("static regex must compile"),
-                ),
-            ]),
+            supported_urls: build_image_url_map(),
         }
     }
 
