@@ -61,6 +61,8 @@ pub enum BitrouterError {
         message: String,
         chunk: Option<JsonValue>,
     },
+    #[error("access denied: {message}")]
+    AccessDenied { message: String },
 }
 
 impl BitrouterError {

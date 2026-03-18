@@ -16,6 +16,7 @@ postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
 mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
 swig = [
     "dep:bitrouter-swig-sdk",
+    "dep:rand",
     "dep:solana-client",
     "dep:solana-instruction",
     "dep:solana-keypair",
@@ -53,6 +54,7 @@ sea-orm-migration = { version = "1.1", default-features = false, features = [
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
+serde_yaml = { version = "0.9" }
 thiserror = { version = "2.0" }
 tokio = { version = "1", features = [
     "macros",
@@ -75,6 +77,7 @@ anyhow = { version = "1", optional = true }
 
 # Embedded wallet (optional)
 bitrouter-swig-sdk = { version = "0.1", optional = true }
+rand = { version = "0.9", optional = true }
 solana-client = { version = "3.1", optional = true }
 solana-instruction = { version = "3.2", optional = true }
 solana-keypair = { version = "3.1", optional = true }

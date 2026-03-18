@@ -13,7 +13,7 @@ pub struct Model {
     /// CAIP-10 identity string (e.g. `solana:5eykt...:BASE58_KEY`), used for
     /// JWT authentication.
     #[sea_orm(unique)]
-    pub master_pubkey: Option<String>,
+    pub caip10_identity: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }

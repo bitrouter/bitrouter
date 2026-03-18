@@ -383,7 +383,7 @@ mod tests {
     use bitrouter_core::models::language::usage::{
         LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage,
     };
-    use bitrouter_core::observe::{RequestContext, RequestSuccessEvent};
+    use bitrouter_core::observe::{CallerContext, RequestContext, RequestSuccessEvent};
 
     use super::*;
 
@@ -392,7 +392,7 @@ mod tests {
             route: route.into(),
             provider: provider.into(),
             model: model.into(),
-            account_id: None,
+            caller: CallerContext::default(),
             latency_ms: 300,
         }
     }
@@ -458,7 +458,7 @@ mod tests {
                     route: "fast".into(),
                     provider: "openai".into(),
                     model: "gpt-4o-mini".into(),
-                    account_id: None,
+                    caller: CallerContext::default(),
                     latency_ms: 500,
                 },
                 error: bitrouter_core::errors::BitrouterError::transport(None, "timeout"),

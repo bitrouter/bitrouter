@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use bitrouter_core::auth::claims::{BudgetRange, BudgetScope};
 use uuid::Uuid;
 
 /// Opaque account identifier.
@@ -49,4 +50,12 @@ pub struct Identity {
     pub account_id: AccountId,
     /// What this caller is permitted to do.
     pub scope: Scope,
+    /// Optional model-name patterns this caller may access.
+    pub models: Option<Vec<String>>,
+    /// Budget limit in micro USD (1 USD = 1,000,000 μUSD).
+    pub budget: Option<u64>,
+    /// Whether the budget applies per-session or per-account.
+    pub budget_scope: Option<BudgetScope>,
+    /// The range over which the budget is measured.
+    pub budget_range: Option<BudgetRange>,
 }
