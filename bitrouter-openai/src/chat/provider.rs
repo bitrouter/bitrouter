@@ -30,9 +30,10 @@ const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
 /// Builds the supported URL map for image MIME types.
 ///
-/// The regex pattern is a compile-time constant that always compiles
-/// successfully, but we handle the error path to satisfy the no-panic
-/// guideline.
+/// The regex pattern `^https?://` is a compile-time constant that always
+/// compiles successfully.  The `else` branch returns an empty map as a
+/// defensive fallback — it can only be reached if the regex engine itself
+/// is broken, which would indicate a catastrophic initialization failure.
 pub(crate) fn build_image_url_map() -> HashMap<String, Regex> {
     let Some(re) = Regex::new(r"^https?://").ok() else {
         return HashMap::new();

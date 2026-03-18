@@ -201,7 +201,8 @@ fn message_to_language_model_content(
                     Some(response_body),
                 ));
             }
-            // SAFETY: len() != 1 is checked above, so len() == 1 here
+            // len() == 1 is guaranteed here because len() != 1 returns early above.
+            // The else branch is a defensive fallback that cannot be reached.
             let Some(tool_call) = tool_calls.into_iter().next() else {
                 return Err(BitrouterError::invalid_response(
                     Some(OPENAI_PROVIDER_NAME),

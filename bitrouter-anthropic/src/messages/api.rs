@@ -210,7 +210,8 @@ fn content_blocks_to_language_model_content(
     }
 
     if blocks.len() == 1 {
-        // SAFETY: len() == 1 guarantees next() returns Some
+        // len() == 1 guarantees next() returns Some.
+        // The else branch is a defensive fallback that cannot be reached.
         let Some(block) = blocks.into_iter().next() else {
             return Err(BitrouterError::invalid_response(
                 Some(ANTHROPIC_PROVIDER_NAME),
