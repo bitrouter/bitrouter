@@ -6,12 +6,13 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // 1. Add master_pubkey column to accounts.
+        // 1. Add caip10_identity column to accounts (stores CAIP-10 identifier
+        //    for JWT authentication, e.g. "solana:5eykt...:BASE58_KEY").
         manager
             .alter_table(
                 Table::alter()
                     .table(Accounts::Table)
-                    .add_column(string_null(Accounts::MasterPubkey))
+                    .add_column(string_null(Accounts::Caip10Identity))
                     .to_owned(),
             )
             .await?;
@@ -19,15 +20,15 @@ impl MigrationTrait for Migration {
         manager
             .create_index(
                 Index::create()
-                    .name("idx_accounts_master_pubkey")
+                    .name("idx_accounts_caip10_identity")
                     .table(Accounts::Table)
-                    .col(Accounts::MasterPubkey)
+                    .col(Accounts::Caip10Identity)
                     .unique()
                     .to_owned(),
             )
             .await?;
 
-        // 3. Create rotated_pubkeys table for key rotation history.
+        // 2. Create rotated_pubkeys table for key rotation history.
         manager
             .create_table(
                 Table::create()
@@ -47,39 +48,10 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // 4. Drop api_keys table.
-        manager
-            .drop_table(Table::drop().table(ApiKeys::Table).to_owned())
-            .await?;
-
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Reverse: recreate api_keys, drop rotated_pubkeys, remove master_pubkey.
-        manager
-            .create_table(
-                Table::create()
-                    .table(ApiKeys::Table)
-                    .if_not_exists()
-                    .col(uuid(ApiKeys::Id).primary_key())
-                    .col(uuid(ApiKeys::AccountId))
-                    .col(string(ApiKeys::Name))
-                    .col(string(ApiKeys::Prefix))
-                    .col(string_uniq(ApiKeys::KeyHash))
-                    .col(timestamp(ApiKeys::CreatedAt))
-                    .col(timestamp_null(ApiKeys::ExpiresAt))
-                    .col(timestamp_null(ApiKeys::RevokedAt))
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(ApiKeys::Table, ApiKeys::AccountId)
-                            .to(Accounts::Table, Accounts::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
-                    .to_owned(),
-            )
-            .await?;
-
         manager
             .drop_table(Table::drop().table(RotatedPubkeys::Table).to_owned())
             .await?;
@@ -87,7 +59,7 @@ impl MigrationTrait for Migration {
         manager
             .drop_index(
                 Index::drop()
-                    .name("idx_accounts_master_pubkey")
+                    .name("idx_accounts_caip10_identity")
                     .table(Accounts::Table)
                     .to_owned(),
             )
@@ -97,7 +69,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(Accounts::Table)
-                    .drop_column(Accounts::MasterPubkey)
+                    .drop_column(Accounts::Caip10Identity)
                     .to_owned(),
             )
             .await?;
@@ -110,7 +82,7 @@ impl MigrationTrait for Migration {
 enum Accounts {
     Table,
     Id,
-    MasterPubkey,
+    Caip10Identity,
 }
 
 #[derive(DeriveIden)]
@@ -120,17 +92,4 @@ enum RotatedPubkeys {
     AccountId,
     Pubkey,
     RotatedAt,
-}
-
-#[derive(DeriveIden)]
-enum ApiKeys {
-    Table,
-    Id,
-    AccountId,
-    Name,
-    Prefix,
-    KeyHash,
-    CreatedAt,
-    ExpiresAt,
-    RevokedAt,
 }

@@ -2,6 +2,8 @@
 
 use std::sync::RwLock;
 
+use chrono::NaiveDateTime;
+
 use super::store::{SpendLog, SpendStore};
 
 /// An in-memory [`SpendStore`] backed by a `Vec`.
@@ -39,6 +41,24 @@ impl SpendStore for InMemorySpendStore {
         guard.push(log);
         Box::pin(async {})
     }
+
+    fn query_total_spend(
+        &self,
+        account_id: &str,
+        since: Option<NaiveDateTime>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send + '_>> {
+        let guard = self.logs.read().unwrap_or_else(|e| e.into_inner());
+        let total: f64 = guard
+            .iter()
+            .filter(|log| {
+                log.success
+                    && log.account_id.as_deref() == Some(account_id)
+                    && since.is_none_or(|s| log.created_at >= s)
+            })
+            .map(|log| log.cost)
+            .sum();
+        Box::pin(async move { total })
+    }
 }
 
 #[cfg(test)]
@@ -57,6 +77,7 @@ mod tests {
             .write(SpendLog {
                 id: Uuid::new_v4(),
                 account_id: Some("acct-1".into()),
+                session_id: None,
                 model: "gpt-4o".into(),
                 provider: "openai".into(),
                 input_tokens: 100,

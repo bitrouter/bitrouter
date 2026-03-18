@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use dialoguer::{Confirm, Input, Password, Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::swig;
@@ -38,9 +38,17 @@ pub struct OnboardingState {
     /// Solana RPC URL chosen during onboarding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpc_url: Option<String>,
+    /// Next Swig role ID to assign when deriving an agent wallet.
+    /// Master is always role 0; agents start at 1 and increment.
+    #[serde(default = "default_next_role_id")]
+    pub next_role_id: u32,
     /// Agent wallets derived from the embedded wallet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_wallets: Vec<AgentWalletState>,
+}
+
+fn default_next_role_id() -> u32 {
+    1
 }
 
 /// Persisted agent wallet reference data (for display only; Swig is source of truth).
@@ -83,6 +91,7 @@ impl OnboardingState {
             wallet_address: None,
             swig_id: None,
             rpc_url: None,
+            next_role_id: 1,
             agent_wallets: Vec::new(),
         }
     }
@@ -213,15 +222,10 @@ pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std:
         .default(swig::DEFAULT_RPC_URL.to_string())
         .interact_text()?;
 
-    // ── Step 3: Passphrase prompt (sudo-like) ───────────────────
-    println!();
-    println!("  Creating a Swig embedded wallet requires your master wallet's signature.");
-    let passphrase = prompt_passphrase(&theme)?;
-
-    // ── Step 4: Create embedded wallet ──────────────────────────
+    // ── Step 3: Create embedded wallet ──────────────────────────
     println!();
     println!("  Creating Swig embedded wallet...");
-    match swig::create_embedded_wallet(&wallet_path, passphrase.as_bytes(), &rpc_url) {
+    match swig::create_embedded_wallet(&wallet_path, &rpc_url) {
         Ok(info) => {
             println!("  ✓ Embedded wallet created: {}", info.address);
             println!();
@@ -266,14 +270,7 @@ pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std:
         let swig_account = load_state(home_dir)
             .embedded_wallet_address
             .ok_or("embedded wallet address missing")?;
-        match prompt_and_derive_agent(
-            home_dir,
-            &wallet_path,
-            passphrase.as_bytes(),
-            &rpc_url,
-            &swig_account,
-            &theme,
-        )? {
+        match prompt_and_derive_agent(home_dir, &wallet_path, &rpc_url, &swig_account, &theme)? {
             Some(agent) => {
                 println!(
                     "  ✓ Agent wallet derived: {} ({})",
@@ -410,26 +407,11 @@ fn prompt_create_wallet(
     Ok(WalletChoice::Create(path))
 }
 
-// ── Passphrase prompt ─────────────────────────────────────────
-
-/// Prompt for the master wallet passphrase (sudo-like UX).
-///
-/// Empty input is accepted — the user presses Enter to continue without
-/// a passphrase, matching the Solana CLI convention.
-pub fn prompt_passphrase(theme: &ColorfulTheme) -> Result<String, Box<dyn std::error::Error>> {
-    let passphrase = Password::with_theme(theme)
-        .with_prompt("[sudo] passphrase for master wallet (empty = none)")
-        .allow_empty_password(true)
-        .interact()?;
-    Ok(passphrase)
-}
-
 // ── Agent wallet derivation prompts ───────────────────────────
 
 fn prompt_and_derive_agent(
     home_dir: &Path,
     wallet_path: &Path,
-    signature: &[u8],
     rpc_url: &str,
     swig_account: &str,
     theme: &ColorfulTheme,
@@ -472,14 +454,16 @@ fn prompt_and_derive_agent(
 
     println!();
     println!("  Deriving agent wallet with Swig...");
+    let current_state = load_state(home_dir);
+    let role_id = current_state.next_role_id;
     match swig::derive_agent_wallet(
         wallet_path,
-        signature,
         &permissions,
         rpc_url,
         &label,
         home_dir,
         swig_account,
+        role_id,
     ) {
         Ok((info, _keypair_bytes)) => {
             let agent = AgentWalletState {
@@ -490,6 +474,10 @@ fn prompt_and_derive_agent(
                 created_at: info.created_at,
             };
             add_agent_wallet(home_dir, agent.clone())?;
+            // Increment role_id for the next agent wallet.
+            let mut state = load_state(home_dir);
+            state.next_role_id = role_id + 1;
+            save_state(home_dir, &state)?;
             Ok(Some(agent))
         }
         Err(e) => {

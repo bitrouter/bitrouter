@@ -11,7 +11,7 @@ use bitrouter_core::{
         stream_result::LanguageModelStreamResult,
         usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
     },
-    observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
+    observe::{CallerContext, ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
     routers::{
         model_router::LanguageModelRouter,
         routing_table::{RoutingTable, RoutingTarget},
@@ -358,7 +358,7 @@ async fn generate_content_observe_success() {
         table,
         router,
         observer.clone(),
-        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(CallerContext::default()) }),
     );
 
     let body = serde_json::json!({
@@ -391,7 +391,7 @@ async fn generate_content_observe_streaming_success() {
         table,
         router,
         observer.clone(),
-        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(None::<String>) }),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(CallerContext::default()) }),
     );
 
     let body = serde_json::json!({

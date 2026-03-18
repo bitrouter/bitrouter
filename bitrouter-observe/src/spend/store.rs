@@ -11,6 +11,7 @@ use uuid::Uuid;
 pub struct SpendLog {
     pub id: Uuid,
     pub account_id: Option<String>,
+    pub session_id: Option<Uuid>,
     pub model: String,
     pub provider: String,
     pub input_tokens: u32,
@@ -30,4 +31,13 @@ pub struct SpendLog {
 pub trait SpendStore: Send + Sync {
     /// Writes a spend log entry to the store.
     fn write(&self, log: SpendLog) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+
+    /// Returns total cost (USD) for an account since the given timestamp.
+    ///
+    /// When `since` is `None`, returns the all-time total.
+    fn query_total_spend(
+        &self,
+        account_id: &str,
+        since: Option<NaiveDateTime>,
+    ) -> Pin<Box<dyn Future<Output = f64> + Send + '_>>;
 }

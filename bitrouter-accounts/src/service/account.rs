@@ -22,7 +22,7 @@ impl<'db> AccountService<'db> {
         let model = account::ActiveModel {
             id: Set(Uuid::new_v4()),
             name: Set(name.to_owned()),
-            master_pubkey: Set(None),
+            caip10_identity: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
         };
@@ -42,7 +42,7 @@ impl<'db> AccountService<'db> {
     /// Find an account by its current master public key.
     pub async fn find_by_pubkey(&self, pubkey: &str) -> Result<Option<account::Model>, DbErr> {
         account::Entity::find()
-            .filter(account::Column::MasterPubkey.eq(pubkey))
+            .filter(account::Column::Caip10Identity.eq(pubkey))
             .one(self.db)
             .await
     }
@@ -59,7 +59,7 @@ impl<'db> AccountService<'db> {
         let model = account::ActiveModel {
             id: Set(Uuid::new_v4()),
             name: Set(name),
-            master_pubkey: Set(Some(pubkey.to_owned())),
+            caip10_identity: Set(Some(pubkey.to_owned())),
             created_at: Set(now),
             updated_at: Set(now),
         };
@@ -112,7 +112,7 @@ impl<'db> AccountService<'db> {
         };
 
         // Store the old pubkey in rotation history.
-        if let Some(old_pubkey) = &account.master_pubkey {
+        if let Some(old_pubkey) = &account.caip10_identity {
             let now = Utc::now().naive_utc();
             let rotated = rotated_pubkey::ActiveModel {
                 id: Set(Uuid::new_v4()),
@@ -133,7 +133,7 @@ impl<'db> AccountService<'db> {
         // Update the account with the new pubkey.
         let now = Utc::now().naive_utc();
         let mut active: account::ActiveModel = account.into();
-        active.master_pubkey = Set(Some(new_pubkey.to_owned()));
+        active.caip10_identity = Set(Some(new_pubkey.to_owned()));
         active.updated_at = Set(now);
         let updated = active.update(self.db).await?;
 

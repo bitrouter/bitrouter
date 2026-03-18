@@ -204,6 +204,8 @@ enum SudoAction {
     },
     /// Display wallet info and persisted policy (no signing required)
     ShowWallet,
+    /// List all locally-tracked agent wallets
+    ListAgents,
 }
 
 #[tokio::main]
@@ -349,6 +351,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 SudoAction::ShowWallet => {
                     cli::sudo::run_show_wallet(home)?;
                 }
+                SudoAction::ListAgents => {
+                    cli::sudo::run_list_agents(home)?;
+                }
             }
             return Ok(());
         }
@@ -390,48 +395,23 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
         .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
 
-    // ── First-run onboarding gate ───────────────────────────────
-    // Auto-trigger cloud node onboarding on first serve/start when no
-    // onboarding marker exists. Only runs in interactive terminals.
+    // ── First-run guidance ────────────────────────────────────────
+    // On serve/start, if onboarding hasn't been completed, print a message
+    // directing the user to run `bitrouter init` instead of auto-triggering.
     let is_server_start =
         cli.command.is_none() || matches!(cli.command, Some(Command::Serve | Command::Start));
-    let mut onboarding_ran = false;
     if is_server_start && cli::onboarding::should_onboard(&paths.home_dir) {
         let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
         if is_interactive {
-            onboarding_ran = true;
-            match cli::onboarding::run_onboarding(&paths.home_dir) {
-                Ok(cli::onboarding::OnboardingOutcome::CompletedCloud { rpc_url }) => {
-                    // Write cloud provider default config and reload runtime.
-                    if let Err(e) = write_cloud_provider_config(&paths, &rpc_url) {
-                        eprintln!("  Warning: failed to write cloud config: {e}");
-                    }
-                    runtime = DefaultRuntime::load(paths.clone())
-                        .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
-                }
-                Ok(cli::onboarding::OnboardingOutcome::CompletedByok) => {
-                    // BYOK — no cloud config written.
-                    println!();
-                    println!("  To configure BYOK providers later, see:");
-                    println!("    https://github.com/bitrouter/bitrouter#provider-configuration");
-                    println!();
-                }
-                Ok(cli::onboarding::OnboardingOutcome::Deferred) => {
-                    // Will re-prompt on next serve/start.
-                }
-                Err(e) => {
-                    eprintln!("  Onboarding error: {e}");
-                    eprintln!("  Continuing without cloud provider...");
-                    eprintln!();
-                }
-            }
+            eprintln!();
+            eprintln!("  No wallet configured. Run `bitrouter init` to set up your node.");
+            eprintln!();
         }
     }
 
     // Auto-init: when launching in TUI mode with no providers, run the setup
     // wizard first so the user lands in a fully configured TUI.
-    // Skip if onboarding already ran — the user chose their path.
-    if use_tui && !onboarding_ran && !runtime.config.has_configured_providers() {
+    if use_tui && !runtime.config.has_configured_providers() {
         let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
         if is_interactive {
             eprintln!();
@@ -773,8 +753,13 @@ fn write_cloud_provider_config(
     // Read existing config or start fresh.
     let existing = fs::read_to_string(config_path).unwrap_or_default();
 
-    // If cloud provider is already configured, skip.
-    if existing.contains("bitrouter-cloud:") {
+    // Parse YAML to check if cloud provider is already configured.
+    if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&existing)
+        && value
+            .get("providers")
+            .and_then(|p| p.get("bitrouter-cloud"))
+            .is_some()
+    {
         return Ok(());
     }
 

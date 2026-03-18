@@ -10,6 +10,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub account_id: Option<String>,
+    pub session_id: Option<Uuid>,
     pub model: String,
     pub provider: String,
     pub input_tokens: i32,
