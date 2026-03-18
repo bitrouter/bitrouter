@@ -6,6 +6,7 @@
 //! secp256k1 for EVM chains (`EIP191K`). Users hold the private seed,
 //! servers verify signatures and resolve accounts by CAIP-10 identity.
 
+pub mod access;
 pub mod chain;
 pub mod claims;
 pub mod keys;

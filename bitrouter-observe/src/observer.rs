@@ -46,7 +46,8 @@ impl ObserveCallback for SpendObserver {
 
             let log = SpendLog {
                 id: Uuid::new_v4(),
-                account_id: event.ctx.account_id,
+                account_id: event.ctx.caller.account_id,
+                session_id: None,
                 model: event.ctx.model,
                 provider: event.ctx.provider,
                 input_tokens: event.usage.input_tokens.total.unwrap_or(0),
@@ -71,7 +72,8 @@ impl ObserveCallback for SpendObserver {
 
             let log = SpendLog {
                 id: Uuid::new_v4(),
-                account_id: event.ctx.account_id,
+                account_id: event.ctx.caller.account_id,
+                session_id: None,
                 model: event.ctx.model,
                 provider: event.ctx.provider,
                 input_tokens: 0,
@@ -100,6 +102,7 @@ fn error_variant_name(error: &bitrouter_core::errors::BitrouterError) -> String 
         BitrouterError::InvalidResponse { .. } => "InvalidResponse".into(),
         BitrouterError::Provider { .. } => "Provider".into(),
         BitrouterError::StreamProtocol { .. } => "StreamProtocol".into(),
+        BitrouterError::AccessDenied { .. } => "AccessDenied".into(),
     }
 }
 
@@ -111,7 +114,9 @@ mod tests {
     use bitrouter_core::models::language::usage::{
         LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage,
     };
-    use bitrouter_core::observe::{RequestContext, RequestFailureEvent, RequestSuccessEvent};
+    use bitrouter_core::observe::{
+        CallerContext, RequestContext, RequestFailureEvent, RequestSuccessEvent,
+    };
 
     use crate::cost::Pricing;
     use crate::spend::memory::InMemorySpendStore;
@@ -133,8 +138,10 @@ mod tests {
             route: "fast".into(),
             provider: "openai".into(),
             model: "gpt-4o".into(),
-            account_id: Some("acct-1".into()),
-            agent_name: None,
+            caller: CallerContext {
+                account_id: Some("acct-1".into()),
+                ..CallerContext::default()
+            },
             latency_ms: 250,
         }
     }

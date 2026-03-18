@@ -4,9 +4,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bitrouter_core::{
+    auth::access::is_model_allowed,
+    errors::BitrouterError,
     hooks::{GenerationHook, HookedRouter},
     models::language::language_model::LanguageModel,
-    observe::{ObserveCallback, RequestContext, RequestFailureEvent, RequestSuccessEvent},
+    observe::{
+        CallerContext, ObserveCallback, RequestContext, RequestFailureEvent, RequestSuccessEvent,
+    },
     routers::{model_router::LanguageModelRouter, routing_table::RoutingTable},
 };
 use warp::Filter;
@@ -74,7 +78,7 @@ pub fn chat_completions_filter_with_observe<T, R, A>(
 where
     T: RoutingTable + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
-    A: Filter<Extract = (Option<String>,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
     warp::path!("v1" / "chat" / "completions")
         .and(warp::post())
@@ -142,7 +146,7 @@ async fn handle_chat_completion_with_observe<T, R>(
     table: Arc<T>,
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
-    account_id: Option<String>,
+    caller: CallerContext,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
 where
     T: RoutingTable + Send + Sync + 'static,
@@ -150,6 +154,16 @@ where
 {
     let is_stream = request.stream.unwrap_or(false);
     let incoming_model = convert::extract_model_name(&request).to_owned();
+
+    if let Some(ref allowed) = caller.models
+        && !is_model_allowed(&incoming_model, allowed)
+    {
+        return Err(warp::reject::custom(BitrouterRejection(
+            BitrouterError::AccessDenied {
+                message: format!("model '{}' is not in your allowlist", incoming_model),
+            },
+        )));
+    }
 
     let target = table
         .route(&incoming_model)
@@ -177,7 +191,7 @@ where
             incoming_model,
             provider_name,
             target_model_id,
-            account_id,
+            caller,
             start,
         )
         .await
@@ -190,8 +204,7 @@ where
                         route: incoming_model,
                         provider: provider_name,
                         model: target_model_id,
-                        account_id,
-                        agent_name: None,
+                        caller,
                         latency_ms: start.elapsed().as_millis() as u64,
                     },
                     usage: result.usage.clone(),
@@ -206,8 +219,7 @@ where
                         route: incoming_model,
                         provider: provider_name,
                         model: target_model_id,
-                        account_id,
-                        agent_name: None,
+                        caller,
                         latency_ms: start.elapsed().as_millis() as u64,
                     },
                     error: e.clone(),
@@ -265,7 +277,7 @@ async fn handle_stream_with_observe(
     route: String,
     provider: String,
     target_model: String,
-    account_id: Option<String>,
+    caller: CallerContext,
     start: Instant,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     let stream_result = model
@@ -311,8 +323,7 @@ async fn handle_stream_with_observe(
             route,
             provider,
             model: target_model,
-            account_id,
-            agent_name: None,
+            caller,
             latency_ms,
         };
         if let Some(usage) = usage {

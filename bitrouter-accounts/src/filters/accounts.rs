@@ -32,7 +32,7 @@ where
 struct AccountResponse {
     id: String,
     name: String,
-    master_pubkey: Option<String>,
+    caip10_identity: Option<String>,
     created_at: String,
 }
 
@@ -52,7 +52,7 @@ async fn handle_get_own_account(
             let body = AccountResponse {
                 id: a.id.to_string(),
                 name: a.name,
-                master_pubkey: a.master_pubkey,
+                caip10_identity: a.caip10_identity,
                 created_at: a.created_at.to_string(),
             };
             Ok(warp::reply::json(&body))

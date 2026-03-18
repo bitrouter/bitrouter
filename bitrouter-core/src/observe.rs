@@ -8,8 +8,28 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use crate::auth::claims::{BudgetRange, BudgetScope};
 use crate::errors::BitrouterError;
 use crate::models::language::usage::LanguageModelUsage;
+
+/// Authenticated caller context extracted from JWT claims.
+///
+/// Carries the account identifier and any claim-based permissions (budget,
+/// model allowlist) through the API handler layer. Constructed in the auth
+/// filter and consumed by observers and (in the future) enforcement middleware.
+#[derive(Debug, Clone, Default)]
+pub struct CallerContext {
+    /// The account that made the request, if authentication is enabled.
+    pub account_id: Option<String>,
+    /// Optional model-name patterns this caller may access.
+    pub models: Option<Vec<String>>,
+    /// Budget limit in micro USD.
+    pub budget: Option<u64>,
+    /// Whether the budget applies per-session or per-account.
+    pub budget_scope: Option<BudgetScope>,
+    /// The range over which the budget is measured.
+    pub budget_range: Option<BudgetRange>,
+}
 
 /// Context about the request available to observation callbacks.
 #[derive(Debug, Clone)]
@@ -20,10 +40,8 @@ pub struct RequestContext {
     pub provider: String,
     /// The resolved model ID sent to the provider.
     pub model: String,
-    /// The account that made the request, if authentication is enabled.
-    pub account_id: Option<String>,
-    /// The A2A agent name resolved from the JWT identity, if available.
-    pub agent_name: Option<String>,
+    /// Authenticated caller context (account ID, budget claims).
+    pub caller: CallerContext,
     /// End-to-end request latency in milliseconds.
     pub latency_ms: u64,
 }
