@@ -15,4 +15,5 @@ pub mod jsonrpc;
 pub mod message;
 pub mod registry;
 pub mod security;
+pub mod server;
 pub mod task;

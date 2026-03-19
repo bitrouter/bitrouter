@@ -1,13 +1,18 @@
-//! Warp HTTP filters for A2A agent discovery.
+//! Warp HTTP filters for A2A agent discovery and JSON-RPC dispatch.
 //!
-//! Provides the standard `/.well-known/agent-card.json` discovery endpoint
-//! and a `/a2a/agents` listing endpoint, per the A2A v1.0 specification.
+//! Provides the standard `/.well-known/agent-card.json` discovery endpoint,
+//! a `/a2a/agents` listing endpoint, and a `POST /a2a` JSON-RPC endpoint
+//! per the A2A v1.0 specification.
 
 use std::sync::Arc;
 
 use warp::Filter;
 
+use bitrouter_a2a::jsonrpc::JsonRpcRequest;
 use bitrouter_a2a::registry::AgentCardRegistry;
+use bitrouter_a2a::server::{AgentExecutor, TaskStore};
+
+use super::handler;
 
 /// Creates a warp filter for `GET /.well-known/agent-card.json`.
 ///
@@ -41,6 +46,31 @@ where
         .and(warp::get())
         .and(warp::any().map(move || registry.clone()))
         .map(handle_agent_list)
+}
+
+/// Creates a warp filter for `POST /a2a` JSON-RPC dispatch.
+///
+/// Accepts JSON-RPC 2.0 requests and dispatches `SendMessage`, `GetTask`,
+/// and `CancelTask` methods to the provided [`AgentExecutor`] and [`TaskStore`].
+pub fn jsonrpc_filter<E, S>(
+    executor: Arc<E>,
+    task_store: Arc<S>,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    E: AgentExecutor + 'static,
+    S: TaskStore + 'static,
+{
+    warp::path("a2a")
+        .and(warp::post())
+        .and(warp::body::json::<JsonRpcRequest>())
+        .and(warp::any().map(move || executor.clone()))
+        .and(warp::any().map(move || task_store.clone()))
+        .then(
+            |request: JsonRpcRequest, executor: Arc<E>, task_store: Arc<S>| async move {
+                let response = handler::handle_jsonrpc(request, executor, task_store).await;
+                warp::reply::json(&response)
+            },
+        )
 }
 
 #[derive(Debug, serde::Deserialize)]

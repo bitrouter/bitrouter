@@ -22,4 +22,16 @@ pub enum A2aError {
     /// A2A client request error.
     #[error("client error: {0}")]
     Client(String),
+
+    /// Task not found.
+    #[error("task not found: {id}")]
+    TaskNotFound { id: String },
+
+    /// Optimistic concurrency version conflict.
+    #[error("version conflict")]
+    VersionConflict,
+
+    /// Agent execution error.
+    #[error("execution error: {0}")]
+    Execution(String),
 }

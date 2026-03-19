@@ -197,7 +197,27 @@ where
         // A2A discovery routes.
         let a2a_well_known =
             bitrouter_api::router::a2a::filters::well_known_filter(a2a_registry.clone());
-        let a2a_agents = bitrouter_api::router::a2a::filters::agent_list_filter(a2a_registry);
+        let a2a_agents =
+            bitrouter_api::router::a2a::filters::agent_list_filter(a2a_registry.clone());
+
+        // A2A JSON-RPC server endpoint.
+        let a2a_model = self
+            .config
+            .models
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+        tracing::info!(model = %a2a_model, "a2a executor configured");
+        let a2a_executor = Arc::new(crate::runtime::a2a_executor::LlmAgentExecutor::new(
+            self.table.clone(),
+            guarded_router.clone(),
+            a2a_model,
+            None,
+        ));
+        let a2a_task_store = Arc::new(crate::runtime::task_store::InMemoryTaskStore::new());
+        let a2a_jsonrpc =
+            bitrouter_api::router::a2a::filters::jsonrpc_filter(a2a_executor, a2a_task_store);
 
         // Build the full route tree. Account/session management routes are
         // only mounted when a database is configured.
@@ -211,6 +231,7 @@ where
             let all = health
                 .or(a2a_well_known)
                 .or(a2a_agents)
+                .or(a2a_jsonrpc)
                 .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
@@ -234,6 +255,7 @@ where
             let all = health
                 .or(a2a_well_known)
                 .or(a2a_agents)
+                .or(a2a_jsonrpc)
                 .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
