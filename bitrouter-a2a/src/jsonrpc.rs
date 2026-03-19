@@ -1,7 +1,7 @@
 //! JSON-RPC 2.0 types for the A2A protocol wire format.
 //!
 //! A2A uses JSON-RPC 2.0 over HTTP(S) as its transport. All A2A methods
-//! (`message/send`, `tasks/get`, `tasks/cancel`) are encoded as JSON-RPC
+//! (`SendMessage`, `GetTask`, `CancelTask`) are encoded as JSON-RPC
 //! requests POSTed to the agent's endpoint.
 
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ pub struct JsonRpcRequest {
     /// Request identifier.
     pub id: String,
 
-    /// Method name (e.g., `"message/send"`, `"tasks/get"`).
+    /// Method name (e.g., `"SendMessage"`, `"GetTask"`).
     pub method: String,
 
     /// Method parameters.
@@ -92,11 +92,11 @@ mod tests {
     fn request_round_trip() {
         let req = JsonRpcRequest::new(
             "req-1",
-            "message/send",
+            "SendMessage",
             serde_json::json!({
                 "message": {
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": "hello"}],
+                    "role": "ROLE_USER",
+                    "parts": [{"text": "hello"}],
                     "messageId": "msg-1"
                 }
             }),

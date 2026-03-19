@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use bitrouter_a2a::card::{AgentCard, AgentProvider, minimal_card};
-use bitrouter_a2a::client::A2aClient;
+use bitrouter_a2a::client::{A2aClient, SendMessageResult};
 use bitrouter_a2a::file_registry::FileAgentCardRegistry;
 use bitrouter_a2a::message::Part;
 use bitrouter_a2a::registry::{AgentCardRegistry, AgentRegistration};
@@ -195,12 +195,20 @@ pub async fn run_send(url: &str, message: &str) -> Result<(), String> {
 
     println!("Sending task to {} ({})...", card.name, endpoint);
 
-    let task = client
+    let result = client
         .send_message(endpoint, msg)
         .await
         .map_err(|e| format!("{e}"))?;
 
-    print_task(&task);
+    match result {
+        SendMessageResult::Task(task) => print_task(&task),
+        SendMessageResult::Message(msg) => {
+            println!();
+            println!("--- Agent Message ---");
+            print_parts(&msg.parts);
+            println!("---");
+        }
+    }
 
     Ok(())
 }
@@ -283,25 +291,21 @@ fn print_task(task: &bitrouter_a2a::task::Task) {
 
 fn print_parts(parts: &[Part]) {
     for part in parts {
-        match part {
-            Part::Text { text } => println!("{text}"),
-            Part::File { file } => {
-                let name = file.name.as_deref().unwrap_or("(unnamed file)");
-                let mime = file.mime_type.as_deref().unwrap_or("unknown");
-                if let Some(ref uri) = file.uri {
-                    println!("[file: {name} ({mime})] {uri}");
-                } else {
-                    println!(
-                        "[file: {name} ({mime})] (inline, {} bytes)",
-                        file.bytes.as_ref().map_or(0, |b| b.len())
-                    );
-                }
-            }
-            Part::Data { data } => {
-                let pretty =
-                    serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string());
-                println!("{pretty}");
-            }
+        if let Some(ref text) = part.text {
+            println!("{text}");
+        } else if let Some(ref url) = part.url {
+            let name = part.filename.as_deref().unwrap_or("(unnamed)");
+            println!("[url: {name}] {url}");
+        } else if part.raw.is_some() {
+            let name = part.filename.as_deref().unwrap_or("(unnamed file)");
+            let mime = part.media_type.as_deref().unwrap_or("unknown");
+            println!(
+                "[file: {name} ({mime})] (inline, {} bytes)",
+                part.raw.as_ref().map_or(0, |b| b.len())
+            );
+        } else if let Some(ref data) = part.data {
+            let pretty = serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string());
+            println!("{pretty}");
         }
     }
 }

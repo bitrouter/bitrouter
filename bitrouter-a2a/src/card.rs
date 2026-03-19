@@ -15,6 +15,7 @@ use crate::security::{SecurityRequirement, SecurityScheme};
 /// agent's identity, capabilities, skills, supported interfaces, and security
 /// requirements.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentCard {
     /// Human-readable agent name.
     pub name: String,
@@ -76,6 +77,7 @@ pub struct AgentProvider {
 
 /// Declares target URL, transport, and protocol version for agent interaction.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentInterface {
     /// Absolute HTTPS URL where the interface is available.
     pub url: String,
@@ -93,6 +95,7 @@ pub struct AgentInterface {
 
 /// Optional capabilities supported by an agent.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentCapabilities {
     /// Supports streaming responses.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,6 +133,7 @@ pub struct AgentExtension {
 
 /// A distinct capability or function an agent performs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentSkill {
     /// Unique skill identifier.
     pub id: String,
@@ -162,6 +166,7 @@ pub struct AgentSkill {
 
 /// JWS signature of an Agent Card (RFC 7515 JSON Serialization format).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentCardSignature {
     /// Base64url-encoded JWS protected header.
     pub protected: String,

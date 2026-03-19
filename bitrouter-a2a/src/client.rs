@@ -1,14 +1,23 @@
 //! A2A protocol client.
 //!
-//! Speaks JSON-RPC 2.0 to any A2A-compliant server. Supports agent discovery,
-//! task submission (`message/send`), status polling (`tasks/get`), and
-//! cancellation (`tasks/cancel`).
+//! Speaks JSON-RPC 2.0 to any A2A v1.0-compliant server. Supports agent
+//! discovery, task submission (`SendMessage`), status polling (`GetTask`),
+//! and cancellation (`CancelTask`).
 
 use crate::card::AgentCard;
 use crate::error::A2aError;
 use crate::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
 use crate::message::{Message, Part};
 use crate::task::Task;
+
+/// Result of a `SendMessage` call — may be a full Task or a direct Message.
+#[derive(Debug, Clone)]
+pub enum SendMessageResult {
+    /// Server returned a full task with status and lifecycle.
+    Task(Task),
+    /// Server returned a direct message response (no task lifecycle).
+    Message(Message),
+}
 
 /// A2A protocol client for communicating with remote A2A servers.
 pub struct A2aClient {
@@ -68,15 +77,22 @@ impl A2aClient {
 
     // ── Task operations (JSON-RPC 2.0) ─────────────────────────
 
-    /// Send a message to a remote agent and wait for the task to complete.
+    /// Send a message to a remote agent.
     ///
-    /// This is the `message/send` JSON-RPC method. The endpoint URL should
+    /// This is the `SendMessage` JSON-RPC method. The endpoint URL should
     /// be the agent's A2A interface URL from its Agent Card.
-    pub async fn send_message(&self, endpoint: &str, message: Message) -> Result<Task, A2aError> {
+    ///
+    /// Returns [`SendMessageResult`] which may be a full [`Task`] or a
+    /// direct [`Message`] response, depending on the server.
+    pub async fn send_message(
+        &self,
+        endpoint: &str,
+        message: Message,
+    ) -> Result<SendMessageResult, A2aError> {
         let request_id = generate_request_id();
         let rpc = JsonRpcRequest::new(
             &request_id,
-            "message/send",
+            "SendMessage",
             serde_json::json!({
                 "message": message,
             }),
@@ -84,18 +100,39 @@ impl A2aClient {
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
-        serde_json::from_value::<Task>(result)
-            .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))
+        // v1.0 SendMessage can return either a Task or a Message.
+        // Discriminate by checking for task-specific fields.
+        if result.get("id").is_some() && result.get("status").is_some() {
+            let task = serde_json::from_value::<Task>(result)
+                .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))?;
+            Ok(SendMessageResult::Task(task))
+        } else if let Some(msg_val) = result.get("message") {
+            let msg = serde_json::from_value::<Message>(msg_val.clone())
+                .map_err(|e| A2aError::Client(format!("failed to parse message response: {e}")))?;
+            Ok(SendMessageResult::Message(msg))
+        } else {
+            // Try parsing as a bare message (messageId + role + parts).
+            match serde_json::from_value::<Message>(result.clone()) {
+                Ok(msg) => Ok(SendMessageResult::Message(msg)),
+                Err(_) => {
+                    // Last resort: try as Task.
+                    let task = serde_json::from_value::<Task>(result).map_err(|e| {
+                        A2aError::Client(format!("failed to parse SendMessage result: {e}"))
+                    })?;
+                    Ok(SendMessageResult::Task(task))
+                }
+            }
+        }
     }
 
     /// Get the current state of a task.
     ///
-    /// This is the `tasks/get` JSON-RPC method.
+    /// This is the `GetTask` JSON-RPC method.
     pub async fn get_task(&self, endpoint: &str, task_id: &str) -> Result<Task, A2aError> {
         let request_id = generate_request_id();
         let rpc = JsonRpcRequest::new(
             &request_id,
-            "tasks/get",
+            "GetTask",
             serde_json::json!({
                 "id": task_id,
             }),
@@ -109,12 +146,12 @@ impl A2aClient {
 
     /// Cancel a running task.
     ///
-    /// This is the `tasks/cancel` JSON-RPC method.
+    /// This is the `CancelTask` JSON-RPC method.
     pub async fn cancel_task(&self, endpoint: &str, task_id: &str) -> Result<Task, A2aError> {
         let request_id = generate_request_id();
         let rpc = JsonRpcRequest::new(
             &request_id,
-            "tasks/cancel",
+            "CancelTask",
             serde_json::json!({
                 "id": task_id,
             }),
@@ -140,9 +177,7 @@ impl A2aClient {
     pub fn text_message(text: &str) -> Message {
         Message {
             role: crate::message::MessageRole::User,
-            parts: vec![Part::Text {
-                text: text.to_string(),
-            }],
+            parts: vec![Part::text(text)],
             message_id: generate_request_id(),
             context_id: None,
             task_id: None,
@@ -200,10 +235,7 @@ mod tests {
         let msg = A2aClient::text_message("hello world");
         assert_eq!(msg.role, crate::message::MessageRole::User);
         assert_eq!(msg.parts.len(), 1);
-        match &msg.parts[0] {
-            Part::Text { text } => assert_eq!(text, "hello world"),
-            _ => panic!("expected text part"),
-        }
+        assert_eq!(msg.parts[0].text.as_deref(), Some("hello world"));
     }
 
     #[test]

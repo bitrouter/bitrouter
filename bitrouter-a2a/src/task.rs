@@ -9,23 +9,30 @@ use crate::message::{Artifact, Message};
 
 /// Task lifecycle states per A2A v1.0.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub enum TaskState {
     /// Task accepted, awaiting processing.
+    #[serde(rename = "TASK_STATE_SUBMITTED")]
     Submitted,
     /// Task actively executing.
+    #[serde(rename = "TASK_STATE_WORKING")]
     Working,
     /// Task completed successfully.
+    #[serde(rename = "TASK_STATE_COMPLETED")]
     Completed,
     /// Task execution failed.
+    #[serde(rename = "TASK_STATE_FAILED")]
     Failed,
     /// Task canceled by client.
+    #[serde(rename = "TASK_STATE_CANCELED")]
     Canceled,
     /// Agent declined the task.
+    #[serde(rename = "TASK_STATE_REJECTED")]
     Rejected,
     /// Waiting for additional client input.
+    #[serde(rename = "TASK_STATE_INPUT_REQUIRED")]
     InputRequired,
     /// Authentication needed to proceed.
+    #[serde(rename = "TASK_STATE_AUTH_REQUIRED")]
     AuthRequired,
 }
 
@@ -72,12 +79,16 @@ mod tests {
     use crate::message::{MessageRole, Part};
 
     #[test]
-    fn task_state_serializes_camel_case() {
+    fn task_state_serializes_v1_format() {
         let json = serde_json::to_string(&TaskState::InputRequired).expect("serialize");
-        assert_eq!(json, "\"inputRequired\"");
+        assert_eq!(json, "\"TASK_STATE_INPUT_REQUIRED\"");
 
-        let parsed: TaskState = serde_json::from_str("\"authRequired\"").expect("deserialize");
+        let parsed: TaskState =
+            serde_json::from_str("\"TASK_STATE_AUTH_REQUIRED\"").expect("deserialize");
         assert_eq!(parsed, TaskState::AuthRequired);
+
+        let json = serde_json::to_string(&TaskState::Submitted).expect("serialize");
+        assert_eq!(json, "\"TASK_STATE_SUBMITTED\"");
     }
 
     #[test]
@@ -90,9 +101,7 @@ mod tests {
                 timestamp: "2026-03-17T10:30:00Z".to_string(),
                 message: Some(Message {
                     role: MessageRole::Agent,
-                    parts: vec![Part::Text {
-                        text: "Done reviewing".to_string(),
-                    }],
+                    parts: vec![Part::text("Done reviewing")],
                     message_id: "msg-resp".to_string(),
                     context_id: None,
                     task_id: Some("task-001".to_string()),
@@ -103,9 +112,8 @@ mod tests {
             artifacts: vec![Artifact {
                 artifact_id: "art-001".to_string(),
                 name: Some("review".to_string()),
-                parts: vec![Part::Text {
-                    text: "LGTM".to_string(),
-                }],
+                description: None,
+                parts: vec![Part::text("LGTM")],
                 metadata: None,
             }],
             history: Vec::new(),
