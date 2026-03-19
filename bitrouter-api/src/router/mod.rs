@@ -1,3 +1,5 @@
+#[cfg(feature = "a2a")]
+pub mod a2a;
 pub mod admin;
 #[cfg(feature = "anthropic")]
 pub mod anthropic;

@@ -1164,7 +1164,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "warp",
 ]
 
 [[package]]
@@ -1202,6 +1201,7 @@ dependencies = [
 name = "bitrouter-api"
 version = "0.10.0"
 dependencies = [
+ "bitrouter-a2a",
  "bitrouter-anthropic",
  "bitrouter-core",
  "bitrouter-google",
@@ -1210,6 +1210,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "warp",

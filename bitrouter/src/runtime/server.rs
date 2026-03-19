@@ -195,8 +195,9 @@ where
             );
 
         // A2A discovery routes.
-        let a2a_well_known = bitrouter_a2a::filters::well_known_filter(a2a_registry.clone());
-        let a2a_agents = bitrouter_a2a::filters::agent_list_filter(a2a_registry);
+        let a2a_well_known =
+            bitrouter_api::router::a2a::filters::well_known_filter(a2a_registry.clone());
+        let a2a_agents = bitrouter_api::router::a2a::filters::agent_list_filter(a2a_registry);
 
         // Build the full route tree. Account/session management routes are
         // only mounted when a database is configured.

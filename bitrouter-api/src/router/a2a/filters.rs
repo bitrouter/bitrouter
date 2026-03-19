@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use warp::Filter;
 
-use crate::registry::AgentCardRegistry;
+use bitrouter_a2a::registry::AgentCardRegistry;
 
 /// Creates a warp filter for `GET /.well-known/agent-card.json`.
 ///
@@ -110,9 +110,9 @@ fn handle_agent_list<R: AgentCardRegistry>(registry: Arc<R>) -> Box<dyn warp::Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::card::minimal_card;
-    use crate::file_registry::FileAgentCardRegistry;
-    use crate::registry::AgentRegistration;
+    use bitrouter_a2a::card::minimal_card;
+    use bitrouter_a2a::file_registry::FileAgentCardRegistry;
+    use bitrouter_a2a::registry::AgentRegistration;
 
     fn setup_registry(dir: &std::path::Path) -> Arc<FileAgentCardRegistry> {
         Arc::new(FileAgentCardRegistry::new(dir).expect("new registry"))

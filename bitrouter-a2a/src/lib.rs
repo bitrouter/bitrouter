@@ -7,13 +7,10 @@
 //! - **Client** — A2A protocol client for discovering and communicating with remote agents (`client`)
 //! - **JSON-RPC** — Wire format types for the A2A JSON-RPC 2.0 transport (`jsonrpc`)
 //! - **Registry** — Trait and file-based implementation for agent card storage
-//! - **Filters** — Warp HTTP filters for the well-known discovery endpoint
-
 pub mod card;
 pub mod client;
 pub mod error;
 pub mod file_registry;
-pub mod filters;
 pub mod jsonrpc;
 pub mod message;
 pub mod registry;
