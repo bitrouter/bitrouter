@@ -1114,6 +1114,8 @@ name = "bitrouter"
 version = "0.10.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "bitrouter-a2a",
  "bitrouter-accounts",
  "bitrouter-anthropic",
  "bitrouter-api",
@@ -1144,12 +1146,27 @@ dependencies = [
  "solana-pubkey 4.1.0",
  "solana-transaction",
  "spl-associated-token-account",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
  "warp",
+]
+
+[[package]]
+name = "bitrouter-a2a"
+version = "0.10.0"
+dependencies = [
+ "futures-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1187,6 +1204,7 @@ dependencies = [
 name = "bitrouter-api"
 version = "0.10.0"
 dependencies = [
+ "bitrouter-a2a",
  "bitrouter-anthropic",
  "bitrouter-core",
  "bitrouter-google",
@@ -1195,6 +1213,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "warp",

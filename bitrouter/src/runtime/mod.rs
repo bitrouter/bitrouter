@@ -1,3 +1,4 @@
+pub mod a2a;
 pub mod app;
 pub mod auth;
 pub mod daemon;

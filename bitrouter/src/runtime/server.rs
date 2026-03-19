@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_api::router::{admin, anthropic, google, models, openai, routes};
@@ -24,6 +25,7 @@ pub struct ServerPlan<T, R> {
     table: Arc<T>,
     router: Arc<R>,
     db: Option<Arc<DatabaseConnection>>,
+    agents_dir: PathBuf,
 }
 
 impl<T, R> ServerPlan<T, R>
@@ -31,12 +33,18 @@ where
     T: AdminRoutingTable + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
-    pub fn new(config: BitrouterConfig, table: Arc<T>, router: Arc<R>) -> Self {
+    pub fn new(
+        config: BitrouterConfig,
+        table: Arc<T>,
+        router: Arc<R>,
+        agents_dir: PathBuf,
+    ) -> Self {
         Self {
             config,
             table,
             router,
             db: None,
+            agents_dir,
         }
     }
 
@@ -95,6 +103,13 @@ where
             spend_observer as Arc<dyn ObserveCallback>,
             metrics_collector.clone() as Arc<dyn ObserveCallback>,
         ]));
+
+        // Build A2A agent card registry for discovery endpoints.
+        let a2a_registry = Arc::new(
+            crate::runtime::a2a::file_registry::FileAgentCardRegistry::new(&self.agents_dir)
+                .map_err(|e| std::io::Error::other(e.to_string()))?,
+        );
+        tracing::info!(dir = %self.agents_dir.display(), "a2a agent registry loaded");
 
         let health = warp::path("health")
             .and(warp::get())
@@ -179,6 +194,46 @@ where
                 account_filter,
             );
 
+        // A2A discovery routes.
+        let a2a_well_known =
+            bitrouter_api::router::a2a::discovery::well_known_filter(a2a_registry.clone());
+        let a2a_agents =
+            bitrouter_api::router::a2a::discovery::agent_list_filter(a2a_registry.clone());
+
+        // A2A JSON-RPC server endpoint.
+        let a2a_model = self
+            .config
+            .models
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+        tracing::info!(model = %a2a_model, "a2a executor configured");
+        let a2a_executor = Arc::new(crate::runtime::a2a::executor::LlmAgentExecutor::new(
+            self.table.clone(),
+            guarded_router.clone(),
+            a2a_model,
+            None,
+        ));
+        let a2a_task_store = Arc::new(crate::runtime::a2a::task_store::InMemoryTaskStore::new());
+        let a2a_push_store =
+            Arc::new(crate::runtime::a2a::push_store::InMemoryPushNotificationStore::new());
+        let a2a_jsonrpc = bitrouter_api::router::a2a::jsonrpc::jsonrpc_filter(
+            a2a_executor.clone(),
+            a2a_task_store.clone(),
+            a2a_registry.clone(),
+            a2a_push_store.clone(),
+        );
+        let a2a_streaming = bitrouter_api::router::a2a::streaming::streaming_jsonrpc_filter(
+            a2a_executor.clone(),
+            a2a_task_store.clone(),
+        );
+        let a2a_rest = bitrouter_api::router::a2a::rest::rest_filters(
+            a2a_executor,
+            a2a_task_store,
+            a2a_push_store,
+        );
+
         // Build the full route tree. Account/session management routes are
         // only mounted when a database is configured.
         if let Some(ref db) = self.db {
@@ -189,6 +244,11 @@ where
             let sess = bitrouter_accounts::filters::session_routes(db_conn, mgmt_auth);
 
             let all = health
+                .or(a2a_well_known)
+                .or(a2a_agents)
+                .or(a2a_streaming)
+                .or(a2a_jsonrpc)
+                .or(a2a_rest)
                 .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
@@ -210,6 +270,11 @@ where
             server.run().await;
         } else {
             let all = health
+                .or(a2a_well_known)
+                .or(a2a_agents)
+                .or(a2a_streaming)
+                .or(a2a_jsonrpc)
+                .or(a2a_rest)
                 .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
