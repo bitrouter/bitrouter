@@ -82,8 +82,8 @@ pub struct AgentInterface {
     /// Absolute HTTPS URL where the interface is available.
     pub url: String,
 
-    /// Protocol binding type: `"json-rpc"`, `"grpc"`, or `"http-rest"`.
-    pub protocol_binding: String,
+    /// Protocol binding type.
+    pub protocol_binding: ProtocolBinding,
 
     /// A2A protocol version (e.g., `"1.0"`).
     pub protocol_version: String,
@@ -91,6 +91,30 @@ pub struct AgentInterface {
     /// Tenant ID for multi-tenant deployments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tenant: Option<String>,
+}
+
+/// A2A v1.0 protocol binding types.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ProtocolBinding {
+    /// JSON-RPC 2.0 over HTTP.
+    #[serde(rename = "JSONRPC")]
+    JsonRpc,
+    /// gRPC transport.
+    #[serde(rename = "GRPC")]
+    Grpc,
+    /// REST-style HTTP+JSON binding.
+    #[serde(rename = "HTTP+JSON")]
+    HttpJson,
+}
+
+impl std::fmt::Display for ProtocolBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::JsonRpc => write!(f, "JSONRPC"),
+            Self::Grpc => write!(f, "GRPC"),
+            Self::HttpJson => write!(f, "HTTP+JSON"),
+        }
+    }
 }
 
 /// Optional capabilities supported by an agent.
@@ -191,7 +215,7 @@ pub fn minimal_card(name: &str, description: &str, version: &str, url: &str) -> 
         provider: None,
         supported_interfaces: vec![AgentInterface {
             url: url.to_string(),
-            protocol_binding: "http-rest".to_string(),
+            protocol_binding: ProtocolBinding::HttpJson,
             protocol_version: "1.0".to_string(),
             tenant: None,
         }],
@@ -238,13 +262,13 @@ mod tests {
             supported_interfaces: vec![
                 AgentInterface {
                     url: "https://agent.acme.example.com/a2a".to_string(),
-                    protocol_binding: "json-rpc".to_string(),
+                    protocol_binding: ProtocolBinding::JsonRpc,
                     protocol_version: "1.0".to_string(),
                     tenant: Some("tenant-1".to_string()),
                 },
                 AgentInterface {
                     url: "https://agent.acme.example.com/rest".to_string(),
-                    protocol_binding: "http-rest".to_string(),
+                    protocol_binding: ProtocolBinding::HttpJson,
                     protocol_version: "1.0".to_string(),
                     tenant: None,
                 },
@@ -308,7 +332,10 @@ mod tests {
         assert!(card.skills.is_empty());
         assert!(card.security_schemes.is_empty());
         assert_eq!(card.supported_interfaces.len(), 1);
-        assert_eq!(card.supported_interfaces[0].protocol_binding, "http-rest");
+        assert_eq!(
+            card.supported_interfaces[0].protocol_binding,
+            ProtocolBinding::HttpJson
+        );
         assert_eq!(card.supported_interfaces[0].protocol_version, "1.0");
     }
 }

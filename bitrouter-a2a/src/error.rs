@@ -34,4 +34,12 @@ pub enum A2aError {
     /// Agent execution error.
     #[error("execution error: {0}")]
     Execution(String),
+
+    /// Push notification config not found.
+    #[error("push notification config not found: task={task_id} id={id}")]
+    PushNotificationNotFound { task_id: String, id: String },
+
+    /// Streaming not supported by this executor.
+    #[error("streaming not supported")]
+    StreamingNotSupported,
 }

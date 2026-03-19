@@ -1158,6 +1158,7 @@ dependencies = [
 name = "bitrouter-a2a"
 version = "0.10.0"
 dependencies = [
+ "futures-core",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

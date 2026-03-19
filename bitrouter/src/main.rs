@@ -241,6 +241,11 @@ enum A2aAction {
         #[arg(long)]
         task: String,
     },
+    /// List tasks from a remote agent
+    ListTasks {
+        /// Base URL of the remote agent
+        url: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -421,6 +426,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 A2aAction::Send { url, message } => cli::a2a::run_send(&url, &message).await?,
                 A2aAction::Status { url, task } => cli::a2a::run_status(&url, &task).await?,
                 A2aAction::Cancel { url, task } => cli::a2a::run_cancel(&url, &task).await?,
+                A2aAction::ListTasks { url } => cli::a2a::run_list_tasks(&url).await?,
             }
             return Ok(());
         }

@@ -14,6 +14,8 @@ pub mod file_registry;
 pub mod jsonrpc;
 pub mod message;
 pub mod registry;
+pub mod request;
 pub mod security;
 pub mod server;
+pub mod stream;
 pub mod task;

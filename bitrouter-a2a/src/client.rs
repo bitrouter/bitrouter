@@ -2,13 +2,19 @@
 //!
 //! Speaks JSON-RPC 2.0 to any A2A v1.0-compliant server. Supports agent
 //! discovery, task submission (`SendMessage`), status polling (`GetTask`),
-//! and cancellation (`CancelTask`).
+//! cancellation (`CancelTask`), listing (`ListTasks`), streaming, and
+//! push notification config CRUD.
 
 use crate::card::AgentCard;
 use crate::error::A2aError;
 use crate::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
-use crate::message::{Message, Part};
-use crate::task::Task;
+use crate::message::{Message, MessageRole, Part};
+use crate::request::{
+    CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
+    GetTaskPushNotificationConfigRequest, ListTaskPushNotificationConfigsRequest,
+    ListTaskPushNotificationConfigsResponse, SendMessageRequest, TaskPushNotificationConfig,
+};
+use crate::task::{GetTaskRequest, ListTasksRequest, ListTasksResponse, Task};
 
 /// Result of a `SendMessage` call — may be a full Task or a direct Message.
 #[derive(Debug, Clone)]
@@ -75,68 +81,64 @@ impl A2aClient {
             .map_err(|e| A2aError::Client(format!("failed to parse agent card: {e}")))
     }
 
+    /// Fetch an extended Agent Card via JSON-RPC.
+    pub async fn get_extended_agent_card(&self, endpoint: &str) -> Result<AgentCard, A2aError> {
+        let request_id = generate_request_id();
+        let rpc = JsonRpcRequest::new(&request_id, "GetExtendedAgentCard", serde_json::json!({}));
+
+        let result = self.rpc_call(endpoint, &rpc).await?;
+
+        serde_json::from_value::<AgentCard>(result)
+            .map_err(|e| A2aError::Client(format!("failed to parse agent card: {e}")))
+    }
+
     // ── Task operations (JSON-RPC 2.0) ─────────────────────────
 
     /// Send a message to a remote agent.
     ///
-    /// This is the `SendMessage` JSON-RPC method. The endpoint URL should
-    /// be the agent's A2A interface URL from its Agent Card.
-    ///
-    /// Returns [`SendMessageResult`] which may be a full [`Task`] or a
-    /// direct [`Message`] response, depending on the server.
+    /// This is the `SendMessage` JSON-RPC method.
     pub async fn send_message(
         &self,
         endpoint: &str,
-        message: Message,
+        request: SendMessageRequest,
     ) -> Result<SendMessageResult, A2aError> {
         let request_id = generate_request_id();
-        let rpc = JsonRpcRequest::new(
-            &request_id,
-            "SendMessage",
-            serde_json::json!({
-                "message": message,
-            }),
-        );
+        let params = serde_json::to_value(&request)
+            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+        let rpc = JsonRpcRequest::new(&request_id, "SendMessage", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
-        // v1.0 SendMessage can return either a Task or a Message.
-        // Discriminate by checking for task-specific fields.
-        if result.get("id").is_some() && result.get("status").is_some() {
-            let task = serde_json::from_value::<Task>(result)
-                .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))?;
-            Ok(SendMessageResult::Task(task))
-        } else if let Some(msg_val) = result.get("message") {
-            let msg = serde_json::from_value::<Message>(msg_val.clone())
-                .map_err(|e| A2aError::Client(format!("failed to parse message response: {e}")))?;
-            Ok(SendMessageResult::Message(msg))
-        } else {
-            // Try parsing as a bare message (messageId + role + parts).
-            match serde_json::from_value::<Message>(result.clone()) {
-                Ok(msg) => Ok(SendMessageResult::Message(msg)),
-                Err(_) => {
-                    // Last resort: try as Task.
-                    let task = serde_json::from_value::<Task>(result).map_err(|e| {
-                        A2aError::Client(format!("failed to parse SendMessage result: {e}"))
-                    })?;
-                    Ok(SendMessageResult::Task(task))
-                }
-            }
-        }
+        parse_send_message_result(result)
+    }
+
+    /// Convenience: send a simple text message.
+    pub async fn send_text(
+        &self,
+        endpoint: &str,
+        text: &str,
+    ) -> Result<SendMessageResult, A2aError> {
+        let request = SendMessageRequest {
+            tenant: None,
+            message: Self::text_message(text),
+            configuration: None,
+            metadata: None,
+        };
+        self.send_message(endpoint, request).await
     }
 
     /// Get the current state of a task.
     ///
     /// This is the `GetTask` JSON-RPC method.
-    pub async fn get_task(&self, endpoint: &str, task_id: &str) -> Result<Task, A2aError> {
+    pub async fn get_task(
+        &self,
+        endpoint: &str,
+        request: GetTaskRequest,
+    ) -> Result<Task, A2aError> {
         let request_id = generate_request_id();
-        let rpc = JsonRpcRequest::new(
-            &request_id,
-            "GetTask",
-            serde_json::json!({
-                "id": task_id,
-            }),
-        );
+        let params = serde_json::to_value(&request)
+            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+        let rpc = JsonRpcRequest::new(&request_id, "GetTask", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
@@ -147,20 +149,107 @@ impl A2aClient {
     /// Cancel a running task.
     ///
     /// This is the `CancelTask` JSON-RPC method.
-    pub async fn cancel_task(&self, endpoint: &str, task_id: &str) -> Result<Task, A2aError> {
+    pub async fn cancel_task(
+        &self,
+        endpoint: &str,
+        request: CancelTaskRequest,
+    ) -> Result<Task, A2aError> {
         let request_id = generate_request_id();
-        let rpc = JsonRpcRequest::new(
-            &request_id,
-            "CancelTask",
-            serde_json::json!({
-                "id": task_id,
-            }),
-        );
+        let params = serde_json::to_value(&request)
+            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+        let rpc = JsonRpcRequest::new(&request_id, "CancelTask", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
         serde_json::from_value::<Task>(result)
             .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))
+    }
+
+    /// List tasks matching a query.
+    ///
+    /// This is the `ListTasks` JSON-RPC method.
+    pub async fn list_tasks(
+        &self,
+        endpoint: &str,
+        request: ListTasksRequest,
+    ) -> Result<ListTasksResponse, A2aError> {
+        let request_id = generate_request_id();
+        let params = serde_json::to_value(&request)
+            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+        let rpc = JsonRpcRequest::new(&request_id, "ListTasks", params);
+
+        let result = self.rpc_call(endpoint, &rpc).await?;
+
+        serde_json::from_value::<ListTasksResponse>(result)
+            .map_err(|e| A2aError::Client(format!("failed to parse list tasks response: {e}")))
+    }
+
+    // ── Push notification config CRUD ──────────────────────────
+
+    /// Create a push notification configuration.
+    pub async fn create_push_notification_config(
+        &self,
+        endpoint: &str,
+        config: TaskPushNotificationConfig,
+    ) -> Result<TaskPushNotificationConfig, A2aError> {
+        let request_id = generate_request_id();
+        let params = serde_json::to_value(&config)
+            .map_err(|e| A2aError::Client(format!("failed to serialize config: {e}")))?;
+        let rpc = JsonRpcRequest::new(&request_id, "CreateTaskPushNotificationConfig", params);
+
+        let result = self.rpc_call(endpoint, &rpc).await?;
+
+        serde_json::from_value::<TaskPushNotificationConfig>(result)
+            .map_err(|e| A2aError::Client(format!("failed to parse push config: {e}")))
+    }
+
+    /// Get a push notification configuration.
+    pub async fn get_push_notification_config(
+        &self,
+        endpoint: &str,
+        request: GetTaskPushNotificationConfigRequest,
+    ) -> Result<TaskPushNotificationConfig, A2aError> {
+        let request_id = generate_request_id();
+        let params = serde_json::to_value(&request)
+            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+        let rpc = JsonRpcRequest::new(&request_id, "GetTaskPushNotificationConfig", params);
+
+        let result = self.rpc_call(endpoint, &rpc).await?;
+
+        serde_json::from_value::<TaskPushNotificationConfig>(result)
+            .map_err(|e| A2aError::Client(format!("failed to parse push config: {e}")))
+    }
+
+    /// List push notification configurations for a task.
+    pub async fn list_push_notification_configs(
+        &self,
+        endpoint: &str,
+        request: ListTaskPushNotificationConfigsRequest,
+    ) -> Result<ListTaskPushNotificationConfigsResponse, A2aError> {
+        let request_id = generate_request_id();
+        let params = serde_json::to_value(&request)
+            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+        let rpc = JsonRpcRequest::new(&request_id, "ListTaskPushNotificationConfigs", params);
+
+        let result = self.rpc_call(endpoint, &rpc).await?;
+
+        serde_json::from_value::<ListTaskPushNotificationConfigsResponse>(result)
+            .map_err(|e| A2aError::Client(format!("failed to parse push configs: {e}")))
+    }
+
+    /// Delete a push notification configuration.
+    pub async fn delete_push_notification_config(
+        &self,
+        endpoint: &str,
+        request: DeleteTaskPushNotificationConfigRequest,
+    ) -> Result<(), A2aError> {
+        let request_id = generate_request_id();
+        let params = serde_json::to_value(&request)
+            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+        let rpc = JsonRpcRequest::new(&request_id, "DeleteTaskPushNotificationConfig", params);
+
+        let _ = self.rpc_call(endpoint, &rpc).await?;
+        Ok(())
     }
 
     // ── Helpers ────────────────────────────────────────────────
@@ -176,13 +265,14 @@ impl A2aClient {
     /// Build a simple text message.
     pub fn text_message(text: &str) -> Message {
         Message {
-            role: crate::message::MessageRole::User,
+            role: MessageRole::User,
             parts: vec![Part::text(text)],
             message_id: generate_request_id(),
             context_id: None,
             task_id: None,
             reference_task_ids: Vec::new(),
             metadata: None,
+            extensions: Vec::new(),
         }
     }
 
@@ -219,6 +309,31 @@ impl A2aClient {
     }
 }
 
+fn parse_send_message_result(result: serde_json::Value) -> Result<SendMessageResult, A2aError> {
+    // v1.0 SendMessage returns a StreamResponse: {"task": {...}} or {"message": {...}}.
+    if let Some(task_val) = result.get("task") {
+        let task = serde_json::from_value::<Task>(task_val.clone())
+            .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))?;
+        Ok(SendMessageResult::Task(task))
+    } else if let Some(msg_val) = result.get("message") {
+        let msg = serde_json::from_value::<Message>(msg_val.clone())
+            .map_err(|e| A2aError::Client(format!("failed to parse message response: {e}")))?;
+        Ok(SendMessageResult::Message(msg))
+    } else {
+        // Fallback: try as bare Task (has id + status) or bare Message.
+        if result.get("id").is_some() && result.get("status").is_some() {
+            let task = serde_json::from_value::<Task>(result)
+                .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))?;
+            Ok(SendMessageResult::Task(task))
+        } else {
+            let msg = serde_json::from_value::<Message>(result).map_err(|e| {
+                A2aError::Client(format!("failed to parse SendMessage result: {e}"))
+            })?;
+            Ok(SendMessageResult::Message(msg))
+        }
+    }
+}
+
 fn generate_request_id() -> String {
     // Simple monotonic ID. For production use, consider UUIDs.
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -233,7 +348,7 @@ mod tests {
     #[test]
     fn text_message_builds_correctly() {
         let msg = A2aClient::text_message("hello world");
-        assert_eq!(msg.role, crate::message::MessageRole::User);
+        assert_eq!(msg.role, MessageRole::User);
         assert_eq!(msg.parts.len(), 1);
         assert_eq!(msg.parts[0].text.as_deref(), Some("hello world"));
     }

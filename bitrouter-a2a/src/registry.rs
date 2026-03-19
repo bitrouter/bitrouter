@@ -38,6 +38,13 @@ pub trait AgentCardRegistry: Send + Sync {
 
     /// Reverse lookup: find agent name from a JWT `iss` claim.
     fn resolve_by_iss(&self, iss: &str) -> Result<Option<String>, A2aError>;
+
+    /// Get an extended agent registration (potentially with authenticated-only fields).
+    ///
+    /// Default implementation delegates to [`get`](Self::get).
+    fn get_extended(&self, name: &str) -> Result<Option<AgentRegistration>, A2aError> {
+        self.get(name)
+    }
 }
 
 /// Validate that an agent name follows DNS label rules: lowercase alphanumeric

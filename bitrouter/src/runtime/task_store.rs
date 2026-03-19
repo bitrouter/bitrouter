@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use bitrouter_a2a::error::A2aError;
-use bitrouter_a2a::server::{StoredTask, TaskStore};
+use bitrouter_a2a::server::{StoredTask, TaskQuery, TaskStore};
 use bitrouter_a2a::task::Task;
 
 /// In-memory implementation of [`TaskStore`] using a `RwLock<HashMap>`.
@@ -19,6 +19,11 @@ impl InMemoryTaskStore {
         }
     }
 }
+
+/// Default page size for `list` queries.
+const DEFAULT_PAGE_SIZE: u32 = 50;
+/// Maximum page size for `list` queries.
+const MAX_PAGE_SIZE: u32 = 100;
 
 impl TaskStore for InMemoryTaskStore {
     fn create(&self, task: &Task) -> Result<u64, A2aError> {
@@ -77,6 +82,67 @@ impl TaskStore for InMemoryTaskStore {
 
         Ok(tasks.get(task_id).cloned())
     }
+
+    fn list(&self, query: &TaskQuery) -> Result<(Vec<StoredTask>, Option<String>), A2aError> {
+        let tasks = self
+            .tasks
+            .read()
+            .map_err(|e| A2aError::Storage(format!("lock poisoned: {e}")))?;
+
+        // Collect and filter.
+        let mut matching: Vec<&StoredTask> = tasks
+            .values()
+            .filter(|stored| {
+                if let Some(ref ctx) = query.context_id
+                    && stored.task.context_id.as_deref() != Some(ctx)
+                {
+                    return false;
+                }
+                if let Some(ref status) = query.status
+                    && &stored.task.status.state != status
+                {
+                    return false;
+                }
+                if let Some(ref after) = query.status_timestamp_after
+                    && stored.task.status.timestamp.as_str() <= after.as_str()
+                {
+                    return false;
+                }
+                true
+            })
+            .collect();
+
+        // Sort by task ID for deterministic pagination.
+        matching.sort_by(|a, b| a.task.id.cmp(&b.task.id));
+
+        // Apply cursor-based pagination.
+        if let Some(ref token) = query.page_token {
+            // Skip tasks until past the cursor.
+            let pos = matching
+                .iter()
+                .position(|s| s.task.id.as_str() > token.as_str());
+            if let Some(pos) = pos {
+                matching = matching[pos..].to_vec();
+            } else {
+                matching.clear();
+            }
+        }
+
+        let page_size = query
+            .page_size
+            .unwrap_or(DEFAULT_PAGE_SIZE)
+            .min(MAX_PAGE_SIZE) as usize;
+
+        let next_page_token = if matching.len() > page_size {
+            matching[page_size - 1].task.id.clone().into()
+        } else {
+            None
+        };
+
+        let page: Vec<StoredTask> = matching.into_iter().take(page_size).cloned().collect();
+
+        Ok((page, next_page_token))
+    }
 }
 
 #[cfg(test)]
@@ -95,6 +161,7 @@ mod tests {
             },
             artifacts: Vec::new(),
             history: Vec::new(),
+            metadata: None,
         }
     }
 
@@ -155,5 +222,88 @@ mod tests {
         let store = InMemoryTaskStore::new();
         let result = store.get("does-not-exist").expect("get should not error");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn list_empty_store() {
+        let store = InMemoryTaskStore::new();
+        let query = TaskQuery::default();
+        let (tasks, next) = store.list(&query).expect("list");
+        assert!(tasks.is_empty());
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn list_with_status_filter() {
+        let store = InMemoryTaskStore::new();
+        store
+            .create(&make_task("t-1", TaskState::Submitted))
+            .expect("create");
+        store
+            .create(&make_task("t-2", TaskState::Completed))
+            .expect("create");
+        store
+            .create(&make_task("t-3", TaskState::Submitted))
+            .expect("create");
+
+        let query = TaskQuery {
+            status: Some(TaskState::Submitted),
+            ..Default::default()
+        };
+        let (tasks, _) = store.list(&query).expect("list");
+        assert_eq!(tasks.len(), 2);
+        assert!(
+            tasks
+                .iter()
+                .all(|t| t.task.status.state == TaskState::Submitted)
+        );
+    }
+
+    #[test]
+    fn list_with_context_filter() {
+        let store = InMemoryTaskStore::new();
+        let mut task = make_task("t-1", TaskState::Submitted);
+        task.context_id = Some("ctx-a".to_string());
+        store.create(&task).expect("create");
+
+        let mut task = make_task("t-2", TaskState::Submitted);
+        task.context_id = Some("ctx-b".to_string());
+        store.create(&task).expect("create");
+
+        let query = TaskQuery {
+            context_id: Some("ctx-a".to_string()),
+            ..Default::default()
+        };
+        let (tasks, _) = store.list(&query).expect("list");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task.id, "t-1");
+    }
+
+    #[test]
+    fn list_pagination() {
+        let store = InMemoryTaskStore::new();
+        for i in 0..5 {
+            store
+                .create(&make_task(&format!("t-{i:02}"), TaskState::Submitted))
+                .expect("create");
+        }
+
+        let query = TaskQuery {
+            page_size: Some(2),
+            ..Default::default()
+        };
+        let (page1, next) = store.list(&query).expect("list");
+        assert_eq!(page1.len(), 2);
+        assert!(next.is_some());
+
+        let query2 = TaskQuery {
+            page_size: Some(2),
+            page_token: next,
+            ..Default::default()
+        };
+        let (page2, _) = store.list(&query2).expect("list");
+        assert_eq!(page2.len(), 2);
+        // Pages should not overlap.
+        assert_ne!(page1[0].task.id, page2[0].task.id);
     }
 }

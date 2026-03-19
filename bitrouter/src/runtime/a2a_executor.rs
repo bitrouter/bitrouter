@@ -109,6 +109,7 @@ where
             task_id: Some(ctx.task_id.clone()),
             reference_task_ids: Vec::new(),
             metadata: None,
+            extensions: Vec::new(),
         };
 
         // Build completed task.
@@ -122,6 +123,7 @@ where
             },
             artifacts: Vec::new(),
             history: Vec::new(),
+            metadata: None,
         };
 
         Ok(ExecuteResult::Task(task))
@@ -140,6 +142,7 @@ where
             },
             artifacts: Vec::new(),
             history: Vec::new(),
+            metadata: None,
         })
     }
 }

@@ -5,6 +5,7 @@ pub mod daemon;
 pub mod error;
 pub mod migration;
 pub mod paths;
+pub mod push_store;
 pub mod router;
 pub mod server;
 pub mod task_store;

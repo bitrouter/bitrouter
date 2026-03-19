@@ -50,6 +50,77 @@ pub struct TaskStatus {
     pub message: Option<Message>,
 }
 
+/// Request parameters for the `GetTask` JSON-RPC method.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTaskRequest {
+    /// Task ID to retrieve.
+    pub id: String,
+
+    /// Maximum number of history messages to return.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_length: Option<u32>,
+
+    /// Tenant scope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant: Option<String>,
+}
+
+/// Request parameters for the `ListTasks` JSON-RPC method.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListTasksRequest {
+    /// Filter by context ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
+
+    /// Filter by task state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskState>,
+
+    /// Filter tasks with status timestamp after this ISO 8601 value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_timestamp_after: Option<String>,
+
+    /// Maximum number of tasks per page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<u32>,
+
+    /// Cursor for pagination.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_token: Option<String>,
+
+    /// Maximum number of history messages per task.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_length: Option<u32>,
+
+    /// Whether to include artifacts in the response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_artifacts: Option<bool>,
+
+    /// Tenant scope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant: Option<String>,
+}
+
+/// Response for the `ListTasks` JSON-RPC method.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListTasksResponse {
+    /// Tasks matching the query.
+    pub tasks: Vec<Task>,
+
+    /// Cursor for the next page, if more results exist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+
+    /// Number of tasks in this page.
+    pub page_size: u32,
+
+    /// Total number of tasks matching the query.
+    pub total_size: u32,
+}
+
 /// A stateful unit of work in the A2A protocol.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +142,10 @@ pub struct Task {
     /// Interaction history (messages exchanged during the task).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<Message>,
+
+    /// Extension metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -107,6 +182,7 @@ mod tests {
                     task_id: Some("task-001".to_string()),
                     reference_task_ids: Vec::new(),
                     metadata: None,
+                    extensions: Vec::new(),
                 }),
             },
             artifacts: vec![Artifact {
@@ -115,8 +191,10 @@ mod tests {
                 description: None,
                 parts: vec![Part::text("LGTM")],
                 metadata: None,
+                extensions: Vec::new(),
             }],
             history: Vec::new(),
+            metadata: None,
         };
 
         let json = serde_json::to_string_pretty(&task).expect("serialize");
@@ -136,6 +214,7 @@ mod tests {
             },
             artifacts: Vec::new(),
             history: Vec::new(),
+            metadata: None,
         };
 
         let json = serde_json::to_string(&task).expect("serialize");

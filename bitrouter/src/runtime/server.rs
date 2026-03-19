@@ -216,8 +216,23 @@ where
             None,
         ));
         let a2a_task_store = Arc::new(crate::runtime::task_store::InMemoryTaskStore::new());
-        let a2a_jsonrpc =
-            bitrouter_api::router::a2a::filters::jsonrpc_filter(a2a_executor, a2a_task_store);
+        let a2a_push_store =
+            Arc::new(crate::runtime::push_store::InMemoryPushNotificationStore::new());
+        let a2a_jsonrpc = bitrouter_api::router::a2a::filters::jsonrpc_filter(
+            a2a_executor.clone(),
+            a2a_task_store.clone(),
+            a2a_registry.clone(),
+            a2a_push_store.clone(),
+        );
+        let a2a_streaming = bitrouter_api::router::a2a::filters::streaming_jsonrpc_filter(
+            a2a_executor.clone(),
+            a2a_task_store.clone(),
+        );
+        let a2a_rest = bitrouter_api::router::a2a::filters::rest_filters(
+            a2a_executor,
+            a2a_task_store,
+            a2a_push_store,
+        );
 
         // Build the full route tree. Account/session management routes are
         // only mounted when a database is configured.
@@ -231,7 +246,9 @@ where
             let all = health
                 .or(a2a_well_known)
                 .or(a2a_agents)
+                .or(a2a_streaming)
                 .or(a2a_jsonrpc)
+                .or(a2a_rest)
                 .or(metrics_route)
                 .or(route_list)
                 .or(model_list)
@@ -255,7 +272,9 @@ where
             let all = health
                 .or(a2a_well_known)
                 .or(a2a_agents)
+                .or(a2a_streaming)
                 .or(a2a_jsonrpc)
+                .or(a2a_rest)
                 .or(metrics_route)
                 .or(route_list)
                 .or(model_list)

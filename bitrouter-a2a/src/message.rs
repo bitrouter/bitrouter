@@ -44,6 +44,10 @@ pub struct Message {
     /// Extension metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+
+    /// Extension URIs this message uses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<String>,
 }
 
 /// Smallest unit of content within a Message or Artifact.
@@ -162,6 +166,10 @@ pub struct Artifact {
     /// Extension metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+
+    /// Extension URIs this artifact uses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<String>,
 }
 
 #[cfg(test)]
@@ -220,6 +228,7 @@ mod tests {
             task_id: None,
             reference_task_ids: Vec::new(),
             metadata: None,
+            extensions: Vec::new(),
         };
         let json = serde_json::to_string_pretty(&msg).expect("serialize");
         let parsed: Message = serde_json::from_str(&json).expect("deserialize");
@@ -247,6 +256,7 @@ mod tests {
             description: None,
             parts: vec![Part::text("Looks good!")],
             metadata: None,
+            extensions: Vec::new(),
         };
         let json = serde_json::to_string_pretty(&artifact).expect("serialize");
         let parsed: Artifact = serde_json::from_str(&json).expect("deserialize");

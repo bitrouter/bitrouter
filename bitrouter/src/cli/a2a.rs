@@ -8,7 +8,8 @@ use bitrouter_a2a::client::{A2aClient, SendMessageResult};
 use bitrouter_a2a::file_registry::FileAgentCardRegistry;
 use bitrouter_a2a::message::Part;
 use bitrouter_a2a::registry::{AgentCardRegistry, AgentRegistration};
-use bitrouter_a2a::task::TaskState;
+use bitrouter_a2a::request::{CancelTaskRequest, SendMessageRequest};
+use bitrouter_a2a::task::{GetTaskRequest, ListTasksRequest, TaskState};
 
 // ── Local agent card management ────────────────────────────────
 
@@ -191,12 +192,17 @@ pub async fn run_send(url: &str, message: &str) -> Result<(), String> {
     let endpoint = A2aClient::resolve_endpoint(&card)
         .ok_or_else(|| "agent has no supported interfaces".to_string())?;
 
-    let msg = A2aClient::text_message(message);
+    let request = SendMessageRequest {
+        tenant: None,
+        message: A2aClient::text_message(message),
+        configuration: None,
+        metadata: None,
+    };
 
     println!("Sending task to {} ({})...", card.name, endpoint);
 
     let result = client
-        .send_message(endpoint, msg)
+        .send_message(endpoint, request)
         .await
         .map_err(|e| format!("{e}"))?;
 
@@ -225,8 +231,14 @@ pub async fn run_status(url: &str, task_id: &str) -> Result<(), String> {
     let endpoint = A2aClient::resolve_endpoint(&card)
         .ok_or_else(|| "agent has no supported interfaces".to_string())?;
 
+    let request = GetTaskRequest {
+        id: task_id.to_string(),
+        history_length: None,
+        tenant: None,
+    };
+
     let task = client
-        .get_task(endpoint, task_id)
+        .get_task(endpoint, request)
         .await
         .map_err(|e| format!("{e}"))?;
 
@@ -247,13 +259,68 @@ pub async fn run_cancel(url: &str, task_id: &str) -> Result<(), String> {
     let endpoint = A2aClient::resolve_endpoint(&card)
         .ok_or_else(|| "agent has no supported interfaces".to_string())?;
 
+    let request = CancelTaskRequest {
+        id: task_id.to_string(),
+        tenant: None,
+    };
+
     let task = client
-        .cancel_task(endpoint, task_id)
+        .cancel_task(endpoint, request)
         .await
         .map_err(|e| format!("{e}"))?;
 
     println!("Task {} canceled.", task.id);
     print_task(&task);
+
+    Ok(())
+}
+
+/// List tasks from a remote agent.
+pub async fn run_list_tasks(url: &str) -> Result<(), String> {
+    let client = A2aClient::new();
+
+    let card = client
+        .discover(url)
+        .await
+        .map_err(|e| format!("discovery failed: {e}"))?;
+
+    let endpoint = A2aClient::resolve_endpoint(&card)
+        .ok_or_else(|| "agent has no supported interfaces".to_string())?;
+
+    let request = ListTasksRequest {
+        context_id: None,
+        status: None,
+        status_timestamp_after: None,
+        page_size: None,
+        page_token: None,
+        history_length: Some(0),
+        include_artifacts: Some(false),
+        tenant: None,
+    };
+
+    let response = client
+        .list_tasks(endpoint, request)
+        .await
+        .map_err(|e| format!("{e}"))?;
+
+    if response.tasks.is_empty() {
+        println!("No tasks found.");
+        return Ok(());
+    }
+
+    println!("Tasks ({} total):", response.total_size);
+    for task in &response.tasks {
+        println!(
+            "  {} — {} ({})",
+            task.id,
+            state_label(&task.status.state),
+            task.status.timestamp
+        );
+    }
+
+    if let Some(ref token) = response.next_page_token {
+        println!("  ... more results (next page token: {token})");
+    }
 
     Ok(())
 }
