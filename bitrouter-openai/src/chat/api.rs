@@ -201,7 +201,15 @@ fn message_to_language_model_content(
                     Some(response_body),
                 ));
             }
-            let tool_call = tool_calls.into_iter().next().expect("length checked");
+            // len() == 1 is guaranteed here because len() != 1 returns early above.
+            // The else branch is a defensive fallback that cannot be reached.
+            let Some(tool_call) = tool_calls.into_iter().next() else {
+                return Err(BitrouterError::invalid_response(
+                    Some(OPENAI_PROVIDER_NAME),
+                    "expected single tool call but iterator was empty",
+                    Some(response_body),
+                ));
+            };
             let tool_input = serde_json::from_str::<JsonValue>(&tool_call.function.arguments)
                 .map_err(|error| {
                     BitrouterError::invalid_response(

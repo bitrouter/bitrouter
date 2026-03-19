@@ -33,11 +33,16 @@ pub struct BuiltinProvider {
 pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
     PROVIDER_DEFS
         .iter()
-        .map(|(name, yaml)| {
-            let def: ProviderDef = serde_yaml::from_str(yaml)
-                .unwrap_or_else(|e| panic!("invalid built-in provider YAML '{name}': {e}"));
+        .filter_map(|(name, yaml)| {
+            let def: ProviderDef = match serde_yaml::from_str(yaml) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("warning: invalid built-in provider YAML '{name}': {e}");
+                    return None;
+                }
+            };
             let models: Vec<String> = def.models.keys().cloned().collect();
-            (
+            Some((
                 (*name).to_owned(),
                 BuiltinProvider {
                     config: ProviderConfig {
@@ -53,7 +58,7 @@ pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
                     },
                     models,
                 },
-            )
+            ))
         })
         .collect()
 }

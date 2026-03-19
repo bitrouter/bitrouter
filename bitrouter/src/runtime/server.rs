@@ -269,8 +269,12 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     {
-        let mut term =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+        let Ok(mut term) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        else {
+            ctrl_c.await.ok();
+            return;
+        };
         tokio::select! {
             _ = ctrl_c => {}
             _ = term.recv() => {}

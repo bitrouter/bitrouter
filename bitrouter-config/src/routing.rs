@@ -117,10 +117,13 @@ impl ConfigRoutingTable {
         let endpoint = match config.strategy {
             RoutingStrategy::Priority => &config.endpoints[0],
             RoutingStrategy::LoadBalance => {
-                let counter = self
-                    .counters
-                    .get(model_name)
-                    .expect("counter must exist for every model");
+                let Some(counter) = self.counters.get(model_name) else {
+                    return Err(BitrouterError::invalid_request(
+                        None,
+                        format!("load-balance counter missing for model '{model_name}'"),
+                        None,
+                    ));
+                };
                 let idx = counter.fetch_add(1, Ordering::Relaxed) % config.endpoints.len();
                 &config.endpoints[idx]
             }
