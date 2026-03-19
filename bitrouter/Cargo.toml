@@ -68,12 +68,16 @@ anyhow = { version = "1", optional = true }
 
 # Embedded wallet (optional)
 rand = { version = "0.9", optional = true }
-solana-client = { version = "3.1", optional = true }
 solana-instruction = { version = "3.2", optional = true }
-solana-keypair = { version = "3.1", optional = true }
 solana-pubkey = { version = "4.1", optional = true }
 solana-transaction = { version = "3.1", optional = true }
-x402-signer = { version = "2.5", optional = true }
+
+# x402 payment signing
+async-trait = { version = "0.1" }
+http = { version = "1.4" }
+solana-client = { version = "3.1" }
+solana-keypair = { version = "3.1" }
+x402-signer = { version = "2.5" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

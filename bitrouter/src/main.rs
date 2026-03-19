@@ -393,10 +393,15 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         None => run_default(runtime).await?,
         Some(Command::Serve) => {
-            let model_router = crate::runtime::Router::new(
-                reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(),
+            let base_client = reqwest::Client::new();
+            let mut model_router = crate::runtime::Router::new(
+                reqwest_middleware::ClientBuilder::new(base_client.clone()).build(),
                 runtime.config.providers.clone(),
             );
+            if let Some(x402_client) = build_x402_client_from_state(&runtime.paths, &runtime.config)
+            {
+                model_router = model_router.with_x402_client(x402_client);
+            }
             runtime.serve(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
@@ -457,10 +462,14 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
 async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::Error>> {
     let status = runtime.status();
 
-    let model_router = crate::runtime::Router::new(
-        reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(),
+    let base_client = reqwest::Client::new();
+    let mut model_router = crate::runtime::Router::new(
+        reqwest_middleware::ClientBuilder::new(base_client.clone()).build(),
         runtime.config.providers.clone(),
     );
+    if let Some(x402_client) = build_x402_client_from_state(&runtime.paths, &runtime.config) {
+        model_router = model_router.with_x402_client(x402_client);
+    }
 
     #[cfg(feature = "tui")]
     {
@@ -498,6 +507,79 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     args.into_iter().any(|arg| arg.as_ref() == "--headless")
+}
+
+/// Build an x402 payment client from onboarding state, if a wallet is configured.
+///
+/// Returns `None` when no wallet has been set up (BYOK mode).
+/// Logs a warning and returns `None` on load failure so the server can still
+/// start for non-x402 providers.
+fn build_x402_client_from_state(
+    paths: &crate::runtime::RuntimePaths,
+    config: &bitrouter_config::BitrouterConfig,
+) -> Option<reqwest_middleware::ClientWithMiddleware> {
+    // Check if any provider uses x402 auth.
+    let x402_providers: Vec<&str> = config
+        .providers
+        .iter()
+        .filter(|(_, p)| matches!(&p.auth, Some(bitrouter_config::AuthConfig::X402)))
+        .map(|(name, _)| name.as_str())
+        .collect();
+
+    let state = cli::onboarding::load_state(&paths.home_dir);
+
+    let wallet_path = match state.master_wallet_path.as_ref() {
+        Some(p) => p,
+        None => {
+            if !x402_providers.is_empty() {
+                tracing::warn!(
+                    providers = ?x402_providers,
+                    "x402 providers configured but no wallet set up — run `bitrouter init`",
+                );
+            }
+            return None;
+        }
+    };
+
+    if !wallet_path.exists() {
+        tracing::warn!(
+            path = %wallet_path.display(),
+            "wallet file not found — run `bitrouter init` to reconfigure",
+        );
+        return None;
+    }
+
+    let rpc_url = state
+        .rpc_url
+        .as_deref()
+        .or(config.solana_rpc_url.as_deref())
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "no Solana RPC URL configured, falling back to {}",
+                cli::swig::DEFAULT_RPC_URL,
+            );
+            cli::swig::DEFAULT_RPC_URL
+        });
+
+    match crate::runtime::x402::build_x402_client(
+        wallet_path,
+        rpc_url,
+        reqwest::Client::new(),
+        true,
+    ) {
+        Ok(client) => {
+            tracing::info!(
+                wallet = %wallet_path.display(),
+                rpc = %rpc_url,
+                "x402 payment signer loaded",
+            );
+            Some(client)
+        }
+        Err(e) => {
+            tracing::warn!("failed to load x402 signer: {e} — x402 providers will be unavailable",);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -668,8 +750,8 @@ fn run_unified_init(
 
 /// Write a cloud provider config entry to `bitrouter.yaml` after onboarding.
 ///
-/// This generates a provider block for BitRouter Cloud Node directly in the
-/// config file (not yet registered in the builtin provider registry).
+/// Since `bitrouter-cloud` is a builtin provider (api_base and api_protocol
+/// come from the registry), the user config only needs to supply auth.
 fn write_cloud_provider_config(
     paths: &crate::runtime::RuntimePaths,
     rpc_url: &str,
@@ -699,8 +781,6 @@ fn write_cloud_provider_config(
         # Uses x402 for request payments — only a wallet is needed.\n\
         providers:\n\
         \x20 bitrouter-cloud:\n\
-        \x20   api_base: \"https://api.bitrouter.ai/v1\"\n\
-        \x20   api_protocol: openai\n\
         \x20   auth:\n\
         \x20     type: x402\n\n\
         models:\n\

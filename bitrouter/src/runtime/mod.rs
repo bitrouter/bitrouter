@@ -6,6 +6,7 @@ pub mod migration;
 pub mod paths;
 pub mod router;
 pub mod server;
+pub mod x402;
 
 pub use app::{AppRuntime, resolve_database_url};
 pub use migration::migrate;

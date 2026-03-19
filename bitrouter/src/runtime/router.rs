@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bitrouter_config::{ApiProtocol, ProviderConfig};
+use bitrouter_config::{ApiProtocol, AuthConfig, ProviderConfig};
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::language::language_model::DynLanguageModel,
@@ -13,12 +13,44 @@ use reqwest_middleware::ClientWithMiddleware;
 /// model objects on demand from [`ProviderConfig`] entries.
 pub struct Router {
     client: ClientWithMiddleware,
+    x402_client: Option<ClientWithMiddleware>,
     providers: HashMap<String, ProviderConfig>,
 }
 
 impl Router {
     pub fn new(client: ClientWithMiddleware, providers: HashMap<String, ProviderConfig>) -> Self {
-        Self { client, providers }
+        Self {
+            client,
+            x402_client: None,
+            providers,
+        }
+    }
+
+    pub fn with_x402_client(mut self, x402_client: ClientWithMiddleware) -> Self {
+        self.x402_client = Some(x402_client);
+        self
+    }
+
+    /// Returns the appropriate HTTP client for the given provider.
+    ///
+    /// Providers with `auth: { type: x402 }` use the x402 middleware client;
+    /// all others use the default client.
+    fn client_for_provider(&self, provider: &ProviderConfig) -> Result<ClientWithMiddleware> {
+        if Self::is_x402_provider(provider) {
+            self.x402_client.clone().ok_or_else(|| {
+                BitrouterError::invalid_request(
+                    None,
+                    "provider requires x402 payment but no wallet is configured — run `bitrouter init`".to_owned(),
+                    None,
+                )
+            })
+        } else {
+            Ok(self.client.clone())
+        }
+    }
+
+    fn is_x402_provider(provider: &ProviderConfig) -> bool {
+        matches!(&provider.auth, Some(AuthConfig::X402))
     }
 
     fn build_openai_config(&self, provider: &ProviderConfig) -> Result<OpenAiConfig> {
@@ -99,7 +131,7 @@ impl LanguageModelRouter for Router {
                 let config = self.build_openai_config(provider)?;
                 let model = OpenAiChatCompletionsModel::with_client(
                     target.model_id,
-                    self.client.clone(),
+                    self.client_for_provider(provider)?,
                     config,
                 );
                 Ok(DynLanguageModel::new_box(model))
@@ -108,7 +140,7 @@ impl LanguageModelRouter for Router {
                 let config = self.build_anthropic_config(provider)?;
                 let model = AnthropicMessagesModel::with_client(
                     target.model_id,
-                    self.client.clone(),
+                    self.client_for_provider(provider)?,
                     config,
                 );
                 Ok(DynLanguageModel::new_box(model))
@@ -117,7 +149,7 @@ impl LanguageModelRouter for Router {
                 let config = self.build_google_config(provider)?;
                 let model = GoogleGenerativeAiModel::with_client(
                     target.model_id,
-                    self.client.clone(),
+                    self.client_for_provider(provider)?,
                     config,
                 );
                 Ok(DynLanguageModel::new_box(model))

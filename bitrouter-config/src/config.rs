@@ -336,7 +336,9 @@ pub enum AuthConfig {
         header_name: String,
         api_key: String,
     },
-    /// Extension point for non-standard auth methods (e.g. SIWx).
+    /// x402 payment protocol — requests are paid via a Solana wallet.
+    X402,
+    /// Extension point for non-standard auth methods.
     Custom {
         method: String,
         #[serde(default)]
