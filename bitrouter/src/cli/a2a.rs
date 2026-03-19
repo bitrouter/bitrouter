@@ -3,9 +3,9 @@
 use std::fs;
 use std::path::Path;
 
+use crate::runtime::a2a::file_registry::FileAgentCardRegistry;
 use bitrouter_a2a::card::{AgentCard, AgentProvider, minimal_card};
 use bitrouter_a2a::client::{A2aClient, SendMessageResult};
-use bitrouter_a2a::file_registry::FileAgentCardRegistry;
 use bitrouter_a2a::message::Part;
 use bitrouter_a2a::registry::{AgentCardRegistry, AgentRegistration};
 use bitrouter_a2a::request::{CancelTaskRequest, SendMessageRequest};

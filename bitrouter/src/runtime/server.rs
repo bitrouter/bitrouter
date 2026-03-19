@@ -106,7 +106,7 @@ where
 
         // Build A2A agent card registry for discovery endpoints.
         let a2a_registry = Arc::new(
-            bitrouter_a2a::file_registry::FileAgentCardRegistry::new(&self.agents_dir)
+            crate::runtime::a2a::file_registry::FileAgentCardRegistry::new(&self.agents_dir)
                 .map_err(|e| std::io::Error::other(e.to_string()))?,
         );
         tracing::info!(dir = %self.agents_dir.display(), "a2a agent registry loaded");
@@ -196,9 +196,9 @@ where
 
         // A2A discovery routes.
         let a2a_well_known =
-            bitrouter_api::router::a2a::filters::well_known_filter(a2a_registry.clone());
+            bitrouter_api::router::a2a::discovery::well_known_filter(a2a_registry.clone());
         let a2a_agents =
-            bitrouter_api::router::a2a::filters::agent_list_filter(a2a_registry.clone());
+            bitrouter_api::router::a2a::discovery::agent_list_filter(a2a_registry.clone());
 
         // A2A JSON-RPC server endpoint.
         let a2a_model = self
@@ -209,26 +209,26 @@ where
             .cloned()
             .unwrap_or_else(|| "default".to_string());
         tracing::info!(model = %a2a_model, "a2a executor configured");
-        let a2a_executor = Arc::new(crate::runtime::a2a_executor::LlmAgentExecutor::new(
+        let a2a_executor = Arc::new(crate::runtime::a2a::executor::LlmAgentExecutor::new(
             self.table.clone(),
             guarded_router.clone(),
             a2a_model,
             None,
         ));
-        let a2a_task_store = Arc::new(crate::runtime::task_store::InMemoryTaskStore::new());
+        let a2a_task_store = Arc::new(crate::runtime::a2a::task_store::InMemoryTaskStore::new());
         let a2a_push_store =
-            Arc::new(crate::runtime::push_store::InMemoryPushNotificationStore::new());
-        let a2a_jsonrpc = bitrouter_api::router::a2a::filters::jsonrpc_filter(
+            Arc::new(crate::runtime::a2a::push_store::InMemoryPushNotificationStore::new());
+        let a2a_jsonrpc = bitrouter_api::router::a2a::jsonrpc::jsonrpc_filter(
             a2a_executor.clone(),
             a2a_task_store.clone(),
             a2a_registry.clone(),
             a2a_push_store.clone(),
         );
-        let a2a_streaming = bitrouter_api::router::a2a::filters::streaming_jsonrpc_filter(
+        let a2a_streaming = bitrouter_api::router::a2a::streaming::streaming_jsonrpc_filter(
             a2a_executor.clone(),
             a2a_task_store.clone(),
         );
-        let a2a_rest = bitrouter_api::router::a2a::filters::rest_filters(
+        let a2a_rest = bitrouter_api::router::a2a::rest::rest_filters(
             a2a_executor,
             a2a_task_store,
             a2a_push_store,

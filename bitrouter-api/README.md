@@ -12,4 +12,6 @@ model resolution and execution to the routing contracts from `bitrouter-core`.
 
 - OpenAI-compatible routes
 - Anthropic-compatible routes
+- Google-compatible routes
+- A2A-compatible routes
 - Shared API error and utility helpers

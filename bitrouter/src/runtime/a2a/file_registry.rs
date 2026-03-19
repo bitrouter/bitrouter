@@ -12,8 +12,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-use crate::error::A2aError;
-use crate::registry::{AgentCardRegistry, AgentRegistration, validate_name};
+use bitrouter_a2a::error::A2aError;
+use bitrouter_a2a::registry::{AgentCardRegistry, AgentRegistration, validate_name};
 
 /// A file-based [`AgentCardRegistry`] that stores each registration as a
 /// JSON file named `<agent_name>.json` in a directory.
@@ -154,7 +154,7 @@ impl AgentCardRegistry for FileAgentCardRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::card::minimal_card;
+    use bitrouter_a2a::card::minimal_card;
 
     fn test_registration(name: &str) -> AgentRegistration {
         AgentRegistration {

@@ -6,11 +6,10 @@
 //! - **Types** — Full A2A v1.0 schema: Agent Card, Task, Message, Artifact (`card`, `security`, `task`, `message`)
 //! - **Client** — A2A protocol client for discovering and communicating with remote agents (`client`)
 //! - **JSON-RPC** — Wire format types for the A2A JSON-RPC 2.0 transport (`jsonrpc`)
-//! - **Registry** — Trait and file-based implementation for agent card storage
+//! - **Registry** — Trait for agent card storage and discovery
 pub mod card;
 pub mod client;
 pub mod error;
-pub mod file_registry;
 pub mod jsonrpc;
 pub mod message;
 pub mod registry;
