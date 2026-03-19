@@ -31,19 +31,20 @@ use super::api::{
 #[derive(Clone)]
 pub struct OpenAiResponsesModel {
     model_id: String,
-    client: reqwest::Client,
+    client: reqwest_middleware::ClientWithMiddleware,
     config: OpenAiConfig,
     supported_urls: HashMap<String, Regex>,
 }
 
 impl OpenAiResponsesModel {
     pub fn new(model_id: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self::with_client(model_id, reqwest::Client::new(), OpenAiConfig::new(api_key))
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+        Self::with_client(model_id, client, OpenAiConfig::new(api_key))
     }
 
     pub fn with_client(
         model_id: impl Into<String>,
-        client: reqwest::Client,
+        client: reqwest_middleware::ClientWithMiddleware,
         config: OpenAiConfig,
     ) -> Self {
         Self {
@@ -169,7 +170,7 @@ impl OpenAiResponsesModel {
         &self,
         request_body: &JsonValue,
         extra_headers: &Option<HeaderMap>,
-    ) -> Result<(reqwest::RequestBuilder, HeaderMap)> {
+    ) -> Result<(reqwest_middleware::RequestBuilder, HeaderMap)> {
         let endpoint = format!("{}/responses", self.config.base_url.trim_end_matches('/'));
         let headers = self.build_headers(extra_headers)?;
         let request_headers = headers.clone();
@@ -236,7 +237,7 @@ impl OpenAiResponsesModel {
 
     async fn send_request(
         &self,
-        builder: reqwest::RequestBuilder,
+        builder: reqwest_middleware::RequestBuilder,
         abort_signal: Option<CancellationToken>,
         operation: &str,
     ) -> Result<reqwest::Response> {

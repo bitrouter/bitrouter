@@ -131,7 +131,7 @@ enum Command {
         rm: Option<String>,
     },
 
-    /// Master-wallet signing operations with Swig
+    /// Wallet status and diagnostics
     Sudo {
         #[command(subcommand)]
         action: SudoAction,
@@ -164,48 +164,8 @@ enum RouteAction {
 
 #[derive(Debug, Subcommand)]
 enum SudoAction {
-    /// Create a Swig embedded wallet (requires master wallet signature)
-    CreateEmbeddedWallet,
-    /// Derive an agent wallet with spend limits (requires master wallet signature)
-    DeriveAgentWallet {
-        /// Maximum tokens per transaction (lamports)
-        #[arg(long)]
-        per_tx_cap: Option<u64>,
-
-        /// Cumulative spending cap (lamports)
-        #[arg(long)]
-        cumulative_cap: Option<u64>,
-
-        /// Expiration (e.g., "7d", "30d", "never")
-        #[arg(long)]
-        expiration: Option<String>,
-
-        /// Human-readable label for this agent wallet
-        #[arg(long, default_value = "default")]
-        label: Option<String>,
-    },
-    /// Update agent wallet permissions (requires master wallet signature)
-    SetPermissions {
-        /// Agent wallet address (uses persisted address if omitted)
-        #[arg(long)]
-        agent: Option<String>,
-
-        /// Maximum tokens per transaction (lamports)
-        #[arg(long)]
-        per_tx_cap: Option<u64>,
-
-        /// Cumulative spending cap (lamports)
-        #[arg(long)]
-        cumulative_cap: Option<u64>,
-
-        /// Expiration (e.g., "7d", "30d", "never")
-        #[arg(long)]
-        expiration: Option<String>,
-    },
-    /// Display wallet info and persisted policy (no signing required)
+    /// Display wallet info and status
     ShowWallet,
-    /// List all locally-tracked agent wallets
-    ListAgents,
 }
 
 #[tokio::main]
@@ -317,42 +277,8 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Sudo { action }) => {
             let home = &paths.home_dir;
             match action {
-                SudoAction::CreateEmbeddedWallet => {
-                    cli::sudo::run_create_embedded_wallet(home)?;
-                }
-                SudoAction::DeriveAgentWallet {
-                    per_tx_cap,
-                    cumulative_cap,
-                    expiration,
-                    label,
-                } => {
-                    cli::sudo::run_derive_agent_wallet(
-                        home,
-                        per_tx_cap,
-                        cumulative_cap,
-                        expiration,
-                        label,
-                    )?;
-                }
-                SudoAction::SetPermissions {
-                    agent,
-                    per_tx_cap,
-                    cumulative_cap,
-                    expiration,
-                } => {
-                    cli::sudo::run_set_permissions(
-                        home,
-                        agent,
-                        per_tx_cap,
-                        cumulative_cap,
-                        expiration,
-                    )?;
-                }
                 SudoAction::ShowWallet => {
                     cli::sudo::run_show_wallet(home)?;
-                }
-                SudoAction::ListAgents => {
-                    cli::sudo::run_list_agents(home)?;
                 }
             }
             return Ok(());
@@ -468,7 +394,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         None => run_default(runtime).await?,
         Some(Command::Serve) => {
             let model_router = crate::runtime::Router::new(
-                reqwest::Client::new(),
+                reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(),
                 runtime.config.providers.clone(),
             );
             runtime.serve(model_router).await?
@@ -531,8 +457,10 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
 async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::Error>> {
     let status = runtime.status();
 
-    let model_router =
-        crate::runtime::Router::new(reqwest::Client::new(), runtime.config.providers.clone());
+    let model_router = crate::runtime::Router::new(
+        reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(),
+        runtime.config.providers.clone(),
+    );
 
     #[cfg(feature = "tui")]
     {
@@ -649,7 +577,7 @@ fn run_unified_init(
     match state.status {
         OnboardingStatus::CompletedCloud | OnboardingStatus::CompletedByok => {
             let label = match state.status {
-                OnboardingStatus::CompletedCloud => "Cloud (Swig wallet)",
+                OnboardingStatus::CompletedCloud => "Cloud (x402 wallet)",
                 _ => "BYOK (bring your own keys)",
             };
             println!();
@@ -765,13 +693,13 @@ fn write_cloud_provider_config(
 
     let cloud_block = format!(
         "\n\
-        # Solana RPC endpoint for Swig wallet operations\n\
+        # Solana RPC endpoint for x402 wallet operations\n\
         solana_rpc_url: \"{rpc_url}\"\n\n\
         # BitRouter Cloud Node (added by onboarding)\n\
         # Uses x402 for request payments — only a wallet is needed.\n\
         providers:\n\
         \x20 bitrouter-cloud:\n\
-        \x20   api_base: \"https://cloud.bitrouter.ai/v1\"\n\
+        \x20   api_base: \"https://api.bitrouter.ai/v1\"\n\
         \x20   api_protocol: openai\n\
         \x20   auth:\n\
         \x20     type: x402\n\n\

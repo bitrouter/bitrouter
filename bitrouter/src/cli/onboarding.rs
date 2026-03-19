@@ -1,13 +1,12 @@
 //! First-run onboarding flow for BitRouter cloud node.
 //!
 //! Auto-triggered on first `serve` / `start` when no onboarding state marker
-//! exists. Guides the user through wallet setup, embedded wallet creation via
-//! Swig, optional agent wallet derivation, and cloud provider default config.
+//! exists. Guides the user through wallet setup and cloud provider config.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
+use dialoguer::{Input, Select, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::swig;
@@ -26,44 +25,9 @@ pub struct OnboardingState {
     /// Path to the master wallet file used during onboarding (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub master_wallet_path: Option<PathBuf>,
-    /// Embedded Swig wallet address (PDA).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub embedded_wallet_address: Option<String>,
-    /// Embedded Swig wallet address for receiving funds (PDA).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wallet_address: Option<String>,
-    /// Hex-encoded 32-byte Swig wallet ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub swig_id: Option<String>,
     /// Solana RPC URL chosen during onboarding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpc_url: Option<String>,
-    /// Next Swig role ID to assign when deriving an agent wallet.
-    /// Master is always role 0; agents start at 1 and increment.
-    #[serde(default = "default_next_role_id")]
-    pub next_role_id: u32,
-    /// Agent wallets derived from the embedded wallet.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub agent_wallets: Vec<AgentWalletState>,
-}
-
-fn default_next_role_id() -> u32 {
-    1
-}
-
-/// Persisted agent wallet reference data (for display only; Swig is source of truth).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentWalletState {
-    /// Human-readable label (e.g. "default", "research-agent").
-    pub label: String,
-    /// On-chain public key of the agent authority.
-    pub address: String,
-    /// Swig role ID for this agent.
-    pub role_id: u32,
-    /// Spend permissions.
-    pub permissions: swig::AgentPermissions,
-    /// ISO 8601 creation timestamp.
-    pub created_at: String,
 }
 
 /// Discrete onboarding outcomes.
@@ -87,12 +51,7 @@ impl OnboardingState {
         Self {
             status: OnboardingStatus::NotStarted,
             master_wallet_path: None,
-            embedded_wallet_address: None,
-            wallet_address: None,
-            swig_id: None,
             rpc_url: None,
-            next_role_id: 1,
-            agent_wallets: Vec::new(),
         }
     }
 }
@@ -119,25 +78,6 @@ pub fn save_state(home_dir: &Path, state: &OnboardingState) -> Result<(), String
     let json = serde_json::to_string_pretty(state)
         .map_err(|e| format!("failed to serialize onboarding state: {e}"))?;
     fs::write(&path, json).map_err(|e| format!("failed to write {}: {e}", path.display()))
-}
-
-/// Add an agent wallet entry to the persisted onboarding state.
-pub fn add_agent_wallet(home_dir: &Path, agent: AgentWalletState) -> Result<(), String> {
-    let mut state = load_state(home_dir);
-    // Replace if same label already exists.
-    state.agent_wallets.retain(|a| a.label != agent.label);
-    state.agent_wallets.push(agent);
-    save_state(home_dir, &state)
-}
-
-/// Load all agent wallets from onboarding state.
-pub fn load_agent_wallets(home_dir: &Path) -> Vec<AgentWalletState> {
-    load_state(home_dir).agent_wallets
-}
-
-/// Load the first (default) agent wallet, if any.
-pub fn load_agent_wallet(home_dir: &Path) -> Option<AgentWalletState> {
-    load_state(home_dir).agent_wallets.into_iter().next()
 }
 
 // ── Onboarding detection ──────────────────────────────────────
@@ -173,8 +113,7 @@ pub enum OnboardingOutcome {
 
 /// Run the interactive onboarding flow.
 ///
-/// Returns the outcome so the caller can decide whether to write cloud
-/// provider config or skip.
+/// Guides the user through wallet selection and RPC URL configuration.
 pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std::error::Error>> {
     let theme = ColorfulTheme::default();
 
@@ -222,69 +161,10 @@ pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std:
         .default(swig::DEFAULT_RPC_URL.to_string())
         .interact_text()?;
 
-    // ── Step 3: Create embedded wallet ──────────────────────────
-    println!();
-    println!("  Creating Swig embedded wallet...");
-    match swig::create_embedded_wallet(&wallet_path, &rpc_url) {
-        Ok(info) => {
-            println!("  ✓ Embedded wallet created: {}", info.address);
-            println!();
-            println!("  ┌─────────────────────────────────────────────────┐");
-            println!("  │  Fund your wallet to start making requests      │");
-            println!("  │                                                 │");
-            println!("  │  Send SOL (for tx fees) and USDC (for payments) │");
-            println!("  │  to the address below:                          │");
-            println!("  │                                                 │");
-            println!("  │  {:<47} │", info.wallet_address);
-            println!("  └─────────────────────────────────────────────────┘");
-            println!();
-
-            let mut state = load_state(home_dir);
-            state.master_wallet_path = Some(wallet_path.clone());
-            state.embedded_wallet_address = Some(info.address);
-            state.wallet_address = Some(info.wallet_address);
-            state.swig_id = Some(info.swig_id);
-            state.rpc_url = Some(rpc_url.clone());
-            save_state(home_dir, &state)?;
-        }
-        Err(e) => {
-            eprintln!("  ✗ Failed to create embedded wallet: {e}");
-            eprintln!("  You can retry later with: bitrouter sudo create-embedded-wallet");
-            let mut state = load_state(home_dir);
-            state.status = OnboardingStatus::FailedRecoverable;
-            state.master_wallet_path = Some(wallet_path);
-            state.rpc_url = Some(rpc_url);
-            save_state(home_dir, &state)?;
-            return Ok(OnboardingOutcome::Deferred);
-        }
-    }
-
-    // ── Step 4: Optional agent wallet derivation ────────────────
-    println!();
-    let derive_agent = Confirm::with_theme(&theme)
-        .with_prompt("Derive an agent wallet now? (can be done later with `bitrouter sudo derive-agent-wallet`)")
-        .default(true)
-        .interact()?;
-
-    if derive_agent {
-        let swig_account = load_state(home_dir)
-            .embedded_wallet_address
-            .ok_or("embedded wallet address missing")?;
-        match prompt_and_derive_agent(home_dir, &wallet_path, &rpc_url, &swig_account, &theme)? {
-            Some(agent) => {
-                println!(
-                    "  ✓ Agent wallet derived: {} ({})",
-                    agent.address, agent.label
-                );
-            }
-            None => {
-                println!("  Agent wallet derivation skipped or failed.");
-            }
-        }
-    }
-
-    // ── Step 6: Mark complete ───────────────────────────────────
+    // ── Step 3: Save state ──────────────────────────────────────
     let mut state = load_state(home_dir);
+    state.master_wallet_path = Some(wallet_path);
+    state.rpc_url = Some(rpc_url.clone());
     state.status = OnboardingStatus::CompletedCloud;
     save_state(home_dir, &state)?;
 
@@ -322,8 +202,8 @@ fn prompt_wallet_selection(
         let choices = &[
             "Use this wallet as master wallet",
             "Import a different wallet file",
-            "Create a new wallet (recommended: set a passphrase)",
-            "Skip — I'll bring my own API keys (BYOK)",
+            "Create a new wallet",
+            "Skip \u{2014} I'll bring my own API keys (BYOK)",
         ];
 
         let selection = Select::with_theme(theme)
@@ -344,8 +224,8 @@ fn prompt_wallet_selection(
 
         let choices = &[
             "Import an existing wallet file",
-            "Create a new wallet (recommended: set a passphrase)",
-            "Skip — I'll bring my own API keys (BYOK)",
+            "Create a new wallet",
+            "Skip \u{2014} I'll bring my own API keys (BYOK)",
         ];
 
         let selection = Select::with_theme(theme)
@@ -379,14 +259,6 @@ fn prompt_create_wallet(
     home_dir: &Path,
     theme: &ColorfulTheme,
 ) -> Result<WalletChoice, Box<dyn std::error::Error>> {
-    println!();
-    println!("  A passphrase protects your wallet from unauthorized agent access.");
-    println!("  This is like a \"sudo password\" — you'll enter it when signing.");
-    println!("  Leave empty to skip passphrase protection.");
-    println!();
-
-    // We inform the user but actual wallet creation is delegated to Swig.
-    // For now, just ask where to save.
     let default_path = home_dir.join("wallet.json");
 
     let path_str: String = Input::with_theme(theme)
@@ -402,100 +274,7 @@ fn prompt_create_wallet(
             .map_err(|e| format!("failed to create directory {}: {e}", parent.display()))?;
     }
 
-    // Actual keypair creation will happen in the Swig integration.
-    // For now we just record the intended path.
     Ok(WalletChoice::Create(path))
-}
-
-// ── Agent wallet derivation prompts ───────────────────────────
-
-fn prompt_and_derive_agent(
-    home_dir: &Path,
-    wallet_path: &Path,
-    rpc_url: &str,
-    swig_account: &str,
-    theme: &ColorfulTheme,
-) -> Result<Option<AgentWalletState>, Box<dyn std::error::Error>> {
-    println!();
-    println!("  Configure agent wallet spend limits (enforced by Swig on-chain).");
-    println!("  Leave empty for no limit.");
-    println!();
-
-    let label: String = Input::with_theme(theme)
-        .with_prompt("Agent label")
-        .default("default".into())
-        .interact_text()?;
-
-    let per_tx_cap: String = Input::with_theme(theme)
-        .with_prompt("Per-transaction cap (lamports, empty = unlimited)")
-        .default(String::new())
-        .allow_empty(true)
-        .interact_text()?;
-    let per_tx_cap = parse_optional_u64(&per_tx_cap)?;
-
-    let cumulative_cap: String = Input::with_theme(theme)
-        .with_prompt("Cumulative spending cap (lamports, empty = unlimited)")
-        .default(String::new())
-        .allow_empty(true)
-        .interact_text()?;
-    let cumulative_cap = parse_optional_u64(&cumulative_cap)?;
-
-    let expiration: String = Input::with_theme(theme)
-        .with_prompt("Expiration (e.g., \"7d\", \"30d\", \"never\", empty = never)")
-        .default("30d".into())
-        .interact_text()?;
-    let expires_at = parse_expiration_input(&expiration)?;
-
-    let permissions = swig::AgentPermissions {
-        per_tx_cap,
-        cumulative_cap,
-        expires_at,
-    };
-
-    println!();
-    println!("  Deriving agent wallet with Swig...");
-    let current_state = load_state(home_dir);
-    let role_id = current_state.next_role_id;
-    match swig::derive_agent_wallet(
-        wallet_path,
-        &permissions,
-        rpc_url,
-        &label,
-        home_dir,
-        swig_account,
-        role_id,
-    ) {
-        Ok((info, _keypair_bytes)) => {
-            let agent = AgentWalletState {
-                label: info.label.clone(),
-                address: info.address,
-                role_id: info.role_id,
-                permissions: info.permissions,
-                created_at: info.created_at,
-            };
-            add_agent_wallet(home_dir, agent.clone())?;
-            // Increment role_id for the next agent wallet.
-            let mut state = load_state(home_dir);
-            state.next_role_id = role_id + 1;
-            save_state(home_dir, &state)?;
-            Ok(Some(agent))
-        }
-        Err(e) => {
-            eprintln!("  ✗ Failed to derive agent wallet: {e}");
-            eprintln!("  You can retry later with: bitrouter sudo derive-agent-wallet");
-            Ok(None)
-        }
-    }
-}
-
-fn parse_optional_u64(s: &str) -> Result<Option<u64>, Box<dyn std::error::Error>> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Ok(None);
-    }
-    s.parse::<u64>()
-        .map(Some)
-        .map_err(|e| format!("invalid number \"{s}\": {e}").into())
 }
 
 /// Expand leading `~` to the user's home directory.
@@ -506,40 +285,4 @@ fn expand_tilde(s: &str) -> PathBuf {
         return home.join(rest);
     }
     PathBuf::from(s)
-}
-
-fn parse_expiration_input(s: &str) -> Result<Option<u64>, Box<dyn std::error::Error>> {
-    let s = s.trim();
-    if s.is_empty() || s == "never" {
-        return Ok(None);
-    }
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("system clock error: {e}"))?
-        .as_secs();
-
-    // Parse relative durations: "7d", "30d", "1h", "365d"
-    if let Some(days) = s.strip_suffix('d') {
-        let d: u64 = days
-            .parse()
-            .map_err(|_| format!("invalid duration \"{s}\""))?;
-        return Ok(Some(now + d * 86400));
-    }
-    if let Some(hours) = s.strip_suffix('h') {
-        let h: u64 = hours
-            .parse()
-            .map_err(|_| format!("invalid duration \"{s}\""))?;
-        return Ok(Some(now + h * 3600));
-    }
-
-    // Try as absolute UNIX timestamp
-    if let Ok(ts) = s.parse::<u64>() {
-        return Ok(Some(ts));
-    }
-
-    Err(
-        format!("invalid expiration \"{s}\" — use \"7d\", \"30d\", \"never\", or a UNIX timestamp")
-            .into(),
-    )
 }

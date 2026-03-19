@@ -7,16 +7,17 @@ use bitrouter_core::{
     routers::{model_router::LanguageModelRouter, routing_table::RoutingTarget},
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest_middleware::ClientWithMiddleware;
 
 /// A model router backed by `reqwest` that instantiates concrete provider
 /// model objects on demand from [`ProviderConfig`] entries.
 pub struct Router {
-    client: reqwest::Client,
+    client: ClientWithMiddleware,
     providers: HashMap<String, ProviderConfig>,
 }
 
 impl Router {
-    pub fn new(client: reqwest::Client, providers: HashMap<String, ProviderConfig>) -> Self {
+    pub fn new(client: ClientWithMiddleware, providers: HashMap<String, ProviderConfig>) -> Self {
         Self { client, providers }
     }
 

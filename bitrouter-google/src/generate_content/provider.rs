@@ -48,19 +48,20 @@ impl GoogleConfig {
 #[derive(Clone)]
 pub struct GoogleGenerativeAiModel {
     model_id: String,
-    client: reqwest::Client,
+    client: reqwest_middleware::ClientWithMiddleware,
     config: GoogleConfig,
     supported_urls: HashMap<String, Regex>,
 }
 
 impl GoogleGenerativeAiModel {
     pub fn new(model_id: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self::with_client(model_id, reqwest::Client::new(), GoogleConfig::new(api_key))
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+        Self::with_client(model_id, client, GoogleConfig::new(api_key))
     }
 
     pub fn with_client(
         model_id: impl Into<String>,
-        client: reqwest::Client,
+        client: reqwest_middleware::ClientWithMiddleware,
         config: GoogleConfig,
     ) -> Self {
         Self {
@@ -189,7 +190,7 @@ impl GoogleGenerativeAiModel {
         request_body: &JsonValue,
         extra_headers: &Option<HeaderMap>,
         stream: bool,
-    ) -> Result<(reqwest::RequestBuilder, HeaderMap)> {
+    ) -> Result<(reqwest_middleware::RequestBuilder, HeaderMap)> {
         let action = if stream {
             "streamGenerateContent?alt=sse"
         } else {
@@ -250,7 +251,7 @@ impl GoogleGenerativeAiModel {
 
     async fn send_request(
         &self,
-        builder: reqwest::RequestBuilder,
+        builder: reqwest_middleware::RequestBuilder,
         abort_signal: Option<CancellationToken>,
         operation: &str,
     ) -> Result<reqwest::Response> {
