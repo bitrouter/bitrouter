@@ -27,15 +27,15 @@ swig = [
 
 [dependencies]
 # Internal crates
-bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.10" }
-bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.10" }
-bitrouter-api = { path = "../bitrouter-api", version = "0.10" }
-bitrouter-config = { path = "../bitrouter-config", version = "0.10" }
-bitrouter-core = { path = "../bitrouter-core", version = "0.10" }
-bitrouter-google = { path = "../bitrouter-google", version = "0.10" }
-bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.10" }
-bitrouter-observe = { path = "../bitrouter-observe", version = "0.10" }
-bitrouter-openai = { path = "../bitrouter-openai", version = "0.10" }
+bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.11" }
+bitrouter-anthropic = { path = "../bitrouter-anthropic", version = "0.11" }
+bitrouter-api = { path = "../bitrouter-api", version = "0.11" }
+bitrouter-config = { path = "../bitrouter-config", version = "0.11" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.11" }
+bitrouter-google = { path = "../bitrouter-google", version = "0.11" }
+bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.11" }
+bitrouter-observe = { path = "../bitrouter-observe", version = "0.11" }
+bitrouter-openai = { path = "../bitrouter-openai", version = "0.11" }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
