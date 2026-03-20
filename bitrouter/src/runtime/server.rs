@@ -188,28 +188,27 @@ where
         // ── MCP gateway ──────────────────────────────────────────────
         #[cfg(feature = "mcp")]
         let (admin_tools, mcp_server) = {
-            let mcp_gateway =
-                match crate::runtime::mcp::gateway::McpGateway::new(
-                    self.config.mcp_servers.clone(),
-                    self.config.mcp_groups.clone(),
-                )
-                .await
-                {
-                    Ok(gw) => {
-                        tracing::info!(
-                            "MCP gateway started with {} upstreams",
-                            self.config.mcp_servers.len()
-                        );
-                        let tool_spend_store = Arc::new(InMemoryToolSpendStore::new());
-                        let tool_observer: Arc<dyn ToolObserveCallback> =
-                            Arc::new(ToolSpendObserver::new(tool_spend_store));
-                        Some(Arc::new(gw.with_observer(tool_observer)))
-                    }
-                    Err(e) => {
-                        tracing::warn!("MCP gateway failed to start: {e}");
-                        None
-                    }
-                };
+            let mcp_gateway = match crate::runtime::mcp::gateway::McpGateway::new(
+                self.config.mcp_servers.clone(),
+                self.config.mcp_groups.clone(),
+            )
+            .await
+            {
+                Ok(gw) => {
+                    tracing::info!(
+                        "MCP gateway started with {} upstreams",
+                        self.config.mcp_servers.len()
+                    );
+                    let tool_spend_store = Arc::new(InMemoryToolSpendStore::new());
+                    let tool_observer: Arc<dyn ToolObserveCallback> =
+                        Arc::new(ToolSpendObserver::new(tool_spend_store));
+                    Some(Arc::new(gw.with_observer(tool_observer)))
+                }
+                Err(e) => {
+                    tracing::warn!("MCP gateway failed to start: {e}");
+                    None
+                }
+            };
 
             let mcp_registry = mcp_gateway.as_ref().map(|gw| Arc::clone(gw.registry_arc()));
 

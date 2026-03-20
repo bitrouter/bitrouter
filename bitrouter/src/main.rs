@@ -121,9 +121,17 @@ enum Command {
     },
 
     /// A2A agent management and protocol client
+    #[cfg(feature = "a2a")]
     A2a {
         #[command(subcommand)]
         action: A2aAction,
+    },
+
+    /// Manage MCP tools on a running daemon
+    #[cfg(feature = "mcp")]
+    Tools {
+        #[command(subcommand)]
+        action: ToolsAction,
     },
 
     /// Manage locally-stored JWTs for the active account
@@ -172,6 +180,7 @@ enum RouteAction {
     },
 }
 
+#[cfg(feature = "a2a")]
 #[derive(Debug, Subcommand)]
 enum A2aAction {
     /// Register a local agent card
@@ -250,6 +259,28 @@ enum A2aAction {
         /// Base URL of the remote agent
         url: String,
     },
+}
+
+#[cfg(feature = "mcp")]
+#[derive(Debug, Subcommand)]
+enum ToolsAction {
+    /// List all tools from the running daemon
+    List,
+    /// Update the tool filter for an upstream
+    Filter {
+        /// Upstream server name
+        server: String,
+        /// Allow list (comma-separated tool names)
+        #[arg(long, value_delimiter = ',')]
+        allow: Option<Vec<String>>,
+        /// Deny list (comma-separated tool names)
+        #[arg(long, value_delimiter = ',')]
+        deny: Option<Vec<String>>,
+    },
+    /// List upstream servers
+    Upstreams,
+    /// List configured access groups
+    Groups,
 }
 
 #[derive(Debug, Subcommand)]
@@ -403,6 +434,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli::keygen::run(&keys_dir, opts)?;
             return Ok(());
         }
+        #[cfg(feature = "a2a")]
         Some(Command::A2a { action }) => {
             let agents_dir = paths.home_dir.join("agents");
             match action {
@@ -434,6 +466,23 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 A2aAction::Status { url, task } => cli::a2a::run_status(&url, &task).await?,
                 A2aAction::Cancel { url, task } => cli::a2a::run_cancel(&url, &task).await?,
                 A2aAction::ListTasks { url } => cli::a2a::run_list_tasks(&url).await?,
+            }
+            return Ok(());
+        }
+        #[cfg(feature = "mcp")]
+        Some(Command::Tools { action }) => {
+            let runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
+                .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+            let addr = runtime.config.server.listen;
+            match action {
+                ToolsAction::List => cli::tools::run_list(&keys_dir, addr)?,
+                ToolsAction::Filter {
+                    server,
+                    allow,
+                    deny,
+                } => cli::tools::run_filter(&keys_dir, addr, &server, allow, deny)?,
+                ToolsAction::Upstreams => cli::tools::run_upstreams(&keys_dir, addr)?,
+                ToolsAction::Groups => cli::tools::run_groups(&keys_dir, addr)?,
             }
             return Ok(());
         }
@@ -618,15 +667,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Some(Command::Restart) => runtime.restart().await?,
-        Some(
-            Command::Init
-            | Command::A2a { .. }
-            | Command::Account { .. }
-            | Command::Keygen { .. }
-            | Command::Keys { .. }
-            | Command::Route { .. }
-            | Command::Sudo { .. },
-        ) => {
+        _ => {
+            // All other commands (Init, A2a, Account, Keygen, Keys, Route,
+            // Sudo, Tools) are handled above and return early.
             unreachable!()
         }
     }
