@@ -21,6 +21,12 @@ pub enum McpGatewayError {
 
     #[error("budget exceeded for account '{account_id}'")]
     BudgetExceeded { account_id: String },
+
+    #[error("resource not found: {uri}")]
+    ResourceNotFound { uri: String },
+
+    #[error("prompt not found: {name}")]
+    PromptNotFound { name: String },
 }
 
 #[cfg(test)]

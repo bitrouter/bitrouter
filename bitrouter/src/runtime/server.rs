@@ -20,12 +20,6 @@ use warp::Filter;
 
 #[cfg(feature = "mcp")]
 use bitrouter_api::router::mcp as mcp_admin;
-#[cfg(feature = "mcp")]
-use bitrouter_core::observe::ToolObserveCallback;
-#[cfg(feature = "mcp")]
-use bitrouter_observe::spend::tool_memory::InMemoryToolSpendStore;
-#[cfg(feature = "mcp")]
-use bitrouter_observe::tool_observer::ToolSpendObserver;
 
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
 use crate::runtime::error::Result;
@@ -185,38 +179,41 @@ where
                 account_filter,
             );
 
-        // ── MCP gateway ──────────────────────────────────────────────
+        // ── MCP registry ─────────────────────────────────────────────
         #[cfg(feature = "mcp")]
-        let (admin_tools, mcp_server) = {
-            let mcp_gateway = match crate::runtime::mcp::gateway::McpGateway::new(
+        let (admin_tools, mcp_server, _refresh_guard) = {
+            use bitrouter_mcp::client::registry::UpstreamRegistry;
+
+            let registry = match UpstreamRegistry::from_configs(
                 self.config.mcp_servers.clone(),
                 self.config.mcp_groups.clone(),
             )
             .await
             {
-                Ok(gw) => {
+                Ok(reg) => {
                     tracing::info!(
-                        "MCP gateway started with {} upstreams",
+                        "MCP registry started with {} upstreams",
                         self.config.mcp_servers.len()
                     );
-                    let tool_spend_store = Arc::new(InMemoryToolSpendStore::new());
-                    let tool_observer: Arc<dyn ToolObserveCallback> =
-                        Arc::new(ToolSpendObserver::new(tool_spend_store));
-                    Some(Arc::new(gw.with_observer(tool_observer)))
+                    Some(Arc::new(reg))
                 }
                 Err(e) => {
-                    tracing::warn!("MCP gateway failed to start: {e}");
+                    tracing::warn!("MCP registry failed to start: {e}");
                     None
                 }
             };
 
-            let mcp_registry = mcp_gateway.as_ref().map(|gw| Arc::clone(gw.registry_arc()));
+            // Spawn background listeners that refresh caches on upstream changes.
+            let refresh_guard = match &registry {
+                Some(reg) => Some(reg.spawn_refresh_listeners().await),
+                None => None,
+            };
 
             let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(mcp_admin::admin_tools_filter(mcp_registry.clone()));
-            let server = mcp_admin::mcp_server_filter(mcp_registry);
+                .and(mcp_admin::admin_tools_filter(registry.clone()));
+            let server = mcp_admin::mcp_server_filter(registry);
 
-            (admin, server)
+            (admin, server, refresh_guard)
         };
 
         // ── A2A protocol ─────────────────────────────────────────────

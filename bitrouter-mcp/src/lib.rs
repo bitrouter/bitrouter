@@ -2,9 +2,12 @@
 //!
 //! This is a lightweight protocol library containing configuration types,
 //! error definitions, access groups, parameter filters, and the admin trait.
-//! The runtime gateway (upstream connections, tool aggregation) lives in the
-//! `bitrouter` binary crate behind the `mcp` feature gate.
+//!
+//! Enable the `client` feature to get runtime upstream connection and
+//! registry components backed by `rmcp`.
 pub mod admin;
+#[cfg(feature = "client")]
+pub mod client;
 pub mod config;
 pub mod error;
 pub mod groups;

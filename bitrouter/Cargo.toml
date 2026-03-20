@@ -15,7 +15,7 @@ sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
 postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
 mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
 a2a = ["bitrouter-api/a2a"]
-mcp = ["dep:rmcp", "bitrouter-api/mcp"]
+mcp = ["bitrouter-api/mcp", "bitrouter-mcp/client"]
 swig = [
     "dep:bitrouter-swig-sdk",
     "dep:rand",
@@ -40,9 +40,6 @@ bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.10" }
 bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.10" }
 bitrouter-observe = { path = "../bitrouter-observe", version = "0.10" }
 bitrouter-openai = { path = "../bitrouter-openai", version = "0.10" }
-
-# MCP runtime (optional)
-rmcp = { version = "1.2", optional = true, features = ["client", "server", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 base64 = { version = "0.22" }
 

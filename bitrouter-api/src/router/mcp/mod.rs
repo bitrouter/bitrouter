@@ -1,5 +1,11 @@
 mod admin;
-mod server;
+mod filters;
+mod prompts;
+mod resources;
+#[cfg(test)]
+mod tests;
+mod tools;
+mod types;
 
 pub use admin::admin_tools_filter;
-pub use server::mcp_server_filter;
+pub use filters::mcp_server_filter;

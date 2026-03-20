@@ -4,7 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::types::{McpTool, McpToolCallResult};
+use super::types::{
+    McpPrompt, McpPromptMessage, McpResource, McpResourceContent, McpResourceTemplate, McpTool,
+    McpToolCallResult,
+};
 
 // ── Initialize ───────────────────────────────────────────────────────
 
@@ -41,10 +44,14 @@ pub struct InitializeResult {
 }
 
 /// Server capabilities advertised during initialization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServerCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ResourcesCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompts: Option<PromptsCapability>,
 }
 
 /// Capability flags for the `tools` feature.
@@ -94,6 +101,89 @@ pub struct CallToolParams {
 /// Re-export the call result type for convenience.
 pub type CallToolResult = McpToolCallResult;
 
+// ── resources/list ──────────────────────────────────────────────────
+
+/// Response to the `resources/list` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListResourcesResult {
+    pub resources: Vec<McpResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+// ── resources/read ──────────────────────────────────────────────────
+
+/// Parameters for the `resources/read` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadResourceParams {
+    pub uri: String,
+}
+
+/// Response to the `resources/read` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadResourceResult {
+    pub contents: Vec<McpResourceContent>,
+}
+
+// ── resources/templates/list ────────────────────────────────────────
+
+/// Response to the `resources/templates/list` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListResourceTemplatesResult {
+    pub resource_templates: Vec<McpResourceTemplate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// Capability flags for the `resources` feature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcesCapability {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscribe: Option<bool>,
+}
+
+// ── prompts/list ────────────────────────────────────────────────────
+
+/// Response to the `prompts/list` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListPromptsResult {
+    pub prompts: Vec<McpPrompt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+// ── prompts/get ─────────────────────────────────────────────────────
+
+/// Parameters for the `prompts/get` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetPromptParams {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Response to the `prompts/get` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpGetPromptResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub messages: Vec<McpPromptMessage>,
+}
+
+/// Capability flags for the `prompts` feature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptsCapability {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_changed: Option<bool>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +213,7 @@ mod tests {
                 tools: Some(ToolsCapability {
                     list_changed: Some(true),
                 }),
+                ..Default::default()
             },
             server_info: ServerInfo {
                 name: "bitrouter".to_string(),

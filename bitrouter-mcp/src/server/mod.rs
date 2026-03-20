@@ -18,7 +18,10 @@ use std::future::Future;
 use tokio::sync::broadcast;
 
 use crate::error::McpGatewayError;
-use types::{McpTool, McpToolCallResult};
+use protocol::McpGetPromptResult;
+use types::{
+    McpPrompt, McpResource, McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
+};
 
 /// Trait for serving MCP tools to downstream clients.
 ///
@@ -42,4 +45,38 @@ pub trait McpToolServer: Send + Sync {
     /// aggregated tool list changes (e.g. an upstream added or removed
     /// a tool).
     fn subscribe_tool_changes(&self) -> broadcast::Receiver<()>;
+}
+
+/// Trait for serving MCP resources to downstream clients.
+pub trait McpResourceServer: Send + Sync {
+    /// List all available resources across all upstreams.
+    fn list_resources(&self) -> impl Future<Output = Vec<McpResource>> + Send;
+
+    /// Read a namespaced resource by URI (e.g. `"github+file:///readme.md"`).
+    fn read_resource(
+        &self,
+        uri: &str,
+    ) -> impl Future<Output = Result<Vec<McpResourceContent>, McpGatewayError>> + Send;
+
+    /// List all available resource templates across all upstreams.
+    fn list_resource_templates(&self) -> impl Future<Output = Vec<McpResourceTemplate>> + Send;
+
+    /// Subscribe to resource list change notifications.
+    fn subscribe_resource_changes(&self) -> broadcast::Receiver<()>;
+}
+
+/// Trait for serving MCP prompts to downstream clients.
+pub trait McpPromptServer: Send + Sync {
+    /// List all available prompts across all upstreams.
+    fn list_prompts(&self) -> impl Future<Output = Vec<McpPrompt>> + Send;
+
+    /// Get a namespaced prompt by name (e.g. `"github/summarize"`).
+    fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<std::collections::HashMap<String, String>>,
+    ) -> impl Future<Output = Result<McpGetPromptResult, McpGatewayError>> + Send;
+
+    /// Subscribe to prompt list change notifications.
+    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()>;
 }

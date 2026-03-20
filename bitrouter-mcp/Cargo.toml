@@ -7,8 +7,17 @@ authors = ["Archer <archer@bitrouter.ai>"]
 license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 
+[features]
+default = []
+client = ["dep:rmcp", "dep:reqwest", "dep:tracing"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 thiserror = { version = "2.0" }
-tokio = { version = "1", default-features = false, features = ["sync"] }
+tokio = { version = "1", default-features = false, features = ["sync", "rt"] }
+
+# Client feature (optional) — enables upstream MCP connections via rmcp
+rmcp = { version = "1.2", optional = true, features = ["client", "server", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+reqwest = { version = "0.13", optional = true, default-features = false }
+tracing = { version = "0.1", optional = true }
