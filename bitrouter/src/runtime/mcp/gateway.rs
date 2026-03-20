@@ -51,6 +51,8 @@ impl McpGateway {
                     tracing::info!(upstream = %name, "tool list changed, refreshing");
                     if let Err(e) = reg.refresh_upstream(&name).await {
                         tracing::warn!(upstream = %name, error = %e, "failed to refresh tools");
+                    } else {
+                        reg.notify_downstream_change();
                     }
                 }
             });

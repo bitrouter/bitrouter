@@ -187,8 +187,8 @@ where
 
         // ── MCP gateway ──────────────────────────────────────────────
         #[cfg(feature = "mcp")]
-        let admin_tools = {
-            let mcp_gateway = if !self.config.mcp_servers.is_empty() {
+        let (admin_tools, mcp_server) = {
+            let mcp_gateway =
                 match crate::runtime::mcp::gateway::McpGateway::new(
                     self.config.mcp_servers.clone(),
                     self.config.mcp_groups.clone(),
@@ -209,14 +209,15 @@ where
                         tracing::warn!("MCP gateway failed to start: {e}");
                         None
                     }
-                }
-            } else {
-                None
-            };
+                };
 
             let mcp_registry = mcp_gateway.as_ref().map(|gw| Arc::clone(gw.registry_arc()));
-            auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(mcp_admin::admin_tools_filter(mcp_registry))
+
+            let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
+                .and(mcp_admin::admin_tools_filter(mcp_registry.clone()));
+            let server = mcp_admin::mcp_server_filter(mcp_registry);
+
+            (admin, server)
         };
 
         // ── A2A protocol ─────────────────────────────────────────────
@@ -291,7 +292,8 @@ where
             .or(a2a_streaming)
             .or(a2a_jsonrpc)
             .or(a2a_rest)
-            .or(admin_tools);
+            .or(admin_tools)
+            .or(mcp_server);
 
         #[cfg(all(feature = "a2a", not(feature = "mcp")))]
         let all_routes = base
@@ -302,7 +304,7 @@ where
             .or(a2a_rest);
 
         #[cfg(all(not(feature = "a2a"), feature = "mcp"))]
-        let all_routes = base.or(admin_tools);
+        let all_routes = base.or(admin_tools).or(mcp_server);
 
         #[cfg(all(not(feature = "a2a"), not(feature = "mcp")))]
         let all_routes = base;

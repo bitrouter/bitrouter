@@ -2,13 +2,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rmcp::model::{CallToolResult, Tool};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{Notify, RwLock, broadcast};
 
 use bitrouter_mcp::admin::{AdminToolRegistry, ToolEntry, UpstreamInfo};
 use bitrouter_mcp::config::{McpServerConfig, ToolFilter};
 use bitrouter_mcp::error::McpGatewayError;
 use bitrouter_mcp::groups::McpAccessGroups;
 use bitrouter_mcp::param_filter::ParamRestrictions;
+use bitrouter_mcp::server::McpToolServer;
+use bitrouter_mcp::server::types::{McpContent, McpTool, McpToolCallResult};
 
 use super::upstream::UpstreamConnection;
 
@@ -19,6 +21,8 @@ use super::upstream::UpstreamConnection;
 pub struct UpstreamRegistry {
     upstreams: RwLock<HashMap<String, UpstreamConnection>>,
     groups: McpAccessGroups,
+    /// Broadcast sender for notifying downstream MCP clients of tool list changes.
+    change_tx: broadcast::Sender<()>,
 }
 
 impl UpstreamRegistry {
@@ -45,9 +49,11 @@ impl UpstreamRegistry {
             upstreams.insert(name, conn);
         }
 
+        let (change_tx, _) = broadcast::channel(16);
         Ok(Self {
             upstreams: RwLock::new(upstreams),
             groups,
+            change_tx,
         })
     }
 
@@ -153,6 +159,65 @@ impl UpstreamRegistry {
             });
         }
         infos
+    }
+
+    /// Notify downstream MCP clients that the tool list has changed.
+    ///
+    /// Best-effort: does nothing if there are no active subscribers.
+    pub fn notify_downstream_change(&self) {
+        let _ = self.change_tx.send(());
+    }
+}
+
+/// Convert an `rmcp` [`Tool`] into an `rmcp`-free [`McpTool`].
+fn rmcp_tool_to_mcp_tool(tool: &Tool) -> McpTool {
+    McpTool {
+        name: tool.name.to_string(),
+        description: tool.description.as_deref().map(str::to_owned),
+        input_schema: serde_json::to_value(&*tool.input_schema).unwrap_or_default(),
+    }
+}
+
+/// Convert an `rmcp` [`CallToolResult`] into an `rmcp`-free [`McpToolCallResult`].
+fn rmcp_result_to_mcp_result(result: &CallToolResult) -> McpToolCallResult {
+    // Serialize the rmcp content to JSON, then extract text fields.
+    // This handles all content types generically.
+    let content: Vec<McpContent> = result
+        .content
+        .iter()
+        .filter_map(|c| {
+            let value = serde_json::to_value(c).ok()?;
+            let text = value.get("text")?.as_str()?;
+            Some(McpContent::Text {
+                text: text.to_owned(),
+            })
+        })
+        .collect();
+
+    McpToolCallResult {
+        content,
+        is_error: result.is_error,
+    }
+}
+
+/// Implement [`McpToolServer`] for the runtime registry.
+impl McpToolServer for UpstreamRegistry {
+    async fn list_tools(&self) -> Vec<McpTool> {
+        let rmcp_tools = self.aggregated_tools().await;
+        rmcp_tools.iter().map(rmcp_tool_to_mcp_tool).collect()
+    }
+
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<McpToolCallResult, McpGatewayError> {
+        let result = self.route_call(name, arguments).await?;
+        Ok(rmcp_result_to_mcp_result(&result))
+    }
+
+    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
+        self.change_tx.subscribe()
     }
 }
 

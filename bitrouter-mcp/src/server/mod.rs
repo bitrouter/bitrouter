@@ -1,0 +1,45 @@
+//! MCP server protocol types and traits.
+//!
+//! Provides JSON-RPC 2.0 envelope types, MCP protocol messages, tool
+//! definitions, and the [`McpToolServer`] trait for serving aggregated
+//! tools to downstream MCP clients.
+//!
+//! These types are `rmcp`-free — they are pure serde structs that match
+//! the MCP wire format, allowing `bitrouter-api` to serve the protocol
+//! without depending on `rmcp`.
+
+pub mod error_codes;
+pub mod jsonrpc;
+pub mod protocol;
+pub mod types;
+
+use std::future::Future;
+
+use tokio::sync::broadcast;
+
+use crate::error::McpGatewayError;
+use types::{McpTool, McpToolCallResult};
+
+/// Trait for serving MCP tools to downstream clients.
+///
+/// Implementors provide tool listing, tool invocation, and change
+/// notification subscription. The API layer's warp filters call these
+/// methods to serve the MCP server protocol.
+pub trait McpToolServer: Send + Sync {
+    /// List all available tools with full JSON Schema input definitions.
+    fn list_tools(&self) -> impl Future<Output = Vec<McpTool>> + Send;
+
+    /// Invoke a namespaced tool (e.g. `"github/search"`) by name.
+    fn call_tool(
+        &self,
+        name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> impl Future<Output = Result<McpToolCallResult, McpGatewayError>> + Send;
+
+    /// Subscribe to tool list change notifications.
+    ///
+    /// Returns a broadcast receiver that yields `()` each time the
+    /// aggregated tool list changes (e.g. an upstream added or removed
+    /// a tool).
+    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()>;
+}

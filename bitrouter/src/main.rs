@@ -111,6 +111,10 @@ enum Command {
         #[arg(long)]
         budget_range: Option<String>,
 
+        /// Comma-separated list of allowed tool patterns (e.g., "github/*,jira/search")
+        #[arg(long, value_delimiter = ',')]
+        tools: Option<Vec<String>>,
+
         /// Optional label for saving the token locally
         #[arg(long)]
         name: Option<String>,
@@ -359,6 +363,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             scope,
             exp,
             models,
+            tools,
             budget,
             budget_scope,
             budget_range,
@@ -388,10 +393,12 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 scope,
                 exp,
                 models,
+                tools,
                 budget,
                 budget_scope,
                 budget_range,
                 name,
+                mcp_groups: bitrouter_mcp::groups::McpAccessGroups::default(),
             };
             cli::keygen::run(&keys_dir, opts)?;
             return Ok(());

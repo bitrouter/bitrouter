@@ -9,3 +9,4 @@ pub mod config;
 pub mod error;
 pub mod groups;
 pub mod param_filter;
+pub mod server;
