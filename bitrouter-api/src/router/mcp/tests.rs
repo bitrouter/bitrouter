@@ -8,9 +8,10 @@ use tokio::sync::broadcast;
 use warp::Filter;
 
 use super::filters::mcp_server_filter;
+use bitrouter_mcp::server::protocol::McpGetPromptResult;
+
 use super::types::{
-    McpGatewayError, McpGetPromptResult, McpPromptServer, McpResourceServer, McpToolServer,
-    error_codes,
+    McpGatewayError, McpPromptServer, McpResourceServer, McpToolServer, error_codes,
 };
 
 // ── Mock server ─────────────────────────────────────────────────────

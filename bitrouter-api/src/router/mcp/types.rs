@@ -26,7 +26,7 @@ pub use bitrouter_mcp::server::jsonrpc::{JsonRpcId, JsonRpcMessage, JsonRpcRespo
 
 pub use bitrouter_mcp::server::protocol::{
     CallToolParams, GetPromptParams, InitializeResult, ListPromptsResult,
-    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, McpGetPromptResult,
-    PromptsCapability, ReadResourceParams, ReadResourceResult, ResourcesCapability,
-    ServerCapabilities, ServerInfo, ToolsCapability,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PromptsCapability,
+    ReadResourceParams, ReadResourceResult, ResourcesCapability, ServerCapabilities, ServerInfo,
+    ToolsCapability,
 };
