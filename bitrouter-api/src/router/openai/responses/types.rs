@@ -16,13 +16,35 @@ pub struct ResponsesRequest {
     pub max_output_tokens: Option<u32>,
     #[serde(default)]
     pub stream: Option<bool>,
+    #[serde(default)]
+    pub tools: Option<Vec<ResponsesTool>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResponsesTool {
+    pub r#type: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+    #[serde(default)]
+    pub strict: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum ResponsesInput {
     Text(String),
-    Messages(Vec<ResponsesInputMessage>),
+    Items(Vec<ResponsesInputItem>),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ResponsesInputItem {
+    Message(ResponsesInputMessage),
+    FunctionCallOutput(ResponsesFunctionCallOutput),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -30,6 +52,12 @@ pub struct ResponsesInputMessage {
     pub role: String,
     #[serde(default)]
     pub content: Option<ResponsesInputContent>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResponsesFunctionCallOutput {
+    pub call_id: String,
+    pub output: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -61,13 +89,23 @@ pub struct ResponsesResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ResponsesOutputItem {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub item_type: String,
-    pub role: String,
-    pub content: Vec<ResponsesOutputContent>,
-    pub status: String,
+#[serde(tag = "type")]
+pub enum ResponsesOutputItem {
+    #[serde(rename = "message")]
+    Message {
+        id: String,
+        role: String,
+        content: Vec<ResponsesOutputContent>,
+        status: String,
+    },
+    #[serde(rename = "function_call")]
+    FunctionCall {
+        id: String,
+        call_id: String,
+        name: String,
+        arguments: String,
+        status: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,4 +136,12 @@ pub struct ResponsesStreamEvent {
     pub content_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<serde_json::Value>,
 }
