@@ -1,8 +1,8 @@
-#[cfg(any(feature = "openai", feature = "anthropic"))]
+#[cfg(any(feature = "openai", feature = "anthropic", feature = "google"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Generates a hex-encoded timestamp-based ID.
-#[cfg(any(feature = "openai", feature = "anthropic"))]
+#[cfg(any(feature = "openai", feature = "anthropic", feature = "google"))]
 pub(crate) fn generate_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
