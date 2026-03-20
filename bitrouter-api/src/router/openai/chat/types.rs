@@ -26,6 +26,29 @@ pub struct ChatCompletionRequest {
     pub seed: Option<u64>,
     #[serde(default)]
     pub stream: Option<bool>,
+    #[serde(default)]
+    pub tools: Option<Vec<ChatTool>>,
+    #[serde(default)]
+    pub tool_choice: Option<serde_json::Value>,
+    #[serde(default)]
+    pub parallel_tool_calls: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatTool {
+    pub r#type: String,
+    pub function: ChatToolFunction,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatToolFunction {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+    #[serde(default)]
+    pub strict: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -33,6 +56,25 @@ pub struct ChatMessage {
     pub role: String,
     #[serde(default)]
     pub content: Option<ChatMessageContent>,
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ChatMessageToolCall>>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatMessageToolCall {
+    pub id: String,
+    pub r#type: String,
+    pub function: ChatMessageToolCallFunction,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatMessageToolCallFunction {
+    pub name: String,
+    pub arguments: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,6 +115,21 @@ pub struct ChatCompletionChoice {
 pub struct ChatCompletionChoiceMessage {
     pub role: String,
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ChatResponseToolCall>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatResponseToolCall {
+    pub id: String,
+    pub r#type: String,
+    pub function: ChatResponseToolCallFunction,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatResponseToolCallFunction {
+    pub name: String,
+    pub arguments: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,4 +166,25 @@ pub struct ChatCompletionChunkDelta {
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ChatResponseToolCallDelta>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatResponseToolCallDelta {
+    pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<ChatResponseToolCallDeltaFunction>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatResponseToolCallDeltaFunction {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
 }

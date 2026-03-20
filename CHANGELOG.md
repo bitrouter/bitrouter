@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/bitrouter/bitrouter/compare/v0.10.0...v0.11.0)
+
+
+### ⛰️ Features
+
+- *(cli)* Unify `bitrouter init` with cloud and BYOK onboarding ([#130](https://github.com/bitrouter/bitrouter/pull/130)) - ([2ecdbfb](https://github.com/bitrouter/bitrouter/commit/2ecdbfb1032dd1580fe53fb7f832fd79c9a8e51a))
+- Sanitize account system ([#133](https://github.com/bitrouter/bitrouter/pull/133)) - ([a20e4f8](https://github.com/bitrouter/bitrouter/commit/a20e4f87aecc4eb7c65beea63a1cbaee7275b1d6))
+
+### 🐛 Bug Fixes
+
+- *(api)* Handle tool call in api protocols ([#141](https://github.com/bitrouter/bitrouter/pull/141)) - ([09d19ad](https://github.com/bitrouter/bitrouter/commit/09d19ad66e65b63d3a53a0621b4f658f04d6ef85))
+- *(code-quality)* Remove #[allow(clippy)] and eliminate potential panics ([#134](https://github.com/bitrouter/bitrouter/pull/134)) - ([f64d937](https://github.com/bitrouter/bitrouter/commit/f64d9373b6801b7d68e5c7205de3d09bbd58fd67))
+
+
 ## [0.10.0](https://github.com/bitrouter/bitrouter/compare/v0.9.0...v0.10.0)
 
 

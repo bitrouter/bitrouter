@@ -8,6 +8,7 @@ use bitrouter_core::{
         finish_reason::LanguageModelFinishReason,
         generate_result::LanguageModelGenerateResult,
         language_model::{DynLanguageModel, LanguageModel},
+        stream_part::LanguageModelStreamPart,
         stream_result::LanguageModelStreamResult,
         usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
     },
@@ -41,6 +42,15 @@ struct MockRouter;
 impl LanguageModelRouter for MockRouter {
     async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
         Ok(DynLanguageModel::new_box(MockModel {
+            model_id: target.model_id,
+        }))
+    }
+}
+
+struct MockToolRouter;
+impl LanguageModelRouter for MockToolRouter {
+    async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+        Ok(DynLanguageModel::new_box(MockToolModel {
             model_id: target.model_id,
         }))
     }
@@ -128,6 +138,89 @@ impl LanguageModel for MockModel {
             )
             .await;
 
+        Ok(LanguageModelStreamResult {
+            stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            request: None,
+            response: None,
+        })
+    }
+}
+
+fn mock_usage() -> LanguageModelUsage {
+    LanguageModelUsage {
+        input_tokens: LanguageModelInputTokens {
+            total: Some(12),
+            no_cache: None,
+            cache_read: None,
+            cache_write: None,
+        },
+        output_tokens: LanguageModelOutputTokens {
+            total: Some(6),
+            text: None,
+            reasoning: None,
+        },
+        raw: None,
+    }
+}
+
+#[derive(Clone)]
+struct MockToolModel {
+    model_id: String,
+}
+
+impl LanguageModel for MockToolModel {
+    fn provider_name(&self) -> &str {
+        "mock"
+    }
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+    async fn supported_urls(&self) -> HashMap<String, Regex> {
+        HashMap::new()
+    }
+    async fn generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult> {
+        Ok(LanguageModelGenerateResult {
+            content: LanguageModelContent::ToolCall {
+                tool_call_id: "call_abc123".to_owned(),
+                tool_name: "get_weather".to_owned(),
+                tool_input: r#"{"location":"NYC"}"#.to_owned(),
+                provider_executed: None,
+                dynamic: None,
+                provider_metadata: None,
+            },
+            finish_reason: LanguageModelFinishReason::FunctionCall,
+            usage: mock_usage(),
+            provider_metadata: None,
+            request: None,
+            response_metadata: None,
+            warnings: None,
+        })
+    }
+    async fn stream(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let _ = tx
+            .send(LanguageModelStreamPart::ToolCall {
+                tool_call_id: "call_abc123".to_owned(),
+                tool_name: "get_weather".to_owned(),
+                tool_input: r#"{"location":"NYC"}"#.to_owned(),
+                provider_executed: None,
+                dynamic: None,
+                provider_metadata: None,
+            })
+            .await;
+        let _ = tx
+            .send(LanguageModelStreamPart::Finish {
+                usage: mock_usage(),
+                finish_reason: LanguageModelFinishReason::FunctionCall,
+                provider_metadata: None,
+            })
+            .await;
         Ok(LanguageModelStreamResult {
             stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
             request: None,
@@ -311,6 +404,120 @@ async fn generate_content_stream_via_path() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers()["content-type"], "text/event-stream");
+}
+
+#[tokio::test]
+async fn generate_content_with_tools() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockToolRouter);
+    let filter = generate_content_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "gemini-2.0-flash",
+        "contents": [
+            {"role": "user", "parts": [{"text": "What's the weather in NYC?"}]}
+        ],
+        "tools": [{
+            "functionDeclarations": [{
+                "name": "get_weather",
+                "description": "Get weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                    "required": ["location"]
+                }
+            }]
+        }]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1beta/models/gemini-2.0-flash:generateContent")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    let json: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+    let part = &json["candidates"][0]["content"]["parts"][0];
+    assert_eq!(part["functionCall"]["name"], "get_weather");
+    assert_eq!(part["functionCall"]["args"]["location"], "NYC");
+}
+
+#[tokio::test]
+async fn generate_content_stream_tool_calls() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockToolRouter);
+    let filter = generate_content_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "gemini-2.0-flash",
+        "contents": [
+            {"role": "user", "parts": [{"text": "Weather?"}]}
+        ],
+        "tools": [{"functionDeclarations": [{"name": "get_weather", "parameters": {}}]}],
+        "stream": true
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1beta/models/gemini-2.0-flash:streamGenerateContent")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    let events = parse_sse_body(res.body());
+    let mut found_function_call = false;
+    for (_, data) in &events {
+        if data == "[DONE]" {
+            continue;
+        }
+        let json: Value = serde_json::from_str(data).unwrap();
+        if let Some(parts) = json["candidates"][0]["content"]["parts"].as_array() {
+            for part in parts {
+                if part.get("functionCall").is_some() {
+                    assert_eq!(part["functionCall"]["name"], "get_weather");
+                    assert_eq!(part["functionCall"]["args"]["location"], "NYC");
+                    found_function_call = true;
+                }
+            }
+        }
+    }
+    assert!(
+        found_function_call,
+        "expected a functionCall part in stream"
+    );
+}
+
+#[tokio::test]
+async fn generate_content_function_response_multi_turn() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let filter = generate_content_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "gemini-2.0-flash",
+        "contents": [
+            {"role": "user", "parts": [{"text": "What's the weather?"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "NYC"}}}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "get_weather", "response": {"content": "72°F"}}}]}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1beta/models/gemini-2.0-flash:generateContent")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    let json: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+    assert_eq!(json["candidates"][0]["content"]["role"], "model");
 }
 
 // ── Mock observer ───────────────────────────────────────────────────────

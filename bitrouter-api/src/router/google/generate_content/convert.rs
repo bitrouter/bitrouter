@@ -1,15 +1,26 @@
 //! Conversion between Google Generative AI format and core LanguageModel types.
 
-use bitrouter_core::models::language::{
-    call_options::LanguageModelCallOptions,
-    content::LanguageModelContent,
-    finish_reason::LanguageModelFinishReason,
-    generate_result::LanguageModelGenerateResult,
-    prompt::{LanguageModelMessage, LanguageModelUserContent},
-    stream_part::LanguageModelStreamPart,
+use std::collections::HashMap;
+
+use bitrouter_core::models::{
+    language::{
+        call_options::LanguageModelCallOptions,
+        content::LanguageModelContent,
+        finish_reason::LanguageModelFinishReason,
+        generate_result::LanguageModelGenerateResult,
+        prompt::{
+            LanguageModelAssistantContent, LanguageModelMessage, LanguageModelToolResult,
+            LanguageModelToolResultOutput, LanguageModelUserContent,
+        },
+        stream_part::LanguageModelStreamPart,
+        tool::LanguageModelTool,
+        tool_choice::LanguageModelToolChoice,
+    },
+    shared::types::JsonSchema,
 };
 
 use super::types::*;
+use crate::util::generate_id;
 
 /// Extracts the model name from a generate content request body.
 pub fn extract_model_name(request: &GenerateContentRequest) -> &str {
@@ -38,23 +49,53 @@ pub fn to_call_options(request: GenerateContentRequest) -> LanguageModelCallOpti
     }
 
     for content in request.contents {
-        let message = match content.role.as_str() {
-            "model" => LanguageModelMessage::Assistant {
-                content: vec![
-                    bitrouter_core::models::language::prompt::LanguageModelAssistantContent::Text {
-                        text: google_parts_to_string(content.parts),
+        match content.role.as_str() {
+            "model" => {
+                let assistant_content = convert_model_parts(content.parts);
+                prompt.push(LanguageModelMessage::Assistant {
+                    content: assistant_content,
+                    provider_options: None,
+                });
+            }
+            _ => {
+                let (user_parts, tool_results) = split_google_parts(content.parts);
+                if !tool_results.is_empty() {
+                    prompt.push(LanguageModelMessage::Tool {
+                        content: tool_results,
                         provider_options: None,
-                    },
-                ],
-                provider_options: None,
-            },
-            _ => LanguageModelMessage::User {
-                content: google_parts_to_user_content(content.parts),
-                provider_options: None,
-            },
-        };
-        prompt.push(message);
+                    });
+                }
+                if !user_parts.is_empty() {
+                    prompt.push(LanguageModelMessage::User {
+                        content: user_parts,
+                        provider_options: None,
+                    });
+                }
+            }
+        }
     }
+
+    let tools = request.tools.map(|tool_groups| {
+        tool_groups
+            .into_iter()
+            .flat_map(|t| t.function_declarations)
+            .map(|fd| {
+                let schema_value = fd.parameters.unwrap_or(serde_json::json!({}));
+                let input_schema: JsonSchema =
+                    serde_json::from_value(schema_value).unwrap_or_default();
+                LanguageModelTool::Function {
+                    name: fd.name,
+                    description: fd.description,
+                    input_schema,
+                    input_examples: vec![],
+                    strict: None,
+                    provider_options: None,
+                }
+            })
+            .collect()
+    });
+
+    let tool_choice = request.tool_config.and_then(convert_tool_config);
 
     let (max_output_tokens, temperature, top_p, top_k, stop_sequences) =
         if let Some(config) = request.generation_config {
@@ -81,8 +122,8 @@ pub fn to_call_options(request: GenerateContentRequest) -> LanguageModelCallOpti
         frequency_penalty: None,
         response_format: None,
         seed: None,
-        tools: None,
-        tool_choice: None,
+        tools,
+        tool_choice,
         include_raw_chunks: None,
         abort_signal: None,
         headers: None,
@@ -95,7 +136,7 @@ pub fn from_generate_result(
     model_id: &str,
     result: LanguageModelGenerateResult,
 ) -> GenerateContentResponse {
-    let text = extract_text_content(&result.content);
+    let parts = extract_response_parts(&result.content);
     let finish_reason = map_finish_reason(&result.finish_reason);
     let input_tokens = result.usage.input_tokens.total.unwrap_or(0);
     let output_tokens = result.usage.output_tokens.total.unwrap_or(0);
@@ -104,7 +145,7 @@ pub fn from_generate_result(
         candidates: vec![GenerateContentCandidate {
             content: GenerateContentCandidateContent {
                 role: "model".to_owned(),
-                parts: vec![GenerateContentPart { text }],
+                parts,
             },
             finish_reason,
             index: 0,
@@ -118,84 +159,241 @@ pub fn from_generate_result(
     }
 }
 
-/// Converts a [`LanguageModelStreamPart`] into a [`GenerateContentStreamChunk`].
-pub fn stream_part_to_chunk(
-    model_id: &str,
-    part: &LanguageModelStreamPart,
-) -> Option<GenerateContentStreamChunk> {
-    match part {
-        LanguageModelStreamPart::TextDelta { delta, .. } => Some(GenerateContentStreamChunk {
+// ── Streaming ───────────────────────────────────────────────────────────────
+
+/// Stateful converter that accumulates incremental tool-call data.
+pub struct StreamConverter {
+    model_id: String,
+    pending_calls: HashMap<String, PendingFunctionCall>,
+}
+
+struct PendingFunctionCall {
+    name: String,
+    args_buffer: String,
+}
+
+impl StreamConverter {
+    pub fn new(model_id: String) -> Self {
+        Self {
+            model_id,
+            pending_calls: HashMap::new(),
+        }
+    }
+
+    /// Converts a [`LanguageModelStreamPart`] into a [`GenerateContentStreamChunk`].
+    pub fn convert(
+        &mut self,
+        part: &LanguageModelStreamPart,
+    ) -> Option<GenerateContentStreamChunk> {
+        match part {
+            LanguageModelStreamPart::TextDelta { delta, .. } => Some(self.make_chunk(
+                vec![GenerateContentPart {
+                    text: Some(delta.clone()),
+                    function_call: None,
+                }],
+                None,
+                None,
+                None,
+            )),
+            LanguageModelStreamPart::ToolCall {
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                let args: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
+                Some(self.make_chunk(
+                    vec![GenerateContentPart {
+                        text: None,
+                        function_call: Some(GoogleFunctionCall {
+                            name: tool_name.clone(),
+                            args,
+                        }),
+                    }],
+                    None,
+                    None,
+                    None,
+                ))
+            }
+            LanguageModelStreamPart::ToolInputStart { id, tool_name, .. } => {
+                self.pending_calls.insert(
+                    id.clone(),
+                    PendingFunctionCall {
+                        name: tool_name.clone(),
+                        args_buffer: String::new(),
+                    },
+                );
+                None
+            }
+            LanguageModelStreamPart::ToolInputDelta { id, delta, .. } => {
+                if let Some(pending) = self.pending_calls.get_mut(id) {
+                    pending.args_buffer.push_str(delta);
+                }
+                None
+            }
+            LanguageModelStreamPart::ToolInputEnd { id, .. } => {
+                if let Some(pending) = self.pending_calls.remove(id) {
+                    let args: serde_json::Value =
+                        serde_json::from_str(&pending.args_buffer).unwrap_or_default();
+                    Some(self.make_chunk(
+                        vec![GenerateContentPart {
+                            text: None,
+                            function_call: Some(GoogleFunctionCall {
+                                name: pending.name,
+                                args,
+                            }),
+                        }],
+                        None,
+                        None,
+                        None,
+                    ))
+                } else {
+                    None
+                }
+            }
+            LanguageModelStreamPart::Finish {
+                finish_reason,
+                usage,
+                ..
+            } => {
+                let input_tokens = usage.input_tokens.total.unwrap_or(0);
+                let output_tokens = usage.output_tokens.total.unwrap_or(0);
+                Some(self.make_chunk(
+                    vec![GenerateContentPart {
+                        text: Some(String::new()),
+                        function_call: None,
+                    }],
+                    Some(map_finish_reason(finish_reason)),
+                    Some(GenerateContentStreamUsageMetadata {
+                        prompt_token_count: input_tokens,
+                        candidates_token_count: output_tokens,
+                        total_token_count: input_tokens + output_tokens,
+                    }),
+                    Some(self.model_id.clone()),
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn make_chunk(
+        &self,
+        parts: Vec<GenerateContentPart>,
+        finish_reason: Option<String>,
+        usage_metadata: Option<GenerateContentStreamUsageMetadata>,
+        model_version: Option<String>,
+    ) -> GenerateContentStreamChunk {
+        GenerateContentStreamChunk {
             candidates: vec![GenerateContentStreamCandidate {
                 content: GenerateContentCandidateContent {
                     role: "model".to_owned(),
-                    parts: vec![GenerateContentPart {
-                        text: delta.clone(),
-                    }],
+                    parts,
                 },
-                finish_reason: None,
+                finish_reason,
                 index: 0,
             }],
-            usage_metadata: None,
-            model_version: None,
-        }),
-        LanguageModelStreamPart::Finish {
-            finish_reason,
-            usage,
-            ..
-        } => {
-            let input_tokens = usage.input_tokens.total.unwrap_or(0);
-            let output_tokens = usage.output_tokens.total.unwrap_or(0);
-            Some(GenerateContentStreamChunk {
-                candidates: vec![GenerateContentStreamCandidate {
-                    content: GenerateContentCandidateContent {
-                        role: "model".to_owned(),
-                        parts: vec![GenerateContentPart {
-                            text: String::new(),
-                        }],
-                    },
-                    finish_reason: Some(map_finish_reason(finish_reason)),
-                    index: 0,
-                }],
-                usage_metadata: Some(GenerateContentStreamUsageMetadata {
-                    prompt_token_count: input_tokens,
-                    candidates_token_count: output_tokens,
-                    total_token_count: input_tokens + output_tokens,
-                }),
-                model_version: Some(model_id.to_owned()),
-            })
+            usage_metadata,
+            model_version,
         }
-        _ => None,
     }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-fn google_parts_to_string(parts: Option<Vec<GooglePart>>) -> String {
-    parts
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|p| p.text)
-        .collect::<Vec<_>>()
-        .join("")
-}
-
-fn google_parts_to_user_content(parts: Option<Vec<GooglePart>>) -> Vec<LanguageModelUserContent> {
+fn convert_model_parts(parts: Option<Vec<GooglePart>>) -> Vec<LanguageModelAssistantContent> {
     parts
         .unwrap_or_default()
         .into_iter()
         .filter_map(|p| {
-            p.text.map(|text| LanguageModelUserContent::Text {
-                text,
-                provider_options: None,
-            })
+            if let Some(fc) = p.function_call {
+                Some(LanguageModelAssistantContent::ToolCall {
+                    tool_call_id: format!("call-{}", generate_id()),
+                    tool_name: fc.name,
+                    input: fc.args,
+                    provider_executed: None,
+                    provider_options: None,
+                })
+            } else {
+                p.text.map(|text| LanguageModelAssistantContent::Text {
+                    text,
+                    provider_options: None,
+                })
+            }
         })
         .collect()
 }
 
-fn extract_text_content(content: &LanguageModelContent) -> String {
+fn split_google_parts(
+    parts: Option<Vec<GooglePart>>,
+) -> (Vec<LanguageModelUserContent>, Vec<LanguageModelToolResult>) {
+    let mut user_parts = Vec::new();
+    let mut tool_results = Vec::new();
+    for part in parts.unwrap_or_default() {
+        if let Some(fr) = part.function_response {
+            let output_text = match fr.response {
+                serde_json::Value::String(s) => s,
+                other => serde_json::to_string(&other).unwrap_or_default(),
+            };
+            tool_results.push(LanguageModelToolResult::ToolResult {
+                tool_call_id: String::new(),
+                tool_name: fr.name,
+                output: LanguageModelToolResultOutput::Text {
+                    value: output_text,
+                    provider_options: None,
+                },
+                provider_options: None,
+            });
+        } else if let Some(text) = part.text {
+            user_parts.push(LanguageModelUserContent::Text {
+                text,
+                provider_options: None,
+            });
+        }
+    }
+    (user_parts, tool_results)
+}
+
+fn convert_tool_config(config: GoogleToolConfig) -> Option<LanguageModelToolChoice> {
+    let fcc = config.function_calling_config?;
+    let mode = fcc.mode?;
+    match mode.as_str() {
+        "AUTO" => Some(LanguageModelToolChoice::Auto),
+        "NONE" => Some(LanguageModelToolChoice::None),
+        "ANY" => {
+            if let Some(names) = fcc.allowed_function_names
+                && names.len() == 1
+            {
+                Some(LanguageModelToolChoice::Tool {
+                    tool_name: names.into_iter().next().unwrap_or_default(),
+                })
+            } else {
+                Some(LanguageModelToolChoice::Required)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn extract_response_parts(content: &LanguageModelContent) -> Vec<GenerateContentPart> {
     match content {
-        LanguageModelContent::Text { text, .. } => text.clone(),
-        _ => String::new(),
+        LanguageModelContent::Text { text, .. } => vec![GenerateContentPart {
+            text: Some(text.clone()),
+            function_call: None,
+        }],
+        LanguageModelContent::ToolCall {
+            tool_name,
+            tool_input,
+            ..
+        } => {
+            let args: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
+            vec![GenerateContentPart {
+                text: None,
+                function_call: Some(GoogleFunctionCall {
+                    name: tool_name.clone(),
+                    args,
+                }),
+            }]
+        }
+        _ => vec![],
     }
 }
 

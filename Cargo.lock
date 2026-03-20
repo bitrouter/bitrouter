@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1158,7 +1158,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-a2a"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures-core",
  "reqwest 0.12.28",
@@ -1172,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-accounts"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bitrouter-core",
  "chrono",
@@ -1186,7 +1186,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-anthropic"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64 0.22.1",
  "bitrouter-core",
@@ -1203,7 +1203,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-api"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bitrouter-a2a",
  "bitrouter-anthropic",
@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-blob"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bitrouter-core",
  "tempfile",
@@ -1232,7 +1232,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-config"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bitrouter-core",
  "bitrouter-guardrails",
@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-google"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64 0.22.1",
  "bitrouter-core",
@@ -1289,7 +1289,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-guardrails"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bitrouter-core",
  "futures-core",
@@ -1302,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-mcp"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "reqwest 0.13.2",
  "rmcp",
@@ -1315,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-observe"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bitrouter-core",
  "chrono",
@@ -1330,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-openai"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64 0.22.1",
  "bitrouter-core",
