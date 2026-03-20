@@ -241,15 +241,16 @@ async fn handle_stream(
 
     tokio::spawn(async move {
         let mut stream = stream_result.stream;
+        let mut converter = convert::StreamConverter::new();
         use tokio_stream::StreamExt as _;
-        while let Some(part) = stream.next().await {
-            if let Some(event) = convert::stream_part_to_event(&part) {
+        'outer: while let Some(part) = stream.next().await {
+            for event in converter.convert(&part) {
                 let data = serde_json::to_string(&event).unwrap_or_default();
                 let sse = Ok(warp::sse::Event::default()
                     .event(&event.event_type)
                     .data(data));
                 if tx.send(sse).await.is_err() {
-                    break;
+                    break 'outer;
                 }
             }
         }
@@ -286,6 +287,7 @@ async fn handle_stream_with_observe(
 
     tokio::spawn(async move {
         let mut stream = stream_result.stream;
+        let mut converter = convert::StreamConverter::new();
         use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;
         use tokio_stream::StreamExt as _;
         let mut usage = None;
@@ -298,15 +300,20 @@ async fn handle_stream_with_observe(
             {
                 usage = Some(finish_usage.clone());
             }
-            if let Some(event) = convert::stream_part_to_event(&part) {
+            let mut send_failed = false;
+            for event in converter.convert(&part) {
                 let data = serde_json::to_string(&event).unwrap_or_default();
                 let sse = Ok(warp::sse::Event::default()
                     .event(&event.event_type)
                     .data(data));
                 if tx.send(sse).await.is_err() {
-                    client_disconnected = true;
+                    send_failed = true;
                     break;
                 }
+            }
+            if send_failed {
+                client_disconnected = true;
+                break;
             }
         }
         let _ = tx

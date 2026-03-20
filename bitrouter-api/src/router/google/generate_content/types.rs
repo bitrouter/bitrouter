@@ -15,6 +15,10 @@ pub struct GenerateContentRequest {
     pub generation_config: Option<GoogleGenerationConfig>,
     #[serde(default)]
     pub stream: Option<bool>,
+    #[serde(default)]
+    pub tools: Option<Vec<GoogleTool>>,
+    #[serde(default)]
+    pub tool_config: Option<GoogleToolConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,6 +41,56 @@ pub struct GoogleSystemInstruction {
 pub struct GooglePart {
     #[serde(default)]
     pub text: Option<String>,
+    #[serde(default)]
+    pub function_call: Option<GoogleFunctionCall>,
+    #[serde(default)]
+    pub function_response: Option<GoogleFunctionResponse>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleFunctionCall {
+    pub name: String,
+    pub args: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleFunctionResponse {
+    pub name: String,
+    pub response: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleTool {
+    pub function_declarations: Vec<GoogleFunctionDeclaration>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleFunctionDeclaration {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleToolConfig {
+    #[serde(default)]
+    pub function_calling_config: Option<GoogleFunctionCallingConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleFunctionCallingConfig {
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub allowed_function_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,7 +137,10 @@ pub struct GenerateContentCandidateContent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateContentPart {
-    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_call: Option<GoogleFunctionCall>,
 }
 
 #[derive(Debug, Clone, Serialize)]
