@@ -1,8 +1,11 @@
+#[cfg(feature = "a2a")]
 pub mod a2a;
 pub mod app;
 pub mod auth;
 pub mod daemon;
 pub mod error;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod migration;
 pub mod paths;
 pub mod router;

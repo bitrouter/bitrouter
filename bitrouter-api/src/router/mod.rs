@@ -5,6 +5,8 @@ pub mod admin;
 pub mod anthropic;
 #[cfg(feature = "google")]
 pub mod google;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod models;
 #[cfg(feature = "openai")]
 pub mod openai;

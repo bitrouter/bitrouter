@@ -12,3 +12,4 @@ pub mod metrics;
 pub mod migration;
 pub mod observer;
 pub mod spend;
+pub mod tool_observer;

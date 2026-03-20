@@ -37,6 +37,14 @@ pub struct BitrouterConfig {
     /// Model routing definitions.
     #[serde(default)]
     pub models: HashMap<String, ModelConfig>,
+
+    /// MCP upstream server configurations.
+    #[serde(default)]
+    pub mcp_servers: Vec<bitrouter_mcp::config::McpServerConfig>,
+
+    /// Named groups of MCP servers for access control convenience.
+    #[serde(default)]
+    pub mcp_groups: bitrouter_mcp::groups::McpAccessGroups,
 }
 
 impl BitrouterConfig {

@@ -1208,6 +1208,7 @@ dependencies = [
  "bitrouter-anthropic",
  "bitrouter-core",
  "bitrouter-google",
+ "bitrouter-mcp",
  "bitrouter-openai",
  "futures-core",
  "regex",
@@ -1234,6 +1235,7 @@ version = "0.10.0"
 dependencies = [
  "bitrouter-core",
  "bitrouter-guardrails",
+ "bitrouter-mcp",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1295,6 +1297,15 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tracing",
+]
+
+[[package]]
+name = "bitrouter-mcp"
+version = "0.10.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

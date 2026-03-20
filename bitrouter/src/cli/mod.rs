@@ -1,3 +1,4 @@
+#[cfg(feature = "a2a")]
 pub mod a2a;
 pub mod account;
 pub mod keygen;
@@ -6,4 +7,6 @@ pub mod onboarding;
 pub mod route;
 pub mod sudo;
 pub mod swig;
+#[cfg(feature = "mcp")]
+pub mod tools;
 pub mod update_check;

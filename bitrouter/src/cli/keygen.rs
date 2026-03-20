@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bitrouter_core::auth::chain::Chain;
 use bitrouter_core::auth::claims::{BitrouterClaims, BudgetRange, BudgetScope, TokenScope};
 use bitrouter_core::auth::token;
+use bitrouter_mcp::groups::McpAccessGroups;
 
 use crate::cli::account::load_active_keypair;
 
@@ -19,10 +20,13 @@ pub struct KeygenOpts {
     pub scope: TokenScope,
     pub exp: Option<String>,
     pub models: Option<Vec<String>>,
+    pub tools: Option<Vec<String>>,
     pub budget: Option<u64>,
     pub budget_scope: Option<BudgetScope>,
     pub budget_range: Option<String>,
     pub name: Option<String>,
+    /// Access groups loaded from config (for expanding group patterns in --tools).
+    pub mcp_groups: McpAccessGroups,
 }
 
 struct SignJwtOpts {
@@ -30,6 +34,7 @@ struct SignJwtOpts {
     scope: TokenScope,
     exp_input: Option<String>,
     models: Option<Vec<String>>,
+    tools: Option<Vec<String>>,
     budget: Option<u64>,
     budget_scope: Option<BudgetScope>,
     budget_range_input: Option<String>,
@@ -38,6 +43,12 @@ struct SignJwtOpts {
 /// Run the `keygen` subcommand.
 pub fn run(keys_dir: &Path, opts: KeygenOpts) -> Result<(), String> {
     let (prefix, kp) = load_active_keypair(keys_dir)?;
+
+    // Expand group patterns (e.g. "dev_tools/*" → "github/*", "jira/*")
+    let tools = opts
+        .tools
+        .map(|patterns| opts.mcp_groups.expand_patterns(&patterns));
+
     let jwt = sign_jwt(
         &kp,
         SignJwtOpts {
@@ -45,6 +56,7 @@ pub fn run(keys_dir: &Path, opts: KeygenOpts) -> Result<(), String> {
             scope: opts.scope,
             exp_input: opts.exp,
             models: opts.models,
+            tools,
             budget: opts.budget,
             budget_scope: opts.budget_scope,
             budget_range_input: opts.budget_range,
@@ -79,6 +91,7 @@ pub fn generate_local_admin_jwt(keys_dir: &Path) -> Result<String, String> {
             scope: TokenScope::Admin,
             exp_input: Some(exp),
             models: None,
+            tools: None,
             budget: None,
             budget_scope: None,
             budget_range_input: None,
@@ -122,6 +135,7 @@ fn sign_jwt(
         exp,
         scope: opts.scope,
         models: opts.models,
+        tools: opts.tools,
         budget: opts.budget,
         budget_scope: opts.budget_scope,
         budget_range,
@@ -282,6 +296,7 @@ mod tests {
                 scope: TokenScope::Admin,
                 exp_input: Some(exp),
                 models: None,
+                tools: None,
                 budget: None,
                 budget_scope: None,
                 budget_range_input: None,

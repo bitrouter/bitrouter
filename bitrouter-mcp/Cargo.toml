@@ -1,0 +1,13 @@
+[package]
+name = "bitrouter-mcp"
+version = { workspace = true }
+edition = "2024"
+description = "MCP types, config, and traits for BitRouter — lightweight protocol library"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+thiserror = { version = "2.0" }

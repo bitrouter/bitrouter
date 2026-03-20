@@ -23,6 +23,8 @@ pub struct CallerContext {
     pub account_id: Option<String>,
     /// Optional model-name patterns this caller may access.
     pub models: Option<Vec<String>>,
+    /// Optional tool-name patterns this caller may access.
+    pub tools: Option<Vec<String>>,
     /// Budget limit in micro USD.
     pub budget: Option<u64>,
     /// Whether the budget applies per-session or per-account.
@@ -85,4 +87,34 @@ pub trait ObserveCallback: Send + Sync {
         &self,
         event: RequestFailureEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
+// ── MCP tool call observation ────────────────────────────────────────
+
+/// Event emitted when an MCP tool call completes.
+#[derive(Debug, Clone)]
+pub struct ToolCallEvent {
+    /// The account that made the call, if authentication is enabled.
+    pub account_id: Option<String>,
+    /// The upstream MCP server name.
+    pub server: String,
+    /// The un-namespaced tool name.
+    pub tool: String,
+    /// Cost of this tool call in USD.
+    pub cost: f64,
+    /// Latency of the tool call in milliseconds.
+    pub latency_ms: u64,
+    /// Whether the tool call succeeded.
+    pub success: bool,
+    /// Error message if the call failed.
+    pub error_message: Option<String>,
+}
+
+/// Callback trait for observing completed MCP tool calls.
+///
+/// Parallel to [`ObserveCallback`] but for tool invocations rather than
+/// LLM requests. Implementations persist tool spend logs or emit metrics.
+pub trait ToolObserveCallback: Send + Sync {
+    /// Called after a tool call completes (success or failure).
+    fn on_tool_call(&self, event: ToolCallEvent) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
