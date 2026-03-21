@@ -45,6 +45,10 @@ pub struct BitrouterConfig {
     /// Named groups of MCP servers for access control convenience.
     #[serde(default)]
     pub mcp_groups: bitrouter_mcp::groups::McpAccessGroups,
+
+    /// Upstream A2A agent to proxy through the gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a2a_agent: Option<bitrouter_a2a::config::A2aAgentConfig>,
 }
 
 impl BitrouterConfig {
@@ -624,6 +628,26 @@ providers:
         let mini = &models["gpt-4o-mini"];
         assert_eq!(mini.name.as_deref(), Some("GPT-4o Mini"));
         assert_eq!(mini.pricing.input_tokens.no_cache, 0.0); // default
+    }
+
+    #[test]
+    fn load_with_a2a_agent_config() {
+        let yaml = r#"
+a2a_agent:
+  name: "upstream-agent"
+  url: "https://agent.example.com"
+  headers:
+    Authorization: "Bearer tok123"
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        let agent = config.a2a_agent.as_ref().unwrap();
+        assert_eq!(agent.name, "upstream-agent");
+        assert_eq!(agent.url, "https://agent.example.com");
+        assert_eq!(
+            agent.headers.get("Authorization").map(String::as_str),
+            Some("Bearer tok123")
+        );
+        assert!(agent.card_path.is_none());
     }
 
     #[test]

@@ -183,48 +183,6 @@ enum RouteAction {
 #[cfg(feature = "a2a")]
 #[derive(Debug, Subcommand)]
 enum A2aAction {
-    /// Register a local agent card
-    Register {
-        /// Agent name (lowercase alphanumeric + hyphens)
-        #[arg(long)]
-        name: Option<String>,
-
-        /// Import full Agent Card from JSON file
-        #[arg(long, conflicts_with_all = ["description", "version", "provider_org"])]
-        card: Option<String>,
-
-        /// Agent description
-        #[arg(long)]
-        description: Option<String>,
-
-        /// Agent version
-        #[arg(long, default_value = "0.1.0")]
-        version: String,
-
-        /// Provider organization name
-        #[arg(long)]
-        provider_org: Option<String>,
-
-        /// Bind to JWT iss claim (CAIP-10 address)
-        #[arg(long)]
-        iss: Option<String>,
-
-        /// Base URL for the agent interface
-        #[arg(long)]
-        url: Option<String>,
-    },
-    /// List registered agents
-    List,
-    /// Show an agent's card
-    Show {
-        /// Agent name
-        name: String,
-    },
-    /// Remove a registered agent
-    Rm {
-        /// Agent name
-        name: String,
-    },
     /// Discover a remote agent by fetching its Agent Card
     Discover {
         /// Base URL of the remote agent (e.g., https://agent.example.com)
@@ -436,31 +394,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(feature = "a2a")]
         Some(Command::A2a { action }) => {
-            let agents_dir = paths.home_dir.join("agents");
             match action {
-                A2aAction::Register {
-                    name,
-                    card,
-                    description,
-                    version,
-                    provider_org,
-                    iss,
-                    url,
-                } => cli::a2a::run_register(
-                    &agents_dir,
-                    cli::a2a::RegisterOpts {
-                        name,
-                        card,
-                        description,
-                        version,
-                        provider_org,
-                        iss,
-                        url,
-                    },
-                )?,
-                A2aAction::List => cli::a2a::run_list(&agents_dir)?,
-                A2aAction::Show { name } => cli::a2a::run_show(&agents_dir, &name)?,
-                A2aAction::Rm { name } => cli::a2a::run_rm(&agents_dir, &name)?,
                 A2aAction::Discover { url } => cli::a2a::run_discover(&url).await?,
                 A2aAction::Send { url, message } => cli::a2a::run_send(&url, &message).await?,
                 A2aAction::Status { url, task } => cli::a2a::run_status(&url, &task).await?,

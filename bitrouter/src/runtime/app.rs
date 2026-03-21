@@ -36,12 +36,10 @@ impl<R: AdminRoutingTable + Send + Sync + 'static> AppRuntime<R> {
         M: bitrouter_core::routers::model_router::LanguageModelRouter + Send + Sync + 'static,
     {
         use crate::runtime::server::ServerPlan;
-        let agents_dir = self.paths.home_dir.join("agents");
         let mut plan = ServerPlan::new(
             self.config,
             Arc::new(self.routing_table),
             Arc::new(model_router),
-            agents_dir,
         );
         if let Some(db) = self.db {
             plan = plan.with_db(db);

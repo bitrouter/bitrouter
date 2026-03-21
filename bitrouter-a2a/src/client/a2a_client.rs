@@ -6,7 +6,7 @@
 //! push notification config CRUD.
 
 use crate::card::AgentCard;
-use crate::error::A2aError;
+use crate::error::A2aGatewayError;
 use crate::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
 use crate::message::{Message, MessageRole, Part};
 use crate::request::{
@@ -54,7 +54,7 @@ impl A2aClient {
     /// Fetch an Agent Card from a remote server's well-known endpoint.
     ///
     /// Resolves `{base_url}/.well-known/agent-card.json`.
-    pub async fn discover(&self, base_url: &str) -> Result<AgentCard, A2aError> {
+    pub async fn discover(&self, base_url: &str) -> Result<AgentCard, A2aGatewayError> {
         let url = format!(
             "{}/.well-known/agent-card.json",
             base_url.trim_end_matches('/')
@@ -66,30 +66,33 @@ impl A2aClient {
             .header("Accept", "application/json")
             .send()
             .await
-            .map_err(|e| A2aError::Client(format!("discovery request failed: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("discovery request failed: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(A2aError::Client(format!(
+            return Err(A2aGatewayError::Client(format!(
                 "discovery failed (HTTP {status}): {body}"
             )));
         }
 
         resp.json::<AgentCard>()
             .await
-            .map_err(|e| A2aError::Client(format!("failed to parse agent card: {e}")))
+            .map_err(|e| A2aGatewayError::Client(format!("failed to parse agent card: {e}")))
     }
 
     /// Fetch an extended Agent Card via JSON-RPC.
-    pub async fn get_extended_agent_card(&self, endpoint: &str) -> Result<AgentCard, A2aError> {
+    pub async fn get_extended_agent_card(
+        &self,
+        endpoint: &str,
+    ) -> Result<AgentCard, A2aGatewayError> {
         let request_id = generate_request_id();
         let rpc = JsonRpcRequest::new(&request_id, "GetExtendedAgentCard", serde_json::json!({}));
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
         serde_json::from_value::<AgentCard>(result)
-            .map_err(|e| A2aError::Client(format!("failed to parse agent card: {e}")))
+            .map_err(|e| A2aGatewayError::Client(format!("failed to parse agent card: {e}")))
     }
 
     // ── Task operations (JSON-RPC 2.0) ─────────────────────────
@@ -101,10 +104,10 @@ impl A2aClient {
         &self,
         endpoint: &str,
         request: SendMessageRequest,
-    ) -> Result<SendMessageResult, A2aError> {
+    ) -> Result<SendMessageResult, A2aGatewayError> {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
-            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
         let rpc = JsonRpcRequest::new(&request_id, "SendMessage", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
@@ -117,7 +120,7 @@ impl A2aClient {
         &self,
         endpoint: &str,
         text: &str,
-    ) -> Result<SendMessageResult, A2aError> {
+    ) -> Result<SendMessageResult, A2aGatewayError> {
         let request = SendMessageRequest {
             tenant: None,
             message: Self::text_message(text),
@@ -134,16 +137,16 @@ impl A2aClient {
         &self,
         endpoint: &str,
         request: GetTaskRequest,
-    ) -> Result<Task, A2aError> {
+    ) -> Result<Task, A2aGatewayError> {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
-            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
         let rpc = JsonRpcRequest::new(&request_id, "GetTask", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
         serde_json::from_value::<Task>(result)
-            .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))
+            .map_err(|e| A2aGatewayError::Client(format!("failed to parse task response: {e}")))
     }
 
     /// Cancel a running task.
@@ -153,16 +156,16 @@ impl A2aClient {
         &self,
         endpoint: &str,
         request: CancelTaskRequest,
-    ) -> Result<Task, A2aError> {
+    ) -> Result<Task, A2aGatewayError> {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
-            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
         let rpc = JsonRpcRequest::new(&request_id, "CancelTask", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
         serde_json::from_value::<Task>(result)
-            .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))
+            .map_err(|e| A2aGatewayError::Client(format!("failed to parse task response: {e}")))
     }
 
     /// List tasks matching a query.
@@ -172,16 +175,17 @@ impl A2aClient {
         &self,
         endpoint: &str,
         request: ListTasksRequest,
-    ) -> Result<ListTasksResponse, A2aError> {
+    ) -> Result<ListTasksResponse, A2aGatewayError> {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
-            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
         let rpc = JsonRpcRequest::new(&request_id, "ListTasks", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
-        serde_json::from_value::<ListTasksResponse>(result)
-            .map_err(|e| A2aError::Client(format!("failed to parse list tasks response: {e}")))
+        serde_json::from_value::<ListTasksResponse>(result).map_err(|e| {
+            A2aGatewayError::Client(format!("failed to parse list tasks response: {e}"))
+        })
     }
 
     // ── Push notification config CRUD ──────────────────────────
@@ -191,16 +195,16 @@ impl A2aClient {
         &self,
         endpoint: &str,
         config: TaskPushNotificationConfig,
-    ) -> Result<TaskPushNotificationConfig, A2aError> {
+    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&config)
-            .map_err(|e| A2aError::Client(format!("failed to serialize config: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("failed to serialize config: {e}")))?;
         let rpc = JsonRpcRequest::new(&request_id, "CreateTaskPushNotificationConfig", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
         serde_json::from_value::<TaskPushNotificationConfig>(result)
-            .map_err(|e| A2aError::Client(format!("failed to parse push config: {e}")))
+            .map_err(|e| A2aGatewayError::Client(format!("failed to parse push config: {e}")))
     }
 
     /// Get a push notification configuration.
@@ -208,16 +212,16 @@ impl A2aClient {
         &self,
         endpoint: &str,
         request: GetTaskPushNotificationConfigRequest,
-    ) -> Result<TaskPushNotificationConfig, A2aError> {
+    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
-            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
         let rpc = JsonRpcRequest::new(&request_id, "GetTaskPushNotificationConfig", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
         serde_json::from_value::<TaskPushNotificationConfig>(result)
-            .map_err(|e| A2aError::Client(format!("failed to parse push config: {e}")))
+            .map_err(|e| A2aGatewayError::Client(format!("failed to parse push config: {e}")))
     }
 
     /// List push notification configurations for a task.
@@ -225,16 +229,16 @@ impl A2aClient {
         &self,
         endpoint: &str,
         request: ListTaskPushNotificationConfigsRequest,
-    ) -> Result<ListTaskPushNotificationConfigsResponse, A2aError> {
+    ) -> Result<ListTaskPushNotificationConfigsResponse, A2aGatewayError> {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
-            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
         let rpc = JsonRpcRequest::new(&request_id, "ListTaskPushNotificationConfigs", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
         serde_json::from_value::<ListTaskPushNotificationConfigsResponse>(result)
-            .map_err(|e| A2aError::Client(format!("failed to parse push configs: {e}")))
+            .map_err(|e| A2aGatewayError::Client(format!("failed to parse push configs: {e}")))
     }
 
     /// Delete a push notification configuration.
@@ -242,10 +246,10 @@ impl A2aClient {
         &self,
         endpoint: &str,
         request: DeleteTaskPushNotificationConfigRequest,
-    ) -> Result<(), A2aError> {
+    ) -> Result<(), A2aGatewayError> {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
-            .map_err(|e| A2aError::Client(format!("failed to serialize request: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
         let rpc = JsonRpcRequest::new(&request_id, "DeleteTaskPushNotificationConfig", params);
 
         let _ = self.rpc_call(endpoint, &rpc).await?;
@@ -282,7 +286,7 @@ impl A2aClient {
         &self,
         endpoint: &str,
         request: &JsonRpcRequest,
-    ) -> Result<serde_json::Value, A2aError> {
+    ) -> Result<serde_json::Value, A2aGatewayError> {
         let resp = self
             .http
             .post(endpoint)
@@ -290,44 +294,47 @@ impl A2aClient {
             .json(request)
             .send()
             .await
-            .map_err(|e| A2aError::Client(format!("request failed: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("request failed: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(A2aError::Client(format!("HTTP {status}: {body}")));
+            return Err(A2aGatewayError::Client(format!("HTTP {status}: {body}")));
         }
 
-        let rpc_resp = resp
-            .json::<JsonRpcResponse>()
-            .await
-            .map_err(|e| A2aError::Client(format!("failed to parse JSON-RPC response: {e}")))?;
+        let rpc_resp = resp.json::<JsonRpcResponse>().await.map_err(|e| {
+            A2aGatewayError::Client(format!("failed to parse JSON-RPC response: {e}"))
+        })?;
 
         rpc_resp
             .into_result()
-            .map_err(|e| A2aError::Client(format!("{e}")))
+            .map_err(|e| A2aGatewayError::Client(format!("{e}")))
     }
 }
 
-fn parse_send_message_result(result: serde_json::Value) -> Result<SendMessageResult, A2aError> {
+fn parse_send_message_result(
+    result: serde_json::Value,
+) -> Result<SendMessageResult, A2aGatewayError> {
     // v1.0 SendMessage returns a StreamResponse: {"task": {...}} or {"message": {...}}.
     if let Some(task_val) = result.get("task") {
         let task = serde_json::from_value::<Task>(task_val.clone())
-            .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))?;
+            .map_err(|e| A2aGatewayError::Client(format!("failed to parse task response: {e}")))?;
         Ok(SendMessageResult::Task(task))
     } else if let Some(msg_val) = result.get("message") {
-        let msg = serde_json::from_value::<Message>(msg_val.clone())
-            .map_err(|e| A2aError::Client(format!("failed to parse message response: {e}")))?;
+        let msg = serde_json::from_value::<Message>(msg_val.clone()).map_err(|e| {
+            A2aGatewayError::Client(format!("failed to parse message response: {e}"))
+        })?;
         Ok(SendMessageResult::Message(msg))
     } else {
         // Fallback: try as bare Task (has id + status) or bare Message.
         if result.get("id").is_some() && result.get("status").is_some() {
-            let task = serde_json::from_value::<Task>(result)
-                .map_err(|e| A2aError::Client(format!("failed to parse task response: {e}")))?;
+            let task = serde_json::from_value::<Task>(result).map_err(|e| {
+                A2aGatewayError::Client(format!("failed to parse task response: {e}"))
+            })?;
             Ok(SendMessageResult::Task(task))
         } else {
             let msg = serde_json::from_value::<Message>(result).map_err(|e| {
-                A2aError::Client(format!("failed to parse SendMessage result: {e}"))
+                A2aGatewayError::Client(format!("failed to parse SendMessage result: {e}"))
             })?;
             Ok(SendMessageResult::Message(msg))
         }

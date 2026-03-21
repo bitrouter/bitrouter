@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_api::router::{admin, models, routes};
@@ -29,7 +28,6 @@ pub struct ServerPlan<T, R> {
     table: Arc<T>,
     router: Arc<R>,
     db: Option<Arc<DatabaseConnection>>,
-    agents_dir: PathBuf,
 }
 
 impl<T, R> ServerPlan<T, R>
@@ -37,18 +35,12 @@ where
     T: AdminRoutingTable + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
-    pub fn new(
-        config: BitrouterConfig,
-        table: Arc<T>,
-        router: Arc<R>,
-        agents_dir: PathBuf,
-    ) -> Self {
+    pub fn new(config: BitrouterConfig, table: Arc<T>, router: Arc<R>) -> Self {
         Self {
             config,
             table,
             router,
             db: None,
-            agents_dir,
         }
     }
 
@@ -218,56 +210,36 @@ where
 
         // ── A2A protocol ─────────────────────────────────────────────
         #[cfg(feature = "a2a")]
-        let (a2a_well_known, a2a_agents, a2a_streaming, a2a_jsonrpc, a2a_rest) = {
-            let a2a_registry = Arc::new(
-                crate::runtime::a2a::file_registry::FileAgentCardRegistry::new(&self.agents_dir)
-                    .map_err(|e| std::io::Error::other(e.to_string()))?,
-            );
-            tracing::info!(dir = %self.agents_dir.display(), "a2a agent registry loaded");
+        let (a2a_routes, _a2a_refresh_guard) = {
+            use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
 
-            let a2a_model = self
-                .config
-                .models
-                .keys()
-                .next()
-                .cloned()
-                .unwrap_or_else(|| "default".to_string());
-            tracing::info!(model = %a2a_model, "a2a executor configured");
-            let a2a_executor = Arc::new(crate::runtime::a2a::executor::LlmAgentExecutor::new(
-                self.table.clone(),
-                guarded_router.clone(),
-                a2a_model,
-                None,
-            ));
-            let a2a_task_store =
-                Arc::new(crate::runtime::a2a::task_store::InMemoryTaskStore::new());
-            let a2a_push_store =
-                Arc::new(crate::runtime::a2a::push_store::InMemoryPushNotificationStore::new());
+            let external_url = format!("http://{}/a2a", self.config.server.listen);
+
+            let registry = match UpstreamAgentRegistry::from_config(
+                self.config.a2a_agent.clone(),
+                external_url,
+            )
+            .await
+            {
+                Ok(reg) => {
+                    if self.config.a2a_agent.is_some() {
+                        tracing::info!("A2A gateway started");
+                    }
+                    Some(Arc::new(reg))
+                }
+                Err(e) => {
+                    tracing::warn!("A2A gateway failed to start: {e}");
+                    None
+                }
+            };
+
+            let refresh_guard = registry.as_ref().map(|reg| reg.spawn_refresh_listeners());
 
             (
-                bitrouter_api::router::a2a::discovery::well_known_filter(a2a_registry.clone()),
-                bitrouter_api::router::a2a::discovery::agent_list_filter(a2a_registry.clone()),
-                bitrouter_api::router::a2a::streaming::streaming_jsonrpc_filter(
-                    a2a_executor.clone(),
-                    a2a_task_store.clone(),
-                ),
-                bitrouter_api::router::a2a::jsonrpc::jsonrpc_filter(
-                    a2a_executor.clone(),
-                    a2a_task_store.clone(),
-                    a2a_registry,
-                    a2a_push_store.clone(),
-                ),
-                bitrouter_api::router::a2a::rest::rest_filters(
-                    a2a_executor,
-                    a2a_task_store,
-                    a2a_push_store,
-                ),
+                bitrouter_api::router::a2a::a2a_gateway_filter(registry),
+                refresh_guard,
             )
         };
-
-        // Suppress unused warning when A2A feature is off.
-        #[cfg(not(feature = "a2a"))]
-        let _ = &self.agents_dir;
 
         // ── Base route tree (always present) ─────────────────────────
         let base = health
@@ -282,22 +254,10 @@ where
 
         // ── Compose optional routes ──────────────────────────────────
         #[cfg(all(feature = "a2a", feature = "mcp"))]
-        let all_routes = base
-            .or(a2a_well_known)
-            .or(a2a_agents)
-            .or(a2a_streaming)
-            .or(a2a_jsonrpc)
-            .or(a2a_rest)
-            .or(admin_tools)
-            .or(mcp_server);
+        let all_routes = base.or(a2a_routes).or(admin_tools).or(mcp_server);
 
         #[cfg(all(feature = "a2a", not(feature = "mcp")))]
-        let all_routes = base
-            .or(a2a_well_known)
-            .or(a2a_agents)
-            .or(a2a_streaming)
-            .or(a2a_jsonrpc)
-            .or(a2a_rest);
+        let all_routes = base.or(a2a_routes);
 
         #[cfg(all(not(feature = "a2a"), feature = "mcp"))]
         let all_routes = base.or(admin_tools).or(mcp_server);

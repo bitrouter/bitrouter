@@ -2,21 +2,26 @@
 name = "bitrouter-a2a"
 version = { workspace = true }
 edition = "2024"
-description = "A2A (Agent-to-Agent) protocol types, registry, and discovery endpoints for BitRouter"
+description = "A2A (Agent-to-Agent) protocol types, gateway traits, and client for BitRouter"
 authors = ["Archer <archer@bitrouter.ai>"]
 license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
+[features]
+default = []
+client = ["dep:reqwest", "dep:tracing"]
+
 [dependencies]
 futures-core = { version = "0.3" }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 thiserror = { version = "2.0" }
-tokio = { version = "1", features = ["rt"] }
-tracing = { version = "0.1" }
+tokio = { version = "1", features = ["sync", "rt"] }
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
+serde_yaml = { version = "0.9" }
 tokio = { version = "1", features = ["macros", "rt"] }
 tempfile = { version = "3" }

@@ -9,6 +9,7 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [dependencies]
+bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.11" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.11" }
 bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.11" }
 bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.11" }

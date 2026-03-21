@@ -1,45 +1,29 @@
-//! Error types for A2A operations.
+//! Error types for the A2A gateway.
 
-/// Errors that can occur during A2A agent card operations.
+/// Errors that can occur during A2A gateway operations.
 #[derive(Debug, thiserror::Error)]
-pub enum A2aError {
-    /// Agent card not found.
+pub enum A2aGatewayError {
+    /// Failed to connect to upstream A2A agent.
+    #[error("upstream '{name}' connection failed: {reason}")]
+    UpstreamConnect { name: String, reason: String },
+
+    /// Upstream A2A agent call failed.
+    #[error("upstream '{name}' call failed: {reason}")]
+    UpstreamCall { name: String, reason: String },
+
+    /// Upstream A2A agent closed.
+    #[error("upstream '{name}' closed")]
+    UpstreamClosed { name: String },
+
+    /// Agent not found.
     #[error("agent not found: {name}")]
-    NotFound { name: String },
+    AgentNotFound { name: String },
 
-    /// Agent card already exists.
-    #[error("agent already exists: {name}")]
-    AlreadyExists { name: String },
-
-    /// Invalid agent name.
-    #[error("invalid agent name \"{name}\": {reason}")]
-    InvalidName { name: String, reason: String },
-
-    /// Storage I/O error.
-    #[error("storage error: {0}")]
-    Storage(String),
+    /// Invalid configuration.
+    #[error("invalid config: {reason}")]
+    InvalidConfig { reason: String },
 
     /// A2A client request error.
     #[error("client error: {0}")]
     Client(String),
-
-    /// Task not found.
-    #[error("task not found: {id}")]
-    TaskNotFound { id: String },
-
-    /// Optimistic concurrency version conflict.
-    #[error("version conflict")]
-    VersionConflict,
-
-    /// Agent execution error.
-    #[error("execution error: {0}")]
-    Execution(String),
-
-    /// Push notification config not found.
-    #[error("push notification config not found: task={task_id} id={id}")]
-    PushNotificationNotFound { task_id: String, id: String },
-
-    /// Streaming not supported by this executor.
-    #[error("streaming not supported")]
-    StreamingNotSupported,
 }

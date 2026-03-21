@@ -1,18 +1,19 @@
-//! A2A (Agent-to-Agent) protocol implementation for BitRouter.
+//! A2A (Agent-to-Agent) protocol types and gateway components for BitRouter.
 //!
 //! Implements the [A2A v1.0 specification](https://a2a-protocol.org/latest/)
 //! for agent identity, discovery, and communication. This crate provides:
 //!
-//! - **Types** — Full A2A v1.0 schema: Agent Card, Task, Message, Artifact (`card`, `security`, `task`, `message`)
-//! - **Client** — A2A protocol client for discovering and communicating with remote agents (`client`)
-//! - **JSON-RPC** — Wire format types for the A2A JSON-RPC 2.0 transport (`jsonrpc`)
-//! - **Registry** — Trait for agent card storage and discovery
+//! - **Types** — Full A2A v1.0 schema: Agent Card, Task, Message, Artifact
+//! - **Gateway traits** — [`server::A2aDiscovery`] and [`server::A2aProxy`] for downstream serving
+//! - **Client** — A2A protocol client and upstream connection (feature-gated)
+pub mod admin;
 pub mod card;
+#[cfg(feature = "client")]
 pub mod client;
+pub mod config;
 pub mod error;
 pub mod jsonrpc;
 pub mod message;
-pub mod registry;
 pub mod request;
 pub mod security;
 pub mod server;

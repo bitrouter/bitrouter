@@ -1164,6 +1164,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1234,6 +1235,7 @@ dependencies = [
 name = "bitrouter-config"
 version = "0.11.0"
 dependencies = [
+ "bitrouter-a2a",
  "bitrouter-core",
  "bitrouter-guardrails",
  "bitrouter-mcp",

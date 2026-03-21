@@ -1,7 +1,12 @@
-pub mod discovery;
-pub mod jsonrpc;
-pub mod rest;
-pub mod streaming;
+//! A2A v1.0 gateway routes.
+//!
+//! Provides Warp filters that proxy A2A protocol operations
+//! to an upstream agent via the [`A2aGateway`] trait.
 
+mod convert;
+pub mod filters;
 #[cfg(test)]
-pub(crate) mod test_helpers;
+mod tests;
+pub mod types;
+
+pub use filters::a2a_gateway_filter;
