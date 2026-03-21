@@ -174,9 +174,9 @@ where
         // ── MCP registry ─────────────────────────────────────────────
         #[cfg(feature = "mcp")]
         let (admin_tools, mcp_server, _refresh_guard) = {
-            use bitrouter_mcp::client::registry::UpstreamRegistry;
+            use bitrouter_mcp::client::registry::ConfigMcpRegistry;
 
-            let registry = match UpstreamRegistry::from_configs(
+            let registry = match ConfigMcpRegistry::from_configs(
                 self.config.mcp_servers.clone(),
                 self.config.mcp_groups.clone(),
             )
@@ -202,7 +202,7 @@ where
             };
 
             let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(mcp_admin::admin_tools_filter(registry.clone()));
+                .and(mcp_admin::admin_mcp_filter(registry.clone()));
             let server = mcp_admin::mcp_server_filter(registry);
 
             (admin, server, refresh_guard)
@@ -210,7 +210,7 @@ where
 
         // ── A2A protocol ─────────────────────────────────────────────
         #[cfg(feature = "a2a")]
-        let (a2a_routes, _a2a_refresh_guard) = {
+        let (a2a_routes, admin_agents, _a2a_refresh_guard) = {
             use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
 
             let external_url = format!("http://{}/a2a", self.config.server.listen);
@@ -235,8 +235,13 @@ where
 
             let refresh_guard = registry.as_ref().map(|reg| reg.spawn_refresh_listeners());
 
+            let admin = auth_gate(auth::management_auth(auth_ctx.clone())).and(
+                bitrouter_api::router::a2a::admin_agents_filter(registry.clone()),
+            );
+
             (
                 bitrouter_api::router::a2a::a2a_gateway_filter(registry),
+                admin,
                 refresh_guard,
             )
         };
@@ -254,10 +259,14 @@ where
 
         // ── Compose optional routes ──────────────────────────────────
         #[cfg(all(feature = "a2a", feature = "mcp"))]
-        let all_routes = base.or(a2a_routes).or(admin_tools).or(mcp_server);
+        let all_routes = base
+            .or(a2a_routes)
+            .or(admin_agents)
+            .or(admin_tools)
+            .or(mcp_server);
 
         #[cfg(all(feature = "a2a", not(feature = "mcp")))]
-        let all_routes = base.or(a2a_routes);
+        let all_routes = base.or(a2a_routes).or(admin_agents);
 
         #[cfg(all(not(feature = "a2a"), feature = "mcp"))]
         let all_routes = base.or(admin_tools).or(mcp_server);

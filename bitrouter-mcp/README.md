@@ -18,5 +18,5 @@ configuration parsing or admin API integration. The runtime gateway
 - `ToolCostConfig` for per-server and per-tool cost tracking in `config`
 - `ParamRestrictions` and `ParamRule` for parameter-level access control (strip or reject) in `param_filter`
 - `McpAccessGroups` for named server groups with pattern expansion in `groups`
-- `AdminToolRegistry` trait for runtime tool listing, filter mutation, and group introspection in `admin`
+- `McpRegistry` and `AdminMcpRegistry` traits for tool listing, filter mutation, and group introspection in `admin`
 - `McpGatewayError` covering upstream, routing, config, param, and budget errors in `error`

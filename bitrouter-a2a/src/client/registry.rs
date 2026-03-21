@@ -6,7 +6,7 @@ use std::sync::Arc;
 use futures_core::Stream;
 use tokio::sync::broadcast;
 
-use crate::admin::{AdminAgentRegistry, AgentInfo};
+use crate::admin::{AdminAgentRegistry, AgentInfo, AgentRegistry};
 use crate::card::AgentCard;
 use crate::config::A2aAgentConfig;
 use crate::error::A2aGatewayError;
@@ -207,6 +207,24 @@ impl A2aProxy for UpstreamAgentRegistry {
         self.require_agent()?
             .delete_push_config(task_id, config_id)
             .await
+    }
+}
+
+impl AgentRegistry for UpstreamAgentRegistry {
+    async fn get(&self, name: &str) -> Option<AgentCard> {
+        let agent = self.agent.as_ref()?;
+        if agent.name() == name {
+            self.rewritten_card().await
+        } else {
+            None
+        }
+    }
+
+    async fn list(&self) -> Vec<AgentCard> {
+        match self.rewritten_card().await {
+            Some(card) => vec![card],
+            None => Vec::new(),
+        }
     }
 }
 

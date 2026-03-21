@@ -1,4 +1,4 @@
-//! Runtime tool management trait — parallel to `AdminRoutingTable` for models.
+//! MCP registry traits — parallel to `RoutingTable` / `AdminRoutingTable` for models.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -33,23 +33,32 @@ pub struct UpstreamInfo {
     pub param_restrictions: Option<ParamRestrictions>,
 }
 
-/// Trait for runtime tool registry management.
+/// Read-only registry for inspecting the MCP gateway.
 ///
-/// Implementors provide read and write access to the set of MCP tools
-/// available through the gateway. Parallel to `AdminRoutingTable` for models.
-pub trait AdminToolRegistry: Send + Sync {
+/// Parallel to [`RoutingTable`](bitrouter_core::routers::routing_table::RoutingTable)
+/// for models. Provides read access to the set of tools, upstreams, and
+/// access groups available through the gateway.
+pub trait McpRegistry: Send + Sync {
     /// List all aggregated tools across all upstreams.
     fn list_tools(&self) -> impl Future<Output = Vec<ToolEntry>> + Send;
     /// List all upstream servers with their tool counts and filter configs.
     fn list_upstreams(&self) -> impl Future<Output = Vec<UpstreamInfo>> + Send;
+    /// List all configured access groups.
+    fn list_groups(&self) -> impl Future<Output = HashMap<String, Vec<String>>> + Send;
+}
+
+/// Admin interface extending [`McpRegistry`] with mutation methods.
+///
+/// Parallel to [`AdminRoutingTable`](bitrouter_core::routers::admin::AdminRoutingTable)
+/// for models. Adds runtime filter and parameter restriction updates
+/// without requiring config rewrites or daemon restarts.
+pub trait AdminMcpRegistry: McpRegistry {
     /// Update the tool filter for a specific upstream server.
     fn update_filter(
         &self,
         server: &str,
         filter: Option<ToolFilter>,
     ) -> impl Future<Output = Result<(), McpGatewayError>> + Send;
-    /// List all configured access groups.
-    fn list_groups(&self) -> impl Future<Output = HashMap<String, Vec<String>>> + Send;
     /// Update parameter restrictions for a specific upstream server.
     fn update_param_restrictions(
         &self,

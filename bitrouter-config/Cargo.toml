@@ -17,3 +17,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 serde_yaml = { version = "0.9" }
 thiserror = { version = "2.0" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

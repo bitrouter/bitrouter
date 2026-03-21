@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use bitrouter_mcp::admin::AdminToolRegistry;
+use bitrouter_mcp::admin::AdminMcpRegistry;
 use bitrouter_mcp::config::ToolFilter;
 use bitrouter_mcp::param_filter::ParamRestrictions;
 use warp::Filter;
@@ -19,11 +19,11 @@ use warp::Filter;
 ///
 /// Accepts `Option<Arc<T>>` — when `None` (no MCP configured), all endpoints
 /// return 404. The caller is responsible for auth gating.
-pub fn admin_tools_filter<T>(
+pub fn admin_mcp_filter<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminMcpRegistry + 'static,
 {
     list_tools(registry.clone())
         .or(list_upstreams(registry.clone()))
@@ -38,7 +38,7 @@ fn list_tools<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminMcpRegistry + 'static,
 {
     warp::path!("admin" / "tools")
         .and(warp::get())
@@ -46,7 +46,7 @@ where
         .and_then(handle_list_tools)
 }
 
-async fn handle_list_tools<T: AdminToolRegistry>(
+async fn handle_list_tools<T: AdminMcpRegistry>(
     registry: Option<Arc<T>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let Some(registry) = registry else {
@@ -62,7 +62,7 @@ fn list_upstreams<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminMcpRegistry + 'static,
 {
     warp::path!("admin" / "tools" / "upstreams")
         .and(warp::get())
@@ -70,7 +70,7 @@ where
         .and_then(handle_list_upstreams)
 }
 
-async fn handle_list_upstreams<T: AdminToolRegistry>(
+async fn handle_list_upstreams<T: AdminMcpRegistry>(
     registry: Option<Arc<T>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let Some(registry) = registry else {
@@ -88,7 +88,7 @@ fn list_groups<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminMcpRegistry + 'static,
 {
     warp::path!("admin" / "tools" / "groups")
         .and(warp::get())
@@ -96,7 +96,7 @@ where
         .and_then(handle_list_groups)
 }
 
-async fn handle_list_groups<T: AdminToolRegistry>(
+async fn handle_list_groups<T: AdminMcpRegistry>(
     registry: Option<Arc<T>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let Some(registry) = registry else {
@@ -112,7 +112,7 @@ fn update_filter<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminMcpRegistry + 'static,
 {
     warp::path!("admin" / "tools" / String / "filter")
         .and(warp::put())
@@ -129,7 +129,7 @@ struct FilterUpdateBody {
     deny: Option<Vec<String>>,
 }
 
-async fn handle_update_filter<T: AdminToolRegistry>(
+async fn handle_update_filter<T: AdminMcpRegistry>(
     server: String,
     body: FilterUpdateBody,
     registry: Option<Arc<T>>,
@@ -175,7 +175,7 @@ fn update_params<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminMcpRegistry + 'static,
 {
     warp::path!("admin" / "tools" / String / "params")
         .and(warp::put())
@@ -184,7 +184,7 @@ where
         .and_then(handle_update_params)
 }
 
-async fn handle_update_params<T: AdminToolRegistry>(
+async fn handle_update_params<T: AdminMcpRegistry>(
     server: String,
     restrictions: ParamRestrictions,
     registry: Option<Arc<T>>,

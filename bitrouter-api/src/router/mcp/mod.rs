@@ -7,5 +7,5 @@ mod tests;
 mod tools;
 mod types;
 
-pub use admin::admin_tools_filter;
+pub use admin::admin_mcp_filter;
 pub use filters::mcp_server_filter;

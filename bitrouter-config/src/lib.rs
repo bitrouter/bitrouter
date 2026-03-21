@@ -1,3 +1,4 @@
+pub mod agent_registry;
 pub mod config;
 pub mod detect;
 pub mod env;

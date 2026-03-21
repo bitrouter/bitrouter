@@ -4,7 +4,7 @@ use std::sync::Arc;
 use rmcp::model::{CallToolResult, PromptMessageContent, ResourceContents, Tool};
 use tokio::sync::{Notify, RwLock, broadcast};
 
-use crate::admin::{AdminToolRegistry, ToolEntry, UpstreamInfo};
+use crate::admin::{AdminMcpRegistry, McpRegistry, ToolEntry, UpstreamInfo};
 use crate::config::{McpServerConfig, ToolFilter};
 use crate::error::McpGatewayError;
 use crate::groups::McpAccessGroups;
@@ -35,7 +35,7 @@ impl Drop for RefreshGuard {
 ///
 /// The inner map is wrapped in [`RwLock`] to support runtime mutation of
 /// filters without restarting the gateway.
-pub struct UpstreamRegistry {
+pub struct ConfigMcpRegistry {
     upstreams: RwLock<HashMap<String, UpstreamConnection>>,
     groups: McpAccessGroups,
     /// Broadcast sender for notifying downstream MCP clients of tool list changes.
@@ -46,7 +46,7 @@ pub struct UpstreamRegistry {
     prompt_change_tx: broadcast::Sender<()>,
 }
 
-impl UpstreamRegistry {
+impl ConfigMcpRegistry {
     /// Connect to all configured upstreams. Fails on first error or duplicate name.
     pub async fn from_configs(
         configs: Vec<McpServerConfig>,
@@ -331,7 +331,7 @@ fn rmcp_result_to_mcp_result(result: &CallToolResult) -> McpToolCallResult {
 }
 
 /// Implement [`McpToolServer`] for the runtime registry.
-impl McpToolServer for UpstreamRegistry {
+impl McpToolServer for ConfigMcpRegistry {
     async fn list_tools(&self) -> Vec<McpTool> {
         let rmcp_tools = self.aggregated_tools().await;
         rmcp_tools.iter().map(rmcp_tool_to_mcp_tool).collect()
@@ -351,8 +351,8 @@ impl McpToolServer for UpstreamRegistry {
     }
 }
 
-/// Implement [`AdminToolRegistry`] for the runtime registry.
-impl AdminToolRegistry for UpstreamRegistry {
+/// Implement [`McpRegistry`] (read-only) for the config-driven registry.
+impl McpRegistry for ConfigMcpRegistry {
     async fn list_tools(&self) -> Vec<ToolEntry> {
         let tools = self.aggregated_tools().await;
         tools
@@ -376,16 +376,19 @@ impl AdminToolRegistry for UpstreamRegistry {
         self.list_upstreams().await
     }
 
+    async fn list_groups(&self) -> HashMap<String, Vec<String>> {
+        self.groups().as_map().clone()
+    }
+}
+
+/// Implement [`AdminMcpRegistry`] (mutation) for the config-driven registry.
+impl AdminMcpRegistry for ConfigMcpRegistry {
     async fn update_filter(
         &self,
         server: &str,
         filter: Option<ToolFilter>,
     ) -> Result<(), McpGatewayError> {
         self.update_filter(server, filter).await
-    }
-
-    async fn list_groups(&self) -> HashMap<String, Vec<String>> {
-        self.groups().as_map().clone()
     }
 
     async fn update_param_restrictions(
@@ -426,7 +429,7 @@ fn rmcp_resource_contents_to_mcp(rc: &ResourceContents) -> McpResourceContent {
 }
 
 /// Implement [`McpResourceServer`] for the runtime registry.
-impl McpResourceServer for UpstreamRegistry {
+impl McpResourceServer for ConfigMcpRegistry {
     async fn list_resources(&self) -> Vec<McpResource> {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
@@ -502,7 +505,7 @@ fn rmcp_prompt_content_to_mcp(content: &PromptMessageContent) -> McpPromptConten
 }
 
 /// Implement [`McpPromptServer`] for the runtime registry.
-impl McpPromptServer for UpstreamRegistry {
+impl McpPromptServer for ConfigMcpRegistry {
     async fn list_prompts(&self) -> Vec<McpPrompt> {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
