@@ -4,7 +4,7 @@
 //! error definitions, access groups, parameter filters, and the admin trait.
 //!
 //! Enable the `client` feature to get runtime upstream connection and
-//! registry components backed by `rmcp`.
+//! registry components.
 #[cfg(feature = "client")]
 pub mod client;
 pub mod config;
@@ -12,3 +12,6 @@ pub mod error;
 pub mod groups;
 pub mod param_filter;
 pub mod server;
+#[cfg(feature = "client")]
+pub mod transports;
+pub mod types;

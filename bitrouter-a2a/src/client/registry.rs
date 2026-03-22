@@ -9,7 +9,15 @@ use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
 use futures_core::Stream;
 use tokio::sync::broadcast;
 
-use crate::card::AgentCard;
+use crate::config::A2aAgentConfig;
+use crate::error::A2aGatewayError;
+use crate::server::{A2aDiscovery, A2aProxy};
+use crate::types::{
+    AgentCard, CancelTaskRequest, GetTaskRequest, ListTasksRequest, ListTasksResponse,
+    SendMessageRequest, StreamResponse, Task, TaskPushNotificationConfig,
+};
+
+use super::upstream::UpstreamA2aAgent;
 
 /// Read-only registry for A2A agent lookup.
 ///
@@ -22,14 +30,6 @@ pub trait A2aAgentRegistry: Send + Sync {
     /// List all registered agent cards.
     fn list(&self) -> impl Future<Output = Vec<AgentCard>> + Send;
 }
-use crate::config::A2aAgentConfig;
-use crate::error::A2aGatewayError;
-use crate::request::{CancelTaskRequest, SendMessageRequest, TaskPushNotificationConfig};
-use crate::server::{A2aDiscovery, A2aProxy};
-use crate::stream::StreamResponse;
-use crate::task::{GetTaskRequest, ListTasksRequest, ListTasksResponse, Task};
-
-use super::upstream::UpstreamA2aAgent;
 
 /// Guard that aborts background refresh tasks on drop.
 pub struct RefreshGuard {

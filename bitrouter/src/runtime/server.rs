@@ -393,10 +393,10 @@ fn mcp_server_config(
         name: cfg.name,
         transport: match cfg.transport {
             bitrouter_config::tool::ToolServerTransport::Stdio { command, args, env } => {
-                bitrouter_mcp::config::McpTransport::Stdio { command, args, env }
+                bitrouter_mcp::config::McpTransportConfig::Stdio { command, args, env }
             }
             bitrouter_config::tool::ToolServerTransport::Http { url, headers } => {
-                bitrouter_mcp::config::McpTransport::Http { url, headers }
+                bitrouter_mcp::config::McpTransportConfig::Http { url, headers }
             }
         },
         // Filters and restrictions are extracted separately and passed to DynamicToolRegistry.

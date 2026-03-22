@@ -1,26 +1,16 @@
-//! MCP server protocol types and traits.
+//! MCP server traits.
 //!
-//! Provides JSON-RPC 2.0 envelope types, MCP protocol messages, tool
-//! definitions, and the [`McpToolServer`] trait for serving aggregated
-//! tools to downstream MCP clients.
-//!
-//! These types are `rmcp`-free — they are pure serde structs that match
-//! the MCP wire format, allowing `bitrouter-api` to serve the protocol
-//! without depending on `rmcp`.
-
-pub mod error_codes;
-pub mod jsonrpc;
-pub mod protocol;
-pub mod types;
+//! Provides [`McpToolServer`], [`McpResourceServer`], and [`McpPromptServer`]
+//! for serving aggregated MCP capabilities to downstream clients.
 
 use std::future::Future;
 
 use tokio::sync::broadcast;
 
 use crate::error::McpGatewayError;
-use protocol::McpGetPromptResult;
-use types::{
-    McpPrompt, McpResource, McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
+use crate::types::{
+    McpGetPromptResult, McpPrompt, McpResource, McpResourceContent, McpResourceTemplate, McpTool,
+    McpToolCallResult,
 };
 
 /// Trait for serving MCP tools to downstream clients.

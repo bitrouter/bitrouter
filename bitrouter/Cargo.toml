@@ -16,6 +16,7 @@ postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
 mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
 a2a = ["bitrouter-api/a2a", "bitrouter-a2a/client"]
 mcp = ["bitrouter-api/mcp", "bitrouter-mcp/client"]
+mcp-stdio = ["mcp", "bitrouter-mcp/client-stdio"]
 swig = [
     "dep:bitrouter-swig-sdk",
     "dep:rand",

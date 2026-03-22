@@ -4,18 +4,16 @@ use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock};
 
-use crate::card::AgentCard;
 use crate::config::A2aAgentConfig;
 use crate::error::A2aGatewayError;
-use crate::request::{
-    CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
-    GetTaskPushNotificationConfigRequest, ListTaskPushNotificationConfigsRequest,
-    SendMessageRequest, TaskPushNotificationConfig,
+use crate::transports::A2aTransport;
+use crate::transports::jsonrpc::A2aClient;
+use crate::types::{
+    AgentCard, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
+    GetTaskPushNotificationConfigRequest, GetTaskRequest, ListTaskPushNotificationConfigsRequest,
+    ListTasksRequest, ListTasksResponse, SendMessageRequest, SendMessageResult, StreamResponse,
+    Task, TaskPushNotificationConfig,
 };
-use crate::stream::StreamResponse;
-use crate::task::{GetTaskRequest, ListTasksRequest, ListTasksResponse, Task};
-
-use super::a2a_client::{A2aClient, SendMessageResult};
 
 /// A live connection to a single upstream A2A agent.
 ///
@@ -25,7 +23,7 @@ pub struct UpstreamA2aAgent {
     name: String,
     base_url: String,
     endpoint: String,
-    client: A2aClient,
+    transport: A2aClient,
     card: Arc<RwLock<Option<AgentCard>>>,
     card_notify: Arc<Notify>,
 }
@@ -35,7 +33,7 @@ impl UpstreamA2aAgent {
     pub async fn connect(config: A2aAgentConfig) -> Result<Self, A2aGatewayError> {
         config.validate()?;
 
-        let client = {
+        let transport = {
             let mut headers = reqwest::header::HeaderMap::new();
             for (k, v) in &config.headers {
                 let name: reqwest::header::HeaderName =
@@ -58,14 +56,12 @@ impl UpstreamA2aAgent {
             A2aClient::with_http_client(http)
         };
 
-        let card =
-            client
-                .discover(&config.url)
-                .await
-                .map_err(|e| A2aGatewayError::UpstreamConnect {
-                    name: config.name.clone(),
-                    reason: e.to_string(),
-                })?;
+        let card = transport.discover(&config.url).await.map_err(|e| {
+            A2aGatewayError::UpstreamConnect {
+                name: config.name.clone(),
+                reason: e.to_string(),
+            }
+        })?;
 
         let endpoint = A2aClient::resolve_endpoint(&card).to_string();
 
@@ -81,7 +77,7 @@ impl UpstreamA2aAgent {
             name: config.name,
             base_url: config.url,
             endpoint,
-            client,
+            transport,
             card: Arc::new(RwLock::new(Some(card))),
             card_notify,
         })
@@ -94,7 +90,7 @@ impl UpstreamA2aAgent {
 
     /// Re-discover the agent card from the upstream.
     pub async fn refresh_card(&self) -> Result<(), A2aGatewayError> {
-        let card = self.client.discover(&self.base_url).await.map_err(|e| {
+        let card = self.transport.discover(&self.base_url).await.map_err(|e| {
             A2aGatewayError::UpstreamCall {
                 name: self.name.clone(),
                 reason: format!("card refresh failed: {e}"),
@@ -128,7 +124,7 @@ impl UpstreamA2aAgent {
         request: SendMessageRequest,
     ) -> Result<StreamResponse, A2aGatewayError> {
         let result = self
-            .client
+            .transport
             .send_message(&self.endpoint, request)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
@@ -144,7 +140,7 @@ impl UpstreamA2aAgent {
 
     /// Forward a `tasks/get` request to the upstream.
     pub async fn get_task(&self, request: GetTaskRequest) -> Result<Task, A2aGatewayError> {
-        self.client
+        self.transport
             .get_task(&self.endpoint, request)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
@@ -155,7 +151,7 @@ impl UpstreamA2aAgent {
 
     /// Forward a `tasks/cancel` request to the upstream.
     pub async fn cancel_task(&self, request: CancelTaskRequest) -> Result<Task, A2aGatewayError> {
-        self.client
+        self.transport
             .cancel_task(&self.endpoint, request)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
@@ -169,7 +165,7 @@ impl UpstreamA2aAgent {
         &self,
         request: ListTasksRequest,
     ) -> Result<ListTasksResponse, A2aGatewayError> {
-        self.client
+        self.transport
             .list_tasks(&self.endpoint, request)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
@@ -180,7 +176,7 @@ impl UpstreamA2aAgent {
 
     /// Forward a `agent/getAuthenticatedExtendedCard` request to the upstream.
     pub async fn get_extended_agent_card(&self) -> Result<AgentCard, A2aGatewayError> {
-        self.client
+        self.transport
             .get_extended_agent_card(&self.endpoint)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
@@ -194,8 +190,8 @@ impl UpstreamA2aAgent {
         &self,
         config: TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
-        self.client
-            .set_push_notification_config(&self.endpoint, config)
+        self.transport
+            .set_push_config(&self.endpoint, config)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
                 name: self.name.clone(),
@@ -213,8 +209,8 @@ impl UpstreamA2aAgent {
             id: task_id.to_string(),
             push_notification_config_id: config_id.map(|s| s.to_string()),
         };
-        self.client
-            .get_push_notification_config(&self.endpoint, request)
+        self.transport
+            .get_push_config(&self.endpoint, request)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
                 name: self.name.clone(),
@@ -230,8 +226,8 @@ impl UpstreamA2aAgent {
         let request = ListTaskPushNotificationConfigsRequest {
             id: task_id.to_string(),
         };
-        self.client
-            .list_push_notification_configs(&self.endpoint, request)
+        self.transport
+            .list_push_configs(&self.endpoint, request)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
                 name: self.name.clone(),
@@ -249,8 +245,8 @@ impl UpstreamA2aAgent {
             id: task_id.to_string(),
             push_notification_config_id: config_id.to_string(),
         };
-        self.client
-            .delete_push_notification_config(&self.endpoint, request)
+        self.transport
+            .delete_push_config(&self.endpoint, request)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
                 name: self.name.clone(),

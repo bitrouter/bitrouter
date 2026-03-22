@@ -13,7 +13,7 @@ pub use bitrouter_core::routers::admin::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     pub name: String,
-    pub transport: McpTransport,
+    pub transport: McpTransportConfig,
     #[serde(default)]
     pub tool_filter: Option<ToolFilter>,
     #[serde(default)]
@@ -57,14 +57,14 @@ impl McpServerConfig {
             });
         }
         match &self.transport {
-            McpTransport::Stdio { command, .. } => {
+            McpTransportConfig::Stdio { command, .. } => {
                 if command.is_empty() {
                     return Err(McpGatewayError::InvalidConfig {
                         reason: format!("server '{}': stdio command must not be empty", self.name),
                     });
                 }
             }
-            McpTransport::Http { url, .. } => {
+            McpTransportConfig::Http { url, .. } => {
                 if url.is_empty() {
                     return Err(McpGatewayError::InvalidConfig {
                         reason: format!("server '{}': http url must not be empty", self.name),
@@ -79,7 +79,7 @@ impl McpServerConfig {
 /// Transport type for connecting to an upstream MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum McpTransport {
+pub enum McpTransportConfig {
     Stdio {
         command: String,
         #[serde(default)]
@@ -101,7 +101,7 @@ mod tests {
     fn test_stdio_config(name: &str, command: &str) -> McpServerConfig {
         McpServerConfig {
             name: name.into(),
-            transport: McpTransport::Stdio {
+            transport: McpTransportConfig::Stdio {
                 command: command.into(),
                 args: vec![],
                 env: HashMap::new(),
@@ -131,7 +131,7 @@ mod tests {
     fn validate_rejects_empty_url() {
         let config = McpServerConfig {
             name: "test".into(),
-            transport: McpTransport::Http {
+            transport: McpTransportConfig::Http {
                 url: String::new(),
                 headers: HashMap::new(),
             },
@@ -151,7 +151,7 @@ mod tests {
     fn validate_accepts_valid_http() {
         let config = McpServerConfig {
             name: "remote".into(),
-            transport: McpTransport::Http {
+            transport: McpTransportConfig::Http {
                 url: "http://localhost:3000/mcp".into(),
                 headers: HashMap::new(),
             },
@@ -205,7 +205,7 @@ mod tests {
     fn serde_roundtrip_stdio() {
         let config = McpServerConfig {
             name: "test".into(),
-            transport: McpTransport::Stdio {
+            transport: McpTransportConfig::Stdio {
                 command: "npx".into(),
                 args: vec!["-y".into(), "server".into()],
                 env: HashMap::from([("KEY".into(), "VAL".into())]),
@@ -226,7 +226,7 @@ mod tests {
     fn serde_roundtrip_http() {
         let config = McpServerConfig {
             name: "remote".into(),
-            transport: McpTransport::Http {
+            transport: McpTransportConfig::Http {
                 url: "http://localhost:3000/mcp".into(),
                 headers: HashMap::from([("Authorization".into(), "Bearer tok".into())]),
             },

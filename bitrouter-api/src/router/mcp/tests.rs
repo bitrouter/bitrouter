@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use bitrouter_mcp::server::types::{
-    McpContent, McpPrompt, McpPromptArgument, McpPromptContent, McpPromptMessage, McpResource,
-    McpResourceContent, McpResourceTemplate, McpRole, McpTool, McpToolCallResult,
+use bitrouter_mcp::types::{
+    McpContent, McpGetPromptResult, McpPrompt, McpPromptArgument, McpPromptContent,
+    McpPromptMessage, McpResource, McpResourceContent, McpResourceTemplate, McpRole, McpTool,
+    McpToolCallResult,
 };
 use tokio::sync::broadcast;
 use warp::Filter;
 
 use super::filters::mcp_server_filter;
-use bitrouter_mcp::server::protocol::McpGetPromptResult;
 
 use super::types::{
     McpGatewayError, McpPromptServer, McpResourceServer, McpToolServer, error_codes,

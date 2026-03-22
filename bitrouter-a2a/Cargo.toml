@@ -11,6 +11,7 @@ readme = "README.md"
 [features]
 default = []
 client = ["dep:reqwest", "dep:tracing"]
+# client-grpc = ["client", "dep:tonic", "dep:prost"]
 
 [dependencies]
 bitrouter-core = { path = "../bitrouter-core", version = "0.11" }

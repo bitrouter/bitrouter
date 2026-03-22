@@ -19,12 +19,12 @@ pub use bitrouter_mcp::error::McpGatewayError;
 
 // ── JSON-RPC envelope ───────────────────────────────────────────────
 
-pub use bitrouter_mcp::server::error_codes;
-pub use bitrouter_mcp::server::jsonrpc::{JsonRpcId, JsonRpcMessage, JsonRpcResponse};
+pub use bitrouter_mcp::types::error_codes;
+pub use bitrouter_mcp::types::{JsonRpcId, JsonRpcMessage, JsonRpcResponse};
 
 // ── Protocol types (request params / response results) ──────────────
 
-pub use bitrouter_mcp::server::protocol::{
+pub use bitrouter_mcp::types::{
     CallToolParams, GetPromptParams, InitializeResult, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PromptsCapability,
     ReadResourceParams, ReadResourceResult, ResourcesCapability, ServerCapabilities, ServerInfo,

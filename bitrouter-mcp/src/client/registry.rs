@@ -2,18 +2,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
-use rmcp::model::{CallToolResult, PromptMessageContent, ResourceContents, Tool};
 use tokio::sync::{Notify, RwLock, broadcast};
 
 use crate::config::McpServerConfig;
 use crate::error::McpGatewayError;
 use crate::groups::McpAccessGroups;
-use crate::server::protocol::McpGetPromptResult;
-use crate::server::types::{
-    McpContent, McpPrompt, McpPromptArgument, McpPromptContent, McpPromptMessage, McpResource,
-    McpResourceContent, McpResourceTemplate, McpRole, McpTool, McpToolCallResult,
-};
 use crate::server::{McpPromptServer, McpResourceServer, McpToolServer};
+use crate::types::{
+    McpGetPromptResult, McpPrompt, McpResource, McpResourceContent, McpResourceTemplate, McpTool,
+    McpToolCallResult,
+};
 
 use super::upstream::UpstreamConnection;
 
@@ -143,7 +141,7 @@ impl ConfigMcpRegistry {
     }
 
     /// Merge all namespaced tools from all upstreams (unfiltered).
-    pub async fn aggregated_tools(&self) -> Vec<Tool> {
+    pub async fn aggregated_tools(&self) -> Vec<McpTool> {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
         for upstream in upstreams.values() {
@@ -157,7 +155,7 @@ impl ConfigMcpRegistry {
         &self,
         prefixed_name: &str,
         arguments: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> Result<CallToolResult, McpGatewayError> {
+    ) -> Result<McpToolCallResult, McpGatewayError> {
         let (server_name, tool_name) = parse_namespaced(prefixed_name)?;
         let upstreams = self.upstreams.read().await;
         let upstream = upstreams
@@ -248,11 +246,6 @@ impl ConfigMcpRegistry {
 
 // ── Core ToolRegistry impl ──────────────────────────────────────────
 
-/// Implement core [`ToolRegistry`](bitrouter_core::routers::registry::ToolRegistry)
-/// for public discovery (`GET /v1/tools`).
-///
-/// Returns all tools from all upstreams, unfiltered. Filtering is applied
-/// by the [`DynamicToolRegistry`] wrapper.
 impl bitrouter_core::routers::registry::ToolRegistry for ConfigMcpRegistry {
     async fn list_tools(&self) -> Vec<bitrouter_core::routers::registry::ToolEntry> {
         McpToolServer::list_tools(self)
@@ -264,35 +257,6 @@ impl bitrouter_core::routers::registry::ToolRegistry for ConfigMcpRegistry {
 }
 
 // ── McpToolServer impl (raw, on ConfigMcpRegistry) ──────────────────
-
-/// Convert an `rmcp` [`Tool`] into an `rmcp`-free [`McpTool`].
-fn rmcp_tool_to_mcp_tool(tool: &Tool) -> McpTool {
-    McpTool {
-        name: tool.name.to_string(),
-        description: tool.description.as_deref().map(str::to_owned),
-        input_schema: serde_json::to_value(&*tool.input_schema).unwrap_or_default(),
-    }
-}
-
-/// Convert an `rmcp` [`CallToolResult`] into an `rmcp`-free [`McpToolCallResult`].
-fn rmcp_result_to_mcp_result(result: &CallToolResult) -> McpToolCallResult {
-    let content: Vec<McpContent> = result
-        .content
-        .iter()
-        .filter_map(|c| {
-            let value = serde_json::to_value(c).ok()?;
-            let text = value.get("text")?.as_str()?;
-            Some(McpContent::Text {
-                text: text.to_owned(),
-            })
-        })
-        .collect();
-
-    McpToolCallResult {
-        content,
-        is_error: result.is_error,
-    }
-}
 
 /// `McpToolServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
 impl McpToolServer for Arc<ConfigMcpRegistry> {
@@ -351,12 +315,10 @@ impl McpPromptServer for Arc<ConfigMcpRegistry> {
     }
 }
 
-/// Raw [`McpToolServer`] impl on `ConfigMcpRegistry` — returns all tools
-/// unfiltered and calls without restriction enforcement.
+/// Raw [`McpToolServer`] impl on `ConfigMcpRegistry`.
 impl McpToolServer for ConfigMcpRegistry {
     async fn list_tools(&self) -> Vec<McpTool> {
-        let rmcp_tools = self.aggregated_tools().await;
-        rmcp_tools.iter().map(rmcp_tool_to_mcp_tool).collect()
+        self.aggregated_tools().await
     }
 
     async fn call_tool(
@@ -364,8 +326,7 @@ impl McpToolServer for ConfigMcpRegistry {
         name: &str,
         arguments: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<McpToolCallResult, McpGatewayError> {
-        let result = self.route_call(name, arguments).await?;
-        Ok(rmcp_result_to_mcp_result(&result))
+        self.route_call(name, arguments).await
     }
 
     fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
@@ -374,17 +335,11 @@ impl McpToolServer for ConfigMcpRegistry {
 }
 
 // ── Protocol trait impls on DynamicToolRegistry<ConfigMcpRegistry> ───
-//
-// These impls live here (in the MCP crate) because the protocol traits
-// (`McpToolServer`, `McpResourceServer`, `McpPromptServer`) are defined
-// in this crate. The `DynamicToolRegistry` type is from core. Orphan
-// rules are satisfied because the traits are local.
 
 /// [`McpToolServer`] for the wrapped registry — applies param restrictions
 /// at call time and delegates tool listing through the filtered wrapper.
 impl McpToolServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
     async fn list_tools(&self) -> Vec<McpTool> {
-        // Use the filtered core ToolRegistry output, then convert back to McpTool.
         let core_tools =
             <Self as bitrouter_core::routers::registry::ToolRegistry>::list_tools(self).await;
         core_tools
@@ -432,34 +387,6 @@ impl McpToolServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
     }
 }
 
-/// Convert an `rmcp` [`ResourceContents`] into an `rmcp`-free [`McpResourceContent`].
-fn rmcp_resource_contents_to_mcp(rc: &ResourceContents) -> McpResourceContent {
-    match rc {
-        ResourceContents::TextResourceContents {
-            uri,
-            mime_type,
-            text,
-            ..
-        } => McpResourceContent {
-            uri: uri.clone(),
-            mime_type: mime_type.clone(),
-            text: Some(text.clone()),
-            blob: None,
-        },
-        ResourceContents::BlobResourceContents {
-            uri,
-            mime_type,
-            blob,
-            ..
-        } => McpResourceContent {
-            uri: uri.clone(),
-            mime_type: mime_type.clone(),
-            text: None,
-            blob: Some(blob.clone()),
-        },
-    }
-}
-
 /// [`McpResourceServer`] — delegates to inner `ConfigMcpRegistry`.
 impl McpResourceServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
     async fn list_resources(&self) -> Vec<McpResource> {
@@ -476,6 +403,25 @@ impl McpResourceServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
 
     fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
         <ConfigMcpRegistry as McpResourceServer>::subscribe_resource_changes(self.inner())
+    }
+}
+
+/// [`McpPromptServer`] — delegates to inner `ConfigMcpRegistry`.
+impl McpPromptServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
+    async fn list_prompts(&self) -> Vec<McpPrompt> {
+        <ConfigMcpRegistry as McpPromptServer>::list_prompts(self.inner()).await
+    }
+
+    async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<McpGetPromptResult, McpGatewayError> {
+        <ConfigMcpRegistry as McpPromptServer>::get_prompt(self.inner(), name, arguments).await
+    }
+
+    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
+        <ConfigMcpRegistry as McpPromptServer>::subscribe_prompt_changes(self.inner())
     }
 }
 
@@ -506,12 +452,7 @@ impl McpResourceServer for ConfigMcpRegistry {
                 .ok_or_else(|| McpGatewayError::ResourceNotFound {
                     uri: uri.to_owned(),
                 })?;
-        let result = upstream.read_resource(original_uri).await?;
-        Ok(result
-            .contents
-            .iter()
-            .map(rmcp_resource_contents_to_mcp)
-            .collect())
+        upstream.read_resource(original_uri).await
     }
 
     async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
@@ -537,58 +478,13 @@ impl McpResourceServer for ConfigMcpRegistry {
     }
 }
 
-/// Convert an `rmcp` [`PromptMessageContent`] into an `rmcp`-free [`McpPromptContent`].
-fn rmcp_prompt_content_to_mcp(content: &PromptMessageContent) -> McpPromptContent {
-    match content {
-        PromptMessageContent::Text { text } => McpPromptContent::Text { text: text.clone() },
-        PromptMessageContent::Resource { resource } => {
-            let rc = &resource.resource;
-            McpPromptContent::Resource {
-                resource: rmcp_resource_contents_to_mcp(rc),
-            }
-        }
-        // For image and resource_link types, serialize to text as a fallback.
-        other => {
-            let text = serde_json::to_string(other).unwrap_or_default();
-            McpPromptContent::Text { text }
-        }
-    }
-}
-
-/// [`McpPromptServer`] — delegates to inner `ConfigMcpRegistry`.
-impl McpPromptServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
-    async fn list_prompts(&self) -> Vec<McpPrompt> {
-        <ConfigMcpRegistry as McpPromptServer>::list_prompts(self.inner()).await
-    }
-
-    async fn get_prompt(
-        &self,
-        name: &str,
-        arguments: Option<std::collections::HashMap<String, String>>,
-    ) -> Result<McpGetPromptResult, McpGatewayError> {
-        <ConfigMcpRegistry as McpPromptServer>::get_prompt(self.inner(), name, arguments).await
-    }
-
-    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
-        <ConfigMcpRegistry as McpPromptServer>::subscribe_prompt_changes(self.inner())
-    }
-}
-
 /// [`McpPromptServer`] impl on raw `ConfigMcpRegistry`.
 impl McpPromptServer for ConfigMcpRegistry {
     async fn list_prompts(&self) -> Vec<McpPrompt> {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
         for upstream in upstreams.values() {
-            for (name, description, args) in upstream.namespaced_prompts().await {
-                let arguments = args
-                    .into_iter()
-                    .map(|a| McpPromptArgument {
-                        name: a.name,
-                        description: a.description,
-                        required: a.required,
-                    })
-                    .collect();
+            for (name, description, arguments) in upstream.namespaced_prompts().await {
                 all.push(McpPrompt {
                     name,
                     description,
@@ -612,25 +508,7 @@ impl McpPromptServer for ConfigMcpRegistry {
                 .ok_or_else(|| McpGatewayError::PromptNotFound {
                     name: name.to_owned(),
                 })?;
-        let result = upstream.get_prompt(prompt_name, arguments).await?;
-        let messages = result
-            .messages
-            .iter()
-            .map(|m| {
-                let role = match m.role {
-                    rmcp::model::PromptMessageRole::User => McpRole::User,
-                    rmcp::model::PromptMessageRole::Assistant => McpRole::Assistant,
-                };
-                McpPromptMessage {
-                    role,
-                    content: rmcp_prompt_content_to_mcp(&m.content),
-                }
-            })
-            .collect();
-        Ok(McpGetPromptResult {
-            description: result.description,
-            messages,
-        })
+        upstream.get_prompt(prompt_name, arguments).await
     }
 
     fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {

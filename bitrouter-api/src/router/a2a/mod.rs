@@ -8,7 +8,6 @@ mod discovery;
 pub mod filters;
 mod messaging;
 mod push;
-mod rest;
 mod tasks;
 #[cfg(test)]
 mod tests;

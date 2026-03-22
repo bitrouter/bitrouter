@@ -9,13 +9,9 @@ mod tests {
     use tokio::sync::broadcast;
     use warp::test::request;
 
-    use bitrouter_a2a::card::{AgentCard, minimal_card};
     use bitrouter_a2a::error::A2aGatewayError;
-    use bitrouter_a2a::message::{Message, MessageRole, Part};
-    use bitrouter_a2a::request::*;
     use bitrouter_a2a::server::{A2aDiscovery, A2aProxy};
-    use bitrouter_a2a::stream::StreamResponse;
-    use bitrouter_a2a::task::*;
+    use bitrouter_a2a::types::*;
 
     use super::super::filters::a2a_gateway_filter;
 

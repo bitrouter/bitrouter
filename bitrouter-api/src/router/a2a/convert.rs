@@ -1,7 +1,7 @@
 //! JSON-RPC conversion helpers for A2A gateway responses.
 
 use bitrouter_a2a::error::A2aGatewayError;
-use bitrouter_a2a::jsonrpc::JsonRpcResponse;
+use bitrouter_a2a::types::JsonRpcResponse;
 
 /// Deserialize JSON-RPC params into a typed request.
 pub(crate) fn deserialize_params<T: serde::de::DeserializeOwned>(
@@ -12,7 +12,7 @@ pub(crate) fn deserialize_params<T: serde::de::DeserializeOwned>(
             jsonrpc: "2.0".to_string(),
             id: String::new(),
             result: None,
-            error: Some(bitrouter_a2a::jsonrpc::JsonRpcError {
+            error: Some(bitrouter_a2a::types::JsonRpcError {
                 code: -32602,
                 message: format!("invalid params: {e}"),
                 data: None,
@@ -37,7 +37,7 @@ pub(crate) fn error_response(id: &str, code: i64, message: String) -> JsonRpcRes
         jsonrpc: "2.0".to_string(),
         id: id.to_string(),
         result: None,
-        error: Some(bitrouter_a2a::jsonrpc::JsonRpcError {
+        error: Some(bitrouter_a2a::types::JsonRpcError {
             code,
             message,
             data: None,

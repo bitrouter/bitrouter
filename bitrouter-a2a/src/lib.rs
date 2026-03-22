@@ -5,16 +5,13 @@
 //!
 //! - **Types** — Full A2A v0.3.0 schema: Agent Card, Task, Message, Artifact
 //! - **Gateway traits** — [`server::A2aDiscovery`] and [`server::A2aProxy`] for downstream serving
-//! - **Client** — A2A protocol client and upstream connection (feature-gated)
-pub mod card;
+//! - **Transports** — JSON-RPC, REST, and gRPC transport implementations (feature-gated)
+//! - **Client** — Upstream connection and registry (feature-gated)
 #[cfg(feature = "client")]
 pub mod client;
 pub mod config;
 pub mod error;
-pub mod jsonrpc;
-pub mod message;
-pub mod request;
-pub mod security;
 pub mod server;
-pub mod stream;
-pub mod task;
+#[cfg(feature = "client")]
+pub mod transports;
+pub mod types;

@@ -27,6 +27,12 @@ pub enum McpGatewayError {
 
     #[error("prompt not found: {name}")]
     PromptNotFound { name: String },
+
+    #[error("HTTP transport error for '{name}': {reason}")]
+    HttpTransport { name: String, reason: String },
+
+    #[error("session expired for '{name}': server returned 404")]
+    SessionExpired { name: String },
 }
 
 #[cfg(test)]

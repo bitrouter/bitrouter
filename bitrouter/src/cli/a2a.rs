@@ -1,9 +1,11 @@
 //! `bitrouter a2a` subcommand — A2A protocol client.
 
-use bitrouter_a2a::client::a2a_client::{A2aClient, SendMessageResult};
-use bitrouter_a2a::message::Part;
-use bitrouter_a2a::request::{CancelTaskRequest, SendMessageRequest};
-use bitrouter_a2a::task::{GetTaskRequest, ListTasksRequest};
+use bitrouter_a2a::transports::A2aTransport;
+use bitrouter_a2a::transports::jsonrpc::A2aClient;
+use bitrouter_a2a::types::{
+    CancelTaskRequest, GetTaskRequest, ListTasksRequest, Part, SendMessageRequest,
+    SendMessageResult,
+};
 
 // ── Remote A2A client operations ───────────────────────────────
 
@@ -206,7 +208,7 @@ pub async fn run_list_tasks(url: &str) -> Result<(), String> {
 
 // ── Output helpers ─────────────────────────────────────────────
 
-fn print_task(task: &bitrouter_a2a::task::Task) {
+fn print_task(task: &bitrouter_a2a::types::Task) {
     println!("Task: {}", task.id);
     println!("Context: {}", task.context_id);
     let ts = task.status.timestamp.as_deref().unwrap_or("no timestamp");
@@ -255,16 +257,16 @@ fn print_parts(parts: &[Part]) {
     }
 }
 
-fn state_label(state: &bitrouter_a2a::task::TaskState) -> &'static str {
+fn state_label(state: &bitrouter_a2a::types::TaskState) -> &'static str {
     match state {
-        bitrouter_a2a::task::TaskState::Submitted => "submitted",
-        bitrouter_a2a::task::TaskState::Working => "working",
-        bitrouter_a2a::task::TaskState::Completed => "completed",
-        bitrouter_a2a::task::TaskState::Failed => "failed",
-        bitrouter_a2a::task::TaskState::Canceled => "canceled",
-        bitrouter_a2a::task::TaskState::Rejected => "rejected",
-        bitrouter_a2a::task::TaskState::InputRequired => "input-required",
-        bitrouter_a2a::task::TaskState::AuthRequired => "auth-required",
-        bitrouter_a2a::task::TaskState::Unknown => "unknown",
+        bitrouter_a2a::types::TaskState::Submitted => "submitted",
+        bitrouter_a2a::types::TaskState::Working => "working",
+        bitrouter_a2a::types::TaskState::Completed => "completed",
+        bitrouter_a2a::types::TaskState::Failed => "failed",
+        bitrouter_a2a::types::TaskState::Canceled => "canceled",
+        bitrouter_a2a::types::TaskState::Rejected => "rejected",
+        bitrouter_a2a::types::TaskState::InputRequired => "input-required",
+        bitrouter_a2a::types::TaskState::AuthRequired => "auth-required",
+        bitrouter_a2a::types::TaskState::Unknown => "unknown",
     }
 }
