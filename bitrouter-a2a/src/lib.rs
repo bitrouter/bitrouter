@@ -1,9 +1,9 @@
 //! A2A (Agent-to-Agent) protocol types and gateway components for BitRouter.
 //!
-//! Implements the [A2A v1.0 specification](https://a2a-protocol.org/latest/)
+//! Implements the [A2A v0.3.0 specification](https://a2a-protocol.org/latest/)
 //! for agent identity, discovery, and communication. This crate provides:
 //!
-//! - **Types** — Full A2A v1.0 schema: Agent Card, Task, Message, Artifact
+//! - **Types** — Full A2A v0.3.0 schema: Agent Card, Task, Message, Artifact
 //! - **Gateway traits** — [`server::A2aDiscovery`] and [`server::A2aProxy`] for downstream serving
 //! - **Client** — A2A protocol client and upstream connection (feature-gated)
 pub mod card;

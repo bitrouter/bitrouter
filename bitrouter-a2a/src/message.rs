@@ -1,7 +1,7 @@
-//! A2A v1.0 Message and Artifact types.
+//! A2A v0.3.0 Message and Artifact types.
 //!
 //! Defines the communication primitives per the
-//! [A2A v1.0 specification](https://a2a-protocol.org/latest/definitions/).
+//! [A2A v0.3.0 specification](https://a2a-protocol.org/latest/definitions/).
 
 use serde::{Deserialize, Serialize};
 
@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MessageRole {
     /// User-initiated message.
-    #[serde(rename = "ROLE_USER")]
+    #[serde(rename = "user")]
     User,
     /// Agent-generated message.
-    #[serde(rename = "ROLE_AGENT")]
+    #[serde(rename = "agent")]
     Agent,
 }
 
@@ -20,6 +20,10 @@ pub enum MessageRole {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
+    /// Object kind — always `"message"`.
+    #[serde(default = "default_message_kind")]
+    pub kind: String,
+
     /// Sender role.
     pub role: MessageRole,
 
@@ -44,102 +48,111 @@ pub struct Message {
     /// Extension metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+}
 
-    /// Extension URIs this message uses.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub extensions: Vec<String>,
+fn default_message_kind() -> String {
+    "message".to_string()
+}
+
+/// File content within a file Part.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileContent {
+    /// Base64-encoded file bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<String>,
+
+    /// URI reference to the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+
+    /// File name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// MIME type (e.g., `"image/png"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
 }
 
 /// Smallest unit of content within a Message or Artifact.
 ///
-/// A2A v1.0 uses a flat structure where the presence of `text`, `raw`,
-/// `data`, or `url` discriminates the content type. Shared optional
-/// fields (`filename`, `media_type`, `metadata`) apply to all variants.
+/// A2A v0.3.0 uses a tagged enum with `kind` discriminator.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Part {
+#[serde(tag = "kind")]
+pub enum Part {
     /// Plain text content.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-
+    #[serde(rename = "text")]
+    Text {
+        /// The text content.
+        text: String,
+        /// Extension metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata: Option<serde_json::Value>,
+    },
+    /// File content (inline bytes or URI reference).
+    #[serde(rename = "file")]
+    File {
+        /// The file content.
+        file: FileContent,
+        /// Extension metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata: Option<serde_json::Value>,
+    },
     /// Structured JSON data.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-
-    /// Base64-encoded raw bytes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw: Option<String>,
-
-    /// URL reference.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-
-    /// File name (applicable to `raw` and `url` parts).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filename: Option<String>,
-
-    /// MIME type (e.g., `"image/png"`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub media_type: Option<String>,
-
-    /// Extension metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
+    #[serde(rename = "data")]
+    Data {
+        /// The structured data.
+        data: serde_json::Value,
+        /// Extension metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata: Option<serde_json::Value>,
+    },
 }
 
 impl Part {
     /// Create a text part.
     pub fn text(text: impl Into<String>) -> Self {
-        Self {
-            text: Some(text.into()),
-            data: None,
-            raw: None,
-            url: None,
-            filename: None,
-            media_type: None,
+        Self::Text {
+            text: text.into(),
             metadata: None,
         }
     }
 
     /// Create a structured data part.
     pub fn data(data: serde_json::Value) -> Self {
-        Self {
-            text: None,
-            data: Some(data),
-            raw: None,
-            url: None,
-            filename: None,
-            media_type: None,
+        Self::Data {
+            data,
             metadata: None,
         }
     }
 
-    /// Create a raw bytes part with optional filename and media type.
-    pub fn raw(
-        raw: impl Into<String>,
-        filename: Option<String>,
-        media_type: Option<String>,
+    /// Create a file part with inline bytes and optional name/mime type.
+    pub fn file_bytes(
+        bytes: impl Into<String>,
+        name: Option<String>,
+        mime_type: Option<String>,
     ) -> Self {
-        Self {
-            text: None,
-            data: None,
-            raw: Some(raw.into()),
-            url: None,
-            filename,
-            media_type,
+        Self::File {
+            file: FileContent {
+                bytes: Some(bytes.into()),
+                uri: None,
+                name,
+                mime_type,
+            },
             metadata: None,
         }
     }
 
-    /// Create a URL reference part with optional filename.
-    pub fn url(url: impl Into<String>, filename: Option<String>) -> Self {
-        Self {
-            text: None,
-            data: None,
-            raw: None,
-            url: Some(url.into()),
-            filename,
-            media_type: None,
+    /// Create a file part with a URI reference and optional name.
+    pub fn file_uri(uri: impl Into<String>, name: Option<String>) -> Self {
+        Self::File {
+            file: FileContent {
+                bytes: None,
+                uri: Some(uri.into()),
+                name,
+                mime_type: None,
+            },
             metadata: None,
         }
     }
@@ -166,10 +179,6 @@ pub struct Artifact {
     /// Extension metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
-
-    /// Extension URIs this artifact uses.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub extensions: Vec<String>,
 }
 
 #[cfg(test)]
@@ -183,13 +192,13 @@ mod tests {
         let parsed: Part = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(part, parsed);
         assert!(json.contains("\"text\":\"hello world\""));
-        // v1.0: no "kind" tag
-        assert!(!json.contains("kind"));
+        // v0.3.0: "kind" tag is present
+        assert!(json.contains("\"kind\":\"text\""));
     }
 
     #[test]
-    fn raw_part_round_trip() {
-        let part = Part::raw(
+    fn file_bytes_part_round_trip() {
+        let part = Part::file_bytes(
             "aGVsbG8=",
             Some("test.png".to_string()),
             Some("image/png".to_string()),
@@ -197,14 +206,14 @@ mod tests {
         let json = serde_json::to_string(&part).expect("serialize");
         let parsed: Part = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(part, parsed);
-        assert!(json.contains("\"raw\""));
-        assert!(json.contains("\"filename\""));
-        assert!(json.contains("\"mediaType\""));
+        assert!(json.contains("\"kind\":\"file\""));
+        assert!(json.contains("\"bytes\""));
+        assert!(json.contains("\"mimeType\""));
     }
 
     #[test]
-    fn url_part_round_trip() {
-        let part = Part::url("https://example.com/file.png", Some("file.png".to_string()));
+    fn file_uri_part_round_trip() {
+        let part = Part::file_uri("https://example.com/file.png", Some("file.png".to_string()));
         let json = serde_json::to_string(&part).expect("serialize");
         let parsed: Part = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(part, parsed);
@@ -221,6 +230,7 @@ mod tests {
     #[test]
     fn message_round_trip() {
         let msg = Message {
+            kind: "message".to_string(),
             role: MessageRole::User,
             parts: vec![Part::text("Review this code")],
             message_id: "msg-001".to_string(),
@@ -228,23 +238,22 @@ mod tests {
             task_id: None,
             reference_task_ids: Vec::new(),
             metadata: None,
-            extensions: Vec::new(),
         };
         let json = serde_json::to_string_pretty(&msg).expect("serialize");
         let parsed: Message = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(msg, parsed);
-        assert!(json.contains("ROLE_USER"));
+        assert!(json.contains("\"user\""));
     }
 
     #[test]
-    fn message_role_v1_format() {
+    fn message_role_v03_format() {
         let json = serde_json::to_string(&MessageRole::User).expect("serialize");
-        assert_eq!(json, "\"ROLE_USER\"");
+        assert_eq!(json, "\"user\"");
 
         let json = serde_json::to_string(&MessageRole::Agent).expect("serialize");
-        assert_eq!(json, "\"ROLE_AGENT\"");
+        assert_eq!(json, "\"agent\"");
 
-        let parsed: MessageRole = serde_json::from_str("\"ROLE_AGENT\"").expect("deserialize");
+        let parsed: MessageRole = serde_json::from_str("\"agent\"").expect("deserialize");
         assert_eq!(parsed, MessageRole::Agent);
     }
 
@@ -256,7 +265,6 @@ mod tests {
             description: None,
             parts: vec![Part::text("Looks good!")],
             metadata: None,
-            extensions: Vec::new(),
         };
         let json = serde_json::to_string_pretty(&artifact).expect("serialize");
         let parsed: Artifact = serde_json::from_str(&json).expect("deserialize");

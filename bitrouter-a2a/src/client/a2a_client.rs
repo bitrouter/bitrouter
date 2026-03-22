@@ -1,8 +1,8 @@
 //! A2A protocol client.
 //!
-//! Speaks JSON-RPC 2.0 to any A2A v1.0-compliant server. Supports agent
-//! discovery, task submission (`SendMessage`), status polling (`GetTask`),
-//! cancellation (`CancelTask`), listing (`ListTasks`), streaming, and
+//! Speaks JSON-RPC 2.0 to any A2A v0.3.0-compliant server. Supports agent
+//! discovery, task submission (`message/send`), status polling (`tasks/get`),
+//! cancellation (`tasks/cancel`), listing (`tasks/list`), streaming, and
 //! push notification config CRUD.
 
 use crate::card::AgentCard;
@@ -12,11 +12,11 @@ use crate::message::{Message, MessageRole, Part};
 use crate::request::{
     CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, ListTaskPushNotificationConfigsRequest,
-    ListTaskPushNotificationConfigsResponse, SendMessageRequest, TaskPushNotificationConfig,
+    SendMessageRequest, TaskPushNotificationConfig,
 };
 use crate::task::{GetTaskRequest, ListTasksRequest, ListTasksResponse, Task};
 
-/// Result of a `SendMessage` call — may be a full Task or a direct Message.
+/// Result of a `message/send` call — may be a full Task or a direct Message.
 #[derive(Debug, Clone)]
 pub enum SendMessageResult {
     /// Server returned a full task with status and lifecycle.
@@ -87,7 +87,11 @@ impl A2aClient {
         endpoint: &str,
     ) -> Result<AgentCard, A2aGatewayError> {
         let request_id = generate_request_id();
-        let rpc = JsonRpcRequest::new(&request_id, "GetExtendedAgentCard", serde_json::json!({}));
+        let rpc = JsonRpcRequest::new(
+            &request_id,
+            "agent/getAuthenticatedExtendedCard",
+            serde_json::json!({}),
+        );
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
@@ -99,7 +103,7 @@ impl A2aClient {
 
     /// Send a message to a remote agent.
     ///
-    /// This is the `SendMessage` JSON-RPC method.
+    /// This is the `message/send` JSON-RPC method.
     pub async fn send_message(
         &self,
         endpoint: &str,
@@ -108,7 +112,7 @@ impl A2aClient {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
             .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
-        let rpc = JsonRpcRequest::new(&request_id, "SendMessage", params);
+        let rpc = JsonRpcRequest::new(&request_id, "message/send", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
@@ -122,7 +126,6 @@ impl A2aClient {
         text: &str,
     ) -> Result<SendMessageResult, A2aGatewayError> {
         let request = SendMessageRequest {
-            tenant: None,
             message: Self::text_message(text),
             configuration: None,
             metadata: None,
@@ -132,7 +135,7 @@ impl A2aClient {
 
     /// Get the current state of a task.
     ///
-    /// This is the `GetTask` JSON-RPC method.
+    /// This is the `tasks/get` JSON-RPC method.
     pub async fn get_task(
         &self,
         endpoint: &str,
@@ -141,7 +144,7 @@ impl A2aClient {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
             .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
-        let rpc = JsonRpcRequest::new(&request_id, "GetTask", params);
+        let rpc = JsonRpcRequest::new(&request_id, "tasks/get", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
@@ -151,7 +154,7 @@ impl A2aClient {
 
     /// Cancel a running task.
     ///
-    /// This is the `CancelTask` JSON-RPC method.
+    /// This is the `tasks/cancel` JSON-RPC method.
     pub async fn cancel_task(
         &self,
         endpoint: &str,
@@ -160,7 +163,7 @@ impl A2aClient {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
             .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
-        let rpc = JsonRpcRequest::new(&request_id, "CancelTask", params);
+        let rpc = JsonRpcRequest::new(&request_id, "tasks/cancel", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
@@ -170,7 +173,7 @@ impl A2aClient {
 
     /// List tasks matching a query.
     ///
-    /// This is the `ListTasks` JSON-RPC method.
+    /// This is the `tasks/list` JSON-RPC method.
     pub async fn list_tasks(
         &self,
         endpoint: &str,
@@ -179,7 +182,7 @@ impl A2aClient {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
             .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
-        let rpc = JsonRpcRequest::new(&request_id, "ListTasks", params);
+        let rpc = JsonRpcRequest::new(&request_id, "tasks/list", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
@@ -190,8 +193,8 @@ impl A2aClient {
 
     // ── Push notification config CRUD ──────────────────────────
 
-    /// Create a push notification configuration.
-    pub async fn create_push_notification_config(
+    /// Set (create or update) a push notification configuration.
+    pub async fn set_push_notification_config(
         &self,
         endpoint: &str,
         config: TaskPushNotificationConfig,
@@ -199,7 +202,7 @@ impl A2aClient {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&config)
             .map_err(|e| A2aGatewayError::Client(format!("failed to serialize config: {e}")))?;
-        let rpc = JsonRpcRequest::new(&request_id, "CreateTaskPushNotificationConfig", params);
+        let rpc = JsonRpcRequest::new(&request_id, "tasks/pushNotificationConfig/set", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
@@ -216,7 +219,7 @@ impl A2aClient {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
             .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
-        let rpc = JsonRpcRequest::new(&request_id, "GetTaskPushNotificationConfig", params);
+        let rpc = JsonRpcRequest::new(&request_id, "tasks/pushNotificationConfig/get", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
@@ -229,15 +232,15 @@ impl A2aClient {
         &self,
         endpoint: &str,
         request: ListTaskPushNotificationConfigsRequest,
-    ) -> Result<ListTaskPushNotificationConfigsResponse, A2aGatewayError> {
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2aGatewayError> {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
             .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
-        let rpc = JsonRpcRequest::new(&request_id, "ListTaskPushNotificationConfigs", params);
+        let rpc = JsonRpcRequest::new(&request_id, "tasks/pushNotificationConfig/list", params);
 
         let result = self.rpc_call(endpoint, &rpc).await?;
 
-        serde_json::from_value::<ListTaskPushNotificationConfigsResponse>(result)
+        serde_json::from_value::<Vec<TaskPushNotificationConfig>>(result)
             .map_err(|e| A2aGatewayError::Client(format!("failed to parse push configs: {e}")))
     }
 
@@ -250,7 +253,7 @@ impl A2aClient {
         let request_id = generate_request_id();
         let params = serde_json::to_value(&request)
             .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
-        let rpc = JsonRpcRequest::new(&request_id, "DeleteTaskPushNotificationConfig", params);
+        let rpc = JsonRpcRequest::new(&request_id, "tasks/pushNotificationConfig/delete", params);
 
         let _ = self.rpc_call(endpoint, &rpc).await?;
         Ok(())
@@ -260,15 +263,15 @@ impl A2aClient {
 
     /// Resolve the A2A endpoint URL from an Agent Card.
     ///
-    /// Returns the first `supported_interfaces` URL, or `None` if the card
-    /// has no interfaces.
-    pub fn resolve_endpoint(card: &AgentCard) -> Option<&str> {
-        card.supported_interfaces.first().map(|i| i.url.as_str())
+    /// Returns the card's `url` field.
+    pub fn resolve_endpoint(card: &AgentCard) -> &str {
+        &card.url
     }
 
     /// Build a simple text message.
     pub fn text_message(text: &str) -> Message {
         Message {
+            kind: "message".to_string(),
             role: MessageRole::User,
             parts: vec![Part::text(text)],
             message_id: generate_request_id(),
@@ -276,7 +279,6 @@ impl A2aClient {
             task_id: None,
             reference_task_ids: Vec::new(),
             metadata: None,
-            extensions: Vec::new(),
         }
     }
 
@@ -315,28 +317,33 @@ impl A2aClient {
 fn parse_send_message_result(
     result: serde_json::Value,
 ) -> Result<SendMessageResult, A2aGatewayError> {
-    // v1.0 SendMessage returns a StreamResponse: {"task": {...}} or {"message": {...}}.
-    if let Some(task_val) = result.get("task") {
-        let task = serde_json::from_value::<Task>(task_val.clone())
-            .map_err(|e| A2aGatewayError::Client(format!("failed to parse task response: {e}")))?;
-        Ok(SendMessageResult::Task(task))
-    } else if let Some(msg_val) = result.get("message") {
-        let msg = serde_json::from_value::<Message>(msg_val.clone()).map_err(|e| {
-            A2aGatewayError::Client(format!("failed to parse message response: {e}"))
-        })?;
-        Ok(SendMessageResult::Message(msg))
-    } else {
-        // Fallback: try as bare Task (has id + status) or bare Message.
-        if result.get("id").is_some() && result.get("status").is_some() {
+    // v0.3.0: result is returned directly with a `kind` discriminator.
+    match result.get("kind").and_then(|v| v.as_str()) {
+        Some("task") => {
             let task = serde_json::from_value::<Task>(result).map_err(|e| {
                 A2aGatewayError::Client(format!("failed to parse task response: {e}"))
             })?;
             Ok(SendMessageResult::Task(task))
-        } else {
+        }
+        Some("message") => {
             let msg = serde_json::from_value::<Message>(result).map_err(|e| {
-                A2aGatewayError::Client(format!("failed to parse SendMessage result: {e}"))
+                A2aGatewayError::Client(format!("failed to parse message response: {e}"))
             })?;
             Ok(SendMessageResult::Message(msg))
+        }
+        _ => {
+            // Fallback: try as Task (has id + status) or Message.
+            if result.get("id").is_some() && result.get("status").is_some() {
+                let task = serde_json::from_value::<Task>(result).map_err(|e| {
+                    A2aGatewayError::Client(format!("failed to parse task response: {e}"))
+                })?;
+                Ok(SendMessageResult::Task(task))
+            } else {
+                let msg = serde_json::from_value::<Message>(result).map_err(|e| {
+                    A2aGatewayError::Client(format!("failed to parse SendMessage result: {e}"))
+                })?;
+                Ok(SendMessageResult::Message(msg))
+            }
         }
     }
 }
@@ -356,8 +363,12 @@ mod tests {
     fn text_message_builds_correctly() {
         let msg = A2aClient::text_message("hello world");
         assert_eq!(msg.role, MessageRole::User);
+        assert_eq!(msg.kind, "message");
         assert_eq!(msg.parts.len(), 1);
-        assert_eq!(msg.parts[0].text.as_deref(), Some("hello world"));
+        match &msg.parts[0] {
+            Part::Text { text, .. } => assert_eq!(text, "hello world"),
+            _ => panic!("expected text part"),
+        }
     }
 
     #[test]
@@ -369,14 +380,7 @@ mod tests {
             "https://agent.example.com/a2a",
         );
         let ep = A2aClient::resolve_endpoint(&card);
-        assert_eq!(ep, Some("https://agent.example.com/a2a"));
-    }
-
-    #[test]
-    fn resolve_endpoint_empty_card() {
-        let mut card = crate::card::minimal_card("test", "test", "1.0.0", "http://localhost");
-        card.supported_interfaces.clear();
-        assert_eq!(A2aClient::resolve_endpoint(&card), None);
+        assert_eq!(ep, "https://agent.example.com/a2a");
     }
 
     #[test]

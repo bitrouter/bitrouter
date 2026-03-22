@@ -55,6 +55,7 @@ mod tests {
             _request: SendMessageRequest,
         ) -> Result<StreamResponse, A2aGatewayError> {
             let msg = Message {
+                kind: "message".to_string(),
                 role: MessageRole::Agent,
                 parts: vec![Part::text("echo response")],
                 message_id: "resp-1".to_string(),
@@ -62,18 +63,18 @@ mod tests {
                 task_id: None,
                 reference_task_ids: Vec::new(),
                 metadata: None,
-                extensions: Vec::new(),
             };
             Ok(StreamResponse::Message(msg))
         }
 
         async fn get_task(&self, request: GetTaskRequest) -> Result<Task, A2aGatewayError> {
             Ok(Task {
+                kind: "task".to_string(),
                 id: request.id,
-                context_id: None,
+                context_id: "ctx-default".to_string(),
                 status: TaskStatus {
                     state: TaskState::Completed,
-                    timestamp: "2026-03-21T00:00:00Z".to_string(),
+                    timestamp: Some("2026-03-21T00:00:00Z".to_string()),
                     message: None,
                 },
                 artifacts: Vec::new(),
@@ -84,11 +85,12 @@ mod tests {
 
         async fn cancel_task(&self, request: CancelTaskRequest) -> Result<Task, A2aGatewayError> {
             Ok(Task {
+                kind: "task".to_string(),
                 id: request.id,
-                context_id: None,
+                context_id: "ctx-default".to_string(),
                 status: TaskStatus {
                     state: TaskState::Canceled,
-                    timestamp: "2026-03-21T00:00:00Z".to_string(),
+                    timestamp: Some("2026-03-21T00:00:00Z".to_string()),
                     message: None,
                 },
                 artifacts: Vec::new(),
@@ -133,7 +135,7 @@ mod tests {
             Ok(self.card.clone())
         }
 
-        async fn create_push_config(
+        async fn set_push_config(
             &self,
             config: TaskPushNotificationConfig,
         ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
@@ -143,25 +145,24 @@ mod tests {
         async fn get_push_config(
             &self,
             _task_id: &str,
-            _config_id: &str,
+            _config_id: Option<&str>,
         ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
             Ok(TaskPushNotificationConfig {
-                tenant: None,
-                id: Some("cfg-1".to_string()),
-                task_id: Some("task-1".to_string()),
-                url: "https://example.com/webhook".to_string(),
-                token: None,
-                authentication: None,
+                task_id: "task-1".to_string(),
+                push_notification_config: PushNotificationConfig {
+                    id: Some("cfg-1".to_string()),
+                    url: "https://example.com/webhook".to_string(),
+                    token: None,
+                    authentication: None,
+                },
             })
         }
 
         async fn list_push_configs(
             &self,
             _task_id: &str,
-        ) -> Result<ListTaskPushNotificationConfigsResponse, A2aGatewayError> {
-            Ok(ListTaskPushNotificationConfigsResponse {
-                configs: Vec::new(),
-            })
+        ) -> Result<Vec<TaskPushNotificationConfig>, A2aGatewayError> {
+            Ok(Vec::new())
         }
 
         async fn delete_push_config(
@@ -212,11 +213,12 @@ mod tests {
         let body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": "req-1",
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
-                    "role": "ROLE_USER",
-                    "parts": [{"text": "hello"}],
+                    "kind": "message",
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hello"}],
                     "messageId": "msg-1"
                 }
             }
@@ -239,7 +241,7 @@ mod tests {
         let body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": "req-2",
-            "method": "GetTask",
+            "method": "tasks/get",
             "params": {"id": "task-123"}
         });
         let resp = request()
@@ -278,8 +280,9 @@ mod tests {
         let filter = mock_filter();
         let body = serde_json::json!({
             "message": {
-                "role": "ROLE_USER",
-                "parts": [{"text": "hello"}],
+                "kind": "message",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hello"}],
                 "messageId": "msg-1"
             }
         });
@@ -316,6 +319,6 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let json: serde_json::Value = serde_json::from_slice(resp.body()).unwrap_or_default();
         assert_eq!(json["id"], "task-789");
-        assert_eq!(json["status"]["state"], "TASK_STATE_CANCELED");
+        assert_eq!(json["status"]["state"], "canceled");
     }
 }

@@ -3,7 +3,7 @@
 use bitrouter_a2a::client::a2a_client::{A2aClient, SendMessageResult};
 use bitrouter_a2a::message::Part;
 use bitrouter_a2a::request::{CancelTaskRequest, SendMessageRequest};
-use bitrouter_a2a::task::{GetTaskRequest, ListTasksRequest, TaskState};
+use bitrouter_a2a::task::{GetTaskRequest, ListTasksRequest};
 
 // ── Remote A2A client operations ───────────────────────────────
 
@@ -15,18 +15,25 @@ pub async fn run_discover(url: &str) -> Result<(), String> {
     println!("Agent: {}", card.name);
     println!("Description: {}", card.description);
     println!("Version: {}", card.version);
+    println!("Protocol: {}", card.protocol_version);
+    println!("URL: {}", card.url);
 
     if let Some(ref provider) = card.provider {
         println!("Provider: {} ({})", provider.organization, provider.url);
     }
 
-    if !card.supported_interfaces.is_empty() {
-        println!("Interfaces:");
-        for iface in &card.supported_interfaces {
-            println!(
-                "  {} ({} v{})",
-                iface.url, iface.protocol_binding, iface.protocol_version
-            );
+    if let Some(ref transport) = card.preferred_transport {
+        println!("Preferred transport: {transport}");
+    }
+
+    if let Some(interfaces) = card
+        .additional_interfaces
+        .as_ref()
+        .filter(|i| !i.is_empty())
+    {
+        println!("Additional interfaces:");
+        for iface in interfaces {
+            println!("  {} ({})", iface.url, iface.transport);
         }
     }
 
@@ -48,8 +55,8 @@ pub async fn run_discover(url: &str) -> Result<(), String> {
     if caps.push_notifications == Some(true) {
         cap_list.push("push-notifications");
     }
-    if caps.extended_agent_card == Some(true) {
-        cap_list.push("extended-card");
+    if caps.state_transition_history == Some(true) {
+        cap_list.push("state-transition-history");
     }
     if !cap_list.is_empty() {
         println!("Capabilities: {}", cap_list.join(", "));
@@ -68,11 +75,9 @@ pub async fn run_send(url: &str, message: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("discovery failed: {e}"))?;
 
-    let endpoint = A2aClient::resolve_endpoint(&card)
-        .ok_or_else(|| "agent has no supported interfaces".to_string())?;
+    let endpoint = A2aClient::resolve_endpoint(&card);
 
     let request = SendMessageRequest {
-        tenant: None,
         message: A2aClient::text_message(message),
         configuration: None,
         metadata: None,
@@ -107,13 +112,11 @@ pub async fn run_status(url: &str, task_id: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("discovery failed: {e}"))?;
 
-    let endpoint = A2aClient::resolve_endpoint(&card)
-        .ok_or_else(|| "agent has no supported interfaces".to_string())?;
+    let endpoint = A2aClient::resolve_endpoint(&card);
 
     let request = GetTaskRequest {
         id: task_id.to_string(),
         history_length: None,
-        tenant: None,
     };
 
     let task = client
@@ -135,12 +138,10 @@ pub async fn run_cancel(url: &str, task_id: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("discovery failed: {e}"))?;
 
-    let endpoint = A2aClient::resolve_endpoint(&card)
-        .ok_or_else(|| "agent has no supported interfaces".to_string())?;
+    let endpoint = A2aClient::resolve_endpoint(&card);
 
     let request = CancelTaskRequest {
         id: task_id.to_string(),
-        tenant: None,
     };
 
     let task = client
@@ -163,8 +164,7 @@ pub async fn run_list_tasks(url: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("discovery failed: {e}"))?;
 
-    let endpoint = A2aClient::resolve_endpoint(&card)
-        .ok_or_else(|| "agent has no supported interfaces".to_string())?;
+    let endpoint = A2aClient::resolve_endpoint(&card);
 
     let request = ListTasksRequest {
         context_id: None,
@@ -174,7 +174,6 @@ pub async fn run_list_tasks(url: &str) -> Result<(), String> {
         page_token: None,
         history_length: Some(0),
         include_artifacts: Some(false),
-        tenant: None,
     };
 
     let response = client
@@ -189,11 +188,12 @@ pub async fn run_list_tasks(url: &str) -> Result<(), String> {
 
     println!("Tasks ({} total):", response.total_size);
     for task in &response.tasks {
+        let ts = task.status.timestamp.as_deref().unwrap_or("no timestamp");
         println!(
             "  {} — {} ({})",
             task.id,
             state_label(&task.status.state),
-            task.status.timestamp
+            ts
         );
     }
 
@@ -208,14 +208,9 @@ pub async fn run_list_tasks(url: &str) -> Result<(), String> {
 
 fn print_task(task: &bitrouter_a2a::task::Task) {
     println!("Task: {}", task.id);
-    if let Some(ref ctx) = task.context_id {
-        println!("Context: {ctx}");
-    }
-    println!(
-        "Status: {} ({})",
-        state_label(&task.status.state),
-        task.status.timestamp
-    );
+    println!("Context: {}", task.context_id);
+    let ts = task.status.timestamp.as_deref().unwrap_or("no timestamp");
+    println!("Status: {} ({})", state_label(&task.status.state), ts);
 
     if let Some(ref msg) = task.status.message {
         println!();
@@ -237,34 +232,39 @@ fn print_task(task: &bitrouter_a2a::task::Task) {
 
 fn print_parts(parts: &[Part]) {
     for part in parts {
-        if let Some(ref text) = part.text {
-            println!("{text}");
-        } else if let Some(ref url) = part.url {
-            let name = part.filename.as_deref().unwrap_or("(unnamed)");
-            println!("[url: {name}] {url}");
-        } else if part.raw.is_some() {
-            let name = part.filename.as_deref().unwrap_or("(unnamed file)");
-            let mime = part.media_type.as_deref().unwrap_or("unknown");
-            println!(
-                "[file: {name} ({mime})] (inline, {} bytes)",
-                part.raw.as_ref().map_or(0, |b| b.len())
-            );
-        } else if let Some(ref data) = part.data {
-            let pretty = serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string());
-            println!("{pretty}");
+        match part {
+            Part::Text { text, .. } => {
+                println!("{text}");
+            }
+            Part::File { file, .. } => {
+                let name = file.name.as_deref().unwrap_or("(unnamed)");
+                if let Some(ref uri) = file.uri {
+                    println!("[file: {name}] {uri}");
+                } else {
+                    let mime = file.mime_type.as_deref().unwrap_or("unknown");
+                    let size = file.bytes.as_ref().map_or(0, |b| b.len());
+                    println!("[file: {name} ({mime})] (inline, {size} bytes)");
+                }
+            }
+            Part::Data { data, .. } => {
+                let pretty =
+                    serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string());
+                println!("{pretty}");
+            }
         }
     }
 }
 
-fn state_label(state: &TaskState) -> &'static str {
+fn state_label(state: &bitrouter_a2a::task::TaskState) -> &'static str {
     match state {
-        TaskState::Submitted => "submitted",
-        TaskState::Working => "working",
-        TaskState::Completed => "completed",
-        TaskState::Failed => "failed",
-        TaskState::Canceled => "canceled",
-        TaskState::Rejected => "rejected",
-        TaskState::InputRequired => "input-required",
-        TaskState::AuthRequired => "auth-required",
+        bitrouter_a2a::task::TaskState::Submitted => "submitted",
+        bitrouter_a2a::task::TaskState::Working => "working",
+        bitrouter_a2a::task::TaskState::Completed => "completed",
+        bitrouter_a2a::task::TaskState::Failed => "failed",
+        bitrouter_a2a::task::TaskState::Canceled => "canceled",
+        bitrouter_a2a::task::TaskState::Rejected => "rejected",
+        bitrouter_a2a::task::TaskState::InputRequired => "input-required",
+        bitrouter_a2a::task::TaskState::AuthRequired => "auth-required",
+        bitrouter_a2a::task::TaskState::Unknown => "unknown",
     }
 }

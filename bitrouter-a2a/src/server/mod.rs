@@ -11,9 +11,7 @@ use tokio::sync::broadcast;
 
 use crate::card::AgentCard;
 use crate::error::A2aGatewayError;
-use crate::request::{
-    ListTaskPushNotificationConfigsResponse, SendMessageRequest, TaskPushNotificationConfig,
-};
+use crate::request::{SendMessageRequest, TaskPushNotificationConfig};
 use crate::stream::StreamResponse;
 use crate::task::{GetTaskRequest, ListTasksRequest, ListTasksResponse, Task};
 
@@ -31,34 +29,34 @@ pub trait A2aDiscovery: Send + Sync {
 
 /// Trait for proxying A2A protocol operations to an upstream agent.
 ///
-/// Each method maps to an A2A v1.0 JSON-RPC method. Implementations
+/// Each method maps to an A2A v0.3.0 JSON-RPC method. Implementations
 /// forward requests to the upstream agent and return responses.
 pub trait A2aProxy: Send + Sync {
-    /// Forward a `SendMessage` request.
+    /// Forward a `message/send` request.
     fn send_message(
         &self,
         request: SendMessageRequest,
     ) -> impl Future<Output = Result<StreamResponse, A2aGatewayError>> + Send;
 
-    /// Forward a `GetTask` request.
+    /// Forward a `tasks/get` request.
     fn get_task(
         &self,
         request: GetTaskRequest,
     ) -> impl Future<Output = Result<Task, A2aGatewayError>> + Send;
 
-    /// Forward a `CancelTask` request.
+    /// Forward a `tasks/cancel` request.
     fn cancel_task(
         &self,
         request: crate::request::CancelTaskRequest,
     ) -> impl Future<Output = Result<Task, A2aGatewayError>> + Send;
 
-    /// Forward a `ListTasks` request.
+    /// Forward a `tasks/list` request.
     fn list_tasks(
         &self,
         request: ListTasksRequest,
     ) -> impl Future<Output = Result<ListTasksResponse, A2aGatewayError>> + Send;
 
-    /// Forward a `SendStreamingMessage` request, returning a proxied SSE stream.
+    /// Forward a `message/stream` request, returning a proxied SSE stream.
     fn send_streaming_message(
         &self,
         request: SendMessageRequest,
@@ -66,7 +64,7 @@ pub trait A2aProxy: Send + Sync {
         Output = Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError>,
     > + Send;
 
-    /// Forward a `SubscribeToTask` request, returning a proxied SSE stream.
+    /// Forward a `tasks/resubscribe` request, returning a proxied SSE stream.
     fn subscribe_to_task(
         &self,
         task_id: &str,
@@ -74,13 +72,13 @@ pub trait A2aProxy: Send + Sync {
         Output = Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError>,
     > + Send;
 
-    /// Forward a `GetExtendedAgentCard` request.
+    /// Forward a `agent/getAuthenticatedExtendedCard` request.
     fn get_extended_agent_card(
         &self,
     ) -> impl Future<Output = Result<AgentCard, A2aGatewayError>> + Send;
 
-    /// Forward a push notification config create request.
-    fn create_push_config(
+    /// Forward a push notification config set request.
+    fn set_push_config(
         &self,
         config: TaskPushNotificationConfig,
     ) -> impl Future<Output = Result<TaskPushNotificationConfig, A2aGatewayError>> + Send;
@@ -89,14 +87,14 @@ pub trait A2aProxy: Send + Sync {
     fn get_push_config(
         &self,
         task_id: &str,
-        config_id: &str,
+        config_id: Option<&str>,
     ) -> impl Future<Output = Result<TaskPushNotificationConfig, A2aGatewayError>> + Send;
 
     /// Forward a push notification config list request.
     fn list_push_configs(
         &self,
         task_id: &str,
-    ) -> impl Future<Output = Result<ListTaskPushNotificationConfigsResponse, A2aGatewayError>> + Send;
+    ) -> impl Future<Output = Result<Vec<TaskPushNotificationConfig>, A2aGatewayError>> + Send;
 
     /// Forward a push notification config delete request.
     fn delete_push_config(

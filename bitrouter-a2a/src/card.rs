@@ -1,19 +1,19 @@
-//! A2A v1.0 Agent Card types.
+//! A2A v0.3.0 Agent Card types.
 //!
 //! Defines the complete Agent Card schema per the
-//! [A2A v1.0 specification](https://a2a-protocol.org/latest/definitions/).
+//! [A2A v0.3.0 specification](https://a2a-protocol.org/latest/definitions/).
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::security::{SecurityRequirement, SecurityScheme};
+use crate::security::SecurityScheme;
 
 /// An Agent Card — the self-describing manifest for an A2A agent.
 ///
 /// Published at `/.well-known/agent-card.json` for discovery. Contains the
-/// agent's identity, capabilities, skills, supported interfaces, and security
-/// requirements.
+/// agent's identity, capabilities, skills, security requirements, and
+/// preferred endpoint URL.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCard {
@@ -26,12 +26,24 @@ pub struct AgentCard {
     /// Agent version (e.g., `"1.0.0"`).
     pub version: String,
 
+    /// A2A protocol version (e.g., `"0.3.0"`).
+    #[serde(default = "default_protocol_version")]
+    pub protocol_version: String,
+
+    /// Preferred endpoint URL for this agent.
+    pub url: String,
+
     /// Service provider information.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<AgentProvider>,
 
-    /// Ordered list of supported protocol interfaces.
-    pub supported_interfaces: Vec<AgentInterface>,
+    /// Preferred transport binding (e.g., `"JSONRPC"`, `"GRPC"`, `"HTTP+JSON"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_transport: Option<String>,
+
+    /// Additional interfaces the agent supports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_interfaces: Option<Vec<AgentInterface>>,
 
     /// Supported A2A capabilities.
     pub capabilities: AgentCapabilities,
@@ -41,8 +53,13 @@ pub struct AgentCard {
     pub security_schemes: HashMap<String, SecurityScheme>,
 
     /// Security requirements for accessing this agent.
+    /// Each entry maps a scheme name to required scopes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub security_requirements: Vec<SecurityRequirement>,
+    pub security: Vec<HashMap<String, Vec<String>>>,
+
+    /// Whether the agent supports an authenticated extended card endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_authenticated_extended_card: Option<bool>,
 
     /// Supported input media types across all skills.
     pub default_input_modes: Vec<String>,
@@ -66,6 +83,10 @@ pub struct AgentCard {
     pub documentation_url: Option<String>,
 }
 
+fn default_protocol_version() -> String {
+    "0.3.0".to_string()
+}
+
 /// Service provider of an agent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentProvider {
@@ -75,46 +96,14 @@ pub struct AgentProvider {
     pub url: String,
 }
 
-/// Declares target URL, transport, and protocol version for agent interaction.
+/// An additional interface the agent supports.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct AgentInterface {
-    /// Absolute HTTPS URL where the interface is available.
+    /// Absolute URL where the interface is available.
     pub url: String,
 
-    /// Protocol binding type.
-    pub protocol_binding: ProtocolBinding,
-
-    /// A2A protocol version (e.g., `"1.0"`).
-    pub protocol_version: String,
-
-    /// Tenant ID for multi-tenant deployments.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
-}
-
-/// A2A v1.0 protocol binding types.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ProtocolBinding {
-    /// JSON-RPC 2.0 over HTTP.
-    #[serde(rename = "JSONRPC")]
-    JsonRpc,
-    /// gRPC transport.
-    #[serde(rename = "GRPC")]
-    Grpc,
-    /// REST-style HTTP+JSON binding.
-    #[serde(rename = "HTTP+JSON")]
-    HttpJson,
-}
-
-impl std::fmt::Display for ProtocolBinding {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::JsonRpc => write!(f, "JSONRPC"),
-            Self::Grpc => write!(f, "GRPC"),
-            Self::HttpJson => write!(f, "HTTP+JSON"),
-        }
-    }
+    /// Transport type (e.g., `"JSONRPC"`, `"GRPC"`, `"HTTP+JSON"`).
+    pub transport: String,
 }
 
 /// Optional capabilities supported by an agent.
@@ -129,9 +118,9 @@ pub struct AgentCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub push_notifications: Option<bool>,
 
-    /// Supports extended agent card when authenticated.
+    /// Supports state transition history.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub extended_agent_card: Option<bool>,
+    pub state_transition_history: Option<bool>,
 
     /// Supported protocol extensions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -185,7 +174,7 @@ pub struct AgentSkill {
 
     /// Security requirements specific to this skill.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub security_requirements: Vec<SecurityRequirement>,
+    pub security: Vec<HashMap<String, Vec<String>>>,
 }
 
 /// JWS signature of an Agent Card (RFC 7515 JSON Serialization format).
@@ -206,22 +195,21 @@ pub struct AgentCardSignature {
 /// Build a minimal Agent Card with required fields only.
 ///
 /// Sets reasonable defaults: empty skills, empty security, `text/plain`
-/// input/output modes, and a single `http-rest` interface.
+/// input/output modes.
 pub fn minimal_card(name: &str, description: &str, version: &str, url: &str) -> AgentCard {
     AgentCard {
         name: name.to_string(),
         description: description.to_string(),
         version: version.to_string(),
+        protocol_version: "0.3.0".to_string(),
+        url: url.to_string(),
         provider: None,
-        supported_interfaces: vec![AgentInterface {
-            url: url.to_string(),
-            protocol_binding: ProtocolBinding::HttpJson,
-            protocol_version: "1.0".to_string(),
-            tenant: None,
-        }],
+        preferred_transport: None,
+        additional_interfaces: None,
         capabilities: AgentCapabilities::default(),
         security_schemes: HashMap::new(),
-        security_requirements: Vec::new(),
+        security: Vec::new(),
+        supports_authenticated_extended_card: None,
         default_input_modes: vec!["text/plain".to_string()],
         default_output_modes: vec!["text/plain".to_string()],
         skills: Vec::new(),
@@ -292,28 +280,21 @@ mod tests {
             name: "smart-assistant".to_string(),
             description: "A smart assistant agent".to_string(),
             version: "2.1.0".to_string(),
+            protocol_version: "0.3.0".to_string(),
+            url: "https://agent.acme.example.com/a2a".to_string(),
             provider: Some(AgentProvider {
                 organization: "Acme Corp".to_string(),
                 url: "https://acme.example.com".to_string(),
             }),
-            supported_interfaces: vec![
-                AgentInterface {
-                    url: "https://agent.acme.example.com/a2a".to_string(),
-                    protocol_binding: ProtocolBinding::JsonRpc,
-                    protocol_version: "1.0".to_string(),
-                    tenant: Some("tenant-1".to_string()),
-                },
-                AgentInterface {
-                    url: "https://agent.acme.example.com/rest".to_string(),
-                    protocol_binding: ProtocolBinding::HttpJson,
-                    protocol_version: "1.0".to_string(),
-                    tenant: None,
-                },
-            ],
+            preferred_transport: Some("JSONRPC".to_string()),
+            additional_interfaces: Some(vec![AgentInterface {
+                url: "https://agent.acme.example.com/rest".to_string(),
+                transport: "HTTP+JSON".to_string(),
+            }]),
             capabilities: AgentCapabilities {
                 streaming: Some(true),
                 push_notifications: Some(false),
-                extended_agent_card: None,
+                state_transition_history: None,
                 extensions: vec![AgentExtension {
                     uri: "https://a2a.example.com/ext/logging".to_string(),
                     description: "Structured logging extension".to_string(),
@@ -329,14 +310,11 @@ mod tests {
                     description: None,
                 }),
             )]),
-            security_requirements: vec![crate::security::SecurityRequirement {
-                schemes: HashMap::from([(
-                    "bearer".to_string(),
-                    crate::security::StringList {
-                        list: vec!["agent:invoke".to_string()],
-                    },
-                )]),
-            }],
+            security: vec![HashMap::from([(
+                "bearer".to_string(),
+                vec!["agent:invoke".to_string()],
+            )])],
+            supports_authenticated_extended_card: Some(true),
             default_input_modes: vec!["text/plain".to_string(), "application/json".to_string()],
             default_output_modes: vec!["text/plain".to_string()],
             skills: vec![AgentSkill {
@@ -347,7 +325,7 @@ mod tests {
                 examples: vec!["Write a poem about Rust".to_string()],
                 input_modes: Vec::new(),
                 output_modes: Vec::new(),
-                security_requirements: Vec::new(),
+                security: Vec::new(),
             }],
             signatures: vec![AgentCardSignature {
                 protected: "eyJhbGciOiJFZERTQSJ9".to_string(),
@@ -368,11 +346,7 @@ mod tests {
         let card = minimal_card("test", "desc", "0.1.0", "http://localhost:8787");
         assert!(card.skills.is_empty());
         assert!(card.security_schemes.is_empty());
-        assert_eq!(card.supported_interfaces.len(), 1);
-        assert_eq!(
-            card.supported_interfaces[0].protocol_binding,
-            ProtocolBinding::HttpJson
-        );
-        assert_eq!(card.supported_interfaces[0].protocol_version, "1.0");
+        assert_eq!(card.protocol_version, "0.3.0");
+        assert_eq!(card.url, "http://localhost:8787");
     }
 }

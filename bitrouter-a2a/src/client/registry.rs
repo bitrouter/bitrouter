@@ -24,10 +24,7 @@ pub trait A2aAgentRegistry: Send + Sync {
 }
 use crate::config::A2aAgentConfig;
 use crate::error::A2aGatewayError;
-use crate::request::{
-    CancelTaskRequest, ListTaskPushNotificationConfigsResponse, SendMessageRequest,
-    TaskPushNotificationConfig,
-};
+use crate::request::{CancelTaskRequest, SendMessageRequest, TaskPushNotificationConfig};
 use crate::server::{A2aDiscovery, A2aProxy};
 use crate::stream::StreamResponse;
 use crate::task::{GetTaskRequest, ListTasksRequest, ListTasksResponse, Task};
@@ -113,10 +110,8 @@ impl UpstreamAgentRegistry {
         let agent = self.agent.as_ref()?;
         let mut card = agent.cached_card().await?;
 
-        // Rewrite the first interface URL to point to the gateway.
-        if let Some(iface) = card.supported_interfaces.first_mut() {
-            iface.url.clone_from(&self.external_url);
-        }
+        // Rewrite the primary URL to point to the gateway.
+        card.url.clone_from(&self.external_url);
 
         Some(card)
     }
@@ -189,17 +184,17 @@ impl A2aProxy for UpstreamAgentRegistry {
         self.require_agent()?.get_extended_agent_card().await
     }
 
-    async fn create_push_config(
+    async fn set_push_config(
         &self,
         config: TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
-        self.require_agent()?.create_push_config(config).await
+        self.require_agent()?.set_push_config(config).await
     }
 
     async fn get_push_config(
         &self,
         task_id: &str,
-        config_id: &str,
+        config_id: Option<&str>,
     ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
         self.require_agent()?
             .get_push_config(task_id, config_id)
@@ -209,7 +204,7 @@ impl A2aProxy for UpstreamAgentRegistry {
     async fn list_push_configs(
         &self,
         task_id: &str,
-    ) -> Result<ListTaskPushNotificationConfigsResponse, A2aGatewayError> {
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2aGatewayError> {
         self.require_agent()?.list_push_configs(task_id).await
     }
 
@@ -328,17 +323,17 @@ impl A2aProxy for DynamicAgentRegistry<Arc<UpstreamAgentRegistry>> {
         self.inner().get_extended_agent_card().await
     }
 
-    async fn create_push_config(
+    async fn set_push_config(
         &self,
         config: TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
-        self.inner().create_push_config(config).await
+        self.inner().set_push_config(config).await
     }
 
     async fn get_push_config(
         &self,
         task_id: &str,
-        config_id: &str,
+        config_id: Option<&str>,
     ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
         self.inner().get_push_config(task_id, config_id).await
     }
@@ -346,7 +341,7 @@ impl A2aProxy for DynamicAgentRegistry<Arc<UpstreamAgentRegistry>> {
     async fn list_push_configs(
         &self,
         task_id: &str,
-    ) -> Result<ListTaskPushNotificationConfigsResponse, A2aGatewayError> {
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2aGatewayError> {
         self.inner().list_push_configs(task_id).await
     }
 

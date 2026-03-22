@@ -1,17 +1,13 @@
-//! Typed request structs for A2A v1.0 JSON-RPC methods.
+//! Typed request structs for A2A v0.3.0 JSON-RPC methods.
 
 use serde::{Deserialize, Serialize};
 
 use crate::message::Message;
 
-/// Request parameters for `SendMessage` / `SendStreamingMessage`.
+/// Request parameters for `message/send` / `message/stream`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequest {
-    /// Tenant scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
-
     /// The user message to send.
     pub message: Message,
 
@@ -24,7 +20,7 @@ pub struct SendMessageRequest {
     pub metadata: Option<serde_json::Value>,
 }
 
-/// Client configuration for a `SendMessage` request.
+/// Client configuration for a `message/send` request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageConfiguration {
@@ -34,56 +30,51 @@ pub struct SendMessageConfiguration {
 
     /// Push notification configuration for async updates.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_push_notification_config: Option<TaskPushNotificationConfig>,
+    pub push_notification_config: Option<PushNotificationConfig>,
 
     /// Maximum number of history messages to include in the response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history_length: Option<u32>,
 
-    /// Return immediately without waiting for completion.
+    /// Whether the call should block until completion.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub return_immediately: Option<bool>,
+    pub blocking: Option<bool>,
 }
 
-/// Request parameters for `CancelTask`.
+/// Request parameters for `tasks/cancel`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelTaskRequest {
     /// Task ID to cancel.
     pub id: String,
-
-    /// Tenant scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
 }
 
-/// Request parameters for `SubscribeToTask`.
+/// Request parameters for `tasks/resubscribe`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscribeToTaskRequest {
     /// Task ID to subscribe to.
     pub task_id: String,
-
-    /// Tenant scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
 }
 
-/// Push notification configuration for a task.
+/// Push notification configuration associated with a task.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskPushNotificationConfig {
-    /// Tenant scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
+    /// Task ID this config applies to.
+    pub task_id: String,
 
+    /// The push notification configuration.
+    pub push_notification_config: PushNotificationConfig,
+}
+
+/// Push notification endpoint configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PushNotificationConfig {
     /// Config ID (generated if not provided).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-
-    /// Task ID this config applies to.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
 
     /// Webhook URL to receive push notifications.
     pub url: String,
@@ -94,68 +85,50 @@ pub struct TaskPushNotificationConfig {
 
     /// Authentication info for the webhook.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authentication: Option<AuthenticationInfo>,
+    pub authentication: Option<PushNotificationAuthenticationInfo>,
 }
 
 /// Authentication credentials for push notification webhooks.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthenticationInfo {
-    /// Authentication scheme (e.g., "Bearer").
-    pub scheme: String,
+pub struct PushNotificationAuthenticationInfo {
+    /// Supported authentication schemes.
+    pub schemes: Vec<String>,
 
     /// Credentials value.
-    pub credentials: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<String>,
 }
 
-/// Request parameters for `GetTaskPushNotificationConfig`.
+/// Request parameters for `tasks/pushNotificationConfig/get`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTaskPushNotificationConfigRequest {
-    /// Tenant scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
-
-    /// Config ID.
+    /// Task ID.
     pub id: String,
 
-    /// Task ID.
-    pub task_id: String,
+    /// Optional push notification config ID to get a specific config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub push_notification_config_id: Option<String>,
 }
 
-/// Request parameters for `ListTaskPushNotificationConfigs`.
+/// Request parameters for `tasks/pushNotificationConfig/list`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ListTaskPushNotificationConfigsRequest {
-    /// Tenant scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
-
     /// Task ID.
-    pub task_id: String,
+    pub id: String,
 }
 
-/// Request parameters for `DeleteTaskPushNotificationConfig`.
+/// Request parameters for `tasks/pushNotificationConfig/delete`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteTaskPushNotificationConfigRequest {
-    /// Tenant scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
-
-    /// Config ID.
+    /// Task ID.
     pub id: String,
 
-    /// Task ID.
-    pub task_id: String,
-}
-
-/// Response for `ListTaskPushNotificationConfigs`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ListTaskPushNotificationConfigsResponse {
-    /// Push notification configurations for the task.
-    pub configs: Vec<TaskPushNotificationConfig>,
+    /// Push notification config ID to delete.
+    pub push_notification_config_id: String,
 }
 
 #[cfg(test)]
@@ -166,8 +139,8 @@ mod tests {
     #[test]
     fn send_message_request_round_trip() {
         let req = SendMessageRequest {
-            tenant: None,
             message: Message {
+                kind: "message".to_string(),
                 role: MessageRole::User,
                 parts: vec![Part::text("hello")],
                 message_id: "msg-1".to_string(),
@@ -175,13 +148,12 @@ mod tests {
                 task_id: None,
                 reference_task_ids: Vec::new(),
                 metadata: None,
-                extensions: Vec::new(),
             },
             configuration: Some(SendMessageConfiguration {
                 accepted_output_modes: Some(vec!["text/plain".to_string()]),
-                task_push_notification_config: None,
+                push_notification_config: None,
                 history_length: Some(5),
-                return_immediately: None,
+                blocking: None,
             }),
             metadata: None,
         };
@@ -195,7 +167,6 @@ mod tests {
     fn cancel_task_request_round_trip() {
         let req = CancelTaskRequest {
             id: "task-1".to_string(),
-            tenant: Some("t1".to_string()),
         };
 
         let json = serde_json::to_string(&req).expect("serialize");
@@ -206,15 +177,16 @@ mod tests {
     #[test]
     fn push_notification_config_round_trip() {
         let config = TaskPushNotificationConfig {
-            tenant: None,
-            id: Some("cfg-1".to_string()),
-            task_id: Some("task-1".to_string()),
-            url: "https://example.com/webhook".to_string(),
-            token: None,
-            authentication: Some(AuthenticationInfo {
-                scheme: "Bearer".to_string(),
-                credentials: "tok-123".to_string(),
-            }),
+            task_id: "task-1".to_string(),
+            push_notification_config: PushNotificationConfig {
+                id: Some("cfg-1".to_string()),
+                url: "https://example.com/webhook".to_string(),
+                token: None,
+                authentication: Some(PushNotificationAuthenticationInfo {
+                    schemes: vec!["Bearer".to_string()],
+                    credentials: Some("tok-123".to_string()),
+                }),
+            },
         };
 
         let json = serde_json::to_string(&config).expect("serialize");

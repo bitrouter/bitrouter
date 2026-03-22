@@ -1,7 +1,7 @@
-//! A2A v1.0 streaming response types.
+//! A2A v0.3.0 streaming response types.
 //!
-//! Defines the event types for `SendStreamingMessage` and `SubscribeToTask`
-//! SSE streams per the A2A v1.0 specification.
+//! Defines the event types for `message/stream` and `tasks/resubscribe`
+//! SSE streams per the A2A v0.3.0 specification.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,19 +10,23 @@ use crate::task::{Task, TaskStatus};
 
 /// A streaming response event from the server.
 ///
-/// Serializes as `{"message": {...}}`, `{"task": {...}}`,
-/// `{"statusUpdate": {...}}`, or `{"artifactUpdate": {...}}`,
-/// matching the A2A v1.0 `StreamResponse` wire format.
+/// Serializes with an internally tagged `kind` field:
+/// `"task"`, `"message"`, `"status-update"`, or `"artifact-update"`,
+/// matching the A2A v0.3.0 `StreamResponse` wire format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "kind")]
 pub enum StreamResponse {
     /// Complete task snapshot.
+    #[serde(rename = "task")]
     Task(Task),
     /// Direct message response.
+    #[serde(rename = "message")]
     Message(Message),
     /// Task status change notification.
+    #[serde(rename = "status-update")]
     StatusUpdate(TaskStatusUpdateEvent),
     /// Artifact data chunk or complete artifact.
+    #[serde(rename = "artifact-update")]
     ArtifactUpdate(TaskArtifactUpdateEvent),
 }
 
@@ -39,6 +43,10 @@ pub struct TaskStatusUpdateEvent {
 
     /// New task status.
     pub status: TaskStatus,
+
+    /// Whether this is the final event for the stream.
+    #[serde(rename = "final")]
+    pub is_final: bool,
 
     /// Extension metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,15 +92,17 @@ mod tests {
             context_id: Some("ctx-1".to_string()),
             status: TaskStatus {
                 state: TaskState::Working,
-                timestamp: "2026-03-19T00:00:00Z".to_string(),
+                timestamp: Some("2026-03-19T00:00:00Z".to_string()),
                 message: None,
             },
+            is_final: false,
             metadata: None,
         };
 
         let json = serde_json::to_string(&event).expect("serialize");
         let parsed: TaskStatusUpdateEvent = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.task_id, "task-1");
+        assert!(!parsed.is_final);
     }
 
     #[test]
@@ -102,14 +112,15 @@ mod tests {
             context_id: None,
             status: TaskStatus {
                 state: TaskState::Completed,
-                timestamp: "2026-03-19T00:00:00Z".to_string(),
+                timestamp: Some("2026-03-19T00:00:00Z".to_string()),
                 message: None,
             },
+            is_final: true,
             metadata: None,
         });
 
         let json = serde_json::to_string(&event).expect("serialize");
-        // Externally tagged: {"statusUpdate": {...}}
-        assert!(json.contains("\"statusUpdate\""));
+        // Internally tagged: {"kind": "status-update", ...}
+        assert!(json.contains("\"kind\":\"status-update\""));
     }
 }

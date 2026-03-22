@@ -10,7 +10,7 @@ use crate::error::A2aGatewayError;
 use crate::request::{
     CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, ListTaskPushNotificationConfigsRequest,
-    ListTaskPushNotificationConfigsResponse, SendMessageRequest, TaskPushNotificationConfig,
+    SendMessageRequest, TaskPushNotificationConfig,
 };
 use crate::stream::StreamResponse;
 use crate::task::{GetTaskRequest, ListTasksRequest, ListTasksResponse, Task};
@@ -67,12 +67,7 @@ impl UpstreamA2aAgent {
                     reason: e.to_string(),
                 })?;
 
-        let endpoint = A2aClient::resolve_endpoint(&card)
-            .ok_or_else(|| A2aGatewayError::UpstreamConnect {
-                name: config.name.clone(),
-                reason: "agent card has no supported interfaces".to_string(),
-            })?
-            .to_string();
+        let endpoint = A2aClient::resolve_endpoint(&card).to_string();
 
         tracing::info!(
             agent = %config.name,
@@ -127,7 +122,7 @@ impl UpstreamA2aAgent {
 
     // ── A2A protocol forwarding ──────────────────────────────────
 
-    /// Forward a `SendMessage` request to the upstream.
+    /// Forward a `message/send` request to the upstream.
     pub async fn send_message(
         &self,
         request: SendMessageRequest,
@@ -147,7 +142,7 @@ impl UpstreamA2aAgent {
         })
     }
 
-    /// Forward a `GetTask` request to the upstream.
+    /// Forward a `tasks/get` request to the upstream.
     pub async fn get_task(&self, request: GetTaskRequest) -> Result<Task, A2aGatewayError> {
         self.client
             .get_task(&self.endpoint, request)
@@ -158,7 +153,7 @@ impl UpstreamA2aAgent {
             })
     }
 
-    /// Forward a `CancelTask` request to the upstream.
+    /// Forward a `tasks/cancel` request to the upstream.
     pub async fn cancel_task(&self, request: CancelTaskRequest) -> Result<Task, A2aGatewayError> {
         self.client
             .cancel_task(&self.endpoint, request)
@@ -169,7 +164,7 @@ impl UpstreamA2aAgent {
             })
     }
 
-    /// Forward a `ListTasks` request to the upstream.
+    /// Forward a `tasks/list` request to the upstream.
     pub async fn list_tasks(
         &self,
         request: ListTasksRequest,
@@ -183,7 +178,7 @@ impl UpstreamA2aAgent {
             })
     }
 
-    /// Forward a `GetExtendedAgentCard` request to the upstream.
+    /// Forward a `agent/getAuthenticatedExtendedCard` request to the upstream.
     pub async fn get_extended_agent_card(&self) -> Result<AgentCard, A2aGatewayError> {
         self.client
             .get_extended_agent_card(&self.endpoint)
@@ -194,13 +189,13 @@ impl UpstreamA2aAgent {
             })
     }
 
-    /// Forward a push notification config create request.
-    pub async fn create_push_config(
+    /// Forward a push notification config set request.
+    pub async fn set_push_config(
         &self,
         config: TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
         self.client
-            .create_push_notification_config(&self.endpoint, config)
+            .set_push_notification_config(&self.endpoint, config)
             .await
             .map_err(|e| A2aGatewayError::UpstreamCall {
                 name: self.name.clone(),
@@ -212,12 +207,11 @@ impl UpstreamA2aAgent {
     pub async fn get_push_config(
         &self,
         task_id: &str,
-        config_id: &str,
+        config_id: Option<&str>,
     ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
         let request = GetTaskPushNotificationConfigRequest {
-            tenant: None,
-            id: config_id.to_string(),
-            task_id: task_id.to_string(),
+            id: task_id.to_string(),
+            push_notification_config_id: config_id.map(|s| s.to_string()),
         };
         self.client
             .get_push_notification_config(&self.endpoint, request)
@@ -232,10 +226,9 @@ impl UpstreamA2aAgent {
     pub async fn list_push_configs(
         &self,
         task_id: &str,
-    ) -> Result<ListTaskPushNotificationConfigsResponse, A2aGatewayError> {
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2aGatewayError> {
         let request = ListTaskPushNotificationConfigsRequest {
-            tenant: None,
-            task_id: task_id.to_string(),
+            id: task_id.to_string(),
         };
         self.client
             .list_push_notification_configs(&self.endpoint, request)
@@ -253,9 +246,8 @@ impl UpstreamA2aAgent {
         config_id: &str,
     ) -> Result<(), A2aGatewayError> {
         let request = DeleteTaskPushNotificationConfigRequest {
-            tenant: None,
-            id: config_id.to_string(),
-            task_id: task_id.to_string(),
+            id: task_id.to_string(),
+            push_notification_config_id: config_id.to_string(),
         };
         self.client
             .delete_push_notification_config(&self.endpoint, request)

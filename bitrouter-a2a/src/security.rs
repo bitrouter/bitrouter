@@ -1,4 +1,4 @@
-//! A2A v1.0 security scheme types.
+//! A2A v0.3.0 security scheme types.
 //!
 //! Models the OpenAPI 3.2-aligned security schemes used in Agent Cards
 //! for declaring authentication requirements.
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// A security scheme declared in an Agent Card.
 ///
-/// Mirrors the A2A v1.0 `SecurityScheme` oneof, serialized with a `type`
+/// Mirrors the A2A v0.3.0 `SecurityScheme` oneof, serialized with a `type`
 /// discriminator for JSON round-tripping.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -183,23 +183,6 @@ pub struct MutualTlsSecurityScheme {
     pub description: Option<String>,
 }
 
-/// Security requirements for accessing an agent or skill.
-///
-/// Each entry maps a security scheme name (from `AgentCard.security_schemes`)
-/// to a list of required scopes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SecurityRequirement {
-    /// Map of scheme names to required scopes.
-    pub schemes: HashMap<String, StringList>,
-}
-
-/// A list of strings, used for OAuth scope lists in security requirements.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StringList {
-    /// The string values.
-    pub list: Vec<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,21 +232,5 @@ mod tests {
         let json = serde_json::to_string(&flows).expect("serialize");
         let parsed: OAuthFlows = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(flows, parsed);
-    }
-
-    #[test]
-    fn security_requirement_round_trip() {
-        let req = SecurityRequirement {
-            schemes: HashMap::from([(
-                "bearer".to_string(),
-                StringList {
-                    list: vec!["agent:read".to_string()],
-                },
-            )]),
-        };
-
-        let json = serde_json::to_string(&req).expect("serialize");
-        let parsed: SecurityRequirement = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(req, parsed);
     }
 }

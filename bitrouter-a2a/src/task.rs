@@ -1,39 +1,42 @@
-//! A2A v1.0 Task types.
+//! A2A v0.3.0 Task types.
 //!
 //! Defines the task lifecycle primitives per the
-//! [A2A v1.0 specification](https://a2a-protocol.org/latest/definitions/).
+//! [A2A v0.3.0 specification](https://a2a-protocol.org/latest/definitions/).
 
 use serde::{Deserialize, Serialize};
 
 use crate::message::{Artifact, Message};
 
-/// Task lifecycle states per A2A v1.0.
+/// Task lifecycle states per A2A v0.3.0.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TaskState {
     /// Task accepted, awaiting processing.
-    #[serde(rename = "TASK_STATE_SUBMITTED")]
+    #[serde(rename = "submitted")]
     Submitted,
     /// Task actively executing.
-    #[serde(rename = "TASK_STATE_WORKING")]
+    #[serde(rename = "working")]
     Working,
     /// Task completed successfully.
-    #[serde(rename = "TASK_STATE_COMPLETED")]
+    #[serde(rename = "completed")]
     Completed,
     /// Task execution failed.
-    #[serde(rename = "TASK_STATE_FAILED")]
+    #[serde(rename = "failed")]
     Failed,
     /// Task canceled by client.
-    #[serde(rename = "TASK_STATE_CANCELED")]
+    #[serde(rename = "canceled")]
     Canceled,
     /// Agent declined the task.
-    #[serde(rename = "TASK_STATE_REJECTED")]
+    #[serde(rename = "rejected")]
     Rejected,
     /// Waiting for additional client input.
-    #[serde(rename = "TASK_STATE_INPUT_REQUIRED")]
+    #[serde(rename = "input-required")]
     InputRequired,
     /// Authentication needed to proceed.
-    #[serde(rename = "TASK_STATE_AUTH_REQUIRED")]
+    #[serde(rename = "auth-required")]
     AuthRequired,
+    /// Unknown or unrecognized state.
+    #[serde(rename = "unknown")]
+    Unknown,
 }
 
 /// Current status of a task.
@@ -43,14 +46,15 @@ pub struct TaskStatus {
     pub state: TaskState,
 
     /// ISO 8601 timestamp of the status change.
-    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 
     /// Optional agent message accompanying the status change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<Message>,
 }
 
-/// Request parameters for the `GetTask` JSON-RPC method.
+/// Request parameters for the `tasks/get` JSON-RPC method.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTaskRequest {
@@ -60,13 +64,9 @@ pub struct GetTaskRequest {
     /// Maximum number of history messages to return.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history_length: Option<u32>,
-
-    /// Tenant scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
 }
 
-/// Request parameters for the `ListTasks` JSON-RPC method.
+/// Request parameters for the `tasks/list` JSON-RPC method.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ListTasksRequest {
@@ -97,13 +97,9 @@ pub struct ListTasksRequest {
     /// Whether to include artifacts in the response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_artifacts: Option<bool>,
-
-    /// Tenant scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
 }
 
-/// Response for the `ListTasks` JSON-RPC method.
+/// Response for the `tasks/list` JSON-RPC method.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ListTasksResponse {
@@ -125,12 +121,15 @@ pub struct ListTasksResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
+    /// Object kind — always `"task"`.
+    #[serde(default = "default_task_kind")]
+    pub kind: String,
+
     /// Unique task identifier.
     pub id: String,
 
     /// Logical conversation grouping across related tasks.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_id: Option<String>,
+    pub context_id: String,
 
     /// Current task status.
     pub status: TaskStatus,
@@ -148,33 +147,41 @@ pub struct Task {
     pub metadata: Option<serde_json::Value>,
 }
 
+fn default_task_kind() -> String {
+    "task".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::message::{MessageRole, Part};
 
     #[test]
-    fn task_state_serializes_v1_format() {
+    fn task_state_serializes_v03_format() {
         let json = serde_json::to_string(&TaskState::InputRequired).expect("serialize");
-        assert_eq!(json, "\"TASK_STATE_INPUT_REQUIRED\"");
+        assert_eq!(json, "\"input-required\"");
 
-        let parsed: TaskState =
-            serde_json::from_str("\"TASK_STATE_AUTH_REQUIRED\"").expect("deserialize");
+        let parsed: TaskState = serde_json::from_str("\"auth-required\"").expect("deserialize");
         assert_eq!(parsed, TaskState::AuthRequired);
 
         let json = serde_json::to_string(&TaskState::Submitted).expect("serialize");
-        assert_eq!(json, "\"TASK_STATE_SUBMITTED\"");
+        assert_eq!(json, "\"submitted\"");
+
+        let json = serde_json::to_string(&TaskState::Unknown).expect("serialize");
+        assert_eq!(json, "\"unknown\"");
     }
 
     #[test]
     fn task_round_trip() {
         let task = Task {
+            kind: "task".to_string(),
             id: "task-001".to_string(),
-            context_id: Some("ctx-abc".to_string()),
+            context_id: "ctx-abc".to_string(),
             status: TaskStatus {
                 state: TaskState::Completed,
-                timestamp: "2026-03-17T10:30:00Z".to_string(),
+                timestamp: Some("2026-03-17T10:30:00Z".to_string()),
                 message: Some(Message {
+                    kind: "message".to_string(),
                     role: MessageRole::Agent,
                     parts: vec![Part::text("Done reviewing")],
                     message_id: "msg-resp".to_string(),
@@ -182,7 +189,6 @@ mod tests {
                     task_id: Some("task-001".to_string()),
                     reference_task_ids: Vec::new(),
                     metadata: None,
-                    extensions: Vec::new(),
                 }),
             },
             artifacts: vec![Artifact {
@@ -191,7 +197,6 @@ mod tests {
                 description: None,
                 parts: vec![Part::text("LGTM")],
                 metadata: None,
-                extensions: Vec::new(),
             }],
             history: Vec::new(),
             metadata: None,
@@ -205,11 +210,12 @@ mod tests {
     #[test]
     fn minimal_task_round_trip() {
         let task = Task {
+            kind: "task".to_string(),
             id: "task-002".to_string(),
-            context_id: None,
+            context_id: "ctx-default".to_string(),
             status: TaskStatus {
                 state: TaskState::Submitted,
-                timestamp: "2026-03-17T10:00:00Z".to_string(),
+                timestamp: Some("2026-03-17T10:00:00Z".to_string()),
                 message: None,
             },
             artifacts: Vec::new(),
