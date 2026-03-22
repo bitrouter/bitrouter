@@ -1743,11 +1743,8 @@ dependencies = [
 name = "bitrouter-api"
 version = "0.11.0"
 dependencies = [
- "bitrouter-anthropic",
  "bitrouter-config",
  "bitrouter-core",
- "bitrouter-google",
- "bitrouter-openai",
  "bs58",
  "ed25519-dalek",
  "futures-core",
