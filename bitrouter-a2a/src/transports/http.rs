@@ -330,7 +330,7 @@ fn parse_send_message_result(
             let msg = serde_json::from_value::<Message>(result).map_err(|e| {
                 A2aGatewayError::Client(format!("failed to parse message response: {e}"))
             })?;
-            Ok(SendMessageResult::Message(msg))
+            Ok(SendMessageResult::Message(Box::new(msg)))
         }
         _ => {
             if result.get("id").is_some() && result.get("status").is_some() {
@@ -342,7 +342,7 @@ fn parse_send_message_result(
                 let msg = serde_json::from_value::<Message>(result).map_err(|e| {
                     A2aGatewayError::Client(format!("failed to parse SendMessage result: {e}"))
                 })?;
-                Ok(SendMessageResult::Message(msg))
+                Ok(SendMessageResult::Message(Box::new(msg)))
             }
         }
     }

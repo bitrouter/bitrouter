@@ -790,7 +790,7 @@ pub enum SendMessageResult {
     /// Server returned a full task with status and lifecycle.
     Task(Box<Task>),
     /// Server returned a direct message response (no task lifecycle).
-    Message(Message),
+    Message(Box<Message>),
 }
 
 // ── Security ─────────────────────────────────────────────────────
