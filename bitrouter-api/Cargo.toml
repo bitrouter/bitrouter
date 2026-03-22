@@ -18,6 +18,7 @@ mpp-solana = [
     "dep:mpp",
     "mpp/server",
     "dep:bitrouter-config",
+    "bitrouter-config/mpp-solana",
     "dep:ed25519-dalek",
     "dep:bs58",
     "dep:time",
