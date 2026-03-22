@@ -22,6 +22,8 @@ const PROTOCOL_VERSION: &str = "2025-11-25";
 /// Server name returned during initialization.
 const SERVER_NAME: &str = "bitrouter";
 
+use super::observe::McpObserveContext;
+
 /// Combined MCP server filter: `POST /mcp` + `GET /mcp/sse`.
 ///
 /// When `server` is `None` (no MCP configured), both endpoints return 404.
@@ -31,13 +33,30 @@ pub fn mcp_server_filter<T>(
 where
     T: McpServer + 'static,
 {
-    mcp_jsonrpc_filter(server.clone()).or(mcp_sse_filter(server))
+    mcp_jsonrpc_filter(server.clone(), None).or(mcp_sse_filter(server))
+}
+
+/// Combined MCP server filter with tool call observation.
+pub fn mcp_server_filter_with_observe<T>(
+    server: Option<Arc<T>>,
+    observer: Arc<dyn bitrouter_core::observe::ToolObserveCallback>,
+    cost_fn: super::observe::ToolCostFn,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: McpServer + 'static,
+{
+    let ctx = Some(McpObserveContext {
+        observer,
+        cost_fn,
+    });
+    mcp_jsonrpc_filter(server.clone(), ctx).or(mcp_sse_filter(server))
 }
 
 // ── POST /mcp ────────────────────────────────────────────────────────
 
 fn mcp_jsonrpc_filter<T>(
     server: Option<Arc<T>>,
+    observe_ctx: Option<McpObserveContext>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
     T: McpServer + 'static,
@@ -47,12 +66,14 @@ where
         .and(warp::post())
         .and(warp::body::json::<serde_json::Value>())
         .and(warp::any().map(move || server.clone()))
+        .and(warp::any().map(move || observe_ctx.clone()))
         .then(handle_jsonrpc_value::<T>)
 }
 
 async fn handle_jsonrpc_value<T: McpServer>(
     body: serde_json::Value,
     server: Option<Arc<T>>,
+    observe_ctx: Option<McpObserveContext>,
 ) -> Box<dyn warp::Reply> {
     let Some(server) = server else {
         return Box::new(warp::reply::with_status(
@@ -79,7 +100,8 @@ async fn handle_jsonrpc_value<T: McpServer>(
 
     match message {
         JsonRpcMessage::Request(req) => {
-            let resp = dispatch_request(&req.id, &req.method, req.params, &*server).await;
+            let resp =
+                dispatch_request(&req.id, &req.method, req.params, &*server, &observe_ctx).await;
             Box::new(warp::reply::json(&resp))
         }
         JsonRpcMessage::Notification(notif) => {
@@ -105,12 +127,13 @@ async fn dispatch_request<T: McpServer>(
     method: &str,
     params: Option<serde_json::Value>,
     server: &T,
+    observe_ctx: &Option<McpObserveContext>,
 ) -> JsonRpcResponse {
     match method {
         "initialize" => handle_initialize(id),
         "ping" => handle_ping(id),
         "tools/list" => tools::handle_tools_list(id, server).await,
-        "tools/call" => tools::handle_tools_call(id, params, server).await,
+        "tools/call" => tools::handle_tools_call(id, params, server, observe_ctx).await,
         "resources/list" => resources::handle_resources_list(id, server).await,
         "resources/read" => resources::handle_resources_read(id, params, server).await,
         "resources/templates/list" => resources::handle_resource_templates_list(id, server).await,

@@ -1,6 +1,7 @@
 mod completion;
 mod filters;
 mod logging;
+mod observe;
 mod prompts;
 mod resources;
 mod subscriptions;
@@ -9,4 +10,5 @@ mod tests;
 mod tools;
 mod types;
 
-pub use filters::mcp_server_filter;
+pub use filters::{mcp_server_filter, mcp_server_filter_with_observe};
+pub use observe::ToolCostFn;

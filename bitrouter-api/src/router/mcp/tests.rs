@@ -335,7 +335,7 @@ async fn tools_list_returns_tools() {
     .await;
     let tools = json["result"]["tools"].as_array().expect("tools array");
     assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["name"], "test/echo");
+    assert_eq!(tools[0]["name"], "test__echo");
     assert_eq!(tools[0]["description"], "Echo tool");
 }
 
@@ -348,7 +348,7 @@ async fn tools_call_succeeds() {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "test/echo", "arguments": {"message": "hi"}}
+            "params": {"name": "test__echo", "arguments": {"message": "hi"}}
         }),
     )
     .await;

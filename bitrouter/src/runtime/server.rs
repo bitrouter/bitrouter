@@ -243,7 +243,19 @@ where
 
             let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
                 .and(admin_tools::admin_tools_filter(registry.clone()));
-            let server = mcp_admin::mcp_server_filter(registry.clone());
+
+            // Build MCP server filter with tool call observation.
+            let tool_observer: Arc<dyn ToolObserveCallback> = composite.clone();
+            let tool_pricing = self.config.mcp_server_pricing.clone();
+            let tool_cost_fn: mcp_admin::ToolCostFn =
+                Arc::new(move |server: &str, tool: &str| {
+                    tool_pricing.get(server).map_or(0.0, |p| p.cost_for(tool))
+                });
+            let server = mcp_admin::mcp_server_filter_with_observe(
+                registry.clone(),
+                tool_observer,
+                tool_cost_fn,
+            );
             let tools = bitrouter_api::router::tools::tools_filter(registry);
 
             (admin, server, tools, refresh_guard)
