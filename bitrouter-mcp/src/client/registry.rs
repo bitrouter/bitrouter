@@ -7,10 +7,13 @@ use tokio::sync::{Notify, RwLock, broadcast};
 use bitrouter_core::routers::upstream::{ToolServerAccessGroups, ToolServerConfig};
 
 use crate::error::McpGatewayError;
-use crate::server::{McpPromptServer, McpResourceServer, McpToolServer};
+use crate::server::{
+    McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
+    McpSubscriptionServer, McpToolServer,
+};
 use crate::types::{
-    McpGetPromptResult, McpPrompt, McpResource, McpResourceContent, McpResourceTemplate, McpTool,
-    McpToolCallResult,
+    CompleteParams, CompleteResult, Completion, LoggingLevel, McpGetPromptResult, McpPrompt,
+    McpResource, McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
 };
 
 use super::upstream::UpstreamConnection;
@@ -296,6 +299,31 @@ impl McpResourceServer for Arc<ConfigMcpRegistry> {
     }
 }
 
+/// `McpSubscriptionServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
+impl McpSubscriptionServer for Arc<ConfigMcpRegistry> {
+    async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
+        (**self).subscribe_resource(uri).await
+    }
+
+    async fn unsubscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
+        (**self).unsubscribe_resource(uri).await
+    }
+}
+
+/// `McpLoggingServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
+impl McpLoggingServer for Arc<ConfigMcpRegistry> {
+    async fn set_logging_level(&self, level: LoggingLevel) -> Result<(), McpGatewayError> {
+        (**self).set_logging_level(level).await
+    }
+}
+
+/// `McpCompletionServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
+impl McpCompletionServer for Arc<ConfigMcpRegistry> {
+    async fn complete(&self, params: CompleteParams) -> Result<CompleteResult, McpGatewayError> {
+        (**self).complete(params).await
+    }
+}
+
 /// `McpPromptServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
 impl McpPromptServer for Arc<ConfigMcpRegistry> {
     async fn list_prompts(&self) -> Vec<McpPrompt> {
@@ -406,6 +434,31 @@ impl McpResourceServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
     }
 }
 
+/// [`McpSubscriptionServer`] — delegates to inner `ConfigMcpRegistry`.
+impl McpSubscriptionServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
+    async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
+        <ConfigMcpRegistry as McpSubscriptionServer>::subscribe_resource(self.inner(), uri).await
+    }
+
+    async fn unsubscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
+        <ConfigMcpRegistry as McpSubscriptionServer>::unsubscribe_resource(self.inner(), uri).await
+    }
+}
+
+/// [`McpLoggingServer`] — delegates to inner `ConfigMcpRegistry`.
+impl McpLoggingServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
+    async fn set_logging_level(&self, level: LoggingLevel) -> Result<(), McpGatewayError> {
+        <ConfigMcpRegistry as McpLoggingServer>::set_logging_level(self.inner(), level).await
+    }
+}
+
+/// [`McpCompletionServer`] — delegates to inner `ConfigMcpRegistry`.
+impl McpCompletionServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
+    async fn complete(&self, params: CompleteParams) -> Result<CompleteResult, McpGatewayError> {
+        <ConfigMcpRegistry as McpCompletionServer>::complete(self.inner(), params).await
+    }
+}
+
 /// [`McpPromptServer`] — delegates to inner `ConfigMcpRegistry`.
 impl McpPromptServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
     async fn list_prompts(&self) -> Vec<McpPrompt> {
@@ -513,6 +566,43 @@ impl McpPromptServer for ConfigMcpRegistry {
 
     fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
         self.prompt_change_tx.subscribe()
+    }
+}
+
+/// [`McpSubscriptionServer`] impl on raw `ConfigMcpRegistry`.
+///
+/// Resource subscriptions are accepted but currently no-ops — the upstream
+/// refresh listeners already detect list-level changes. Per-resource
+/// granularity can be added later.
+impl McpSubscriptionServer for ConfigMcpRegistry {
+    async fn subscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
+        Ok(())
+    }
+
+    async fn unsubscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
+        Ok(())
+    }
+}
+
+/// [`McpLoggingServer`] impl on raw `ConfigMcpRegistry`.
+impl McpLoggingServer for ConfigMcpRegistry {
+    async fn set_logging_level(&self, _level: LoggingLevel) -> Result<(), McpGatewayError> {
+        Ok(())
+    }
+}
+
+/// [`McpCompletionServer`] impl on raw `ConfigMcpRegistry`.
+///
+/// Returns empty completions — upstreams do not yet expose completion support.
+impl McpCompletionServer for ConfigMcpRegistry {
+    async fn complete(&self, _params: CompleteParams) -> Result<CompleteResult, McpGatewayError> {
+        Ok(CompleteResult {
+            completion: Completion {
+                values: Vec::new(),
+                has_more: None,
+                total: None,
+            },
+        })
     }
 }
 

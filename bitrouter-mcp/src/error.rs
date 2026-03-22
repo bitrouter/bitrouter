@@ -33,6 +33,12 @@ pub enum McpGatewayError {
 
     #[error("session expired for '{name}': server returned 404")]
     SessionExpired { name: String },
+
+    #[error("subscription not supported for resource: {uri}")]
+    SubscriptionNotSupported { uri: String },
+
+    #[error("completion not available for: {reference}")]
+    CompletionNotAvailable { reference: String },
 }
 
 #[cfg(test)]

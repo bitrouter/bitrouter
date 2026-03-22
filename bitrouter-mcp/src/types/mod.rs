@@ -190,6 +190,10 @@ pub struct ServerCapabilities {
     pub resources: Option<ResourcesCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompts: Option<PromptsCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logging: Option<LoggingCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completions: Option<CompletionsCapability>,
 }
 
 /// Capability flags for the `tools` feature.
@@ -320,6 +324,155 @@ pub struct McpGetPromptResult {
 pub struct PromptsCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
+}
+
+// ── Logging types ──────────────────────────────────────────────────
+
+/// Logging severity levels defined by the MCP 2025-11-25 spec.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LoggingLevel {
+    Debug,
+    Info,
+    Notice,
+    Warning,
+    Error,
+    Critical,
+    Alert,
+    Emergency,
+}
+
+/// Parameters for the `logging/setLevel` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetLoggingLevelParams {
+    pub level: LoggingLevel,
+}
+
+/// Capability flags for the `logging` feature.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LoggingCapability {}
+
+// ── Resource subscription types ────────────────────────────────────
+
+/// Parameters for the `resources/subscribe` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscribeResourceParams {
+    pub uri: String,
+}
+
+/// Parameters for the `resources/unsubscribe` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnsubscribeResourceParams {
+    pub uri: String,
+}
+
+// ── Completion types ───────────────────────────────────────────────
+
+/// Parameters for the `completion/complete` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompleteParams {
+    /// Reference to the prompt or resource to complete.
+    #[serde(rename = "ref")]
+    pub reference: CompletionRef,
+    /// The argument to complete.
+    pub argument: CompletionArgument,
+}
+
+/// A reference to a prompt or resource for completion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum CompletionRef {
+    #[serde(rename = "ref/prompt")]
+    Prompt { name: String },
+    #[serde(rename = "ref/resource")]
+    Resource { uri: String },
+}
+
+/// An argument being completed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletionArgument {
+    /// The name of the argument.
+    pub name: String,
+    /// The current partial value.
+    pub value: String,
+}
+
+/// Response to the `completion/complete` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompleteResult {
+    pub completion: Completion,
+}
+
+/// Completion suggestions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Completion {
+    /// Suggested completion values.
+    pub values: Vec<String>,
+    /// Whether there are more completions available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
+    /// Total number of available completions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u32>,
+}
+
+/// Capability flags for the `completions` feature.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompletionsCapability {}
+
+// ── Notification parameter types ───────────────────────────────────
+
+/// Parameters for `notifications/cancelled`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelledNotificationParams {
+    /// The ID of the request being cancelled.
+    pub request_id: JsonRpcId,
+    /// Optional human-readable reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// A progress token — may be a string or a number.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProgressToken {
+    Str(String),
+    Number(i64),
+}
+
+/// Parameters for `notifications/progress`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressNotificationParams {
+    /// Token matching the progress token from the original request.
+    pub progress_token: ProgressToken,
+    /// Current progress value.
+    pub progress: f64,
+    /// Total expected value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+    /// Human-readable progress message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Parameters for `notifications/resources/updated`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceUpdatedNotificationParams {
+    pub uri: String,
+}
+
+/// Parameters for `notifications/message` (log messages).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogMessageNotificationParams {
+    /// Severity level.
+    pub level: LoggingLevel,
+    /// Optional logger name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logger: Option<String>,
+    /// Arbitrary log data.
+    pub data: serde_json::Value,
 }
 
 // ── JSON-RPC 2.0 envelope types ───────────────────────────────────

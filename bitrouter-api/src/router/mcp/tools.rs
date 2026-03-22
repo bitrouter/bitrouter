@@ -64,7 +64,10 @@ pub fn gateway_error_to_jsonrpc(err: &McpGatewayError) -> (i64, String) {
         | McpGatewayError::PromptNotFound { .. } => {
             (error_codes::METHOD_NOT_FOUND, err.to_string())
         }
-        McpGatewayError::InvalidConfig { .. } | McpGatewayError::ParamDenied { .. } => {
+        McpGatewayError::InvalidConfig { .. }
+        | McpGatewayError::ParamDenied { .. }
+        | McpGatewayError::SubscriptionNotSupported { .. }
+        | McpGatewayError::CompletionNotAvailable { .. } => {
             (error_codes::INVALID_PARAMS, err.to_string())
         }
         _ => (error_codes::INTERNAL_ERROR, err.to_string()),

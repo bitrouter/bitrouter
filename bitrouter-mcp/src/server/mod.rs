@@ -9,8 +9,8 @@ use tokio::sync::broadcast;
 
 use crate::error::McpGatewayError;
 use crate::types::{
-    McpGetPromptResult, McpPrompt, McpResource, McpResourceContent, McpResourceTemplate, McpTool,
-    McpToolCallResult,
+    CompleteParams, CompleteResult, LoggingLevel, McpGetPromptResult, McpPrompt, McpResource,
+    McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
 };
 
 /// Trait for serving MCP tools to downstream clients.
@@ -69,4 +69,41 @@ pub trait McpPromptServer: Send + Sync {
 
     /// Subscribe to prompt list change notifications.
     fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()>;
+}
+
+/// Trait for handling per-resource subscriptions.
+///
+/// When a client subscribes to a resource URI, the server should send
+/// `notifications/resources/updated` over the SSE channel when the
+/// resource changes.
+pub trait McpSubscriptionServer: Send + Sync {
+    /// Subscribe to updates for a specific resource URI.
+    fn subscribe_resource(
+        &self,
+        uri: &str,
+    ) -> impl Future<Output = Result<(), McpGatewayError>> + Send;
+
+    /// Unsubscribe from updates for a specific resource URI.
+    fn unsubscribe_resource(
+        &self,
+        uri: &str,
+    ) -> impl Future<Output = Result<(), McpGatewayError>> + Send;
+}
+
+/// Trait for managing the server's logging level.
+pub trait McpLoggingServer: Send + Sync {
+    /// Set the logging level for the server.
+    fn set_logging_level(
+        &self,
+        level: LoggingLevel,
+    ) -> impl Future<Output = Result<(), McpGatewayError>> + Send;
+}
+
+/// Trait for providing argument auto-completion.
+pub trait McpCompletionServer: Send + Sync {
+    /// Provide completion suggestions for a prompt or resource argument.
+    fn complete(
+        &self,
+        params: CompleteParams,
+    ) -> impl Future<Output = Result<CompleteResult, McpGatewayError>> + Send;
 }

@@ -10,13 +10,14 @@ use tokio_stream::StreamExt;
 use warp::Filter;
 
 use super::types::{
-    InitializeResult, JsonRpcId, JsonRpcMessage, JsonRpcResponse, McpServer, PromptsCapability,
-    ResourcesCapability, ServerCapabilities, ServerInfo, ToolsCapability, error_codes,
+    CompletionsCapability, InitializeResult, JsonRpcId, JsonRpcMessage, JsonRpcResponse,
+    LoggingCapability, McpServer, PromptsCapability, ResourcesCapability, ServerCapabilities,
+    ServerInfo, ToolsCapability, error_codes,
 };
-use super::{prompts, resources, tools};
+use super::{completion, logging, prompts, resources, subscriptions, tools};
 
 /// The MCP protocol version this server advertises.
-const PROTOCOL_VERSION: &str = "2025-03-26";
+const PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Server name returned during initialization.
 const SERVER_NAME: &str = "bitrouter";
@@ -81,8 +82,16 @@ async fn handle_jsonrpc_value<T: McpServer>(
             let resp = dispatch_request(&req.id, &req.method, req.params, &*server).await;
             Box::new(warp::reply::json(&resp))
         }
-        JsonRpcMessage::Notification(_notif) => {
-            // Notifications get no response body — return 202 Accepted.
+        JsonRpcMessage::Notification(notif) => {
+            // Notifications are acknowledged without a response body.
+            // Dispatch on known methods for future extensibility.
+            match notif.method.as_str() {
+                "notifications/initialized"
+                | "notifications/cancelled"
+                | "notifications/progress"
+                | "notifications/roots/list_changed" => {}
+                _ => {}
+            }
             Box::new(warp::reply::with_status(
                 warp::reply::json(&serde_json::json!({})),
                 warp::http::StatusCode::ACCEPTED,
@@ -99,14 +108,20 @@ async fn dispatch_request<T: McpServer>(
 ) -> JsonRpcResponse {
     match method {
         "initialize" => handle_initialize(id),
+        "ping" => handle_ping(id),
         "tools/list" => tools::handle_tools_list(id, server).await,
         "tools/call" => tools::handle_tools_call(id, params, server).await,
         "resources/list" => resources::handle_resources_list(id, server).await,
         "resources/read" => resources::handle_resources_read(id, params, server).await,
         "resources/templates/list" => resources::handle_resource_templates_list(id, server).await,
+        "resources/subscribe" => subscriptions::handle_resource_subscribe(id, params, server).await,
+        "resources/unsubscribe" => {
+            subscriptions::handle_resource_unsubscribe(id, params, server).await
+        }
         "prompts/list" => prompts::handle_prompts_list(id, server).await,
         "prompts/get" => prompts::handle_prompts_get(id, params, server).await,
-        "ping" => handle_ping(id),
+        "logging/setLevel" => logging::handle_set_level(id, params, server).await,
+        "completion/complete" => completion::handle_complete(id, params, server).await,
         _ => JsonRpcResponse::error(
             id.clone(),
             error_codes::METHOD_NOT_FOUND,
@@ -125,11 +140,13 @@ fn handle_initialize(id: &JsonRpcId) -> JsonRpcResponse {
             }),
             resources: Some(ResourcesCapability {
                 list_changed: Some(true),
-                subscribe: None,
+                subscribe: Some(true),
             }),
             prompts: Some(PromptsCapability {
                 list_changed: Some(true),
             }),
+            logging: Some(LoggingCapability {}),
+            completions: Some(CompletionsCapability {}),
         },
         server_info: ServerInfo {
             name: SERVER_NAME.to_string(),

@@ -10,8 +10,11 @@ use warp::Filter;
 
 use super::filters::mcp_server_filter;
 
+use bitrouter_mcp::types::{CompleteParams, CompleteResult, Completion, LoggingLevel};
+
 use super::types::{
-    McpGatewayError, McpPromptServer, McpResourceServer, McpToolServer, error_codes,
+    McpCompletionServer, McpGatewayError, McpLoggingServer, McpPromptServer, McpResourceServer,
+    McpSubscriptionServer, McpToolServer, error_codes,
 };
 
 // ── Mock server ─────────────────────────────────────────────────────
@@ -147,6 +150,40 @@ impl McpPromptServer for MockServer {
 
     fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
         self.prompt_change_tx.subscribe()
+    }
+}
+
+impl McpSubscriptionServer for MockServer {
+    async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
+        if uri.starts_with("test+") {
+            Ok(())
+        } else {
+            Err(McpGatewayError::SubscriptionNotSupported {
+                uri: uri.to_string(),
+            })
+        }
+    }
+
+    async fn unsubscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
+        Ok(())
+    }
+}
+
+impl McpLoggingServer for MockServer {
+    async fn set_logging_level(&self, _level: LoggingLevel) -> Result<(), McpGatewayError> {
+        Ok(())
+    }
+}
+
+impl McpCompletionServer for MockServer {
+    async fn complete(&self, _params: CompleteParams) -> Result<CompleteResult, McpGatewayError> {
+        Ok(CompleteResult {
+            completion: Completion {
+                values: vec!["suggestion1".to_string()],
+                has_more: Some(false),
+                total: Some(1),
+            },
+        })
     }
 }
 
@@ -515,4 +552,247 @@ async fn prompts_get_missing_params() {
     )
     .await;
     assert_eq!(json["error"]["code"], error_codes::INVALID_PARAMS);
+}
+
+// ── Subscription tests ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn resources_subscribe_succeeds() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/subscribe",
+            "params": {"uri": "test+file:///readme.md"}
+        }),
+    )
+    .await;
+    assert!(json["result"].is_object());
+    assert!(json["error"].is_null());
+}
+
+#[tokio::test]
+async fn resources_subscribe_unsupported_uri() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/subscribe",
+            "params": {"uri": "unknown://foo"}
+        }),
+    )
+    .await;
+    assert_eq!(json["error"]["code"], error_codes::INVALID_PARAMS);
+}
+
+#[tokio::test]
+async fn resources_subscribe_missing_params() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "resources/subscribe"}),
+    )
+    .await;
+    assert_eq!(json["error"]["code"], error_codes::INVALID_PARAMS);
+}
+
+#[tokio::test]
+async fn resources_unsubscribe_succeeds() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/unsubscribe",
+            "params": {"uri": "test+file:///readme.md"}
+        }),
+    )
+    .await;
+    assert!(json["result"].is_object());
+    assert!(json["error"].is_null());
+}
+
+// ── Logging tests ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn logging_set_level_succeeds() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "logging/setLevel",
+            "params": {"level": "warning"}
+        }),
+    )
+    .await;
+    assert!(json["result"].is_object());
+    assert!(json["error"].is_null());
+}
+
+#[tokio::test]
+async fn logging_set_level_missing_params() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "logging/setLevel"}),
+    )
+    .await;
+    assert_eq!(json["error"]["code"], error_codes::INVALID_PARAMS);
+}
+
+// ── Completion tests ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn completion_complete_prompt_ref() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "completion/complete",
+            "params": {
+                "ref": {"type": "ref/prompt", "name": "test/summarize"},
+                "argument": {"name": "text", "value": "hel"}
+            }
+        }),
+    )
+    .await;
+    assert!(json["error"].is_null());
+    let values = json["result"]["completion"]["values"]
+        .as_array()
+        .expect("values array");
+    assert_eq!(values[0], "suggestion1");
+}
+
+#[tokio::test]
+async fn completion_complete_resource_ref() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "completion/complete",
+            "params": {
+                "ref": {"type": "ref/resource", "uri": "test+file:///{path}"},
+                "argument": {"name": "path", "value": "src/"}
+            }
+        }),
+    )
+    .await;
+    assert!(json["error"].is_null());
+    assert!(json["result"]["completion"]["values"].is_array());
+}
+
+#[tokio::test]
+async fn completion_complete_missing_params() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "completion/complete"}),
+    )
+    .await;
+    assert_eq!(json["error"]["code"], error_codes::INVALID_PARAMS);
+}
+
+// ── Capabilities and version tests ──────────────────────────────────
+
+#[tokio::test]
+async fn initialize_protocol_version_is_2025_11_25() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "test"}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["protocolVersion"], "2025-11-25");
+}
+
+#[tokio::test]
+async fn initialize_advertises_logging_and_completions() {
+    let filter = make_filter();
+    let json = jsonrpc_request(
+        &filter,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "test"}
+            }
+        }),
+    )
+    .await;
+    let caps = &json["result"]["capabilities"];
+    assert!(caps["logging"].is_object());
+    assert!(caps["completions"].is_object());
+    assert!(caps["resources"]["subscribe"].as_bool().unwrap_or(false));
+}
+
+// ── Notification tests ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn notification_cancelled_returns_accepted() {
+    let filter = make_filter();
+    let resp = warp::test::request()
+        .method("POST")
+        .path("/mcp")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 42, "reason": "user cancelled"}
+        }))
+        .reply(&filter)
+        .await;
+    assert_eq!(resp.status(), 202);
+}
+
+#[tokio::test]
+async fn notification_progress_returns_accepted() {
+    let filter = make_filter();
+    let resp = warp::test::request()
+        .method("POST")
+        .path("/mcp")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/progress",
+            "params": {"progressToken": "tok-1", "progress": 0.5}
+        }))
+        .reply(&filter)
+        .await;
+    assert_eq!(resp.status(), 202);
+}
+
+#[tokio::test]
+async fn notification_roots_list_changed_returns_accepted() {
+    let filter = make_filter();
+    let resp = warp::test::request()
+        .method("POST")
+        .path("/mcp")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/roots/list_changed"
+        }))
+        .reply(&filter)
+        .await;
+    assert_eq!(resp.status(), 202);
 }
