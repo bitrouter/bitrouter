@@ -118,3 +118,34 @@ pub trait ToolObserveCallback: Send + Sync {
     /// Called after a tool call completes (success or failure).
     fn on_tool_call(&self, event: ToolCallEvent) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
+
+// ── A2A agent call observation ───────────────────────────────────────
+
+/// Event emitted when an A2A agent call completes.
+#[derive(Debug, Clone)]
+pub struct AgentCallEvent {
+    /// The account that made the call, if authentication is enabled.
+    pub account_id: Option<String>,
+    /// The upstream agent name.
+    pub agent: String,
+    /// The A2A method dispatched (e.g. `"message/send"`, `"tasks/get"`).
+    pub method: String,
+    /// Cost of this agent call in USD.
+    pub cost: f64,
+    /// Latency of the agent call in milliseconds.
+    pub latency_ms: u64,
+    /// Whether the agent call succeeded.
+    pub success: bool,
+    /// Error message if the call failed.
+    pub error_message: Option<String>,
+}
+
+/// Callback trait for observing completed A2A agent calls.
+///
+/// Parallel to [`ToolObserveCallback`] but for agent invocations.
+/// Implementations persist agent spend logs or emit metrics.
+pub trait AgentObserveCallback: Send + Sync {
+    /// Called after an agent call completes (success or failure).
+    fn on_agent_call(&self, event: AgentCallEvent)
+    -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}

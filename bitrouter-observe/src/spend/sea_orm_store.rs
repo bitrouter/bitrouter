@@ -7,7 +7,7 @@ use sea_orm::{
 
 use crate::entity::spend_log;
 
-use super::store::{SpendLog, SpendStore};
+use super::store::{ServiceType, SpendLog, SpendStore};
 
 /// A [`SpendStore`] backed by a SeaORM database connection.
 ///
@@ -53,16 +53,17 @@ impl SpendStore for SeaOrmSpendStore {
 
             let active = spend_log::ActiveModel {
                 id: Set(log.id),
+                service_type: Set(log.service_type.to_string()),
                 account_id: Set(log.account_id),
                 session_id: Set(log.session_id),
-                model: Set(log.model),
-                provider: Set(log.provider),
+                service_name: Set(log.service_name),
+                operation: Set(log.operation),
                 input_tokens: Set(input_tokens),
                 output_tokens: Set(output_tokens),
                 cost: Set(log.cost),
                 latency_ms: Set(latency_ms),
                 success: Set(log.success),
-                error_type: Set(log.error_type),
+                error_info: Set(log.error_info),
                 created_at: Set(log.created_at),
             };
 
@@ -76,6 +77,7 @@ impl SpendStore for SeaOrmSpendStore {
         &self,
         account_id: &str,
         since: Option<NaiveDateTime>,
+        service_type: Option<ServiceType>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send + '_>> {
         let account_id = account_id.to_owned();
         Box::pin(async move {
@@ -85,6 +87,10 @@ impl SpendStore for SeaOrmSpendStore {
 
             if let Some(since) = since {
                 query = query.filter(spend_log::Column::CreatedAt.gte(since));
+            }
+
+            if let Some(st) = service_type {
+                query = query.filter(spend_log::Column::ServiceType.eq(st.to_string()));
             }
 
             let result = query

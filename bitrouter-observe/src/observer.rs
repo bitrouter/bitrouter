@@ -12,7 +12,7 @@ use std::pin::Pin;
 use bitrouter_core::observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent};
 
 use crate::cost::{Pricing, calculate_cost};
-use crate::spend::store::{SpendLog, SpendStore};
+use crate::spend::store::{ServiceType, SpendLog, SpendStore};
 
 /// A thread-safe closure that maps `(provider, model)` to [`Pricing`].
 type PricingLookup = dyn Fn(&str, &str) -> Pricing + Send + Sync;
@@ -46,16 +46,17 @@ impl ObserveCallback for SpendObserver {
 
             let log = SpendLog {
                 id: Uuid::new_v4(),
+                service_type: ServiceType::Model,
                 account_id: event.ctx.caller.account_id,
                 session_id: None,
-                model: event.ctx.model,
-                provider: event.ctx.provider,
+                service_name: event.ctx.route,
+                operation: format!("{}:{}", event.ctx.provider, event.ctx.model),
                 input_tokens: event.usage.input_tokens.total.unwrap_or(0),
                 output_tokens: event.usage.output_tokens.total.unwrap_or(0),
                 cost,
                 latency_ms: event.ctx.latency_ms,
                 success: true,
-                error_type: None,
+                error_info: None,
                 created_at: Utc::now().naive_utc(),
             };
 
@@ -68,20 +69,21 @@ impl ObserveCallback for SpendObserver {
         event: RequestFailureEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            let error_type = error_variant_name(&event.error);
+            let error_info = error_variant_name(&event.error);
 
             let log = SpendLog {
                 id: Uuid::new_v4(),
+                service_type: ServiceType::Model,
                 account_id: event.ctx.caller.account_id,
                 session_id: None,
-                model: event.ctx.model,
-                provider: event.ctx.provider,
+                service_name: event.ctx.route,
+                operation: format!("{}:{}", event.ctx.provider, event.ctx.model),
                 input_tokens: 0,
                 output_tokens: 0,
                 cost: 0.0,
                 latency_ms: event.ctx.latency_ms,
                 success: false,
-                error_type: Some(error_type),
+                error_info: Some(error_info),
                 created_at: Utc::now().naive_utc(),
             };
 
@@ -174,6 +176,9 @@ mod tests {
         let logs = store.logs();
         assert_eq!(logs.len(), 1);
         assert!(logs[0].success);
+        assert_eq!(logs[0].service_type, ServiceType::Model);
+        assert_eq!(logs[0].service_name, "fast");
+        assert_eq!(logs[0].operation, "openai:gpt-4o");
         assert_eq!(logs[0].input_tokens, 1000);
         assert_eq!(logs[0].output_tokens, 500);
         // cost = 1000*2.50/1M + 500*10.0/1M = 0.0025 + 0.005 = 0.0075
@@ -181,7 +186,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failure_writes_spend_log_with_error_type() {
+    async fn failure_writes_spend_log_with_error_info() {
         let store = Arc::new(InMemorySpendStore::new());
         let observer = SpendObserver::new(store.clone(), Arc::new(|_, _| test_pricing()));
 
@@ -195,7 +200,7 @@ mod tests {
         let logs = store.logs();
         assert_eq!(logs.len(), 1);
         assert!(!logs[0].success);
-        assert_eq!(logs[0].error_type.as_deref(), Some("Transport"));
+        assert_eq!(logs[0].error_info.as_deref(), Some("Transport"));
         assert_eq!(logs[0].cost, 0.0);
     }
 }

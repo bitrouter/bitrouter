@@ -1,5 +1,5 @@
 //! [`ToolSpendObserver`] — a [`ToolObserveCallback`] that persists tool call
-//! spend logs via a [`ToolSpendStore`].
+//! spend logs via a [`SpendStore`].
 
 use std::sync::Arc;
 
@@ -11,15 +11,15 @@ use std::pin::Pin;
 
 use bitrouter_core::observe::{ToolCallEvent, ToolObserveCallback};
 
-use crate::spend::tool_store::{ToolSpendLog, ToolSpendStore};
+use crate::spend::store::{ServiceType, SpendLog, SpendStore};
 
 /// Observes completed tool calls and writes spend logs.
 pub struct ToolSpendObserver {
-    store: Arc<dyn ToolSpendStore>,
+    store: Arc<dyn SpendStore>,
 }
 
 impl ToolSpendObserver {
-    pub fn new(store: Arc<dyn ToolSpendStore>) -> Self {
+    pub fn new(store: Arc<dyn SpendStore>) -> Self {
         Self { store }
     }
 }
@@ -27,15 +27,19 @@ impl ToolSpendObserver {
 impl ToolObserveCallback for ToolSpendObserver {
     fn on_tool_call(&self, event: ToolCallEvent) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            let log = ToolSpendLog {
+            let log = SpendLog {
                 id: Uuid::new_v4(),
+                service_type: ServiceType::Tool,
                 account_id: event.account_id,
-                server: event.server,
-                tool: event.tool,
+                session_id: None,
+                service_name: event.server,
+                operation: event.tool,
+                input_tokens: 0,
+                output_tokens: 0,
                 cost: event.cost,
                 latency_ms: event.latency_ms,
                 success: event.success,
-                error_message: event.error_message,
+                error_info: event.error_message,
                 created_at: Utc::now().naive_utc(),
             };
 
@@ -50,13 +54,14 @@ mod tests {
 
     use bitrouter_core::observe::ToolCallEvent;
 
-    use crate::spend::tool_memory::InMemoryToolSpendStore;
+    use crate::spend::memory::InMemorySpendStore;
+    use crate::spend::store::ServiceType;
 
     use super::*;
 
     #[tokio::test]
     async fn observer_writes_log() {
-        let store = Arc::new(InMemoryToolSpendStore::new());
+        let store = Arc::new(InMemorySpendStore::new());
         let observer = ToolSpendObserver::new(store.clone());
 
         let event = ToolCallEvent {
@@ -73,15 +78,16 @@ mod tests {
 
         let logs = store.logs();
         assert_eq!(logs.len(), 1);
-        assert_eq!(logs[0].server, "github");
-        assert_eq!(logs[0].tool, "search");
+        assert_eq!(logs[0].service_type, ServiceType::Tool);
+        assert_eq!(logs[0].service_name, "github");
+        assert_eq!(logs[0].operation, "search");
         assert!(logs[0].success);
         assert!((logs[0].cost - 0.005).abs() < 1e-10);
     }
 
     #[tokio::test]
     async fn observer_records_failure() {
-        let store = Arc::new(InMemoryToolSpendStore::new());
+        let store = Arc::new(InMemorySpendStore::new());
         let observer = ToolSpendObserver::new(store.clone());
 
         let event = ToolCallEvent {
@@ -99,6 +105,6 @@ mod tests {
         let logs = store.logs();
         assert_eq!(logs.len(), 1);
         assert!(!logs[0].success);
-        assert_eq!(logs[0].error_message.as_deref(), Some("timeout"));
+        assert_eq!(logs[0].error_info.as_deref(), Some("timeout"));
     }
 }

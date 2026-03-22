@@ -28,7 +28,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::future::Future;
 use std::pin::Pin;
 
-use bitrouter_core::observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent};
+use bitrouter_core::observe::{
+    AgentCallEvent, AgentObserveCallback, ObserveCallback, RequestFailureEvent,
+    RequestSuccessEvent, ToolCallEvent, ToolObserveCallback,
+};
 use serde::Serialize;
 
 /// Maximum number of latency samples retained per route or endpoint.
@@ -309,6 +312,41 @@ impl ObserveCallback for MetricsCollector {
     }
 }
 
+impl ToolObserveCallback for MetricsCollector {
+    fn on_tool_call(&self, event: ToolCallEvent) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("tool:{}", event.server);
+        let endpoint = event.tool;
+        self.record(
+            route,
+            endpoint,
+            event.latency_ms,
+            !event.success,
+            None,
+            None,
+        );
+        Box::pin(async {})
+    }
+}
+
+impl AgentObserveCallback for MetricsCollector {
+    fn on_agent_call(
+        &self,
+        event: AgentCallEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("agent:{}", event.agent);
+        let endpoint = event.method;
+        self.record(
+            route,
+            endpoint,
+            event.latency_ms,
+            !event.success,
+            None,
+            None,
+        );
+        Box::pin(async {})
+    }
+}
+
 // ── Private helpers ─────────────────────────────────────────────────────────
 
 impl RouteData {
@@ -531,5 +569,52 @@ mod tests {
             json["routes"]["default"]["by_endpoint"]["openai:gpt-4o"]["total_requests"],
             1
         );
+    }
+
+    #[tokio::test]
+    async fn tool_callback_records_metrics() {
+        let collector = MetricsCollector::new();
+        collector
+            .on_tool_call(ToolCallEvent {
+                account_id: None,
+                server: "github".into(),
+                tool: "search".into(),
+                cost: 0.005,
+                latency_ms: 150,
+                success: true,
+                error_message: None,
+            })
+            .await;
+
+        let snap = collector.snapshot();
+        let route = snap.routes.get("tool:github").expect("route should exist");
+        assert_eq!(route.total_requests, 1);
+        assert_eq!(route.total_errors, 0);
+        assert_eq!(route.by_endpoint["search"].total_requests, 1);
+    }
+
+    #[tokio::test]
+    async fn agent_callback_records_metrics() {
+        let collector = MetricsCollector::new();
+        collector
+            .on_agent_call(AgentCallEvent {
+                account_id: None,
+                agent: "upstream".into(),
+                method: "message/send".into(),
+                cost: 0.01,
+                latency_ms: 300,
+                success: false,
+                error_message: Some("timeout".into()),
+            })
+            .await;
+
+        let snap = collector.snapshot();
+        let route = snap
+            .routes
+            .get("agent:upstream")
+            .expect("route should exist");
+        assert_eq!(route.total_requests, 1);
+        assert_eq!(route.total_errors, 1);
+        assert_eq!(route.by_endpoint["message/send"].total_errors, 1);
     }
 }
