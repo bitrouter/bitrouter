@@ -10,10 +10,10 @@ use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::model_router::LanguageModelRouter;
 use bitrouter_core::routers::registry::ModelRegistry;
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
+use bitrouter_observe::agent_observer::AgentSpendObserver;
 use bitrouter_observe::composite::CompositeObserver;
 use bitrouter_observe::cost::Pricing;
 use bitrouter_observe::metrics::MetricsCollector;
-use bitrouter_observe::agent_observer::AgentSpendObserver;
 use bitrouter_observe::observer::SpendObserver;
 use bitrouter_observe::spend::memory::InMemorySpendStore;
 use bitrouter_observe::spend::sea_orm_store::SeaOrmSpendStore;
@@ -97,8 +97,10 @@ where
         };
 
         // Compose observers: spend tracking + metrics aggregation for all service types.
-        let spend_observer =
-            Arc::new(SpendObserver::new(spend_store.clone(), Arc::new(pricing_fn)));
+        let spend_observer = Arc::new(SpendObserver::new(
+            spend_store.clone(),
+            Arc::new(pricing_fn),
+        ));
         let tool_spend_observer = Arc::new(ToolSpendObserver::new(spend_store.clone()));
         let agent_spend_observer = Arc::new(AgentSpendObserver::new(spend_store));
         let metrics_collector = Arc::new(MetricsCollector::new());

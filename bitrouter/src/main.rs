@@ -120,13 +120,13 @@ enum Command {
         name: Option<String>,
     },
 
-    /// A2A agent management and protocol client
-    A2a {
+    /// Inspect upstream agents on a running daemon
+    Agents {
         #[command(subcommand)]
-        action: A2aAction,
+        action: AgentsAction,
     },
 
-    /// Manage MCP tools on a running daemon
+    /// Inspect MCP tools on a running daemon
     Tools {
         #[command(subcommand)]
         action: ToolsAction,
@@ -179,62 +179,19 @@ enum RouteAction {
 }
 
 #[derive(Debug, Subcommand)]
-enum A2aAction {
-    /// Discover a remote agent by fetching its Agent Card
-    Discover {
-        /// Base URL of the remote agent (e.g., https://agent.example.com)
-        url: String,
-    },
-    /// Send a task to a remote agent
-    Send {
-        /// Base URL of the remote agent
-        url: String,
-        /// Message to send
-        #[arg(long)]
-        message: String,
-    },
-    /// Check the status of a task
-    Status {
-        /// Base URL of the remote agent
-        url: String,
-        /// Task ID to check
-        #[arg(long)]
-        task: String,
-    },
-    /// Cancel a running task
-    Cancel {
-        /// Base URL of the remote agent
-        url: String,
-        /// Task ID to cancel
-        #[arg(long)]
-        task: String,
-    },
-    /// List tasks from a remote agent
-    ListTasks {
-        /// Base URL of the remote agent
-        url: String,
-    },
+enum AgentsAction {
+    /// List configured upstream agents
+    List,
+    /// Show upstream agent connection health
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
 enum ToolsAction {
     /// List all tools from the running daemon
     List,
-    /// Update the tool filter for an upstream
-    Filter {
-        /// Upstream server name
-        server: String,
-        /// Allow list (comma-separated tool names)
-        #[arg(long, value_delimiter = ',')]
-        allow: Option<Vec<String>>,
-        /// Deny list (comma-separated tool names)
-        #[arg(long, value_delimiter = ',')]
-        deny: Option<Vec<String>>,
-    },
-    /// List upstream servers
-    Upstreams,
-    /// List configured access groups
-    Groups,
+    /// Show upstream MCP server health
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -388,13 +345,13 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli::keygen::run(&keys_dir, opts)?;
             return Ok(());
         }
-        Some(Command::A2a { action }) => {
+        Some(Command::Agents { action }) => {
+            let runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
+                .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+            let addr = runtime.config.server.listen;
             match action {
-                A2aAction::Discover { url } => cli::a2a::run_discover(&url).await?,
-                A2aAction::Send { url, message } => cli::a2a::run_send(&url, &message).await?,
-                A2aAction::Status { url, task } => cli::a2a::run_status(&url, &task).await?,
-                A2aAction::Cancel { url, task } => cli::a2a::run_cancel(&url, &task).await?,
-                A2aAction::ListTasks { url } => cli::a2a::run_list_tasks(&url).await?,
+                AgentsAction::List => cli::agents::run_list(&keys_dir, addr)?,
+                AgentsAction::Status => cli::agents::run_status(&keys_dir, addr)?,
             }
             return Ok(());
         }
@@ -404,13 +361,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let addr = runtime.config.server.listen;
             match action {
                 ToolsAction::List => cli::tools::run_list(&keys_dir, addr)?,
-                ToolsAction::Filter {
-                    server,
-                    allow,
-                    deny,
-                } => cli::tools::run_filter(&keys_dir, addr, &server, allow, deny)?,
-                ToolsAction::Upstreams => cli::tools::run_upstreams(&keys_dir, addr)?,
-                ToolsAction::Groups => cli::tools::run_groups(&keys_dir, addr)?,
+                ToolsAction::Status => cli::tools::run_status(&keys_dir, addr)?,
             }
             return Ok(());
         }
