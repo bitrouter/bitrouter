@@ -125,6 +125,26 @@ pub enum McpPromptContent {
     Resource { resource: McpResourceContent },
 }
 
+// ── Core conversion ────────────────────────────────────────────────
+
+impl From<McpTool> for bitrouter_core::routers::registry::ToolEntry {
+    fn from(t: McpTool) -> Self {
+        let provider = t
+            .name
+            .split_once('/')
+            .map(|(s, _)| s)
+            .unwrap_or("unknown")
+            .to_owned();
+        Self {
+            id: t.name,
+            name: None,
+            provider,
+            description: t.description,
+            input_schema: Some(t.input_schema),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

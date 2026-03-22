@@ -231,6 +231,43 @@ pub fn minimal_card(name: &str, description: &str, version: &str, url: &str) -> 
     }
 }
 
+// ── Core conversions ───────────────────────────────────────────────
+
+impl From<AgentSkill> for bitrouter_core::routers::registry::AgentSkillEntry {
+    fn from(s: AgentSkill) -> Self {
+        Self {
+            id: s.id,
+            name: s.name,
+            description: Some(s.description),
+            tags: s.tags,
+            examples: s.examples,
+        }
+    }
+}
+
+impl From<AgentCard> for bitrouter_core::routers::registry::AgentEntry {
+    fn from(card: AgentCard) -> Self {
+        let provider = card
+            .provider
+            .as_ref()
+            .map(|p| p.organization.clone())
+            .unwrap_or_default();
+        Self {
+            id: card.name.clone(),
+            name: Some(card.name),
+            provider,
+            description: Some(card.description),
+            version: Some(card.version),
+            skills: card.skills.into_iter().map(Into::into).collect(),
+            input_modes: card.default_input_modes,
+            output_modes: card.default_output_modes,
+            streaming: card.capabilities.streaming,
+            icon_url: card.icon_url,
+            documentation_url: card.documentation_url,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

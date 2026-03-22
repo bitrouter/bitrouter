@@ -11,9 +11,8 @@ use rmcp::transport::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use tokio::sync::Notify;
 
-use crate::config::{McpServerConfig, McpTransport, ToolFilter};
+use crate::config::{McpServerConfig, McpTransport};
 use crate::error::McpGatewayError;
-use crate::param_filter::ParamRestrictions;
 
 /// Handler that receives notifications from an upstream MCP server.
 struct UpstreamNotificationHandler {
@@ -53,6 +52,9 @@ impl ClientHandler for UpstreamNotificationHandler {
 }
 
 /// A live connection to a single upstream MCP server.
+///
+/// Stores cached tool, resource, and prompt lists. Filter and parameter
+/// restriction state is managed externally by [`DynamicToolRegistry`].
 pub struct UpstreamConnection {
     name: String,
     service: RunningService<RoleClient, UpstreamNotificationHandler>,
@@ -60,8 +62,6 @@ pub struct UpstreamConnection {
     resources: Arc<tokio::sync::RwLock<Vec<Resource>>>,
     resource_templates: Arc<tokio::sync::RwLock<Vec<ResourceTemplate>>>,
     prompts: Arc<tokio::sync::RwLock<Vec<Prompt>>>,
-    tool_filter: tokio::sync::RwLock<Option<ToolFilter>>,
-    param_restrictions: tokio::sync::RwLock<ParamRestrictions>,
     tool_notify: Arc<Notify>,
     resource_notify: Arc<Notify>,
     prompt_notify: Arc<Notify>,
@@ -168,21 +168,20 @@ impl UpstreamConnection {
             resources: Arc::new(tokio::sync::RwLock::new(initial_resources)),
             resource_templates: Arc::new(tokio::sync::RwLock::new(initial_templates)),
             prompts: Arc::new(tokio::sync::RwLock::new(initial_prompts)),
-            tool_filter: tokio::sync::RwLock::new(config.tool_filter),
-            param_restrictions: tokio::sync::RwLock::new(config.param_restrictions),
             tool_notify,
             resource_notify,
             prompt_notify,
         })
     }
 
-    /// Return all tools from this upstream, filtered and namespaced as `{name}/{tool_name}`.
+    /// Return all tools from this upstream, namespaced as `{name}/{tool_name}`.
+    ///
+    /// Returns **all** tools without filtering. Filter application is handled
+    /// externally by the [`DynamicToolRegistry`] wrapper.
     pub async fn namespaced_tools(&self) -> Vec<Tool> {
         let tools = self.tools.read().await;
-        let filter = self.tool_filter.read().await;
         tools
             .iter()
-            .filter(|t| filter.as_ref().is_none_or(|f| f.accepts(&t.name)))
             .map(|t| {
                 let prefixed_name = format!("{}/{}", self.name, t.name);
                 let mut cloned = t.clone();
@@ -209,18 +208,13 @@ impl UpstreamConnection {
 
     /// Forward a tool call to this upstream using the original (un-prefixed) tool name.
     ///
-    /// Parameter restrictions are enforced before forwarding the call.
+    /// Parameter restrictions are **not** enforced here — the caller is
+    /// responsible for applying restrictions before calling this method.
     pub async fn call_tool(
         &self,
         tool_name: &str,
-        mut arguments: Option<serde_json::Map<String, serde_json::Value>>,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<CallToolResult, McpGatewayError> {
-        // Enforce parameter restrictions before forwarding
-        self.param_restrictions
-            .read()
-            .await
-            .check(tool_name, &mut arguments)?;
-
         let mut params = CallToolRequestParams::new(tool_name.to_owned());
         if let Some(args) = arguments {
             params = params.with_arguments(args);
@@ -234,36 +228,9 @@ impl UpstreamConnection {
             })
     }
 
-    /// Update the tool filter at runtime.
-    pub async fn set_filter(&self, filter: Option<ToolFilter>) {
-        let mut current = self.tool_filter.write().await;
-        *current = filter;
-    }
-
-    /// Return a clone of the current tool filter.
-    pub async fn filter(&self) -> Option<ToolFilter> {
-        self.tool_filter.read().await.clone()
-    }
-
-    /// Update the parameter restrictions at runtime.
-    pub async fn set_param_restrictions(&self, restrictions: ParamRestrictions) {
-        let mut current = self.param_restrictions.write().await;
-        *current = restrictions;
-    }
-
-    /// Return a clone of the current parameter restrictions.
-    pub async fn param_restrictions(&self) -> ParamRestrictions {
-        self.param_restrictions.read().await.clone()
-    }
-
-    /// Return the number of tools exposed by this upstream (after filtering).
+    /// Return the total number of tools on this upstream (unfiltered).
     pub async fn tool_count(&self) -> usize {
-        let tools = self.tools.read().await;
-        let filter = self.tool_filter.read().await;
-        match filter.as_ref() {
-            Some(f) => tools.iter().filter(|t| f.accepts(&t.name)).count(),
-            None => tools.len(),
-        }
+        self.tools.read().await.len()
     }
 
     /// Expose the tool-change notify handle for spawning background refresh tasks.

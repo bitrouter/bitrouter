@@ -1,13 +1,27 @@
 //! Single-agent upstream registry implementing gateway traits.
 
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use bitrouter_core::routers::admin::{AgentUpstreamEntry, AgentUpstreamSource};
+use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
 use futures_core::Stream;
 use tokio::sync::broadcast;
 
-use crate::admin::{AdminAgentRegistry, AgentInfo, AgentRegistry};
 use crate::card::AgentCard;
+
+/// Read-only registry for A2A agent lookup.
+///
+/// Provides protocol-specific access to [`AgentCard`] objects. The core
+/// [`AgentRegistry`](bitrouter_core::routers::registry::AgentRegistry) trait
+/// handles protocol-agnostic discovery.
+pub trait A2aAgentRegistry: Send + Sync {
+    /// Get an agent card by name.
+    fn get(&self, name: &str) -> impl Future<Output = Option<AgentCard>> + Send;
+    /// List all registered agent cards.
+    fn list(&self) -> impl Future<Output = Vec<AgentCard>> + Send;
+}
 use crate::config::A2aAgentConfig;
 use crate::error::A2aGatewayError;
 use crate::request::{
@@ -36,7 +50,7 @@ impl Drop for RefreshGuard {
 /// Single-agent upstream registry for the A2A gateway.
 ///
 /// Holds an optional upstream A2A agent connection and implements
-/// the gateway traits ([`A2aDiscovery`], [`A2aProxy`], [`AdminAgentRegistry`]).
+/// the gateway traits ([`A2aDiscovery`], [`A2aProxy`]).
 pub struct UpstreamAgentRegistry {
     agent: Option<UpstreamA2aAgent>,
     external_url: String,
@@ -116,6 +130,8 @@ impl UpstreamAgentRegistry {
     }
 }
 
+// ── Protocol trait impls on UpstreamAgentRegistry ────────────────────
+
 impl A2aDiscovery for UpstreamAgentRegistry {
     async fn get_agent_card(&self) -> Option<AgentCard> {
         self.rewritten_card().await
@@ -153,7 +169,6 @@ impl A2aProxy for UpstreamAgentRegistry {
         &self,
         _request: SendMessageRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
-        // TODO: Implement SSE stream proxying via reqwest byte stream
         Err(A2aGatewayError::UpstreamCall {
             name: self.agent.as_ref().map_or("none", |a| a.name()).to_string(),
             reason: "streaming proxy not yet implemented".to_string(),
@@ -164,7 +179,6 @@ impl A2aProxy for UpstreamAgentRegistry {
         &self,
         _task_id: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
-        // TODO: Implement SSE stream proxying via reqwest byte stream
         Err(A2aGatewayError::UpstreamCall {
             name: self.agent.as_ref().map_or("none", |a| a.name()).to_string(),
             reason: "streaming proxy not yet implemented".to_string(),
@@ -210,7 +224,9 @@ impl A2aProxy for UpstreamAgentRegistry {
     }
 }
 
-impl AgentRegistry for UpstreamAgentRegistry {
+// ── A2A-internal admin trait impls ──────────────────────────────────
+
+impl A2aAgentRegistry for UpstreamAgentRegistry {
     async fn get(&self, name: &str) -> Option<AgentCard> {
         let agent = self.agent.as_ref()?;
         if agent.name() == name {
@@ -228,15 +244,117 @@ impl AgentRegistry for UpstreamAgentRegistry {
     }
 }
 
-impl AdminAgentRegistry for UpstreamAgentRegistry {
-    async fn list_agents(&self) -> Vec<AgentInfo> {
+// ── Core trait impls ────────────────────────────────────────────────
+
+/// Implement core [`AgentRegistry`](bitrouter_core::routers::registry::AgentRegistry)
+/// for public discovery (`GET /v1/agents`).
+impl bitrouter_core::routers::registry::AgentRegistry for UpstreamAgentRegistry {
+    async fn list_agents(&self) -> Vec<bitrouter_core::routers::registry::AgentEntry> {
+        A2aAgentRegistry::list(self)
+            .await
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+}
+
+/// Implement core [`AgentUpstreamSource`] for admin inspection.
+impl AgentUpstreamSource for UpstreamAgentRegistry {
+    async fn list_upstreams(&self) -> Vec<AgentUpstreamEntry> {
         match &self.agent {
-            Some(agent) => vec![AgentInfo {
+            Some(agent) => vec![AgentUpstreamEntry {
                 name: agent.name().to_string(),
                 url: agent.url().to_string(),
                 connected: agent.cached_card().await.is_some(),
             }],
             None => Vec::new(),
         }
+    }
+}
+
+// ── Protocol trait passthrough on DynamicAgentRegistry ───────────────
+//
+// These impls let the runtime pass DynamicAgentRegistry<UpstreamAgentRegistry>
+// directly to the A2A gateway filters.
+
+impl A2aDiscovery for DynamicAgentRegistry<Arc<UpstreamAgentRegistry>> {
+    async fn get_agent_card(&self) -> Option<AgentCard> {
+        self.inner().get_agent_card().await
+    }
+
+    fn subscribe_card_changes(&self) -> broadcast::Receiver<()> {
+        self.inner().subscribe_card_changes()
+    }
+}
+
+impl A2aProxy for DynamicAgentRegistry<Arc<UpstreamAgentRegistry>> {
+    async fn send_message(
+        &self,
+        request: SendMessageRequest,
+    ) -> Result<StreamResponse, A2aGatewayError> {
+        self.inner().send_message(request).await
+    }
+
+    async fn get_task(&self, request: GetTaskRequest) -> Result<Task, A2aGatewayError> {
+        self.inner().get_task(request).await
+    }
+
+    async fn cancel_task(&self, request: CancelTaskRequest) -> Result<Task, A2aGatewayError> {
+        self.inner().cancel_task(request).await
+    }
+
+    async fn list_tasks(
+        &self,
+        request: ListTasksRequest,
+    ) -> Result<ListTasksResponse, A2aGatewayError> {
+        self.inner().list_tasks(request).await
+    }
+
+    async fn send_streaming_message(
+        &self,
+        request: SendMessageRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
+        self.inner().send_streaming_message(request).await
+    }
+
+    async fn subscribe_to_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
+        self.inner().subscribe_to_task(task_id).await
+    }
+
+    async fn get_extended_agent_card(&self) -> Result<AgentCard, A2aGatewayError> {
+        self.inner().get_extended_agent_card().await
+    }
+
+    async fn create_push_config(
+        &self,
+        config: TaskPushNotificationConfig,
+    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
+        self.inner().create_push_config(config).await
+    }
+
+    async fn get_push_config(
+        &self,
+        task_id: &str,
+        config_id: &str,
+    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
+        self.inner().get_push_config(task_id, config_id).await
+    }
+
+    async fn list_push_configs(
+        &self,
+        task_id: &str,
+    ) -> Result<ListTaskPushNotificationConfigsResponse, A2aGatewayError> {
+        self.inner().list_push_configs(task_id).await
+    }
+
+    async fn delete_push_config(
+        &self,
+        task_id: &str,
+        config_id: &str,
+    ) -> Result<(), A2aGatewayError> {
+        self.inner().delete_push_config(task_id, config_id).await
     }
 }

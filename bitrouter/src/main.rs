@@ -387,7 +387,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 budget_scope,
                 budget_range,
                 name,
-                mcp_groups: bitrouter_mcp::groups::McpAccessGroups::default(),
+                mcp_groups: bitrouter_config::tool::ToolServerAccessGroups::default(),
             };
             cli::keygen::run(&keys_dir, opts)?;
             return Ok(());

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::config::{ApiProtocol, ModelInfo, ProviderConfig};
+use crate::model::{ApiProtocol, ModelInfo, ProviderConfig};
 
 // ── Compile-time embedded provider definitions ──────────────────────
 
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn merge_provider_overlay_replaces_models() {
-        use crate::config::ModelInfo;
+        use crate::model::ModelInfo;
 
         let mut base = ProviderConfig {
             models: Some(HashMap::from([
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn merge_provider_no_overlay_keeps_base_models() {
-        use crate::config::ModelInfo;
+        use crate::model::ModelInfo;
 
         let mut base = ProviderConfig {
             models: Some(HashMap::from([("model-a".into(), ModelInfo::default())])),
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn derives_inherits_models() {
-        use crate::config::ModelInfo;
+        use crate::model::ModelInfo;
 
         let mut providers = HashMap::new();
         providers.insert(
@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn derives_child_models_override_parent() {
-        use crate::config::ModelInfo;
+        use crate::model::ModelInfo;
 
         let mut providers = HashMap::new();
         providers.insert(

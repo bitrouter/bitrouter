@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::McpGatewayError;
-use crate::param_filter::ParamRestrictions;
+
+// Re-export core admin types used in MCP config.
+pub use bitrouter_core::routers::admin::{
+    ParamRestrictions, ParamRule, ParamViolationAction, ToolFilter,
+};
 
 /// Configuration for a single upstream MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,34 +92,6 @@ pub enum McpTransport {
         #[serde(default)]
         headers: HashMap<String, String>,
     },
-}
-
-/// Optional tool filter for an upstream server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolFilter {
-    #[serde(default)]
-    pub allow: Option<Vec<String>>,
-    #[serde(default)]
-    pub deny: Option<Vec<String>>,
-}
-
-impl ToolFilter {
-    /// Returns `true` if the given tool name passes this filter.
-    ///
-    /// Deny takes precedence: if a tool is in the deny list, it is rejected
-    /// regardless of the allow list. If an allow list is present and the tool
-    /// is not in it, it is also rejected.
-    pub fn accepts(&self, tool_name: &str) -> bool {
-        if let Some(deny) = &self.deny
-            && deny.iter().any(|d| d == tool_name)
-        {
-            return false;
-        }
-        if let Some(allow) = &self.allow {
-            return allow.iter().any(|a| a == tool_name);
-        }
-        true
-    }
 }
 
 #[cfg(test)]

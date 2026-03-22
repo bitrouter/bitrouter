@@ -5,7 +5,6 @@
 //!
 //! Enable the `client` feature to get runtime upstream connection and
 //! registry components backed by `rmcp`.
-pub mod admin;
 #[cfg(feature = "client")]
 pub mod client;
 pub mod config;

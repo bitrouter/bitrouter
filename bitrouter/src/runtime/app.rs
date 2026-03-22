@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::routers::admin::AdminRoutingTable;
+use bitrouter_core::routers::registry::ModelRegistry;
 use sea_orm::DatabaseConnection;
 
 use crate::runtime::{error::Result, paths::RuntimePaths};
@@ -14,7 +15,7 @@ pub struct AppRuntime<R> {
     pub db: Option<Arc<DatabaseConnection>>,
 }
 
-impl<R: AdminRoutingTable + Send + Sync + 'static> AppRuntime<R> {
+impl<R: AdminRoutingTable + ModelRegistry + Send + Sync + 'static> AppRuntime<R> {
     pub fn status(&self) -> RuntimeStatus {
         let daemon_pid = crate::runtime::daemon::DaemonManager::new(self.paths.clone())
             .is_running()

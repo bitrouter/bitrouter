@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
 use rmcp::model::{CallToolResult, PromptMessageContent, ResourceContents, Tool};
 use tokio::sync::{Notify, RwLock, broadcast};
 
-use crate::admin::{AdminMcpRegistry, McpRegistry, ToolEntry, UpstreamInfo};
-use crate::config::{McpServerConfig, ToolFilter};
+use crate::config::McpServerConfig;
 use crate::error::McpGatewayError;
 use crate::groups::McpAccessGroups;
-use crate::param_filter::ParamRestrictions;
 use crate::server::protocol::McpGetPromptResult;
 use crate::server::types::{
     McpContent, McpPrompt, McpPromptArgument, McpPromptContent, McpPromptMessage, McpResource,
@@ -33,8 +32,9 @@ impl Drop for RefreshGuard {
 
 /// Aggregates multiple upstream MCP connections and routes tool calls.
 ///
-/// The inner map is wrapped in [`RwLock`] to support runtime mutation of
-/// filters without restarting the gateway.
+/// This is the raw tool source — it provides unfiltered tools from all
+/// upstreams. Filter and restriction management is handled by the
+/// [`DynamicToolRegistry`] wrapper that wraps this registry.
 pub struct ConfigMcpRegistry {
     upstreams: RwLock<HashMap<String, UpstreamConnection>>,
     groups: McpAccessGroups,
@@ -142,7 +142,7 @@ impl ConfigMcpRegistry {
         &self.groups
     }
 
-    /// Merge all namespaced tools from all upstreams.
+    /// Merge all namespaced tools from all upstreams (unfiltered).
     pub async fn aggregated_tools(&self) -> Vec<Tool> {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
@@ -186,59 +186,6 @@ impl ConfigMcpRegistry {
             .iter()
             .map(|(name, conn)| (name.clone(), conn.tool_change_notify()))
             .collect()
-    }
-
-    /// Update the tool filter for a running upstream.
-    pub async fn update_filter(
-        &self,
-        server_name: &str,
-        filter: Option<ToolFilter>,
-    ) -> Result<(), McpGatewayError> {
-        let upstreams = self.upstreams.read().await;
-        let upstream = upstreams
-            .get(server_name)
-            .ok_or_else(|| McpGatewayError::ToolNotFound {
-                name: server_name.to_owned(),
-            })?;
-        upstream.set_filter(filter).await;
-        Ok(())
-    }
-
-    /// Update the parameter restrictions for a running upstream.
-    pub async fn update_param_restrictions(
-        &self,
-        server_name: &str,
-        restrictions: ParamRestrictions,
-    ) -> Result<(), McpGatewayError> {
-        let upstreams = self.upstreams.read().await;
-        let upstream = upstreams
-            .get(server_name)
-            .ok_or_else(|| McpGatewayError::ToolNotFound {
-                name: server_name.to_owned(),
-            })?;
-        upstream.set_param_restrictions(restrictions).await;
-        Ok(())
-    }
-
-    /// List all upstream servers with their tool counts and current filters.
-    pub async fn list_upstreams(&self) -> Vec<UpstreamInfo> {
-        let upstreams = self.upstreams.read().await;
-        let mut infos = Vec::with_capacity(upstreams.len());
-        for (name, conn) in upstreams.iter() {
-            let restrictions = conn.param_restrictions().await;
-            let has_restrictions = !restrictions.rules.is_empty();
-            infos.push(UpstreamInfo {
-                name: name.clone(),
-                tool_count: conn.tool_count().await,
-                filter: conn.filter().await,
-                param_restrictions: if has_restrictions {
-                    Some(restrictions)
-                } else {
-                    None
-                },
-            });
-        }
-        infos
     }
 
     /// Notify downstream MCP clients that the tool list has changed.
@@ -299,6 +246,25 @@ impl ConfigMcpRegistry {
     }
 }
 
+// ── Core ToolRegistry impl ──────────────────────────────────────────
+
+/// Implement core [`ToolRegistry`](bitrouter_core::routers::registry::ToolRegistry)
+/// for public discovery (`GET /v1/tools`).
+///
+/// Returns all tools from all upstreams, unfiltered. Filtering is applied
+/// by the [`DynamicToolRegistry`] wrapper.
+impl bitrouter_core::routers::registry::ToolRegistry for ConfigMcpRegistry {
+    async fn list_tools(&self) -> Vec<bitrouter_core::routers::registry::ToolEntry> {
+        McpToolServer::list_tools(self)
+            .await
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+}
+
+// ── McpToolServer impl (raw, on ConfigMcpRegistry) ──────────────────
+
 /// Convert an `rmcp` [`Tool`] into an `rmcp`-free [`McpTool`].
 fn rmcp_tool_to_mcp_tool(tool: &Tool) -> McpTool {
     McpTool {
@@ -310,8 +276,6 @@ fn rmcp_tool_to_mcp_tool(tool: &Tool) -> McpTool {
 
 /// Convert an `rmcp` [`CallToolResult`] into an `rmcp`-free [`McpToolCallResult`].
 fn rmcp_result_to_mcp_result(result: &CallToolResult) -> McpToolCallResult {
-    // Serialize the rmcp content to JSON, then extract text fields.
-    // This handles all content types generically.
     let content: Vec<McpContent> = result
         .content
         .iter()
@@ -330,7 +294,65 @@ fn rmcp_result_to_mcp_result(result: &CallToolResult) -> McpToolCallResult {
     }
 }
 
-/// Implement [`McpToolServer`] for the runtime registry.
+/// `McpToolServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
+impl McpToolServer for Arc<ConfigMcpRegistry> {
+    async fn list_tools(&self) -> Vec<McpTool> {
+        <ConfigMcpRegistry as McpToolServer>::list_tools(self).await
+    }
+
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<McpToolCallResult, McpGatewayError> {
+        <ConfigMcpRegistry as McpToolServer>::call_tool(self, name, arguments).await
+    }
+
+    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
+        <ConfigMcpRegistry as McpToolServer>::subscribe_tool_changes(self)
+    }
+}
+
+/// `McpResourceServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
+impl McpResourceServer for Arc<ConfigMcpRegistry> {
+    async fn list_resources(&self) -> Vec<McpResource> {
+        (**self).list_resources().await
+    }
+
+    async fn read_resource(&self, uri: &str) -> Result<Vec<McpResourceContent>, McpGatewayError> {
+        (**self).read_resource(uri).await
+    }
+
+    async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
+        (**self).list_resource_templates().await
+    }
+
+    fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
+        (**self).subscribe_resource_changes()
+    }
+}
+
+/// `McpPromptServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
+impl McpPromptServer for Arc<ConfigMcpRegistry> {
+    async fn list_prompts(&self) -> Vec<McpPrompt> {
+        (**self).list_prompts().await
+    }
+
+    async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<McpGetPromptResult, McpGatewayError> {
+        (**self).get_prompt(name, arguments).await
+    }
+
+    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
+        (**self).subscribe_prompt_changes()
+    }
+}
+
+/// Raw [`McpToolServer`] impl on `ConfigMcpRegistry` — returns all tools
+/// unfiltered and calls without restriction enforcement.
 impl McpToolServer for ConfigMcpRegistry {
     async fn list_tools(&self) -> Vec<McpTool> {
         let rmcp_tools = self.aggregated_tools().await;
@@ -351,52 +373,62 @@ impl McpToolServer for ConfigMcpRegistry {
     }
 }
 
-/// Implement [`McpRegistry`] (read-only) for the config-driven registry.
-impl McpRegistry for ConfigMcpRegistry {
-    async fn list_tools(&self) -> Vec<ToolEntry> {
-        let tools = self.aggregated_tools().await;
-        tools
+// ── Protocol trait impls on DynamicToolRegistry<ConfigMcpRegistry> ───
+//
+// These impls live here (in the MCP crate) because the protocol traits
+// (`McpToolServer`, `McpResourceServer`, `McpPromptServer`) are defined
+// in this crate. The `DynamicToolRegistry` type is from core. Orphan
+// rules are satisfied because the traits are local.
+
+/// [`McpToolServer`] for the wrapped registry — applies param restrictions
+/// at call time and delegates tool listing through the filtered wrapper.
+impl McpToolServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
+    async fn list_tools(&self) -> Vec<McpTool> {
+        // Use the filtered core ToolRegistry output, then convert back to McpTool.
+        let core_tools =
+            <Self as bitrouter_core::routers::registry::ToolRegistry>::list_tools(self).await;
+        core_tools
             .into_iter()
-            .map(|t| {
-                let (server, _tool) = t
-                    .name
-                    .split_once('/')
-                    .unwrap_or(("unknown", t.name.as_ref()));
-                ToolEntry {
-                    name: t.name.to_string(),
-                    server: server.to_owned(),
-                    description: t.description.as_deref().unwrap_or_default().to_owned(),
-                    source: "config",
-                }
+            .map(|t| McpTool {
+                name: t.id,
+                description: t.description,
+                input_schema: t.input_schema.unwrap_or_default(),
             })
             .collect()
     }
 
-    async fn list_upstreams(&self) -> Vec<UpstreamInfo> {
-        self.list_upstreams().await
-    }
-
-    async fn list_groups(&self) -> HashMap<String, Vec<String>> {
-        self.groups().as_map().clone()
-    }
-}
-
-/// Implement [`AdminMcpRegistry`] (mutation) for the config-driven registry.
-impl AdminMcpRegistry for ConfigMcpRegistry {
-    async fn update_filter(
+    async fn call_tool(
         &self,
-        server: &str,
-        filter: Option<ToolFilter>,
-    ) -> Result<(), McpGatewayError> {
-        self.update_filter(server, filter).await
+        name: &str,
+        mut arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<McpToolCallResult, McpGatewayError> {
+        // Extract server name from namespaced tool call.
+        let (server_name, tool_name) = parse_namespaced(name)?;
+
+        // Enforce parameter restrictions from the wrapper's state.
+        if let Some(restrictions) = self.get_param_restrictions(server_name) {
+            restrictions
+                .check(tool_name, &mut arguments)
+                .map_err(|e| match e {
+                    bitrouter_core::errors::BitrouterError::InvalidRequest { message, .. } => {
+                        McpGatewayError::ParamDenied {
+                            tool: name.to_owned(),
+                            param: message,
+                        }
+                    }
+                    other => McpGatewayError::UpstreamCall {
+                        name: name.to_owned(),
+                        reason: other.to_string(),
+                    },
+                })?;
+        }
+
+        // Delegate actual call to inner ConfigMcpRegistry.
+        self.inner().call_tool(name, arguments).await
     }
 
-    async fn update_param_restrictions(
-        &self,
-        server: &str,
-        restrictions: ParamRestrictions,
-    ) -> Result<(), McpGatewayError> {
-        self.update_param_restrictions(server, restrictions).await
+    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
+        self.inner().subscribe_tool_changes()
     }
 }
 
@@ -428,7 +460,26 @@ fn rmcp_resource_contents_to_mcp(rc: &ResourceContents) -> McpResourceContent {
     }
 }
 
-/// Implement [`McpResourceServer`] for the runtime registry.
+/// [`McpResourceServer`] — delegates to inner `ConfigMcpRegistry`.
+impl McpResourceServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
+    async fn list_resources(&self) -> Vec<McpResource> {
+        <ConfigMcpRegistry as McpResourceServer>::list_resources(self.inner()).await
+    }
+
+    async fn read_resource(&self, uri: &str) -> Result<Vec<McpResourceContent>, McpGatewayError> {
+        <ConfigMcpRegistry as McpResourceServer>::read_resource(self.inner(), uri).await
+    }
+
+    async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
+        <ConfigMcpRegistry as McpResourceServer>::list_resource_templates(self.inner()).await
+    }
+
+    fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
+        <ConfigMcpRegistry as McpResourceServer>::subscribe_resource_changes(self.inner())
+    }
+}
+
+/// [`McpResourceServer`] impl on raw `ConfigMcpRegistry`.
 impl McpResourceServer for ConfigMcpRegistry {
     async fn list_resources(&self) -> Vec<McpResource> {
         let upstreams = self.upstreams.read().await;
@@ -504,7 +555,26 @@ fn rmcp_prompt_content_to_mcp(content: &PromptMessageContent) -> McpPromptConten
     }
 }
 
-/// Implement [`McpPromptServer`] for the runtime registry.
+/// [`McpPromptServer`] — delegates to inner `ConfigMcpRegistry`.
+impl McpPromptServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
+    async fn list_prompts(&self) -> Vec<McpPrompt> {
+        <ConfigMcpRegistry as McpPromptServer>::list_prompts(self.inner()).await
+    }
+
+    async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<McpGetPromptResult, McpGatewayError> {
+        <ConfigMcpRegistry as McpPromptServer>::get_prompt(self.inner(), name, arguments).await
+    }
+
+    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
+        <ConfigMcpRegistry as McpPromptServer>::subscribe_prompt_changes(self.inner())
+    }
+}
+
+/// [`McpPromptServer`] impl on raw `ConfigMcpRegistry`.
 impl McpPromptServer for ConfigMcpRegistry {
     async fn list_prompts(&self) -> Vec<McpPrompt> {
         let upstreams = self.upstreams.read().await;

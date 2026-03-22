@@ -1,18 +1,20 @@
-//! Warp filters for the admin A2A agent registry API.
+//! Warp filters for the admin agent registry API.
 //!
-//! Provides HTTP endpoints for inspecting registered A2A agents:
+//! Provides HTTP endpoints for inspecting registered agents:
 //!
 //! - `GET /admin/agents` — list all agents with connection status
+//!
+//! Generic over [`AdminAgentRegistry`] — no protocol-crate dependency.
 
 use std::sync::Arc;
 
-use bitrouter_a2a::admin::AdminAgentRegistry;
+use bitrouter_core::routers::admin::AdminAgentRegistry;
 use warp::Filter;
 
 /// Mount admin agent registry endpoints under `/admin/agents`.
 ///
-/// Accepts `Option<Arc<T>>` — when `None` (no A2A configured), all endpoints
-/// return 404. The caller is responsible for auth gating.
+/// Accepts `Option<Arc<T>>` — when `None` (no agent source configured), all
+/// endpoints return 404. The caller is responsible for auth gating.
 pub fn admin_agents_filter<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -42,6 +44,6 @@ async fn handle_list_agents<T: AdminAgentRegistry>(
     let Some(registry) = registry else {
         return Err(warp::reject::not_found());
     };
-    let agents = registry.list_agents().await;
+    let agents = registry.list_upstreams().await;
     Ok(warp::reply::json(&serde_json::json!({ "agents": agents })))
 }

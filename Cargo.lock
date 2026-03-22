@@ -1160,6 +1160,7 @@ dependencies = [
 name = "bitrouter-a2a"
 version = "0.11.0"
 dependencies = [
+ "bitrouter-core",
  "futures-core",
  "reqwest 0.12.28",
  "serde",
@@ -1235,10 +1236,8 @@ dependencies = [
 name = "bitrouter-config"
 version = "0.11.0"
 dependencies = [
- "bitrouter-a2a",
  "bitrouter-core",
  "bitrouter-guardrails",
- "bitrouter-mcp",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1307,6 +1306,7 @@ dependencies = [
 name = "bitrouter-mcp"
 version = "0.11.0"
 dependencies = [
+ "bitrouter-core",
  "reqwest 0.13.2",
  "rmcp",
  "serde",

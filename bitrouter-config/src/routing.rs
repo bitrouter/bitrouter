@@ -3,10 +3,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitrouter_core::{
     errors::{BitrouterError, Result},
-    routers::routing_table::{ModelEntry, RouteEntry, RoutingTable, RoutingTarget},
+    routers::registry::{ModelEntry, ModelRegistry},
+    routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget},
 };
 
-use crate::config::{
+use crate::model::{
     ApiProtocol, ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy,
 };
 
@@ -172,7 +173,9 @@ impl RoutingTable for ConfigRoutingTable {
         entries.sort_by(|a, b| a.model.cmp(&b.model));
         entries
     }
+}
 
+impl ModelRegistry for ConfigRoutingTable {
     fn list_models(&self) -> Vec<ModelEntry> {
         let mut entries = Vec::new();
         for (provider_name, provider_config) in &self.providers {
@@ -211,7 +214,7 @@ impl RoutingTable for ConfigRoutingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
+    use crate::model::{
         ApiProtocol, InputTokenPricing, Modality, ModelEndpoint, OutputTokenPricing,
     };
 

@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use bitrouter_api::router::{admin, models, routes};
+use bitrouter_api::router::{admin, admin_agents, admin_tools, models, routes};
 use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
 use bitrouter_core::observe::{CallerContext, ObserveCallback};
 use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::model_router::LanguageModelRouter;
+use bitrouter_core::routers::registry::ModelRegistry;
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
 use bitrouter_observe::composite::CompositeObserver;
 use bitrouter_observe::cost::Pricing;
@@ -32,7 +33,7 @@ pub struct ServerPlan<T, R> {
 
 impl<T, R> ServerPlan<T, R>
 where
-    T: AdminRoutingTable + Send + Sync + 'static,
+    T: AdminRoutingTable + ModelRegistry + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     pub fn new(config: BitrouterConfig, table: Arc<T>, router: Arc<R>) -> Self {
@@ -173,75 +174,103 @@ where
 
         // ── MCP registry ─────────────────────────────────────────────
         #[cfg(feature = "mcp")]
-        let (admin_tools, mcp_server, _refresh_guard) = {
+        let (admin_tool_routes, mcp_server, tool_list, _refresh_guard) = {
+            use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
+            use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
             use bitrouter_mcp::client::registry::ConfigMcpRegistry;
 
-            let registry = match ConfigMcpRegistry::from_configs(
-                self.config.mcp_servers.clone(),
-                self.config.mcp_groups.clone(),
-            )
-            .await
-            {
-                Ok(reg) => {
-                    tracing::info!(
-                        "MCP registry started with {} upstreams",
-                        self.config.mcp_servers.len()
-                    );
-                    Some(Arc::new(reg))
-                }
-                Err(e) => {
-                    tracing::warn!("MCP registry failed to start: {e}");
-                    None
-                }
-            };
+            let mcp_configs: Vec<bitrouter_mcp::config::McpServerConfig> = self
+                .config
+                .mcp_servers
+                .iter()
+                .cloned()
+                .map(mcp_server_config)
+                .collect();
+            let mcp_groups = mcp_access_groups(self.config.mcp_groups.clone());
 
-            // Spawn background listeners that refresh caches on upstream changes.
-            let refresh_guard = match &registry {
-                Some(reg) => Some(reg.spawn_refresh_listeners().await),
-                None => None,
-            };
+            // Extract initial filters and restrictions from config for the wrapper.
+            let initial_filters: std::collections::HashMap<String, ToolFilter> = self
+                .config
+                .mcp_servers
+                .iter()
+                .filter_map(|cfg| cfg.tool_filter.clone().map(|f| (cfg.name.clone(), f)))
+                .collect();
+            let initial_restrictions: std::collections::HashMap<String, ParamRestrictions> = self
+                .config
+                .mcp_servers
+                .iter()
+                .filter(|cfg| !cfg.param_restrictions.rules.is_empty())
+                .map(|cfg| (cfg.name.clone(), cfg.param_restrictions.clone()))
+                .collect();
+            let groups = self.config.mcp_groups.as_map().clone();
+
+            let (registry, refresh_guard) =
+                match ConfigMcpRegistry::from_configs(mcp_configs, mcp_groups).await {
+                    Ok(reg) => {
+                        tracing::info!(
+                            "MCP registry started with {} upstreams",
+                            self.config.mcp_servers.len()
+                        );
+                        // Build Arc first so we can spawn refresh listeners,
+                        // then wrap with DynamicToolRegistry.
+                        let inner = Arc::new(reg);
+                        let guard = inner.spawn_refresh_listeners().await;
+                        let wrapped = Arc::new(DynamicToolRegistry::new(
+                            inner,
+                            initial_filters,
+                            initial_restrictions,
+                            groups,
+                        ));
+                        (Some(wrapped), Some(guard))
+                    }
+                    Err(e) => {
+                        tracing::warn!("MCP registry failed to start: {e}");
+                        (None, None)
+                    }
+                };
 
             let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(mcp_admin::admin_mcp_filter(registry.clone()));
-            let server = mcp_admin::mcp_server_filter(registry);
+                .and(admin_tools::admin_tools_filter(registry.clone()));
+            let server = mcp_admin::mcp_server_filter(registry.clone());
+            let tools = bitrouter_api::router::tools::tools_filter(registry);
 
-            (admin, server, refresh_guard)
+            (admin, server, tools, refresh_guard)
         };
 
         // ── A2A protocol ─────────────────────────────────────────────
         #[cfg(feature = "a2a")]
-        let (a2a_routes, admin_agents, _a2a_refresh_guard) = {
+        let (a2a_routes, admin_agent_routes, agent_list, _a2a_refresh_guard) = {
             use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
+            use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
 
             let external_url = format!("http://{}/a2a", self.config.server.listen);
+            let a2a_config = self.config.a2a_agent.clone().map(a2a_agent_config);
 
-            let registry = match UpstreamAgentRegistry::from_config(
-                self.config.a2a_agent.clone(),
-                external_url,
-            )
-            .await
-            {
-                Ok(reg) => {
-                    if self.config.a2a_agent.is_some() {
-                        tracing::info!("A2A gateway started");
+            let (registry, refresh_guard) =
+                match UpstreamAgentRegistry::from_config(a2a_config, external_url).await {
+                    Ok(reg) => {
+                        if self.config.a2a_agent.is_some() {
+                            tracing::info!("A2A gateway started");
+                        }
+                        let inner = Arc::new(reg);
+                        let guard = inner.spawn_refresh_listeners();
+                        let wrapped = Arc::new(DynamicAgentRegistry::new(inner));
+                        (Some(wrapped), Some(guard))
                     }
-                    Some(Arc::new(reg))
-                }
-                Err(e) => {
-                    tracing::warn!("A2A gateway failed to start: {e}");
-                    None
-                }
-            };
+                    Err(e) => {
+                        tracing::warn!("A2A gateway failed to start: {e}");
+                        (None, None)
+                    }
+                };
 
-            let refresh_guard = registry.as_ref().map(|reg| reg.spawn_refresh_listeners());
-
-            let admin = auth_gate(auth::management_auth(auth_ctx.clone())).and(
-                bitrouter_api::router::a2a::admin_agents_filter(registry.clone()),
-            );
+            let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
+                .and(admin_agents::admin_agents_filter(registry.clone()));
+            let agents = bitrouter_api::router::agents::agents_filter(registry.clone());
 
             (
                 bitrouter_api::router::a2a::a2a_gateway_filter(registry),
                 admin,
+                agents,
                 refresh_guard,
             )
         };
@@ -261,15 +290,17 @@ where
         #[cfg(all(feature = "a2a", feature = "mcp"))]
         let all_routes = base
             .or(a2a_routes)
-            .or(admin_agents)
-            .or(admin_tools)
+            .or(admin_agent_routes)
+            .or(agent_list)
+            .or(admin_tool_routes)
+            .or(tool_list)
             .or(mcp_server);
 
         #[cfg(all(feature = "a2a", not(feature = "mcp")))]
-        let all_routes = base.or(a2a_routes).or(admin_agents);
+        let all_routes = base.or(a2a_routes).or(admin_agent_routes).or(agent_list);
 
         #[cfg(all(not(feature = "a2a"), feature = "mcp"))]
-        let all_routes = base.or(admin_tools).or(mcp_server);
+        let all_routes = base.or(admin_tool_routes).or(tool_list).or(mcp_server);
 
         #[cfg(all(not(feature = "a2a"), not(feature = "mcp")))]
         let all_routes = base;
@@ -325,9 +356,7 @@ fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> Cal
 }
 
 /// Convert an auth filter into a gate that rejects unauthorized requests
-/// but does not add anything to the extract tuple. This lets us compose
-/// `auth_gate(auth).and(existing_filter)` without changing the existing
-/// filter's handler signature.
+/// but does not add anything to the extract tuple.
 fn auth_gate(
     auth: impl Filter<Extract = (bitrouter_accounts::identity::Identity,), Error = warp::Rejection>
     + Clone,
@@ -352,6 +381,57 @@ async fn handle_auth_rejection(
         ));
     }
     Err(rejection)
+}
+
+// ── Config → protocol type conversions ───────────────────────────
+
+#[cfg(feature = "mcp")]
+fn mcp_server_config(
+    cfg: bitrouter_config::tool::ToolServerConfig,
+) -> bitrouter_mcp::config::McpServerConfig {
+    bitrouter_mcp::config::McpServerConfig {
+        name: cfg.name,
+        transport: match cfg.transport {
+            bitrouter_config::tool::ToolServerTransport::Stdio { command, args, env } => {
+                bitrouter_mcp::config::McpTransport::Stdio { command, args, env }
+            }
+            bitrouter_config::tool::ToolServerTransport::Http { url, headers } => {
+                bitrouter_mcp::config::McpTransport::Http { url, headers }
+            }
+        },
+        // Filters and restrictions are extracted separately and passed to DynamicToolRegistry.
+        // Keep them in the config for backward compatibility but they are not used by
+        // UpstreamConnection anymore.
+        tool_filter: cfg.tool_filter,
+        cost: bitrouter_mcp::config::ToolCostConfig {
+            default_cost_per_query: cfg.cost.default_cost_per_query,
+            tool_costs: cfg.cost.tool_costs,
+        },
+        param_restrictions: cfg.param_restrictions,
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_access_groups(
+    groups: bitrouter_config::tool::ToolServerAccessGroups,
+) -> bitrouter_mcp::groups::McpAccessGroups {
+    // Re-deserialize from the underlying map to construct McpAccessGroups,
+    // which has a private inner field behind #[serde(flatten)].
+    serde_json::to_value(groups.as_map())
+        .and_then(serde_json::from_value)
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "a2a")]
+fn a2a_agent_config(
+    cfg: bitrouter_config::agent::AgentConfig,
+) -> bitrouter_a2a::config::A2aAgentConfig {
+    bitrouter_a2a::config::A2aAgentConfig {
+        name: cfg.name,
+        url: cfg.url,
+        headers: cfg.headers,
+        card_path: cfg.card_path,
+    }
 }
 
 async fn shutdown_signal() {

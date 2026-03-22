@@ -6,7 +6,6 @@
 //! - **Types** — Full A2A v1.0 schema: Agent Card, Task, Message, Artifact
 //! - **Gateway traits** — [`server::A2aDiscovery`] and [`server::A2aProxy`] for downstream serving
 //! - **Client** — A2A protocol client and upstream connection (feature-gated)
-pub mod admin;
 pub mod card;
 #[cfg(feature = "client")]
 pub mod client;
