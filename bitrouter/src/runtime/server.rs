@@ -158,7 +158,7 @@ where
         #[cfg(feature = "mpp-tempo")]
         let mpp_state: Option<Arc<bitrouter_api::mpp::MppState>> = {
             match self.config.mpp.as_ref().filter(|c| c.enabled) {
-                Some(mpp_config) => match mpp_config.chains.tempo.as_ref() {
+                Some(mpp_config) => match mpp_config.networks.tempo.as_ref() {
                     Some(tempo) => {
                         let state = bitrouter_api::mpp::MppState::from_tempo_config(
                             tempo,

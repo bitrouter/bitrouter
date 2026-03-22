@@ -350,15 +350,18 @@ pub struct MppConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_key: Option<String>,
 
-    /// Per-chain configuration.
+    /// Per-network configuration.
+    ///
+    /// Each supported payment network (Tempo, Solana, …) has its own
+    /// section with a network-specific recipient address and settings.
     #[serde(default)]
-    pub chains: MppChainsConfig,
+    pub networks: MppNetworksConfig,
 }
 
-/// Per-chain MPP configuration.
+/// Per-network MPP configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MppChainsConfig {
-    /// Tempo chain configuration.
+pub struct MppNetworksConfig {
+    /// Tempo network configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tempo: Option<TempoMppConfig>,
 }

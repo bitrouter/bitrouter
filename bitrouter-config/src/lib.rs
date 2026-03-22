@@ -8,7 +8,7 @@ pub mod writer;
 
 pub use config::{
     ApiProtocol, AuthConfig, BitrouterConfig, ControlEndpoint, DatabaseConfig, InputTokenPricing,
-    Modality, ModelConfig, ModelEndpoint, ModelInfo, ModelPricing, MppChainsConfig, MppConfig,
+    Modality, ModelConfig, ModelEndpoint, ModelInfo, ModelPricing, MppConfig, MppNetworksConfig,
     OutputTokenPricing, ProviderConfig, RoutingStrategy, ServerConfig, TempoMppConfig,
 };
 pub use detect::{DetectedProvider, detect_providers, detect_providers_from_env};
