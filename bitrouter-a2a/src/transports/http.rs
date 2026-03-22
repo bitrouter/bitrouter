@@ -324,7 +324,7 @@ fn parse_send_message_result(
             let task = serde_json::from_value::<Task>(result).map_err(|e| {
                 A2aGatewayError::Client(format!("failed to parse task response: {e}"))
             })?;
-            Ok(SendMessageResult::Task(task))
+            Ok(SendMessageResult::Task(Box::new(task)))
         }
         Some("message") => {
             let msg = serde_json::from_value::<Message>(result).map_err(|e| {
@@ -337,7 +337,7 @@ fn parse_send_message_result(
                 let task = serde_json::from_value::<Task>(result).map_err(|e| {
                     A2aGatewayError::Client(format!("failed to parse task response: {e}"))
                 })?;
-                Ok(SendMessageResult::Task(task))
+                Ok(SendMessageResult::Task(Box::new(task)))
             } else {
                 let msg = serde_json::from_value::<Message>(result).map_err(|e| {
                     A2aGatewayError::Client(format!("failed to parse SendMessage result: {e}"))

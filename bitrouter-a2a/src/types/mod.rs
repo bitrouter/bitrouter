@@ -788,7 +788,7 @@ pub struct DeleteTaskPushNotificationConfigRequest {
 #[derive(Debug, Clone)]
 pub enum SendMessageResult {
     /// Server returned a full task with status and lifecycle.
-    Task(Task),
+    Task(Box<Task>),
     /// Server returned a direct message response (no task lifecycle).
     Message(Message),
 }

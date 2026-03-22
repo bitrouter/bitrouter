@@ -139,7 +139,7 @@ impl UpstreamA2aAgent {
             })?;
 
         Ok(match result {
-            SendMessageResult::Task(task) => StreamResponse::Task(task),
+            SendMessageResult::Task(task) => StreamResponse::Task(*task),
             SendMessageResult::Message(msg) => StreamResponse::Message(msg),
         })
     }
