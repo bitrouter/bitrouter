@@ -208,6 +208,8 @@ fn parse_headers(headers: Option<&HashMap<String, String>>) -> Result<HeaderMap>
 }
 
 // Re-export provider types under short aliases for readability.
-use bitrouter_anthropic::messages::provider::{AnthropicConfig, AnthropicMessagesModel};
-use bitrouter_google::generate_content::provider::{GoogleConfig, GoogleGenerativeAiModel};
-use bitrouter_openai::chat::provider::{OpenAiChatCompletionsModel, OpenAiConfig};
+use bitrouter_providers::anthropic::messages::provider::{AnthropicConfig, AnthropicMessagesModel};
+use bitrouter_providers::google::generate_content::provider::{
+    GoogleConfig, GoogleGenerativeAiModel,
+};
+use bitrouter_providers::openai::chat::provider::{OpenAiChatCompletionsModel, OpenAiConfig};
