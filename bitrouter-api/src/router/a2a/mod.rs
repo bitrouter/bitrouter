@@ -7,6 +7,7 @@ mod convert;
 mod discovery;
 pub mod filters;
 mod messaging;
+mod observe;
 mod push;
 mod tasks;
 #[cfg(test)]
@@ -14,3 +15,4 @@ mod tests;
 pub mod types;
 
 pub use filters::a2a_gateway_filter;
+pub use observe::AgentCostFn;

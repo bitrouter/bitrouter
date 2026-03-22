@@ -252,6 +252,7 @@ where
         // ── A2A protocol ─────────────────────────────────────────────
         let (a2a_routes, admin_agent_routes, agent_list, _a2a_refresh_guard) = {
             use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
+            use bitrouter_api::router::a2a::AgentCostFn;
             use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
 
             let external_base_url = format!("http://{}/a2a", self.config.server.listen);
@@ -269,12 +270,24 @@ where
                 (None, None, None)
             };
 
+            let agent_observer: Option<Arc<dyn AgentObserveCallback>> =
+                Some(composite.clone() as Arc<dyn AgentObserveCallback>);
+            let agent_pricing = self.config.a2a_agent_pricing.clone();
+            let agent_cost_fn: Option<AgentCostFn> =
+                Some(Arc::new(move |agent: &str, method: &str| {
+                    agent_pricing.get(agent).map_or(0.0, |p| p.cost_for(method))
+                }));
+
             let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
                 .and(admin_agents::admin_agents_filter(discovery_reg.clone()));
             let agents = bitrouter_api::router::agents::agents_filter(discovery_reg);
 
             (
-                bitrouter_api::router::a2a::a2a_gateway_filter(gateway_reg),
+                bitrouter_api::router::a2a::a2a_gateway_filter(
+                    gateway_reg,
+                    agent_observer,
+                    agent_cost_fn,
+                ),
                 admin,
                 agents,
                 refresh_guard,
