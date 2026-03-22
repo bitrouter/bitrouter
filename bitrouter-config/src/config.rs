@@ -197,7 +197,7 @@ fn default_socket_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ApiProtocol, AuthConfig, Modality, ModelInfo, RoutingStrategy};
+    use crate::model::{ApiProtocol, AuthConfig, Modality, RoutingStrategy};
 
     #[test]
     fn default_config_round_trips_through_yaml() {
