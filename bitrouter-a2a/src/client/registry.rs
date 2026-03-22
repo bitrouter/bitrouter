@@ -9,13 +9,13 @@ use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
 use futures_core::Stream;
 use tokio::sync::broadcast;
 
-use crate::config::A2aAgentConfig;
 use crate::error::A2aGatewayError;
 use crate::server::{A2aDiscovery, A2aProxy};
 use crate::types::{
     AgentCard, CancelTaskRequest, GetTaskRequest, ListTasksRequest, ListTasksResponse,
     SendMessageRequest, StreamResponse, Task, TaskPushNotificationConfig,
 };
+use bitrouter_core::routers::upstream::AgentConfig;
 
 use super::upstream::UpstreamA2aAgent;
 
@@ -57,7 +57,7 @@ pub struct UpstreamAgentRegistry {
 impl UpstreamAgentRegistry {
     /// Connect to the configured upstream agent, if any.
     pub async fn from_config(
-        config: Option<A2aAgentConfig>,
+        config: Option<AgentConfig>,
         external_url: String,
     ) -> Result<Self, A2aGatewayError> {
         let (card_change_tx, _) = broadcast::channel(16);

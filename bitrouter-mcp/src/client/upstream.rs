@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock};
 
-use crate::config::{McpServerConfig, McpTransportConfig};
+use bitrouter_core::routers::upstream::{ToolServerConfig, ToolServerTransport};
+
 use crate::error::McpGatewayError;
 use crate::transports::McpTransport;
 use crate::transports::TransportKind;
@@ -34,8 +35,10 @@ pub struct UpstreamConnection {
 
 impl UpstreamConnection {
     /// Connect to an upstream MCP server.
-    pub async fn connect(config: McpServerConfig) -> Result<Self, McpGatewayError> {
-        config.validate()?;
+    pub async fn connect(config: ToolServerConfig) -> Result<Self, McpGatewayError> {
+        config
+            .validate()
+            .map_err(|reason| McpGatewayError::InvalidConfig { reason })?;
 
         let name = config.name.clone();
         let tool_notify = Arc::new(Notify::new());
@@ -43,7 +46,7 @@ impl UpstreamConnection {
         let prompt_notify = Arc::new(Notify::new());
 
         match config.transport {
-            McpTransportConfig::Http {
+            ToolServerTransport::Http {
                 ref url,
                 ref headers,
             } => {
@@ -87,7 +90,7 @@ impl UpstreamConnection {
                 })
             }
             #[cfg(feature = "client-stdio")]
-            McpTransportConfig::Stdio {
+            ToolServerTransport::Stdio {
                 ref command,
                 ref args,
                 ref env,
@@ -129,7 +132,7 @@ impl UpstreamConnection {
                 })
             }
             #[cfg(not(feature = "client-stdio"))]
-            McpTransportConfig::Stdio { .. } => Err(McpGatewayError::InvalidConfig {
+            ToolServerTransport::Stdio { .. } => Err(McpGatewayError::InvalidConfig {
                 reason: format!(
                     "server '{}': stdio transport requires the 'client-stdio' feature",
                     config.name

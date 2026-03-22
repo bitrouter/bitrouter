@@ -40,15 +40,15 @@ pub struct BitrouterConfig {
 
     /// MCP upstream server configurations.
     #[serde(default)]
-    pub mcp_servers: Vec<crate::tool::ToolServerConfig>,
+    pub mcp_servers: Vec<bitrouter_core::routers::upstream::ToolServerConfig>,
 
     /// Named groups of tool servers for access control convenience.
     #[serde(default)]
-    pub mcp_groups: crate::tool::ToolServerAccessGroups,
+    pub mcp_groups: bitrouter_core::routers::upstream::ToolServerAccessGroups,
 
     /// Upstream A2A agent to proxy through the gateway.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub a2a_agent: Option<crate::agent::AgentConfig>,
+    pub a2a_agent: Option<bitrouter_core::routers::upstream::AgentConfig>,
 }
 
 impl BitrouterConfig {

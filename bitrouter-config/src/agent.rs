@@ -1,31 +1,7 @@
 //! Config-driven agent registry — parallel to [`ConfigRoutingTable`] for models.
 
-use std::collections::HashMap;
-
-use serde::{Deserialize, Serialize};
-
 use bitrouter_core::routers::registry::{AgentEntry, AgentRegistry};
-
-/// Configuration for an upstream agent to proxy.
-///
-/// Protocol-agnostic YAML config shape. Protocol crates convert this
-/// into their own types at assembly time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfig {
-    /// Display name for this upstream agent.
-    pub name: String,
-
-    /// Base URL of the upstream agent (used for discovery).
-    pub url: String,
-
-    /// Optional HTTP headers to send to upstream (e.g., auth tokens).
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub headers: HashMap<String, String>,
-
-    /// Optional card discovery path override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub card_path: Option<String>,
-}
+use bitrouter_core::routers::upstream::AgentConfig;
 
 /// Immutable agent registry loaded from config.
 ///
@@ -76,7 +52,7 @@ mod tests {
         AgentConfig {
             name: "test-agent".to_string(),
             url: "http://localhost:9000".to_string(),
-            headers: HashMap::new(),
+            headers: std::collections::HashMap::new(),
             card_path: None,
         }
     }
@@ -94,24 +70,5 @@ mod tests {
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].id, "test-agent");
         assert_eq!(agents[0].name.as_deref(), Some("test-agent"));
-    }
-
-    #[test]
-    fn serde_round_trip() {
-        let cfg = AgentConfig {
-            name: "my-agent".to_string(),
-            url: "https://agent.example.com".to_string(),
-            headers: HashMap::from([("Authorization".into(), "Bearer tok".into())]),
-            card_path: Some("/custom/card.json".to_string()),
-        };
-        let yaml = serde_yaml::to_string(&cfg).expect("serialize");
-        let parsed: AgentConfig = serde_yaml::from_str(&yaml).expect("deserialize");
-        assert_eq!(parsed.name, "my-agent");
-        assert_eq!(parsed.url, "https://agent.example.com");
-        assert_eq!(
-            parsed.headers.get("Authorization").map(String::as_str),
-            Some("Bearer tok")
-        );
-        assert_eq!(parsed.card_path.as_deref(), Some("/custom/card.json"));
     }
 }

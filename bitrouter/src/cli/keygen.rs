@@ -4,10 +4,10 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bitrouter_config::tool::ToolServerAccessGroups;
 use bitrouter_core::auth::chain::Chain;
 use bitrouter_core::auth::claims::{BitrouterClaims, BudgetRange, BudgetScope, TokenScope};
 use bitrouter_core::auth::token;
+use bitrouter_core::routers::upstream::ToolServerAccessGroups;
 
 use crate::cli::account::load_active_keypair;
 

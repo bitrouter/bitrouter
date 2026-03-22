@@ -4,9 +4,9 @@ use std::sync::Arc;
 use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
 use tokio::sync::{Notify, RwLock, broadcast};
 
-use crate::config::McpServerConfig;
+use bitrouter_core::routers::upstream::{ToolServerAccessGroups, ToolServerConfig};
+
 use crate::error::McpGatewayError;
-use crate::groups::McpAccessGroups;
 use crate::server::{McpPromptServer, McpResourceServer, McpToolServer};
 use crate::types::{
     McpGetPromptResult, McpPrompt, McpResource, McpResourceContent, McpResourceTemplate, McpTool,
@@ -35,7 +35,7 @@ impl Drop for RefreshGuard {
 /// [`DynamicToolRegistry`] wrapper that wraps this registry.
 pub struct ConfigMcpRegistry {
     upstreams: RwLock<HashMap<String, UpstreamConnection>>,
-    groups: McpAccessGroups,
+    groups: ToolServerAccessGroups,
     /// Broadcast sender for notifying downstream MCP clients of tool list changes.
     tool_change_tx: broadcast::Sender<()>,
     /// Broadcast sender for notifying downstream MCP clients of resource list changes.
@@ -47,8 +47,8 @@ pub struct ConfigMcpRegistry {
 impl ConfigMcpRegistry {
     /// Connect to all configured upstreams. Fails on first error or duplicate name.
     pub async fn from_configs(
-        configs: Vec<McpServerConfig>,
-        groups: McpAccessGroups,
+        configs: Vec<ToolServerConfig>,
+        groups: ToolServerAccessGroups,
     ) -> Result<Self, McpGatewayError> {
         // Check for duplicate names
         let mut seen = std::collections::HashSet::new();
@@ -136,7 +136,7 @@ impl ConfigMcpRegistry {
     }
 
     /// Return the access groups.
-    pub fn groups(&self) -> &McpAccessGroups {
+    pub fn groups(&self) -> &ToolServerAccessGroups {
         &self.groups
     }
 

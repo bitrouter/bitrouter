@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock};
 
-use crate::config::A2aAgentConfig;
+use bitrouter_core::routers::upstream::AgentConfig;
+
 use crate::error::A2aGatewayError;
 use crate::transports::A2aTransport;
 use crate::transports::jsonrpc::A2aClient;
@@ -30,8 +31,10 @@ pub struct UpstreamA2aAgent {
 
 impl UpstreamA2aAgent {
     /// Connect to an upstream A2A agent by discovering its agent card.
-    pub async fn connect(config: A2aAgentConfig) -> Result<Self, A2aGatewayError> {
-        config.validate()?;
+    pub async fn connect(config: AgentConfig) -> Result<Self, A2aGatewayError> {
+        config
+            .validate()
+            .map_err(|reason| A2aGatewayError::InvalidConfig { reason })?;
 
         let transport = {
             let mut headers = reqwest::header::HeaderMap::new();

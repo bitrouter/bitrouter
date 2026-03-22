@@ -5,3 +5,4 @@ pub mod dynamic_tool;
 pub mod model_router;
 pub mod registry;
 pub mod routing_table;
+pub mod upstream;

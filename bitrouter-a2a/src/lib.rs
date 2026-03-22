@@ -9,7 +9,6 @@
 //! - **Client** — Upstream connection and registry (feature-gated)
 #[cfg(feature = "client")]
 pub mod client;
-pub mod config;
 pub mod error;
 pub mod server;
 #[cfg(feature = "client")]

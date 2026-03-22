@@ -179,14 +179,8 @@ where
             use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
             use bitrouter_mcp::client::registry::ConfigMcpRegistry;
 
-            let mcp_configs: Vec<bitrouter_mcp::config::McpServerConfig> = self
-                .config
-                .mcp_servers
-                .iter()
-                .cloned()
-                .map(mcp_server_config)
-                .collect();
-            let mcp_groups = mcp_access_groups(self.config.mcp_groups.clone());
+            let mcp_configs = self.config.mcp_servers.clone();
+            let mcp_groups = self.config.mcp_groups.clone();
 
             // Extract initial filters and restrictions from config for the wrapper.
             let initial_filters: std::collections::HashMap<String, ToolFilter> = self
@@ -244,7 +238,7 @@ where
             use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
 
             let external_url = format!("http://{}/a2a", self.config.server.listen);
-            let a2a_config = self.config.a2a_agent.clone().map(a2a_agent_config);
+            let a2a_config = self.config.a2a_agent.clone();
 
             let (registry, refresh_guard) =
                 match UpstreamAgentRegistry::from_config(a2a_config, external_url).await {
@@ -381,57 +375,6 @@ async fn handle_auth_rejection(
         ));
     }
     Err(rejection)
-}
-
-// ── Config → protocol type conversions ───────────────────────────
-
-#[cfg(feature = "mcp")]
-fn mcp_server_config(
-    cfg: bitrouter_config::tool::ToolServerConfig,
-) -> bitrouter_mcp::config::McpServerConfig {
-    bitrouter_mcp::config::McpServerConfig {
-        name: cfg.name,
-        transport: match cfg.transport {
-            bitrouter_config::tool::ToolServerTransport::Stdio { command, args, env } => {
-                bitrouter_mcp::config::McpTransportConfig::Stdio { command, args, env }
-            }
-            bitrouter_config::tool::ToolServerTransport::Http { url, headers } => {
-                bitrouter_mcp::config::McpTransportConfig::Http { url, headers }
-            }
-        },
-        // Filters and restrictions are extracted separately and passed to DynamicToolRegistry.
-        // Keep them in the config for backward compatibility but they are not used by
-        // UpstreamConnection anymore.
-        tool_filter: cfg.tool_filter,
-        cost: bitrouter_mcp::config::ToolCostConfig {
-            default_cost_per_query: cfg.cost.default_cost_per_query,
-            tool_costs: cfg.cost.tool_costs,
-        },
-        param_restrictions: cfg.param_restrictions,
-    }
-}
-
-#[cfg(feature = "mcp")]
-fn mcp_access_groups(
-    groups: bitrouter_config::tool::ToolServerAccessGroups,
-) -> bitrouter_mcp::groups::McpAccessGroups {
-    // Re-deserialize from the underlying map to construct McpAccessGroups,
-    // which has a private inner field behind #[serde(flatten)].
-    serde_json::to_value(groups.as_map())
-        .and_then(serde_json::from_value)
-        .unwrap_or_default()
-}
-
-#[cfg(feature = "a2a")]
-fn a2a_agent_config(
-    cfg: bitrouter_config::agent::AgentConfig,
-) -> bitrouter_a2a::config::A2aAgentConfig {
-    bitrouter_a2a::config::A2aAgentConfig {
-        name: cfg.name,
-        url: cfg.url,
-        headers: cfg.headers,
-        card_path: cfg.card_path,
-    }
 }
 
 async fn shutdown_signal() {
