@@ -5,6 +5,8 @@ pub mod error;
 pub mod migration;
 #[cfg(feature = "mpp-tempo")]
 pub mod mpp_client;
+#[cfg(feature = "mpp-solana")]
+pub mod mpp_solana_client;
 pub mod paths;
 pub mod router;
 pub mod server;

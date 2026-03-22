@@ -364,6 +364,11 @@ pub struct MppNetworksConfig {
     /// Tempo network configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tempo: Option<TempoMppConfig>,
+
+    /// Solana network configuration.
+    #[cfg(feature = "mpp-solana")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solana: Option<SolanaMppConfig>,
 }
 
 /// Tempo-specific MPP configuration.
@@ -386,6 +391,26 @@ pub struct TempoMppConfig {
     /// Enable fee sponsorship for all challenges.
     #[serde(default)]
     pub fee_payer: bool,
+}
+
+/// Solana-specific MPP configuration.
+#[cfg(feature = "mpp-solana")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolanaMppConfig {
+    /// Recipient address for payments (Solana base58 pubkey, required).
+    pub recipient: String,
+
+    /// Channel (escrow) program address (required for session support).
+    pub channel_program: String,
+
+    /// Solana network name (e.g., "mainnet-beta", "devnet").
+    #[serde(default = "default_solana_network")]
+    pub network: String,
+}
+
+#[cfg(feature = "mpp-solana")]
+fn default_solana_network() -> String {
+    "mainnet-beta".into()
 }
 
 /// Authentication configuration.

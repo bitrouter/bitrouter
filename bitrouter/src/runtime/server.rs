@@ -155,31 +155,56 @@ where
         // Model API routes with observation.
         // When MPP is enabled, payment-gated filters replace the standard
         // auth-gated filters. We use .boxed() to unify the filter types.
-        #[cfg(feature = "mpp-tempo")]
+        #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
         let mpp_state: Option<Arc<bitrouter_api::mpp::MppState>> = {
             match self.config.mpp.as_ref().filter(|c| c.enabled) {
-                Some(mpp_config) => match mpp_config.networks.tempo.as_ref() {
-                    Some(tempo) => {
-                        let state = bitrouter_api::mpp::MppState::from_tempo_config(
-                            tempo,
-                            mpp_config.realm.as_deref(),
-                            mpp_config.secret_key.as_deref(),
-                        )
-                        .map_err(|e| {
-                            bitrouter_config::ConfigError::ConfigParse(format!(
-                                "MPP initialization failed: {e}"
-                            ))
-                        })?;
-                        tracing::info!(realm = state.realm(), "MPP enabled (Tempo)");
-                        Some(Arc::new(state))
+                Some(mpp_config) => {
+                    let realm = mpp_config.realm.as_deref();
+                    let secret_key = mpp_config.secret_key.as_deref();
+                    let mut state: Option<bitrouter_api::mpp::MppState> = None;
+
+                    #[cfg(feature = "mpp-tempo")]
+                    if let (true, Some(tempo)) =
+                        (state.is_none(), mpp_config.networks.tempo.as_ref())
+                    {
+                        state = Some(
+                            bitrouter_api::mpp::MppState::from_tempo_config(
+                                tempo, realm, secret_key,
+                            )
+                            .map_err(|e| {
+                                bitrouter_config::ConfigError::ConfigParse(format!(
+                                    "MPP initialization failed: {e}"
+                                ))
+                            })?,
+                        );
                     }
-                    None => None,
-                },
+
+                    #[cfg(feature = "mpp-solana")]
+                    if let (true, Some(solana)) =
+                        (state.is_none(), mpp_config.networks.solana.as_ref())
+                    {
+                        state = Some(
+                            bitrouter_api::mpp::MppState::from_solana_config(
+                                solana, realm, secret_key,
+                            )
+                            .map_err(|e| {
+                                bitrouter_config::ConfigError::ConfigParse(format!(
+                                    "MPP initialization failed: {e}"
+                                ))
+                            })?,
+                        );
+                    }
+
+                    if let Some(s) = state.as_ref() {
+                        tracing::info!(realm = s.realm(), "MPP enabled");
+                    }
+                    state.map(Arc::new)
+                }
                 None => None,
             }
         };
 
-        #[cfg(feature = "mpp-tempo")]
+        #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
         let (chat, messages, responses, generate_content) = if let Some(ref mpp) = mpp_state {
             (
                 openai::chat::filters::chat_completions_filter_with_mpp(
@@ -252,28 +277,28 @@ where
             )
         };
 
-        #[cfg(not(feature = "mpp-tempo"))]
+        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
         let chat = openai::chat::filters::chat_completions_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
-        #[cfg(not(feature = "mpp-tempo"))]
+        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
         let messages = anthropic::messages::filters::messages_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             anthropic_account_filter,
         );
-        #[cfg(not(feature = "mpp-tempo"))]
+        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
         let responses = openai::responses::filters::responses_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
-        #[cfg(not(feature = "mpp-tempo"))]
+        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
         let generate_content =
             google::generate_content::filters::generate_content_filter_with_observe(
                 self.table.clone(),
@@ -366,7 +391,7 @@ async fn handle_auth_rejection(
         )) as Box<dyn warp::Reply>);
     }
 
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
     if let Some(challenge) = rejection.find::<bitrouter_api::mpp::MppChallenge>() {
         match warp::http::Response::builder()
             .status(warp::http::StatusCode::PAYMENT_REQUIRED)
@@ -386,7 +411,7 @@ async fn handle_auth_rejection(
         }
     }
 
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
     if let Some(err) = rejection.find::<bitrouter_api::mpp::MppVerificationFailed>() {
         let json = warp::reply::json(&serde_json::json!({
             "error": {
