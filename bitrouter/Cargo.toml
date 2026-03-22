@@ -9,7 +9,7 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["tui", "sqlite", "postgres", "mpp-tempo"]
+default = ["tui", "sqlite", "postgres", "mpp-tempo", "mpp-solana"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
 sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
 postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
@@ -19,6 +19,13 @@ mpp-tempo = [
     "bitrouter-config/mpp-tempo",
     "dep:mpp",
     "dep:anyhow",
+]
+mpp-solana = [
+    "bitrouter-api/mpp-solana",
+    "bitrouter-config/mpp-solana",
+    "dep:mpp",
+    "dep:anyhow",
+    "dep:bs58",
 ]
 
 [dependencies]
@@ -91,6 +98,8 @@ mpp = { git = "https://github.com/tempoxyz/mpp-rs", default-features = false, fe
     "tempo",
     "reqwest-rustls-tls",
 ], optional = true }
+bs58 = { version = "0.5", optional = true }
+bitrouter-swig-sdk = "0.3.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

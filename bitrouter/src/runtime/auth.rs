@@ -54,10 +54,20 @@ impl JwtAuthContext {
 // ── credential extraction ─────────────────────────────────────
 
 /// Extract a bearer token from `Authorization: Bearer <token>`.
+///
+/// Handles comma-separated schemes so that
+/// `"Bearer <jwt>, Payment <cred>"` correctly returns `"<jwt>"`.
 fn extract_bearer(header: &str) -> Option<&str> {
-    header
-        .strip_prefix("Bearer ")
-        .or_else(|| header.strip_prefix("bearer "))
+    for segment in header.split(',') {
+        let trimmed = segment.trim();
+        if let Some(token) = trimmed
+            .strip_prefix("Bearer ")
+            .or_else(|| trimmed.strip_prefix("bearer "))
+        {
+            return Some(token.trim());
+        }
+    }
+    None
 }
 
 /// Warp filter: extract credential from `Authorization: Bearer` header.
@@ -174,6 +184,7 @@ async fn resolve_jwt_identity(
     Ok(Identity {
         account_id: AccountId(account.id),
         scope,
+        chain: Some(claims.chain),
         models: claims.models,
         budget: claims.budget,
         budget_scope: claims.budget_scope,
@@ -290,6 +301,7 @@ fn open_identity() -> impl Filter<Extract = (Identity,), Error = warp::Rejection
         Ok::<_, warp::Rejection>(Identity {
             account_id: AccountId(uuid::Uuid::nil()),
             scope: Scope::Admin,
+            chain: None,
             models: None,
             budget: None,
             budget_scope: None,

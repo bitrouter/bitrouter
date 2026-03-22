@@ -14,7 +14,7 @@ use reqwest_middleware::ClientWithMiddleware;
 pub struct Router {
     client: ClientWithMiddleware,
     x402_client: Option<ClientWithMiddleware>,
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
     mpp_client: Option<ClientWithMiddleware>,
     providers: HashMap<String, ProviderConfig>,
 }
@@ -24,7 +24,7 @@ impl Router {
         Self {
             client,
             x402_client: None,
-            #[cfg(feature = "mpp-tempo")]
+            #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
             mpp_client: None,
             providers,
         }
@@ -35,7 +35,7 @@ impl Router {
         self
     }
 
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
     pub fn with_mpp_client(mut self, mpp_client: ClientWithMiddleware) -> Self {
         self.mpp_client = Some(mpp_client);
         self
@@ -55,7 +55,7 @@ impl Router {
                 )
             })
         } else {
-            #[cfg(feature = "mpp-tempo")]
+            #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
             if Self::is_mpp_provider(provider) {
                 return self.mpp_client.clone().ok_or_else(|| {
                     BitrouterError::invalid_request(
@@ -73,7 +73,7 @@ impl Router {
         matches!(&provider.auth, Some(AuthConfig::X402))
     }
 
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
     fn is_mpp_provider(provider: &ProviderConfig) -> bool {
         matches!(&provider.auth, Some(AuthConfig::Mpp))
     }

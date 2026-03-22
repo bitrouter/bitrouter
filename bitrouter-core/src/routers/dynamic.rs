@@ -40,6 +40,11 @@ impl<T> DynamicRoutingTable<T> {
         }
     }
 
+    /// Returns a reference to the wrapped inner routing table.
+    pub fn inner(&self) -> &T {
+        &self.inner
+    }
+
     /// Resolve a model name against dynamic routes only.
     ///
     /// Returns `None` if no dynamic route matches.

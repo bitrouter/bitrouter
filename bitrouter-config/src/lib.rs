@@ -6,6 +6,8 @@ pub mod registry;
 pub mod routing;
 pub mod writer;
 
+#[cfg(feature = "mpp-solana")]
+pub use config::SolanaMppConfig;
 pub use config::{
     ApiProtocol, AuthConfig, BitrouterConfig, ControlEndpoint, DatabaseConfig, InputTokenPricing,
     Modality, ModelConfig, ModelEndpoint, ModelInfo, ModelPricing, MppConfig, MppNetworksConfig,

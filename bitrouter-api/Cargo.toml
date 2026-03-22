@@ -14,6 +14,15 @@ openai = ["bitrouter-openai"]
 anthropic = ["bitrouter-anthropic"]
 google = ["bitrouter-google"]
 mpp-tempo = ["dep:mpp", "mpp/tempo", "mpp/server", "dep:bitrouter-config"]
+mpp-solana = [
+    "dep:mpp",
+    "mpp/server",
+    "dep:bitrouter-config",
+    "bitrouter-config/mpp-solana",
+    "dep:ed25519-dalek",
+    "dep:bs58",
+    "dep:time",
+]
 
 [dependencies]
 bitrouter-core = { path = "../bitrouter-core", version = "0.11" }
@@ -27,6 +36,12 @@ mpp = { git = "https://github.com/tempoxyz/mpp-rs", default-features = false, fe
 ], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
+ed25519-dalek = { version = "2", features = ["std"], optional = true }
+bs58 = { version = "0.5", optional = true }
+time = { version = "0.3", features = [
+    "formatting",
+    "parsing",
+], optional = true }
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
 tokio-stream = { version = "0.1" }
 tracing = { version = "0.1" }
