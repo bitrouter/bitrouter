@@ -1875,6 +1875,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitrouter-providers"
+version = "0.11.0"
+
+[[package]]
 name = "bitrouter-swig-sdk"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
