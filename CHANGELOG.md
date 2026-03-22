@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/bitrouter/bitrouter/compare/v0.11.0...v0.12.0)
+
+
+### ⛰️ Features
+
+- *(api)* Support MPP `session` intend on Solana ([#144](https://github.com/bitrouter/bitrouter/pull/144)) - ([b398a4f](https://github.com/bitrouter/bitrouter/commit/b398a4f835ba3d30151f809bd30c6a7231bec175))
+- Bitrouter default provider onboarding ([#135](https://github.com/bitrouter/bitrouter/pull/135)) - ([7269264](https://github.com/bitrouter/bitrouter/commit/7269264afdfda54bd77f58b608c3608392e886a9))
+
+
 ## [0.11.0](https://github.com/bitrouter/bitrouter/compare/v0.10.0...v0.11.0)
 
 
