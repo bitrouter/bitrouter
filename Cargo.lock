@@ -1720,24 +1720,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-anthropic"
-version = "0.11.0"
-dependencies = [
- "base64 0.22.1",
- "bitrouter-core",
- "bytes",
- "regex",
- "reqwest 0.13.2",
- "reqwest-middleware 0.5.1",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tokio-util",
-]
-
-[[package]]
 name = "bitrouter-api"
 version = "0.11.0"
 dependencies = [
@@ -1806,24 +1788,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-google"
-version = "0.11.0"
-dependencies = [
- "base64 0.22.1",
- "bitrouter-core",
- "bytes",
- "regex",
- "reqwest 0.13.2",
- "reqwest-middleware 0.5.1",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tokio-util",
-]
-
-[[package]]
 name = "bitrouter-guardrails"
 version = "0.11.0"
 dependencies = [
@@ -1849,24 +1813,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "bitrouter-openai"
-version = "0.11.0"
-dependencies = [
- "base64 0.22.1",
- "bitrouter-core",
- "bytes",
- "regex",
- "reqwest 0.13.2",
- "reqwest-middleware 0.5.1",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tokio-util",
 ]
 
 [[package]]
