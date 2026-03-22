@@ -89,9 +89,26 @@ where
 
         let mut retry_req = retry_req;
         let header_name = reqwest::header::HeaderName::from_static(AUTHORIZATION_HEADER);
+
+        // Combine existing Bearer token (if any) with the Payment credential.
+        let combined = if let Some(existing) = retry_req.headers().get(&header_name) {
+            let existing_str = existing.to_str().unwrap_or("");
+            let bearer_part = existing_str
+                .split(',')
+                .map(|s| s.trim())
+                .find(|s| s.starts_with("Bearer "));
+            if let Some(bearer) = bearer_part {
+                format!("{bearer}, {auth_header}")
+            } else {
+                auth_header
+            }
+        } else {
+            auth_header
+        };
+
         retry_req.headers_mut().insert(
             header_name,
-            auth_header
+            combined
                 .parse()
                 .map_err(|e: reqwest::header::InvalidHeaderValue| {
                     reqwest_middleware::Error::Middleware(anyhow::anyhow!(

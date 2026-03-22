@@ -7,9 +7,10 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use mpp::server::VerificationError;
-use tokio::sync::RwLock;
+use tokio::sync::{Notify, RwLock};
 
 use super::solana_types::SolanaChannelState;
 
@@ -43,17 +44,25 @@ pub trait SolanaChannelStore: Send + Sync {
     ) -> Pin<
         Box<dyn Future<Output = Result<Option<SolanaChannelState>, VerificationError>> + Send + '_>,
     >;
+
+    /// Wait for the next update to a channel.
+    /// Default implementation returns immediately (poll-based fallback).
+    fn wait_for_update(&self, _channel_id: &str) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
 }
 
 /// In-memory channel store backed by a `RwLock<HashMap>`.
 pub struct InMemorySolanaChannelStore {
     channels: RwLock<HashMap<String, SolanaChannelState>>,
+    notifiers: RwLock<HashMap<String, Arc<Notify>>>,
 }
 
 impl Default for InMemorySolanaChannelStore {
     fn default() -> Self {
         Self {
             channels: RwLock::new(HashMap::new()),
+            notifiers: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -92,13 +101,33 @@ impl SolanaChannelStore for InMemorySolanaChannelStore {
             let next = updater(current)?;
             match next {
                 Some(ref state) => {
-                    channels.insert(channel_id, state.clone());
+                    channels.insert(channel_id.clone(), state.clone());
                 }
                 None => {
                     channels.remove(&channel_id);
                 }
             }
+            // Wake any task waiting on this channel.
+            drop(channels);
+            let notifiers = self.notifiers.read().await;
+            if let Some(notify) = notifiers.get(&channel_id) {
+                notify.notify_waiters();
+            }
             Ok(next)
+        })
+    }
+
+    fn wait_for_update(&self, channel_id: &str) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let channel_id = channel_id.to_string();
+        Box::pin(async move {
+            let notify = {
+                let mut notifiers = self.notifiers.write().await;
+                notifiers
+                    .entry(channel_id)
+                    .or_insert_with(|| Arc::new(Notify::new()))
+                    .clone()
+            };
+            notify.notified().await;
         })
     }
 }

@@ -19,6 +19,23 @@ use warp::Filter;
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
 use crate::runtime::error::Result;
 
+/// Conditional bound: when MPP features are enabled, the routing table must
+/// also implement `PricingLookup` so that handlers can compute per-request costs.
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+pub(crate) trait ServerTableBound:
+    AdminRoutingTable + bitrouter_api::mpp::PricingLookup
+{
+}
+
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+impl<T: AdminRoutingTable + bitrouter_api::mpp::PricingLookup> ServerTableBound for T {}
+
+#[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+pub(crate) trait ServerTableBound: AdminRoutingTable {}
+
+#[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+impl<T: AdminRoutingTable> ServerTableBound for T {}
+
 pub struct ServerPlan<T, R> {
     config: BitrouterConfig,
     table: Arc<T>,
@@ -44,7 +61,13 @@ where
         self.db = Some(db);
         self
     }
+}
 
+impl<T, R> ServerPlan<T, R>
+where
+    T: ServerTableBound + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
     pub async fn serve(self) -> Result<()> {
         let addr = self.config.server.listen;
 
@@ -130,6 +153,7 @@ where
                     budget: id.budget,
                     budget_scope: id.budget_scope,
                     budget_range: id.budget_range,
+                    chain: id.chain,
                 })
                 .boxed()
         } else {
@@ -146,6 +170,7 @@ where
                     budget: id.budget,
                     budget_scope: id.budget_scope,
                     budget_range: id.budget_range,
+                    chain: id.chain,
                 })
                 .boxed()
         } else {
@@ -159,46 +184,36 @@ where
         let mpp_state: Option<Arc<bitrouter_api::mpp::MppState>> = {
             match self.config.mpp.as_ref().filter(|c| c.enabled) {
                 Some(mpp_config) => {
-                    let realm = mpp_config.realm.as_deref();
+                    let realm = mpp_config.realm.as_deref().unwrap_or("MPP Payment");
                     let secret_key = mpp_config.secret_key.as_deref();
-                    let mut state: Option<bitrouter_api::mpp::MppState> = None;
+                    let mut state = bitrouter_api::mpp::MppState::new(realm);
 
                     #[cfg(feature = "mpp-tempo")]
-                    if let (true, Some(tempo)) =
-                        (state.is_none(), mpp_config.networks.tempo.as_ref())
-                    {
-                        state = Some(
-                            bitrouter_api::mpp::MppState::from_tempo_config(
-                                tempo, realm, secret_key,
-                            )
-                            .map_err(|e| {
-                                bitrouter_config::ConfigError::ConfigParse(format!(
-                                    "MPP initialization failed: {e}"
-                                ))
-                            })?,
-                        );
+                    if let Some(tempo) = mpp_config.networks.tempo.as_ref() {
+                        state.add_tempo(tempo, secret_key).map_err(|e| {
+                            bitrouter_config::ConfigError::ConfigParse(format!(
+                                "MPP Tempo initialization failed: {e}"
+                            ))
+                        })?;
+                        tracing::info!("MPP Tempo backend enabled");
                     }
 
                     #[cfg(feature = "mpp-solana")]
-                    if let (true, Some(solana)) =
-                        (state.is_none(), mpp_config.networks.solana.as_ref())
-                    {
-                        state = Some(
-                            bitrouter_api::mpp::MppState::from_solana_config(
-                                solana, realm, secret_key,
-                            )
-                            .map_err(|e| {
-                                bitrouter_config::ConfigError::ConfigParse(format!(
-                                    "MPP initialization failed: {e}"
-                                ))
-                            })?,
-                        );
+                    if let Some(solana) = mpp_config.networks.solana.as_ref() {
+                        state.add_solana(solana, secret_key).map_err(|e| {
+                            bitrouter_config::ConfigError::ConfigParse(format!(
+                                "MPP Solana initialization failed: {e}"
+                            ))
+                        })?;
+                        tracing::info!("MPP Solana backend enabled");
                     }
 
-                    if let Some(s) = state.as_ref() {
-                        tracing::info!(realm = s.realm(), "MPP enabled");
+                    if state.is_configured() {
+                        tracing::info!(realm = state.realm(), "MPP enabled");
+                        Some(Arc::new(state))
+                    } else {
+                        None
                     }
-                    state.map(Arc::new)
                 }
                 None => None,
             }
@@ -212,6 +227,7 @@ where
                     guarded_router.clone(),
                     observer.clone(),
                     mpp.clone(),
+                    account_filter.clone(),
                 )
                 .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                 .boxed(),
@@ -220,6 +236,7 @@ where
                     guarded_router.clone(),
                     observer.clone(),
                     mpp.clone(),
+                    anthropic_account_filter.clone(),
                 )
                 .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                 .boxed(),
@@ -228,6 +245,7 @@ where
                     guarded_router.clone(),
                     observer.clone(),
                     mpp.clone(),
+                    account_filter.clone(),
                 )
                 .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                 .boxed(),
@@ -236,6 +254,7 @@ where
                     guarded_router.clone(),
                     observer.clone(),
                     mpp.clone(),
+                    account_filter.clone(),
                 )
                 .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                 .boxed(),

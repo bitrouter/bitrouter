@@ -141,18 +141,24 @@ where
     handle_chat_completion(request, table, hooked).await
 }
 
-#[cfg(feature = "mpp-tempo")]
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
 async fn handle_chat_completion_with_mpp<T, R>(
-    mpp_ctx: crate::mpp::MppPaymentContext,
+    caller: CallerContext,
+    mpp_state: Arc<crate::mpp::MppState>,
+    auth_header: Option<String>,
     request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
 where
-    T: RoutingTable + Send + Sync + 'static,
+    T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
+    let mpp_ctx =
+        crate::mpp::verify_mpp_payment(mpp_state.clone(), caller.chain.clone(), auth_header)
+            .await?;
+
     // Management actions (channel open/topUp/close) short-circuit request processing.
     if let Some(ref management) = mpp_ctx.management_response {
         let reply = warp::reply::json(management);
@@ -166,45 +172,224 @@ where
         return Ok(Box::new(reply));
     }
 
-    // Normal request processing with observation (MPP replaces account auth).
-    let result = handle_chat_completion_with_observe(
-        request,
-        table,
-        router,
-        observer,
-        CallerContext::default(),
-    )
-    .await?;
+    let is_stream = request.stream.unwrap_or(false);
+    let incoming_model = convert::extract_model_name(&request).to_owned();
 
-    if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
-        Ok(Box::new(warp::reply::with_header(
-            result,
-            mpp::PAYMENT_RECEIPT_HEADER,
-            receipt_header,
-        )))
+    if let Some(ref allowed) = caller.models
+        && !is_model_allowed(&incoming_model, allowed)
+    {
+        return Err(warp::reject::custom(BitrouterRejection(
+            BitrouterError::AccessDenied {
+                message: format!("model '{}' is not in your allowlist", incoming_model),
+            },
+        )));
+    }
+
+    let target = table
+        .route(&incoming_model)
+        .await
+        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+
+    let provider_name = target.provider_name.clone();
+    let target_model_id = target.model_id.clone();
+
+    let model = router
+        .route_model(target)
+        .await
+        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+
+    let model_id = model.model_id().to_owned();
+    let options = convert::to_call_options(request);
+    let start = Instant::now();
+
+    if is_stream {
+        let stream_result = model
+            .stream(options)
+            .await
+            .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+
+        let stream_id = format!("chatcmpl-{}", generate_id());
+
+        let (tx, rx) =
+            tokio::sync::mpsc::channel::<Result<warp::sse::Event, std::convert::Infallible>>(32);
+
+        let pricing = table.model_pricing(&provider_name, &target_model_id);
+        let tick_cost = crate::mpp::cost_to_micro_units(pricing.output_tokens.text / 1_000_000.0);
+
+        let metered = crate::mpp::metered_sse::MeteredSseContext {
+            mpp_state: mpp_state.clone(),
+            backend_key: mpp_ctx.backend_key.clone(),
+            channel_id: mpp_ctx.channel_id.clone(),
+            tick_cost,
+        };
+
+        tokio::spawn(async move {
+            let mut stream = stream_result.stream;
+            let mut converter = convert::StreamConverter::new(model_id, stream_id);
+            use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;
+            use tokio_stream::StreamExt as _;
+            let mut usage = None;
+            let mut client_disconnected = false;
+            while let Some(part) = stream.next().await {
+                if let LanguageModelStreamPart::Finish {
+                    usage: ref finish_usage,
+                    ..
+                } = part
+                {
+                    usage = Some(finish_usage.clone());
+                }
+                if let Some(chunk) = converter.convert(&part) {
+                    if !metered.deduct_or_pause(&tx).await {
+                        client_disconnected = true;
+                        break;
+                    }
+                    let data = serde_json::to_string(&chunk).unwrap_or_default();
+                    let event = Ok(warp::sse::Event::default().data(data));
+                    if tx.send(event).await.is_err() {
+                        client_disconnected = true;
+                        break;
+                    }
+                }
+            }
+            let _ = tx
+                .send(Ok(warp::sse::Event::default().data("[DONE]")))
+                .await;
+
+            let latency_ms = start.elapsed().as_millis() as u64;
+            let ctx = RequestContext {
+                route: incoming_model,
+                provider: provider_name,
+                model: target_model_id,
+                caller,
+                latency_ms,
+            };
+            if let Some(usage) = usage {
+                observer
+                    .on_request_success(RequestSuccessEvent { ctx, usage })
+                    .await;
+            } else if client_disconnected {
+                observer
+                    .on_request_failure(RequestFailureEvent {
+                        ctx,
+                        error: bitrouter_core::errors::BitrouterError::cancelled(
+                            None,
+                            "client disconnected during stream",
+                        ),
+                    })
+                    .await;
+            } else {
+                observer
+                    .on_request_failure(RequestFailureEvent {
+                        ctx,
+                        error: bitrouter_core::errors::BitrouterError::stream_protocol(
+                            None,
+                            "stream completed without finish event",
+                            None,
+                        ),
+                    })
+                    .await;
+            }
+        });
+
+        let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let reply = warp::sse::reply(sse_stream);
+        if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+            Ok(Box::new(warp::reply::with_header(
+                reply,
+                mpp::PAYMENT_RECEIPT_HEADER,
+                receipt_header,
+            )))
+        } else {
+            Ok(Box::new(reply) as Box<dyn warp::Reply>)
+        }
     } else {
-        Ok(result)
+        let gen_result = model.generate(options).await;
+        match gen_result {
+            Ok(result) => {
+                // Compute cost and deduct from channel.
+                let pricing = table.model_pricing(&provider_name, &target_model_id);
+                let cost_usd = crate::mpp::calculate_usage_cost(&result.usage, &pricing);
+                let micro_units = crate::mpp::cost_to_micro_units(cost_usd);
+
+                if micro_units > 0
+                    && let Err(e) = mpp_state
+                        .deduct(&mpp_ctx.backend_key, &mpp_ctx.channel_id, micro_units)
+                        .await
+                {
+                    tracing::warn!(
+                        channel_id = %mpp_ctx.channel_id,
+                        amount = micro_units,
+                        error = %e,
+                        "MPP deduction failed after successful generation"
+                    );
+                }
+
+                let event = RequestSuccessEvent {
+                    ctx: RequestContext {
+                        route: incoming_model,
+                        provider: provider_name,
+                        model: target_model_id,
+                        caller,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                    },
+                    usage: result.usage.clone(),
+                };
+                tokio::spawn(async move { observer.on_request_success(event).await });
+
+                let response = convert::from_generate_result(&model_id, result);
+                let reply = warp::reply::json(&response);
+
+                if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+                    Ok(Box::new(warp::reply::with_header(
+                        reply,
+                        mpp::PAYMENT_RECEIPT_HEADER,
+                        receipt_header,
+                    )))
+                } else {
+                    Ok(Box::new(reply) as Box<dyn warp::Reply>)
+                }
+            }
+            Err(e) => {
+                let event = RequestFailureEvent {
+                    ctx: RequestContext {
+                        route: incoming_model,
+                        provider: provider_name,
+                        model: target_model_id,
+                        caller,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                    },
+                    error: e.clone(),
+                };
+                tokio::spawn(async move { observer.on_request_failure(event).await });
+                Err(warp::reject::custom(BitrouterRejection(e)))
+            }
+        }
     }
 }
 
 /// Creates a warp filter for `/v1/chat/completions` with MPP payment gating.
 ///
-/// Requests must carry a valid `Authorization: Payment` credential.
-/// Channel management actions (open, topUp, close) are handled inline.
-#[cfg(feature = "mpp-tempo")]
-pub fn chat_completions_filter_with_mpp<T, R>(
+/// Requires JWT authentication. The JWT `chain` claim selects the payment
+/// backend. Requests must also carry a `Payment` credential in the
+/// `Authorization` header.
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+pub fn chat_completions_filter_with_mpp<T, R, A>(
     table: Arc<T>,
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
     mpp_state: Arc<crate::mpp::MppState>,
+    account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: RoutingTable + Send + Sync + 'static,
+    T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
     warp::path!("v1" / "chat" / "completions")
         .and(warp::post())
-        .and(crate::mpp::mpp_payment_filter(mpp_state))
+        .and(account_filter)
+        .and(warp::any().map(move || mpp_state.clone()))
+        .and(warp::header::optional::<String>("authorization"))
         .and(warp::body::json::<ChatCompletionRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
