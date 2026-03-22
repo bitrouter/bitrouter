@@ -1162,7 +1162,7 @@ version = "0.11.0"
 dependencies = [
  "bitrouter-core",
  "futures-core",
- "reqwest 0.12.28",
+ "reqwest 0.13.2",
  "serde",
  "serde_json",
  "serde_yaml",

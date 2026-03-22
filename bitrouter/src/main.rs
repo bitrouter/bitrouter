@@ -121,14 +121,12 @@ enum Command {
     },
 
     /// A2A agent management and protocol client
-    #[cfg(feature = "a2a")]
     A2a {
         #[command(subcommand)]
         action: A2aAction,
     },
 
     /// Manage MCP tools on a running daemon
-    #[cfg(feature = "mcp")]
     Tools {
         #[command(subcommand)]
         action: ToolsAction,
@@ -180,7 +178,6 @@ enum RouteAction {
     },
 }
 
-#[cfg(feature = "a2a")]
 #[derive(Debug, Subcommand)]
 enum A2aAction {
     /// Discover a remote agent by fetching its Agent Card
@@ -219,7 +216,6 @@ enum A2aAction {
     },
 }
 
-#[cfg(feature = "mcp")]
 #[derive(Debug, Subcommand)]
 enum ToolsAction {
     /// List all tools from the running daemon
@@ -392,7 +388,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli::keygen::run(&keys_dir, opts)?;
             return Ok(());
         }
-        #[cfg(feature = "a2a")]
         Some(Command::A2a { action }) => {
             match action {
                 A2aAction::Discover { url } => cli::a2a::run_discover(&url).await?,
@@ -403,7 +398,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             return Ok(());
         }
-        #[cfg(feature = "mcp")]
         Some(Command::Tools { action }) => {
             let runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
                 .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));

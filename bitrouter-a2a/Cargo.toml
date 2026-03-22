@@ -8,23 +8,18 @@ license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
-[features]
-default = []
-client = ["dep:reqwest", "dep:tracing"]
-# client-grpc = ["client", "dep:tonic", "dep:prost"]
-
 [dependencies]
 bitrouter-core = { path = "../bitrouter-core", version = "0.11" }
 futures-core = { version = "0.3" }
-reqwest = { version = "0.12", optional = true, default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 thiserror = { version = "2.0" }
 tokio = { version = "1", features = ["sync", "rt"] }
-tracing = { version = "0.1", optional = true }
+tracing = { version = "0.1" }
 
 [dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 serde_yaml = { version = "0.9" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = { version = "3" }

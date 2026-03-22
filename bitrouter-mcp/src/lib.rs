@@ -4,12 +4,9 @@
 //! server traits, and MCP-specific types. Configuration types live in
 //! [`bitrouter_core::routers::upstream`].
 //!
-//! Enable the `client` feature to get runtime upstream connection and
-//! registry components.
-#[cfg(feature = "client")]
+//! Enable the `client-stdio` feature for child-process MCP connections.
 pub mod client;
 pub mod error;
 pub mod server;
-#[cfg(feature = "client")]
 pub mod transports;
 pub mod types;

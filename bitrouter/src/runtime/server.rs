@@ -18,7 +18,6 @@ use bitrouter_observe::spend::store;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
-#[cfg(feature = "mcp")]
 use bitrouter_api::router::mcp as mcp_admin;
 
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
@@ -173,7 +172,6 @@ where
             );
 
         // ── MCP registry ─────────────────────────────────────────────
-        #[cfg(feature = "mcp")]
         let (admin_tool_routes, mcp_server, tool_list, _refresh_guard) = {
             use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
             use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
@@ -232,7 +230,6 @@ where
         };
 
         // ── A2A protocol ─────────────────────────────────────────────
-        #[cfg(feature = "a2a")]
         let (a2a_routes, admin_agent_routes, agent_list, _a2a_refresh_guard) = {
             use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
             use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
@@ -280,8 +277,7 @@ where
             .or(responses)
             .or(generate_content);
 
-        // ── Compose optional routes ──────────────────────────────────
-        #[cfg(all(feature = "a2a", feature = "mcp"))]
+        // ── Compose all routes ─────────────────────────────────────────
         let all_routes = base
             .or(a2a_routes)
             .or(admin_agent_routes)
@@ -289,15 +285,6 @@ where
             .or(admin_tool_routes)
             .or(tool_list)
             .or(mcp_server);
-
-        #[cfg(all(feature = "a2a", not(feature = "mcp")))]
-        let all_routes = base.or(a2a_routes).or(admin_agent_routes).or(agent_list);
-
-        #[cfg(all(not(feature = "a2a"), feature = "mcp"))]
-        let all_routes = base.or(admin_tool_routes).or(tool_list).or(mcp_server);
-
-        #[cfg(all(not(feature = "a2a"), not(feature = "mcp")))]
-        let all_routes = base;
 
         // ── Serve ────────────────────────────────────────────────────
         if let Some(ref db) = self.db {
