@@ -1,0 +1,11 @@
+[package]
+name = "bitrouter-providers"
+version = { workspace = true }
+edition = "2024"
+description = "BitRouter provider adapters"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+readme = "README.md"
+
+[dependencies]
