@@ -6,6 +6,7 @@ pub mod error;
 pub mod model;
 pub mod registry;
 pub mod routing;
+pub mod tool;
 pub mod writer;
 
 pub use config::{BitrouterConfig, ControlEndpoint, DatabaseConfig, ServerConfig};

@@ -3,7 +3,9 @@ use std::sync::Arc;
 use bitrouter_api::router::{admin, admin_agents, admin_tools, models, routes};
 use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
-use bitrouter_core::observe::{CallerContext, ObserveCallback};
+use bitrouter_core::observe::{
+    AgentObserveCallback, CallerContext, ObserveCallback, ToolObserveCallback,
+};
 use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::model_router::LanguageModelRouter;
 use bitrouter_core::routers::registry::ModelRegistry;
@@ -11,10 +13,12 @@ use bitrouter_guardrails::{GuardedRouter, Guardrail};
 use bitrouter_observe::composite::CompositeObserver;
 use bitrouter_observe::cost::Pricing;
 use bitrouter_observe::metrics::MetricsCollector;
+use bitrouter_observe::agent_observer::AgentSpendObserver;
 use bitrouter_observe::observer::SpendObserver;
 use bitrouter_observe::spend::memory::InMemorySpendStore;
 use bitrouter_observe::spend::sea_orm_store::SeaOrmSpendStore;
 use bitrouter_observe::spend::store;
+use bitrouter_observe::tool_observer::ToolSpendObserver;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
@@ -92,13 +96,27 @@ where
             }
         };
 
-        // Compose observers: spend tracking + metrics aggregation.
-        let spend_observer = Arc::new(SpendObserver::new(spend_store, Arc::new(pricing_fn)));
+        // Compose observers: spend tracking + metrics aggregation for all service types.
+        let spend_observer =
+            Arc::new(SpendObserver::new(spend_store.clone(), Arc::new(pricing_fn)));
+        let tool_spend_observer = Arc::new(ToolSpendObserver::new(spend_store.clone()));
+        let agent_spend_observer = Arc::new(AgentSpendObserver::new(spend_store));
         let metrics_collector = Arc::new(MetricsCollector::new());
-        let observer: Arc<dyn ObserveCallback> = Arc::new(CompositeObserver::new(vec![
-            spend_observer as Arc<dyn ObserveCallback>,
-            metrics_collector.clone() as Arc<dyn ObserveCallback>,
-        ]));
+        let composite = Arc::new(CompositeObserver::new(
+            vec![
+                spend_observer as Arc<dyn ObserveCallback>,
+                metrics_collector.clone() as Arc<dyn ObserveCallback>,
+            ],
+            vec![
+                tool_spend_observer as Arc<dyn ToolObserveCallback>,
+                metrics_collector.clone() as Arc<dyn ToolObserveCallback>,
+            ],
+            vec![
+                agent_spend_observer as Arc<dyn AgentObserveCallback>,
+                metrics_collector.clone() as Arc<dyn AgentObserveCallback>,
+            ],
+        ));
+        let observer: Arc<dyn ObserveCallback> = composite.clone();
 
         let health = warp::path("health")
             .and(warp::get())
@@ -234,32 +252,27 @@ where
             use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
             use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
 
-            let external_url = format!("http://{}/a2a", self.config.server.listen);
-            let a2a_config = self.config.a2a_agent.clone();
+            let external_base_url = format!("http://{}/a2a", self.config.server.listen);
+            let a2a_configs = self.config.a2a_agents.clone();
 
-            let (registry, refresh_guard) =
-                match UpstreamAgentRegistry::from_config(a2a_config, external_url).await {
-                    Ok(reg) => {
-                        if self.config.a2a_agent.is_some() {
-                            tracing::info!("A2A gateway started");
-                        }
-                        let inner = Arc::new(reg);
-                        let guard = inner.spawn_refresh_listeners();
-                        let wrapped = Arc::new(DynamicAgentRegistry::new(inner));
-                        (Some(wrapped), Some(guard))
-                    }
-                    Err(e) => {
-                        tracing::warn!("A2A gateway failed to start: {e}");
-                        (None, None)
-                    }
-                };
+            let reg = UpstreamAgentRegistry::from_configs(a2a_configs, external_base_url).await;
+
+            let (gateway_reg, discovery_reg, refresh_guard) = if reg.has_agents() {
+                tracing::info!("A2A gateway started");
+                let inner = Arc::new(reg);
+                let guard = inner.spawn_refresh_listeners();
+                let wrapped = Arc::new(DynamicAgentRegistry::new(Arc::clone(&inner)));
+                (Some(inner), Some(wrapped), Some(guard))
+            } else {
+                (None, None, None)
+            };
 
             let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(admin_agents::admin_agents_filter(registry.clone()));
-            let agents = bitrouter_api::router::agents::agents_filter(registry.clone());
+                .and(admin_agents::admin_agents_filter(discovery_reg.clone()));
+            let agents = bitrouter_api::router::agents::agents_filter(discovery_reg);
 
             (
-                bitrouter_api::router::a2a::a2a_gateway_filter(registry),
+                bitrouter_api::router::a2a::a2a_gateway_filter(gateway_reg),
                 admin,
                 agents,
                 refresh_guard,

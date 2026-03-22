@@ -20,8 +20,6 @@ pub struct ToolServerConfig {
     #[serde(default)]
     pub tool_filter: Option<ToolFilter>,
     #[serde(default)]
-    pub cost: ToolCostConfig,
-    #[serde(default)]
     pub param_restrictions: ParamRestrictions,
 }
 
@@ -72,27 +70,6 @@ pub enum ToolServerTransport {
         #[serde(default)]
         headers: HashMap<String, String>,
     },
-}
-
-/// Cost configuration for tool invocations on a server.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ToolCostConfig {
-    /// Default cost per tool invocation (USD).
-    #[serde(default)]
-    pub default_cost_per_query: f64,
-    /// Per-tool cost overrides. Keys are un-namespaced tool names.
-    #[serde(default)]
-    pub tool_costs: HashMap<String, f64>,
-}
-
-impl ToolCostConfig {
-    /// Return the cost for a given tool, falling back to the default.
-    pub fn cost_for(&self, tool_name: &str) -> f64 {
-        self.tool_costs
-            .get(tool_name)
-            .copied()
-            .unwrap_or(self.default_cost_per_query)
-    }
 }
 
 /// Named groups of tool servers for access control convenience.
@@ -212,7 +189,6 @@ mod tests {
                 env: HashMap::new(),
             },
             tool_filter: None,
-            cost: ToolCostConfig::default(),
             param_restrictions: ParamRestrictions::default(),
         }
     }
@@ -241,7 +217,6 @@ mod tests {
                 headers: HashMap::new(),
             },
             tool_filter: None,
-            cost: ToolCostConfig::default(),
             param_restrictions: ParamRestrictions::default(),
         };
         assert!(config.validate().is_err());
@@ -261,7 +236,6 @@ mod tests {
                 headers: HashMap::new(),
             },
             tool_filter: None,
-            cost: ToolCostConfig::default(),
             param_restrictions: ParamRestrictions::default(),
         };
         assert!(config.validate().is_ok());
@@ -280,7 +254,6 @@ mod tests {
                 allow: Some(vec!["tool1".into()]),
                 deny: None,
             }),
-            cost: ToolCostConfig::default(),
             param_restrictions: ParamRestrictions::default(),
         };
         let json = serde_json::to_string(&config).expect("serialize");
@@ -297,39 +270,11 @@ mod tests {
                 headers: HashMap::from([("Authorization".into(), "Bearer tok".into())]),
             },
             tool_filter: None,
-            cost: ToolCostConfig::default(),
             param_restrictions: ParamRestrictions::default(),
         };
         let json = serde_json::to_string(&config).expect("serialize");
         let parsed: ToolServerConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.name, "remote");
-    }
-
-    // ── ToolCostConfig tests ────────────────────────────────────────
-
-    #[test]
-    fn cost_for_with_default() {
-        let cost = ToolCostConfig {
-            default_cost_per_query: 0.001,
-            tool_costs: HashMap::new(),
-        };
-        assert!((cost.cost_for("anything") - 0.001).abs() < 1e-10);
-    }
-
-    #[test]
-    fn cost_for_with_override() {
-        let cost = ToolCostConfig {
-            default_cost_per_query: 0.001,
-            tool_costs: HashMap::from([("search".into(), 0.005)]),
-        };
-        assert!((cost.cost_for("search") - 0.005).abs() < 1e-10);
-        assert!((cost.cost_for("other") - 0.001).abs() < 1e-10);
-    }
-
-    #[test]
-    fn cost_for_zero_default() {
-        let cost = ToolCostConfig::default();
-        assert_eq!(cost.cost_for("anything"), 0.0);
     }
 
     // ── ToolServerAccessGroups tests ────────────────────────────────

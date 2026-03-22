@@ -1,20 +1,14 @@
-//! Single-agent upstream registry implementing gateway traits.
+//! Multi-agent upstream registry implementing gateway traits.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use bitrouter_core::routers::admin::{AgentUpstreamEntry, AgentUpstreamSource};
-use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
-use futures_core::Stream;
 use tokio::sync::broadcast;
 
 use crate::error::A2aGatewayError;
-use crate::server::{A2aDiscovery, A2aProxy};
-use crate::types::{
-    AgentCard, CancelTaskRequest, GetTaskRequest, ListTasksRequest, ListTasksResponse,
-    SendMessageRequest, StreamResponse, Task, TaskPushNotificationConfig,
-};
+use crate::types::AgentCard;
 use bitrouter_core::routers::upstream::AgentConfig;
 
 use super::upstream::UpstreamA2aAgent;
@@ -44,54 +38,79 @@ impl Drop for RefreshGuard {
     }
 }
 
-/// Single-agent upstream registry for the A2A gateway.
+/// Multi-agent upstream registry for the A2A gateway.
 ///
-/// Holds an optional upstream A2A agent connection and implements
-/// the gateway traits ([`A2aDiscovery`], [`A2aProxy`]).
+/// Holds zero or more upstream A2A agent connections keyed by name.
+/// Each agent is a fully independent A2A endpoint exposed under its
+/// own path prefix (`/a2a/{agent_name}/`).
 pub struct UpstreamAgentRegistry {
-    agent: Option<UpstreamA2aAgent>,
-    external_url: String,
+    agents: HashMap<String, UpstreamA2aAgent>,
+    external_base_url: String,
     card_change_tx: broadcast::Sender<()>,
 }
 
 impl UpstreamAgentRegistry {
-    /// Connect to the configured upstream agent, if any.
-    pub async fn from_config(
-        config: Option<AgentConfig>,
-        external_url: String,
-    ) -> Result<Self, A2aGatewayError> {
+    /// Connect to all configured upstream agents.
+    ///
+    /// Agents that fail to connect are logged and skipped so that one
+    /// unreachable agent does not prevent the gateway from starting.
+    pub async fn from_configs(configs: Vec<AgentConfig>, external_base_url: String) -> Self {
         let (card_change_tx, _) = broadcast::channel(16);
+        let mut agents = HashMap::new();
 
-        let agent = match config {
-            Some(cfg) => {
-                let agent = UpstreamA2aAgent::connect(cfg).await?;
-                Some(agent)
+        for cfg in configs {
+            let name = cfg.name.clone();
+            match UpstreamA2aAgent::connect(cfg).await {
+                Ok(agent) => {
+                    agents.insert(name, agent);
+                }
+                Err(e) => {
+                    tracing::warn!(agent = %name, error = %e, "failed to connect to upstream agent, skipping");
+                }
             }
-            None => None,
-        };
+        }
 
-        Ok(Self {
-            agent,
-            external_url,
+        Self {
+            agents,
+            external_base_url,
             card_change_tx,
-        })
+        }
     }
 
-    /// Spawn background tasks that periodically refresh the agent card.
+    /// Returns true if at least one agent is connected.
+    pub fn has_agents(&self) -> bool {
+        !self.agents.is_empty()
+    }
+
+    /// Get a reference to an upstream agent by name.
+    pub fn get_agent(&self, name: &str) -> Option<&UpstreamA2aAgent> {
+        self.agents.get(name)
+    }
+
+    /// Require an agent by name, returning an error if not found.
+    pub fn require_agent(&self, name: &str) -> Result<&UpstreamA2aAgent, A2aGatewayError> {
+        self.agents
+            .get(name)
+            .ok_or_else(|| A2aGatewayError::AgentNotFound {
+                name: name.to_string(),
+            })
+    }
+
+    /// Spawn background tasks that periodically refresh each agent's card.
     ///
     /// Returns a [`RefreshGuard`] that aborts all tasks when dropped.
     pub fn spawn_refresh_listeners(self: &Arc<Self>) -> RefreshGuard {
         let mut handles = Vec::new();
 
-        if let Some(ref agent) = self.agent {
+        for (name, agent) in &self.agents {
             let notify = agent.card_change_notify();
             let reg = Arc::clone(self);
-            let name = agent.name().to_string();
+            let name = name.clone();
             handles.push(tokio::spawn(async move {
                 loop {
                     notify.notified().await;
                     tracing::info!(agent = %name, "agent card changed, refreshing");
-                    if let Some(ref agent) = reg.agent {
+                    if let Some(agent) = reg.agents.get(&name) {
                         if let Err(e) = agent.refresh_card().await {
                             tracing::warn!(agent = %name, error = %e, "failed to refresh agent card");
                         } else {
@@ -106,116 +125,19 @@ impl UpstreamAgentRegistry {
     }
 
     /// Return the agent card with URL rewritten to the gateway's external address.
-    async fn rewritten_card(&self) -> Option<AgentCard> {
-        let agent = self.agent.as_ref()?;
+    pub async fn rewritten_card(&self, name: &str) -> Option<AgentCard> {
+        let agent = self.agents.get(name)?;
         let mut card = agent.cached_card().await?;
 
-        // Rewrite the primary URL to point to the gateway.
-        card.url.clone_from(&self.external_url);
+        // Rewrite the primary URL to point to the gateway's per-agent endpoint.
+        card.url = format!("{}/{}", self.external_base_url.trim_end_matches('/'), name);
 
         Some(card)
     }
 
-    fn require_agent(&self) -> Result<&UpstreamA2aAgent, A2aGatewayError> {
-        self.agent
-            .as_ref()
-            .ok_or_else(|| A2aGatewayError::AgentNotFound {
-                name: "no upstream agent configured".to_string(),
-            })
-    }
-}
-
-// ── Protocol trait impls on UpstreamAgentRegistry ────────────────────
-
-impl A2aDiscovery for UpstreamAgentRegistry {
-    async fn get_agent_card(&self) -> Option<AgentCard> {
-        self.rewritten_card().await
-    }
-
-    fn subscribe_card_changes(&self) -> broadcast::Receiver<()> {
+    /// Subscribe to agent card change notifications.
+    pub fn subscribe_card_changes(&self) -> broadcast::Receiver<()> {
         self.card_change_tx.subscribe()
-    }
-}
-
-impl A2aProxy for UpstreamAgentRegistry {
-    async fn send_message(
-        &self,
-        request: SendMessageRequest,
-    ) -> Result<StreamResponse, A2aGatewayError> {
-        self.require_agent()?.send_message(request).await
-    }
-
-    async fn get_task(&self, request: GetTaskRequest) -> Result<Task, A2aGatewayError> {
-        self.require_agent()?.get_task(request).await
-    }
-
-    async fn cancel_task(&self, request: CancelTaskRequest) -> Result<Task, A2aGatewayError> {
-        self.require_agent()?.cancel_task(request).await
-    }
-
-    async fn list_tasks(
-        &self,
-        request: ListTasksRequest,
-    ) -> Result<ListTasksResponse, A2aGatewayError> {
-        self.require_agent()?.list_tasks(request).await
-    }
-
-    async fn send_streaming_message(
-        &self,
-        _request: SendMessageRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
-        Err(A2aGatewayError::UpstreamCall {
-            name: self.agent.as_ref().map_or("none", |a| a.name()).to_string(),
-            reason: "streaming proxy not yet implemented".to_string(),
-        })
-    }
-
-    async fn subscribe_to_task(
-        &self,
-        _task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
-        Err(A2aGatewayError::UpstreamCall {
-            name: self.agent.as_ref().map_or("none", |a| a.name()).to_string(),
-            reason: "streaming proxy not yet implemented".to_string(),
-        })
-    }
-
-    async fn get_extended_agent_card(&self) -> Result<AgentCard, A2aGatewayError> {
-        self.require_agent()?.get_extended_agent_card().await
-    }
-
-    async fn set_push_config(
-        &self,
-        config: TaskPushNotificationConfig,
-    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
-        self.require_agent()?.set_push_config(config).await
-    }
-
-    async fn get_push_config(
-        &self,
-        task_id: &str,
-        config_id: Option<&str>,
-    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
-        self.require_agent()?
-            .get_push_config(task_id, config_id)
-            .await
-    }
-
-    async fn list_push_configs(
-        &self,
-        task_id: &str,
-    ) -> Result<Vec<TaskPushNotificationConfig>, A2aGatewayError> {
-        self.require_agent()?.list_push_configs(task_id).await
-    }
-
-    async fn delete_push_config(
-        &self,
-        task_id: &str,
-        config_id: &str,
-    ) -> Result<(), A2aGatewayError> {
-        self.require_agent()?
-            .delete_push_config(task_id, config_id)
-            .await
     }
 }
 
@@ -223,19 +145,17 @@ impl A2aProxy for UpstreamAgentRegistry {
 
 impl A2aAgentRegistry for UpstreamAgentRegistry {
     async fn get(&self, name: &str) -> Option<AgentCard> {
-        let agent = self.agent.as_ref()?;
-        if agent.name() == name {
-            self.rewritten_card().await
-        } else {
-            None
-        }
+        self.rewritten_card(name).await
     }
 
     async fn list(&self) -> Vec<AgentCard> {
-        match self.rewritten_card().await {
-            Some(card) => vec![card],
-            None => Vec::new(),
+        let mut cards = Vec::new();
+        for name in self.agents.keys() {
+            if let Some(card) = self.rewritten_card(name).await {
+                cards.push(card);
+            }
         }
+        cards
     }
 }
 
@@ -256,100 +176,14 @@ impl bitrouter_core::routers::registry::AgentRegistry for UpstreamAgentRegistry 
 /// Implement core [`AgentUpstreamSource`] for admin inspection.
 impl AgentUpstreamSource for UpstreamAgentRegistry {
     async fn list_upstreams(&self) -> Vec<AgentUpstreamEntry> {
-        match &self.agent {
-            Some(agent) => vec![AgentUpstreamEntry {
+        let mut entries = Vec::new();
+        for agent in self.agents.values() {
+            entries.push(AgentUpstreamEntry {
                 name: agent.name().to_string(),
                 url: agent.url().to_string(),
                 connected: agent.cached_card().await.is_some(),
-            }],
-            None => Vec::new(),
+            });
         }
-    }
-}
-
-// ── Protocol trait passthrough on DynamicAgentRegistry ───────────────
-//
-// These impls let the runtime pass DynamicAgentRegistry<UpstreamAgentRegistry>
-// directly to the A2A gateway filters.
-
-impl A2aDiscovery for DynamicAgentRegistry<Arc<UpstreamAgentRegistry>> {
-    async fn get_agent_card(&self) -> Option<AgentCard> {
-        self.inner().get_agent_card().await
-    }
-
-    fn subscribe_card_changes(&self) -> broadcast::Receiver<()> {
-        self.inner().subscribe_card_changes()
-    }
-}
-
-impl A2aProxy for DynamicAgentRegistry<Arc<UpstreamAgentRegistry>> {
-    async fn send_message(
-        &self,
-        request: SendMessageRequest,
-    ) -> Result<StreamResponse, A2aGatewayError> {
-        self.inner().send_message(request).await
-    }
-
-    async fn get_task(&self, request: GetTaskRequest) -> Result<Task, A2aGatewayError> {
-        self.inner().get_task(request).await
-    }
-
-    async fn cancel_task(&self, request: CancelTaskRequest) -> Result<Task, A2aGatewayError> {
-        self.inner().cancel_task(request).await
-    }
-
-    async fn list_tasks(
-        &self,
-        request: ListTasksRequest,
-    ) -> Result<ListTasksResponse, A2aGatewayError> {
-        self.inner().list_tasks(request).await
-    }
-
-    async fn send_streaming_message(
-        &self,
-        request: SendMessageRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
-        self.inner().send_streaming_message(request).await
-    }
-
-    async fn subscribe_to_task(
-        &self,
-        task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
-        self.inner().subscribe_to_task(task_id).await
-    }
-
-    async fn get_extended_agent_card(&self) -> Result<AgentCard, A2aGatewayError> {
-        self.inner().get_extended_agent_card().await
-    }
-
-    async fn set_push_config(
-        &self,
-        config: TaskPushNotificationConfig,
-    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
-        self.inner().set_push_config(config).await
-    }
-
-    async fn get_push_config(
-        &self,
-        task_id: &str,
-        config_id: Option<&str>,
-    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
-        self.inner().get_push_config(task_id, config_id).await
-    }
-
-    async fn list_push_configs(
-        &self,
-        task_id: &str,
-    ) -> Result<Vec<TaskPushNotificationConfig>, A2aGatewayError> {
-        self.inner().list_push_configs(task_id).await
-    }
-
-    async fn delete_push_config(
-        &self,
-        task_id: &str,
-        config_id: &str,
-    ) -> Result<(), A2aGatewayError> {
-        self.inner().delete_push_config(task_id, config_id).await
+        entries
     }
 }

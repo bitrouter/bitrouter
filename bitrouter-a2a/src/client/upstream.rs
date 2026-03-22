@@ -1,12 +1,15 @@
 //! Live connection to a single upstream A2A agent.
 
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_core::Stream;
 use tokio::sync::{Notify, RwLock};
 
 use bitrouter_core::routers::upstream::AgentConfig;
 
 use crate::error::A2aGatewayError;
+use crate::server::A2aProxy;
 use crate::transports::A2aTransport;
 use crate::transports::jsonrpc::A2aClient;
 use crate::types::{
@@ -255,5 +258,85 @@ impl UpstreamA2aAgent {
                 name: self.name.clone(),
                 reason: e.to_string(),
             })
+    }
+}
+
+// ── A2aProxy trait impl ─────────────────────────────────────────────
+
+impl A2aProxy for UpstreamA2aAgent {
+    async fn send_message(
+        &self,
+        request: SendMessageRequest,
+    ) -> Result<StreamResponse, A2aGatewayError> {
+        UpstreamA2aAgent::send_message(self, request).await
+    }
+
+    async fn get_task(&self, request: GetTaskRequest) -> Result<Task, A2aGatewayError> {
+        UpstreamA2aAgent::get_task(self, request).await
+    }
+
+    async fn cancel_task(&self, request: CancelTaskRequest) -> Result<Task, A2aGatewayError> {
+        UpstreamA2aAgent::cancel_task(self, request).await
+    }
+
+    async fn list_tasks(
+        &self,
+        request: ListTasksRequest,
+    ) -> Result<ListTasksResponse, A2aGatewayError> {
+        UpstreamA2aAgent::list_tasks(self, request).await
+    }
+
+    async fn send_streaming_message(
+        &self,
+        _request: SendMessageRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
+        Err(A2aGatewayError::UpstreamCall {
+            name: self.name.clone(),
+            reason: "streaming proxy not yet implemented".to_string(),
+        })
+    }
+
+    async fn subscribe_to_task(
+        &self,
+        _task_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
+        Err(A2aGatewayError::UpstreamCall {
+            name: self.name.clone(),
+            reason: "streaming proxy not yet implemented".to_string(),
+        })
+    }
+
+    async fn get_extended_agent_card(&self) -> Result<AgentCard, A2aGatewayError> {
+        UpstreamA2aAgent::get_extended_agent_card(self).await
+    }
+
+    async fn set_push_config(
+        &self,
+        config: TaskPushNotificationConfig,
+    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
+        UpstreamA2aAgent::set_push_config(self, config).await
+    }
+
+    async fn get_push_config(
+        &self,
+        task_id: &str,
+        config_id: Option<&str>,
+    ) -> Result<TaskPushNotificationConfig, A2aGatewayError> {
+        UpstreamA2aAgent::get_push_config(self, task_id, config_id).await
+    }
+
+    async fn list_push_configs(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2aGatewayError> {
+        UpstreamA2aAgent::list_push_configs(self, task_id).await
+    }
+
+    async fn delete_push_config(
+        &self,
+        task_id: &str,
+        config_id: &str,
+    ) -> Result<(), A2aGatewayError> {
+        UpstreamA2aAgent::delete_push_config(self, task_id, config_id).await
     }
 }

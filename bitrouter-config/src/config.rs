@@ -6,9 +6,11 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent::AgentPricing;
 use crate::env::{load_env, substitute_in_value};
 use crate::model::{ModelConfig, ProviderConfig};
 use crate::registry::{builtin_providers, merge_provider, resolve_providers};
+use crate::tool::ToolPricing;
 
 // ── Top-level configuration ──────────────────────────────────────────
 
@@ -46,9 +48,17 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub mcp_groups: bitrouter_core::routers::upstream::ToolServerAccessGroups,
 
-    /// Upstream A2A agent to proxy through the gateway.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub a2a_agent: Option<bitrouter_core::routers::upstream::AgentConfig>,
+    /// Upstream A2A agents to proxy through the gateway.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub a2a_agents: Vec<bitrouter_core::routers::upstream::AgentConfig>,
+
+    /// Per-server tool invocation pricing. Keys are MCP server names.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub mcp_server_pricing: HashMap<String, ToolPricing>,
+
+    /// Per-agent invocation pricing. Keys are agent names.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub a2a_agent_pricing: HashMap<String, AgentPricing>,
 }
 
 impl BitrouterConfig {
@@ -325,16 +335,19 @@ providers:
     }
 
     #[test]
-    fn load_with_a2a_agent_config() {
+    fn load_with_a2a_agents_config() {
         let yaml = r#"
-a2a_agent:
-  name: "upstream-agent"
-  url: "https://agent.example.com"
-  headers:
-    Authorization: "Bearer tok123"
+a2a_agents:
+  - name: "upstream-agent"
+    url: "https://agent.example.com"
+    headers:
+      Authorization: "Bearer tok123"
+  - name: "search-agent"
+    url: "https://search.example.com"
 "#;
         let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
-        let agent = config.a2a_agent.as_ref().unwrap();
+        assert_eq!(config.a2a_agents.len(), 2);
+        let agent = &config.a2a_agents[0];
         assert_eq!(agent.name, "upstream-agent");
         assert_eq!(agent.url, "https://agent.example.com");
         assert_eq!(
@@ -342,6 +355,7 @@ a2a_agent:
             Some("Bearer tok123")
         );
         assert!(agent.card_path.is_none());
+        assert_eq!(config.a2a_agents[1].name, "search-agent");
     }
 
     #[test]

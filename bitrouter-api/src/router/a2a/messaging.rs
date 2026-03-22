@@ -2,8 +2,9 @@
 
 use std::convert::Infallible;
 use std::pin::Pin;
-use std::sync::Arc;
 
+use bitrouter_a2a::client::upstream::UpstreamA2aAgent;
+use bitrouter_a2a::server::A2aProxy;
 use futures_core::Stream;
 use tokio_stream::StreamExt;
 
@@ -13,24 +14,24 @@ use super::convert::{
 use super::types::*;
 
 /// Handle `message/send` JSON-RPC method.
-pub(crate) async fn dispatch_send_message<T: A2aProxy>(
+pub(crate) async fn dispatch_send_message(
     request: &JsonRpcRequest,
-    gw: &T,
+    agent: &UpstreamA2aAgent,
 ) -> JsonRpcResponse {
     let req: SendMessageRequest = match deserialize_params(&request.params) {
         Ok(r) => r,
         Err(resp) => return (*resp).with_id(&request.id),
     };
-    match gw.send_message(req).await {
+    match agent.send_message(req).await {
         Ok(result) => success_response(&request.id, &result),
         Err(e) => gateway_error_response(&request.id, &e),
     }
 }
 
 /// Handle streaming JSON-RPC methods (`message/stream`, `tasks/resubscribe`).
-pub(crate) async fn handle_streaming_jsonrpc<T: A2aGateway>(
+pub(crate) async fn handle_streaming_jsonrpc(
     request: JsonRpcRequest,
-    gw: Arc<T>,
+    agent: &UpstreamA2aAgent,
 ) -> Box<dyn warp::Reply> {
     match request.method.as_str() {
         "message/stream" => {
@@ -44,7 +45,7 @@ pub(crate) async fn handle_streaming_jsonrpc<T: A2aGateway>(
                     ));
                 }
             };
-            match gw.send_streaming_message(req).await {
+            match agent.send_streaming_message(req).await {
                 Ok(stream) => {
                     let request_id = request.id.clone();
                     let event_stream = sync_bridge(stream)
@@ -71,7 +72,7 @@ pub(crate) async fn handle_streaming_jsonrpc<T: A2aGateway>(
                     ));
                 }
             };
-            match gw.subscribe_to_task(&req.task_id).await {
+            match agent.subscribe_to_task(&req.task_id).await {
                 Ok(stream) => {
                     let request_id = request.id.clone();
                     let event_stream = sync_bridge(stream)
@@ -105,7 +106,7 @@ pub(crate) async fn handle_streaming_jsonrpc<T: A2aGateway>(
 ///
 /// `warp::sse::reply` requires `Send + Sync` but our trait returns
 /// `Pin<Box<dyn Stream + Send>>`. This spawns a forwarding task.
-fn sync_bridge(
+pub(crate) fn sync_bridge(
     source: Pin<Box<dyn Stream<Item = StreamResponse> + Send>>,
 ) -> tokio_stream::wrappers::ReceiverStream<StreamResponse> {
     let (tx, rx) = tokio::sync::mpsc::channel(32);
@@ -120,7 +121,7 @@ fn sync_bridge(
     tokio_stream::wrappers::ReceiverStream::new(rx)
 }
 
-fn stream_response_to_sse(
+pub(crate) fn stream_response_to_sse(
     request_id: &str,
     item: &StreamResponse,
 ) -> Result<warp::sse::Event, Infallible> {
