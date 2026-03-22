@@ -1,23 +1,81 @@
 use std::collections::HashMap;
 
-use bitrouter_config::{ApiProtocol, ProviderConfig};
+use bitrouter_config::{ApiProtocol, AuthConfig, ProviderConfig};
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::language::language_model::DynLanguageModel,
     routers::{model_router::LanguageModelRouter, routing_table::RoutingTarget},
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest_middleware::ClientWithMiddleware;
 
 /// A model router backed by `reqwest` that instantiates concrete provider
 /// model objects on demand from [`ProviderConfig`] entries.
 pub struct Router {
-    client: reqwest::Client,
+    client: ClientWithMiddleware,
+    x402_client: Option<ClientWithMiddleware>,
+    #[cfg(feature = "mpp-tempo")]
+    mpp_client: Option<ClientWithMiddleware>,
     providers: HashMap<String, ProviderConfig>,
 }
 
 impl Router {
-    pub fn new(client: reqwest::Client, providers: HashMap<String, ProviderConfig>) -> Self {
-        Self { client, providers }
+    pub fn new(client: ClientWithMiddleware, providers: HashMap<String, ProviderConfig>) -> Self {
+        Self {
+            client,
+            x402_client: None,
+            #[cfg(feature = "mpp-tempo")]
+            mpp_client: None,
+            providers,
+        }
+    }
+
+    pub fn with_x402_client(mut self, x402_client: ClientWithMiddleware) -> Self {
+        self.x402_client = Some(x402_client);
+        self
+    }
+
+    #[cfg(feature = "mpp-tempo")]
+    pub fn with_mpp_client(mut self, mpp_client: ClientWithMiddleware) -> Self {
+        self.mpp_client = Some(mpp_client);
+        self
+    }
+
+    /// Returns the appropriate HTTP client for the given provider.
+    ///
+    /// Providers with `auth: { type: x402 }` use the x402 middleware client;
+    /// all others use the default client.
+    fn client_for_provider(&self, provider: &ProviderConfig) -> Result<ClientWithMiddleware> {
+        if Self::is_x402_provider(provider) {
+            self.x402_client.clone().ok_or_else(|| {
+                BitrouterError::invalid_request(
+                    None,
+                    "provider requires x402 payment but no wallet is configured — run `bitrouter init`".to_owned(),
+                    None,
+                )
+            })
+        } else {
+            #[cfg(feature = "mpp-tempo")]
+            if Self::is_mpp_provider(provider) {
+                return self.mpp_client.clone().ok_or_else(|| {
+                    BitrouterError::invalid_request(
+                        None,
+                        "provider requires MPP payment but no wallet is configured — run `bitrouter init`".to_owned(),
+                        None,
+                    )
+                });
+            }
+            Ok(self.client.clone())
+        }
+    }
+
+    fn is_x402_provider(provider: &ProviderConfig) -> bool {
+        matches!(&provider.auth, Some(AuthConfig::X402))
+    }
+
+    #[cfg(feature = "mpp-tempo")]
+    fn is_mpp_provider(provider: &ProviderConfig) -> bool {
+        matches!(&provider.auth, Some(AuthConfig::Mpp))
     }
 
     fn build_openai_config(&self, provider: &ProviderConfig) -> Result<OpenAiConfig> {
@@ -98,7 +156,7 @@ impl LanguageModelRouter for Router {
                 let config = self.build_openai_config(provider)?;
                 let model = OpenAiChatCompletionsModel::with_client(
                     target.model_id,
-                    self.client.clone(),
+                    self.client_for_provider(provider)?,
                     config,
                 );
                 Ok(DynLanguageModel::new_box(model))
@@ -107,7 +165,7 @@ impl LanguageModelRouter for Router {
                 let config = self.build_anthropic_config(provider)?;
                 let model = AnthropicMessagesModel::with_client(
                     target.model_id,
-                    self.client.clone(),
+                    self.client_for_provider(provider)?,
                     config,
                 );
                 Ok(DynLanguageModel::new_box(model))
@@ -116,7 +174,7 @@ impl LanguageModelRouter for Router {
                 let config = self.build_google_config(provider)?;
                 let model = GoogleGenerativeAiModel::with_client(
                     target.model_id,
-                    self.client.clone(),
+                    self.client_for_provider(provider)?,
                     config,
                 );
                 Ok(DynLanguageModel::new_box(model))

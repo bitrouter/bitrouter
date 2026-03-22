@@ -153,24 +153,127 @@ where
         };
 
         // Model API routes with observation.
+        // When MPP is enabled, payment-gated filters replace the standard
+        // auth-gated filters. We use .boxed() to unify the filter types.
+        #[cfg(feature = "mpp-tempo")]
+        let mpp_state: Option<Arc<bitrouter_api::mpp::MppState>> = {
+            match self.config.mpp.as_ref().filter(|c| c.enabled) {
+                Some(mpp_config) => match mpp_config.networks.tempo.as_ref() {
+                    Some(tempo) => {
+                        let state = bitrouter_api::mpp::MppState::from_tempo_config(
+                            tempo,
+                            mpp_config.realm.as_deref(),
+                            mpp_config.secret_key.as_deref(),
+                        )
+                        .map_err(|e| {
+                            bitrouter_config::ConfigError::ConfigParse(format!(
+                                "MPP initialization failed: {e}"
+                            ))
+                        })?;
+                        tracing::info!(realm = state.realm(), "MPP enabled (Tempo)");
+                        Some(Arc::new(state))
+                    }
+                    None => None,
+                },
+                None => None,
+            }
+        };
+
+        #[cfg(feature = "mpp-tempo")]
+        let (chat, messages, responses, generate_content) = if let Some(ref mpp) = mpp_state {
+            (
+                openai::chat::filters::chat_completions_filter_with_mpp(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    mpp.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                anthropic::messages::filters::messages_filter_with_mpp(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    mpp.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                openai::responses::filters::responses_filter_with_mpp(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    mpp.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                google::generate_content::filters::generate_content_filter_with_mpp(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    mpp.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+            )
+        } else {
+            (
+                openai::chat::filters::chat_completions_filter_with_observe(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    account_filter.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                anthropic::messages::filters::messages_filter_with_observe(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    anthropic_account_filter,
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                openai::responses::filters::responses_filter_with_observe(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    account_filter.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                google::generate_content::filters::generate_content_filter_with_observe(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    account_filter,
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+            )
+        };
+
+        #[cfg(not(feature = "mpp-tempo"))]
         let chat = openai::chat::filters::chat_completions_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
+        #[cfg(not(feature = "mpp-tempo"))]
         let messages = anthropic::messages::filters::messages_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             anthropic_account_filter,
         );
+        #[cfg(not(feature = "mpp-tempo"))]
         let responses = openai::responses::filters::responses_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
+        #[cfg(not(feature = "mpp-tempo"))]
         let generate_content =
             google::generate_content::filters::generate_content_filter_with_observe(
                 self.table.clone(),
@@ -245,7 +348,8 @@ fn auth_gate(
     auth.map(|_| ()).untuple_one()
 }
 
-/// Rejection handler that turns [`Unauthorized`] into a JSON 401 response.
+/// Rejection handler that turns [`Unauthorized`] into a JSON 401 response
+/// and MPP rejections into 402 responses.
 async fn handle_auth_rejection(
     rejection: warp::Rejection,
 ) -> std::result::Result<impl warp::Reply, warp::Rejection> {
@@ -256,11 +360,46 @@ async fn handle_auth_rejection(
                 "type": "authentication_error",
             }
         }));
-        return Ok(warp::reply::with_status(
+        return Ok(Box::new(warp::reply::with_status(
             json,
             warp::http::StatusCode::UNAUTHORIZED,
-        ));
+        )) as Box<dyn warp::Reply>);
     }
+
+    #[cfg(feature = "mpp-tempo")]
+    if let Some(challenge) = rejection.find::<bitrouter_api::mpp::MppChallenge>() {
+        match warp::http::Response::builder()
+            .status(warp::http::StatusCode::PAYMENT_REQUIRED)
+            .header("WWW-Authenticate", &challenge.www_authenticate)
+            .header("Content-Type", "application/json")
+            .body(
+                serde_json::json!({
+                    "error": {
+                        "message": "Payment required",
+                        "type": "payment_required",
+                    }
+                })
+                .to_string(),
+            ) {
+            Ok(resp) => return Ok(Box::new(resp) as Box<dyn warp::Reply>),
+            Err(_) => return Err(rejection),
+        }
+    }
+
+    #[cfg(feature = "mpp-tempo")]
+    if let Some(err) = rejection.find::<bitrouter_api::mpp::MppVerificationFailed>() {
+        let json = warp::reply::json(&serde_json::json!({
+            "error": {
+                "message": err.message,
+                "type": "payment_verification_failed",
+            }
+        }));
+        return Ok(Box::new(warp::reply::with_status(
+            json,
+            warp::http::StatusCode::PAYMENT_REQUIRED,
+        )) as Box<dyn warp::Reply>);
+    }
+
     Err(rejection)
 }
 

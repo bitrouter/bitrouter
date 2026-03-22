@@ -30,6 +30,10 @@ pub struct BitrouterConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solana_rpc_url: Option<String>,
 
+    /// MPP (Machine Payment Protocol) configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mpp: Option<MppConfig>,
+
     /// Provider definitions (merged on top of built-in providers).
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
@@ -325,6 +329,65 @@ pub struct OutputTokenPricing {
     pub reasoning: f64,
 }
 
+// ── MPP (Machine Payment Protocol) configuration ─────────────────────
+
+/// Top-level MPP configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MppConfig {
+    /// Whether MPP payment gating is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Server realm for `WWW-Authenticate` headers.
+    ///
+    /// Auto-detected from environment if omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm: Option<String>,
+
+    /// HMAC secret for stateless challenge ID verification.
+    ///
+    /// Reads `MPP_SECRET_KEY` environment variable if omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_key: Option<String>,
+
+    /// Per-network configuration.
+    ///
+    /// Each supported payment network (Tempo, Solana, …) has its own
+    /// section with a network-specific recipient address and settings.
+    #[serde(default)]
+    pub networks: MppNetworksConfig,
+}
+
+/// Per-network MPP configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MppNetworksConfig {
+    /// Tempo network configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo: Option<TempoMppConfig>,
+}
+
+/// Tempo-specific MPP configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TempoMppConfig {
+    /// Recipient address for payments (required).
+    pub recipient: String,
+
+    /// Escrow contract address (required for session support).
+    pub escrow_contract: String,
+
+    /// Tempo RPC endpoint URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpc_url: Option<String>,
+
+    /// TIP-20 token address for charges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+
+    /// Enable fee sponsorship for all challenges.
+    #[serde(default)]
+    pub fee_payer: bool,
+}
+
 /// Authentication configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -336,7 +399,11 @@ pub enum AuthConfig {
         header_name: String,
         api_key: String,
     },
-    /// Extension point for non-standard auth methods (e.g. SIWx).
+    /// x402 payment protocol — requests are paid via a Solana wallet.
+    X402,
+    /// MPP (Machine Payment Protocol) — requests are paid via an EVM wallet.
+    Mpp,
+    /// Extension point for non-standard auth methods.
     Custom {
         method: String,
         #[serde(default)]

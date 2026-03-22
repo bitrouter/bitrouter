@@ -30,7 +30,7 @@ pub enum BitrouterError {
     InvalidRequest {
         provider: Option<String>,
         message: String,
-        body: Option<JsonValue>,
+        body: Option<Box<JsonValue>>,
     },
     #[error("transport failure: {message}")]
     Transport {
@@ -41,13 +41,13 @@ pub enum BitrouterError {
     ResponseDecode {
         provider: Option<String>,
         message: String,
-        body: Option<JsonValue>,
+        body: Option<Box<JsonValue>>,
     },
     #[error("invalid response: {message}")]
     InvalidResponse {
         provider: Option<String>,
         message: String,
-        body: Option<JsonValue>,
+        body: Option<Box<JsonValue>>,
     },
     #[error("provider error: {message}")]
     Provider {
@@ -59,7 +59,7 @@ pub enum BitrouterError {
     StreamProtocol {
         provider: Option<String>,
         message: String,
-        chunk: Option<JsonValue>,
+        chunk: Option<Box<JsonValue>>,
     },
     #[error("access denied: {message}")]
     AccessDenied { message: String },
@@ -93,7 +93,7 @@ impl BitrouterError {
         Self::InvalidRequest {
             provider: provider.map(str::to_owned),
             message: message.into(),
-            body,
+            body: body.map(Box::new),
         }
     }
 
@@ -112,7 +112,7 @@ impl BitrouterError {
         Self::ResponseDecode {
             provider: provider.map(str::to_owned),
             message: message.into(),
-            body,
+            body: body.map(Box::new),
         }
     }
 
@@ -124,7 +124,7 @@ impl BitrouterError {
         Self::InvalidResponse {
             provider: provider.map(str::to_owned),
             message: message.into(),
-            body,
+            body: body.map(Box::new),
         }
     }
 
@@ -148,7 +148,7 @@ impl BitrouterError {
         Self::StreamProtocol {
             provider: provider.map(str::to_owned),
             message: message.into(),
-            chunk,
+            chunk: chunk.map(Box::new),
         }
     }
 }
