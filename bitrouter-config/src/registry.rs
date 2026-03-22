@@ -10,6 +10,10 @@ const PROVIDER_DEFS: &[(&str, &str)] = &[
     ("openai", include_str!("../providers/openai.yaml")),
     ("anthropic", include_str!("../providers/anthropic.yaml")),
     ("google", include_str!("../providers/google.yaml")),
+    (
+        "bitrouter-cloud",
+        include_str!("../providers/bitrouter-cloud.yaml"),
+    ),
 ];
 
 /// Raw YAML shape for built-in provider files.

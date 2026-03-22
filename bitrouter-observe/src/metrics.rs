@@ -29,8 +29,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use bitrouter_core::observe::{
-    AgentCallEvent, AgentObserveCallback, ObserveCallback, RequestFailureEvent,
-    RequestSuccessEvent, ToolCallEvent, ToolObserveCallback,
+    AgentCallFailureEvent, AgentCallSuccessEvent, AgentObserveCallback, ObserveCallback,
+    RequestFailureEvent, RequestSuccessEvent, ToolCallFailureEvent, ToolCallSuccessEvent,
+    ToolObserveCallback,
 };
 use serde::Serialize;
 
@@ -313,36 +314,45 @@ impl ObserveCallback for MetricsCollector {
 }
 
 impl ToolObserveCallback for MetricsCollector {
-    fn on_tool_call(&self, event: ToolCallEvent) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let route = format!("tool:{}", event.server);
-        let endpoint = event.tool;
-        self.record(
-            route,
-            endpoint,
-            event.latency_ms,
-            !event.success,
-            None,
-            None,
-        );
+    fn on_tool_call_success(
+        &self,
+        event: ToolCallSuccessEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("tool:{}", event.ctx.server);
+        let endpoint = event.ctx.tool;
+        self.record(route, endpoint, event.ctx.latency_ms, false, None, None);
+        Box::pin(async {})
+    }
+
+    fn on_tool_call_failure(
+        &self,
+        event: ToolCallFailureEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("tool:{}", event.ctx.server);
+        let endpoint = event.ctx.tool;
+        self.record(route, endpoint, event.ctx.latency_ms, true, None, None);
         Box::pin(async {})
     }
 }
 
 impl AgentObserveCallback for MetricsCollector {
-    fn on_agent_call(
+    fn on_agent_call_success(
         &self,
-        event: AgentCallEvent,
+        event: AgentCallSuccessEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let route = format!("agent:{}", event.agent);
-        let endpoint = event.method;
-        self.record(
-            route,
-            endpoint,
-            event.latency_ms,
-            !event.success,
-            None,
-            None,
-        );
+        let route = format!("agent:{}", event.ctx.agent);
+        let endpoint = event.ctx.method;
+        self.record(route, endpoint, event.ctx.latency_ms, false, None, None);
+        Box::pin(async {})
+    }
+
+    fn on_agent_call_failure(
+        &self,
+        event: AgentCallFailureEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("agent:{}", event.ctx.agent);
+        let endpoint = event.ctx.method;
+        self.record(route, endpoint, event.ctx.latency_ms, true, None, None);
         Box::pin(async {})
     }
 }
@@ -573,16 +583,17 @@ mod tests {
 
     #[tokio::test]
     async fn tool_callback_records_metrics() {
+        use bitrouter_core::observe::{ToolCallSuccessEvent, ToolRequestContext};
+
         let collector = MetricsCollector::new();
         collector
-            .on_tool_call(ToolCallEvent {
-                account_id: None,
-                server: "github".into(),
-                tool: "search".into(),
-                cost: 0.005,
-                latency_ms: 150,
-                success: true,
-                error_message: None,
+            .on_tool_call_success(ToolCallSuccessEvent {
+                ctx: ToolRequestContext {
+                    server: "github".into(),
+                    tool: "search".into(),
+                    caller: CallerContext::default(),
+                    latency_ms: 150,
+                },
             })
             .await;
 
@@ -595,16 +606,18 @@ mod tests {
 
     #[tokio::test]
     async fn agent_callback_records_metrics() {
+        use bitrouter_core::observe::{AgentCallFailureEvent, AgentRequestContext};
+
         let collector = MetricsCollector::new();
         collector
-            .on_agent_call(AgentCallEvent {
-                account_id: None,
-                agent: "upstream".into(),
-                method: "message/send".into(),
-                cost: 0.01,
-                latency_ms: 300,
-                success: false,
-                error_message: Some("timeout".into()),
+            .on_agent_call_failure(AgentCallFailureEvent {
+                ctx: AgentRequestContext {
+                    agent: "upstream".into(),
+                    method: "message/send".into(),
+                    caller: CallerContext::default(),
+                    latency_ms: 300,
+                },
+                error: "timeout".into(),
             })
             .await;
 

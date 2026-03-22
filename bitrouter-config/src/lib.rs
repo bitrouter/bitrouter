@@ -14,7 +14,8 @@ pub use detect::{DetectedProvider, detect_providers, detect_providers_from_env};
 pub use error::{ConfigError, Result};
 pub use model::{
     ApiProtocol, AuthConfig, InputTokenPricing, Modality, ModelConfig, ModelEndpoint, ModelInfo,
-    ModelPricing, OutputTokenPricing, ProviderConfig, RoutingStrategy,
+    ModelPricing, MppConfig, MppNetworksConfig, OutputTokenPricing, ProviderConfig,
+    RoutingStrategy, TempoMppConfig,
 };
 pub use registry::{BuiltinProvider, builtin_provider_defs};
 pub use routing::{ConfigRoutingTable, ResolvedTarget};

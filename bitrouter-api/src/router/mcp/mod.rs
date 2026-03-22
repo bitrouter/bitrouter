@@ -11,4 +11,3 @@ mod tools;
 mod types;
 
 pub use filters::{mcp_server_filter, mcp_server_filter_with_observe};
-pub use observe::ToolCostFn;

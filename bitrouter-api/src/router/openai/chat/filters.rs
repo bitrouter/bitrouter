@@ -141,6 +141,77 @@ where
     handle_chat_completion(request, table, hooked).await
 }
 
+#[cfg(feature = "mpp-tempo")]
+async fn handle_chat_completion_with_mpp<T, R>(
+    mpp_ctx: crate::mpp::MppPaymentContext,
+    request: ChatCompletionRequest,
+    table: Arc<T>,
+    router: Arc<R>,
+    observer: Arc<dyn ObserveCallback>,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection>
+where
+    T: RoutingTable + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
+    // Management actions (channel open/topUp/close) short-circuit request processing.
+    if let Some(ref management) = mpp_ctx.management_response {
+        let reply = warp::reply::json(management);
+        if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+            return Ok(Box::new(warp::reply::with_header(
+                reply,
+                mpp::PAYMENT_RECEIPT_HEADER,
+                receipt_header,
+            )));
+        }
+        return Ok(Box::new(reply));
+    }
+
+    // Normal request processing with observation (MPP replaces account auth).
+    let result = handle_chat_completion_with_observe(
+        request,
+        table,
+        router,
+        observer,
+        CallerContext::default(),
+    )
+    .await?;
+
+    if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+        Ok(Box::new(warp::reply::with_header(
+            result,
+            mpp::PAYMENT_RECEIPT_HEADER,
+            receipt_header,
+        )))
+    } else {
+        Ok(result)
+    }
+}
+
+/// Creates a warp filter for `/v1/chat/completions` with MPP payment gating.
+///
+/// Requests must carry a valid `Authorization: Payment` credential.
+/// Channel management actions (open, topUp, close) are handled inline.
+#[cfg(feature = "mpp-tempo")]
+pub fn chat_completions_filter_with_mpp<T, R>(
+    table: Arc<T>,
+    router: Arc<R>,
+    observer: Arc<dyn ObserveCallback>,
+    mpp_state: Arc<crate::mpp::MppState>,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: RoutingTable + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
+    warp::path!("v1" / "chat" / "completions")
+        .and(warp::post())
+        .and(crate::mpp::mpp_payment_filter(mpp_state))
+        .and(warp::body::json::<ChatCompletionRequest>())
+        .and(warp::any().map(move || table.clone()))
+        .and(warp::any().map(move || router.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and_then(handle_chat_completion_with_mpp)
+}
+
 async fn handle_chat_completion_with_observe<T, R>(
     request: ChatCompletionRequest,
     table: Arc<T>,

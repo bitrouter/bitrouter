@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentPricing;
 use crate::env::{load_env, substitute_in_value};
-use crate::model::{ModelConfig, ProviderConfig};
+use crate::model::{ModelConfig, MppConfig, ProviderConfig};
 use crate::registry::{builtin_providers, merge_provider, resolve_providers};
 use crate::tool::ToolPricing;
 
@@ -31,6 +31,10 @@ pub struct BitrouterConfig {
     /// Solana RPC endpoint used for Swig wallet operations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solana_rpc_url: Option<String>,
+
+    /// MPP (Machine Payment Protocol) configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mpp: Option<MppConfig>,
 
     /// Provider definitions (merged on top of built-in providers).
     #[serde(default)]

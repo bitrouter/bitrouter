@@ -15,4 +15,3 @@ mod tests;
 pub mod types;
 
 pub use filters::a2a_gateway_filter;
-pub use observe::AgentCostFn;

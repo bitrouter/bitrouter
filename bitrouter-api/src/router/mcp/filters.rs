@@ -6,6 +6,7 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
+use bitrouter_core::observe::{CallerContext, ToolObserveCallback};
 use tokio_stream::StreamExt;
 use warp::Filter;
 
@@ -37,19 +38,20 @@ where
 }
 
 /// Combined MCP server filter with tool call observation.
-pub fn mcp_server_filter_with_observe<T>(
+///
+/// The `account_filter` extracts a [`CallerContext`] per-request (e.g. from
+/// JWT claims) so that observation events carry account information.
+pub fn mcp_server_filter_with_observe<T, A>(
     server: Option<Arc<T>>,
-    observer: Arc<dyn bitrouter_core::observe::ToolObserveCallback>,
-    cost_fn: super::observe::ToolCostFn,
+    observer: Arc<dyn ToolObserveCallback>,
+    account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
     T: McpServer + 'static,
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
-    let ctx = Some(McpObserveContext {
-        observer,
-        cost_fn,
-    });
-    mcp_jsonrpc_filter(server.clone(), ctx).or(mcp_sse_filter(server))
+    mcp_jsonrpc_filter_with_observe(server.clone(), observer, account_filter)
+        .or(mcp_sse_filter(server))
 }
 
 // ── POST /mcp ────────────────────────────────────────────────────────
@@ -68,6 +70,33 @@ where
         .and(warp::any().map(move || server.clone()))
         .and(warp::any().map(move || observe_ctx.clone()))
         .then(handle_jsonrpc_value::<T>)
+}
+
+fn mcp_jsonrpc_filter_with_observe<T, A>(
+    server: Option<Arc<T>>,
+    observer: Arc<dyn ToolObserveCallback>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: McpServer + 'static,
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
+    warp::path("mcp")
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::body::json::<serde_json::Value>())
+        .and(warp::any().map(move || server.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
+        .then(
+            |body: serde_json::Value,
+             server: Option<Arc<T>>,
+             observer: Arc<dyn ToolObserveCallback>,
+             caller: CallerContext| async move {
+                let ctx = Some(McpObserveContext { observer, caller });
+                handle_jsonrpc_value::<T>(body, server, ctx).await
+            },
+        )
 }
 
 async fn handle_jsonrpc_value<T: McpServer>(

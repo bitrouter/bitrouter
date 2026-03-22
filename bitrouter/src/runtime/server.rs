@@ -101,8 +101,20 @@ where
             spend_store.clone(),
             Arc::new(pricing_fn),
         ));
-        let tool_spend_observer = Arc::new(ToolSpendObserver::new(spend_store.clone()));
-        let agent_spend_observer = Arc::new(AgentSpendObserver::new(spend_store));
+        let tool_pricing = self.config.mcp_server_pricing.clone();
+        let tool_cost_fn: bitrouter_observe::tool_observer::ToolCostFn =
+            Arc::new(move |server: &str, tool: &str| {
+                tool_pricing.get(server).map_or(0.0, |p| p.cost_for(tool))
+            });
+        let tool_spend_observer =
+            Arc::new(ToolSpendObserver::new(spend_store.clone(), tool_cost_fn));
+
+        let agent_pricing = self.config.a2a_agent_pricing.clone();
+        let agent_cost_fn: bitrouter_observe::agent_observer::AgentCostFn =
+            Arc::new(move |agent: &str, method: &str| {
+                agent_pricing.get(agent).map_or(0.0, |p| p.cost_for(method))
+            });
+        let agent_spend_observer = Arc::new(AgentSpendObserver::new(spend_store, agent_cost_fn));
         let metrics_collector = Arc::new(MetricsCollector::new());
         let composite = Arc::new(CompositeObserver::new(
             vec![
@@ -165,30 +177,133 @@ where
         };
 
         // Model API routes with observation.
+        // When MPP is enabled, payment-gated filters replace the standard
+        // auth-gated filters. We use .boxed() to unify the filter types.
+        #[cfg(feature = "mpp-tempo")]
+        let mpp_state: Option<Arc<bitrouter_api::mpp::MppState>> = {
+            match self.config.mpp.as_ref().filter(|c| c.enabled) {
+                Some(mpp_config) => match mpp_config.networks.tempo.as_ref() {
+                    Some(tempo) => {
+                        let state = bitrouter_api::mpp::MppState::from_tempo_config(
+                            tempo,
+                            mpp_config.realm.as_deref(),
+                            mpp_config.secret_key.as_deref(),
+                        )
+                        .map_err(|e| {
+                            bitrouter_config::ConfigError::ConfigParse(format!(
+                                "MPP initialization failed: {e}"
+                            ))
+                        })?;
+                        tracing::info!(realm = state.realm(), "MPP enabled (Tempo)");
+                        Some(Arc::new(state))
+                    }
+                    None => None,
+                },
+                None => None,
+            }
+        };
+
+        #[cfg(feature = "mpp-tempo")]
+        let (chat, messages, responses, generate_content) = if let Some(ref mpp) = mpp_state {
+            (
+                openai::chat::filters::chat_completions_filter_with_mpp(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    mpp.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                anthropic::messages::filters::messages_filter_with_mpp(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    mpp.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                openai::responses::filters::responses_filter_with_mpp(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    mpp.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                google::generate_content::filters::generate_content_filter_with_mpp(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    mpp.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+            )
+        } else {
+            (
+                openai::chat::filters::chat_completions_filter_with_observe(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    account_filter.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                anthropic::messages::filters::messages_filter_with_observe(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    anthropic_account_filter,
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                openai::responses::filters::responses_filter_with_observe(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    account_filter.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+                google::generate_content::filters::generate_content_filter_with_observe(
+                    self.table.clone(),
+                    guarded_router.clone(),
+                    observer.clone(),
+                    account_filter.clone(),
+                )
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed(),
+            )
+        };
+
+        #[cfg(not(feature = "mpp-tempo"))]
         let chat = openai::chat::filters::chat_completions_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
+        #[cfg(not(feature = "mpp-tempo"))]
         let messages = anthropic::messages::filters::messages_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             anthropic_account_filter,
         );
+        #[cfg(not(feature = "mpp-tempo"))]
         let responses = openai::responses::filters::responses_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
+        #[cfg(not(feature = "mpp-tempo"))]
         let generate_content =
             google::generate_content::filters::generate_content_filter_with_observe(
                 self.table.clone(),
                 guarded_router.clone(),
                 observer.clone(),
-                account_filter,
+                account_filter.clone(),
             );
 
         // ── MCP registry ─────────────────────────────────────────────
@@ -246,15 +361,10 @@ where
 
             // Build MCP server filter with tool call observation.
             let tool_observer: Arc<dyn ToolObserveCallback> = composite.clone();
-            let tool_pricing = self.config.mcp_server_pricing.clone();
-            let tool_cost_fn: mcp_admin::ToolCostFn =
-                Arc::new(move |server: &str, tool: &str| {
-                    tool_pricing.get(server).map_or(0.0, |p| p.cost_for(tool))
-                });
             let server = mcp_admin::mcp_server_filter_with_observe(
                 registry.clone(),
                 tool_observer,
-                tool_cost_fn,
+                account_filter.clone(),
             );
             let tools = bitrouter_api::router::tools::tools_filter(registry);
 
@@ -264,7 +374,6 @@ where
         // ── A2A protocol ─────────────────────────────────────────────
         let (a2a_routes, admin_agent_routes, agent_list, _a2a_refresh_guard) = {
             use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
-            use bitrouter_api::router::a2a::AgentCostFn;
             use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
 
             let external_base_url = format!("http://{}/a2a", self.config.server.listen);
@@ -284,11 +393,16 @@ where
 
             let agent_observer: Option<Arc<dyn AgentObserveCallback>> =
                 Some(composite.clone() as Arc<dyn AgentObserveCallback>);
-            let agent_pricing = self.config.a2a_agent_pricing.clone();
-            let agent_cost_fn: Option<AgentCostFn> =
-                Some(Arc::new(move |agent: &str, method: &str| {
-                    agent_pricing.get(agent).map_or(0.0, |p| p.cost_for(method))
-                }));
+
+            let a2a_account_filter = if self.db.is_some() {
+                let auth_filter = auth::openai_auth(auth_ctx.clone());
+                warp::any()
+                    .and(auth_filter)
+                    .map(identity_to_caller_context)
+                    .boxed()
+            } else {
+                warp::any().map(CallerContext::default).boxed()
+            };
 
             let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
                 .and(admin_agents::admin_agents_filter(discovery_reg.clone()));
@@ -298,7 +412,7 @@ where
                 bitrouter_api::router::a2a::a2a_gateway_filter(
                     gateway_reg,
                     agent_observer,
-                    agent_cost_fn,
+                    a2a_account_filter,
                 ),
                 admin,
                 agents,
@@ -385,7 +499,8 @@ fn auth_gate(
     auth.map(|_| ()).untuple_one()
 }
 
-/// Rejection handler that turns [`Unauthorized`] into a JSON 401 response.
+/// Rejection handler that turns [`Unauthorized`] into a JSON 401 response
+/// and MPP rejections into 402 responses.
 async fn handle_auth_rejection(
     rejection: warp::Rejection,
 ) -> std::result::Result<impl warp::Reply, warp::Rejection> {
@@ -396,11 +511,46 @@ async fn handle_auth_rejection(
                 "type": "authentication_error",
             }
         }));
-        return Ok(warp::reply::with_status(
+        return Ok(Box::new(warp::reply::with_status(
             json,
             warp::http::StatusCode::UNAUTHORIZED,
-        ));
+        )) as Box<dyn warp::Reply>);
     }
+
+    #[cfg(feature = "mpp-tempo")]
+    if let Some(challenge) = rejection.find::<bitrouter_api::mpp::MppChallenge>() {
+        match warp::http::Response::builder()
+            .status(warp::http::StatusCode::PAYMENT_REQUIRED)
+            .header("WWW-Authenticate", &challenge.www_authenticate)
+            .header("Content-Type", "application/json")
+            .body(
+                serde_json::json!({
+                    "error": {
+                        "message": "Payment required",
+                        "type": "payment_required",
+                    }
+                })
+                .to_string(),
+            ) {
+            Ok(resp) => return Ok(Box::new(resp) as Box<dyn warp::Reply>),
+            Err(_) => return Err(rejection),
+        }
+    }
+
+    #[cfg(feature = "mpp-tempo")]
+    if let Some(err) = rejection.find::<bitrouter_api::mpp::MppVerificationFailed>() {
+        let json = warp::reply::json(&serde_json::json!({
+            "error": {
+                "message": err.message,
+                "type": "payment_verification_failed",
+            }
+        }));
+        return Ok(Box::new(warp::reply::with_status(
+            json,
+            warp::http::StatusCode::PAYMENT_REQUIRED,
+        )) as Box<dyn warp::Reply>);
+    }
+
     Err(rejection)
 }
 

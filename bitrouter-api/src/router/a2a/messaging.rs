@@ -12,7 +12,7 @@ use tokio_stream::StreamExt;
 use super::convert::{
     WithId, deserialize_params, error_response, gateway_error_response, success_response,
 };
-use super::observe::{A2aObserveContext, emit_agent_error, emit_agent_event, emit_agent_success};
+use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
 use super::types::*;
 
 /// Handle `message/send` JSON-RPC method.
@@ -28,7 +28,10 @@ pub(crate) async fn dispatch_send_message(
     };
     let start = Instant::now();
     let result = agent.send_message(req).await;
-    emit_agent_event(ctx, agent_name, "message/send", start, &result);
+    match &result {
+        Ok(_) => emit_agent_success(ctx, agent_name, "message/send", start),
+        Err(e) => emit_agent_failure(ctx, agent_name, "message/send", start, &e.to_string()),
+    }
     match result {
         Ok(r) => success_response(&request.id, &r),
         Err(e) => gateway_error_response(&request.id, &e),
@@ -58,13 +61,18 @@ pub(crate) async fn handle_streaming_jsonrpc(
             match agent.send_streaming_message(req).await {
                 Ok(stream) => {
                     let request_id = request.id.clone();
-                    let event_stream = sync_bridge(stream)
-                        .map(move |item| stream_response_to_sse(&request_id, &item));
-                    emit_agent_success(ctx, agent_name, "message/stream", start);
+                    let event_stream = sync_bridge_with_observe(
+                        stream,
+                        agent_name.to_string(),
+                        "message/stream".to_string(),
+                        start,
+                        ctx.clone(),
+                    )
+                    .map(move |item| stream_response_to_sse(&request_id, &item));
                     Box::new(warp::sse::reply(event_stream))
                 }
                 Err(ref e) => {
-                    emit_agent_error(ctx, agent_name, "message/stream", start, e);
+                    emit_agent_failure(ctx, agent_name, "message/stream", start, &e.to_string());
                     let resp = gateway_error_response(&request.id, e);
                     Box::new(warp::reply::with_status(
                         warp::reply::json(&resp),
@@ -88,13 +96,18 @@ pub(crate) async fn handle_streaming_jsonrpc(
             match agent.subscribe_to_task(&req.task_id).await {
                 Ok(stream) => {
                     let request_id = request.id.clone();
-                    let event_stream = sync_bridge(stream)
-                        .map(move |item| stream_response_to_sse(&request_id, &item));
-                    emit_agent_success(ctx, agent_name, "tasks/resubscribe", start);
+                    let event_stream = sync_bridge_with_observe(
+                        stream,
+                        agent_name.to_string(),
+                        "tasks/resubscribe".to_string(),
+                        start,
+                        ctx.clone(),
+                    )
+                    .map(move |item| stream_response_to_sse(&request_id, &item));
                     Box::new(warp::sse::reply(event_stream))
                 }
                 Err(ref e) => {
-                    emit_agent_error(ctx, agent_name, "tasks/resubscribe", start, e);
+                    emit_agent_failure(ctx, agent_name, "tasks/resubscribe", start, &e.to_string());
                     let resp = gateway_error_response(&request.id, e);
                     Box::new(warp::reply::with_status(
                         warp::reply::json(&resp),
@@ -117,20 +130,36 @@ pub(crate) async fn handle_streaming_jsonrpc(
     }
 }
 
-/// Bridge a `Send`-only stream into a `Send + Sync` stream via a channel.
-///
-/// `warp::sse::reply` requires `Send + Sync` but our trait returns
-/// `Pin<Box<dyn Stream + Send>>`. This spawns a forwarding task.
-pub(crate) fn sync_bridge(
+/// Bridge a `Send`-only stream into a `Send + Sync` stream via a channel,
+/// emitting an observation event after the stream
+/// completes or the client disconnects.
+pub(crate) fn sync_bridge_with_observe(
     source: Pin<Box<dyn Stream<Item = StreamResponse> + Send>>,
+    agent_name: String,
+    method: String,
+    start: Instant,
+    ctx: Option<A2aObserveContext>,
 ) -> tokio_stream::wrappers::ReceiverStream<StreamResponse> {
     let (tx, rx) = tokio::sync::mpsc::channel(32);
     tokio::spawn(async move {
         tokio::pin!(source);
+        let mut client_disconnected = false;
         while let Some(item) = source.next().await {
             if tx.send(item).await.is_err() {
+                client_disconnected = true;
                 break;
             }
+        }
+        if client_disconnected {
+            emit_agent_failure(
+                &ctx,
+                &agent_name,
+                &method,
+                start,
+                "client disconnected during stream",
+            );
+        } else {
+            emit_agent_success(&ctx, &agent_name, &method, start);
         }
     });
     tokio_stream::wrappers::ReceiverStream::new(rx)

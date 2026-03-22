@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use warp::Filter;
 
 use super::convert::{gateway_error_response, success_response};
-use super::observe::{A2aObserveContext, emit_agent_error, emit_agent_event, emit_agent_success};
+use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
 use super::types::*;
 
 /// Warp filter for `GET /a2a/{agent_name}/.well-known/agent-card.json`.
@@ -51,14 +51,15 @@ pub(crate) fn well_known_filter(
                         Box::new(reply) as Box<dyn warp::Reply>
                     }
                     None => {
-                        emit_agent_error(
+                        emit_agent_failure(
                             &ctx,
                             &agent_name,
                             ".well-known/agent-card.json",
                             start,
                             &A2aGatewayError::AgentNotFound {
                                 name: agent_name.clone(),
-                            },
+                            }
+                            .to_string(),
                         );
                         Box::new(warp::reply::with_status(
                             warp::reply::json(
@@ -81,13 +82,16 @@ pub(crate) async fn dispatch_get_extended(
 ) -> JsonRpcResponse {
     let start = Instant::now();
     let result = agent.get_extended_agent_card().await;
-    emit_agent_event(
-        ctx,
-        agent_name,
-        "agent/getAuthenticatedExtendedCard",
-        start,
-        &result,
-    );
+    match &result {
+        Ok(_) => emit_agent_success(ctx, agent_name, "agent/getAuthenticatedExtendedCard", start),
+        Err(e) => emit_agent_failure(
+            ctx,
+            agent_name,
+            "agent/getAuthenticatedExtendedCard",
+            start,
+            &e.to_string(),
+        ),
+    }
     match result {
         Ok(card) => success_response(&request.id, &card),
         Err(e) => gateway_error_response(&request.id, &e),

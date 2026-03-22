@@ -9,17 +9,15 @@ use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
 use bitrouter_a2a::client::upstream::UpstreamA2aAgent;
 use bitrouter_a2a::error::A2aGatewayError;
 use bitrouter_a2a::server::A2aProxy;
-use bitrouter_core::observe::AgentObserveCallback;
+use bitrouter_core::observe::{AgentObserveCallback, CallerContext};
 use serde::Deserialize;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use warp::Filter;
 
 use super::convert::error_response;
-use super::messaging::{stream_response_to_sse, sync_bridge};
-use super::observe::{
-    A2aObserveContext, AgentCostFn, emit_agent_error, emit_agent_event, emit_agent_success,
-};
+use super::messaging::{stream_response_to_sse, sync_bridge_with_observe};
+use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
 use super::types::*;
 use super::{discovery, messaging, push, tasks};
 
@@ -28,33 +26,86 @@ use super::{discovery, messaging, push, tasks};
 /// Routes are prefixed with `/a2a/{agent_name}` so each upstream agent is
 /// addressed independently.
 ///
-/// When `observer` and `cost_fn` are provided, every handler fires an
-/// [`AgentCallEvent`](bitrouter_core::observe::AgentCallEvent) through
-/// the observer.
-pub fn a2a_gateway_filter(
+/// When `observer` and `account_filter` are provided, every handler fires
+/// observation events through the observer with caller context.
+pub fn a2a_gateway_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
-    cost_fn: Option<AgentCostFn>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    let ctx = observer
-        .zip(cost_fn)
-        .map(|(observer, cost_fn)| A2aObserveContext { observer, cost_fn });
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
+    // For discovery endpoints (no auth required), use a static observe context
+    // with a default CallerContext.
+    let discovery_ctx = observer.as_ref().map(|obs| A2aObserveContext {
+        observer: obs.clone(),
+        caller: CallerContext::default(),
+    });
 
-    discovery::well_known_filter(registry.clone(), ctx.clone())
-        .or(jsonrpc_filter(registry.clone(), ctx.clone()))
-        .or(streaming_filter(registry.clone(), ctx.clone()))
-        .or(rest_send_filter(registry.clone(), ctx.clone()))
-        .or(rest_stream_filter(registry.clone(), ctx.clone()))
-        .or(rest_get_task_filter(registry.clone(), ctx.clone()))
-        .or(rest_list_tasks_filter(registry.clone(), ctx.clone()))
-        .or(rest_cancel_filter(registry.clone(), ctx.clone()))
-        .or(rest_subscribe_filter(registry.clone(), ctx.clone()))
-        .or(rest_card_filter(registry.clone(), ctx.clone()))
-        .or(rest_extended_card_filter(registry.clone(), ctx.clone()))
-        .or(rest_push_create_filter(registry.clone(), ctx.clone()))
-        .or(rest_push_get_filter(registry.clone(), ctx.clone()))
-        .or(rest_push_list_filter(registry.clone(), ctx.clone()))
-        .or(rest_push_delete_filter(registry, ctx))
+    discovery::well_known_filter(registry.clone(), discovery_ctx.clone())
+        .or(jsonrpc_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(streaming_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_send_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_stream_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_get_task_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_list_tasks_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_cancel_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_subscribe_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_card_filter(registry.clone(), discovery_ctx.clone()))
+        .or(rest_extended_card_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_push_create_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_push_get_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_push_list_filter(
+            registry.clone(),
+            observer.clone(),
+            account_filter.clone(),
+        ))
+        .or(rest_push_delete_filter(registry, observer, account_filter))
 }
 
 // -- Agent lookup helper ---------------------------------------------------------
@@ -71,24 +122,42 @@ fn require_agent<'a>(
     reg.require_agent(agent_name)
 }
 
+/// Build an `Option<A2aObserveContext>` from per-request caller and shared observer.
+fn make_ctx(
+    observer: &Option<Arc<dyn AgentObserveCallback>>,
+    caller: CallerContext,
+) -> Option<A2aObserveContext> {
+    observer.as_ref().map(|obs| A2aObserveContext {
+        observer: obs.clone(),
+        caller,
+    })
+}
+
 // -- JSON-RPC dispatch -----------------------------------------------------------
 
-fn jsonrpc_filter(
+fn jsonrpc_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path::end())
         .and(warp::post())
         .and(warp::body::json::<JsonRpcRequest>())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              request: JsonRpcRequest,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => {
@@ -146,22 +215,29 @@ async fn dispatch_jsonrpc(
 
 // -- SSE streaming ---------------------------------------------------------------
 
-fn streaming_filter(
+fn streaming_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("stream"))
         .and(warp::post())
         .and(warp::body::json::<JsonRpcRequest>())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              request: JsonRpcRequest,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => {
@@ -195,10 +271,14 @@ fn rest_gateway_error_reply(err: &A2aGatewayError) -> Box<dyn warp::Reply> {
     rest_error_reply(status, &err.to_string())
 }
 
-fn rest_send_filter(
+fn rest_send_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("message:send"))
@@ -206,19 +286,27 @@ fn rest_send_filter(
         .and(warp::post())
         .and(warp::body::json::<SendMessageRequest>())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              body: SendMessageRequest,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
                 let start = Instant::now();
                 let result = agent.send_message(body).await;
-                emit_agent_event(&ctx, &agent_name, "message/send", start, &result);
+                match &result {
+                    Ok(_) => emit_agent_success(&ctx, &agent_name, "message/send", start),
+                    Err(e) => {
+                        emit_agent_failure(&ctx, &agent_name, "message/send", start, &e.to_string())
+                    }
+                }
                 match result {
                     Ok(r) => Box::new(warp::reply::json(&r)) as Box<dyn warp::Reply>,
                     Err(e) => rest_gateway_error_reply(&e),
@@ -227,10 +315,14 @@ fn rest_send_filter(
         )
 }
 
-fn rest_stream_filter(
+fn rest_stream_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("message:stream"))
@@ -238,12 +330,15 @@ fn rest_stream_filter(
         .and(warp::post())
         .and(warp::body::json::<SendMessageRequest>())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              body: SendMessageRequest,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
@@ -252,13 +347,24 @@ fn rest_stream_filter(
                 let result = agent.send_streaming_message(body).await;
                 match result {
                     Ok(stream) => {
-                        let event_stream =
-                            sync_bridge(stream).map(|item| stream_response_to_sse("rest", &item));
-                        emit_agent_success(&ctx, &agent_name, "message/stream", start);
+                        let event_stream = sync_bridge_with_observe(
+                            stream,
+                            agent_name,
+                            "message/stream".to_string(),
+                            start,
+                            ctx,
+                        )
+                        .map(|item| stream_response_to_sse("rest", &item));
                         Box::new(warp::sse::reply(event_stream)) as Box<dyn warp::Reply>
                     }
                     Err(ref e) => {
-                        emit_agent_error(&ctx, &agent_name, "message/stream", start, e);
+                        emit_agent_failure(
+                            &ctx,
+                            &agent_name,
+                            "message/stream",
+                            start,
+                            &e.to_string(),
+                        );
                         rest_gateway_error_reply(e)
                     }
                 }
@@ -266,10 +372,14 @@ fn rest_stream_filter(
         )
 }
 
-fn rest_get_task_filter(
+fn rest_get_task_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("tasks"))
@@ -277,12 +387,15 @@ fn rest_get_task_filter(
         .and(warp::path::end())
         .and(warp::get())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              task_id: String,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
@@ -293,7 +406,12 @@ fn rest_get_task_filter(
                 };
                 let start = Instant::now();
                 let result = agent.get_task(req).await;
-                emit_agent_event(&ctx, &agent_name, "tasks/get", start, &result);
+                match &result {
+                    Ok(_) => emit_agent_success(&ctx, &agent_name, "tasks/get", start),
+                    Err(e) => {
+                        emit_agent_failure(&ctx, &agent_name, "tasks/get", start, &e.to_string())
+                    }
+                }
                 match result {
                     Ok(task) => Box::new(warp::reply::json(&task)) as Box<dyn warp::Reply>,
                     Err(e) => rest_gateway_error_reply(&e),
@@ -322,10 +440,14 @@ struct ListTasksQueryParams {
     include_artifacts: Option<bool>,
 }
 
-fn rest_list_tasks_filter(
+fn rest_list_tasks_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("tasks"))
@@ -345,12 +467,15 @@ fn rest_list_tasks_filter(
                 .unify(),
         )
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              params: ListTasksQueryParams,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
@@ -366,7 +491,12 @@ fn rest_list_tasks_filter(
                 };
                 let start = Instant::now();
                 let result = agent.list_tasks(req).await;
-                emit_agent_event(&ctx, &agent_name, "tasks/list", start, &result);
+                match &result {
+                    Ok(_) => emit_agent_success(&ctx, &agent_name, "tasks/list", start),
+                    Err(e) => {
+                        emit_agent_failure(&ctx, &agent_name, "tasks/list", start, &e.to_string())
+                    }
+                }
                 match result {
                     Ok(resp) => Box::new(warp::reply::json(&resp)) as Box<dyn warp::Reply>,
                     Err(e) => rest_gateway_error_reply(&e),
@@ -375,10 +505,14 @@ fn rest_list_tasks_filter(
         )
 }
 
-fn rest_cancel_filter(
+fn rest_cancel_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("tasks"))
@@ -386,15 +520,18 @@ fn rest_cancel_filter(
         .and(warp::path::end())
         .and(warp::post())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .and_then(
             |agent_name: String,
              task_id_action: String,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
                 let Some(task_id) = task_id_action.strip_suffix(":cancel") else {
                     return Err(warp::reject::not_found());
                 };
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return Ok(rest_gateway_error_reply(&e)),
@@ -404,7 +541,12 @@ fn rest_cancel_filter(
                 };
                 let start = Instant::now();
                 let result = agent.cancel_task(req).await;
-                emit_agent_event(&ctx, &agent_name, "tasks/cancel", start, &result);
+                match &result {
+                    Ok(_) => emit_agent_success(&ctx, &agent_name, "tasks/cancel", start),
+                    Err(e) => {
+                        emit_agent_failure(&ctx, &agent_name, "tasks/cancel", start, &e.to_string())
+                    }
+                }
                 let reply: Box<dyn warp::Reply> = match result {
                     Ok(task) => Box::new(warp::reply::json(&task)),
                     Err(e) => rest_gateway_error_reply(&e),
@@ -414,10 +556,14 @@ fn rest_cancel_filter(
         )
 }
 
-fn rest_subscribe_filter(
+fn rest_subscribe_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("tasks"))
@@ -425,15 +571,18 @@ fn rest_subscribe_filter(
         .and(warp::path::end())
         .and(warp::post())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .and_then(
             |agent_name: String,
              task_id_action: String,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
                 let Some(task_id) = task_id_action.strip_suffix(":subscribe") else {
                     return Err(warp::reject::not_found());
                 };
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return Ok(rest_gateway_error_reply(&e)),
@@ -442,13 +591,24 @@ fn rest_subscribe_filter(
                 let result = agent.subscribe_to_task(task_id).await;
                 let reply: Box<dyn warp::Reply> = match result {
                     Ok(stream) => {
-                        let event_stream =
-                            sync_bridge(stream).map(|item| stream_response_to_sse("rest", &item));
-                        emit_agent_success(&ctx, &agent_name, "tasks/resubscribe", start);
+                        let event_stream = sync_bridge_with_observe(
+                            stream,
+                            agent_name,
+                            "tasks/resubscribe".to_string(),
+                            start,
+                            ctx,
+                        )
+                        .map(|item| stream_response_to_sse("rest", &item));
                         Box::new(warp::sse::reply(event_stream))
                     }
                     Err(ref e) => {
-                        emit_agent_error(&ctx, &agent_name, "tasks/resubscribe", start, e);
+                        emit_agent_failure(
+                            &ctx,
+                            &agent_name,
+                            "tasks/resubscribe",
+                            start,
+                            &e.to_string(),
+                        );
                         rest_gateway_error_reply(e)
                     }
                 };
@@ -489,14 +649,15 @@ fn rest_card_filter(
                         Box::new(warp::reply::json(&card)) as Box<dyn warp::Reply>
                     }
                     None => {
-                        emit_agent_error(
+                        emit_agent_failure(
                             &ctx,
                             &agent_name,
                             "card/get",
                             start,
                             &A2aGatewayError::AgentNotFound {
                                 name: agent_name.clone(),
-                            },
+                            }
+                            .to_string(),
                         );
                         rest_error_reply(
                             warp::http::StatusCode::NOT_FOUND,
@@ -508,34 +669,49 @@ fn rest_card_filter(
         )
 }
 
-fn rest_extended_card_filter(
+fn rest_extended_card_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("extendedAgentCard"))
         .and(warp::path::end())
         .and(warp::get())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
                 let start = Instant::now();
                 let result = agent.get_extended_agent_card().await;
-                emit_agent_event(
-                    &ctx,
-                    &agent_name,
-                    "agent/getAuthenticatedExtendedCard",
-                    start,
-                    &result,
-                );
+                match &result {
+                    Ok(_) => emit_agent_success(
+                        &ctx,
+                        &agent_name,
+                        "agent/getAuthenticatedExtendedCard",
+                        start,
+                    ),
+                    Err(e) => emit_agent_failure(
+                        &ctx,
+                        &agent_name,
+                        "agent/getAuthenticatedExtendedCard",
+                        start,
+                        &e.to_string(),
+                    ),
+                }
                 match result {
                     Ok(card) => Box::new(warp::reply::json(&card)) as Box<dyn warp::Reply>,
                     Err(e) => rest_gateway_error_reply(&e),
@@ -544,10 +720,14 @@ fn rest_extended_card_filter(
         )
 }
 
-fn rest_push_create_filter(
+fn rest_push_create_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("tasks"))
@@ -557,26 +737,37 @@ fn rest_push_create_filter(
         .and(warp::post())
         .and(warp::body::json::<TaskPushNotificationConfig>())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              _task_id: String,
              config: TaskPushNotificationConfig,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
                 let start = Instant::now();
                 let result = agent.set_push_config(config).await;
-                emit_agent_event(
-                    &ctx,
-                    &agent_name,
-                    "tasks/pushNotificationConfig/set",
-                    start,
-                    &result,
-                );
+                match &result {
+                    Ok(_) => emit_agent_success(
+                        &ctx,
+                        &agent_name,
+                        "tasks/pushNotificationConfig/set",
+                        start,
+                    ),
+                    Err(e) => emit_agent_failure(
+                        &ctx,
+                        &agent_name,
+                        "tasks/pushNotificationConfig/set",
+                        start,
+                        &e.to_string(),
+                    ),
+                }
                 match result {
                     Ok(stored) => Box::new(warp::reply::with_status(
                         warp::reply::json(&stored),
@@ -588,10 +779,14 @@ fn rest_push_create_filter(
         )
 }
 
-fn rest_push_get_filter(
+fn rest_push_get_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("tasks"))
@@ -601,26 +796,37 @@ fn rest_push_get_filter(
         .and(warp::path::end())
         .and(warp::get())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              task_id: String,
              config_id: String,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
                 let start = Instant::now();
                 let result = agent.get_push_config(&task_id, Some(&config_id)).await;
-                emit_agent_event(
-                    &ctx,
-                    &agent_name,
-                    "tasks/pushNotificationConfig/get",
-                    start,
-                    &result,
-                );
+                match &result {
+                    Ok(_) => emit_agent_success(
+                        &ctx,
+                        &agent_name,
+                        "tasks/pushNotificationConfig/get",
+                        start,
+                    ),
+                    Err(e) => emit_agent_failure(
+                        &ctx,
+                        &agent_name,
+                        "tasks/pushNotificationConfig/get",
+                        start,
+                        &e.to_string(),
+                    ),
+                }
                 match result {
                     Ok(config) => Box::new(warp::reply::json(&config)) as Box<dyn warp::Reply>,
                     Err(e) => rest_gateway_error_reply(&e),
@@ -629,10 +835,14 @@ fn rest_push_get_filter(
         )
 }
 
-fn rest_push_list_filter(
+fn rest_push_list_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("tasks"))
@@ -641,25 +851,36 @@ fn rest_push_list_filter(
         .and(warp::path::end())
         .and(warp::get())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              task_id: String,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
                 let start = Instant::now();
                 let result = agent.list_push_configs(&task_id).await;
-                emit_agent_event(
-                    &ctx,
-                    &agent_name,
-                    "tasks/pushNotificationConfig/list",
-                    start,
-                    &result,
-                );
+                match &result {
+                    Ok(_) => emit_agent_success(
+                        &ctx,
+                        &agent_name,
+                        "tasks/pushNotificationConfig/list",
+                        start,
+                    ),
+                    Err(e) => emit_agent_failure(
+                        &ctx,
+                        &agent_name,
+                        "tasks/pushNotificationConfig/list",
+                        start,
+                        &e.to_string(),
+                    ),
+                }
                 match result {
                     Ok(resp) => Box::new(warp::reply::json(&resp)) as Box<dyn warp::Reply>,
                     Err(e) => rest_gateway_error_reply(&e),
@@ -668,10 +889,14 @@ fn rest_push_list_filter(
         )
 }
 
-fn rest_push_delete_filter(
+fn rest_push_delete_filter<A>(
     registry: Option<Arc<UpstreamAgentRegistry>>,
-    ctx: Option<A2aObserveContext>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    observer: Option<Arc<dyn AgentObserveCallback>>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path("a2a")
         .and(warp::path::param::<String>())
         .and(warp::path("tasks"))
@@ -681,26 +906,37 @@ fn rest_push_delete_filter(
         .and(warp::path::end())
         .and(warp::delete())
         .and(warp::any().map(move || registry.clone()))
-        .and(warp::any().map(move || ctx.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and(account_filter)
         .then(
             |agent_name: String,
              task_id: String,
              config_id: String,
              registry: Option<Arc<UpstreamAgentRegistry>>,
-             ctx: Option<A2aObserveContext>| async move {
+             observer: Option<Arc<dyn AgentObserveCallback>>,
+             caller: CallerContext| async move {
+                let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
                 let start = Instant::now();
                 let result = agent.delete_push_config(&task_id, &config_id).await;
-                emit_agent_event(
-                    &ctx,
-                    &agent_name,
-                    "tasks/pushNotificationConfig/delete",
-                    start,
-                    &result,
-                );
+                match &result {
+                    Ok(_) => emit_agent_success(
+                        &ctx,
+                        &agent_name,
+                        "tasks/pushNotificationConfig/delete",
+                        start,
+                    ),
+                    Err(e) => emit_agent_failure(
+                        &ctx,
+                        &agent_name,
+                        "tasks/pushNotificationConfig/delete",
+                        start,
+                        &e.to_string(),
+                    ),
+                }
                 match result {
                     Ok(()) => Box::new(warp::reply::with_status(
                         warp::reply::json(&serde_json::json!({"success": true})),

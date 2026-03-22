@@ -79,19 +79,13 @@ pub async fn handle_tools_call<T: McpToolServer>(
         .await
     {
         Ok(result) => {
-            super::observe::emit_tool_event(observe_ctx, server_name, tool_name, start, &Ok(()));
+            super::observe::emit_tool_success(observe_ctx, server_name, tool_name, start);
             let value = serde_json::to_value(&result).unwrap_or_default();
             JsonRpcResponse::success(id.clone(), value)
         }
         Err(err) => {
             let err_str = err.to_string();
-            super::observe::emit_tool_event(
-                observe_ctx,
-                server_name,
-                tool_name,
-                start,
-                &Err(err_str),
-            );
+            super::observe::emit_tool_failure(observe_ctx, server_name, tool_name, start, &err_str);
             let (code, message) = gateway_error_to_jsonrpc(&err);
             JsonRpcResponse::error(id.clone(), code, message, None)
         }

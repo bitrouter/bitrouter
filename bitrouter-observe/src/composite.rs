@@ -5,8 +5,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bitrouter_core::observe::{
-    AgentCallEvent, AgentObserveCallback, ObserveCallback, RequestFailureEvent,
-    RequestSuccessEvent, ToolCallEvent, ToolObserveCallback,
+    AgentCallFailureEvent, AgentCallSuccessEvent, AgentObserveCallback, ObserveCallback,
+    RequestFailureEvent, RequestSuccessEvent, ToolCallFailureEvent, ToolCallSuccessEvent,
+    ToolObserveCallback,
 };
 
 /// An observer that delegates to multiple inner callbacks for all service types.
@@ -59,23 +60,48 @@ impl ObserveCallback for CompositeObserver {
 }
 
 impl ToolObserveCallback for CompositeObserver {
-    fn on_tool_call(&self, event: ToolCallEvent) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    fn on_tool_call_success(
+        &self,
+        event: ToolCallSuccessEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             for cb in &self.tool_callbacks {
-                cb.on_tool_call(event.clone()).await;
+                cb.on_tool_call_success(event.clone()).await;
+            }
+        })
+    }
+
+    fn on_tool_call_failure(
+        &self,
+        event: ToolCallFailureEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            for cb in &self.tool_callbacks {
+                cb.on_tool_call_failure(event.clone()).await;
             }
         })
     }
 }
 
 impl AgentObserveCallback for CompositeObserver {
-    fn on_agent_call(
+    fn on_agent_call_success(
         &self,
-        event: AgentCallEvent,
+        event: AgentCallSuccessEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             for cb in &self.agent_callbacks {
-                cb.on_agent_call(event.clone()).await;
+                cb.on_agent_call_success(event.clone()).await;
+            }
+        })
+    }
+
+    fn on_agent_call_failure(
+        &self,
+        event: AgentCallFailureEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            for cb in &self.agent_callbacks {
+                cb.on_agent_call_failure(event.clone()).await;
             }
         })
     }

@@ -147,7 +147,7 @@ enum Command {
         rm: Option<String>,
     },
 
-    /// Master-wallet signing operations with Swig
+    /// Wallet status and diagnostics
     Sudo {
         #[command(subcommand)]
         action: SudoAction,
@@ -196,48 +196,8 @@ enum ToolsAction {
 
 #[derive(Debug, Subcommand)]
 enum SudoAction {
-    /// Create a Swig embedded wallet (requires master wallet signature)
-    CreateEmbeddedWallet,
-    /// Derive an agent wallet with spend limits (requires master wallet signature)
-    DeriveAgentWallet {
-        /// Maximum tokens per transaction (lamports)
-        #[arg(long)]
-        per_tx_cap: Option<u64>,
-
-        /// Cumulative spending cap (lamports)
-        #[arg(long)]
-        cumulative_cap: Option<u64>,
-
-        /// Expiration (e.g., "7d", "30d", "never")
-        #[arg(long)]
-        expiration: Option<String>,
-
-        /// Human-readable label for this agent wallet
-        #[arg(long, default_value = "default")]
-        label: Option<String>,
-    },
-    /// Update agent wallet permissions (requires master wallet signature)
-    SetPermissions {
-        /// Agent wallet address (uses persisted address if omitted)
-        #[arg(long)]
-        agent: Option<String>,
-
-        /// Maximum tokens per transaction (lamports)
-        #[arg(long)]
-        per_tx_cap: Option<u64>,
-
-        /// Cumulative spending cap (lamports)
-        #[arg(long)]
-        cumulative_cap: Option<u64>,
-
-        /// Expiration (e.g., "7d", "30d", "never")
-        #[arg(long)]
-        expiration: Option<String>,
-    },
-    /// Display wallet info and persisted policy (no signing required)
+    /// Display wallet info and status
     ShowWallet,
-    /// List all locally-tracked agent wallets
-    ListAgents,
 }
 
 #[tokio::main]
@@ -372,42 +332,8 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Sudo { action }) => {
             let home = &paths.home_dir;
             match action {
-                SudoAction::CreateEmbeddedWallet => {
-                    cli::sudo::run_create_embedded_wallet(home)?;
-                }
-                SudoAction::DeriveAgentWallet {
-                    per_tx_cap,
-                    cumulative_cap,
-                    expiration,
-                    label,
-                } => {
-                    cli::sudo::run_derive_agent_wallet(
-                        home,
-                        per_tx_cap,
-                        cumulative_cap,
-                        expiration,
-                        label,
-                    )?;
-                }
-                SudoAction::SetPermissions {
-                    agent,
-                    per_tx_cap,
-                    cumulative_cap,
-                    expiration,
-                } => {
-                    cli::sudo::run_set_permissions(
-                        home,
-                        agent,
-                        per_tx_cap,
-                        cumulative_cap,
-                        expiration,
-                    )?;
-                }
                 SudoAction::ShowWallet => {
                     cli::sudo::run_show_wallet(home)?;
-                }
-                SudoAction::ListAgents => {
-                    cli::sudo::run_list_agents(home)?;
                 }
             }
             return Ok(());
@@ -522,10 +448,19 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         None => run_default(runtime).await?,
         Some(Command::Serve) => {
-            let model_router = crate::runtime::Router::new(
-                reqwest::Client::new(),
+            let base_client = reqwest::Client::new();
+            let mut model_router = crate::runtime::Router::new(
+                reqwest_middleware::ClientBuilder::new(base_client.clone()).build(),
                 runtime.config.providers.clone(),
             );
+            if let Some(x402_client) = build_x402_client_from_state(&runtime.paths, &runtime.config)
+            {
+                model_router = model_router.with_x402_client(x402_client);
+            }
+            #[cfg(feature = "mpp-tempo")]
+            if let Some(mpp_client) = build_mpp_client_from_state(&runtime.paths, &runtime.config) {
+                model_router = model_router.with_mpp_client(mpp_client);
+            }
             runtime.serve(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
@@ -581,8 +516,18 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
 async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::Error>> {
     let status = runtime.status();
 
-    let model_router =
-        crate::runtime::Router::new(reqwest::Client::new(), runtime.config.providers.clone());
+    let base_client = reqwest::Client::new();
+    let mut model_router = crate::runtime::Router::new(
+        reqwest_middleware::ClientBuilder::new(base_client.clone()).build(),
+        runtime.config.providers.clone(),
+    );
+    if let Some(x402_client) = build_x402_client_from_state(&runtime.paths, &runtime.config) {
+        model_router = model_router.with_x402_client(x402_client);
+    }
+    #[cfg(feature = "mpp-tempo")]
+    if let Some(mpp_client) = build_mpp_client_from_state(&runtime.paths, &runtime.config) {
+        model_router = model_router.with_mpp_client(mpp_client);
+    }
 
     #[cfg(feature = "tui")]
     {
@@ -620,6 +565,134 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     args.into_iter().any(|arg| arg.as_ref() == "--headless")
+}
+
+/// Build an x402 payment client from onboarding state, if a wallet is configured.
+///
+/// Returns `None` when no wallet has been set up (BYOK mode).
+/// Logs a warning and returns `None` on load failure so the server can still
+/// start for non-x402 providers.
+fn build_x402_client_from_state(
+    paths: &crate::runtime::RuntimePaths,
+    config: &bitrouter_config::BitrouterConfig,
+) -> Option<reqwest_middleware::ClientWithMiddleware> {
+    // Check if any provider uses x402 auth.
+    let x402_providers: Vec<&str> = config
+        .providers
+        .iter()
+        .filter(|(_, p)| matches!(&p.auth, Some(bitrouter_config::AuthConfig::X402)))
+        .map(|(name, _)| name.as_str())
+        .collect();
+
+    let state = cli::onboarding::load_state(&paths.home_dir);
+
+    let wallet_path = match state.master_wallet_path.as_ref() {
+        Some(p) => p,
+        None => {
+            if !x402_providers.is_empty() {
+                tracing::warn!(
+                    providers = ?x402_providers,
+                    "x402 providers configured but no wallet set up — run `bitrouter init`",
+                );
+            }
+            return None;
+        }
+    };
+
+    if !wallet_path.exists() {
+        tracing::warn!(
+            path = %wallet_path.display(),
+            "wallet file not found — run `bitrouter init` to reconfigure",
+        );
+        return None;
+    }
+
+    let rpc_url = state
+        .rpc_url
+        .as_deref()
+        .or(config.solana_rpc_url.as_deref())
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "no Solana RPC URL configured, falling back to {}",
+                cli::swig::DEFAULT_RPC_URL,
+            );
+            cli::swig::DEFAULT_RPC_URL
+        });
+
+    match crate::runtime::x402::build_x402_client(
+        wallet_path,
+        rpc_url,
+        reqwest::Client::new(),
+        true,
+    ) {
+        Ok(client) => {
+            tracing::info!(
+                wallet = %wallet_path.display(),
+                rpc = %rpc_url,
+                "x402 payment signer loaded",
+            );
+            Some(client)
+        }
+        Err(e) => {
+            tracing::warn!("failed to load x402 signer: {e} — x402 providers will be unavailable",);
+            None
+        }
+    }
+}
+
+/// Build an MPP payment client from the active keypair, if any MPP providers are configured.
+///
+/// Returns `None` when no wallet has been set up or no providers use MPP auth.
+/// Logs a warning and returns `None` on failure so the server can still start.
+#[cfg(feature = "mpp-tempo")]
+fn build_mpp_client_from_state(
+    paths: &crate::runtime::RuntimePaths,
+    config: &bitrouter_config::BitrouterConfig,
+) -> Option<reqwest_middleware::ClientWithMiddleware> {
+    let mpp_providers: Vec<&str> = config
+        .providers
+        .iter()
+        .filter(|(_, p)| matches!(&p.auth, Some(bitrouter_config::AuthConfig::Mpp)))
+        .map(|(name, _)| name.as_str())
+        .collect();
+
+    if mpp_providers.is_empty() {
+        return None;
+    }
+
+    let keys_dir = paths.home_dir.join(".keys");
+    let (_prefix, keypair) = match cli::account::load_active_keypair(&keys_dir) {
+        Ok(kp) => kp,
+        Err(e) => {
+            tracing::warn!(
+                providers = ?mpp_providers,
+                "MPP providers configured but no keypair available: {e}",
+            );
+            return None;
+        }
+    };
+
+    let rpc_url = config
+        .mpp
+        .as_ref()
+        .and_then(|m| m.networks.tempo.as_ref())
+        .and_then(|t| t.rpc_url.as_deref())
+        .unwrap_or(crate::runtime::mpp_client::DEFAULT_TEMPO_RPC_URL);
+
+    match crate::runtime::mpp_client::build_mpp_client(&keypair, rpc_url, reqwest::Client::new()) {
+        Ok(client) => {
+            tracing::info!(
+                rpc = %rpc_url,
+                providers = ?mpp_providers,
+                "MPP payment signer loaded",
+            );
+            Some(client)
+        }
+        Err(e) => {
+            tracing::warn!("failed to load MPP signer: {e} — MPP providers will be unavailable",);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -699,7 +772,7 @@ fn run_unified_init(
     match state.status {
         OnboardingStatus::CompletedCloud | OnboardingStatus::CompletedByok => {
             let label = match state.status {
-                OnboardingStatus::CompletedCloud => "Cloud (Swig wallet)",
+                OnboardingStatus::CompletedCloud => "Cloud (x402 wallet)",
                 _ => "BYOK (bring your own keys)",
             };
             println!();
@@ -790,8 +863,8 @@ fn run_unified_init(
 
 /// Write a cloud provider config entry to `bitrouter.yaml` after onboarding.
 ///
-/// This generates a provider block for BitRouter Cloud Node directly in the
-/// config file (not yet registered in the builtin provider registry).
+/// Since `bitrouter-cloud` is a builtin provider (api_base and api_protocol
+/// come from the registry), the user config only needs to supply auth.
 fn write_cloud_provider_config(
     paths: &crate::runtime::RuntimePaths,
     rpc_url: &str,
@@ -815,14 +888,12 @@ fn write_cloud_provider_config(
 
     let cloud_block = format!(
         "\n\
-        # Solana RPC endpoint for Swig wallet operations\n\
+        # Solana RPC endpoint for x402 wallet operations\n\
         solana_rpc_url: \"{rpc_url}\"\n\n\
         # BitRouter Cloud Node (added by onboarding)\n\
         # Uses x402 for request payments — only a wallet is needed.\n\
         providers:\n\
         \x20 bitrouter-cloud:\n\
-        \x20   api_base: \"https://cloud.bitrouter.ai/v1\"\n\
-        \x20   api_protocol: openai\n\
         \x20   auth:\n\
         \x20     type: x402\n\n\
         models:\n\

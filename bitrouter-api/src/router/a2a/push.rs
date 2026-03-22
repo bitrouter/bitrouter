@@ -4,7 +4,7 @@ use bitrouter_a2a::client::upstream::UpstreamA2aAgent;
 use tokio::time::Instant;
 
 use super::convert::{WithId, deserialize_params, gateway_error_response, success_response};
-use super::observe::{A2aObserveContext, emit_agent_event};
+use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
 use super::types::*;
 
 /// Handle `tasks/pushNotificationConfig/set` JSON-RPC method.
@@ -20,13 +20,16 @@ pub(crate) async fn dispatch_set_push(
     };
     let start = Instant::now();
     let result = agent.set_push_config(config).await;
-    emit_agent_event(
-        ctx,
-        agent_name,
-        "tasks/pushNotificationConfig/set",
-        start,
-        &result,
-    );
+    match &result {
+        Ok(_) => emit_agent_success(ctx, agent_name, "tasks/pushNotificationConfig/set", start),
+        Err(e) => emit_agent_failure(
+            ctx,
+            agent_name,
+            "tasks/pushNotificationConfig/set",
+            start,
+            &e.to_string(),
+        ),
+    }
     match result {
         Ok(stored) => success_response(&request.id, &stored),
         Err(e) => gateway_error_response(&request.id, &e),
@@ -48,13 +51,16 @@ pub(crate) async fn dispatch_get_push(
     let result = agent
         .get_push_config(&req.id, req.push_notification_config_id.as_deref())
         .await;
-    emit_agent_event(
-        ctx,
-        agent_name,
-        "tasks/pushNotificationConfig/get",
-        start,
-        &result,
-    );
+    match &result {
+        Ok(_) => emit_agent_success(ctx, agent_name, "tasks/pushNotificationConfig/get", start),
+        Err(e) => emit_agent_failure(
+            ctx,
+            agent_name,
+            "tasks/pushNotificationConfig/get",
+            start,
+            &e.to_string(),
+        ),
+    }
     match result {
         Ok(config) => success_response(&request.id, &config),
         Err(e) => gateway_error_response(&request.id, &e),
@@ -74,13 +80,16 @@ pub(crate) async fn dispatch_list_push(
     };
     let start = Instant::now();
     let result = agent.list_push_configs(&req.id).await;
-    emit_agent_event(
-        ctx,
-        agent_name,
-        "tasks/pushNotificationConfig/list",
-        start,
-        &result,
-    );
+    match &result {
+        Ok(_) => emit_agent_success(ctx, agent_name, "tasks/pushNotificationConfig/list", start),
+        Err(e) => emit_agent_failure(
+            ctx,
+            agent_name,
+            "tasks/pushNotificationConfig/list",
+            start,
+            &e.to_string(),
+        ),
+    }
     match result {
         Ok(resp) => success_response(&request.id, &resp),
         Err(e) => gateway_error_response(&request.id, &e),
@@ -102,13 +111,21 @@ pub(crate) async fn dispatch_delete_push(
     let result = agent
         .delete_push_config(&req.id, &req.push_notification_config_id)
         .await;
-    emit_agent_event(
-        ctx,
-        agent_name,
-        "tasks/pushNotificationConfig/delete",
-        start,
-        &result,
-    );
+    match &result {
+        Ok(_) => emit_agent_success(
+            ctx,
+            agent_name,
+            "tasks/pushNotificationConfig/delete",
+            start,
+        ),
+        Err(e) => emit_agent_failure(
+            ctx,
+            agent_name,
+            "tasks/pushNotificationConfig/delete",
+            start,
+            &e.to_string(),
+        ),
+    }
     match result {
         Ok(()) => success_response(&request.id, &serde_json::json!({"success": true})),
         Err(e) => gateway_error_response(&request.id, &e),
