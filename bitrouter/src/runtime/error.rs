@@ -14,4 +14,7 @@ pub enum RuntimeError {
     Io(#[from] io::Error),
     #[error("x402 error: {0}")]
     X402(String),
+    #[cfg(feature = "mpp-tempo")]
+    #[error("mpp error: {0}")]
+    Mpp(String),
 }

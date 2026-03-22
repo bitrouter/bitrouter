@@ -14,7 +14,12 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
 sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
 postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
 mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
-mpp-tempo = ["bitrouter-api/mpp-tempo", "bitrouter-config/mpp-tempo"]
+mpp-tempo = [
+    "bitrouter-api/mpp-tempo",
+    "bitrouter-config/mpp-tempo",
+    "dep:mpp",
+    "dep:anyhow",
+]
 
 [dependencies]
 # Internal crates
@@ -79,6 +84,13 @@ http = { version = "1.4" }
 solana-client = { version = "3.1" }
 solana-keypair = { version = "3.1" }
 x402-signer = { version = "2.5" }
+
+# MPP payment middleware (optional)
+mpp = { git = "https://github.com/tempoxyz/mpp-rs", default-features = false, features = [
+    "client",
+    "tempo",
+    "reqwest-rustls-tls",
+], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

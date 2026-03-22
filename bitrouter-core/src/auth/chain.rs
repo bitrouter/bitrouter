@@ -46,6 +46,20 @@ impl Chain {
         }
     }
 
+    /// Tempo mainnet (EVM chain ID 4217).
+    pub fn tempo() -> Self {
+        Self::Evm {
+            reference: "4217".to_string(),
+        }
+    }
+
+    /// Tempo testnet (EVM chain ID 42431).
+    pub fn tempo_testnet() -> Self {
+        Self::Evm {
+            reference: "42431".to_string(),
+        }
+    }
+
     /// Format as a CAIP-2 chain identifier string.
     ///
     /// Examples: `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"`, `"eip155:8453"`.

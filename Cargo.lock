@@ -1642,6 +1642,7 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "libc",
+ "mpp",
  "rand 0.9.2",
  "ratatui",
  "reqwest 0.13.2",

@@ -401,6 +401,8 @@ pub enum AuthConfig {
     },
     /// x402 payment protocol — requests are paid via a Solana wallet.
     X402,
+    /// MPP (Machine Payment Protocol) — requests are paid via an EVM wallet.
+    Mpp,
     /// Extension point for non-standard auth methods.
     Custom {
         method: String,

@@ -402,6 +402,10 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             {
                 model_router = model_router.with_x402_client(x402_client);
             }
+            #[cfg(feature = "mpp-tempo")]
+            if let Some(mpp_client) = build_mpp_client_from_state(&runtime.paths, &runtime.config) {
+                model_router = model_router.with_mpp_client(mpp_client);
+            }
             runtime.serve(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
@@ -469,6 +473,10 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
     );
     if let Some(x402_client) = build_x402_client_from_state(&runtime.paths, &runtime.config) {
         model_router = model_router.with_x402_client(x402_client);
+    }
+    #[cfg(feature = "mpp-tempo")]
+    if let Some(mpp_client) = build_mpp_client_from_state(&runtime.paths, &runtime.config) {
+        model_router = model_router.with_mpp_client(mpp_client);
     }
 
     #[cfg(feature = "tui")]
@@ -577,6 +585,61 @@ fn build_x402_client_from_state(
         }
         Err(e) => {
             tracing::warn!("failed to load x402 signer: {e} — x402 providers will be unavailable",);
+            None
+        }
+    }
+}
+
+/// Build an MPP payment client from the active keypair, if any MPP providers are configured.
+///
+/// Returns `None` when no wallet has been set up or no providers use MPP auth.
+/// Logs a warning and returns `None` on failure so the server can still start.
+#[cfg(feature = "mpp-tempo")]
+fn build_mpp_client_from_state(
+    paths: &crate::runtime::RuntimePaths,
+    config: &bitrouter_config::BitrouterConfig,
+) -> Option<reqwest_middleware::ClientWithMiddleware> {
+    let mpp_providers: Vec<&str> = config
+        .providers
+        .iter()
+        .filter(|(_, p)| matches!(&p.auth, Some(bitrouter_config::AuthConfig::Mpp)))
+        .map(|(name, _)| name.as_str())
+        .collect();
+
+    if mpp_providers.is_empty() {
+        return None;
+    }
+
+    let keys_dir = paths.home_dir.join(".keys");
+    let (_prefix, keypair) = match cli::account::load_active_keypair(&keys_dir) {
+        Ok(kp) => kp,
+        Err(e) => {
+            tracing::warn!(
+                providers = ?mpp_providers,
+                "MPP providers configured but no keypair available: {e}",
+            );
+            return None;
+        }
+    };
+
+    let rpc_url = config
+        .mpp
+        .as_ref()
+        .and_then(|m| m.networks.tempo.as_ref())
+        .and_then(|t| t.rpc_url.as_deref())
+        .unwrap_or(crate::runtime::mpp_client::DEFAULT_TEMPO_RPC_URL);
+
+    match crate::runtime::mpp_client::build_mpp_client(&keypair, rpc_url, reqwest::Client::new()) {
+        Ok(client) => {
+            tracing::info!(
+                rpc = %rpc_url,
+                providers = ?mpp_providers,
+                "MPP payment signer loaded",
+            );
+            Some(client)
+        }
+        Err(e) => {
+            tracing::warn!("failed to load MPP signer: {e} — MPP providers will be unavailable",);
             None
         }
     }

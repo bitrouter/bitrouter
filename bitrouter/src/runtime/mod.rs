@@ -3,6 +3,8 @@ pub mod auth;
 pub mod daemon;
 pub mod error;
 pub mod migration;
+#[cfg(feature = "mpp-tempo")]
+pub mod mpp_client;
 pub mod paths;
 pub mod router;
 pub mod server;

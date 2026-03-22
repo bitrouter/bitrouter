@@ -14,6 +14,8 @@ use reqwest_middleware::ClientWithMiddleware;
 pub struct Router {
     client: ClientWithMiddleware,
     x402_client: Option<ClientWithMiddleware>,
+    #[cfg(feature = "mpp-tempo")]
+    mpp_client: Option<ClientWithMiddleware>,
     providers: HashMap<String, ProviderConfig>,
 }
 
@@ -22,12 +24,20 @@ impl Router {
         Self {
             client,
             x402_client: None,
+            #[cfg(feature = "mpp-tempo")]
+            mpp_client: None,
             providers,
         }
     }
 
     pub fn with_x402_client(mut self, x402_client: ClientWithMiddleware) -> Self {
         self.x402_client = Some(x402_client);
+        self
+    }
+
+    #[cfg(feature = "mpp-tempo")]
+    pub fn with_mpp_client(mut self, mpp_client: ClientWithMiddleware) -> Self {
+        self.mpp_client = Some(mpp_client);
         self
     }
 
@@ -45,12 +55,27 @@ impl Router {
                 )
             })
         } else {
+            #[cfg(feature = "mpp-tempo")]
+            if Self::is_mpp_provider(provider) {
+                return self.mpp_client.clone().ok_or_else(|| {
+                    BitrouterError::invalid_request(
+                        None,
+                        "provider requires MPP payment but no wallet is configured — run `bitrouter init`".to_owned(),
+                        None,
+                    )
+                });
+            }
             Ok(self.client.clone())
         }
     }
 
     fn is_x402_provider(provider: &ProviderConfig) -> bool {
         matches!(&provider.auth, Some(AuthConfig::X402))
+    }
+
+    #[cfg(feature = "mpp-tempo")]
+    fn is_mpp_provider(provider: &ProviderConfig) -> bool {
+        matches!(&provider.auth, Some(AuthConfig::Mpp))
     }
 
     fn build_openai_config(&self, provider: &ProviderConfig) -> Result<OpenAiConfig> {
