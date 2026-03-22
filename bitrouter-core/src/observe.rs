@@ -31,6 +31,8 @@ pub struct CallerContext {
     pub budget_scope: Option<BudgetScope>,
     /// The range over which the budget is measured.
     pub budget_range: Option<BudgetRange>,
+    /// CAIP-2 chain identifier from JWT claims (e.g. `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"`).
+    pub chain: Option<String>,
 }
 
 /// Context about the request available to observation callbacks.

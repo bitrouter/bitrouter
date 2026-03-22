@@ -1,41 +1,76 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(feature = "mpp-tempo")]
 use bitrouter_config::TempoMppConfig;
+#[cfg(feature = "mpp-tempo")]
 use mpp::server::{
-    Mpp, SessionChallengeOptions, SessionMethodConfig, TempoChargeMethod, TempoConfig,
-    TempoProvider, TempoSessionMethod,
+    Mpp, SessionMethodConfig, TempoChargeMethod, TempoConfig, TempoProvider, TempoSessionMethod,
 };
 
+use mpp::server::SessionChallengeOptions;
+
+#[cfg(feature = "mpp-tempo")]
+use mpp::protocol::methods::tempo::session_method::ChannelStore as TempoChannelStore;
+
+#[cfg(feature = "mpp-tempo")]
 type TempoMpp = Mpp<TempoChargeMethod<TempoProvider>, TempoSessionMethod<TempoProvider>>;
 
 /// Server-side MPP (Machine Payment Protocol) state.
 ///
-/// Holds a configured `Mpp` instance with session support for the Tempo chain.
-/// Constructed from [`TempoMppConfig`] during server startup.
+/// Holds one or more configured payment backends, keyed by CAIP-2 chain
+/// identifier (e.g. `"eip155:4217"` for Tempo, `"solana"` for Solana).
+/// A request's JWT `chain` claim selects which backend handles payment.
 pub struct MppState {
-    mpp: TempoMpp,
+    backends: HashMap<String, MppBackend>,
+    realm: String,
+}
+
+enum MppBackend {
+    #[cfg(feature = "mpp-tempo")]
+    Tempo {
+        mpp: TempoMpp,
+        store: Arc<dyn TempoChannelStore>,
+    },
+    #[cfg(feature = "mpp-solana")]
+    Solana(SolanaState),
+}
+
+#[cfg(feature = "mpp-solana")]
+struct SolanaState {
+    realm: String,
+    secret_key: String,
+    currency: String,
+    recipient: String,
+    session_method: super::solana_session_method::SolanaSessionMethod,
 }
 
 impl MppState {
-    /// Create an `MppState` from Tempo configuration.
+    /// Create an empty `MppState` with the given realm.
+    pub fn new(realm: &str) -> Self {
+        Self {
+            backends: HashMap::new(),
+            realm: realm.to_string(),
+        }
+    }
+
+    /// Add a Tempo backend for the given chain IDs.
     ///
-    /// Initializes both charge and session methods backed by the Tempo chain.
-    pub fn from_tempo_config(
+    /// Typically called with `"eip155:4217"` (mainnet) or `"eip155:42431"` (testnet).
+    #[cfg(feature = "mpp-tempo")]
+    pub fn add_tempo(
+        &mut self,
         tempo: &TempoMppConfig,
-        realm: Option<&str>,
         secret_key: Option<&str>,
-    ) -> Result<Self, mpp::MppError> {
+    ) -> Result<(), mpp::MppError> {
         let rpc_url = tempo.rpc_url.as_deref().unwrap_or("https://rpc.tempo.xyz");
 
-        // Build the Mpp instance via the simple API (binds currency + recipient).
         let mut builder = mpp::server::tempo(TempoConfig {
             recipient: &tempo.recipient,
         })
-        .rpc_url(rpc_url);
+        .rpc_url(rpc_url)
+        .realm(&self.realm);
 
-        if let Some(r) = realm {
-            builder = builder.realm(r);
-        }
         if let Some(s) = secret_key {
             builder = builder.secret_key(s);
         }
@@ -46,11 +81,10 @@ impl MppState {
             builder = builder.fee_payer(true);
         }
 
-        let mpp = Mpp::create(builder)?;
+        let mpp_instance = Mpp::create(builder)?;
 
-        // Create a separate provider for the session method.
         let session_provider = mpp::server::tempo_provider(rpc_url)?;
-        let store = Arc::new(mpp::server::SessionChannelStore::new());
+        let store: Arc<dyn TempoChannelStore> = Arc::new(mpp::server::SessionChannelStore::new());
 
         let escrow = tempo
             .escrow_contract
@@ -69,40 +103,388 @@ impl MppState {
             min_voucher_delta: 0,
         };
 
-        let session_method = TempoSessionMethod::new(session_provider, store, session_config);
-        let mpp = mpp.with_session_method(session_method);
+        let session_method =
+            TempoSessionMethod::new(session_provider, store.clone(), session_config);
+        let mpp_instance = mpp_instance.with_session_method(session_method);
 
-        Ok(Self { mpp })
+        let caip2 = format!("eip155:{chain_id}");
+        self.backends.insert(
+            caip2,
+            MppBackend::Tempo {
+                mpp: mpp_instance,
+                store,
+            },
+        );
+        Ok(())
     }
 
-    /// Issue a session challenge with per-unit pricing details.
+    /// Add a Solana backend keyed by `"solana"`.
+    #[cfg(feature = "mpp-solana")]
+    pub fn add_solana(
+        &mut self,
+        solana: &bitrouter_config::SolanaMppConfig,
+        secret_key: Option<&str>,
+    ) -> Result<(), mpp::MppError> {
+        use super::solana_channel_store::InMemorySolanaChannelStore;
+        use super::solana_session_method::{SolanaSessionMethod, SolanaSessionMethodConfig};
+
+        let secret_key = secret_key
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("MPP_SECRET_KEY").ok())
+            .and_then(|v| if v.trim().is_empty() { None } else { Some(v) })
+            .ok_or_else(|| {
+                mpp::MppError::InvalidConfig(
+                    "Missing secret key. Set MPP_SECRET_KEY or pass secret_key.".into(),
+                )
+            })?;
+
+        let store = Arc::new(InMemorySolanaChannelStore::new());
+        let config = SolanaSessionMethodConfig {
+            channel_program: solana.channel_program.clone(),
+            network: solana.network.clone(),
+        };
+        let session_method = SolanaSessionMethod::new(store, config);
+
+        let currency = "SOL".to_string();
+
+        self.backends.insert(
+            "solana".to_string(),
+            MppBackend::Solana(SolanaState {
+                realm: self.realm.clone(),
+                secret_key,
+                currency,
+                recipient: solana.recipient.clone(),
+                session_method,
+            }),
+        );
+        Ok(())
+    }
+
+    /// Look up the backend that handles the given CAIP-2 chain identifier.
+    ///
+    /// Supports exact match (`"eip155:4217"`) and namespace-prefix match
+    /// (`"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"` matches key `"solana"`).
+    fn backend_for_chain(&self, chain: &str) -> Option<(&String, &MppBackend)> {
+        // Exact match first.
+        if let Some((key, backend)) = self.backends.get_key_value(chain) {
+            return Some((key, backend));
+        }
+        // Namespace-prefix match (e.g. "solana:xxx" matches key "solana").
+        let namespace = chain.split_once(':').map(|(ns, _)| ns).unwrap_or(chain);
+        for (key, backend) in &self.backends {
+            if key == namespace {
+                return Some((key, backend));
+            }
+        }
+        None
+    }
+
+    /// Returns `true` if at least one backend is configured.
+    pub fn is_configured(&self) -> bool {
+        !self.backends.is_empty()
+    }
+
+    /// Issue a session challenge for a specific backend selected by chain.
+    ///
+    /// If `chain` is `None`, returns challenges from all backends.
     pub fn session_challenge(
         &self,
+        chain: Option<&str>,
         amount: &str,
         options: SessionChallengeOptions<'_>,
     ) -> Result<mpp::PaymentChallenge, mpp::MppError> {
-        let currency = self
-            .mpp
-            .currency()
-            .ok_or_else(|| mpp::MppError::InvalidConfig("currency not configured".into()))?;
-        let recipient = self
-            .mpp
-            .recipient()
-            .ok_or_else(|| mpp::MppError::InvalidConfig("recipient not configured".into()))?;
-        self.mpp
-            .session_challenge_with_details(amount, currency, recipient, options)
+        let (_key, backend) = match chain {
+            Some(c) => self.backend_for_chain(c).ok_or_else(|| {
+                mpp::MppError::InvalidConfig(format!("no backend for chain: {c}"))
+            })?,
+            None => {
+                // No chain specified — use first available backend.
+                self.backends.iter().next().ok_or_else(|| {
+                    mpp::MppError::InvalidConfig("no MPP backends configured".into())
+                })?
+            }
+        };
+        backend_session_challenge(backend, amount, options)
     }
 
-    /// Verify an incoming session credential.
+    /// Issue session challenges from **all** configured backends.
+    ///
+    /// Used when the caller's chain is unknown and we want to present
+    /// all available payment options in the 402 response.
+    pub fn all_session_challenges(
+        &self,
+        amount: &str,
+        options: SessionChallengeOptions<'_>,
+    ) -> Vec<mpp::PaymentChallenge> {
+        self.backends
+            .values()
+            .filter_map(|backend| {
+                backend_session_challenge(
+                    backend,
+                    amount,
+                    SessionChallengeOptions {
+                        unit_type: options.unit_type,
+                        suggested_deposit: options.suggested_deposit,
+                        fee_payer: options.fee_payer,
+                        expires: options.expires,
+                        description: options.description,
+                    },
+                )
+                .ok()
+            })
+            .collect()
+    }
+
+    /// Verify an incoming session credential against the matching backend.
+    ///
+    /// The `method` field of the credential's challenge selects the backend.
+    /// Returns the verification result along with the backend key for deduction routing.
     pub async fn verify_session(
         &self,
         credential: &mpp::PaymentCredential,
-    ) -> Result<mpp::server::SessionVerifyResult, mpp::server::VerificationError> {
-        self.mpp.verify_session(credential).await
+    ) -> Result<(String, mpp::server::SessionVerifyResult), mpp::server::VerificationError> {
+        let method = credential.challenge.method.as_str();
+        let (key, backend) = self.backend_for_chain(method).ok_or_else(|| {
+            mpp::server::VerificationError::new(format!("no backend for payment method: {method}"))
+        })?;
+        let key = key.clone();
+        let result = backend_verify_session(backend, credential).await?;
+        Ok((key, result))
+    }
+
+    /// Deduct `amount` micro-units from the channel in the specified backend.
+    ///
+    /// Routes to the correct backend's channel store based on `backend_key`.
+    pub async fn deduct(
+        &self,
+        backend_key: &str,
+        channel_id: &str,
+        amount: u128,
+    ) -> Result<(), mpp::server::VerificationError> {
+        let (_key, backend) = self.backend_for_chain(backend_key).ok_or_else(|| {
+            mpp::server::VerificationError::new(format!("no backend for key: {backend_key}"))
+        })?;
+        match backend {
+            #[cfg(feature = "mpp-tempo")]
+            MppBackend::Tempo { store, .. } => {
+                mpp::protocol::methods::tempo::session_method::deduct_from_channel(
+                    &**store, channel_id, amount,
+                )
+                .await?;
+            }
+            #[cfg(feature = "mpp-solana")]
+            MppBackend::Solana(state) => {
+                super::solana_channel_store::deduct_from_channel(
+                    state.session_method.store(),
+                    channel_id,
+                    amount,
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Wait for the next channel update on the given backend.
+    ///
+    /// Used by metered SSE to pause until a new voucher arrives.
+    pub async fn wait_for_update(&self, backend_key: &str, channel_id: &str) {
+        let Some((_key, backend)) = self.backend_for_chain(backend_key) else {
+            return;
+        };
+        match backend {
+            #[cfg(feature = "mpp-tempo")]
+            MppBackend::Tempo { store, .. } => {
+                store.wait_for_update(channel_id).await;
+            }
+            #[cfg(feature = "mpp-solana")]
+            MppBackend::Solana(state) => {
+                state
+                    .session_method
+                    .store()
+                    .wait_for_update(channel_id)
+                    .await;
+            }
+        }
+    }
+
+    /// Retrieve channel balance info for the NeedVoucher event.
+    ///
+    /// Returns `(settled, authorized, deposit)` in micro-units, or `None`
+    /// if the channel is not found.
+    pub async fn channel_balance(
+        &self,
+        backend_key: &str,
+        channel_id: &str,
+    ) -> Option<(u128, u128, u128)> {
+        let (_key, backend) = self.backend_for_chain(backend_key)?;
+        match backend {
+            #[cfg(feature = "mpp-tempo")]
+            MppBackend::Tempo { store, .. } => {
+                let ch = store.get_channel(channel_id).await.ok()??;
+                Some((ch.spent, ch.highest_voucher_amount, ch.deposit))
+            }
+            #[cfg(feature = "mpp-solana")]
+            MppBackend::Solana(state) => {
+                let ch = state
+                    .session_method
+                    .store()
+                    .get_channel(channel_id)
+                    .await
+                    .ok()??;
+                let settled: u128 = ch.settled_amount.parse().ok()?;
+                let authorized: u128 = ch.last_authorized_amount.parse().ok()?;
+                let deposit: u128 = ch.escrowed_amount.parse().ok()?;
+                Some((settled, authorized, deposit))
+            }
+        }
     }
 
     /// The server's realm.
     pub fn realm(&self) -> &str {
-        self.mpp.realm()
+        &self.realm
     }
+}
+
+fn backend_session_challenge(
+    backend: &MppBackend,
+    amount: &str,
+    options: SessionChallengeOptions<'_>,
+) -> Result<mpp::PaymentChallenge, mpp::MppError> {
+    match backend {
+        #[cfg(feature = "mpp-tempo")]
+        MppBackend::Tempo { mpp, .. } => {
+            let currency = mpp
+                .currency()
+                .ok_or_else(|| mpp::MppError::InvalidConfig("currency not configured".into()))?;
+            let recipient = mpp
+                .recipient()
+                .ok_or_else(|| mpp::MppError::InvalidConfig("recipient not configured".into()))?;
+            mpp.session_challenge_with_details(amount, currency, recipient, options)
+        }
+        #[cfg(feature = "mpp-solana")]
+        MppBackend::Solana(state) => solana_session_challenge(state, amount, options),
+    }
+}
+
+async fn backend_verify_session(
+    backend: &MppBackend,
+    credential: &mpp::PaymentCredential,
+) -> Result<mpp::server::SessionVerifyResult, mpp::server::VerificationError> {
+    match backend {
+        #[cfg(feature = "mpp-tempo")]
+        MppBackend::Tempo { mpp, .. } => mpp.verify_session(credential).await,
+        #[cfg(feature = "mpp-solana")]
+        MppBackend::Solana(state) => solana_verify_session(state, credential).await,
+    }
+}
+
+// ── Solana helpers ───────────────────────────────────────────────────
+
+#[cfg(feature = "mpp-solana")]
+fn solana_session_challenge(
+    state: &SolanaState,
+    amount: &str,
+    options: SessionChallengeOptions<'_>,
+) -> Result<mpp::PaymentChallenge, mpp::MppError> {
+    use mpp::protocol::traits::SessionMethod as _;
+
+    let method_details = state.session_method.challenge_method_details();
+
+    let request = mpp::SessionRequest {
+        amount: amount.to_string(),
+        unit_type: options.unit_type.map(|s| s.to_string()),
+        currency: state.currency.clone(),
+        recipient: Some(state.recipient.clone()),
+        suggested_deposit: options.suggested_deposit.map(|s| s.to_string()),
+        method_details,
+        ..Default::default()
+    };
+
+    let encoded = mpp::Base64UrlJson::from_typed(&request)?;
+
+    let id = mpp::compute_challenge_id(
+        &state.secret_key,
+        &state.realm,
+        "solana",
+        "session",
+        encoded.raw(),
+        options.expires,
+        None,
+        None,
+    );
+
+    Ok(mpp::PaymentChallenge {
+        id,
+        realm: state.realm.clone(),
+        method: "solana".into(),
+        intent: "session".into(),
+        request: encoded,
+        expires: options.expires.map(|s| s.to_string()),
+        description: options.description.map(|s| s.to_string()),
+        digest: None,
+        opaque: None,
+    })
+}
+
+#[cfg(feature = "mpp-solana")]
+async fn solana_verify_session(
+    state: &SolanaState,
+    credential: &mpp::PaymentCredential,
+) -> Result<mpp::server::SessionVerifyResult, mpp::server::VerificationError> {
+    use mpp::protocol::traits::SessionMethod as _;
+    use mpp::server::VerificationError;
+
+    // HMAC check.
+    let expected_id = mpp::compute_challenge_id(
+        &state.secret_key,
+        &state.realm,
+        credential.challenge.method.as_str(),
+        credential.challenge.intent.as_str(),
+        credential.challenge.request.raw(),
+        credential.challenge.expires.as_deref(),
+        credential.challenge.digest.as_deref(),
+        credential.challenge.opaque.as_ref().map(|o| o.raw()),
+    );
+    if credential.challenge.id != expected_id {
+        return Err(VerificationError::with_code(
+            "Challenge ID mismatch - not issued by this server",
+            mpp::server::ErrorCode::CredentialMismatch,
+        ));
+    }
+
+    // Expiry check.
+    if let Some(ref expires) = credential.challenge.expires {
+        if let Ok(expires_at) =
+            time::OffsetDateTime::parse(expires, &time::format_description::well_known::Rfc3339)
+        {
+            if expires_at <= time::OffsetDateTime::now_utc() {
+                return Err(VerificationError::expired(format!(
+                    "Challenge expired at {expires}"
+                )));
+            }
+        } else {
+            return Err(VerificationError::new(
+                "Invalid expires timestamp in challenge",
+            ));
+        }
+    }
+
+    // Decode session request.
+    let request: mpp::SessionRequest =
+        credential.challenge.request.decode().map_err(|e| {
+            VerificationError::new(format!("Failed to decode session request: {e}"))
+        })?;
+
+    let receipt = state
+        .session_method
+        .verify_session(credential, &request)
+        .await?;
+
+    let management_response = state.session_method.respond(credential, &receipt);
+
+    Ok(mpp::server::SessionVerifyResult {
+        receipt,
+        management_response,
+    })
 }

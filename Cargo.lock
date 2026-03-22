@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1678,6 +1678,7 @@ dependencies = [
  "bitrouter-observe",
  "bitrouter-openai",
  "bitrouter-swig-sdk",
+ "bs58",
  "clap",
  "crossterm",
  "dialoguer",
@@ -1713,7 +1714,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-a2a"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bitrouter-core",
  "futures-core",
@@ -1729,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-accounts"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bitrouter-core",
  "chrono",
@@ -1743,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-anthropic"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "bitrouter-core",
@@ -1761,7 +1762,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-api"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bitrouter-a2a",
  "bitrouter-anthropic",
@@ -1770,12 +1771,15 @@ dependencies = [
  "bitrouter-google",
  "bitrouter-mcp",
  "bitrouter-openai",
+ "bs58",
+ "ed25519-dalek",
  "futures-core",
  "mpp",
  "regex",
  "serde",
  "serde_json",
  "tempfile",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -1784,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-blob"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bitrouter-core",
  "tempfile",
@@ -1793,7 +1797,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-config"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bitrouter-core",
  "bitrouter-guardrails",
@@ -1806,7 +1810,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1833,7 +1837,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-google"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "bitrouter-core",
@@ -1851,7 +1855,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-guardrails"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bitrouter-core",
  "futures-core",
@@ -1864,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-mcp"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bitrouter-core",
  "reqwest 0.13.2",
@@ -1878,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-observe"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bitrouter-core",
  "chrono",
@@ -1893,7 +1897,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-openai"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "bitrouter-core",
@@ -1911,9 +1915,9 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-swig-sdk"
-version = "0.1.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a6331f4ab19da9b16c46d4e7064f41b0920399b669e03184b918c710db44b2d"
+checksum = "133e386e186aabbd22fa938464c0772d8fd3a5569db5dc86a5dd7659f1bc1f0d"
 dependencies = [
  "bs58",
  "hex",
@@ -1923,7 +1927,6 @@ dependencies = [
  "solana-keypair",
  "solana-pubkey 4.1.0",
  "solana-sdk-ids",
- "solana-secp256r1-program",
  "solana-transaction",
  "spl-associated-token-account",
  "spl-token",
@@ -2542,9 +2545,9 @@ dependencies = [
 
 [[package]]
 name = "crypto-common"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
+checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
  "rand_core 0.6.4",
@@ -3331,21 +3334,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
-name = "foreign-types"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
-dependencies = [
- "foreign-types-shared",
-]
-
-[[package]]
-name = "foreign-types-shared"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
-
-[[package]]
 name = "form_urlencoded"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3479,9 +3467,9 @@ checksum = "42012b0f064e01aa58b545fe3727f90f7dd4020f4a3ea735b50344965f5a57e9"
 
 [[package]]
 name = "generic-array"
-version = "0.14.9"
+version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bb6743198531e02858aeaea5398fcc883e71851fcbcb5a2f773e2fb6cb1edf2"
+checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
@@ -4951,48 +4939,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "openssl"
-version = "0.10.76"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "951c002c75e16ea2c65b8c7e4d3d51d5530d8dfa7d060b4776828c88cfb18ecf"
-dependencies = [
- "bitflags 2.11.0",
- "cfg-if",
- "foreign-types",
- "libc",
- "once_cell",
- "openssl-macros",
- "openssl-sys",
-]
-
-[[package]]
-name = "openssl-macros"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
-
-[[package]]
-name = "openssl-sys"
-version = "0.9.112"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d55af3b3e226502be1526dfdba67ab0e9c96fc293004e79576b2b9edb0dbdb"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
- "vcpkg",
-]
 
 [[package]]
 name = "option-ext"
@@ -8520,18 +8470,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "solana-secp256r1-program"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "445d8e12592631d76fc4dc57858bae66c9fd7cc838c306c62a472547fc9d0ce6"
-dependencies = [
- "bytemuck",
- "openssl",
- "solana-instruction",
- "solana-sdk-ids",
 ]
 
 [[package]]

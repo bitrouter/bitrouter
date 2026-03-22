@@ -27,6 +27,26 @@ use bitrouter_api::router::mcp as mcp_admin;
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
 use crate::runtime::error::Result;
 
+/// Conditional bound: when MPP features are enabled, the routing table must
+/// also implement `PricingLookup` so that handlers can compute per-request costs.
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+pub(crate) trait ServerTableBound:
+    AdminRoutingTable + ModelRegistry + bitrouter_api::mpp::PricingLookup
+{
+}
+
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+impl<T: AdminRoutingTable + ModelRegistry + bitrouter_api::mpp::PricingLookup> ServerTableBound
+    for T
+{
+}
+
+#[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+pub(crate) trait ServerTableBound: AdminRoutingTable + ModelRegistry {}
+
+#[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+impl<T: AdminRoutingTable + ModelRegistry> ServerTableBound for T {}
+
 pub struct ServerPlan<T, R> {
     config: BitrouterConfig,
     table: Arc<T>,
@@ -36,7 +56,7 @@ pub struct ServerPlan<T, R> {
 
 impl<T, R> ServerPlan<T, R>
 where
-    T: AdminRoutingTable + ModelRegistry + Send + Sync + 'static,
+    T: ServerTableBound + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     pub fn new(config: BitrouterConfig, table: Arc<T>, router: Arc<R>) -> Self {
@@ -52,7 +72,13 @@ where
         self.db = Some(db);
         self
     }
+}
 
+impl<T, R> ServerPlan<T, R>
+where
+    T: ServerTableBound + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
     pub async fn serve(self) -> Result<()> {
         let addr = self.config.server.listen;
 
@@ -179,31 +205,46 @@ where
         // Model API routes with observation.
         // When MPP is enabled, payment-gated filters replace the standard
         // auth-gated filters. We use .boxed() to unify the filter types.
-        #[cfg(feature = "mpp-tempo")]
+        #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
         let mpp_state: Option<Arc<bitrouter_api::mpp::MppState>> = {
             match self.config.mpp.as_ref().filter(|c| c.enabled) {
-                Some(mpp_config) => match mpp_config.networks.tempo.as_ref() {
-                    Some(tempo) => {
-                        let state = bitrouter_api::mpp::MppState::from_tempo_config(
-                            tempo,
-                            mpp_config.realm.as_deref(),
-                            mpp_config.secret_key.as_deref(),
-                        )
-                        .map_err(|e| {
+                Some(mpp_config) => {
+                    let realm = mpp_config.realm.as_deref().unwrap_or("MPP Payment");
+                    let secret_key = mpp_config.secret_key.as_deref();
+                    let mut state = bitrouter_api::mpp::MppState::new(realm);
+
+                    #[cfg(feature = "mpp-tempo")]
+                    if let Some(tempo) = mpp_config.networks.tempo.as_ref() {
+                        state.add_tempo(tempo, secret_key).map_err(|e| {
                             bitrouter_config::ConfigError::ConfigParse(format!(
-                                "MPP initialization failed: {e}"
+                                "MPP Tempo initialization failed: {e}"
                             ))
                         })?;
-                        tracing::info!(realm = state.realm(), "MPP enabled (Tempo)");
-                        Some(Arc::new(state))
+                        tracing::info!("MPP Tempo backend enabled");
                     }
-                    None => None,
-                },
+
+                    #[cfg(feature = "mpp-solana")]
+                    if let Some(solana) = mpp_config.networks.solana.as_ref() {
+                        state.add_solana(solana, secret_key).map_err(|e| {
+                            bitrouter_config::ConfigError::ConfigParse(format!(
+                                "MPP Solana initialization failed: {e}"
+                            ))
+                        })?;
+                        tracing::info!("MPP Solana backend enabled");
+                    }
+
+                    if state.is_configured() {
+                        tracing::info!(realm = state.realm(), "MPP enabled");
+                        Some(Arc::new(state))
+                    } else {
+                        None
+                    }
+                }
                 None => None,
             }
         };
 
-        #[cfg(feature = "mpp-tempo")]
+        #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
         let (chat, messages, responses, generate_content) = if let Some(ref mpp) = mpp_state {
             (
                 openai::chat::filters::chat_completions_filter_with_mpp(
@@ -211,6 +252,7 @@ where
                     guarded_router.clone(),
                     observer.clone(),
                     mpp.clone(),
+                    account_filter.clone(),
                 )
                 .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                 .boxed(),
@@ -219,6 +261,7 @@ where
                     guarded_router.clone(),
                     observer.clone(),
                     mpp.clone(),
+                    anthropic_account_filter.clone(),
                 )
                 .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                 .boxed(),
@@ -227,6 +270,7 @@ where
                     guarded_router.clone(),
                     observer.clone(),
                     mpp.clone(),
+                    account_filter.clone(),
                 )
                 .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                 .boxed(),
@@ -235,6 +279,7 @@ where
                     guarded_router.clone(),
                     observer.clone(),
                     mpp.clone(),
+                    account_filter.clone(),
                 )
                 .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                 .boxed(),
@@ -276,28 +321,28 @@ where
             )
         };
 
-        #[cfg(not(feature = "mpp-tempo"))]
+        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
         let chat = openai::chat::filters::chat_completions_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
-        #[cfg(not(feature = "mpp-tempo"))]
+        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
         let messages = anthropic::messages::filters::messages_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             anthropic_account_filter,
         );
-        #[cfg(not(feature = "mpp-tempo"))]
+        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
         let responses = openai::responses::filters::responses_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
-        #[cfg(not(feature = "mpp-tempo"))]
+        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
         let generate_content =
             google::generate_content::filters::generate_content_filter_with_observe(
                 self.table.clone(),
@@ -487,6 +532,7 @@ fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> Cal
         budget: id.budget,
         budget_scope: id.budget_scope,
         budget_range: id.budget_range,
+        chain: id.chain,
     }
 }
 
@@ -517,7 +563,7 @@ async fn handle_auth_rejection(
         )) as Box<dyn warp::Reply>);
     }
 
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
     if let Some(challenge) = rejection.find::<bitrouter_api::mpp::MppChallenge>() {
         match warp::http::Response::builder()
             .status(warp::http::StatusCode::PAYMENT_REQUIRED)
@@ -537,7 +583,7 @@ async fn handle_auth_rejection(
         }
     }
 
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
     if let Some(err) = rejection.find::<bitrouter_api::mpp::MppVerificationFailed>() {
         let json = warp::reply::json(&serde_json::json!({
             "error": {

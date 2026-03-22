@@ -50,6 +50,10 @@ pub struct Identity {
     pub account_id: AccountId,
     /// What this caller is permitted to do.
     pub scope: Scope,
+    /// CAIP-2 chain identifier from the JWT `chain` claim (e.g.
+    /// `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"`, `"eip155:4217"`).
+    /// Used to select the payment network backend for MPP.
+    pub chain: Option<String>,
     /// Optional model-name patterns this caller may access.
     pub models: Option<Vec<String>>,
     /// Optional tool-name patterns this caller may access.

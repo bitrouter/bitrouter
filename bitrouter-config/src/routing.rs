@@ -7,7 +7,7 @@ use bitrouter_core::{
     routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget},
 };
 
-use crate::model::{
+use crate::config::{
     ApiProtocol, ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy,
 };
 
@@ -214,7 +214,7 @@ impl ModelRegistry for ConfigRoutingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
+    use crate::config::{
         ApiProtocol, InputTokenPricing, Modality, ModelEndpoint, OutputTokenPricing,
     };
 
