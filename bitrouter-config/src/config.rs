@@ -30,6 +30,10 @@ pub struct BitrouterConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solana_rpc_url: Option<String>,
 
+    /// MPP (Machine Payment Protocol) configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mpp: Option<MppConfig>,
+
     /// Provider definitions (merged on top of built-in providers).
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
@@ -323,6 +327,62 @@ pub struct OutputTokenPricing {
     /// Cost per million reasoning output tokens.
     #[serde(default)]
     pub reasoning: f64,
+}
+
+// ── MPP (Machine Payment Protocol) configuration ─────────────────────
+
+/// Top-level MPP configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MppConfig {
+    /// Whether MPP payment gating is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Server realm for `WWW-Authenticate` headers.
+    ///
+    /// Auto-detected from environment if omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm: Option<String>,
+
+    /// HMAC secret for stateless challenge ID verification.
+    ///
+    /// Reads `MPP_SECRET_KEY` environment variable if omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_key: Option<String>,
+
+    /// Per-chain configuration.
+    #[serde(default)]
+    pub chains: MppChainsConfig,
+}
+
+/// Per-chain MPP configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MppChainsConfig {
+    /// Tempo chain configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo: Option<TempoMppConfig>,
+}
+
+/// Tempo-specific MPP configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TempoMppConfig {
+    /// Recipient address for payments (required).
+    pub recipient: String,
+
+    /// Escrow contract address (required for session support).
+    pub escrow_contract: String,
+
+    /// Tempo RPC endpoint URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpc_url: Option<String>,
+
+    /// TIP-20 token address for charges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+
+    /// Enable fee sponsorship for all challenges.
+    #[serde(default)]
+    pub fee_payer: bool,
 }
 
 /// Authentication configuration.

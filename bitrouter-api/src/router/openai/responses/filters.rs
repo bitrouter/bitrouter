@@ -136,6 +136,67 @@ where
     handle_responses(request, table, hooked).await
 }
 
+/// Creates a warp filter for `/v1/responses` with MPP payment gating.
+#[cfg(feature = "mpp-tempo")]
+pub fn responses_filter_with_mpp<T, R>(
+    table: Arc<T>,
+    router: Arc<R>,
+    observer: Arc<dyn ObserveCallback>,
+    mpp_state: Arc<crate::mpp::MppState>,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: RoutingTable + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
+    warp::path!("v1" / "responses")
+        .and(warp::post())
+        .and(crate::mpp::mpp_payment_filter(mpp_state))
+        .and(warp::body::json::<ResponsesRequest>())
+        .and(warp::any().map(move || table.clone()))
+        .and(warp::any().map(move || router.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and_then(handle_responses_with_mpp)
+}
+
+#[cfg(feature = "mpp-tempo")]
+async fn handle_responses_with_mpp<T, R>(
+    mpp_ctx: crate::mpp::MppPaymentContext,
+    request: ResponsesRequest,
+    table: Arc<T>,
+    router: Arc<R>,
+    observer: Arc<dyn ObserveCallback>,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection>
+where
+    T: RoutingTable + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
+    if let Some(ref management) = mpp_ctx.management_response {
+        let reply = warp::reply::json(management);
+        if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+            return Ok(Box::new(warp::reply::with_header(
+                reply,
+                mpp::PAYMENT_RECEIPT_HEADER,
+                receipt_header,
+            )));
+        }
+        return Ok(Box::new(reply));
+    }
+
+    let result =
+        handle_responses_with_observe(request, table, router, observer, CallerContext::default())
+            .await?;
+
+    if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+        Ok(Box::new(warp::reply::with_header(
+            result,
+            mpp::PAYMENT_RECEIPT_HEADER,
+            receipt_header,
+        )))
+    } else {
+        Ok(result)
+    }
+}
+
 async fn handle_responses_with_observe<T, R>(
     request: ResponsesRequest,
     table: Arc<T>,
