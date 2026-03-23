@@ -111,7 +111,7 @@ where
     let options = convert::to_call_options(request);
 
     if is_stream {
-        handle_stream(&model, &model_id, options).await
+        handle_stream(&model, options, model_id).await
     } else {
         let result = model
             .generate(options)
@@ -243,7 +243,7 @@ where
 
         tokio::spawn(async move {
             let mut stream = stream_result.stream;
-            let mut converter = convert::StreamConverter::new(model_id);
+            let mut converter = convert::StreamConverter::new(model_id.clone());
             use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;
             use tokio_stream::StreamExt as _;
             let mut usage = None;
@@ -265,7 +265,7 @@ where
                 for event in events {
                     let data = serde_json::to_string(&event).unwrap_or_default();
                     let sse = Ok(warp::sse::Event::default()
-                        .event(&event.event_type)
+                        .event(event.event_type())
                         .data(data));
                     if tx.send(sse).await.is_err() {
                         send_failed = true;
@@ -436,7 +436,6 @@ where
     if is_stream {
         handle_stream_with_observe(
             &model,
-            &model_id,
             options,
             crate::router::StreamObserveContext {
                 observer,
@@ -486,15 +485,13 @@ where
 
 async fn handle_stream(
     model: &(impl LanguageModel + ?Sized),
-    model_id: &str,
     options: bitrouter_core::models::language::call_options::LanguageModelCallOptions,
+    model_id: String,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     let stream_result = model
         .stream(options)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
-    let model_id = model_id.to_owned();
 
     let (tx, rx) =
         tokio::sync::mpsc::channel::<Result<warp::sse::Event, std::convert::Infallible>>(32);
@@ -507,7 +504,7 @@ async fn handle_stream(
             for event in converter.convert(&part) {
                 let data = serde_json::to_string(&event).unwrap_or_default();
                 let sse = Ok(warp::sse::Event::default()
-                    .event(&event.event_type)
+                    .event(event.event_type())
                     .data(data));
                 if tx.send(sse).await.is_err() {
                     break 'outer;
@@ -525,7 +522,6 @@ async fn handle_stream(
 
 async fn handle_stream_with_observe(
     model: &(impl LanguageModel + ?Sized),
-    model_id: &str,
     options: bitrouter_core::models::language::call_options::LanguageModelCallOptions,
     ctx: crate::router::StreamObserveContext,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
@@ -533,8 +529,6 @@ async fn handle_stream_with_observe(
         .stream(options)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
-    let model_id = model_id.to_owned();
 
     let (tx, rx) =
         tokio::sync::mpsc::channel::<Result<warp::sse::Event, std::convert::Infallible>>(32);
@@ -550,7 +544,7 @@ async fn handle_stream_with_observe(
 
     tokio::spawn(async move {
         let mut stream = stream_result.stream;
-        let mut converter = convert::StreamConverter::new(model_id);
+        let mut converter = convert::StreamConverter::new(target_model.clone());
         use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;
         use tokio_stream::StreamExt as _;
         let mut usage = None;
@@ -567,7 +561,7 @@ async fn handle_stream_with_observe(
             for event in converter.convert(&part) {
                 let data = serde_json::to_string(&event).unwrap_or_default();
                 let sse = Ok(warp::sse::Event::default()
-                    .event(&event.event_type)
+                    .event(event.event_type())
                     .data(data));
                 if tx.send(sse).await.is_err() {
                     send_failed = true;
