@@ -2,10 +2,27 @@
 name = "bitrouter-providers"
 version = { workspace = true }
 edition = "2024"
-description = "BitRouter provider adapters"
-authors = ["Archer <archer@bitrouter.ai>"]
-license = "Apache-2.0"
-repository = "https://github.com/bitrouter/bitrouter"
-readme = "README.md"
+description = "BitRouter provider adapters — HTTP client, auth, streaming"
+
+[features]
+default = ["openai", "anthropic", "google"]
+openai = []
+anthropic = []
+google = []
 
 [dependencies]
+bitrouter-core = { path = "../bitrouter-core", version = "0.12" }
+
+base64 = "0.22"
+bytes = "1"
+regex = "1.12"
+reqwest = { version = "0.13", default-features = false, features = [
+    "json", "query", "rustls", "stream"
+] }
+reqwest-middleware = { version = "0.5", features = ["json", "query"] }
+schemars = { version = "1.2", default-features = false, features = ["std"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"

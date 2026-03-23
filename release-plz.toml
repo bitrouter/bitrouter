@@ -13,9 +13,7 @@ changelog_path = "CHANGELOG.md" # Single changelog at the repository root
 changelog_update = true
 changelog_include = [           # Include commits from all sub-crates in the bitrouter changelog
     "bitrouter-core",
-    "bitrouter-openai",
-    "bitrouter-anthropic",
-    "bitrouter-google",
+    "bitrouter-providers",
     "bitrouter-config",
     "bitrouter-api",
     "bitrouter-guardrails",

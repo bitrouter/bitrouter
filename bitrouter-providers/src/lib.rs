@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+#[cfg(feature = "openai")]
+pub mod openai;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[cfg(feature = "anthropic")]
+pub mod anthropic;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+#[cfg(feature = "google")]
+pub mod google;
