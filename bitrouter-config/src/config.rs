@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::agent::AgentPricing;
 use crate::env::{load_env, substitute_in_value};
 use crate::registry::{builtin_providers, merge_provider, resolve_providers};
+use crate::skill::SkillConfig;
 use crate::tool::ToolPricing;
 
 // ── Top-level configuration ──────────────────────────────────────────
@@ -63,6 +64,10 @@ pub struct BitrouterConfig {
     /// Per-agent invocation pricing. Keys are agent names.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub a2a_agent_pricing: HashMap<String, AgentPricing>,
+
+    /// Skill definitions for the skills registry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<SkillConfig>,
 }
 
 impl BitrouterConfig {

@@ -76,6 +76,101 @@ impl<T: ToolRegistry> ToolRegistry for std::sync::Arc<T> {
     }
 }
 
+/// Combines two [`ToolRegistry`] implementations into one.
+///
+/// `list_tools()` returns entries from both registries (primary first).
+pub struct CompositeToolRegistry<A, B> {
+    primary: A,
+    secondary: B,
+}
+
+impl<A, B> CompositeToolRegistry<A, B> {
+    pub fn new(primary: A, secondary: B) -> Self {
+        Self { primary, secondary }
+    }
+}
+
+impl<A: ToolRegistry, B: ToolRegistry> ToolRegistry for CompositeToolRegistry<A, B> {
+    async fn list_tools(&self) -> Vec<ToolEntry> {
+        let mut tools = self.primary.list_tools().await;
+        tools.extend(self.secondary.list_tools().await);
+        tools
+    }
+}
+
+// ── Skill ─────────────────────────────────────────────────────────
+
+/// A skill tracked in the bitrouter skills registry.
+///
+/// Mirrors the Anthropic Skills API object shape while adding
+/// bitrouter-specific fields (source, required_apis).
+#[derive(Debug, Clone)]
+pub struct SkillEntry {
+    /// Unique skill identifier (UUID string).
+    pub id: String,
+    /// Skill name (agentskills.io format: 1–64 chars, lowercase + hyphens).
+    pub name: String,
+    /// What the skill does and when to use it.
+    pub description: String,
+    /// "config" or "manual".
+    pub source: String,
+    /// Provider names this skill depends on for paid API access.
+    pub required_apis: Vec<String>,
+    /// ISO 8601 timestamp.
+    pub created_at: String,
+    /// ISO 8601 timestamp.
+    pub updated_at: String,
+}
+
+/// CRUD service for the skills registry.
+///
+/// Implemented by `bitrouter-skills`, consumed by `bitrouter-api` filters.
+pub trait SkillService: Send + Sync {
+    /// Register a new skill. Returns the assigned ID.
+    fn create(
+        &self,
+        name: String,
+        description: String,
+        source: Option<String>,
+        required_apis: Vec<String>,
+    ) -> impl Future<Output = Result<SkillEntry, String>> + Send;
+
+    /// List all registered skills.
+    fn list(&self) -> impl Future<Output = Result<Vec<SkillEntry>, String>> + Send;
+
+    /// Retrieve a single skill by name.
+    fn get(&self, name: &str) -> impl Future<Output = Result<Option<SkillEntry>, String>> + Send;
+
+    /// Delete a skill by name. Returns true if it existed.
+    fn delete(&self, name: &str) -> impl Future<Output = Result<bool, String>> + Send;
+}
+
+impl<T: SkillService> SkillService for std::sync::Arc<T> {
+    async fn create(
+        &self,
+        name: String,
+        description: String,
+        source: Option<String>,
+        required_apis: Vec<String>,
+    ) -> Result<SkillEntry, String> {
+        (**self)
+            .create(name, description, source, required_apis)
+            .await
+    }
+
+    async fn list(&self) -> Result<Vec<SkillEntry>, String> {
+        (**self).list().await
+    }
+
+    async fn get(&self, name: &str) -> Result<Option<SkillEntry>, String> {
+        (**self).get(name).await
+    }
+
+    async fn delete(&self, name: &str) -> Result<bool, String> {
+        (**self).delete(name).await
+    }
+}
+
 // ── Agent ──────────────────────────────────────────────────────────
 
 /// A single agent available through the router, with its metadata.
