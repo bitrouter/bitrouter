@@ -1,6 +1,6 @@
 # BitRouter - Open Intelligence Router for LLM Agents
 
-> The zero-ops LLM gateway built for modern agent runtime. Single binary. Zero infrastructure dependencies. Agent-native control.
+> The agentic proxy for modern agent runtimes. Smart, safe, agent-controlled routing across LLMs, tools, and agents.
 
 [![Build status](https://github.com/bitrouter/bitrouter/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bitrouter/bitrouter/actions)
 [![Crates.io](https://img.shields.io/crates/v/bitrouter)](https://crates.io/crates/bitrouter)
@@ -9,7 +9,7 @@
 [![Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/G3zVrZDa5C)
 [![Docs](https://img.shields.io/badge/Docs-bitrouter.ai-green)](https://bitrouter.ai)
 
-## ⚠ Notice
+<!--## ⚠ Notice
 
 We are waiting for the upstream `mpp` crate to publish. Now we depend on its git version, so we can't publish our packages to `crates.io` registry.
 
@@ -24,22 +24,23 @@ And add bitrouter framework to your project like this:
 ```toml
 [dependencies]
 bitrouter-core = { git = "https://github.com/bitrouter/bitrouter" }
-```
+```-->
 
 ## Overview
 
-As LLM agents grow more autonomous, humans can no longer hand-pick the best model, tool, or sub-agent for every runtime decision. BitRouter is a proxy layer purpose-built for LLM agents (OpenClaw, OpenCode, etc.) to discover and route to LLMs, tools, and other agents autonomously — with agent-native control and observability via CLI + TUI, backed by a high-performance Rust proxy that optimizes for both performance and cost during runtime.
+As LLM agents grow more autonomous, humans can no longer hand-pick the best model, tool, or sub-agent for every runtime decision. BitRouter is a proxy layer purpose-built for LLM agents (OpenClaw, OpenCode, etc.) to discover and route to LLMs, tools, and other agents autonomously — with agent-native control, guardrails, and observability via CLI + TUI, backed by a high-performance Rust proxy that optimizes for performance, cost, and safety during runtime.
 
 ## Features
 
-- **Agent-native routing** — agents discover and select LLMs, tools, and sub-agents at runtime
-- **Multi-provider gateway** — unified access to OpenAI, Anthropic, Google, and more
-- **Streaming & non-streaming** — first-class support for both modes
-- **CLI + TUI observability** — monitor and control agent sessions in real time
-- **Smart routing** — cost and performance optimization via configurable routing tables
-- **Agent firewall** — inspect agent traffic with `bitrouter-guardrails` and warn, redact, or block risky content
-- **High-performance proxy** — single Rust binary, async-first, minimal overhead
-- **Tool calling** — unified tool use across providers
+- **Multi-provider routing** — unified access to OpenAI, Anthropic, Google, and custom providers with cost/performance-aware routing ([`core`](bitrouter-core/) · [`providers`](bitrouter-providers/) · [`config`](bitrouter-config/))
+- **Streaming & non-streaming** — first-class support for both modes across all providers
+- **Agent firewall** — inspect, warn, redact, or block risky content at the proxy layer ([`guardrails`](bitrouter-guardrails/))
+- **MCP gateway** — proxy for MCP servers, agents discover and call tools across hosts ([`mcp`](bitrouter-mcp/))
+- **A2A gateway** — agent identity, discovery, and task dispatch via A2A v0.3.0 ([`a2a`](bitrouter-a2a/))
+- **Skills registry** — track and expose agent skills following the [agentskills.io](https://agentskills.io) standard ([`skills`](bitrouter-skills/))
+- **Agentic payment** — 402/MPP payment handling for LLMs, tools, and APIs ([`api`](bitrouter-api/) · [`accounts`](bitrouter-accounts/))
+- **Observability** — per-request spend tracking, metrics, and cost calculation ([`observe`](bitrouter-observe/))
+- **CLI + TUI** — monitor and control agent sessions in real time ([`cli`](bitrouter/))
 
 ## Documentation
 
@@ -49,192 +50,44 @@ As LLM agents grow more autonomous, humans can no longer hand-pick the best mode
 
 ## Quick Start
 
-```bash
-# Install
-cargo install bitrouter
+### Install
 
-# Launch — runs the setup wizard on first run, then starts the TUI + API server
+```bash
+cargo install bitrouter
+```
+
+### Default (setup wizard)
+
+```bash
 bitrouter
 ```
 
-On first launch, if no providers are configured, BitRouter automatically runs an interactive setup wizard that walks you through provider selection, API key entry, and configuration. After setup completes, the TUI and API server start with your new configuration.
+On first launch, BitRouter runs an interactive setup wizard with two modes:
+- **Cloud** — connect to BitRouter Cloud with x402/Solana wallet payments
+- **BYOK** — bring your own API keys for OpenAI, Anthropic, Google, or custom providers
 
-You can also run the setup wizard explicitly at any time:
+After setup, the TUI and API server start at `http://localhost:8787`.
 
-```bash
-bitrouter init
-```
+You can re-run the wizard at any time with `bitrouter init`.
 
-For a foreground API server without the TUI:
+### BYOK (bring your own keys)
 
-```bash
-bitrouter serve
-```
-
-To run as a background daemon:
-
-```bash
-bitrouter start
-```
-
-### Zero-config mode
-
-If you have provider API keys in your environment (e.g. `OPENAI_API_KEY`), BitRouter auto-detects them and enables direct routing without any configuration file:
+If you already have provider API keys in your environment, BitRouter auto-detects them — no config file needed:
 
 ```bash
 export OPENAI_API_KEY=sk-...
-bitrouter serve
-# Use "openai:gpt-4o" as the model name
+bitrouter
+# Routes to "openai:gpt-4o" at http://localhost:8787
 ```
 
-## CLI Overview
+For a foreground server without the TUI, use `bitrouter serve`.
 
-`bitrouter` has two ways to run:
+## Learn More
 
-- `bitrouter` starts the default interactive runtime. On first run with no providers configured, the setup wizard runs automatically. With the default `tui` feature enabled, this then launches the TUI and API server together.
-- `bitrouter [COMMAND]` runs an explicit operational command such as `serve` for a foreground server or `start` for a background daemon.
-
-### Subcommands
-
-| Command   | What it does                                                                  |
-| --------- | ----------------------------------------------------------------------------- |
-| `init`    | Interactive setup wizard for provider configuration                           |
-| `serve`   | Start the API server in the foreground                                        |
-| `start`   | Start BitRouter as a background daemon                                        |
-| `stop`    | Stop the running daemon                                                       |
-| `status`  | Print resolved paths, listen address, configured providers, and daemon status |
-| `restart` | Restart the background daemon                                                 |
-| `account` | Manage local Ed25519 account keypairs used to sign BitRouter JWTs             |
-| `keygen`  | Sign a JWT with the active account key                                        |
-| `keys`    | List, inspect, and remove locally stored JWTs                                 |
-
-### Global options
-
-These flags are available on the top-level command and on each subcommand:
-
-- `--home-dir <PATH>` — override BitRouter home directory resolution
-- `--config-file <PATH>` — override `<home>/bitrouter.yaml`
-- `--env-file <PATH>` — override `<home>/.env`
-- `--run-dir <PATH>` — override `<home>/run`
-- `--logs-dir <PATH>` — override `<home>/logs`
-- `--db <DATABASE_URL>` — override the database URL from environment variables and config
-
-### Local account and JWT helpers
-
-BitRouter can generate and manage local Ed25519 account keys under `<home>/.keys`, then use the active account to mint JWTs for API access:
-
-```bash
-# Generate a local account keypair and set it active
-bitrouter account --generate-key
-
-# Create an API token for that account and save it locally
-bitrouter keygen --exp 30d --models openai:gpt-4o --name default
-
-# Inspect or remove saved tokens
-bitrouter keys --list
-bitrouter keys --show default
-bitrouter keys --rm default
-```
-
-## Configuration and `BITROUTER_HOME`
-
-BitRouter resolves its working directory in this order:
-
-1. `--home-dir <PATH>` if provided
-2. The current working directory, if `./bitrouter.yaml` exists
-3. `BITROUTER_HOME`, if it points to an existing directory
-4. `~/.bitrouter`
-
-When BitRouter falls back to `~/.bitrouter`, it scaffolds the directory if needed.
-
-### Default home layout
-
-```text
-<home>/
-├── bitrouter.yaml
-├── .env
-├── .gitignore
-├── logs/
-└── run/
-```
-
-The scaffolded `.gitignore` ignores `logs/`, `run/`, and `.env`. The runtime automatically loads `<home>/.env` when it exists, then reads `<home>/bitrouter.yaml`.
-
-### Minimal configuration
-
-The easiest way to create a configuration is to run `bitrouter init`, which generates `bitrouter.yaml` and `.env` interactively. You can also write the config manually:
-
-```yaml
-server:
-  listen: 127.0.0.1:8787
-
-providers:
-  openai:
-    api_key: ${OPENAI_API_KEY}
-
-models:
-  default:
-    strategy: priority
-    endpoints:
-      - provider: openai
-        model_id: gpt-4o
-```
-
-Provider definitions are merged on top of BitRouter's built-in provider registry, so you can start by overriding only the fields you need. Environment-variable references like `${OPENAI_API_KEY}` are expanded during config loading.
-
-### Custom providers
-
-`bitrouter init` supports adding custom OpenAI-compatible or Anthropic-compatible providers. You can also define them manually in `bitrouter.yaml`:
-
-```yaml
-providers:
-  openrouter:
-    derives: openai
-    api_base: "https://openrouter.ai/api/v1"
-    api_key: "${OPENROUTER_API_KEY}"
-  moonshot-anthropic:
-    derives: anthropic
-    api_base: "https://api.moonshot.ai/anthropic"
-    api_key: "${MOONSHOT_API_KEY}"
-```
-
-The `derives` field inherits protocol handling from the named built-in provider, so any service with an OpenAI-compatible or Anthropic-compatible API works out of the box.
-
-## Agent firewall with `bitrouter-guardrails`
-
-BitRouter includes an agent firewall powered by the `bitrouter-guardrails`
-package. It wraps the model router and inspects content at the proxy layer
-before requests go upstream and before responses come back downstream.
-
-Guardrail rules are configured under the `guardrails` key in `bitrouter.yaml`:
-
-- `upgoing` applies to outbound traffic (`user/tool -> model`)
-- `downgoing` applies to inbound traffic (`model -> user/tool`)
-- actions can be `warn`, `redact`, or `block`
-- `disabled_patterns` turns off built-in detectors you do not want
-- `custom_patterns` adds your own regex-based firewall rules
-
-```yaml
-guardrails:
-  enabled: true
-  disabled_patterns:
-    - pii_phone_numbers
-  custom_patterns:
-    - name: internal_ticket
-      regex: "INC-[0-9]{6}"
-      direction: both
-  upgoing:
-    api_keys: redact
-    private_keys: block
-  downgoing:
-    suspicious_commands: block
-  custom_downgoing:
-    internal_ticket: warn
-```
-
-This lets you quickly define a local firewall policy for secrets, credentials,
-PII, or custom patterns without changing any application code. For more detail,
-see [`bitrouter-guardrails/README.md`](bitrouter-guardrails/README.md).
+- [CLI reference & configuration](bitrouter/) — subcommands, global options, home directory, YAML config, custom providers
+- [Agent firewall](bitrouter-guardrails/) — inspect, redact, or block agent traffic at the proxy layer
+- [Development guide](DEVELOPMENT.md) — workspace architecture and server composition
+- [Contributing](CONTRIBUTING.md) — contribution workflow and provider updates
 
 ## Supported Providers
 
@@ -246,6 +99,21 @@ see [`bitrouter-guardrails/README.md`](bitrouter-guardrails/README.md).
 
 Want to see another provider supported? [Open an issue](https://github.com/AIMOverse/bitrouter/issues) or submit a PR — contributions are welcome. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
 
+## Supported Agent Runtimes
+
+BitRouter works as a drop-in proxy for agent runtimes that support custom API base URLs. Point your runtime at `http://localhost:8787` and route to any configured provider.
+
+| Runtime | Integration |
+| ------- | ----------- |
+| [OpenClaw](https://github.com/openclaw/openclaw) | [Native plugin](https://github.com/bitrouter/bitrouter-openclaw) |
+| [Claude Code](https://github.com/anthropics/claude-code) | CLI + Skills |
+| [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) | CLI + Skills |
+| [Codex CLI](https://github.com/openai/codex) | CLI + Skills |
+| [OpenCode](https://github.com/opencode-ai/opencode) | CLI + Skills |
+| [Kilo Code](https://github.com/Kilo-Org/kilocode) | CLI + Skills |
+
+Any agent runtime that can target a custom OpenAI or Anthropic base URL works with BitRouter out of the box. **Building an agent runtime or framework?** We partner with teams to build native BitRouter integrations — reach out on [Discord](https://discord.gg/G3zVrZDa5C) or [open an issue](https://github.com/AIMOverse/bitrouter/issues).
+
 ## Roadmap
 
 - [x] Core routing engine and provider abstractions
@@ -253,7 +121,7 @@ Want to see another provider supported? [Open an issue](https://github.com/AIMOv
 - [x] Interactive setup wizard (`bitrouter init`) with auto-detection
 - [x] Custom provider support (OpenAI-compatible / Anthropic-compatible)
 - [x] Cross-protocol routing (e.g. OpenAI format → Anthropic provider)
-- [ ] MCP & A2A protocol support
+- [x] MCP & A2A & Skills protocol support
 - [ ] TUI observability dashboard
 - [ ] Telemetry and usage analytics
 - [ ] Provider & model routing policy customization
