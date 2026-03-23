@@ -11,9 +11,10 @@ readme = "README.md"
 [features]
 default = ["tui", "sqlite", "postgres", "mpp-tempo", "mpp-solana"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
-sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
-postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
-mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
+sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite", "bitrouter-skills/sqlite"]
+postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres", "bitrouter-skills/postgres"]
+mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql", "bitrouter-skills/mysql"]
+mcp-stdio = ["bitrouter-mcp/client-stdio"]
 mpp-tempo = [
     "bitrouter-api/mpp-tempo",
     "bitrouter-config/mpp-tempo",
@@ -30,13 +31,16 @@ mpp-solana = [
 
 [dependencies]
 # Internal crates
+bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.12" }
 bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.12" }
 bitrouter-api = { path = "../bitrouter-api", version = "0.12" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.12" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.12" }
 bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.12" }
+bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.12" }
 bitrouter-observe = { path = "../bitrouter-observe", version = "0.12" }
 bitrouter-providers = { path = "../bitrouter-providers", version = "0.12" }
+bitrouter-skills = { path = "../bitrouter-skills", version = "0.12" }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -91,6 +95,9 @@ mpp = { git = "https://github.com/tempoxyz/mpp-rs", default-features = false, fe
     "reqwest-rustls-tls",
 ], optional = true }
 bs58 = { version = "0.5", optional = true }
+
+[dev-dependencies]
+tempfile = { version = "3" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

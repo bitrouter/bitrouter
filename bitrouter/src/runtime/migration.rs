@@ -10,6 +10,7 @@ impl MigratorTrait for Migrator {
         let mut all = Vec::new();
         all.extend(bitrouter_accounts::migration::migrations());
         all.extend(bitrouter_observe::migration::migrations());
+        all.extend(bitrouter_skills::migration::migrations());
         all
     }
 }

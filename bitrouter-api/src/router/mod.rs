@@ -1,12 +1,19 @@
+pub mod a2a;
 pub mod admin;
+pub mod admin_agents;
+pub mod admin_tools;
+pub mod agents;
 #[cfg(feature = "anthropic")]
 pub mod anthropic;
 #[cfg(feature = "google")]
 pub mod google;
+pub mod mcp;
 pub mod models;
 #[cfg(feature = "openai")]
 pub mod openai;
 pub mod routes;
+pub mod skills;
+pub mod tools;
 
 #[cfg(any(feature = "openai", feature = "anthropic", feature = "google"))]
 mod observe_ctx {

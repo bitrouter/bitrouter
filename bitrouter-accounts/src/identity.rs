@@ -56,6 +56,8 @@ pub struct Identity {
     pub chain: Option<String>,
     /// Optional model-name patterns this caller may access.
     pub models: Option<Vec<String>>,
+    /// Optional tool-name patterns this caller may access.
+    pub tools: Option<Vec<String>>,
     /// Budget limit in micro USD (1 USD = 1,000,000 μUSD).
     pub budget: Option<u64>,
     /// Whether the budget applies per-session or per-account.

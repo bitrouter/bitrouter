@@ -44,6 +44,12 @@ pub struct BitrouterClaims {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<Vec<String>>,
 
+    /// Optional allowlist of tool name patterns this token may access.
+    /// Tool names are `{server}/{tool}`, so patterns like `"github/*"` work.
+    /// When `None`, all tools are accessible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
+
     /// Budget limit in micro USD (1 USD = 1,000,000 μUSD).
     /// Matches on-chain stablecoin precision (6 decimals).
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -71,6 +71,7 @@ impl Middleware for JwtAuthMiddleware {
             exp: Some(now + JWT_LIFETIME_SECS),
             scope: TokenScope::Api,
             models: None,
+            tools: None,
             budget: None,
             budget_scope: None,
             budget_range: None,

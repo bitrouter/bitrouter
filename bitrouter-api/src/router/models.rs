@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use bitrouter_core::routers::routing_table::RoutingTable;
+use bitrouter_core::routers::registry::ModelRegistry;
 use serde::Serialize;
 use warp::Filter;
 
@@ -35,7 +35,7 @@ pub fn models_filter<T>(
     table: Arc<T>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: RoutingTable + Send + Sync + 'static,
+    T: ModelRegistry + Send + Sync + 'static,
 {
     warp::path!("v1" / "models")
         .and(warp::get())
@@ -88,7 +88,7 @@ fn parse_query(raw: &str) -> ModelQuery {
     query
 }
 
-fn handle_list_models<T: RoutingTable>(
+fn handle_list_models<T: ModelRegistry>(
     raw_query: Option<String>,
     table: Arc<T>,
 ) -> impl warp::Reply {

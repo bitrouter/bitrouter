@@ -28,7 +28,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::future::Future;
 use std::pin::Pin;
 
-use bitrouter_core::observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent};
+use bitrouter_core::observe::{
+    AgentCallFailureEvent, AgentCallSuccessEvent, AgentObserveCallback, ObserveCallback,
+    RequestFailureEvent, RequestSuccessEvent, ToolCallFailureEvent, ToolCallSuccessEvent,
+    ToolObserveCallback,
+};
 use serde::Serialize;
 
 /// Maximum number of latency samples retained per route or endpoint.
@@ -309,6 +313,50 @@ impl ObserveCallback for MetricsCollector {
     }
 }
 
+impl ToolObserveCallback for MetricsCollector {
+    fn on_tool_call_success(
+        &self,
+        event: ToolCallSuccessEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("tool:{}", event.ctx.server);
+        let endpoint = event.ctx.tool;
+        self.record(route, endpoint, event.ctx.latency_ms, false, None, None);
+        Box::pin(async {})
+    }
+
+    fn on_tool_call_failure(
+        &self,
+        event: ToolCallFailureEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("tool:{}", event.ctx.server);
+        let endpoint = event.ctx.tool;
+        self.record(route, endpoint, event.ctx.latency_ms, true, None, None);
+        Box::pin(async {})
+    }
+}
+
+impl AgentObserveCallback for MetricsCollector {
+    fn on_agent_call_success(
+        &self,
+        event: AgentCallSuccessEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("agent:{}", event.ctx.agent);
+        let endpoint = event.ctx.method;
+        self.record(route, endpoint, event.ctx.latency_ms, false, None, None);
+        Box::pin(async {})
+    }
+
+    fn on_agent_call_failure(
+        &self,
+        event: AgentCallFailureEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("agent:{}", event.ctx.agent);
+        let endpoint = event.ctx.method;
+        self.record(route, endpoint, event.ctx.latency_ms, true, None, None);
+        Box::pin(async {})
+    }
+}
+
 // ── Private helpers ─────────────────────────────────────────────────────────
 
 impl RouteData {
@@ -531,5 +579,55 @@ mod tests {
             json["routes"]["default"]["by_endpoint"]["openai:gpt-4o"]["total_requests"],
             1
         );
+    }
+
+    #[tokio::test]
+    async fn tool_callback_records_metrics() {
+        use bitrouter_core::observe::{ToolCallSuccessEvent, ToolRequestContext};
+
+        let collector = MetricsCollector::new();
+        collector
+            .on_tool_call_success(ToolCallSuccessEvent {
+                ctx: ToolRequestContext {
+                    server: "github".into(),
+                    tool: "search".into(),
+                    caller: CallerContext::default(),
+                    latency_ms: 150,
+                },
+            })
+            .await;
+
+        let snap = collector.snapshot();
+        let route = snap.routes.get("tool:github").expect("route should exist");
+        assert_eq!(route.total_requests, 1);
+        assert_eq!(route.total_errors, 0);
+        assert_eq!(route.by_endpoint["search"].total_requests, 1);
+    }
+
+    #[tokio::test]
+    async fn agent_callback_records_metrics() {
+        use bitrouter_core::observe::{AgentCallFailureEvent, AgentRequestContext};
+
+        let collector = MetricsCollector::new();
+        collector
+            .on_agent_call_failure(AgentCallFailureEvent {
+                ctx: AgentRequestContext {
+                    agent: "upstream".into(),
+                    method: "message/send".into(),
+                    caller: CallerContext::default(),
+                    latency_ms: 300,
+                },
+                error: "timeout".into(),
+            })
+            .await;
+
+        let snap = collector.snapshot();
+        let route = snap
+            .routes
+            .get("agent:upstream")
+            .expect("route should exist");
+        assert_eq!(route.total_requests, 1);
+        assert_eq!(route.total_errors, 1);
+        assert_eq!(route.by_endpoint["message/send"].total_errors, 1);
     }
 }

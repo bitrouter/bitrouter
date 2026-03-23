@@ -1,11 +1,16 @@
 use std::sync::Arc;
 
-use bitrouter_api::router::{admin, anthropic, google, models, openai, routes};
+use bitrouter_api::router::{admin, admin_agents, admin_tools, models, routes};
+use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
-use bitrouter_core::observe::{CallerContext, ObserveCallback};
+use bitrouter_core::observe::{
+    AgentObserveCallback, CallerContext, ObserveCallback, ToolObserveCallback,
+};
 use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::model_router::LanguageModelRouter;
+use bitrouter_core::routers::registry::ModelRegistry;
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
+use bitrouter_observe::agent_observer::AgentSpendObserver;
 use bitrouter_observe::composite::CompositeObserver;
 use bitrouter_observe::cost::Pricing;
 use bitrouter_observe::metrics::MetricsCollector;
@@ -13,8 +18,11 @@ use bitrouter_observe::observer::SpendObserver;
 use bitrouter_observe::spend::memory::InMemorySpendStore;
 use bitrouter_observe::spend::sea_orm_store::SeaOrmSpendStore;
 use bitrouter_observe::spend::store;
+use bitrouter_observe::tool_observer::ToolSpendObserver;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
+
+use bitrouter_api::router::mcp as mcp_admin;
 
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
 use crate::runtime::error::Result;
@@ -23,18 +31,21 @@ use crate::runtime::error::Result;
 /// also implement `PricingLookup` so that handlers can compute per-request costs.
 #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
 pub(crate) trait ServerTableBound:
-    AdminRoutingTable + bitrouter_api::mpp::PricingLookup
+    AdminRoutingTable + ModelRegistry + bitrouter_api::mpp::PricingLookup
 {
 }
 
 #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
-impl<T: AdminRoutingTable + bitrouter_api::mpp::PricingLookup> ServerTableBound for T {}
+impl<T: AdminRoutingTable + ModelRegistry + bitrouter_api::mpp::PricingLookup> ServerTableBound
+    for T
+{
+}
 
 #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
-pub(crate) trait ServerTableBound: AdminRoutingTable {}
+pub(crate) trait ServerTableBound: AdminRoutingTable + ModelRegistry {}
 
 #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
-impl<T: AdminRoutingTable> ServerTableBound for T {}
+impl<T: AdminRoutingTable + ModelRegistry> ServerTableBound for T {}
 
 pub struct ServerPlan<T, R> {
     config: BitrouterConfig,
@@ -45,7 +56,7 @@ pub struct ServerPlan<T, R> {
 
 impl<T, R> ServerPlan<T, R>
 where
-    T: AdminRoutingTable + Send + Sync + 'static,
+    T: ServerTableBound + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     pub fn new(config: BitrouterConfig, table: Arc<T>, router: Arc<R>) -> Self {
@@ -111,13 +122,41 @@ where
             }
         };
 
-        // Compose observers: spend tracking + metrics aggregation.
-        let spend_observer = Arc::new(SpendObserver::new(spend_store, Arc::new(pricing_fn)));
+        // Compose observers: spend tracking + metrics aggregation for all service types.
+        let spend_observer = Arc::new(SpendObserver::new(
+            spend_store.clone(),
+            Arc::new(pricing_fn),
+        ));
+        let tool_pricing = self.config.mcp_server_pricing.clone();
+        let tool_cost_fn: bitrouter_observe::tool_observer::ToolCostFn =
+            Arc::new(move |server: &str, tool: &str| {
+                tool_pricing.get(server).map_or(0.0, |p| p.cost_for(tool))
+            });
+        let tool_spend_observer =
+            Arc::new(ToolSpendObserver::new(spend_store.clone(), tool_cost_fn));
+
+        let agent_pricing = self.config.a2a_agent_pricing.clone();
+        let agent_cost_fn: bitrouter_observe::agent_observer::AgentCostFn =
+            Arc::new(move |agent: &str, method: &str| {
+                agent_pricing.get(agent).map_or(0.0, |p| p.cost_for(method))
+            });
+        let agent_spend_observer = Arc::new(AgentSpendObserver::new(spend_store, agent_cost_fn));
         let metrics_collector = Arc::new(MetricsCollector::new());
-        let observer: Arc<dyn ObserveCallback> = Arc::new(CompositeObserver::new(vec![
-            spend_observer as Arc<dyn ObserveCallback>,
-            metrics_collector.clone() as Arc<dyn ObserveCallback>,
-        ]));
+        let composite = Arc::new(CompositeObserver::new(
+            vec![
+                spend_observer as Arc<dyn ObserveCallback>,
+                metrics_collector.clone() as Arc<dyn ObserveCallback>,
+            ],
+            vec![
+                tool_spend_observer as Arc<dyn ToolObserveCallback>,
+                metrics_collector.clone() as Arc<dyn ToolObserveCallback>,
+            ],
+            vec![
+                agent_spend_observer as Arc<dyn AgentObserveCallback>,
+                metrics_collector.clone() as Arc<dyn AgentObserveCallback>,
+            ],
+        ));
+        let observer: Arc<dyn ObserveCallback> = composite.clone();
 
         let health = warp::path("health")
             .and(warp::get())
@@ -147,14 +186,7 @@ where
             let auth_filter = auth::openai_auth(auth_ctx.clone());
             warp::any()
                 .and(auth_filter)
-                .map(|id: bitrouter_accounts::identity::Identity| CallerContext {
-                    account_id: Some(id.account_id.0.to_string()),
-                    models: id.models,
-                    budget: id.budget,
-                    budget_scope: id.budget_scope,
-                    budget_range: id.budget_range,
-                    chain: id.chain,
-                })
+                .map(identity_to_caller_context)
                 .boxed()
         } else {
             warp::any().map(CallerContext::default).boxed()
@@ -164,14 +196,7 @@ where
             let auth_filter = auth::anthropic_auth(auth_ctx.clone());
             warp::any()
                 .and(auth_filter)
-                .map(|id: bitrouter_accounts::identity::Identity| CallerContext {
-                    account_id: Some(id.account_id.0.to_string()),
-                    models: id.models,
-                    budget: id.budget,
-                    budget_scope: id.budget_scope,
-                    budget_range: id.budget_range,
-                    chain: id.chain,
-                })
+                .map(identity_to_caller_context)
                 .boxed()
         } else {
             warp::any().map(CallerContext::default).boxed()
@@ -289,7 +314,7 @@ where
                     self.table.clone(),
                     guarded_router.clone(),
                     observer.clone(),
-                    account_filter,
+                    account_filter.clone(),
                 )
                 .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                 .boxed(),
@@ -323,11 +348,196 @@ where
                 self.table.clone(),
                 guarded_router.clone(),
                 observer.clone(),
-                account_filter,
+                account_filter.clone(),
             );
 
-        // Build the full route tree. Account/session management routes are
-        // only mounted when a database is configured.
+        // ── MCP registry ─────────────────────────────────────────────
+        let (admin_tool_routes, mcp_server, tool_list, _refresh_guard) = {
+            use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
+            use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
+            use bitrouter_mcp::client::registry::ConfigMcpRegistry;
+
+            let mcp_configs = self.config.mcp_servers.clone();
+            let mcp_groups = self.config.mcp_groups.clone();
+
+            // Extract initial filters and restrictions from config for the wrapper.
+            let initial_filters: std::collections::HashMap<String, ToolFilter> = self
+                .config
+                .mcp_servers
+                .iter()
+                .filter_map(|cfg| cfg.tool_filter.clone().map(|f| (cfg.name.clone(), f)))
+                .collect();
+            let initial_restrictions: std::collections::HashMap<String, ParamRestrictions> = self
+                .config
+                .mcp_servers
+                .iter()
+                .filter(|cfg| !cfg.param_restrictions.rules.is_empty())
+                .map(|cfg| (cfg.name.clone(), cfg.param_restrictions.clone()))
+                .collect();
+            let groups = self.config.mcp_groups.as_map().clone();
+
+            let (registry, refresh_guard) =
+                match ConfigMcpRegistry::from_configs(mcp_configs, mcp_groups).await {
+                    Ok(reg) => {
+                        tracing::info!(
+                            "MCP registry started with {} upstreams",
+                            self.config.mcp_servers.len()
+                        );
+                        // Build Arc first so we can spawn refresh listeners,
+                        // then wrap with DynamicToolRegistry.
+                        let inner = Arc::new(reg);
+                        let guard = inner.spawn_refresh_listeners().await;
+                        let wrapped = Arc::new(DynamicToolRegistry::new(
+                            inner,
+                            initial_filters,
+                            initial_restrictions,
+                            groups,
+                        ));
+                        (Some(wrapped), Some(guard))
+                    }
+                    Err(e) => {
+                        tracing::warn!("MCP registry failed to start: {e}");
+                        (None, None)
+                    }
+                };
+
+            let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
+                .and(admin_tools::admin_tools_filter(registry.clone()));
+
+            // Build MCP server filter with tool call observation.
+            let tool_observer: Arc<dyn ToolObserveCallback> = composite.clone();
+            let server = mcp_admin::mcp_server_filter_with_observe(
+                registry.clone(),
+                tool_observer,
+                account_filter.clone(),
+            );
+            // Compose MCP tools + config skills into a single ToolRegistry
+            // for the unified GET /v1/tools endpoint.
+            let skill_entries: Vec<bitrouter_core::routers::registry::ToolEntry> = self
+                .config
+                .skills
+                .iter()
+                .map(|cfg| bitrouter_core::routers::registry::ToolEntry {
+                    id: format!("skill/{}", cfg.name),
+                    name: Some(cfg.name.clone()),
+                    provider: "skill".to_string(),
+                    description: Some(cfg.description.clone()),
+                    input_schema: None,
+                })
+                .collect();
+
+            let tools = if !skill_entries.is_empty() {
+                let skill_reg = bitrouter_skills::registry::ConfigSkillRegistry::new(skill_entries);
+                if let Some(ref mcp_reg) = registry {
+                    let composite = Arc::new(
+                        bitrouter_core::routers::registry::CompositeToolRegistry::new(
+                            mcp_reg.clone(),
+                            skill_reg,
+                        ),
+                    );
+                    bitrouter_api::router::tools::tools_filter(Some(composite))
+                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                        .boxed()
+                } else {
+                    bitrouter_api::router::tools::tools_filter(Some(Arc::new(skill_reg)))
+                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                        .boxed()
+                }
+            } else {
+                bitrouter_api::router::tools::tools_filter(registry)
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            };
+
+            (admin, server, tools, refresh_guard)
+        };
+
+        // ── Skills registry ───────────────────────────────────────────
+        let skills_list = if let Some(ref db) = self.db {
+            let skill_registry =
+                Arc::new(bitrouter_skills::registry::SkillRegistry::new(db.clone()));
+            bitrouter_api::router::skills::skills_filter(skill_registry)
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed()
+        } else {
+            // No DB — return 404 for all skills endpoints.
+            warp::path!("v1" / "skills" / ..)
+                .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
+                .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed()
+        };
+
+        // ── A2A protocol ─────────────────────────────────────────────
+        let (a2a_routes, admin_agent_routes, agent_list, _a2a_refresh_guard) = {
+            use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
+            use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
+
+            let external_base_url = format!("http://{}/a2a", self.config.server.listen);
+            let a2a_configs = self.config.a2a_agents.clone();
+
+            let reg = UpstreamAgentRegistry::from_configs(a2a_configs, external_base_url).await;
+
+            let (gateway_reg, discovery_reg, refresh_guard) = if reg.has_agents() {
+                tracing::info!("A2A gateway started");
+                let inner = Arc::new(reg);
+                let guard = inner.spawn_refresh_listeners();
+                let wrapped = Arc::new(DynamicAgentRegistry::new(Arc::clone(&inner)));
+                (Some(inner), Some(wrapped), Some(guard))
+            } else {
+                (None, None, None)
+            };
+
+            let agent_observer: Option<Arc<dyn AgentObserveCallback>> =
+                Some(composite.clone() as Arc<dyn AgentObserveCallback>);
+
+            let a2a_account_filter = if self.db.is_some() {
+                let auth_filter = auth::openai_auth(auth_ctx.clone());
+                warp::any()
+                    .and(auth_filter)
+                    .map(identity_to_caller_context)
+                    .boxed()
+            } else {
+                warp::any().map(CallerContext::default).boxed()
+            };
+
+            let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
+                .and(admin_agents::admin_agents_filter(discovery_reg.clone()));
+            let agents = bitrouter_api::router::agents::agents_filter(discovery_reg);
+
+            (
+                bitrouter_api::router::a2a::a2a_gateway_filter(
+                    gateway_reg,
+                    agent_observer,
+                    a2a_account_filter,
+                ),
+                admin,
+                agents,
+                refresh_guard,
+            )
+        };
+
+        // ── Base route tree (always present) ─────────────────────────
+        let base = health
+            .or(metrics_route)
+            .or(route_list)
+            .or(model_list)
+            .or(admin_routes)
+            .or(chat)
+            .or(messages)
+            .or(responses)
+            .or(generate_content);
+
+        // ── Compose all routes ─────────────────────────────────────────
+        let all_routes = base
+            .or(a2a_routes)
+            .or(admin_agent_routes)
+            .or(agent_list)
+            .or(admin_tool_routes)
+            .or(tool_list)
+            .or(skills_list)
+            .or(mcp_server);
+
+        // ── Serve ────────────────────────────────────────────────────
         if let Some(ref db) = self.db {
             let db_conn = db.as_ref().clone();
             let mgmt_auth = auth::management_auth(auth_ctx.clone());
@@ -335,15 +545,7 @@ where
                 bitrouter_accounts::filters::account_routes(db_conn.clone(), mgmt_auth.clone());
             let sess = bitrouter_accounts::filters::session_routes(db_conn, mgmt_auth);
 
-            let all = health
-                .or(metrics_route)
-                .or(route_list)
-                .or(model_list)
-                .or(admin_routes)
-                .or(chat)
-                .or(messages)
-                .or(responses)
-                .or(generate_content)
+            let all = all_routes
                 .or(acct)
                 .or(sess)
                 .recover(handle_auth_rejection)
@@ -356,15 +558,7 @@ where
                 .graceful(shutdown_signal());
             server.run().await;
         } else {
-            let all = health
-                .or(metrics_route)
-                .or(route_list)
-                .or(model_list)
-                .or(admin_routes)
-                .or(chat)
-                .or(messages)
-                .or(responses)
-                .or(generate_content)
+            let all = all_routes
                 .recover(handle_auth_rejection)
                 .with(warp::trace::request());
 
@@ -381,10 +575,21 @@ where
     }
 }
 
+/// Map an authenticated [`Identity`] to the transport-neutral [`CallerContext`].
+fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> CallerContext {
+    CallerContext {
+        account_id: Some(id.account_id.0.to_string()),
+        models: id.models,
+        tools: id.tools,
+        budget: id.budget,
+        budget_scope: id.budget_scope,
+        budget_range: id.budget_range,
+        chain: id.chain,
+    }
+}
+
 /// Convert an auth filter into a gate that rejects unauthorized requests
-/// but does not add anything to the extract tuple. This lets us compose
-/// `auth_gate(auth).and(existing_filter)` without changing the existing
-/// filter's handler signature.
+/// but does not add anything to the extract tuple.
 fn auth_gate(
     auth: impl Filter<Extract = (bitrouter_accounts::identity::Identity,), Error = warp::Rejection>
     + Clone,

@@ -1,9 +1,12 @@
+pub mod agent;
 pub mod config;
 pub mod detect;
 pub mod env;
 pub mod error;
 pub mod registry;
 pub mod routing;
+pub mod skill;
+pub mod tool;
 pub mod writer;
 
 #[cfg(feature = "mpp-solana")]
@@ -17,4 +20,5 @@ pub use detect::{DetectedProvider, detect_providers, detect_providers_from_env};
 pub use error::{ConfigError, Result};
 pub use registry::{BuiltinProvider, builtin_provider_defs};
 pub use routing::{ConfigRoutingTable, ResolvedTarget};
+pub use skill::{SkillConfig, SkillRequiredApi};
 pub use writer::{CustomProviderInit, InitOptions, InitResult, write_init_config};

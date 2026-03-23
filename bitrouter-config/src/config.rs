@@ -7,8 +7,11 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent::AgentPricing;
 use crate::env::{load_env, substitute_in_value};
 use crate::registry::{builtin_providers, merge_provider, resolve_providers};
+use crate::skill::SkillConfig;
+use crate::tool::ToolPricing;
 
 // ── Top-level configuration ──────────────────────────────────────────
 
@@ -41,6 +44,30 @@ pub struct BitrouterConfig {
     /// Model routing definitions.
     #[serde(default)]
     pub models: HashMap<String, ModelConfig>,
+
+    /// MCP upstream server configurations.
+    #[serde(default)]
+    pub mcp_servers: Vec<bitrouter_core::routers::upstream::ToolServerConfig>,
+
+    /// Named groups of tool servers for access control convenience.
+    #[serde(default)]
+    pub mcp_groups: bitrouter_core::routers::upstream::ToolServerAccessGroups,
+
+    /// Upstream A2A agents to proxy through the gateway.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub a2a_agents: Vec<bitrouter_core::routers::upstream::AgentConfig>,
+
+    /// Per-server tool invocation pricing. Keys are MCP server names.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub mcp_server_pricing: HashMap<String, ToolPricing>,
+
+    /// Per-agent invocation pricing. Keys are agent names.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub a2a_agent_pricing: HashMap<String, AgentPricing>,
+
+    /// Skill definitions for the skills registry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<SkillConfig>,
 }
 
 impl BitrouterConfig {
@@ -475,7 +502,6 @@ pub struct ModelConfig {
 
     pub endpoints: Vec<ModelEndpoint>,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -579,97 +605,6 @@ providers:
     }
 
     #[test]
-    fn model_info_round_trips_through_yaml() {
-        let yaml = r#"
-name: "GPT-4o"
-description: "Multimodal flagship model"
-max_input_tokens: 128000
-max_output_tokens: 16384
-input_modalities:
-  - text
-  - image
-output_modalities:
-  - text
-pricing:
-  input_tokens:
-    no_cache: 2.50
-    cache_read: 1.25
-    cache_write: 2.50
-  output_tokens:
-    text: 10.00
-    reasoning: 10.00
-"#;
-        let info: ModelInfo = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(info.name.as_deref(), Some("GPT-4o"));
-        assert_eq!(
-            info.description.as_deref(),
-            Some("Multimodal flagship model")
-        );
-        assert_eq!(info.max_input_tokens, Some(128000));
-        assert_eq!(info.max_output_tokens, Some(16384));
-        assert_eq!(info.input_modalities, vec![Modality::Text, Modality::Image]);
-        assert_eq!(info.output_modalities, vec![Modality::Text]);
-        assert_eq!(info.pricing.input_tokens.no_cache, 2.50);
-        assert_eq!(info.pricing.input_tokens.cache_read, 1.25);
-        assert_eq!(info.pricing.input_tokens.cache_write, 2.50);
-        assert_eq!(info.pricing.output_tokens.text, 10.00);
-        assert_eq!(info.pricing.output_tokens.reasoning, 10.00);
-
-        // Round-trip
-        let serialized = serde_yaml::to_string(&info).unwrap();
-        let deserialized: ModelInfo = serde_yaml::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.name, info.name);
-        assert_eq!(deserialized.pricing.input_tokens.no_cache, 2.50);
-
-        // Legacy "context_length" alias still works
-        let legacy_yaml = "context_length: 200000";
-        let legacy: ModelInfo = serde_yaml::from_str(legacy_yaml).unwrap();
-        assert_eq!(legacy.max_input_tokens, Some(200000));
-    }
-
-    #[test]
-    fn empty_model_info_deserializes_to_defaults() {
-        let info: ModelInfo = serde_yaml::from_str("{}").unwrap();
-        assert!(info.name.is_none());
-        assert!(info.description.is_none());
-        assert!(info.max_input_tokens.is_none());
-        assert!(info.max_output_tokens.is_none());
-        assert!(info.input_modalities.is_empty());
-        assert!(info.output_modalities.is_empty());
-        assert_eq!(info.pricing.input_tokens.no_cache, 0.0);
-        assert_eq!(info.pricing.output_tokens.text, 0.0);
-    }
-
-    #[test]
-    fn file_modality_round_trips_through_yaml() {
-        let yaml = r#"
-input_modalities:
-  - text
-  - file
-output_modalities:
-  - text
-  - file
-"#;
-        let info: ModelInfo = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(info.input_modalities, vec![Modality::Text, Modality::File]);
-        assert_eq!(info.output_modalities, vec![Modality::Text, Modality::File]);
-
-        let serialized = serde_yaml::to_string(&info).unwrap();
-        let deserialized: ModelInfo = serde_yaml::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.input_modalities, info.input_modalities);
-        assert_eq!(deserialized.output_modalities, info.output_modalities);
-    }
-
-    #[test]
-    fn modality_display_uses_lowercase_words() {
-        assert_eq!(Modality::Text.to_string(), "text");
-        assert_eq!(Modality::Image.to_string(), "image");
-        assert_eq!(Modality::Audio.to_string(), "audio");
-        assert_eq!(Modality::Video.to_string(), "video");
-        assert_eq!(Modality::File.to_string(), "file");
-    }
-
-    #[test]
     fn load_with_provider_model_metadata() {
         let yaml = r#"
 providers:
@@ -708,6 +643,30 @@ providers:
         let mini = &models["gpt-4o-mini"];
         assert_eq!(mini.name.as_deref(), Some("GPT-4o Mini"));
         assert_eq!(mini.pricing.input_tokens.no_cache, 0.0); // default
+    }
+
+    #[test]
+    fn load_with_a2a_agents_config() {
+        let yaml = r#"
+a2a_agents:
+  - name: "upstream-agent"
+    url: "https://agent.example.com"
+    headers:
+      Authorization: "Bearer tok123"
+  - name: "search-agent"
+    url: "https://search.example.com"
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        assert_eq!(config.a2a_agents.len(), 2);
+        let agent = &config.a2a_agents[0];
+        assert_eq!(agent.name, "upstream-agent");
+        assert_eq!(agent.url, "https://agent.example.com");
+        assert_eq!(
+            agent.headers.get("Authorization").map(String::as_str),
+            Some("Bearer tok123")
+        );
+        assert!(agent.card_path.is_none());
+        assert_eq!(config.a2a_agents[1].name, "search-agent");
     }
 
     #[test]

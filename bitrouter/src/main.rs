@@ -111,9 +111,25 @@ enum Command {
         #[arg(long)]
         budget_range: Option<String>,
 
+        /// Comma-separated list of allowed tool patterns (e.g., "github/*,jira/search")
+        #[arg(long, value_delimiter = ',')]
+        tools: Option<Vec<String>>,
+
         /// Optional label for saving the token locally
         #[arg(long)]
         name: Option<String>,
+    },
+
+    /// Inspect upstream agents on a running daemon
+    Agents {
+        #[command(subcommand)]
+        action: AgentsAction,
+    },
+
+    /// Inspect MCP tools on a running daemon
+    Tools {
+        #[command(subcommand)]
+        action: ToolsAction,
     },
 
     /// Manage locally-stored JWTs for the active account
@@ -160,6 +176,22 @@ enum RouteAction {
         /// Model name to remove
         model: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentsAction {
+    /// List configured upstream agents
+    List,
+    /// Show upstream agent connection health
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum ToolsAction {
+    /// List all tools from the running daemon
+    List,
+    /// Show upstream MCP server health
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -233,6 +265,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             scope,
             exp,
             models,
+            tools,
             budget,
             budget_scope,
             budget_range,
@@ -262,12 +295,34 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 scope,
                 exp,
                 models,
+                tools,
                 budget,
                 budget_scope,
                 budget_range,
                 name,
+                mcp_groups: bitrouter_core::routers::upstream::ToolServerAccessGroups::default(),
             };
             cli::keygen::run(&keys_dir, opts)?;
+            return Ok(());
+        }
+        Some(Command::Agents { action }) => {
+            let runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
+                .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+            let addr = runtime.config.server.listen;
+            match action {
+                AgentsAction::List => cli::agents::run_list(&keys_dir, addr)?,
+                AgentsAction::Status => cli::agents::run_status(&keys_dir, addr)?,
+            }
+            return Ok(());
+        }
+        Some(Command::Tools { action }) => {
+            let runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
+                .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+            let addr = runtime.config.server.listen;
+            match action {
+                ToolsAction::List => cli::tools::run_list(&keys_dir, addr)?,
+                ToolsAction::Status => cli::tools::run_status(&keys_dir, addr)?,
+            }
             return Ok(());
         }
         Some(Command::Keys { list, show, rm }) => {
@@ -432,14 +487,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Some(Command::Restart) => runtime.restart().await?,
-        Some(
-            Command::Init
-            | Command::Account { .. }
-            | Command::Keygen { .. }
-            | Command::Keys { .. }
-            | Command::Route { .. }
-            | Command::Sudo { .. },
-        ) => {
+        _ => {
+            // All other commands (Init, A2a, Account, Keygen, Keys, Route,
+            // Sudo, Tools) are handled above and return early.
             unreachable!()
         }
     }
