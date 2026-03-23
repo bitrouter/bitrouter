@@ -17,7 +17,10 @@ base64 = "0.22"
 bytes = "1"
 regex = "1.12"
 reqwest = { version = "0.13", default-features = false, features = [
-    "json", "query", "rustls", "stream"
+    "json",
+    "query",
+    "rustls",
+    "stream",
 ] }
 reqwest-middleware = { version = "0.5", features = ["json", "query"] }
 schemars = { version = "1.2", default-features = false, features = ["std"] }
