@@ -153,7 +153,9 @@ impl<T: SkillService> SkillService for std::sync::Arc<T> {
         source: Option<String>,
         required_apis: Vec<String>,
     ) -> Result<SkillEntry, String> {
-        (**self).create(name, description, source, required_apis).await
+        (**self)
+            .create(name, description, source, required_apis)
+            .await
     }
 
     async fn list(&self) -> Result<Vec<SkillEntry>, String> {

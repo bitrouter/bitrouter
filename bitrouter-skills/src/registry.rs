@@ -7,9 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use uuid::Uuid;
 
 use bitrouter_core::routers::registry::{SkillEntry, SkillService, ToolEntry, ToolRegistry};
@@ -75,9 +73,10 @@ impl SkillRegistry {
             } else {
                 Some(serde_json::to_value(&skill.metadata).unwrap_or_default())
             }),
-            allowed_tools: Set(skill.allowed_tools.as_ref().map(|tools| {
-                serde_json::to_value(tools).unwrap_or_default()
-            })),
+            allowed_tools: Set(skill
+                .allowed_tools
+                .as_ref()
+                .map(|tools| serde_json::to_value(tools).unwrap_or_default())),
             source_type: Set(skill.source.to_string()),
             source_url: Set(None),
             required_apis: Set(serde_json::to_value(&skill.required_apis).unwrap_or_default()),
@@ -174,9 +173,7 @@ impl SkillService for SkillRegistry {
     }
 
     async fn list(&self) -> Result<Vec<SkillEntry>, String> {
-        let skills = SkillRegistry::list(self)
-            .await
-            .map_err(|e| e.to_string())?;
+        let skills = SkillRegistry::list(self).await.map_err(|e| e.to_string())?;
         Ok(skills.iter().map(skill_to_entry).collect())
     }
 
@@ -218,8 +215,8 @@ fn model_to_skill(m: skill::Model) -> Skill {
         .as_ref()
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    let required_apis: Vec<String> = serde_json::from_value(m.required_apis.clone())
-        .unwrap_or_default();
+    let required_apis: Vec<String> =
+        serde_json::from_value(m.required_apis.clone()).unwrap_or_default();
 
     let source = match m.source_type.as_str() {
         "manual" => SkillSource::Manual,
@@ -294,9 +291,10 @@ mod tests {
 
     #[tokio::test]
     async fn config_skill_registry_arc_delegates() {
-        let reg = Arc::new(ConfigSkillRegistry::new(vec![
-            test_entry("test", "Test skill"),
-        ]));
+        let reg = Arc::new(ConfigSkillRegistry::new(vec![test_entry(
+            "test",
+            "Test skill",
+        )]));
 
         let tools = ToolRegistry::list_tools(&*reg).await;
         assert_eq!(tools.len(), 1);

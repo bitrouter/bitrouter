@@ -46,7 +46,10 @@ description: "Reviews code for quality and security issues"
 "#;
         let config: SkillConfig = serde_yaml::from_str(yaml).expect("deserialize");
         assert_eq!(config.name, "code-review");
-        assert_eq!(config.description, "Reviews code for quality and security issues");
+        assert_eq!(
+            config.description,
+            "Reviews code for quality and security issues"
+        );
         assert!(config.source.is_none());
         assert!(config.required_apis.is_empty());
 
@@ -68,7 +71,10 @@ required_apis:
 "#;
         let config: SkillConfig = serde_yaml::from_str(yaml).expect("deserialize");
         assert_eq!(config.name, "translate");
-        assert_eq!(config.source.as_deref(), Some("https://github.com/example/translate-skill"));
+        assert_eq!(
+            config.source.as_deref(),
+            Some("https://github.com/example/translate-skill")
+        );
         assert_eq!(config.required_apis.len(), 2);
         assert_eq!(config.required_apis[0].provider, "deepl");
         assert_eq!(config.required_apis[1].provider, "openai");
