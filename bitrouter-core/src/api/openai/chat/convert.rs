@@ -550,10 +550,7 @@ mod tests {
         assert_eq!(tc.len(), 1);
         assert_eq!(tc[0].id, "call_abc123");
         assert_eq!(tc[0].function.name, "get_weather");
-        assert_eq!(
-            tc[0].function.arguments,
-            r#"{"location":"San Francisco"}"#
-        );
+        assert_eq!(tc[0].function.arguments, r#"{"location":"San Francisco"}"#);
 
         let tool_msg = &req.messages[2];
         assert_eq!(tool_msg.role, "tool");
@@ -1021,10 +1018,7 @@ mod tests {
         };
         let resp = from_generate_result("gpt-4o", result);
         assert!(resp.choices[0].message.content.is_none());
-        assert_eq!(
-            resp.choices[0].finish_reason.as_deref(),
-            Some("tool_calls")
-        );
+        assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("tool_calls"));
         let tc = resp.choices[0]
             .message
             .tool_calls
@@ -1051,10 +1045,7 @@ mod tests {
         assert_eq!(chunk.object, "chat.completion.chunk");
         assert_eq!(chunk.model, "gpt-4");
         assert_eq!(chunk.id, "stream-1");
-        assert_eq!(
-            chunk.choices[0].delta.content.as_deref(),
-            Some("Hello")
-        );
+        assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hello"));
         assert!(chunk.choices[0].delta.tool_calls.is_none());
         assert!(chunk.choices[0].finish_reason.is_none());
     }
@@ -1115,10 +1106,7 @@ mod tests {
         assert!(tc[0].id.is_none());
         assert!(tc[0].r#type.is_none());
         assert_eq!(
-            tc[0]
-                .function
-                .as_ref()
-                .and_then(|f| f.arguments.as_deref()),
+            tc[0].function.as_ref().and_then(|f| f.arguments.as_deref()),
             Some(r#"{"query":"rust"}"#)
         );
     }
@@ -1395,10 +1383,7 @@ mod tests {
             map_finish_reason(&LanguageModelFinishReason::ContentFilter),
             "content_filter"
         );
-        assert_eq!(
-            map_finish_reason(&LanguageModelFinishReason::Error),
-            "stop"
-        );
+        assert_eq!(map_finish_reason(&LanguageModelFinishReason::Error), "stop");
         assert_eq!(
             map_finish_reason(&LanguageModelFinishReason::Other("unknown".to_owned())),
             "stop"
