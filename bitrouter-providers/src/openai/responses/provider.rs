@@ -24,8 +24,8 @@ use tokio_util::sync::CancellationToken;
 use crate::openai::chat::provider::OpenAiConfig;
 
 use super::api::{
-    ByteStream, OPENAI_PROVIDER_NAME, OpenAiResponse, OpenAiResponsesRequest, drive_sse_stream,
-    parse_openai_error,
+    ByteStream, OPENAI_PROVIDER_NAME, build_responses_request, drive_sse_stream,
+    parse_openai_error, response_to_generate_result,
 };
 
 #[derive(Clone)]
@@ -59,7 +59,7 @@ impl OpenAiResponsesModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        let request = OpenAiResponsesRequest::from_call_options(&self.model_id, &options, false)?;
+        let request = build_responses_request(&self.model_id, &options, false)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),
@@ -96,7 +96,7 @@ impl OpenAiResponsesModel {
                 },
             )
             .await?;
-        let completion: OpenAiResponse =
+        let completion: bitrouter_core::api::openai::responses::types::ResponsesResponse =
             serde_json::from_value(response_body.clone()).map_err(|error| {
                 BitrouterError::response_decode(
                     Some(OPENAI_PROVIDER_NAME),
@@ -105,7 +105,8 @@ impl OpenAiResponsesModel {
                 )
             })?;
 
-        completion.into_generate_result(
+        response_to_generate_result(
+            completion,
             Some(request_headers),
             request_body,
             Some(response_headers),
@@ -117,7 +118,7 @@ impl OpenAiResponsesModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
-        let request = OpenAiResponsesRequest::from_call_options(&self.model_id, &options, true)?;
+        let request = build_responses_request(&self.model_id, &options, true)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),

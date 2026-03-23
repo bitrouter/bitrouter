@@ -24,7 +24,7 @@ use super::types::{
     ChatCompletionChunkChoice, ChatCompletionChunkDelta, ChatCompletionRequest,
     ChatCompletionResponse, ChatCompletionUsage, ChatContentPart, ChatMessage, ChatMessageContent,
     ChatResponseToolCall, ChatResponseToolCallDelta, ChatResponseToolCallDeltaFunction,
-    ChatResponseToolCallFunction,
+    ChatResponseToolCallFunction, ChatToolChoice,
 };
 use crate::api::util::{generate_id, now_unix};
 
@@ -56,7 +56,7 @@ pub fn to_call_options(request: ChatCompletionRequest) -> LanguageModelCallOptio
             .collect()
     });
 
-    let tool_choice = request.tool_choice.and_then(convert_tool_choice);
+    let tool_choice = request.tool_choice.as_ref().and_then(convert_tool_choice);
 
     LanguageModelCallOptions {
         prompt,
@@ -91,22 +91,26 @@ pub fn from_generate_result(
 
     ChatCompletionResponse {
         id: format!("chatcmpl-{}", generate_id()),
-        object: "chat.completion".to_owned(),
+        object: Some("chat.completion".to_owned()),
         created: now_unix(),
         model: model_id.to_owned(),
+        system_fingerprint: None,
         choices: vec![ChatCompletionChoice {
             index: 0,
             message: ChatCompletionChoiceMessage {
                 role: "assistant".to_owned(),
                 content,
+                refusal: None,
                 tool_calls,
             },
             finish_reason: Some(finish_reason),
         }],
         usage: Some(ChatCompletionUsage {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens: prompt_tokens + completion_tokens,
+            prompt_tokens: Some(prompt_tokens),
+            completion_tokens: Some(completion_tokens),
+            total_tokens: Some(prompt_tokens + completion_tokens),
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
         }),
     }
 }
@@ -230,9 +234,11 @@ impl StreamConverter {
                     },
                     Some(map_finish_reason(finish_reason)),
                     Some(ChatCompletionUsage {
-                        prompt_tokens,
-                        completion_tokens,
-                        total_tokens: prompt_tokens + completion_tokens,
+                        prompt_tokens: Some(prompt_tokens),
+                        completion_tokens: Some(completion_tokens),
+                        total_tokens: Some(prompt_tokens + completion_tokens),
+                        prompt_tokens_details: None,
+                        completion_tokens_details: None,
                     }),
                 ))
             }
@@ -248,7 +254,7 @@ impl StreamConverter {
     ) -> ChatCompletionChunk {
         ChatCompletionChunk {
             id: self.stream_id.clone(),
-            object: "chat.completion.chunk".to_owned(),
+            object: Some("chat.completion.chunk".to_owned()),
             created: now_unix(),
             model: self.model_id.clone(),
             choices: vec![ChatCompletionChunkChoice {
@@ -320,23 +326,17 @@ fn convert_message(msg: ChatMessage) -> LanguageModelMessage {
     }
 }
 
-fn convert_tool_choice(value: serde_json::Value) -> Option<LanguageModelToolChoice> {
-    match &value {
-        serde_json::Value::String(s) => match s.as_str() {
+fn convert_tool_choice(value: &ChatToolChoice) -> Option<LanguageModelToolChoice> {
+    match value {
+        ChatToolChoice::Mode(s) => match s.as_str() {
             "auto" => Some(LanguageModelToolChoice::Auto),
             "none" => Some(LanguageModelToolChoice::None),
             "required" => Some(LanguageModelToolChoice::Required),
             _ => None,
         },
-        serde_json::Value::Object(obj) => {
-            let name = obj
-                .get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(|n| n.as_str())
-                .map(|s| s.to_owned());
-            name.map(|tool_name| LanguageModelToolChoice::Tool { tool_name })
-        }
-        _ => None,
+        ChatToolChoice::Named { function, .. } => Some(LanguageModelToolChoice::Tool {
+            tool_name: function.name.clone(),
+        }),
     }
 }
 
@@ -370,8 +370,9 @@ fn content_to_string(content: Option<ChatMessageContent>) -> String {
         Some(ChatMessageContent::Text(s)) => s,
         Some(ChatMessageContent::Parts(parts)) => parts
             .into_iter()
-            .map(|p| match p {
-                ChatContentPart::Text { text } => text,
+            .filter_map(|p| match p {
+                ChatContentPart::Text { text } => Some(text),
+                ChatContentPart::ImageUrl { .. } => None,
             })
             .collect::<Vec<_>>()
             .join(""),
@@ -387,11 +388,12 @@ fn content_to_parts(content: Option<ChatMessageContent>) -> Vec<LanguageModelUse
         }],
         Some(ChatMessageContent::Parts(parts)) => parts
             .into_iter()
-            .map(|p| match p {
-                ChatContentPart::Text { text } => LanguageModelUserContent::Text {
+            .filter_map(|p| match p {
+                ChatContentPart::Text { text } => Some(LanguageModelUserContent::Text {
                     text,
                     provider_options: None,
-                },
+                }),
+                ChatContentPart::ImageUrl { .. } => None,
             })
             .collect(),
         None => vec![],
@@ -507,7 +509,10 @@ mod tests {
             Some("Get the current weather")
         );
         assert!(tools[0].function.parameters.is_some());
-        assert_eq!(req.tool_choice, Some(serde_json::json!("auto")));
+        match &req.tool_choice {
+            Some(ChatToolChoice::Mode(s)) => assert_eq!(s, "auto"),
+            other => panic!("expected Mode(\"auto\"), got {other:?}"),
+        }
     }
 
     #[test]
@@ -578,9 +583,11 @@ mod tests {
                 assert_eq!(parts.len(), 2);
                 match &parts[0] {
                     ChatContentPart::Text { text } => assert_eq!(text, "Hello "),
+                    other => panic!("expected Text, got {other:?}"),
                 }
                 match &parts[1] {
                     ChatContentPart::Text { text } => assert_eq!(text, "world!"),
+                    other => panic!("expected Text, got {other:?}"),
                 }
             }
             other => panic!("expected Parts content, got {other:?}"),
@@ -625,22 +632,26 @@ mod tests {
     fn serialize_text_response() {
         let resp = ChatCompletionResponse {
             id: "chatcmpl-123".to_owned(),
-            object: "chat.completion".to_owned(),
+            object: Some("chat.completion".to_owned()),
             created: 1700000000,
             model: "gpt-4".to_owned(),
+            system_fingerprint: None,
             choices: vec![ChatCompletionChoice {
                 index: 0,
                 message: ChatCompletionChoiceMessage {
                     role: "assistant".to_owned(),
                     content: Some("Hello!".to_owned()),
+                    refusal: None,
                     tool_calls: None,
                 },
                 finish_reason: Some("stop".to_owned()),
             }],
             usage: Some(ChatCompletionUsage {
-                prompt_tokens: 10,
-                completion_tokens: 5,
-                total_tokens: 15,
+                prompt_tokens: Some(10),
+                completion_tokens: Some(5),
+                total_tokens: Some(15),
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
             }),
         };
         let val = serde_json::to_value(&resp).expect("serialize failed");
@@ -657,14 +668,16 @@ mod tests {
     fn serialize_tool_call_response() {
         let resp = ChatCompletionResponse {
             id: "chatcmpl-456".to_owned(),
-            object: "chat.completion".to_owned(),
+            object: Some("chat.completion".to_owned()),
             created: 1700000000,
             model: "gpt-4".to_owned(),
+            system_fingerprint: None,
             choices: vec![ChatCompletionChoice {
                 index: 0,
                 message: ChatCompletionChoiceMessage {
                     role: "assistant".to_owned(),
                     content: None,
+                    refusal: None,
                     tool_calls: Some(vec![ChatResponseToolCall {
                         id: "call_abc".to_owned(),
                         r#type: "function".to_owned(),
@@ -691,7 +704,7 @@ mod tests {
     fn serialize_streaming_chunk_text_delta() {
         let chunk = ChatCompletionChunk {
             id: "chatcmpl-stream-1".to_owned(),
-            object: "chat.completion.chunk".to_owned(),
+            object: Some("chat.completion.chunk".to_owned()),
             created: 1700000000,
             model: "gpt-4".to_owned(),
             choices: vec![ChatCompletionChunkChoice {
@@ -718,7 +731,7 @@ mod tests {
         use super::super::types::{ChatResponseToolCallDelta, ChatResponseToolCallDeltaFunction};
         let chunk = ChatCompletionChunk {
             id: "chatcmpl-stream-2".to_owned(),
-            object: "chat.completion.chunk".to_owned(),
+            object: Some("chat.completion.chunk".to_owned()),
             created: 1700000000,
             model: "gpt-4".to_owned(),
             choices: vec![ChatCompletionChunkChoice {
@@ -752,7 +765,7 @@ mod tests {
     fn serialize_streaming_chunk_finish() {
         let chunk = ChatCompletionChunk {
             id: "chatcmpl-stream-3".to_owned(),
-            object: "chat.completion.chunk".to_owned(),
+            object: Some("chat.completion.chunk".to_owned()),
             created: 1700000000,
             model: "gpt-4".to_owned(),
             choices: vec![ChatCompletionChunkChoice {
@@ -765,9 +778,11 @@ mod tests {
                 finish_reason: Some("stop".to_owned()),
             }],
             usage: Some(ChatCompletionUsage {
-                prompt_tokens: 20,
-                completion_tokens: 30,
-                total_tokens: 50,
+                prompt_tokens: Some(20),
+                completion_tokens: Some(30),
+                total_tokens: Some(50),
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
             }),
         };
         let val = serde_json::to_value(&chunk).expect("serialize failed");
@@ -983,7 +998,7 @@ mod tests {
             warnings: None,
         };
         let resp = from_generate_result("gpt-4", result);
-        assert_eq!(resp.object, "chat.completion");
+        assert_eq!(resp.object.as_deref(), Some("chat.completion"));
         assert_eq!(resp.model, "gpt-4");
         assert_eq!(resp.choices.len(), 1);
         assert_eq!(
@@ -993,9 +1008,9 @@ mod tests {
         assert!(resp.choices[0].message.tool_calls.is_none());
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
         let usage = resp.usage.expect("usage missing");
-        assert_eq!(usage.prompt_tokens, 10);
-        assert_eq!(usage.completion_tokens, 5);
-        assert_eq!(usage.total_tokens, 15);
+        assert_eq!(usage.prompt_tokens, Some(10));
+        assert_eq!(usage.completion_tokens, Some(5));
+        assert_eq!(usage.total_tokens, Some(15));
     }
 
     #[test]
@@ -1042,7 +1057,7 @@ mod tests {
             provider_metadata: None,
         };
         let chunk = conv.convert(&part).expect("should produce chunk");
-        assert_eq!(chunk.object, "chat.completion.chunk");
+        assert_eq!(chunk.object.as_deref(), Some("chat.completion.chunk"));
         assert_eq!(chunk.model, "gpt-4");
         assert_eq!(chunk.id, "stream-1");
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hello"));
@@ -1149,9 +1164,9 @@ mod tests {
         assert!(chunk.choices[0].delta.content.is_none());
         assert!(chunk.choices[0].delta.tool_calls.is_none());
         let usage = chunk.usage.expect("usage missing");
-        assert_eq!(usage.prompt_tokens, 25);
-        assert_eq!(usage.completion_tokens, 30);
-        assert_eq!(usage.total_tokens, 55);
+        assert_eq!(usage.prompt_tokens, Some(25));
+        assert_eq!(usage.completion_tokens, Some(30));
+        assert_eq!(usage.total_tokens, Some(55));
     }
 
     #[test]

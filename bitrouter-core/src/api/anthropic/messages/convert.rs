@@ -20,8 +20,8 @@ use crate::models::{
 };
 
 use super::types::{
-    AnthropicContentBlock, AnthropicMessageContent, MessagesRequest, MessagesResponse,
-    MessagesResponseContent, MessagesStreamContentBlock, MessagesStreamDelta, MessagesStreamEvent,
+    AnthropicContentBlock, AnthropicMessageContent, AnthropicToolChoice, MessagesMessageDelta,
+    MessagesRequest, MessagesResponse, MessagesStreamDelta, MessagesStreamEvent,
     MessagesStreamMessage, MessagesUsage,
 };
 use crate::api::util::generate_id;
@@ -88,7 +88,7 @@ pub fn to_call_options(request: MessagesRequest) -> LanguageModelCallOptions {
             .collect()
     });
 
-    let tool_choice = request.tool_choice.and_then(convert_tool_choice);
+    let tool_choice = request.tool_choice.as_ref().and_then(convert_tool_choice);
 
     LanguageModelCallOptions {
         prompt,
@@ -129,10 +129,12 @@ pub fn from_generate_result(
         model: model_id.to_owned(),
         stop_reason: Some(stop_reason),
         stop_sequence: None,
-        usage: MessagesUsage {
-            input_tokens,
-            output_tokens,
-        },
+        usage: Some(MessagesUsage {
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(output_tokens),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        }),
     }
 }
 
@@ -158,35 +160,24 @@ impl StreamConverter {
     pub fn convert(&mut self, part: &LanguageModelStreamPart) -> Vec<MessagesStreamEvent> {
         match part {
             LanguageModelStreamPart::TextDelta { delta, .. } => {
-                vec![MessagesStreamEvent {
-                    event_type: "content_block_delta".to_owned(),
-                    index: Some(0),
-                    delta: Some(MessagesStreamDelta {
-                        delta_type: "text_delta".to_owned(),
-                        text: Some(delta.clone()),
-                        stop_reason: None,
-                        partial_json: None,
-                    }),
-                    message: None,
-                    content_block: None,
+                vec![MessagesStreamEvent::ContentBlockDelta {
+                    index: 0,
+                    delta: MessagesStreamDelta::TextDelta {
+                        text: delta.clone(),
+                    },
                 }]
             }
             LanguageModelStreamPart::ToolInputStart { id, tool_name, .. } => {
                 let index = self.next_block_index;
                 self.tool_id_to_index.insert(id.clone(), index);
                 self.next_block_index += 1;
-                vec![MessagesStreamEvent {
-                    event_type: "content_block_start".to_owned(),
-                    index: Some(index),
-                    delta: None,
-                    message: None,
-                    content_block: Some(MessagesStreamContentBlock {
-                        block_type: "tool_use".to_owned(),
-                        id: Some(id.clone()),
-                        name: Some(tool_name.clone()),
-                        input: Some(serde_json::json!({})),
-                        text: None,
-                    }),
+                vec![MessagesStreamEvent::ContentBlockStart {
+                    index,
+                    content_block: AnthropicContentBlock::ToolUse {
+                        id: id.clone(),
+                        name: tool_name.clone(),
+                        input: serde_json::json!({}),
+                    },
                 }]
             }
             LanguageModelStreamPart::ToolInputDelta { id, delta, .. } => {
@@ -195,17 +186,11 @@ impl StreamConverter {
                     .get(id)
                     .copied()
                     .unwrap_or(self.next_block_index);
-                vec![MessagesStreamEvent {
-                    event_type: "content_block_delta".to_owned(),
-                    index: Some(index),
-                    delta: Some(MessagesStreamDelta {
-                        delta_type: "input_json_delta".to_owned(),
-                        text: None,
-                        stop_reason: None,
-                        partial_json: Some(delta.clone()),
-                    }),
-                    message: None,
-                    content_block: None,
+                vec![MessagesStreamEvent::ContentBlockDelta {
+                    index,
+                    delta: MessagesStreamDelta::InputJsonDelta {
+                        partial_json: delta.clone(),
+                    },
                 }]
             }
             LanguageModelStreamPart::ToolInputEnd { id, .. } => {
@@ -214,13 +199,7 @@ impl StreamConverter {
                     .get(id)
                     .copied()
                     .unwrap_or(self.next_block_index);
-                vec![MessagesStreamEvent {
-                    event_type: "content_block_stop".to_owned(),
-                    index: Some(index),
-                    delta: None,
-                    message: None,
-                    content_block: None,
-                }]
+                vec![MessagesStreamEvent::ContentBlockStop { index }]
             }
             LanguageModelStreamPart::ToolCall {
                 tool_call_id,
@@ -231,56 +210,36 @@ impl StreamConverter {
                 let index = self.next_block_index;
                 self.next_block_index += 1;
                 vec![
-                    MessagesStreamEvent {
-                        event_type: "content_block_start".to_owned(),
-                        index: Some(index),
-                        delta: None,
-                        message: None,
-                        content_block: Some(MessagesStreamContentBlock {
-                            block_type: "tool_use".to_owned(),
-                            id: Some(tool_call_id.clone()),
-                            name: Some(tool_name.clone()),
-                            input: Some(serde_json::json!({})),
-                            text: None,
-                        }),
+                    MessagesStreamEvent::ContentBlockStart {
+                        index,
+                        content_block: AnthropicContentBlock::ToolUse {
+                            id: tool_call_id.clone(),
+                            name: tool_name.clone(),
+                            input: serde_json::json!({}),
+                        },
                     },
-                    MessagesStreamEvent {
-                        event_type: "content_block_delta".to_owned(),
-                        index: Some(index),
-                        delta: Some(MessagesStreamDelta {
-                            delta_type: "input_json_delta".to_owned(),
-                            text: None,
-                            stop_reason: None,
-                            partial_json: Some(tool_input.clone()),
-                        }),
-                        message: None,
-                        content_block: None,
+                    MessagesStreamEvent::ContentBlockDelta {
+                        index,
+                        delta: MessagesStreamDelta::InputJsonDelta {
+                            partial_json: tool_input.clone(),
+                        },
                     },
-                    MessagesStreamEvent {
-                        event_type: "content_block_stop".to_owned(),
-                        index: Some(index),
-                        delta: None,
-                        message: None,
-                        content_block: None,
-                    },
+                    MessagesStreamEvent::ContentBlockStop { index },
                 ]
             }
             LanguageModelStreamPart::Finish { finish_reason, .. } => {
-                vec![MessagesStreamEvent {
-                    event_type: "message_delta".to_owned(),
-                    index: None,
-                    delta: Some(MessagesStreamDelta {
+                vec![MessagesStreamEvent::MessageDelta {
+                    delta: MessagesMessageDelta {
                         delta_type: "message_delta".to_owned(),
-                        text: None,
                         stop_reason: Some(map_finish_reason(finish_reason)),
-                        partial_json: None,
-                    }),
+                        stop_sequence: None,
+                    },
+                    usage: None,
                     message: Some(MessagesStreamMessage {
                         id: format!("msg-{}", generate_id()),
                         model: self.model_id.clone(),
                         role: "assistant".to_owned(),
                     }),
-                    content_block: None,
                 }]
             }
             _ => vec![],
@@ -316,7 +275,9 @@ fn convert_assistant_content(
                         provider_options: None,
                     })
                 }
-                AnthropicContentBlock::ToolResult { .. } => None,
+                AnthropicContentBlock::ToolResult { .. } | AnthropicContentBlock::Image { .. } => {
+                    None
+                }
             })
             .collect(),
         None => vec![],
@@ -348,6 +309,7 @@ fn split_user_content(
                     AnthropicContentBlock::ToolResult {
                         tool_use_id,
                         content,
+                        ..
                     } => {
                         tool_results.push(LanguageModelToolResult::ToolResult {
                             tool_call_id: tool_use_id,
@@ -359,7 +321,8 @@ fn split_user_content(
                             provider_options: None,
                         });
                     }
-                    AnthropicContentBlock::ToolUse { .. } => {}
+                    AnthropicContentBlock::ToolUse { .. } | AnthropicContentBlock::Image { .. } => {
+                    }
                 }
             }
             (user_parts, tool_results)
@@ -368,24 +331,20 @@ fn split_user_content(
     }
 }
 
-fn convert_tool_choice(value: serde_json::Value) -> Option<LanguageModelToolChoice> {
-    let obj = value.as_object()?;
-    let tc_type = obj.get("type")?.as_str()?;
-    match tc_type {
-        "auto" => Some(LanguageModelToolChoice::Auto),
-        "any" => Some(LanguageModelToolChoice::Required),
-        "tool" => {
-            let name = obj.get("name")?.as_str()?.to_owned();
-            Some(LanguageModelToolChoice::Tool { tool_name: name })
-        }
-        _ => None,
+fn convert_tool_choice(value: &AnthropicToolChoice) -> Option<LanguageModelToolChoice> {
+    match value {
+        AnthropicToolChoice::Auto => Some(LanguageModelToolChoice::Auto),
+        AnthropicToolChoice::Any => Some(LanguageModelToolChoice::Required),
+        AnthropicToolChoice::Tool { name } => Some(LanguageModelToolChoice::Tool {
+            tool_name: name.clone(),
+        }),
     }
 }
 
-fn extract_response_content(content: &LanguageModelContent) -> Vec<MessagesResponseContent> {
+fn extract_response_content(content: &LanguageModelContent) -> Vec<AnthropicContentBlock> {
     match content {
         LanguageModelContent::Text { text, .. } => {
-            vec![MessagesResponseContent::Text { text: text.clone() }]
+            vec![AnthropicContentBlock::Text { text: text.clone() }]
         }
         LanguageModelContent::ToolCall {
             tool_call_id,
@@ -394,7 +353,7 @@ fn extract_response_content(content: &LanguageModelContent) -> Vec<MessagesRespo
             ..
         } => {
             let input: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
-            vec![MessagesResponseContent::ToolUse {
+            vec![AnthropicContentBlock::ToolUse {
                 id: tool_call_id.clone(),
                 name: tool_name.clone(),
                 input,

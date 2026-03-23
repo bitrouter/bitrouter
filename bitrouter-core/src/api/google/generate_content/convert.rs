@@ -20,10 +20,8 @@ use crate::models::{
 };
 
 use super::types::{
-    GenerateContentCandidate, GenerateContentCandidateContent, GenerateContentPart,
-    GenerateContentRequest, GenerateContentResponse, GenerateContentStreamCandidate,
-    GenerateContentStreamChunk, GenerateContentStreamUsageMetadata, GenerateContentUsageMetadata,
-    GoogleFunctionCall, GooglePart, GoogleToolConfig,
+    GenerateContentCandidate, GenerateContentRequest, GenerateContentResponse,
+    GenerateContentUsageMetadata, GoogleContent, GoogleFunctionCall, GooglePart, GoogleToolConfig,
 };
 use crate::api::util::generate_id;
 
@@ -54,8 +52,8 @@ pub fn to_call_options(request: GenerateContentRequest) -> LanguageModelCallOpti
     }
 
     for content in request.contents {
-        match content.role.as_str() {
-            "model" => {
+        match content.role.as_deref() {
+            Some("model") => {
                 let assistant_content = convert_model_parts(content.parts);
                 prompt.push(LanguageModelMessage::Assistant {
                     content: assistant_content,
@@ -83,7 +81,7 @@ pub fn to_call_options(request: GenerateContentRequest) -> LanguageModelCallOpti
     let tools = request.tools.map(|tool_groups| {
         tool_groups
             .into_iter()
-            .flat_map(|t| t.function_declarations)
+            .flat_map(|t| t.function_declarations.unwrap_or_default())
             .map(|fd| {
                 let schema_value = fd.parameters.unwrap_or(serde_json::json!({}));
                 let input_schema: JsonSchema =
@@ -147,19 +145,20 @@ pub fn from_generate_result(
     let output_tokens = result.usage.output_tokens.total.unwrap_or(0);
 
     GenerateContentResponse {
-        candidates: vec![GenerateContentCandidate {
-            content: GenerateContentCandidateContent {
-                role: "model".to_owned(),
-                parts,
-            },
-            finish_reason,
-            index: 0,
-        }],
-        usage_metadata: GenerateContentUsageMetadata {
-            prompt_token_count: input_tokens,
-            candidates_token_count: output_tokens,
-            total_token_count: input_tokens + output_tokens,
-        },
+        candidates: Some(vec![GenerateContentCandidate {
+            content: Some(GoogleContent {
+                role: Some("model".to_owned()),
+                parts: Some(parts),
+            }),
+            finish_reason: Some(finish_reason),
+            index: Some(0),
+        }]),
+        usage_metadata: Some(GenerateContentUsageMetadata {
+            prompt_token_count: Some(input_tokens),
+            candidates_token_count: Some(output_tokens),
+            total_token_count: Some(input_tokens + output_tokens),
+            cached_content_token_count: None,
+        }),
         model_version: Some(model_id.to_owned()),
     }
 }
@@ -185,16 +184,15 @@ impl StreamConverter {
         }
     }
 
-    /// Converts a [`LanguageModelStreamPart`] into a [`GenerateContentStreamChunk`].
-    pub fn convert(
-        &mut self,
-        part: &LanguageModelStreamPart,
-    ) -> Option<GenerateContentStreamChunk> {
+    /// Converts a [`LanguageModelStreamPart`] into a [`GenerateContentResponse`].
+    pub fn convert(&mut self, part: &LanguageModelStreamPart) -> Option<GenerateContentResponse> {
         match part {
             LanguageModelStreamPart::TextDelta { delta, .. } => Some(self.make_chunk(
-                vec![GenerateContentPart {
+                vec![GooglePart {
                     text: Some(delta.clone()),
+                    inline_data: None,
                     function_call: None,
+                    function_response: None,
                 }],
                 None,
                 None,
@@ -207,12 +205,14 @@ impl StreamConverter {
             } => {
                 let args: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
                 Some(self.make_chunk(
-                    vec![GenerateContentPart {
+                    vec![GooglePart {
                         text: None,
+                        inline_data: None,
                         function_call: Some(GoogleFunctionCall {
                             name: tool_name.clone(),
-                            args,
+                            args: Some(args),
                         }),
+                        function_response: None,
                     }],
                     None,
                     None,
@@ -240,12 +240,14 @@ impl StreamConverter {
                     let args: serde_json::Value =
                         serde_json::from_str(&pending.args_buffer).unwrap_or_default();
                     Some(self.make_chunk(
-                        vec![GenerateContentPart {
+                        vec![GooglePart {
                             text: None,
+                            inline_data: None,
                             function_call: Some(GoogleFunctionCall {
                                 name: pending.name,
-                                args,
+                                args: Some(args),
                             }),
+                            function_response: None,
                         }],
                         None,
                         None,
@@ -263,15 +265,18 @@ impl StreamConverter {
                 let input_tokens = usage.input_tokens.total.unwrap_or(0);
                 let output_tokens = usage.output_tokens.total.unwrap_or(0);
                 Some(self.make_chunk(
-                    vec![GenerateContentPart {
+                    vec![GooglePart {
                         text: Some(String::new()),
+                        inline_data: None,
                         function_call: None,
+                        function_response: None,
                     }],
                     Some(map_finish_reason(finish_reason)),
-                    Some(GenerateContentStreamUsageMetadata {
-                        prompt_token_count: input_tokens,
-                        candidates_token_count: output_tokens,
-                        total_token_count: input_tokens + output_tokens,
+                    Some(GenerateContentUsageMetadata {
+                        prompt_token_count: Some(input_tokens),
+                        candidates_token_count: Some(output_tokens),
+                        total_token_count: Some(input_tokens + output_tokens),
+                        cached_content_token_count: None,
                     }),
                     Some(self.model_id.clone()),
                 ))
@@ -282,20 +287,20 @@ impl StreamConverter {
 
     fn make_chunk(
         &self,
-        parts: Vec<GenerateContentPart>,
+        parts: Vec<GooglePart>,
         finish_reason: Option<String>,
-        usage_metadata: Option<GenerateContentStreamUsageMetadata>,
+        usage_metadata: Option<GenerateContentUsageMetadata>,
         model_version: Option<String>,
-    ) -> GenerateContentStreamChunk {
-        GenerateContentStreamChunk {
-            candidates: vec![GenerateContentStreamCandidate {
-                content: GenerateContentCandidateContent {
-                    role: "model".to_owned(),
-                    parts,
-                },
+    ) -> GenerateContentResponse {
+        GenerateContentResponse {
+            candidates: Some(vec![GenerateContentCandidate {
+                content: Some(GoogleContent {
+                    role: Some("model".to_owned()),
+                    parts: Some(parts),
+                }),
                 finish_reason,
-                index: 0,
-            }],
+                index: Some(0),
+            }]),
             usage_metadata,
             model_version,
         }
@@ -313,7 +318,7 @@ fn convert_model_parts(parts: Option<Vec<GooglePart>>) -> Vec<LanguageModelAssis
                 Some(LanguageModelAssistantContent::ToolCall {
                     tool_call_id: format!("call-{}", generate_id()),
                     tool_name: fc.name,
-                    input: fc.args,
+                    input: fc.args.unwrap_or_default(),
                     provider_executed: None,
                     provider_options: None,
                 })
@@ -378,11 +383,13 @@ fn convert_tool_config(config: GoogleToolConfig) -> Option<LanguageModelToolChoi
     }
 }
 
-fn extract_response_parts(content: &LanguageModelContent) -> Vec<GenerateContentPart> {
+fn extract_response_parts(content: &LanguageModelContent) -> Vec<GooglePart> {
     match content {
-        LanguageModelContent::Text { text, .. } => vec![GenerateContentPart {
+        LanguageModelContent::Text { text, .. } => vec![GooglePart {
             text: Some(text.clone()),
+            inline_data: None,
             function_call: None,
+            function_response: None,
         }],
         LanguageModelContent::ToolCall {
             tool_name,
@@ -390,12 +397,14 @@ fn extract_response_parts(content: &LanguageModelContent) -> Vec<GenerateContent
             ..
         } => {
             let args: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
-            vec![GenerateContentPart {
+            vec![GooglePart {
                 text: None,
+                inline_data: None,
                 function_call: Some(GoogleFunctionCall {
                     name: tool_name.clone(),
-                    args,
+                    args: Some(args),
                 }),
+                function_response: None,
             }]
         }
         _ => vec![],

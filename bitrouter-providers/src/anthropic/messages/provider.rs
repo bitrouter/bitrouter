@@ -21,8 +21,10 @@ use tokio::{select, sync::mpsc};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
 
-use super::api::{ByteStream, drive_sse_stream, parse_anthropic_error};
-use super::types::{ANTHROPIC_PROVIDER_NAME, AnthropicMessageResponse, AnthropicMessagesRequest};
+use super::api::{
+    ANTHROPIC_PROVIDER_NAME, ByteStream, build_messages_request, drive_sse_stream,
+    parse_anthropic_error, response_to_generate_result,
+};
 
 const ANTHROPIC_DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
@@ -79,7 +81,7 @@ impl AnthropicMessagesModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        let request = AnthropicMessagesRequest::from_call_options(&self.model_id, &options, false)?;
+        let request = build_messages_request(&self.model_id, &options, false)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(ANTHROPIC_PROVIDER_NAME),
@@ -116,8 +118,8 @@ impl AnthropicMessagesModel {
                 },
             )
             .await?;
-        let message: AnthropicMessageResponse = serde_json::from_value(response_body.clone())
-            .map_err(|error| {
+        let message: bitrouter_core::api::anthropic::messages::types::MessagesResponse =
+            serde_json::from_value(response_body.clone()).map_err(|error| {
                 BitrouterError::response_decode(
                     Some(ANTHROPIC_PROVIDER_NAME),
                     format!("failed to parse messages response: {error}"),
@@ -125,7 +127,8 @@ impl AnthropicMessagesModel {
                 )
             })?;
 
-        message.into_generate_result(
+        response_to_generate_result(
+            message,
             Some(request_headers),
             request_body,
             Some(response_headers),
@@ -137,7 +140,7 @@ impl AnthropicMessagesModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
-        let request = AnthropicMessagesRequest::from_call_options(&self.model_id, &options, true)?;
+        let request = build_messages_request(&self.model_id, &options, true)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(ANTHROPIC_PROVIDER_NAME),

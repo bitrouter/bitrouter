@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use bitrouter_core::api::openai::chat::types::ChatCompletionResponse;
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::{
@@ -21,9 +22,9 @@ use tokio::{select, sync::mpsc};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
 
-use super::api::{ByteStream, drive_sse_stream, parse_openai_error};
-use super::types::{
-    OPENAI_PROVIDER_NAME, OpenAiChatCompletionResponse, OpenAiChatCompletionsRequest,
+use super::api::{
+    ByteStream, OPENAI_PROVIDER_NAME, build_chat_request, drive_sse_stream, parse_openai_error,
+    response_to_generate_result,
 };
 
 const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
@@ -98,8 +99,7 @@ impl OpenAiChatCompletionsModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        let request =
-            OpenAiChatCompletionsRequest::from_call_options(&self.model_id, &options, false)?;
+        let request = build_chat_request(&self.model_id, &options, false)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),
@@ -136,8 +136,8 @@ impl OpenAiChatCompletionsModel {
                 },
             )
             .await?;
-        let completion: OpenAiChatCompletionResponse =
-            serde_json::from_value(response_body.clone()).map_err(|error| {
+        let completion: ChatCompletionResponse = serde_json::from_value(response_body.clone())
+            .map_err(|error| {
                 BitrouterError::response_decode(
                     Some(OPENAI_PROVIDER_NAME),
                     format!("failed to parse chat completion response: {error}"),
@@ -145,7 +145,8 @@ impl OpenAiChatCompletionsModel {
                 )
             })?;
 
-        completion.into_generate_result(
+        response_to_generate_result(
+            completion,
             Some(request_headers),
             request_body,
             Some(response_headers),
@@ -157,8 +158,7 @@ impl OpenAiChatCompletionsModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
-        let request =
-            OpenAiChatCompletionsRequest::from_call_options(&self.model_id, &options, true)?;
+        let request = build_chat_request(&self.model_id, &options, true)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(OPENAI_PROVIDER_NAME),

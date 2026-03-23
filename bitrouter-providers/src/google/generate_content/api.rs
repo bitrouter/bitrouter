@@ -2,12 +2,19 @@ use std::{collections::HashMap, pin::Pin};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bitrouter_core::{
+    api::google::generate_content::types::{
+        GenerateContentCandidate, GenerateContentResponse, GenerateContentUsageMetadata,
+        GoogleContent, GoogleErrorEnvelope, GoogleFunctionCall, GoogleFunctionCallingConfig,
+        GoogleFunctionDeclaration, GoogleFunctionResponse, GoogleGenerationConfig,
+        GoogleInlineData, GooglePart, GoogleTool, GoogleToolConfig,
+    },
     errors::{BitrouterError, ProviderErrorContext, Result},
     models::{
         language::{
             call_options::LanguageModelCallOptions,
             content::LanguageModelContent,
             data_content::LanguageModelDataContent,
+            finish_reason::LanguageModelFinishReason,
             generate_result::{
                 LanguageModelGenerateResult, LanguageModelRawRequest, LanguageModelRawResponse,
             },
@@ -16,7 +23,9 @@ use bitrouter_core::{
                 LanguageModelToolResultOutput, LanguageModelToolResultOutputContent,
             },
             stream_part::LanguageModelStreamPart,
-            usage::LanguageModelUsage,
+            tool::LanguageModelTool,
+            tool_choice::LanguageModelToolChoice,
+            usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
         },
         shared::{provider::ProviderMetadata, types::JsonValue, warnings::Warning},
     },
@@ -27,138 +36,256 @@ use tokio::{select, sync::mpsc};
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::sync::CancellationToken;
 
-use super::types::{
-    GOOGLE_PROVIDER_NAME, GoogleCandidate, GoogleContent, GoogleErrorEnvelope,
-    GoogleFunctionCallingConfig, GoogleFunctionDeclaration, GoogleFunctionResponse,
-    GoogleGenerateContentRequest, GoogleGenerateContentResponse, GoogleGenerationConfig,
-    GoogleInlineData, GooglePart, GoogleTool, GoogleToolConfig, GoogleUsageMetadata,
-    STREAM_TEXT_ID, empty_usage, google_metadata, map_finish_reason,
-};
+// Re-export the request type so provider.rs can use a short path
+pub(super) use bitrouter_core::api::google::generate_content::types::GenerateContentRequest;
+
+pub(super) const GOOGLE_PROVIDER_NAME: &str = "google";
+pub(super) const STREAM_TEXT_ID: &str = "text";
 
 // ── Default max tokens ──────────────────────────────────────────────────────
 
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
+// ── Helper functions ────────────────────────────────────────────────────────
+
+pub(super) fn map_finish_reason(finish_reason: Option<&str>) -> LanguageModelFinishReason {
+    match finish_reason {
+        Some("STOP") | None => LanguageModelFinishReason::Stop,
+        Some("MAX_TOKENS") => LanguageModelFinishReason::Length,
+        Some("SAFETY")
+        | Some("RECITATION")
+        | Some("BLOCKLIST")
+        | Some("PROHIBITED_CONTENT")
+        | Some("SPII") => LanguageModelFinishReason::ContentFilter,
+        Some("MALFORMED_FUNCTION_CALL") => LanguageModelFinishReason::Error,
+        Some("LANGUAGE") => LanguageModelFinishReason::Other("LANGUAGE".to_owned()),
+        Some(other) => LanguageModelFinishReason::Other(other.to_owned()),
+    }
+}
+
+pub(super) fn google_metadata(model_version: Option<String>) -> Option<ProviderMetadata> {
+    let mut inner = HashMap::new();
+    if let Some(version) = model_version {
+        inner.insert("model_version".to_owned(), JsonValue::String(version));
+    }
+
+    if inner.is_empty() {
+        None
+    } else {
+        Some(HashMap::from([(
+            GOOGLE_PROVIDER_NAME.to_owned(),
+            json!(inner),
+        )]))
+    }
+}
+
+pub(super) fn empty_usage() -> LanguageModelUsage {
+    LanguageModelUsage {
+        input_tokens: LanguageModelInputTokens {
+            total: None,
+            no_cache: None,
+            cache_read: None,
+            cache_write: None,
+        },
+        output_tokens: LanguageModelOutputTokens {
+            total: None,
+            text: None,
+            reasoning: None,
+        },
+        raw: None,
+    }
+}
+
+// ── Type conversions ────────────────────────────────────────────────────────
+
+pub(super) fn usage_to_language_model(usage: GenerateContentUsageMetadata) -> LanguageModelUsage {
+    let raw = serde_json::to_value(&usage).ok();
+    LanguageModelUsage {
+        input_tokens: LanguageModelInputTokens {
+            total: usage.prompt_token_count,
+            no_cache: usage
+                .prompt_token_count
+                .map(|total| total.saturating_sub(usage.cached_content_token_count.unwrap_or(0))),
+            cache_read: usage.cached_content_token_count,
+            cache_write: None,
+        },
+        output_tokens: LanguageModelOutputTokens {
+            total: usage.candidates_token_count,
+            text: usage.candidates_token_count,
+            reasoning: None,
+        },
+        raw,
+    }
+}
+
+pub(super) fn tool_choice_to_config(
+    choice: &LanguageModelToolChoice,
+) -> GoogleFunctionCallingConfig {
+    match choice {
+        LanguageModelToolChoice::Auto => GoogleFunctionCallingConfig {
+            mode: Some("AUTO".to_owned()),
+            allowed_function_names: None,
+        },
+        LanguageModelToolChoice::None => GoogleFunctionCallingConfig {
+            mode: Some("NONE".to_owned()),
+            allowed_function_names: None,
+        },
+        LanguageModelToolChoice::Required => GoogleFunctionCallingConfig {
+            mode: Some("ANY".to_owned()),
+            allowed_function_names: None,
+        },
+        LanguageModelToolChoice::Tool { tool_name } => GoogleFunctionCallingConfig {
+            mode: Some("ANY".to_owned()),
+            allowed_function_names: Some(vec![tool_name.clone()]),
+        },
+    }
+}
+
+pub(super) fn tool_to_declaration(tool: &LanguageModelTool) -> Result<GoogleFunctionDeclaration> {
+    match tool {
+        LanguageModelTool::Function {
+            name,
+            description,
+            input_schema,
+            ..
+        } => {
+            let parameters = serde_json::to_value(input_schema).ok();
+            Ok(GoogleFunctionDeclaration {
+                name: name.clone(),
+                description: description.clone(),
+                parameters,
+            })
+        }
+        LanguageModelTool::Provider { id, .. } => Err(BitrouterError::unsupported(
+            GOOGLE_PROVIDER_NAME,
+            format!("provider tool {}:{}", id.provider_name, id.tool_id),
+            Some(
+                "Google Generative AI API supports function declarations, \
+                 but bitrouter-core provider tools do not map cleanly here"
+                    .to_owned(),
+            ),
+        )),
+    }
+}
+
 // ── Response conversion ─────────────────────────────────────────────────────
 
-impl GoogleGenerateContentResponse {
-    pub(super) fn into_generate_result(
-        self,
-        request_headers: Option<reqwest::header::HeaderMap>,
-        request_body: JsonValue,
-        response_headers: Option<reqwest::header::HeaderMap>,
-        response_body: JsonValue,
-    ) -> Result<LanguageModelGenerateResult> {
-        let provider_metadata = google_metadata(self.model_version.clone());
-        let candidate = self
-            .candidates
-            .as_ref()
-            .and_then(|c| c.first())
-            .ok_or_else(|| {
-                BitrouterError::invalid_response(
-                    Some(GOOGLE_PROVIDER_NAME),
-                    "response contained no candidates",
-                    Some(response_body.clone()),
-                )
-            })?;
+pub(super) fn response_to_generate_result(
+    response: GenerateContentResponse,
+    request_headers: Option<reqwest::header::HeaderMap>,
+    request_body: JsonValue,
+    response_headers: Option<reqwest::header::HeaderMap>,
+    response_body: JsonValue,
+) -> Result<LanguageModelGenerateResult> {
+    let provider_metadata = google_metadata(response.model_version.clone());
+    let candidate = response
+        .candidates
+        .as_ref()
+        .and_then(|c| c.first())
+        .ok_or_else(|| {
+            BitrouterError::invalid_response(
+                Some(GOOGLE_PROVIDER_NAME),
+                "response contained no candidates",
+                Some(response_body.clone()),
+            )
+        })?;
 
-        let finish_reason = map_finish_reason(candidate.finish_reason.as_deref());
-        let content = candidate_to_language_model_content(
-            candidate,
-            provider_metadata.clone(),
-            response_body.clone(),
-        )?;
+    let finish_reason = map_finish_reason(candidate.finish_reason.as_deref());
+    let content = candidate_to_language_model_content(
+        candidate,
+        provider_metadata.clone(),
+        response_body.clone(),
+    )?;
 
-        Ok(LanguageModelGenerateResult {
-            content,
-            finish_reason,
-            usage: self
-                .usage_metadata
-                .map(LanguageModelUsage::from)
-                .unwrap_or_else(empty_usage),
-            provider_metadata,
-            request: Some(LanguageModelRawRequest {
-                headers: request_headers,
-                body: request_body,
-            }),
-            response_metadata: Some(LanguageModelRawResponse {
-                id: None,
-                timestamp: None,
-                model_id: self.model_version,
-                headers: response_headers,
-                body: Some(response_body),
-            }),
-            warnings: Some(Vec::<Warning>::new()),
-        })
-    }
+    Ok(LanguageModelGenerateResult {
+        content,
+        finish_reason,
+        usage: response
+            .usage_metadata
+            .map(usage_to_language_model)
+            .unwrap_or_else(empty_usage),
+        provider_metadata,
+        request: Some(LanguageModelRawRequest {
+            headers: request_headers,
+            body: request_body,
+        }),
+        response_metadata: Some(LanguageModelRawResponse {
+            id: None,
+            timestamp: None,
+            model_id: response.model_version,
+            headers: response_headers,
+            body: Some(response_body),
+        }),
+        warnings: Some(Vec::<Warning>::new()),
+    })
 }
 
 // ── Request building ────────────────────────────────────────────────────────
 
-impl GoogleGenerateContentRequest {
-    pub(super) fn from_call_options(
-        model_id: &str,
-        options: &LanguageModelCallOptions,
-    ) -> Result<Self> {
-        let _ = model_id; // model_id is in the URL, not the request body for Google
+pub(super) fn build_generate_content_request(
+    model_id: &str,
+    options: &LanguageModelCallOptions,
+) -> Result<GenerateContentRequest> {
+    let _ = model_id; // model_id is in the URL, not the request body for Google
 
-        let tools: Option<Vec<GoogleFunctionDeclaration>> = options
-            .tools
-            .as_ref()
-            .map(|tools| {
-                tools
-                    .iter()
-                    .map(GoogleFunctionDeclaration::try_from)
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?;
-
-        let (system_instruction, contents) = convert_prompt(&options.prompt)?;
-
-        let has_generation_config = options.max_output_tokens.is_some()
-            || options.temperature.is_some()
-            || options.top_p.is_some()
-            || options.top_k.is_some()
-            || options.stop_sequences.is_some()
-            || options.presence_penalty.is_some()
-            || options.frequency_penalty.is_some()
-            || options.seed.is_some()
-            || options.response_format.is_some();
-
-        let generation_config = if has_generation_config {
-            Some(GoogleGenerationConfig {
-                temperature: options.temperature,
-                top_p: options.top_p,
-                top_k: options.top_k,
-                max_output_tokens: Some(options.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
-                stop_sequences: options.stop_sequences.clone(),
-                presence_penalty: options.presence_penalty,
-                frequency_penalty: options.frequency_penalty,
-                seed: options.seed.map(|s| s as i64),
-                response_mime_type: options
-                    .response_format
-                    .as_ref()
-                    .map(|_| "application/json".to_owned()),
-                response_schema: None,
-            })
-        } else {
-            None
-        };
-
-        Ok(Self {
-            contents,
-            system_instruction,
-            tools: tools.map(|decls| {
-                vec![GoogleTool {
-                    function_declarations: Some(decls),
-                }]
-            }),
-            tool_config: options.tool_choice.as_ref().map(|choice| GoogleToolConfig {
-                function_calling_config: Some(GoogleFunctionCallingConfig::from(choice)),
-            }),
-            generation_config,
+    let tools: Option<Vec<GoogleFunctionDeclaration>> = options
+        .tools
+        .as_ref()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(tool_to_declaration)
+                .collect::<Result<Vec<_>>>()
         })
-    }
+        .transpose()?;
+
+    let (system_instruction, contents) = convert_prompt(&options.prompt)?;
+
+    let has_generation_config = options.max_output_tokens.is_some()
+        || options.temperature.is_some()
+        || options.top_p.is_some()
+        || options.top_k.is_some()
+        || options.stop_sequences.is_some()
+        || options.presence_penalty.is_some()
+        || options.frequency_penalty.is_some()
+        || options.seed.is_some()
+        || options.response_format.is_some();
+
+    let generation_config = if has_generation_config {
+        Some(GoogleGenerationConfig {
+            temperature: options.temperature,
+            top_p: options.top_p,
+            top_k: options.top_k,
+            max_output_tokens: Some(options.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
+            stop_sequences: options.stop_sequences.clone(),
+            presence_penalty: options.presence_penalty,
+            frequency_penalty: options.frequency_penalty,
+            seed: options.seed.map(|s| s as i64),
+            response_mime_type: options
+                .response_format
+                .as_ref()
+                .map(|_| "application/json".to_owned()),
+            response_schema: None,
+        })
+    } else {
+        None
+    };
+
+    Ok(GenerateContentRequest {
+        model: String::new(),
+        contents,
+        system_instruction,
+        tools: tools.map(|decls| {
+            vec![GoogleTool {
+                function_declarations: Some(decls),
+            }]
+        }),
+        tool_config: options.tool_choice.as_ref().map(|choice| GoogleToolConfig {
+            function_calling_config: Some(tool_choice_to_config(choice)),
+        }),
+        generation_config,
+        stream: None,
+    })
 }
 
 // ── Error parsing ───────────────────────────────────────────────────────────
@@ -206,7 +333,7 @@ pub(super) fn parse_google_error(
 // ── Content conversion ──────────────────────────────────────────────────────
 
 fn candidate_to_language_model_content(
-    candidate: &GoogleCandidate,
+    candidate: &GenerateContentCandidate,
     provider_metadata: Option<ProviderMetadata>,
     response_body: JsonValue,
 ) -> Result<LanguageModelContent> {
@@ -405,7 +532,7 @@ fn convert_assistant_content(content: &[LanguageModelAssistantContent]) -> Resul
                 parts.push(GooglePart {
                     text: None,
                     inline_data: None,
-                    function_call: Some(super::types::GoogleFunctionCall {
+                    function_call: Some(GoogleFunctionCall {
                         name: tool_name.clone(),
                         args: Some(input.clone()),
                     }),
@@ -645,22 +772,21 @@ impl GoogleSseParser {
             });
         }
 
-        let response: GoogleGenerateContentResponse =
-            match serde_json::from_value(raw_value.clone()) {
-                Ok(resp) => resp,
-                Err(error) => {
-                    self.state.finished = true;
-                    parts.push(LanguageModelStreamPart::Error {
-                        error: json!({
-                            "provider": GOOGLE_PROVIDER_NAME,
-                            "kind": "response_decode",
-                            "message": error.to_string(),
-                            "raw": raw_value,
-                        }),
-                    });
-                    return parts;
-                }
-            };
+        let response: GenerateContentResponse = match serde_json::from_value(raw_value.clone()) {
+            Ok(resp) => resp,
+            Err(error) => {
+                self.state.finished = true;
+                parts.push(LanguageModelStreamPart::Error {
+                    error: json!({
+                        "provider": GOOGLE_PROVIDER_NAME,
+                        "kind": "response_decode",
+                        "message": error.to_string(),
+                        "raw": raw_value,
+                    }),
+                });
+                return parts;
+            }
+        };
 
         parts.extend(self.state.apply_response(response));
         parts
@@ -681,7 +807,7 @@ struct GoogleStreamState {
 impl GoogleStreamState {
     fn apply_response(
         &mut self,
-        response: GoogleGenerateContentResponse,
+        response: GenerateContentResponse,
     ) -> Vec<LanguageModelStreamPart> {
         let mut parts = Vec::new();
 
@@ -764,8 +890,8 @@ impl GoogleStreamState {
         parts
     }
 
-    fn merge_usage(&mut self, usage: GoogleUsageMetadata) {
-        let new_usage: LanguageModelUsage = usage.into();
+    fn merge_usage(&mut self, usage: GenerateContentUsageMetadata) {
+        let new_usage: LanguageModelUsage = usage_to_language_model(usage);
         match &mut self.usage {
             Some(existing) => {
                 if new_usage.input_tokens.total.is_some() {
@@ -1342,6 +1468,380 @@ mod tests {
             parts
                 .iter()
                 .any(|p| matches!(p, LanguageModelStreamPart::TextDelta { .. }))
+        );
+    }
+
+    // ── helper / conversion tests (migrated from types.rs) ──────────────────
+
+    #[test]
+    fn maps_stop_finish_reason() {
+        assert_eq!(
+            map_finish_reason(Some("STOP")),
+            LanguageModelFinishReason::Stop
+        );
+    }
+
+    #[test]
+    fn maps_all_finish_reasons() {
+        assert_eq!(
+            map_finish_reason(Some("STOP")),
+            LanguageModelFinishReason::Stop
+        );
+        assert_eq!(map_finish_reason(None), LanguageModelFinishReason::Stop);
+        assert_eq!(
+            map_finish_reason(Some("MAX_TOKENS")),
+            LanguageModelFinishReason::Length
+        );
+        assert_eq!(
+            map_finish_reason(Some("SAFETY")),
+            LanguageModelFinishReason::ContentFilter
+        );
+        assert_eq!(
+            map_finish_reason(Some("RECITATION")),
+            LanguageModelFinishReason::ContentFilter
+        );
+        assert_eq!(
+            map_finish_reason(Some("BLOCKLIST")),
+            LanguageModelFinishReason::ContentFilter
+        );
+        assert_eq!(
+            map_finish_reason(Some("PROHIBITED_CONTENT")),
+            LanguageModelFinishReason::ContentFilter
+        );
+        assert_eq!(
+            map_finish_reason(Some("SPII")),
+            LanguageModelFinishReason::ContentFilter
+        );
+        assert_eq!(
+            map_finish_reason(Some("MALFORMED_FUNCTION_CALL")),
+            LanguageModelFinishReason::Error
+        );
+        assert_eq!(
+            map_finish_reason(Some("LANGUAGE")),
+            LanguageModelFinishReason::Other("LANGUAGE".to_owned())
+        );
+        assert_eq!(
+            map_finish_reason(Some("unknown_reason")),
+            LanguageModelFinishReason::Other("unknown_reason".to_owned())
+        );
+    }
+
+    #[test]
+    fn google_usage_to_language_model_usage() {
+        let usage = GenerateContentUsageMetadata {
+            prompt_token_count: Some(100),
+            candidates_token_count: Some(50),
+            total_token_count: Some(150),
+            cached_content_token_count: Some(20),
+        };
+        let lm_usage = usage_to_language_model(usage);
+        assert_eq!(lm_usage.input_tokens.total, Some(100));
+        assert_eq!(lm_usage.input_tokens.no_cache, Some(80));
+        assert_eq!(lm_usage.input_tokens.cache_read, Some(20));
+        assert_eq!(lm_usage.input_tokens.cache_write, None);
+        assert_eq!(lm_usage.output_tokens.total, Some(50));
+        assert_eq!(lm_usage.output_tokens.text, Some(50));
+        assert_eq!(lm_usage.output_tokens.reasoning, None);
+    }
+
+    #[test]
+    fn google_usage_without_cache() {
+        let usage = GenerateContentUsageMetadata {
+            prompt_token_count: Some(100),
+            candidates_token_count: Some(50),
+            total_token_count: Some(150),
+            cached_content_token_count: None,
+        };
+        let lm_usage = usage_to_language_model(usage);
+        assert_eq!(lm_usage.input_tokens.total, Some(100));
+        assert_eq!(lm_usage.input_tokens.no_cache, Some(100));
+        assert_eq!(lm_usage.input_tokens.cache_read, None);
+    }
+
+    #[test]
+    fn deserialize_text_response() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello!"}]
+                },
+                "finishReason": "STOP",
+                "index": 0
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15
+            },
+            "modelVersion": "gemini-2.0-flash"
+        }"#;
+        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let candidates = response.candidates.unwrap();
+        assert_eq!(candidates.len(), 1);
+        let parts = candidates[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .parts
+            .as_ref()
+            .unwrap();
+        assert_eq!(parts[0].text.as_deref(), Some("Hello!"));
+        assert_eq!(candidates[0].finish_reason.as_deref(), Some("STOP"));
+        assert_eq!(response.model_version.as_deref(), Some("gemini-2.0-flash"));
+    }
+
+    #[test]
+    fn deserialize_function_call_response() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "role": "model",
+                    "parts": [{
+                        "functionCall": {
+                            "name": "get_weather",
+                            "args": {"location": "Paris"}
+                        }
+                    }]
+                },
+                "finishReason": "STOP",
+                "index": 0
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 20,
+                "candidatesTokenCount": 15,
+                "totalTokenCount": 35
+            }
+        }"#;
+        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let candidates = response.candidates.unwrap();
+        let parts = candidates[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .parts
+            .as_ref()
+            .unwrap();
+        assert!(parts[0].function_call.is_some());
+        assert_eq!(parts[0].function_call.as_ref().unwrap().name, "get_weather");
+    }
+
+    #[test]
+    fn serialize_request() {
+        let request = GenerateContentRequest {
+            model: String::new(),
+            contents: vec![GoogleContent {
+                role: Some("user".to_owned()),
+                parts: Some(vec![GooglePart {
+                    text: Some("Hello".to_owned()),
+                    inline_data: None,
+                    function_call: None,
+                    function_response: None,
+                }]),
+            }],
+            system_instruction: Some(GoogleContent {
+                role: None,
+                parts: Some(vec![GooglePart {
+                    text: Some("You are a helpful assistant.".to_owned()),
+                    inline_data: None,
+                    function_call: None,
+                    function_response: None,
+                }]),
+            }),
+            tools: None,
+            tool_config: None,
+            generation_config: Some(GoogleGenerationConfig {
+                temperature: Some(0.7),
+                top_p: None,
+                top_k: None,
+                max_output_tokens: Some(1024),
+                stop_sequences: None,
+                presence_penalty: None,
+                frequency_penalty: None,
+                seed: None,
+                response_mime_type: None,
+                response_schema: None,
+            }),
+            stream: None,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["contents"][0]["role"], "user");
+        assert_eq!(json["contents"][0]["parts"][0]["text"], "Hello");
+        assert_eq!(
+            json["systemInstruction"]["parts"][0]["text"],
+            "You are a helpful assistant."
+        );
+        assert!(json["generationConfig"]["temperature"].as_f64().unwrap() - 0.7 < 0.01);
+        assert_eq!(json["generationConfig"]["maxOutputTokens"], 1024);
+        assert!(json.get("tools").is_none());
+    }
+
+    #[test]
+    fn tool_choice_auto() {
+        let config = tool_choice_to_config(&LanguageModelToolChoice::Auto);
+        assert_eq!(config.mode.as_deref(), Some("AUTO"));
+        assert!(config.allowed_function_names.is_none());
+    }
+
+    #[test]
+    fn tool_choice_none() {
+        let config = tool_choice_to_config(&LanguageModelToolChoice::None);
+        assert_eq!(config.mode.as_deref(), Some("NONE"));
+    }
+
+    #[test]
+    fn tool_choice_required_maps_to_any() {
+        let config = tool_choice_to_config(&LanguageModelToolChoice::Required);
+        assert_eq!(config.mode.as_deref(), Some("ANY"));
+        assert!(config.allowed_function_names.is_none());
+    }
+
+    #[test]
+    fn tool_choice_named() {
+        let config = tool_choice_to_config(&LanguageModelToolChoice::Tool {
+            tool_name: "get_weather".to_owned(),
+        });
+        assert_eq!(config.mode.as_deref(), Some("ANY"));
+        assert_eq!(
+            config.allowed_function_names.as_ref().unwrap(),
+            &["get_weather"]
+        );
+    }
+
+    #[test]
+    fn tool_conversion_function() {
+        let tool = LanguageModelTool::Function {
+            name: "test_tool".to_owned(),
+            description: Some("A test tool".to_owned()),
+            input_schema: schemars::Schema::default(),
+            input_examples: vec![],
+            strict: None,
+            provider_options: None,
+        };
+        let result = tool_to_declaration(&tool);
+        assert!(result.is_ok());
+        let decl = result.unwrap();
+        assert_eq!(decl.name, "test_tool");
+        assert_eq!(decl.description.as_deref(), Some("A test tool"));
+    }
+
+    #[test]
+    fn tool_conversion_provider_fails() {
+        let tool = LanguageModelTool::Provider {
+            id: bitrouter_core::models::language::tool::ProviderToolId {
+                provider_name: "test".to_owned(),
+                tool_id: "123".to_owned(),
+            },
+            name: "test_tool".to_owned(),
+            args: HashMap::new(),
+            provider_options: None,
+        };
+        let result = tool_to_declaration(&tool);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deserialize_error_envelope() {
+        let json = r#"{
+            "error": {
+                "code": 400,
+                "message": "Invalid value at 'contents'",
+                "status": "INVALID_ARGUMENT"
+            }
+        }"#;
+        let envelope: GoogleErrorEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(envelope.error.code, Some(400));
+        assert_eq!(
+            envelope.error.message.as_deref(),
+            Some("Invalid value at 'contents'")
+        );
+        assert_eq!(envelope.error.status.as_deref(), Some("INVALID_ARGUMENT"));
+    }
+
+    #[test]
+    fn serialize_inline_data_part() {
+        let part = GooglePart {
+            text: None,
+            inline_data: Some(GoogleInlineData {
+                mime_type: "image/png".to_owned(),
+                data: "abc123".to_owned(),
+            }),
+            function_call: None,
+            function_response: None,
+        };
+        let json = serde_json::to_value(&part).unwrap();
+        assert_eq!(json["inlineData"]["mimeType"], "image/png");
+        assert_eq!(json["inlineData"]["data"], "abc123");
+        assert!(json.get("text").is_none());
+    }
+
+    #[test]
+    fn google_metadata_with_model_version() {
+        let meta = google_metadata(Some("gemini-2.0-flash".to_owned()));
+        assert!(meta.is_some());
+        let meta = meta.unwrap();
+        let inner = meta.get(GOOGLE_PROVIDER_NAME).unwrap();
+        assert_eq!(inner["model_version"], "gemini-2.0-flash");
+    }
+
+    #[test]
+    fn google_metadata_empty() {
+        let meta = google_metadata(None);
+        assert!(meta.is_none());
+    }
+
+    #[test]
+    fn request_roundtrip_with_tools() {
+        let request = GenerateContentRequest {
+            model: String::new(),
+            contents: vec![GoogleContent {
+                role: Some("user".to_owned()),
+                parts: Some(vec![GooglePart {
+                    text: Some("Hello".to_owned()),
+                    inline_data: None,
+                    function_call: None,
+                    function_response: None,
+                }]),
+            }],
+            system_instruction: None,
+            tools: Some(vec![GoogleTool {
+                function_declarations: Some(vec![GoogleFunctionDeclaration {
+                    name: "get_weather".to_owned(),
+                    description: Some("Get the weather".to_owned()),
+                    parameters: Some(serde_json::json!({})),
+                }]),
+            }]),
+            tool_config: Some(GoogleToolConfig {
+                function_calling_config: Some(GoogleFunctionCallingConfig {
+                    mode: Some("AUTO".to_owned()),
+                    allowed_function_names: None,
+                }),
+            }),
+            generation_config: None,
+            stream: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        let parsed: GenerateContentRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.contents.len(), 1);
+        assert_eq!(
+            parsed.tools.as_ref().unwrap()[0]
+                .function_declarations
+                .as_ref()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            parsed
+                .tool_config
+                .as_ref()
+                .unwrap()
+                .function_calling_config
+                .as_ref()
+                .unwrap()
+                .mode
+                .as_deref(),
+            Some("AUTO")
         );
     }
 }

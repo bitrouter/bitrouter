@@ -21,10 +21,11 @@ use tokio::{select, sync::mpsc};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
 
-use super::api::{ByteStream, drive_sse_stream, parse_google_error};
-use super::types::{
-    GOOGLE_PROVIDER_NAME, GoogleGenerateContentRequest, GoogleGenerateContentResponse,
+use super::api::{
+    ByteStream, GOOGLE_PROVIDER_NAME, build_generate_content_request, drive_sse_stream,
+    parse_google_error, response_to_generate_result,
 };
+use bitrouter_core::api::google::generate_content::types::GenerateContentResponse;
 
 const GOOGLE_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 
@@ -76,7 +77,7 @@ impl GoogleGenerativeAiModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
-        let request = GoogleGenerateContentRequest::from_call_options(&self.model_id, &options)?;
+        let request = build_generate_content_request(&self.model_id, &options)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(GOOGLE_PROVIDER_NAME),
@@ -114,16 +115,17 @@ impl GoogleGenerativeAiModel {
                 },
             )
             .await?;
-        let gen_response: GoogleGenerateContentResponse =
-            serde_json::from_value(response_body.clone()).map_err(|error| {
-                BitrouterError::response_decode(
-                    Some(GOOGLE_PROVIDER_NAME),
-                    format!("failed to parse generateContent response: {error}"),
-                    Some(response_body.clone()),
-                )
-            })?;
+        let gen_response: GenerateContentResponse = serde_json::from_value(response_body.clone())
+            .map_err(|error| {
+            BitrouterError::response_decode(
+                Some(GOOGLE_PROVIDER_NAME),
+                format!("failed to parse generateContent response: {error}"),
+                Some(response_body.clone()),
+            )
+        })?;
 
-        gen_response.into_generate_result(
+        response_to_generate_result(
+            gen_response,
             Some(request_headers),
             request_body,
             Some(response_headers),
@@ -135,7 +137,7 @@ impl GoogleGenerativeAiModel {
         &self,
         options: LanguageModelCallOptions,
     ) -> Result<LanguageModelStreamResult> {
-        let request = GoogleGenerateContentRequest::from_call_options(&self.model_id, &options)?;
+        let request = build_generate_content_request(&self.model_id, &options)?;
         let request_body = serde_json::to_value(&request).map_err(|error| {
             BitrouterError::invalid_request(
                 Some(GOOGLE_PROVIDER_NAME),

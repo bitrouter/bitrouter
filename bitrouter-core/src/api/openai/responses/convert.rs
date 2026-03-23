@@ -6,10 +6,11 @@ use crate::models::{
     language::{
         call_options::LanguageModelCallOptions,
         content::LanguageModelContent,
+        data_content::LanguageModelDataContent,
         generate_result::LanguageModelGenerateResult,
         prompt::{
-            LanguageModelMessage, LanguageModelToolResult, LanguageModelToolResultOutput,
-            LanguageModelUserContent,
+            LanguageModelAssistantContent, LanguageModelMessage, LanguageModelToolResult,
+            LanguageModelToolResultOutput, LanguageModelUserContent,
         },
         stream_part::LanguageModelStreamPart,
         tool::LanguageModelTool,
@@ -95,16 +96,20 @@ pub fn from_generate_result(
 
     ResponsesResponse {
         id: format!("resp-{}", generate_id()),
-        object: "response".to_owned(),
+        object: Some("response".to_owned()),
         created_at: now_unix(),
         model: model_id.to_owned(),
         output,
         usage: Some(ResponsesUsage {
-            input_tokens,
-            output_tokens,
-            total_tokens: input_tokens + output_tokens,
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(output_tokens),
+            total_tokens: Some(input_tokens + output_tokens),
+            input_tokens_details: None,
+            output_tokens_details: None,
         }),
-        status: "completed".to_owned(),
+        status: Some("completed".to_owned()),
+        incomplete_details: None,
+        error: None,
     }
 }
 
@@ -316,6 +321,19 @@ fn convert_input_items(items: Vec<ResponsesInputItem>) -> Vec<LanguageModelMessa
                     provider_options: None,
                 });
             }
+            ResponsesInputItem::FunctionCall(fc) => {
+                let input = serde_json::from_str(&fc.arguments).unwrap_or(serde_json::Value::Null);
+                messages.push(LanguageModelMessage::Assistant {
+                    content: vec![LanguageModelAssistantContent::ToolCall {
+                        tool_call_id: fc.call_id,
+                        tool_name: fc.name,
+                        input,
+                        provider_executed: None,
+                        provider_options: None,
+                    }],
+                    provider_options: None,
+                });
+            }
         }
     }
     messages
@@ -326,8 +344,9 @@ fn input_content_to_string(content: Option<ResponsesInputContent>) -> String {
         Some(ResponsesInputContent::Text(s)) => s,
         Some(ResponsesInputContent::Parts(parts)) => parts
             .into_iter()
-            .map(|p| match p {
-                ResponsesInputContentPart::InputText { text } => text,
+            .filter_map(|p| match p {
+                ResponsesInputContentPart::InputText { text } => Some(text),
+                ResponsesInputContentPart::InputImage { .. } => None,
             })
             .collect::<Vec<_>>()
             .join(""),
@@ -348,6 +367,14 @@ fn input_content_to_parts(content: Option<ResponsesInputContent>) -> Vec<Languag
                     text,
                     provider_options: None,
                 },
+                ResponsesInputContentPart::InputImage { image_url } => {
+                    LanguageModelUserContent::File {
+                        filename: None,
+                        data: LanguageModelDataContent::Url(image_url),
+                        media_type: "image/png".to_owned(),
+                        provider_options: None,
+                    }
+                }
             })
             .collect(),
         None => vec![],
@@ -358,13 +385,10 @@ fn extract_output_items(content: &LanguageModelContent) -> Vec<ResponsesOutputIt
     match content {
         LanguageModelContent::Text { text, .. } => {
             vec![ResponsesOutputItem::Message {
-                id: format!("msg-{}", generate_id()),
-                role: "assistant".to_owned(),
-                content: vec![ResponsesOutputContent {
-                    content_type: "output_text".to_owned(),
-                    text: text.clone(),
-                }],
-                status: "completed".to_owned(),
+                id: Some(format!("msg-{}", generate_id())),
+                role: Some("assistant".to_owned()),
+                content: vec![ResponsesOutputContent::OutputText { text: text.clone() }],
+                status: Some("completed".to_owned()),
             }]
         }
         LanguageModelContent::ToolCall {
@@ -374,11 +398,11 @@ fn extract_output_items(content: &LanguageModelContent) -> Vec<ResponsesOutputIt
             ..
         } => {
             vec![ResponsesOutputItem::FunctionCall {
-                id: format!("fc-{}", generate_id()),
+                id: Some(format!("fc-{}", generate_id())),
                 call_id: tool_call_id.clone(),
                 name: tool_name.clone(),
                 arguments: tool_input.clone(),
-                status: "completed".to_owned(),
+                status: Some("completed".to_owned()),
             }]
         }
         _ => vec![],
@@ -556,24 +580,27 @@ mod tests {
     fn serialize_text_response() {
         let resp = ResponsesResponse {
             id: "resp-test-1".to_owned(),
-            object: "response".to_owned(),
+            object: Some("response".to_owned()),
             created_at: 1700000000,
             model: "gpt-4o".to_owned(),
             output: vec![ResponsesOutputItem::Message {
-                id: "msg-1".to_owned(),
-                role: "assistant".to_owned(),
-                content: vec![ResponsesOutputContent {
-                    content_type: "output_text".to_owned(),
+                id: Some("msg-1".to_owned()),
+                role: Some("assistant".to_owned()),
+                content: vec![ResponsesOutputContent::OutputText {
                     text: "Hello!".to_owned(),
                 }],
-                status: "completed".to_owned(),
+                status: Some("completed".to_owned()),
             }],
             usage: Some(ResponsesUsage {
-                input_tokens: 10,
-                output_tokens: 5,
-                total_tokens: 15,
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                total_tokens: Some(15),
+                input_tokens_details: None,
+                output_tokens_details: None,
             }),
-            status: "completed".to_owned(),
+            status: Some("completed".to_owned()),
+            incomplete_details: None,
+            error: None,
         };
         let val = serde_json::to_value(&resp).expect("serialize failed");
         assert_eq!(val["id"], "resp-test-1");
@@ -592,18 +619,20 @@ mod tests {
     fn serialize_function_call_response() {
         let resp = ResponsesResponse {
             id: "resp-test-2".to_owned(),
-            object: "response".to_owned(),
+            object: Some("response".to_owned()),
             created_at: 1700000000,
             model: "gpt-4o".to_owned(),
             output: vec![ResponsesOutputItem::FunctionCall {
-                id: "fc-1".to_owned(),
+                id: Some("fc-1".to_owned()),
                 call_id: "call_xyz".to_owned(),
                 name: "get_weather".to_owned(),
                 arguments: r#"{"location":"NYC"}"#.to_owned(),
-                status: "completed".to_owned(),
+                status: Some("completed".to_owned()),
             }],
             usage: None,
-            status: "completed".to_owned(),
+            status: Some("completed".to_owned()),
+            incomplete_details: None,
+            error: None,
         };
         let val = serde_json::to_value(&resp).expect("serialize failed");
         assert_eq!(val["output"][0]["type"], "function_call");
@@ -914,9 +943,9 @@ mod tests {
             warnings: None,
         };
         let resp = from_generate_result("gpt-4o", result);
-        assert_eq!(resp.object, "response");
+        assert_eq!(resp.object.as_deref(), Some("response"));
         assert_eq!(resp.model, "gpt-4o");
-        assert_eq!(resp.status, "completed");
+        assert_eq!(resp.status.as_deref(), Some("completed"));
         assert!(resp.id.starts_with("resp-"));
         assert_eq!(resp.output.len(), 1);
         match &resp.output[0] {
@@ -926,18 +955,22 @@ mod tests {
                 status,
                 ..
             } => {
-                assert_eq!(role, "assistant");
-                assert_eq!(status, "completed");
+                assert_eq!(role.as_deref(), Some("assistant"));
+                assert_eq!(status.as_deref(), Some("completed"));
                 assert_eq!(content.len(), 1);
-                assert_eq!(content[0].content_type, "output_text");
-                assert_eq!(content[0].text, "Hello world");
+                match &content[0] {
+                    ResponsesOutputContent::OutputText { text } => {
+                        assert_eq!(text, "Hello world");
+                    }
+                    other => panic!("expected OutputText, got {other:?}"),
+                }
             }
             other => panic!("expected Message output, got {other:?}"),
         }
         let usage = resp.usage.expect("usage missing");
-        assert_eq!(usage.input_tokens, 10);
-        assert_eq!(usage.output_tokens, 5);
-        assert_eq!(usage.total_tokens, 15);
+        assert_eq!(usage.input_tokens, Some(10));
+        assert_eq!(usage.output_tokens, Some(5));
+        assert_eq!(usage.total_tokens, Some(15));
     }
 
     #[test]
@@ -971,14 +1004,14 @@ mod tests {
                 assert_eq!(call_id, "call_xyz");
                 assert_eq!(name, "get_weather");
                 assert_eq!(arguments, r#"{"location":"NYC"}"#);
-                assert_eq!(status, "completed");
+                assert_eq!(status.as_deref(), Some("completed"));
             }
             other => panic!("expected FunctionCall output, got {other:?}"),
         }
         let usage = resp.usage.expect("usage missing");
-        assert_eq!(usage.input_tokens, 15);
-        assert_eq!(usage.output_tokens, 20);
-        assert_eq!(usage.total_tokens, 35);
+        assert_eq!(usage.input_tokens, Some(15));
+        assert_eq!(usage.output_tokens, Some(20));
+        assert_eq!(usage.total_tokens, Some(35));
     }
 
     // ── Conversion: StreamConverter ─────────────────────────────────────

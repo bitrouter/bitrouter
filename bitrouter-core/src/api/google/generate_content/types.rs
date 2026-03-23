@@ -4,178 +4,176 @@ use serde::{Deserialize, Serialize};
 
 // ── Request ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateContentRequest {
+    #[serde(default)]
     pub model: String,
     pub contents: Vec<GoogleContent>,
-    #[serde(default)]
-    pub system_instruction: Option<GoogleSystemInstruction>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_instruction: Option<GoogleContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_config: Option<GoogleGenerationConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<GoogleTool>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_config: Option<GoogleToolConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleContent {
-    pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     #[serde(default)]
     pub parts: Option<Vec<GooglePart>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GoogleSystemInstruction {
-    #[serde(default)]
-    pub parts: Option<Vec<GooglePart>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GooglePart {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_data: Option<GoogleInlineData>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function_call: Option<GoogleFunctionCall>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function_response: Option<GoogleFunctionResponse>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleInlineData {
+    pub mime_type: String,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleFunctionCall {
     pub name: String,
-    pub args: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleFunctionResponse {
     pub name: String,
     pub response: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleTool {
-    pub function_declarations: Vec<GoogleFunctionDeclaration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function_declarations: Option<Vec<GoogleFunctionDeclaration>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleFunctionDeclaration {
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleToolConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function_calling_config: Option<GoogleFunctionCallingConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleFunctionCallingConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_function_names: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleGenerationConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_k: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<serde_json::Value>,
 }
 
 // ── Response ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateContentResponse {
-    pub candidates: Vec<GenerateContentCandidate>,
-    pub usage_metadata: GenerateContentUsageMetadata,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub candidates: Option<Vec<GenerateContentCandidate>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_metadata: Option<GenerateContentUsageMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_version: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateContentCandidate {
-    pub content: GenerateContentCandidateContent,
-    pub finish_reason: String,
-    pub index: u32,
+    #[serde(default)]
+    pub content: Option<GoogleContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    #[serde(default)]
+    pub index: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GenerateContentCandidateContent {
-    pub role: String,
-    pub parts: Vec<GenerateContentPart>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GenerateContentPart {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub function_call: Option<GoogleFunctionCall>,
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateContentUsageMetadata {
-    pub prompt_token_count: u32,
-    pub candidates_token_count: u32,
-    pub total_token_count: u32,
+    #[serde(default)]
+    pub prompt_token_count: Option<u32>,
+    #[serde(default)]
+    pub candidates_token_count: Option<u32>,
+    #[serde(default)]
+    pub total_token_count: Option<u32>,
+    #[serde(default)]
+    pub cached_content_token_count: Option<u32>,
 }
 
-// ── Streaming ───────────────────────────────────────────────────────────────
+// ── Errors ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GenerateContentStreamChunk {
-    pub candidates: Vec<GenerateContentStreamCandidate>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage_metadata: Option<GenerateContentStreamUsageMetadata>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_version: Option<String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoogleErrorEnvelope {
+    pub error: GoogleApiError,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GenerateContentStreamCandidate {
-    pub content: GenerateContentCandidateContent,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finish_reason: Option<String>,
-    pub index: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GenerateContentStreamUsageMetadata {
-    pub prompt_token_count: u32,
-    pub candidates_token_count: u32,
-    pub total_token_count: u32,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoogleApiError {
+    #[serde(default)]
+    pub code: Option<u16>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
 }

@@ -5,9 +5,10 @@ use bitrouter_core::{
     errors::{BitrouterError, ProviderErrorContext, Result},
     models::{
         language::{
-            call_options::LanguageModelCallOptions,
+            call_options::{LanguageModelCallOptions, LanguageModelResponseFormat},
             content::LanguageModelContent,
             data_content::LanguageModelDataContent,
+            finish_reason::LanguageModelFinishReason,
             generate_result::{
                 LanguageModelGenerateResult, LanguageModelRawRequest, LanguageModelRawResponse,
             },
@@ -17,7 +18,9 @@ use bitrouter_core::{
                 LanguageModelToolResultOutputContentFileId, LanguageModelUserContent,
             },
             stream_part::LanguageModelStreamPart,
-            usage::LanguageModelUsage,
+            tool::LanguageModelTool,
+            tool_choice::LanguageModelToolChoice,
+            usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
         },
         shared::{provider::ProviderMetadata, types::JsonValue, warnings::Warning},
     },
@@ -29,117 +32,293 @@ use tokio::{select, sync::mpsc};
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::sync::CancellationToken;
 
-use super::types::{
-    OPENAI_PROVIDER_NAME, OpenAiChatCompletionChunk, OpenAiChatCompletionResponse,
-    OpenAiChatCompletionStreamOptions, OpenAiChatCompletionsRequest, OpenAiChatMessageParam,
-    OpenAiChatTool, OpenAiChatToolCall, OpenAiChatToolCallFunction, OpenAiChunkDeltaToolCall,
-    OpenAiErrorEnvelope, OpenAiImageUrl, OpenAiInputContentPart, OpenAiToolChoice,
-    OpenAiUserMessageContent, STREAM_TEXT_ID, empty_usage, json_value_to_string, map_finish_reason,
-    openai_metadata,
+use bitrouter_core::api::openai::chat::types::{
+    ChatCompletionChoiceMessage, ChatCompletionChunk, ChatCompletionErrorEnvelope,
+    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStreamOptions,
+    ChatCompletionUsage, ChatContentPart, ChatImageUrl, ChatJsonSchemaConfig, ChatMessage,
+    ChatMessageContent, ChatMessageToolCall, ChatMessageToolCallFunction, ChatNamedToolChoice,
+    ChatResponseFormat, ChatResponseToolCallDelta, ChatTool, ChatToolChoice, ChatToolFunction,
 };
+
+pub(super) const OPENAI_PROVIDER_NAME: &str = "openai";
+const STREAM_TEXT_ID: &str = "text";
+
+// ── Helper functions (moved from types.rs) ──────────────────────────────────
+
+fn map_finish_reason(finish_reason: Option<&str>) -> LanguageModelFinishReason {
+    match finish_reason {
+        Some("stop") | None => LanguageModelFinishReason::Stop,
+        Some("length") => LanguageModelFinishReason::Length,
+        Some("tool_calls") | Some("function_call") => LanguageModelFinishReason::FunctionCall,
+        Some("content_filter") => LanguageModelFinishReason::ContentFilter,
+        Some("error") => LanguageModelFinishReason::Error,
+        Some(other) => LanguageModelFinishReason::Other(other.to_owned()),
+    }
+}
+
+fn openai_metadata(
+    system_fingerprint: Option<String>,
+    refusal: Option<String>,
+) -> Option<ProviderMetadata> {
+    let mut inner = HashMap::new();
+    if let Some(system_fingerprint) = system_fingerprint {
+        inner.insert(
+            "system_fingerprint".to_owned(),
+            JsonValue::String(system_fingerprint),
+        );
+    }
+    if let Some(refusal) = refusal {
+        inner.insert("refusal".to_owned(), JsonValue::String(refusal));
+    }
+
+    if inner.is_empty() {
+        None
+    } else {
+        Some(HashMap::from([(
+            OPENAI_PROVIDER_NAME.to_owned(),
+            json!(inner),
+        )]))
+    }
+}
+
+fn empty_usage() -> LanguageModelUsage {
+    LanguageModelUsage {
+        input_tokens: LanguageModelInputTokens {
+            total: None,
+            no_cache: None,
+            cache_read: None,
+            cache_write: None,
+        },
+        output_tokens: LanguageModelOutputTokens {
+            total: None,
+            text: None,
+            reasoning: None,
+        },
+        raw: None,
+    }
+}
+
+fn json_value_to_string(value: JsonValue) -> Option<String> {
+    match value {
+        JsonValue::String(value) => Some(value),
+        JsonValue::Number(value) => Some(value.to_string()),
+        JsonValue::Bool(value) => Some(value.to_string()),
+        JsonValue::Null => None,
+        other => Some(other.to_string()),
+    }
+}
+
+fn usage_to_language_model(usage: ChatCompletionUsage) -> LanguageModelUsage {
+    let raw = serde_json::to_value(&usage).ok();
+    let reasoning_tokens = usage
+        .completion_tokens_details
+        .as_ref()
+        .and_then(|d| d.reasoning_tokens);
+    LanguageModelUsage {
+        input_tokens: LanguageModelInputTokens {
+            total: usage.prompt_tokens,
+            no_cache: usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens)
+                .map(|cached| usage.prompt_tokens.unwrap_or(cached).saturating_sub(cached)),
+            cache_read: usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+            cache_write: None,
+        },
+        output_tokens: LanguageModelOutputTokens {
+            total: usage.completion_tokens,
+            text: usage.completion_tokens,
+            reasoning: reasoning_tokens,
+        },
+        raw,
+    }
+}
+
+fn tool_choice_from_language_model(choice: &LanguageModelToolChoice) -> ChatToolChoice {
+    match choice {
+        LanguageModelToolChoice::Auto => ChatToolChoice::Mode("auto".to_owned()),
+        LanguageModelToolChoice::None => ChatToolChoice::Mode("none".to_owned()),
+        LanguageModelToolChoice::Required => ChatToolChoice::Mode("required".to_owned()),
+        LanguageModelToolChoice::Tool { tool_name } => ChatToolChoice::Named {
+            r#type: "function".to_owned(),
+            function: ChatNamedToolChoice {
+                name: tool_name.clone(),
+            },
+        },
+    }
+}
+
+fn response_format_from_language_model(format: &LanguageModelResponseFormat) -> ChatResponseFormat {
+    match format {
+        LanguageModelResponseFormat::Text => ChatResponseFormat::Text,
+        LanguageModelResponseFormat::Json {
+            schema,
+            name,
+            description,
+        } => match schema {
+            Some(schema) => ChatResponseFormat::JsonSchema {
+                json_schema: ChatJsonSchemaConfig {
+                    name: name.clone().unwrap_or_else(|| "output".to_owned()),
+                    description: description.clone(),
+                    schema: schema.clone(),
+                    strict: Some(true),
+                },
+            },
+            None => ChatResponseFormat::JsonObject,
+        },
+    }
+}
+
+fn tool_from_language_model(tool: &LanguageModelTool) -> Result<ChatTool> {
+    match tool {
+        LanguageModelTool::Function {
+            name,
+            description,
+            input_schema,
+            strict,
+            ..
+        } => {
+            let parameters = serde_json::to_value(input_schema).map_err(|error| {
+                BitrouterError::invalid_request(
+                    Some(OPENAI_PROVIDER_NAME),
+                    format!("failed to serialize tool parameters: {error}"),
+                    None,
+                )
+            })?;
+            Ok(ChatTool {
+                r#type: "function".to_owned(),
+                function: ChatToolFunction {
+                    name: name.clone(),
+                    description: description.clone(),
+                    parameters: Some(parameters),
+                    strict: *strict,
+                },
+            })
+        }
+        LanguageModelTool::Provider { id, .. } => Err(BitrouterError::unsupported(
+            OPENAI_PROVIDER_NAME,
+            format!("provider tool {}:{}", id.provider_name, id.tool_id),
+            Some(
+                "OpenAI chat completions supports function and custom tools, \
+                 but bitrouter-core provider tools do not map cleanly here"
+                    .to_owned(),
+            ),
+        )),
+    }
+}
 
 // ── Response conversion ─────────────────────────────────────────────────────
 
-impl OpenAiChatCompletionResponse {
-    pub(super) fn into_generate_result(
-        self,
-        request_headers: Option<HeaderMap>,
-        request_body: JsonValue,
-        response_headers: Option<HeaderMap>,
-        response_body: JsonValue,
-    ) -> Result<LanguageModelGenerateResult> {
-        let Some(choice) = self.choices.into_iter().find(|choice| choice.index == 0) else {
-            return Err(BitrouterError::invalid_response(
-                Some(OPENAI_PROVIDER_NAME),
-                "chat completion response did not contain choice 0",
-                Some(response_body),
-            ));
-        };
+pub(super) fn response_to_generate_result(
+    response: ChatCompletionResponse,
+    request_headers: Option<HeaderMap>,
+    request_body: JsonValue,
+    response_headers: Option<HeaderMap>,
+    response_body: JsonValue,
+) -> Result<LanguageModelGenerateResult> {
+    let Some(choice) = response
+        .choices
+        .into_iter()
+        .find(|choice| choice.index == 0)
+    else {
+        return Err(BitrouterError::invalid_response(
+            Some(OPENAI_PROVIDER_NAME),
+            "chat completion response did not contain choice 0",
+            Some(response_body),
+        ));
+    };
 
-        let provider_metadata = openai_metadata(
-            self.system_fingerprint.clone(),
-            choice.message.refusal.clone(),
-        );
-        let finish_reason = map_finish_reason(choice.finish_reason.as_deref());
-        let content = message_to_language_model_content(
-            choice.message,
-            provider_metadata.clone(),
-            response_body.clone(),
-        )?;
+    let provider_metadata = openai_metadata(
+        response.system_fingerprint.clone(),
+        choice.message.refusal.clone(),
+    );
+    let finish_reason = map_finish_reason(choice.finish_reason.as_deref());
+    let content = message_to_language_model_content(
+        choice.message,
+        provider_metadata.clone(),
+        response_body.clone(),
+    )?;
 
-        Ok(LanguageModelGenerateResult {
-            content,
-            finish_reason,
-            usage: self
-                .usage
-                .map(LanguageModelUsage::from)
-                .unwrap_or_else(empty_usage),
-            provider_metadata,
-            request: Some(LanguageModelRawRequest {
-                headers: request_headers,
-                body: request_body,
-            }),
-            response_metadata: Some(LanguageModelRawResponse {
-                id: Some(self.id),
-                timestamp: Some(self.created.saturating_mul(1_000)),
-                model_id: Some(self.model),
-                headers: response_headers,
-                body: Some(response_body),
-            }),
-            warnings: Some(Vec::<Warning>::new()),
-        })
-    }
+    Ok(LanguageModelGenerateResult {
+        content,
+        finish_reason,
+        usage: response
+            .usage
+            .map(usage_to_language_model)
+            .unwrap_or_else(empty_usage),
+        provider_metadata,
+        request: Some(LanguageModelRawRequest {
+            headers: request_headers,
+            body: request_body,
+        }),
+        response_metadata: Some(LanguageModelRawResponse {
+            id: Some(response.id),
+            timestamp: Some(response.created.saturating_mul(1_000)),
+            model_id: Some(response.model),
+            headers: response_headers,
+            body: Some(response_body),
+        }),
+        warnings: Some(Vec::<Warning>::new()),
+    })
 }
 
 // ── Request building ────────────────────────────────────────────────────────
 
-impl OpenAiChatCompletionsRequest {
-    pub(super) fn from_call_options(
-        model_id: &str,
-        options: &LanguageModelCallOptions,
-        stream: bool,
-    ) -> Result<Self> {
-        let model = model_id.to_owned();
-        if options.top_k.is_some() {
-            return Err(BitrouterError::unsupported(
-                OPENAI_PROVIDER_NAME,
-                "top_k",
-                Some("OpenAI chat completions does not expose top_k sampling".to_owned()),
-            ));
-        }
-
-        let tools: Option<Vec<OpenAiChatTool>> = options
-            .tools
-            .as_ref()
-            .map(|tools| {
-                tools
-                    .iter()
-                    .map(OpenAiChatTool::try_from)
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?;
-        let has_tools = tools.as_ref().is_some_and(|tools| !tools.is_empty());
-
-        Ok(Self {
-            model,
-            messages: convert_prompt(&options.prompt)?,
-            stream: Some(stream),
-            stream_options: stream.then_some(OpenAiChatCompletionStreamOptions {
-                include_usage: Some(true),
-            }),
-            max_completion_tokens: options.max_output_tokens,
-            temperature: options.temperature,
-            top_p: options.top_p,
-            stop: options.stop_sequences.clone(),
-            presence_penalty: options.presence_penalty,
-            frequency_penalty: options.frequency_penalty,
-            response_format: options.response_format.as_ref().map(Into::into),
-            seed: options.seed,
-            tools,
-            tool_choice: options.tool_choice.as_ref().map(OpenAiToolChoice::from),
-            parallel_tool_calls: has_tools.then_some(false),
-        })
+pub(super) fn build_chat_request(
+    model_id: &str,
+    options: &LanguageModelCallOptions,
+    stream: bool,
+) -> Result<ChatCompletionRequest> {
+    let model = model_id.to_owned();
+    if options.top_k.is_some() {
+        return Err(BitrouterError::unsupported(
+            OPENAI_PROVIDER_NAME,
+            "top_k",
+            Some("OpenAI chat completions does not expose top_k sampling".to_owned()),
+        ));
     }
+
+    let tools: Option<Vec<ChatTool>> = options
+        .tools
+        .as_ref()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(tool_from_language_model)
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
+    let has_tools = tools.as_ref().is_some_and(|tools| !tools.is_empty());
+
+    Ok(ChatCompletionRequest {
+        model,
+        messages: convert_prompt(&options.prompt)?,
+        stream: Some(stream),
+        stream_options: stream.then_some(ChatCompletionStreamOptions {
+            include_usage: Some(true),
+        }),
+        max_completion_tokens: options.max_output_tokens,
+        max_tokens: None,
+        temperature: options.temperature,
+        top_p: options.top_p,
+        stop: options.stop_sequences.clone(),
+        presence_penalty: options.presence_penalty,
+        frequency_penalty: options.frequency_penalty,
+        response_format: options
+            .response_format
+            .as_ref()
+            .map(response_format_from_language_model),
+        seed: options.seed,
+        tools,
+        tool_choice: options
+            .tool_choice
+            .as_ref()
+            .map(tool_choice_from_language_model),
+        parallel_tool_calls: has_tools.then_some(false),
+    })
 }
 
 // ── Error parsing ───────────────────────────────────────────────────────────
@@ -151,7 +330,7 @@ pub(super) fn parse_openai_error(
 ) -> BitrouterError {
     let parsed = body
         .as_ref()
-        .and_then(|body| serde_json::from_value::<OpenAiErrorEnvelope>(body.clone()).ok());
+        .and_then(|body| serde_json::from_value::<ChatCompletionErrorEnvelope>(body.clone()).ok());
 
     match parsed {
         Some(envelope) => BitrouterError::provider_error(
@@ -184,7 +363,7 @@ pub(super) fn parse_openai_error(
 // ── Message / prompt conversion ─────────────────────────────────────────────
 
 fn message_to_language_model_content(
-    message: super::types::OpenAiChatCompletionMessage,
+    message: ChatCompletionChoiceMessage,
     provider_metadata: Option<ProviderMetadata>,
     response_body: JsonValue,
 ) -> Result<LanguageModelContent> {
@@ -246,19 +425,27 @@ fn message_to_language_model_content(
     }
 }
 
-fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiChatMessageParam>> {
+fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ChatMessage>> {
     let mut messages = Vec::new();
 
     for message in prompt {
         match message {
             LanguageModelMessage::System { content, .. } => {
-                messages.push(OpenAiChatMessageParam::System {
-                    content: content.clone(),
+                messages.push(ChatMessage {
+                    role: "system".to_owned(),
+                    content: Some(ChatMessageContent::Text(content.clone())),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    name: None,
                 });
             }
             LanguageModelMessage::User { content, .. } => {
-                messages.push(OpenAiChatMessageParam::User {
-                    content: convert_user_content(content)?,
+                messages.push(ChatMessage {
+                    role: "user".to_owned(),
+                    content: Some(convert_user_content(content)?),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    name: None,
                 });
             }
             LanguageModelMessage::Assistant { content, .. } => {
@@ -276,10 +463,10 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiChatMessa
                             input,
                             ..
                         } => {
-                            tool_calls.push(OpenAiChatToolCall {
+                            tool_calls.push(ChatMessageToolCall {
                                 id: tool_call_id.clone(),
-                                kind: "function".to_owned(),
-                                function: OpenAiChatToolCallFunction {
+                                r#type: "function".to_owned(),
+                                function: ChatMessageToolCallFunction {
                                     name: tool_name.clone(),
                                     arguments: serde_json::to_string(input).map_err(|error| {
                                         BitrouterError::invalid_request(
@@ -315,9 +502,14 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiChatMessa
                     }
                 }
 
-                messages.push(OpenAiChatMessageParam::Assistant {
-                    content: (!text_segments.is_empty()).then(|| text_segments.join("\n")),
+                let content_text = (!text_segments.is_empty())
+                    .then(|| ChatMessageContent::Text(text_segments.join("\n")));
+                messages.push(ChatMessage {
+                    role: "assistant".to_owned(),
+                    content: content_text,
+                    tool_call_id: None,
                     tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+                    name: None,
                 });
             }
             LanguageModelMessage::Tool { content, .. } => {
@@ -328,9 +520,14 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiChatMessa
                             output,
                             ..
                         } => {
-                            messages.push(OpenAiChatMessageParam::Tool {
-                                tool_call_id: tool_call_id.clone(),
-                                content: stringify_tool_output(output)?,
+                            messages.push(ChatMessage {
+                                role: "tool".to_owned(),
+                                content: Some(ChatMessageContent::Text(stringify_tool_output(
+                                    output,
+                                )?)),
+                                tool_call_id: Some(tool_call_id.clone()),
+                                tool_calls: None,
+                                name: None,
                             });
                         }
                         LanguageModelToolResult::ToolApprovalResponse { .. } => {
@@ -349,24 +546,24 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiChatMessa
     Ok(messages)
 }
 
-fn convert_user_content(content: &[LanguageModelUserContent]) -> Result<OpenAiUserMessageContent> {
+fn convert_user_content(content: &[LanguageModelUserContent]) -> Result<ChatMessageContent> {
     if content.len() == 1
         && let LanguageModelUserContent::Text { text, .. } = &content[0]
     {
-        return Ok(OpenAiUserMessageContent::Text(text.clone()));
+        return Ok(ChatMessageContent::Text(text.clone()));
     }
 
     let mut parts = Vec::new();
     for item in content {
         match item {
             LanguageModelUserContent::Text { text, .. } => {
-                parts.push(OpenAiInputContentPart::Text { text: text.clone() });
+                parts.push(ChatContentPart::Text { text: text.clone() });
             }
             LanguageModelUserContent::File {
                 data, media_type, ..
             } => {
-                parts.push(OpenAiInputContentPart::ImageUrl {
-                    image_url: OpenAiImageUrl {
+                parts.push(ChatContentPart::ImageUrl {
+                    image_url: ChatImageUrl {
                         url: convert_image_input(data, media_type)?,
                     },
                 });
@@ -374,7 +571,7 @@ fn convert_user_content(content: &[LanguageModelUserContent]) -> Result<OpenAiUs
         }
     }
 
-    Ok(OpenAiUserMessageContent::Parts(parts))
+    Ok(ChatMessageContent::Parts(parts))
 }
 
 fn convert_image_input(data: &LanguageModelDataContent, media_type: &str) -> Result<String> {
@@ -590,7 +787,8 @@ impl OpenAiSseParser {
             });
         }
 
-        if let Ok(error_envelope) = serde_json::from_value::<OpenAiErrorEnvelope>(raw_value.clone())
+        if let Ok(error_envelope) =
+            serde_json::from_value::<ChatCompletionErrorEnvelope>(raw_value.clone())
         {
             self.state.finished = true;
             parts.push(LanguageModelStreamPart::Error {
@@ -604,7 +802,7 @@ impl OpenAiSseParser {
             return parts;
         }
 
-        let chunk: OpenAiChatCompletionChunk = match serde_json::from_value(raw_value.clone()) {
+        let chunk: ChatCompletionChunk = match serde_json::from_value(raw_value.clone()) {
             Ok(chunk) => chunk,
             Err(error) => {
                 self.state.finished = true;
@@ -645,7 +843,7 @@ struct OpenAiToolInputState {
 }
 
 impl OpenAiStreamState {
-    fn apply_chunk(&mut self, chunk: OpenAiChatCompletionChunk) -> Vec<LanguageModelStreamPart> {
+    fn apply_chunk(&mut self, chunk: ChatCompletionChunk) -> Vec<LanguageModelStreamPart> {
         let mut parts = Vec::new();
 
         if !self.metadata_emitted {
@@ -658,7 +856,7 @@ impl OpenAiStreamState {
         }
 
         if let Some(usage) = chunk.usage {
-            self.usage = Some(usage.into());
+            self.usage = Some(usage_to_language_model(usage));
         }
 
         for choice in chunk.choices {
@@ -697,7 +895,7 @@ impl OpenAiStreamState {
 
     fn apply_tool_delta(
         &mut self,
-        tool_call: OpenAiChunkDeltaToolCall,
+        tool_call: ChatResponseToolCallDelta,
     ) -> Vec<LanguageModelStreamPart> {
         let entry = self.tool_inputs.entry(tool_call.index).or_default();
         if let Some(id) = tool_call.id {
@@ -950,7 +1148,7 @@ mod tests {
 
     #[test]
     fn builds_image_prompt_request() {
-        let request = OpenAiChatCompletionsRequest::from_call_options(
+        let request = build_chat_request(
             "gpt-4o-mini",
             &LanguageModelCallOptions {
                 prompt: vec![LanguageModelMessage::User {
@@ -991,10 +1189,7 @@ mod tests {
         )
         .expect("request should build");
 
-        assert!(matches!(
-            request.messages[0],
-            OpenAiChatMessageParam::User { .. }
-        ));
+        assert_eq!(request.messages[0].role, "user");
     }
 
     // ── SSE parser unit tests ──────────────────────────────────────────

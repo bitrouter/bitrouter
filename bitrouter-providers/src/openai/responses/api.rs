@@ -2,6 +2,7 @@ use std::{collections::HashMap, pin::Pin};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bitrouter_core::{
+    api::openai::responses::types::*,
     errors::{BitrouterError, ProviderErrorContext, Result},
     models::{
         language::{
@@ -36,463 +37,288 @@ use tokio_util::sync::CancellationToken;
 pub(crate) const OPENAI_PROVIDER_NAME: &str = "openai";
 const STREAM_TEXT_ID: &str = "text";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiApiError {
-    pub message: String,
-    #[serde(rename = "type", default)]
-    pub error_type: Option<String>,
-    #[serde(default)]
-    pub param: Option<String>,
-    #[serde(default)]
-    pub code: Option<JsonValue>,
-}
+// ── Free-function conversions (replace From / TryFrom impls) ───────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiErrorEnvelope {
-    pub error: OpenAiApiError,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiResponseUsage {
-    #[serde(default)]
-    pub input_tokens: Option<u32>,
-    #[serde(default)]
-    pub output_tokens: Option<u32>,
-    #[serde(default)]
-    pub total_tokens: Option<u32>,
-    #[serde(default)]
-    pub input_tokens_details: Option<OpenAiResponseInputTokensDetails>,
-    #[serde(default)]
-    pub output_tokens_details: Option<OpenAiResponseOutputTokensDetails>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiResponseInputTokensDetails {
-    #[serde(default)]
-    pub cached_tokens: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiResponseOutputTokensDetails {
-    #[serde(default)]
-    pub reasoning_tokens: Option<u32>,
-}
-
-impl From<OpenAiResponseUsage> for LanguageModelUsage {
-    fn from(usage: OpenAiResponseUsage) -> Self {
-        let raw = serde_json::to_value(&usage).ok();
-        let reasoning_tokens = usage
-            .output_tokens_details
-            .as_ref()
-            .and_then(|details| details.reasoning_tokens);
-
-        LanguageModelUsage {
-            input_tokens: LanguageModelInputTokens {
-                total: usage.input_tokens,
-                no_cache: usage
-                    .input_tokens_details
-                    .as_ref()
-                    .and_then(|details| details.cached_tokens)
-                    .map(|cached| usage.input_tokens.unwrap_or(cached).saturating_sub(cached)),
-                cache_read: usage
-                    .input_tokens_details
-                    .as_ref()
-                    .and_then(|details| details.cached_tokens),
-                cache_write: None,
-            },
-            output_tokens: LanguageModelOutputTokens {
-                total: usage.output_tokens,
-                text: usage.output_tokens,
-                reasoning: reasoning_tokens,
-            },
-            raw,
-        }
+pub(crate) fn tool_choice_from_language_model(
+    choice: &LanguageModelToolChoice,
+) -> ResponsesToolChoice {
+    match choice {
+        LanguageModelToolChoice::Auto => ResponsesToolChoice::Mode("auto".to_owned()),
+        LanguageModelToolChoice::None => ResponsesToolChoice::Mode("none".to_owned()),
+        LanguageModelToolChoice::Required => ResponsesToolChoice::Mode("required".to_owned()),
+        LanguageModelToolChoice::Tool { tool_name } => ResponsesToolChoice::Named {
+            kind: "function".to_owned(),
+            name: tool_name.clone(),
+        },
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiResponsesRequest {
-    pub model: String,
-    pub input: Vec<OpenAiResponseInputItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<OpenAiResponsesTool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<OpenAiToolChoice>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calls: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<OpenAiResponseTextConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum OpenAiResponseInputItem {
-    Message {
-        role: String,
-        content: Vec<OpenAiResponseInputContent>,
-    },
-    FunctionCall {
-        call_id: String,
-        name: String,
-        arguments: String,
-    },
-    FunctionCallOutput {
-        call_id: String,
-        output: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum OpenAiResponseInputContent {
-    InputText { text: String },
-    InputImage { image_url: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiResponseTextConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub format: Option<OpenAiResponseTextFormat>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum OpenAiResponseTextFormat {
-    Text,
-    JsonObject,
-    JsonSchema {
-        name: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-        schema: schemars::Schema,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        strict: Option<bool>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiResponsesTool {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub parameters: schemars::Schema,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub strict: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum OpenAiToolChoice {
-    Mode(String),
-    Named {
-        #[serde(rename = "type")]
-        kind: String,
-        name: String,
-    },
-}
-
-impl From<&LanguageModelToolChoice> for OpenAiToolChoice {
-    fn from(choice: &LanguageModelToolChoice) -> Self {
-        match choice {
-            LanguageModelToolChoice::Auto => OpenAiToolChoice::Mode("auto".to_owned()),
-            LanguageModelToolChoice::None => OpenAiToolChoice::Mode("none".to_owned()),
-            LanguageModelToolChoice::Required => OpenAiToolChoice::Mode("required".to_owned()),
-            LanguageModelToolChoice::Tool { tool_name } => OpenAiToolChoice::Named {
-                kind: "function".to_owned(),
-                name: tool_name.clone(),
-            },
-        }
-    }
-}
-
-impl From<&LanguageModelResponseFormat> for OpenAiResponseTextConfig {
-    fn from(format: &LanguageModelResponseFormat) -> Self {
-        match format {
-            LanguageModelResponseFormat::Text => Self {
-                format: Some(OpenAiResponseTextFormat::Text),
-            },
-            LanguageModelResponseFormat::Json {
-                schema,
-                name,
-                description,
-            } => Self {
-                format: Some(match schema {
-                    Some(schema) => OpenAiResponseTextFormat::JsonSchema {
+pub(crate) fn text_config_from_response_format(
+    format: &LanguageModelResponseFormat,
+) -> ResponsesTextConfig {
+    match format {
+        LanguageModelResponseFormat::Text => ResponsesTextConfig {
+            format: Some(ResponsesTextFormat::Text),
+        },
+        LanguageModelResponseFormat::Json {
+            schema,
+            name,
+            description,
+        } => ResponsesTextConfig {
+            format: Some(match schema {
+                Some(schema) => {
+                    let schema_value =
+                        serde_json::to_value(schema).unwrap_or_else(|_| serde_json::json!({}));
+                    ResponsesTextFormat::JsonSchema {
                         name: name.clone().unwrap_or_else(|| "output".to_owned()),
                         description: description.clone(),
-                        schema: schema.clone(),
+                        schema: schema_value,
                         strict: Some(true),
-                    },
-                    None => OpenAiResponseTextFormat::JsonObject,
-                }),
-            },
-        }
+                    }
+                }
+                None => ResponsesTextFormat::JsonObject,
+            }),
+        },
     }
 }
 
-impl TryFrom<&LanguageModelTool> for OpenAiResponsesTool {
-    type Error = BitrouterError;
-
-    fn try_from(tool: &LanguageModelTool) -> Result<Self> {
-        match tool {
-            LanguageModelTool::Function {
-                name,
-                description,
-                input_schema,
-                strict,
-                ..
-            } => Ok(Self {
-                kind: "function".to_owned(),
-                name: name.clone(),
+pub(crate) fn tool_to_responses(tool: &LanguageModelTool) -> Result<ResponsesTool> {
+    match tool {
+        LanguageModelTool::Function {
+            name,
+            description,
+            input_schema,
+            strict,
+            ..
+        } => {
+            let parameters = serde_json::to_value(input_schema)
+                .map_err(|error| {
+                    BitrouterError::invalid_request(
+                        Some(OPENAI_PROVIDER_NAME),
+                        format!("failed to convert tool parameters: {error}"),
+                        None,
+                    )
+                })?;
+            Ok(ResponsesTool {
+                r#type: "function".to_owned(),
+                name: Some(name.clone()),
                 description: description.clone(),
-                parameters: input_schema.clone(),
+                parameters: Some(parameters),
                 strict: *strict,
-            }),
-            LanguageModelTool::Provider { id, .. } => Err(BitrouterError::unsupported(
-                OPENAI_PROVIDER_NAME,
-                format!("provider tool {}:{}", id.provider_name, id.tool_id),
-                Some(
-                    "OpenAI responses supports function and custom tools, but bitrouter-core provider tools do not map directly".to_owned(),
-                ),
-            )),
-        }
-    }
-}
-
-impl TryFrom<&LanguageModelUserContent> for OpenAiResponseInputContent {
-    type Error = BitrouterError;
-
-    fn try_from(content: &LanguageModelUserContent) -> Result<Self> {
-        match content {
-            LanguageModelUserContent::Text { text, .. } => {
-                Ok(Self::InputText { text: text.clone() })
-            }
-            LanguageModelUserContent::File {
-                data, media_type, ..
-            } => Ok(Self::InputImage {
-                image_url: convert_image_input(data, media_type)?,
-            }),
-        }
-    }
-}
-
-impl OpenAiResponsesRequest {
-    pub(crate) fn from_call_options(
-        model_id: &str,
-        options: &LanguageModelCallOptions,
-        stream: bool,
-    ) -> Result<Self> {
-        let model = model_id.to_owned();
-        if options.top_k.is_some() {
-            return Err(BitrouterError::unsupported(
-                OPENAI_PROVIDER_NAME,
-                "top_k",
-                Some("OpenAI responses does not expose top_k sampling".to_owned()),
-            ));
-        }
-        if options.stop_sequences.is_some() {
-            return Err(BitrouterError::unsupported(
-                OPENAI_PROVIDER_NAME,
-                "stop_sequences",
-                Some("OpenAI responses does not support stop for all models".to_owned()),
-            ));
-        }
-        if options.presence_penalty.is_some() || options.frequency_penalty.is_some() {
-            return Err(BitrouterError::unsupported(
-                OPENAI_PROVIDER_NAME,
-                "presence_penalty/frequency_penalty",
-                Some("OpenAI responses does not accept chat-style penalties".to_owned()),
-            ));
-        }
-
-        let tools = options
-            .tools
-            .as_ref()
-            .map(|tools| {
-                tools
-                    .iter()
-                    .map(OpenAiResponsesTool::try_from)
-                    .collect::<Result<Vec<_>>>()
             })
-            .transpose()?;
-        let has_tools = tools.as_ref().is_some_and(|tools| !tools.is_empty());
-
-        Ok(Self {
-            model,
-            input: convert_prompt(&options.prompt)?,
-            stream: Some(stream),
-            max_output_tokens: options.max_output_tokens,
-            temperature: options.temperature,
-            top_p: options.top_p,
-            tools,
-            tool_choice: options.tool_choice.as_ref().map(OpenAiToolChoice::from),
-            parallel_tool_calls: has_tools.then_some(false),
-            text: options
-                .response_format
-                .as_ref()
-                .map(OpenAiResponseTextConfig::from),
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiResponse {
-    pub id: String,
-    pub created_at: i64,
-    pub model: String,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub output: Vec<OpenAiResponseOutputItem>,
-    #[serde(default)]
-    pub usage: Option<OpenAiResponseUsage>,
-    #[serde(default)]
-    pub incomplete_details: Option<OpenAiResponseIncompleteDetails>,
-    #[serde(default)]
-    pub error: Option<OpenAiApiError>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiResponseIncompleteDetails {
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum OpenAiResponseOutputItem {
-    Message {
-        #[serde(default)]
-        role: Option<String>,
-        #[serde(default)]
-        content: Vec<OpenAiResponseOutputContent>,
-    },
-    FunctionCall {
-        call_id: String,
-        name: String,
-        arguments: String,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum OpenAiResponseOutputContent {
-    OutputText {
-        text: String,
-    },
-    Refusal {
-        refusal: String,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
-impl OpenAiResponse {
-    pub(crate) fn into_generate_result(
-        self,
-        request_headers: Option<HeaderMap>,
-        request_body: JsonValue,
-        response_headers: Option<HeaderMap>,
-        response_body: JsonValue,
-    ) -> Result<LanguageModelGenerateResult> {
-        let mut text_segments = Vec::new();
-        let mut refusal: Option<String> = None;
-        let mut first_function_call: Option<(String, String, String)> = None;
-
-        for item in &self.output {
-            match item {
-                OpenAiResponseOutputItem::Message { content, .. } => {
-                    for part in content {
-                        match part {
-                            OpenAiResponseOutputContent::OutputText { text } => {
-                                text_segments.push(text.clone());
-                            }
-                            OpenAiResponseOutputContent::Refusal { refusal: value } => {
-                                refusal = Some(value.clone());
-                            }
-                            OpenAiResponseOutputContent::Unknown => {}
-                        }
-                    }
-                }
-                OpenAiResponseOutputItem::FunctionCall {
-                    call_id,
-                    name,
-                    arguments,
-                } => {
-                    if first_function_call.is_none() {
-                        first_function_call =
-                            Some((call_id.clone(), name.clone(), arguments.clone()));
-                    }
-                }
-                OpenAiResponseOutputItem::Unknown => {}
-            }
         }
-
-        let provider_metadata = openai_metadata(refusal);
-        let finish_reason = map_response_finish_reason(
-            self.status.as_deref(),
-            self.incomplete_details
-                .as_ref()
-                .and_then(|details| details.reason.as_deref()),
-            first_function_call.is_some(),
-        );
-
-        let content = if let Some((call_id, tool_name, tool_input)) = first_function_call {
-            LanguageModelContent::ToolCall {
-                tool_call_id: call_id,
-                tool_name,
-                tool_input,
-                provider_executed: None,
-                dynamic: None,
-                provider_metadata: provider_metadata.clone(),
-            }
-        } else if !text_segments.is_empty() {
-            LanguageModelContent::Text {
-                text: text_segments.join("\n"),
-                provider_metadata: provider_metadata.clone(),
-            }
-        } else {
-            return Err(BitrouterError::invalid_response(
-                Some(OPENAI_PROVIDER_NAME),
-                "responses result did not contain text or function_call output",
-                Some(response_body),
-            ));
-        };
-
-        Ok(LanguageModelGenerateResult {
-            content,
-            finish_reason,
-            usage: self
-                .usage
-                .map(LanguageModelUsage::from)
-                .unwrap_or_else(empty_usage),
-            provider_metadata,
-            request: Some(LanguageModelRawRequest {
-                headers: request_headers,
-                body: request_body,
-            }),
-            response_metadata: Some(LanguageModelRawResponse {
-                id: Some(self.id),
-                timestamp: Some(self.created_at.saturating_mul(1_000)),
-                model_id: Some(self.model),
-                headers: response_headers,
-                body: Some(response_body),
-            }),
-            warnings: Some(Vec::<Warning>::new()),
-        })
+        LanguageModelTool::Provider { id, .. } => Err(BitrouterError::unsupported(
+            OPENAI_PROVIDER_NAME,
+            format!("provider tool {}:{}", id.provider_name, id.tool_id),
+            Some(
+                "OpenAI responses supports function and custom tools, but bitrouter-core provider tools do not map directly".to_owned(),
+            ),
+        )),
     }
+}
+
+pub(crate) fn user_content_to_input_content(
+    content: &LanguageModelUserContent,
+) -> Result<ResponsesInputContentPart> {
+    match content {
+        LanguageModelUserContent::Text { text, .. } => {
+            Ok(ResponsesInputContentPart::InputText { text: text.clone() })
+        }
+        LanguageModelUserContent::File {
+            data, media_type, ..
+        } => Ok(ResponsesInputContentPart::InputImage {
+            image_url: convert_image_input(data, media_type)?,
+        }),
+    }
+}
+
+pub(crate) fn usage_to_language_model(usage: ResponsesUsage) -> LanguageModelUsage {
+    let raw = serde_json::to_value(&usage).ok();
+    let reasoning_tokens = usage
+        .output_tokens_details
+        .as_ref()
+        .and_then(|details| details.reasoning_tokens);
+
+    LanguageModelUsage {
+        input_tokens: LanguageModelInputTokens {
+            total: usage.input_tokens,
+            no_cache: usage
+                .input_tokens_details
+                .as_ref()
+                .and_then(|details| details.cached_tokens)
+                .map(|cached| usage.input_tokens.unwrap_or(cached).saturating_sub(cached)),
+            cache_read: usage
+                .input_tokens_details
+                .as_ref()
+                .and_then(|details| details.cached_tokens),
+            cache_write: None,
+        },
+        output_tokens: LanguageModelOutputTokens {
+            total: usage.output_tokens,
+            text: usage.output_tokens,
+            reasoning: reasoning_tokens,
+        },
+        raw,
+    }
+}
+
+// ── Request building ────────────────────────────────────────────────────────
+
+pub(crate) fn build_responses_request(
+    model_id: &str,
+    options: &LanguageModelCallOptions,
+    stream: bool,
+) -> Result<ResponsesRequest> {
+    let model = model_id.to_owned();
+    if options.top_k.is_some() {
+        return Err(BitrouterError::unsupported(
+            OPENAI_PROVIDER_NAME,
+            "top_k",
+            Some("OpenAI responses does not expose top_k sampling".to_owned()),
+        ));
+    }
+    if options.stop_sequences.is_some() {
+        return Err(BitrouterError::unsupported(
+            OPENAI_PROVIDER_NAME,
+            "stop_sequences",
+            Some("OpenAI responses does not support stop for all models".to_owned()),
+        ));
+    }
+    if options.presence_penalty.is_some() || options.frequency_penalty.is_some() {
+        return Err(BitrouterError::unsupported(
+            OPENAI_PROVIDER_NAME,
+            "presence_penalty/frequency_penalty",
+            Some("OpenAI responses does not accept chat-style penalties".to_owned()),
+        ));
+    }
+
+    let tools = options
+        .tools
+        .as_ref()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(tool_to_responses)
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
+    let has_tools = tools.as_ref().is_some_and(|tools| !tools.is_empty());
+
+    Ok(ResponsesRequest {
+        model,
+        input: ResponsesInput::Items(convert_prompt(&options.prompt)?),
+        stream: Some(stream),
+        max_output_tokens: options.max_output_tokens,
+        temperature: options.temperature,
+        top_p: options.top_p,
+        tools,
+        tool_choice: options
+            .tool_choice
+            .as_ref()
+            .map(tool_choice_from_language_model),
+        parallel_tool_calls: has_tools.then_some(false),
+        text: options
+            .response_format
+            .as_ref()
+            .map(text_config_from_response_format),
+    })
+}
+
+// ── Response conversion ─────────────────────────────────────────────────────
+
+pub(crate) fn response_to_generate_result(
+    response: ResponsesResponse,
+    request_headers: Option<HeaderMap>,
+    request_body: JsonValue,
+    response_headers: Option<HeaderMap>,
+    response_body: JsonValue,
+) -> Result<LanguageModelGenerateResult> {
+    let mut text_segments = Vec::new();
+    let mut refusal: Option<String> = None;
+    let mut first_function_call: Option<(String, String, String)> = None;
+
+    for item in &response.output {
+        match item {
+            ResponsesOutputItem::Message { content, .. } => {
+                for part in content {
+                    match part {
+                        ResponsesOutputContent::OutputText { text } => {
+                            text_segments.push(text.clone());
+                        }
+                        ResponsesOutputContent::Refusal { refusal: value } => {
+                            refusal = Some(value.clone());
+                        }
+                        ResponsesOutputContent::Unknown => {}
+                    }
+                }
+            }
+            ResponsesOutputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => {
+                if first_function_call.is_none() {
+                    first_function_call = Some((call_id.clone(), name.clone(), arguments.clone()));
+                }
+            }
+            ResponsesOutputItem::Unknown => {}
+        }
+    }
+
+    let provider_metadata = openai_metadata(refusal);
+    let finish_reason = map_response_finish_reason(
+        response.status.as_deref(),
+        response
+            .incomplete_details
+            .as_ref()
+            .and_then(|details| details.reason.as_deref()),
+        first_function_call.is_some(),
+    );
+
+    let content = if let Some((call_id, tool_name, tool_input)) = first_function_call {
+        LanguageModelContent::ToolCall {
+            tool_call_id: call_id,
+            tool_name,
+            tool_input,
+            provider_executed: None,
+            dynamic: None,
+            provider_metadata: provider_metadata.clone(),
+        }
+    } else if !text_segments.is_empty() {
+        LanguageModelContent::Text {
+            text: text_segments.join("\n"),
+            provider_metadata: provider_metadata.clone(),
+        }
+    } else {
+        return Err(BitrouterError::invalid_response(
+            Some(OPENAI_PROVIDER_NAME),
+            "responses result did not contain text or function_call output",
+            Some(response_body),
+        ));
+    };
+
+    Ok(LanguageModelGenerateResult {
+        content,
+        finish_reason,
+        usage: response
+            .usage
+            .map(usage_to_language_model)
+            .unwrap_or_else(empty_usage),
+        provider_metadata,
+        request: Some(LanguageModelRawRequest {
+            headers: request_headers,
+            body: request_body,
+        }),
+        response_metadata: Some(LanguageModelRawResponse {
+            id: Some(response.id),
+            timestamp: Some(response.created_at.saturating_mul(1_000)),
+            model_id: Some(response.model),
+            headers: response_headers,
+            body: Some(response_body),
+        }),
+        warnings: Some(Vec::<Warning>::new()),
+    })
 }
 
 pub(crate) fn parse_openai_error(
@@ -502,7 +328,7 @@ pub(crate) fn parse_openai_error(
 ) -> BitrouterError {
     let parsed = body
         .as_ref()
-        .and_then(|body| serde_json::from_value::<OpenAiErrorEnvelope>(body.clone()).ok());
+        .and_then(|body| serde_json::from_value::<ResponsesErrorEnvelope>(body.clone()).ok());
 
     match parsed {
         Some(envelope) => BitrouterError::provider_error(
@@ -585,27 +411,33 @@ fn map_response_finish_reason(
     }
 }
 
-fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiResponseInputItem>> {
+fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ResponsesInputItem>> {
     let mut input = Vec::new();
 
     for message in prompt {
         match message {
             LanguageModelMessage::System { content, .. } => {
-                input.push(OpenAiResponseInputItem::Message {
+                input.push(ResponsesInputItem::Message(ResponsesInputMessage {
+                    item_type: "message".to_owned(),
                     role: "system".to_owned(),
-                    content: vec![OpenAiResponseInputContent::InputText {
-                        text: content.clone(),
-                    }],
-                });
+                    content: Some(ResponsesInputContent::Parts(vec![
+                        ResponsesInputContentPart::InputText {
+                            text: content.clone(),
+                        },
+                    ])),
+                }));
             }
             LanguageModelMessage::User { content, .. } => {
-                input.push(OpenAiResponseInputItem::Message {
+                input.push(ResponsesInputItem::Message(ResponsesInputMessage {
+                    item_type: "message".to_owned(),
                     role: "user".to_owned(),
-                    content: content
-                        .iter()
-                        .map(OpenAiResponseInputContent::try_from)
-                        .collect::<Result<Vec<_>>>()?,
-                });
+                    content: Some(ResponsesInputContent::Parts(
+                        content
+                            .iter()
+                            .map(user_content_to_input_content)
+                            .collect::<Result<Vec<_>>>()?,
+                    )),
+                }));
             }
             LanguageModelMessage::Assistant { content, .. } => {
                 let mut text_content = Vec::new();
@@ -614,7 +446,7 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiResponseI
                     match item {
                         LanguageModelAssistantContent::Text { text, .. } => {
                             text_content
-                                .push(OpenAiResponseInputContent::InputText { text: text.clone() });
+                                .push(ResponsesInputContentPart::InputText { text: text.clone() });
                         }
                         LanguageModelAssistantContent::ToolCall {
                             tool_call_id,
@@ -622,7 +454,8 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiResponseI
                             input: tool_input,
                             ..
                         } => {
-                            input.push(OpenAiResponseInputItem::FunctionCall {
+                            input.push(ResponsesInputItem::FunctionCall(ResponsesInputFunctionCall {
+                                item_type: "function_call".to_owned(),
                                 call_id: tool_call_id.clone(),
                                 name: tool_name.clone(),
                                 arguments: serde_json::to_string(tool_input).map_err(|error| {
@@ -634,7 +467,7 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiResponseI
                                         None,
                                     )
                                 })?,
-                            });
+                            }));
                         }
                         LanguageModelAssistantContent::Reasoning { .. } => {
                             return Err(BitrouterError::unsupported(
@@ -664,10 +497,11 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiResponseI
                 }
 
                 if !text_content.is_empty() {
-                    input.push(OpenAiResponseInputItem::Message {
+                    input.push(ResponsesInputItem::Message(ResponsesInputMessage {
+                        item_type: "message".to_owned(),
                         role: "assistant".to_owned(),
-                        content: text_content,
-                    });
+                        content: Some(ResponsesInputContent::Parts(text_content)),
+                    }));
                 }
             }
             LanguageModelMessage::Tool { content, .. } => {
@@ -678,10 +512,13 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<OpenAiResponseI
                             output,
                             ..
                         } => {
-                            input.push(OpenAiResponseInputItem::FunctionCallOutput {
-                                call_id: tool_call_id.clone(),
-                                output: stringify_tool_output(output)?,
-                            });
+                            input.push(ResponsesInputItem::FunctionCallOutput(
+                                ResponsesInputFunctionCallOutput {
+                                    item_type: "function_call_output".to_owned(),
+                                    call_id: tool_call_id.clone(),
+                                    output: stringify_tool_output(output)?,
+                                },
+                            ));
                         }
                         LanguageModelToolResult::ToolApprovalResponse { .. } => {
                             return Err(BitrouterError::unsupported(
@@ -910,7 +747,8 @@ impl OpenAiResponsesSseParser {
             });
         }
 
-        if let Ok(error_envelope) = serde_json::from_value::<OpenAiErrorEnvelope>(raw_value.clone())
+        if let Ok(error_envelope) =
+            serde_json::from_value::<ResponsesErrorEnvelope>(raw_value.clone())
         {
             self.state.finished = true;
             parts.push(LanguageModelStreamPart::Error {
@@ -966,9 +804,9 @@ struct OpenAiResponsesStreamState {
 #[serde(tag = "type")]
 enum OpenAiResponsesStreamEvent {
     #[serde(rename = "response.created")]
-    ResponseCreated { response: OpenAiResponse },
+    ResponseCreated { response: ResponsesResponse },
     #[serde(rename = "response.output_item.added")]
-    ResponseOutputItemAdded { item: OpenAiResponseOutputItem },
+    ResponseOutputItemAdded { item: ResponsesOutputItem },
     #[serde(rename = "response.output_text.delta")]
     ResponseOutputTextDelta {
         #[serde(default)]
@@ -996,11 +834,11 @@ enum OpenAiResponsesStreamEvent {
         arguments: Option<String>,
     },
     #[serde(rename = "response.completed")]
-    ResponseCompleted { response: OpenAiResponse },
+    ResponseCompleted { response: ResponsesResponse },
     #[serde(rename = "response.failed")]
-    ResponseFailed { response: OpenAiResponse },
+    ResponseFailed { response: ResponsesResponse },
     #[serde(rename = "error")]
-    Error { error: OpenAiApiError },
+    Error { error: ResponsesApiError },
 }
 
 impl OpenAiResponsesStreamState {
@@ -1017,15 +855,16 @@ impl OpenAiResponsesStreamState {
                     self.metadata_emitted = true;
                 }
                 if let Some(usage) = response.usage {
-                    self.usage = Some(usage.into());
+                    self.usage = Some(usage_to_language_model(usage));
                 }
                 parts
             }
             OpenAiResponsesStreamEvent::ResponseOutputItemAdded { item } => match item {
-                OpenAiResponseOutputItem::FunctionCall {
+                ResponsesOutputItem::FunctionCall {
                     call_id,
                     name,
                     arguments,
+                    ..
                 } => {
                     let tool_state = self.tool_inputs.entry(call_id.clone()).or_default();
                     tool_state.tool_name = Some(name.clone());
@@ -1149,7 +988,7 @@ impl OpenAiResponsesStreamState {
             }
             OpenAiResponsesStreamEvent::ResponseCompleted { response } => {
                 if let Some(usage) = response.usage {
-                    self.usage = Some(usage.into());
+                    self.usage = Some(usage_to_language_model(usage));
                 }
                 self.finish_reason = Some(map_response_finish_reason(
                     response.status.as_deref(),
@@ -1160,7 +999,7 @@ impl OpenAiResponsesStreamState {
                     response
                         .output
                         .iter()
-                        .any(|item| matches!(item, OpenAiResponseOutputItem::FunctionCall { .. })),
+                        .any(|item| matches!(item, ResponsesOutputItem::FunctionCall { .. })),
                 ));
                 self.finish_parts()
             }
@@ -1372,7 +1211,7 @@ mod tests {
 
     #[test]
     fn builds_image_prompt_request() {
-        let request = OpenAiResponsesRequest::from_call_options(
+        let request = build_responses_request(
             "gpt-4.1-mini",
             &LanguageModelCallOptions {
                 prompt: vec![LanguageModelMessage::User {
@@ -1413,26 +1252,31 @@ mod tests {
         )
         .expect("request should build");
 
-        assert!(matches!(
-            request.input[0],
-            OpenAiResponseInputItem::Message { .. }
-        ));
+        match &request.input {
+            ResponsesInput::Items(items) => {
+                assert!(matches!(items[0], ResponsesInputItem::Message(..)));
+            }
+            other => panic!("expected Items input, got {other:?}"),
+        }
     }
 
     #[test]
     fn parses_non_stream_response_to_generate_result() {
-        let response = OpenAiResponse {
+        let response = ResponsesResponse {
             id: "resp_123".to_owned(),
+            object: None,
             created_at: 100,
             model: "gpt-4.1-mini".to_owned(),
             status: Some("completed".to_owned()),
-            output: vec![OpenAiResponseOutputItem::Message {
+            output: vec![ResponsesOutputItem::Message {
+                id: None,
                 role: Some("assistant".to_owned()),
-                content: vec![OpenAiResponseOutputContent::OutputText {
+                content: vec![ResponsesOutputContent::OutputText {
                     text: "hello".to_owned(),
                 }],
+                status: None,
             }],
-            usage: Some(OpenAiResponseUsage {
+            usage: Some(ResponsesUsage {
                 input_tokens: Some(2),
                 output_tokens: Some(1),
                 total_tokens: Some(3),
@@ -1443,8 +1287,7 @@ mod tests {
             error: None,
         };
 
-        let result = response
-            .into_generate_result(None, json!({}), None, json!({}))
+        let result = response_to_generate_result(response, None, json!({}), None, json!({}))
             .expect("conversion should succeed");
 
         assert!(matches!(

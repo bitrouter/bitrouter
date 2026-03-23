@@ -17,7 +17,9 @@ use bitrouter_core::{
                 LanguageModelUserContent,
             },
             stream_part::LanguageModelStreamPart,
-            usage::LanguageModelUsage,
+            tool::LanguageModelTool,
+            tool_choice::LanguageModelToolChoice,
+            usage::{LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage},
         },
         shared::{provider::ProviderMetadata, types::JsonValue, warnings::Warning},
     },
@@ -29,130 +31,242 @@ use tokio::{select, sync::mpsc};
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::sync::CancellationToken;
 
-use super::types::{
-    ANTHROPIC_PROVIDER_NAME, AnthropicContentBlock, AnthropicDelta, AnthropicErrorEnvelope,
-    AnthropicImageSource, AnthropicInputContentBlock, AnthropicMessageContent,
-    AnthropicMessageParam, AnthropicMessageResponse, AnthropicMessagesRequest,
-    AnthropicStreamEvent, AnthropicTool, AnthropicToolChoice, AnthropicUsage, STREAM_TEXT_ID,
-    anthropic_metadata, empty_usage, map_finish_reason,
+use bitrouter_core::api::anthropic::messages::types::{
+    AnthropicContentBlock, AnthropicImageSource, AnthropicMessage, AnthropicMessageContent,
+    AnthropicTool, AnthropicToolChoice, MessagesErrorEnvelope, MessagesRequest, MessagesResponse,
+    MessagesStreamDelta, MessagesStreamEvent, MessagesUsage,
 };
 
 // ── Default max tokens ──────────────────────────────────────────────────────
 
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
+// ── Constants & helpers (moved from types.rs) ───────────────────────────────
+
+pub(super) const ANTHROPIC_PROVIDER_NAME: &str = "anthropic";
+pub(super) const STREAM_TEXT_ID: &str = "text";
+
+pub(super) fn map_finish_reason(
+    stop_reason: Option<&str>,
+) -> bitrouter_core::models::language::finish_reason::LanguageModelFinishReason {
+    use bitrouter_core::models::language::finish_reason::LanguageModelFinishReason;
+    match stop_reason {
+        Some("end_turn") | None => LanguageModelFinishReason::Stop,
+        Some("stop_sequence") => LanguageModelFinishReason::Stop,
+        Some("max_tokens") => LanguageModelFinishReason::Length,
+        Some("tool_use") => LanguageModelFinishReason::FunctionCall,
+        Some("content_filter") => LanguageModelFinishReason::ContentFilter,
+        Some("error") => LanguageModelFinishReason::Error,
+        Some(other) => LanguageModelFinishReason::Other(other.to_owned()),
+    }
+}
+
+pub(super) fn anthropic_metadata(stop_sequence: Option<String>) -> Option<ProviderMetadata> {
+    let mut inner = HashMap::new();
+    if let Some(stop_sequence) = stop_sequence {
+        inner.insert("stop_sequence".to_owned(), JsonValue::String(stop_sequence));
+    }
+
+    if inner.is_empty() {
+        None
+    } else {
+        Some(HashMap::from([(
+            ANTHROPIC_PROVIDER_NAME.to_owned(),
+            json!(inner),
+        )]))
+    }
+}
+
+pub(super) fn empty_usage() -> LanguageModelUsage {
+    LanguageModelUsage {
+        input_tokens: LanguageModelInputTokens {
+            total: None,
+            no_cache: None,
+            cache_read: None,
+            cache_write: None,
+        },
+        output_tokens: LanguageModelOutputTokens {
+            total: None,
+            text: None,
+            reasoning: None,
+        },
+        raw: None,
+    }
+}
+
+pub(super) fn usage_to_language_model(usage: MessagesUsage) -> LanguageModelUsage {
+    let raw = serde_json::to_value(&usage).ok();
+    LanguageModelUsage {
+        input_tokens: LanguageModelInputTokens {
+            total: usage.input_tokens,
+            no_cache: usage.input_tokens.map(|total| {
+                total
+                    .saturating_sub(usage.cache_read_input_tokens.unwrap_or(0))
+                    .saturating_sub(usage.cache_creation_input_tokens.unwrap_or(0))
+            }),
+            cache_read: usage.cache_read_input_tokens,
+            cache_write: usage.cache_creation_input_tokens,
+        },
+        output_tokens: LanguageModelOutputTokens {
+            total: usage.output_tokens,
+            text: usage.output_tokens,
+            reasoning: None,
+        },
+        raw,
+    }
+}
+
+fn tool_choice_from_language_model(choice: &LanguageModelToolChoice) -> AnthropicToolChoice {
+    match choice {
+        LanguageModelToolChoice::Auto => AnthropicToolChoice::Auto,
+        LanguageModelToolChoice::None => AnthropicToolChoice::Auto,
+        LanguageModelToolChoice::Required => AnthropicToolChoice::Any,
+        LanguageModelToolChoice::Tool { tool_name } => AnthropicToolChoice::Tool {
+            name: tool_name.clone(),
+        },
+    }
+}
+
+fn tool_from_language_model(tool: &LanguageModelTool) -> Result<AnthropicTool> {
+    match tool {
+        LanguageModelTool::Function {
+            name,
+            description,
+            input_schema,
+            ..
+        } => {
+            let schema_value = serde_json::to_value(input_schema).map_err(|error| {
+                BitrouterError::invalid_request(
+                    Some(ANTHROPIC_PROVIDER_NAME),
+                    format!("failed to serialize tool input schema: {error}"),
+                    None,
+                )
+            })?;
+            Ok(AnthropicTool {
+                name: name.clone(),
+                description: description.clone(),
+                input_schema: schema_value,
+            })
+        }
+        LanguageModelTool::Provider { id, .. } => Err(BitrouterError::unsupported(
+            ANTHROPIC_PROVIDER_NAME,
+            format!("provider tool {}:{}", id.provider_name, id.tool_id),
+            Some(
+                "Anthropic messages API supports function tools, \
+                 but bitrouter-core provider tools do not map cleanly here"
+                    .to_owned(),
+            ),
+        )),
+    }
+}
+
 // ── Response conversion ─────────────────────────────────────────────────────
 
-impl AnthropicMessageResponse {
-    pub(super) fn into_generate_result(
-        self,
-        request_headers: Option<HeaderMap>,
-        request_body: JsonValue,
-        response_headers: Option<HeaderMap>,
-        response_body: JsonValue,
-    ) -> Result<LanguageModelGenerateResult> {
-        let provider_metadata = anthropic_metadata(self.stop_sequence.clone());
-        let finish_reason = map_finish_reason(self.stop_reason.as_deref());
-        let content = content_blocks_to_language_model_content(
-            self.content,
-            provider_metadata.clone(),
-            response_body.clone(),
-        )?;
+pub(super) fn response_to_generate_result(
+    response: MessagesResponse,
+    request_headers: Option<HeaderMap>,
+    request_body: JsonValue,
+    response_headers: Option<HeaderMap>,
+    response_body: JsonValue,
+) -> Result<LanguageModelGenerateResult> {
+    let provider_metadata = anthropic_metadata(response.stop_sequence.clone());
+    let finish_reason = map_finish_reason(response.stop_reason.as_deref());
+    let content = content_blocks_to_language_model_content(
+        response.content,
+        provider_metadata.clone(),
+        response_body.clone(),
+    )?;
 
-        Ok(LanguageModelGenerateResult {
-            content,
-            finish_reason,
-            usage: self
-                .usage
-                .map(LanguageModelUsage::from)
-                .unwrap_or_else(empty_usage),
-            provider_metadata,
-            request: Some(LanguageModelRawRequest {
-                headers: request_headers,
-                body: request_body,
-            }),
-            response_metadata: Some(LanguageModelRawResponse {
-                id: Some(self.id),
-                timestamp: None,
-                model_id: Some(self.model),
-                headers: response_headers,
-                body: Some(response_body),
-            }),
-            warnings: Some(Vec::<Warning>::new()),
-        })
-    }
+    Ok(LanguageModelGenerateResult {
+        content,
+        finish_reason,
+        usage: response
+            .usage
+            .map(usage_to_language_model)
+            .unwrap_or_else(empty_usage),
+        provider_metadata,
+        request: Some(LanguageModelRawRequest {
+            headers: request_headers,
+            body: request_body,
+        }),
+        response_metadata: Some(LanguageModelRawResponse {
+            id: Some(response.id),
+            timestamp: None,
+            model_id: Some(response.model),
+            headers: response_headers,
+            body: Some(response_body),
+        }),
+        warnings: Some(Vec::<Warning>::new()),
+    })
 }
 
 // ── Request building ────────────────────────────────────────────────────────
 
-impl AnthropicMessagesRequest {
-    pub(super) fn from_call_options(
-        model_id: &str,
-        options: &LanguageModelCallOptions,
-        stream: bool,
-    ) -> Result<Self> {
-        let model = model_id.to_owned();
-        let mut warnings = Vec::new();
+pub(super) fn build_messages_request(
+    model_id: &str,
+    options: &LanguageModelCallOptions,
+    stream: bool,
+) -> Result<MessagesRequest> {
+    let model = model_id.to_owned();
+    let mut warnings = Vec::new();
 
-        if options.presence_penalty.is_some() {
-            warnings.push(Warning::Unsupported {
-                feature: "presence_penalty".to_owned(),
-                details: Some(
-                    "Anthropic messages API does not support presence_penalty".to_owned(),
-                ),
-            });
-        }
-        if options.frequency_penalty.is_some() {
-            warnings.push(Warning::Unsupported {
-                feature: "frequency_penalty".to_owned(),
-                details: Some(
-                    "Anthropic messages API does not support frequency_penalty".to_owned(),
-                ),
-            });
-        }
-        if options.seed.is_some() {
-            warnings.push(Warning::Unsupported {
-                feature: "seed".to_owned(),
-                details: Some("Anthropic messages API does not support seed".to_owned()),
-            });
-        }
-        if options.response_format.is_some() {
-            warnings.push(Warning::Unsupported {
-                feature: "response_format".to_owned(),
-                details: Some(
-                    "Anthropic messages API does not support response_format directly".to_owned(),
-                ),
-            });
-        }
-
-        let tools: Option<Vec<AnthropicTool>> = options
-            .tools
-            .as_ref()
-            .map(|tools| {
-                tools
-                    .iter()
-                    .map(AnthropicTool::try_from)
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?;
-
-        let (system, messages) = convert_prompt(&options.prompt)?;
-
-        Ok(Self {
-            model,
-            messages,
-            max_tokens: options.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
-            system,
-            stream: Some(stream),
-            temperature: options.temperature,
-            top_p: options.top_p,
-            top_k: options.top_k,
-            stop_sequences: options.stop_sequences.clone(),
-            tools,
-            tool_choice: options.tool_choice.as_ref().map(AnthropicToolChoice::from),
-            metadata: None,
-        })
+    if options.presence_penalty.is_some() {
+        warnings.push(Warning::Unsupported {
+            feature: "presence_penalty".to_owned(),
+            details: Some("Anthropic messages API does not support presence_penalty".to_owned()),
+        });
     }
+    if options.frequency_penalty.is_some() {
+        warnings.push(Warning::Unsupported {
+            feature: "frequency_penalty".to_owned(),
+            details: Some("Anthropic messages API does not support frequency_penalty".to_owned()),
+        });
+    }
+    if options.seed.is_some() {
+        warnings.push(Warning::Unsupported {
+            feature: "seed".to_owned(),
+            details: Some("Anthropic messages API does not support seed".to_owned()),
+        });
+    }
+    if options.response_format.is_some() {
+        warnings.push(Warning::Unsupported {
+            feature: "response_format".to_owned(),
+            details: Some(
+                "Anthropic messages API does not support response_format directly".to_owned(),
+            ),
+        });
+    }
+
+    let tools: Option<Vec<AnthropicTool>> = options
+        .tools
+        .as_ref()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(tool_from_language_model)
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
+
+    let (system, messages) = convert_prompt(&options.prompt)?;
+
+    Ok(MessagesRequest {
+        model,
+        messages,
+        max_tokens: options.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        system,
+        stream: Some(stream),
+        temperature: options.temperature,
+        top_p: options.top_p,
+        top_k: options.top_k,
+        stop_sequences: options.stop_sequences.clone(),
+        tools,
+        tool_choice: options
+            .tool_choice
+            .as_ref()
+            .map(tool_choice_from_language_model),
+        metadata: None,
+    })
 }
 
 // ── Error parsing ───────────────────────────────────────────────────────────
@@ -164,7 +278,7 @@ pub(super) fn parse_anthropic_error(
 ) -> BitrouterError {
     let parsed = body
         .as_ref()
-        .and_then(|body| serde_json::from_value::<AnthropicErrorEnvelope>(body.clone()).ok());
+        .and_then(|body| serde_json::from_value::<MessagesErrorEnvelope>(body.clone()).ok());
 
     match parsed {
         Some(envelope) => BitrouterError::provider_error(
@@ -240,6 +354,13 @@ fn content_blocks_to_language_model_content(
                     provider_metadata,
                 })
             }
+            AnthropicContentBlock::Image { .. } | AnthropicContentBlock::ToolResult { .. } => {
+                Err(BitrouterError::invalid_response(
+                    Some(ANTHROPIC_PROVIDER_NAME),
+                    "unexpected content block type in response",
+                    Some(response_body),
+                ))
+            }
         };
     }
 
@@ -252,7 +373,9 @@ fn content_blocks_to_language_model_content(
             AnthropicContentBlock::ToolUse { id, name, input } if tool_use.is_none() => {
                 tool_use = Some((id, name, input));
             }
-            AnthropicContentBlock::ToolUse { .. } => {}
+            AnthropicContentBlock::ToolUse { .. }
+            | AnthropicContentBlock::Image { .. }
+            | AnthropicContentBlock::ToolResult { .. } => {}
         }
     }
 
@@ -283,7 +406,7 @@ fn content_blocks_to_language_model_content(
 
 fn convert_prompt(
     prompt: &[LanguageModelMessage],
-) -> Result<(Option<String>, Vec<AnthropicMessageParam>)> {
+) -> Result<(Option<String>, Vec<AnthropicMessage>)> {
     let mut system_text: Option<String> = None;
     let mut messages = Vec::new();
 
@@ -294,23 +417,23 @@ fn convert_prompt(
             }
             LanguageModelMessage::User { content, .. } => {
                 let blocks = convert_user_content(content)?;
-                messages.push(AnthropicMessageParam {
+                messages.push(AnthropicMessage {
                     role: "user".to_owned(),
-                    content: blocks,
+                    content: Some(blocks),
                 });
             }
             LanguageModelMessage::Assistant { content, .. } => {
                 let blocks = convert_assistant_content(content)?;
-                messages.push(AnthropicMessageParam {
+                messages.push(AnthropicMessage {
                     role: "assistant".to_owned(),
-                    content: blocks,
+                    content: Some(blocks),
                 });
             }
             LanguageModelMessage::Tool { content, .. } => {
                 let blocks = convert_tool_results(content)?;
-                messages.push(AnthropicMessageParam {
+                messages.push(AnthropicMessage {
                     role: "user".to_owned(),
-                    content: AnthropicMessageContent::Blocks(blocks),
+                    content: Some(AnthropicMessageContent::Blocks(blocks)),
                 });
             }
         }
@@ -330,7 +453,7 @@ fn convert_user_content(content: &[LanguageModelUserContent]) -> Result<Anthropi
     for item in content {
         match item {
             LanguageModelUserContent::Text { text, .. } => {
-                blocks.push(AnthropicInputContentBlock::Text { text: text.clone() });
+                blocks.push(AnthropicContentBlock::Text { text: text.clone() });
             }
             LanguageModelUserContent::File {
                 data, media_type, ..
@@ -346,7 +469,7 @@ fn convert_user_content(content: &[LanguageModelUserContent]) -> Result<Anthropi
 fn convert_file_input(
     data: &LanguageModelDataContent,
     media_type: &str,
-) -> Result<AnthropicInputContentBlock> {
+) -> Result<AnthropicContentBlock> {
     if !media_type.starts_with("image/") {
         return Err(BitrouterError::unsupported(
             ANTHROPIC_PROVIDER_NAME,
@@ -384,9 +507,9 @@ fn convert_file_input(
         }
     };
 
-    Ok(AnthropicInputContentBlock::Image {
+    Ok(AnthropicContentBlock::Image {
         source: AnthropicImageSource {
-            kind: "base64".to_owned(),
+            source_type: "base64".to_owned(),
             media_type: resolved_media_type,
             data: base64_data,
         },
@@ -401,7 +524,7 @@ fn convert_assistant_content(
     for item in content {
         match item {
             LanguageModelAssistantContent::Text { text, .. } => {
-                blocks.push(AnthropicInputContentBlock::Text { text: text.clone() });
+                blocks.push(AnthropicContentBlock::Text { text: text.clone() });
             }
             LanguageModelAssistantContent::ToolCall {
                 tool_call_id,
@@ -409,7 +532,7 @@ fn convert_assistant_content(
                 input,
                 ..
             } => {
-                blocks.push(AnthropicInputContentBlock::ToolUse {
+                blocks.push(AnthropicContentBlock::ToolUse {
                     id: tool_call_id.clone(),
                     name: tool_name.clone(),
                     input: input.clone(),
@@ -443,7 +566,7 @@ fn convert_assistant_content(
     }
 
     if blocks.len() == 1
-        && let AnthropicInputContentBlock::Text { text } = &blocks[0]
+        && let AnthropicContentBlock::Text { text } = &blocks[0]
     {
         return Ok(AnthropicMessageContent::Text(text.clone()));
     }
@@ -451,9 +574,7 @@ fn convert_assistant_content(
     Ok(AnthropicMessageContent::Blocks(blocks))
 }
 
-fn convert_tool_results(
-    content: &[LanguageModelToolResult],
-) -> Result<Vec<AnthropicInputContentBlock>> {
+fn convert_tool_results(content: &[LanguageModelToolResult]) -> Result<Vec<AnthropicContentBlock>> {
     let mut blocks = Vec::new();
     for item in content {
         match item {
@@ -463,7 +584,7 @@ fn convert_tool_results(
                 ..
             } => {
                 let (content_str, is_error) = stringify_tool_output(output)?;
-                blocks.push(AnthropicInputContentBlock::ToolResult {
+                blocks.push(AnthropicContentBlock::ToolResult {
                     tool_use_id: tool_call_id.clone(),
                     content: Some(content_str),
                     is_error,
@@ -677,7 +798,7 @@ impl AnthropicSseParser {
             });
         }
 
-        let event: AnthropicStreamEvent = match serde_json::from_value(raw_value.clone()) {
+        let event: MessagesStreamEvent = match serde_json::from_value(raw_value.clone()) {
             Ok(event) => event,
             Err(error) => {
                 self.state.finished = true;
@@ -718,9 +839,9 @@ struct AnthropicToolInputState {
 }
 
 impl AnthropicStreamState {
-    fn apply_event(&mut self, event: AnthropicStreamEvent) -> Vec<LanguageModelStreamPart> {
+    fn apply_event(&mut self, event: MessagesStreamEvent) -> Vec<LanguageModelStreamPart> {
         match event {
-            AnthropicStreamEvent::MessageStart { message } => {
+            MessagesStreamEvent::MessageStart { message } => {
                 let mut parts = Vec::new();
                 if !self.metadata_emitted {
                     parts.push(LanguageModelStreamPart::ResponseMetadata {
@@ -735,7 +856,7 @@ impl AnthropicStreamState {
                 }
                 parts
             }
-            AnthropicStreamEvent::ContentBlockStart {
+            MessagesStreamEvent::ContentBlockStart {
                 index,
                 content_block,
             } => {
@@ -764,11 +885,13 @@ impl AnthropicStreamState {
                         });
                         entry.started = true;
                     }
+                    AnthropicContentBlock::Image { .. }
+                    | AnthropicContentBlock::ToolResult { .. } => {}
                 }
                 parts
             }
-            AnthropicStreamEvent::ContentBlockDelta { index, delta } => match delta {
-                AnthropicDelta::TextDelta { text } => {
+            MessagesStreamEvent::ContentBlockDelta { index, delta } => match delta {
+                MessagesStreamDelta::TextDelta { text } => {
                     let mut parts = Vec::new();
                     if !self.text_started {
                         parts.push(LanguageModelStreamPart::TextStart {
@@ -784,7 +907,7 @@ impl AnthropicStreamState {
                     });
                     parts
                 }
-                AnthropicDelta::InputJsonDelta { partial_json } => {
+                MessagesStreamDelta::InputJsonDelta { partial_json } => {
                     let entry = self.tool_inputs.entry(index).or_default();
                     entry.buffered_delta.push_str(&partial_json);
                     let mut parts = Vec::new();
@@ -798,7 +921,7 @@ impl AnthropicStreamState {
                     parts
                 }
             },
-            AnthropicStreamEvent::ContentBlockStop { index } => {
+            MessagesStreamEvent::ContentBlockStop { index } => {
                 let mut parts = Vec::new();
                 if let Some(tool_state) = self.tool_inputs.get(&index)
                     && tool_state.started
@@ -813,7 +936,7 @@ impl AnthropicStreamState {
                 }
                 parts
             }
-            AnthropicStreamEvent::MessageDelta { delta, usage } => {
+            MessagesStreamEvent::MessageDelta { delta, usage, .. } => {
                 if let Some(stop_reason) = delta.stop_reason.as_deref() {
                     self.finish_reason = Some(map_finish_reason(Some(stop_reason)));
                 }
@@ -822,9 +945,9 @@ impl AnthropicStreamState {
                 }
                 Vec::new()
             }
-            AnthropicStreamEvent::MessageStop => self.finish_parts(),
-            AnthropicStreamEvent::Ping => Vec::new(),
-            AnthropicStreamEvent::Error { error } => {
+            MessagesStreamEvent::MessageStop => self.finish_parts(),
+            MessagesStreamEvent::Ping => Vec::new(),
+            MessagesStreamEvent::Error { error } => {
                 self.finished = true;
                 vec![LanguageModelStreamPart::Error {
                     error: json!({
@@ -837,8 +960,8 @@ impl AnthropicStreamState {
         }
     }
 
-    fn merge_usage(&mut self, usage: AnthropicUsage) {
-        let new_usage: LanguageModelUsage = usage.into();
+    fn merge_usage(&mut self, usage: MessagesUsage) {
+        let new_usage: LanguageModelUsage = usage_to_language_model(usage);
         match &mut self.usage {
             Some(existing) => {
                 if new_usage.input_tokens.total.is_some() {
@@ -1123,13 +1246,10 @@ mod tests {
         let (_, messages) = convert_prompt(&prompt).unwrap();
         assert_eq!(messages.len(), 1);
         match &messages[0].content {
-            AnthropicMessageContent::Blocks(blocks) => {
+            Some(AnthropicMessageContent::Blocks(blocks)) => {
                 assert_eq!(blocks.len(), 2);
-                assert!(matches!(blocks[0], AnthropicInputContentBlock::Text { .. }));
-                assert!(matches!(
-                    blocks[1],
-                    AnthropicInputContentBlock::Image { .. }
-                ));
+                assert!(matches!(blocks[0], AnthropicContentBlock::Text { .. }));
+                assert!(matches!(blocks[1], AnthropicContentBlock::Image { .. }));
             }
             _ => panic!("expected blocks content"),
         }
@@ -1168,11 +1288,11 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
         match &messages[0].content {
-            AnthropicMessageContent::Blocks(blocks) => {
+            Some(AnthropicMessageContent::Blocks(blocks)) => {
                 assert_eq!(blocks.len(), 1);
                 assert!(matches!(
                     &blocks[0],
-                    AnthropicInputContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "toolu_123"
+                    AnthropicContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "toolu_123"
                 ));
             }
             _ => panic!("expected blocks content"),
