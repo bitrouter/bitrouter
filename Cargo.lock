@@ -1666,14 +1666,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bitrouter-accounts",
- "bitrouter-anthropic",
  "bitrouter-api",
  "bitrouter-config",
  "bitrouter-core",
- "bitrouter-google",
  "bitrouter-guardrails",
  "bitrouter-observe",
- "bitrouter-openai",
+ "bitrouter-providers",
  "bitrouter-swig-sdk",
  "bs58",
  "clap",
@@ -1722,32 +1720,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-anthropic"
-version = "0.12.0"
-dependencies = [
- "base64 0.22.1",
- "bitrouter-core",
- "bytes",
- "regex",
- "reqwest 0.13.2",
- "reqwest-middleware 0.5.1",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tokio-util",
-]
-
-[[package]]
 name = "bitrouter-api"
 version = "0.12.0"
 dependencies = [
- "bitrouter-anthropic",
  "bitrouter-config",
  "bitrouter-core",
- "bitrouter-google",
- "bitrouter-openai",
  "bs58",
  "ed25519-dalek",
  "futures-core",
@@ -1811,24 +1788,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-google"
-version = "0.12.0"
-dependencies = [
- "base64 0.22.1",
- "bitrouter-core",
- "bytes",
- "regex",
- "reqwest 0.13.2",
- "reqwest-middleware 0.5.1",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tokio-util",
-]
-
-[[package]]
 name = "bitrouter-guardrails"
 version = "0.12.0"
 dependencies = [
@@ -1857,7 +1816,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-openai"
+name = "bitrouter-providers"
 version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
@@ -2506,9 +2465,9 @@ dependencies = [
 
 [[package]]
 name = "crypto-common"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
+checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
  "rand_core 0.6.4",
@@ -3428,9 +3387,9 @@ checksum = "42012b0f064e01aa58b545fe3727f90f7dd4020f4a3ea735b50344965f5a57e9"
 
 [[package]]
 name = "generic-array"
-version = "0.14.9"
+version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bb6743198531e02858aeaea5398fcc883e71851fcbcb5a2f773e2fb6cb1edf2"
+checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
@@ -4066,9 +4025,9 @@ checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
 name = "iri-string"
-version = "0.7.10"
+version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c91338f0783edbd6195decb37bae672fd3b165faffb89bf7b9e6942f8b1a731a"
+checksum = "d8e7418f59cc01c88316161279a7f665217ae316b388e58a0d10e29f54f1e5eb"
 dependencies = [
  "memchr",
  "serde",
@@ -4521,7 +4480,7 @@ dependencies = [
 [[package]]
 name = "mpp"
 version = "0.6.0"
-source = "git+https://github.com/tempoxyz/mpp-rs#e61e723ab18be83900c32c4eb1dbfd17ea603a13"
+source = "git+https://github.com/tempoxyz/mpp-rs#92c8bb698b29553e1e49ec378cd7850beb9b11af"
 dependencies = [
  "alloy",
  "async-stream",
@@ -7807,12 +7766,11 @@ checksum = "e92f37a14e7c660628752833250dd3dcd8e95309876aee751d7f8769a27947c6"
 
 [[package]]
 name = "solana-instruction"
-version = "3.2.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6a6d22d0a6fdf345be294bb9afdcd40c296cdc095e64e7ceaa3bb3c2f608c1c"
+checksum = "a97881335fc698deb46c6571945969aae6d93a14e2fff792a368b4fac872f116"
 dependencies = [
  "bincode 1.3.3",
- "borsh",
  "serde",
  "serde_derive",
  "solana-define-syscall 5.0.0",
@@ -8816,6 +8774,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-zero-copy"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94f52dd8f733a13f6a18e55de83cf97c4c3f5fdf27ea3830bcff0b35313efcc2"
+dependencies = [
+ "bytemuck",
+ "bytemuck_derive",
+]
+
+[[package]]
 name = "solana-zk-sdk"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8919,9 +8887,9 @@ dependencies = [
 
 [[package]]
 name = "spl-discriminator"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d48cc11459e265d5b501534144266620289720b4c44522a47bc6b63cd295d2f3"
+checksum = "e597c5ff9ed7c74a54dbc47bae2f06e4db8c98f4356ad280200dc11878266db1"
 dependencies = [
  "bytemuck",
  "solana-program-error",
@@ -9128,19 +9096,18 @@ dependencies = [
 
 [[package]]
 name = "spl-type-length-value"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca20a1a19f4507a98ca4b28ff5ed54cac9b9d34ed27863e2bde50a3238f9a6ac"
+checksum = "2504631748c48d2a937414d64a12dcac4588d34bd07d355d648619c189d29435"
 dependencies = [
  "bytemuck",
  "num-derive",
  "num-traits",
  "num_enum",
  "solana-account-info",
- "solana-msg",
  "solana-program-error",
+ "solana-zero-copy",
  "spl-discriminator",
- "spl-pod",
  "thiserror 2.0.18",
 ]
 
@@ -9492,7 +9459,7 @@ dependencies = [
 [[package]]
 name = "tempo-alloy"
 version = "1.4.2"
-source = "git+https://github.com/tempoxyz/tempo#bbce2e3bcb81502d87b9febd03d565c203c2fab4"
+source = "git+https://github.com/tempoxyz/tempo#5e64ac6995fc6b342d09e3a1eb3763b6b1f20085"
 dependencies = [
  "alloy-consensus",
  "alloy-contract",
@@ -9518,7 +9485,7 @@ dependencies = [
 [[package]]
 name = "tempo-contracts"
 version = "1.4.2"
-source = "git+https://github.com/tempoxyz/tempo#bbce2e3bcb81502d87b9febd03d565c203c2fab4"
+source = "git+https://github.com/tempoxyz/tempo#5e64ac6995fc6b342d09e3a1eb3763b6b1f20085"
 dependencies = [
  "alloy-contract",
  "alloy-primitives",
@@ -9529,7 +9496,7 @@ dependencies = [
 [[package]]
 name = "tempo-primitives"
 version = "1.4.2"
-source = "git+https://github.com/tempoxyz/tempo#bbce2e3bcb81502d87b9febd03d565c203c2fab4"
+source = "git+https://github.com/tempoxyz/tempo#5e64ac6995fc6b342d09e3a1eb3763b6b1f20085"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",

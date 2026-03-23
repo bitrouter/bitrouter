@@ -1,6 +1,6 @@
-pub mod convert;
+pub use bitrouter_core::api::openai::chat::{convert, types};
+
 pub mod filters;
-pub mod types;
 
 #[cfg(test)]
 pub(crate) mod tests;
