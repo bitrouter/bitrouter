@@ -1677,6 +1677,7 @@ dependencies = [
  "bitrouter-mcp",
  "bitrouter-observe",
  "bitrouter-openai",
+ "bitrouter-skills",
  "bitrouter-swig-sdk",
  "bs58",
  "clap",
@@ -1911,6 +1912,20 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+]
+
+[[package]]
+name = "bitrouter-skills"
+version = "0.12.0"
+dependencies = [
+ "bitrouter-core",
+ "chrono",
+ "sea-orm",
+ "sea-orm-migration",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

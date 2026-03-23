@@ -12,6 +12,7 @@ pub mod models;
 #[cfg(feature = "openai")]
 pub mod openai;
 pub mod routes;
+pub mod skills;
 pub mod tools;
 
 #[cfg(any(feature = "openai", feature = "anthropic", feature = "google"))]

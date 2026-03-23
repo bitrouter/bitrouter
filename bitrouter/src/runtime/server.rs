@@ -411,9 +411,60 @@ where
                 tool_observer,
                 account_filter.clone(),
             );
-            let tools = bitrouter_api::router::tools::tools_filter(registry);
+            // Compose MCP tools + config skills into a single ToolRegistry
+            // for the unified GET /v1/tools endpoint.
+            let skill_entries: Vec<bitrouter_core::routers::registry::ToolEntry> = self
+                .config
+                .skills
+                .iter()
+                .map(|cfg| bitrouter_core::routers::registry::ToolEntry {
+                    id: format!("skill/{}", cfg.name),
+                    name: Some(cfg.name.clone()),
+                    provider: "skill".to_string(),
+                    description: Some(cfg.description.clone()),
+                    input_schema: None,
+                })
+                .collect();
+
+            let tools = if !skill_entries.is_empty() {
+                let skill_reg = bitrouter_skills::registry::ConfigSkillRegistry::new(skill_entries);
+                if let Some(ref mcp_reg) = registry {
+                    let composite = Arc::new(
+                        bitrouter_core::routers::registry::CompositeToolRegistry::new(
+                            mcp_reg.clone(),
+                            skill_reg,
+                        ),
+                    );
+                    bitrouter_api::router::tools::tools_filter(Some(composite))
+                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                        .boxed()
+                } else {
+                    bitrouter_api::router::tools::tools_filter(Some(Arc::new(skill_reg)))
+                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                        .boxed()
+                }
+            } else {
+                bitrouter_api::router::tools::tools_filter(registry)
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            };
 
             (admin, server, tools, refresh_guard)
+        };
+
+        // ── Skills registry ───────────────────────────────────────────
+        let skills_list = if let Some(ref db) = self.db {
+            let skill_registry =
+                Arc::new(bitrouter_skills::registry::SkillRegistry::new(db.clone()));
+            bitrouter_api::router::skills::skills_filter(skill_registry)
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed()
+        } else {
+            // No DB — return 404 for all skills endpoints.
+            warp::path!("v1" / "skills" / ..)
+                .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
+                .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed()
         };
 
         // ── A2A protocol ─────────────────────────────────────────────
@@ -483,6 +534,7 @@ where
             .or(agent_list)
             .or(admin_tool_routes)
             .or(tool_list)
+            .or(skills_list)
             .or(mcp_server);
 
         // ── Serve ────────────────────────────────────────────────────
