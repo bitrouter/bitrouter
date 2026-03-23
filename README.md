@@ -82,6 +82,15 @@ bitrouter
 
 For a foreground server without the TUI, use `bitrouter serve`.
 
+### Agent Skills
+
+Install [Agent Skills](https://github.com/bitrouter/agent-skills) to give your AI agent the knowledge to register on the BitRouter network, configure services, and start serving requests:
+
+```bash
+# Any agent (Claude Code, Copilot, Cursor, Codex, etc.)
+npx skills add BitRouterAI/agent-skills
+```
+
 ## Learn More
 
 - [CLI reference & configuration](bitrouter/) — subcommands, global options, home directory, YAML config, custom providers
