@@ -82,6 +82,17 @@ bitrouter
 
 For a foreground server without the TUI, use `bitrouter serve`.
 
+### Agent Skills
+
+Install [Agent Skills](https://github.com/bitrouter/agent-skills) to give your AI agent the knowledge to register on the BitRouter network, configure services, and start serving requests:
+
+```bash
+# Any agent (Claude Code, Copilot, Cursor, Codex, etc.)
+npx skills add BitRouterAI/agent-skills
+```
+
+Skills follow the [agentskills.io](https://agentskills.io) specification and cover the full agent lifecycle: keypair generation, registration, MCP/A2A/chat configuration, and serving via the `bitrouter` CLI. See the [agent-skills repo](https://github.com/bitrouter/agent-skills) for manual installation and the full guide.
+
 ## Learn More
 
 - [CLI reference & configuration](bitrouter/) — subcommands, global options, home directory, YAML config, custom providers
@@ -113,17 +124,6 @@ BitRouter works as a drop-in proxy for agent runtimes that support custom API ba
 | [Kilo Code](https://github.com/Kilo-Org/kilocode) | CLI + Skills |
 
 Any agent runtime that can target a custom OpenAI or Anthropic base URL works with BitRouter out of the box. **Building an agent runtime or framework?** We partner with teams to build native BitRouter integrations — reach out on [Discord](https://discord.gg/G3zVrZDa5C) or [open an issue](https://github.com/AIMOverse/bitrouter/issues).
-
-## Agent Skills
-
-Install [Agent Skills](https://github.com/bitrouter/agent-skills) to give your AI agent the knowledge to register on the BitRouter network, configure services, and start serving requests:
-
-```bash
-# Any agent (Claude Code, Copilot, Cursor, Codex, etc.)
-npx skills add BitRouterAI/agent-skills
-```
-
-Skills follow the [agentskills.io](https://agentskills.io) specification and cover the full agent lifecycle: keypair generation, registration, MCP/A2A/chat configuration, and serving via the `bitrouter` CLI. See the [agent-skills repo](https://github.com/bitrouter/agent-skills) for manual installation and the full guide.
 
 ## Roadmap
 
