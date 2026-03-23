@@ -9,6 +9,23 @@
 [![Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/G3zVrZDa5C)
 [![Docs](https://img.shields.io/badge/Docs-bitrouter.ai-green)](https://bitrouter.ai)
 
+## ⚠ Notice
+
+We are waiting for the upstream `mpp` crate to publish. Now we depend on its git version, so we can't publish our packages to `crates.io` registry.
+
+Now you have to install bitrouter like this:
+
+```bash
+cargo install bitrouter --git https://github.com/bitrouter/bitroute
+```
+
+And add bitrouter framework to your project like this:
+
+```toml
+[dependencies]
+bitrouter-core = { git = "https://github.com/bitrouter/bitrouter" }
+```
+
 ## Overview
 
 As LLM agents grow more autonomous, humans can no longer hand-pick the best model, tool, or sub-agent for every runtime decision. BitRouter is a proxy layer purpose-built for LLM agents (OpenClaw, OpenCode, etc.) to discover and route to LLMs, tools, and other agents autonomously — with agent-native control and observability via CLI + TUI, backed by a high-performance Rust proxy that optimizes for both performance and cost during runtime.
