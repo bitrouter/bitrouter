@@ -91,8 +91,6 @@ Install [Agent Skills](https://github.com/bitrouter/agent-skills) to give your A
 npx skills add BitRouterAI/agent-skills
 ```
 
-Skills follow the [agentskills.io](https://agentskills.io) specification and cover the full agent lifecycle: keypair generation, registration, MCP/A2A/chat configuration, and serving via the `bitrouter` CLI. See the [agent-skills repo](https://github.com/bitrouter/agent-skills) for manual installation and the full guide.
-
 ## Learn More
 
 - [CLI reference & configuration](bitrouter/) — subcommands, global options, home directory, YAML config, custom providers
