@@ -2,7 +2,10 @@
 //!
 //! - `POST /mcp` — JSON-RPC dispatch for all MCP methods.
 //! - `GET /mcp/sse` — SSE stream for change notifications.
+//! - `POST /mcp/{name}` — per-server bridge endpoint (see [`mcp_bridge_filter`]).
+//! - `GET /mcp/{name}/sse` — per-server bridge SSE stream.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
@@ -130,7 +133,8 @@ async fn handle_jsonrpc_value<T: McpServer>(
     match message {
         JsonRpcMessage::Request(req) => {
             let resp =
-                dispatch_request(&req.id, &req.method, req.params, &*server, &observe_ctx).await;
+                dispatch_request(&req.id, &req.method, req.params, &*server, &observe_ctx, None)
+                    .await;
             Box::new(warp::reply::json(&resp))
         }
         JsonRpcMessage::Notification(notif) => {
@@ -157,9 +161,10 @@ async fn dispatch_request<T: McpServer>(
     params: Option<serde_json::Value>,
     server: &T,
     observe_ctx: &Option<McpObserveContext>,
+    server_name: Option<&str>,
 ) -> JsonRpcResponse {
     match method {
-        "initialize" => handle_initialize(id),
+        "initialize" => handle_initialize(id, server_name),
         "ping" => handle_ping(id),
         "tools/list" => tools::handle_tools_list(id, server).await,
         "tools/call" => tools::handle_tools_call(id, params, server, observe_ctx).await,
@@ -183,7 +188,18 @@ async fn dispatch_request<T: McpServer>(
     }
 }
 
-fn handle_initialize(id: &JsonRpcId) -> JsonRpcResponse {
+fn handle_initialize(id: &JsonRpcId, server_name: Option<&str>) -> JsonRpcResponse {
+    let (name, instructions) = match server_name {
+        Some(name) => (
+            name.to_string(),
+            format!("BitRouter MCP Bridge — {name}"),
+        ),
+        None => (
+            SERVER_NAME.to_string(),
+            "BitRouter MCP Gateway — aggregated tools from multiple upstream MCP servers"
+                .to_string(),
+        ),
+    };
     let result = InitializeResult {
         protocol_version: PROTOCOL_VERSION.to_string(),
         capabilities: ServerCapabilities {
@@ -201,13 +217,10 @@ fn handle_initialize(id: &JsonRpcId) -> JsonRpcResponse {
             completions: Some(CompletionsCapability {}),
         },
         server_info: ServerInfo {
-            name: SERVER_NAME.to_string(),
+            name,
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
-        instructions: Some(
-            "BitRouter MCP Gateway — aggregated tools from multiple upstream MCP servers"
-                .to_string(),
-        ),
+        instructions: Some(instructions),
     };
     let value = serde_json::to_value(&result).unwrap_or_default();
     JsonRpcResponse::success(id.clone(), value)
@@ -229,6 +242,114 @@ where
         .and(warp::get())
         .and(warp::any().map(move || server.clone()))
         .and_then(handle_sse::<T>)
+}
+
+// ── Bridge filters: POST /mcp/{name} + GET /mcp/{name}/sse ───────────
+
+/// Combined bridge filter for all configured bridge servers.
+///
+/// Routes `POST /mcp/{name}` and `GET /mcp/{name}/sse` to the bridge
+/// identified by `{name}`.  Returns 404 for names not in the map.
+///
+/// **Routing note:** compose this filter *after* the aggregated
+/// [`mcp_server_filter`] so that the static paths `POST /mcp` and
+/// `GET /mcp/sse` are matched first.
+pub fn mcp_bridge_filter<T>(
+    bridges: Arc<HashMap<String, Arc<T>>>,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: McpServer + 'static,
+{
+    mcp_bridge_jsonrpc_filter(bridges.clone()).or(mcp_bridge_sse_filter(bridges))
+}
+
+fn mcp_bridge_jsonrpc_filter<T>(
+    bridges: Arc<HashMap<String, Arc<T>>>,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: McpServer + 'static,
+{
+    warp::path("mcp")
+        .and(warp::path::param::<String>())
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::body::json::<serde_json::Value>())
+        .and(warp::any().map(move || bridges.clone()))
+        .then(
+            |name: String,
+             body: serde_json::Value,
+             bridges: Arc<HashMap<String, Arc<T>>>| async move {
+                let server = bridges.get(&name).cloned();
+                handle_jsonrpc_value_bridge::<T>(body, server, name).await
+            },
+        )
+}
+
+fn mcp_bridge_sse_filter<T>(
+    bridges: Arc<HashMap<String, Arc<T>>>,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: McpServer + 'static,
+{
+    warp::path("mcp")
+        .and(warp::path::param::<String>())
+        .and(warp::path("sse"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::any().map(move || bridges.clone()))
+        .and_then(
+            |name: String, bridges: Arc<HashMap<String, Arc<T>>>| async move {
+                let server = bridges.get(&name).cloned();
+                handle_sse::<T>(server).await
+            },
+        )
+}
+
+async fn handle_jsonrpc_value_bridge<T: McpServer>(
+    body: serde_json::Value,
+    server: Option<Arc<T>>,
+    server_name: String,
+) -> Box<dyn warp::Reply> {
+    let Some(server) = server else {
+        return Box::new(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({
+                "error": {"message": "MCP bridge not found"}
+            })),
+            warp::http::StatusCode::NOT_FOUND,
+        ));
+    };
+
+    let message: JsonRpcMessage = match serde_json::from_value(body) {
+        Ok(msg) => msg,
+        Err(e) => {
+            let resp = JsonRpcResponse::error(
+                JsonRpcId::Number(0),
+                error_codes::PARSE_ERROR,
+                format!("parse error: {e}"),
+                None,
+            );
+            return Box::new(warp::reply::json(&resp));
+        }
+    };
+
+    match message {
+        JsonRpcMessage::Request(req) => {
+            let resp = dispatch_request(
+                &req.id,
+                &req.method,
+                req.params,
+                &*server,
+                &None,
+                Some(&server_name),
+            )
+            .await;
+            Box::new(warp::reply::json(&resp))
+        }
+        JsonRpcMessage::Notification(_) => Box::new(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({})),
+            warp::http::StatusCode::ACCEPTED,
+        )),
+    }
 }
 
 async fn handle_sse<T: McpServer>(

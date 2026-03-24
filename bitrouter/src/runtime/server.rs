@@ -352,10 +352,13 @@ where
             );
 
         // ── MCP registry ─────────────────────────────────────────────
-        let (admin_tool_routes, mcp_server, tool_list, _refresh_guard) = {
+        let (admin_tool_routes, mcp_server, tool_list, bridge_routes, _refresh_guard, _bridge_guards) = {
             use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
             use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
+            use bitrouter_mcp::bridge::SingleServerBridge;
             use bitrouter_mcp::client::registry::ConfigMcpRegistry;
+            use bitrouter_mcp::client::upstream::UpstreamConnection;
+            use bitrouter_mcp::server::{McpPromptServer, McpResourceServer, McpToolServer};
 
             let mcp_configs = self.config.mcp_servers.clone();
             let mcp_groups = self.config.mcp_groups.clone();
@@ -376,30 +379,62 @@ where
                 .collect();
             let groups = self.config.mcp_groups.as_map().clone();
 
-            let (registry, refresh_guard) =
-                match ConfigMcpRegistry::from_configs(mcp_configs, mcp_groups).await {
-                    Ok(reg) => {
-                        tracing::info!(
-                            "MCP registry started with {} upstreams",
-                            self.config.mcp_servers.len()
-                        );
-                        // Build Arc first so we can spawn refresh listeners,
-                        // then wrap with DynamicToolRegistry.
-                        let inner = Arc::new(reg);
-                        let guard = inner.spawn_refresh_listeners().await;
-                        let wrapped = Arc::new(DynamicToolRegistry::new(
-                            inner,
-                            initial_filters,
-                            initial_restrictions,
-                            groups,
-                        ));
-                        (Some(wrapped), Some(guard))
+            // Build all upstream connections upfront so bridges can share them.
+            let mut connections: std::collections::HashMap<
+                String,
+                Arc<UpstreamConnection>,
+            > = std::collections::HashMap::with_capacity(mcp_configs.len());
+            for config in &mcp_configs {
+                let name = config.name.clone();
+                match UpstreamConnection::connect(config.clone()).await {
+                    Ok(conn) => {
+                        connections.insert(name, Arc::new(conn));
                     }
                     Err(e) => {
-                        tracing::warn!("MCP registry failed to start: {e}");
-                        (None, None)
+                        tracing::warn!(upstream = %name, error = %e, "failed to connect to MCP upstream");
                     }
-                };
+                }
+            }
+
+            let (inner, registry, refresh_guard) = if !connections.is_empty() {
+                let reg = ConfigMcpRegistry::from_connections(connections.clone(), mcp_groups);
+                tracing::info!(
+                    "MCP registry started with {} upstreams",
+                    connections.len()
+                );
+                let inner = Arc::new(reg);
+                let guard = inner.spawn_refresh_listeners().await;
+                let wrapped = Arc::new(DynamicToolRegistry::new(
+                    Arc::clone(&inner),
+                    initial_filters,
+                    initial_restrictions,
+                    groups,
+                ));
+                (Some(inner), Some(wrapped), Some(guard))
+            } else {
+                (None, None, None)
+            };
+
+            // Build bridge endpoints for servers with `bridge: true`.
+            let mut bridge_map: std::collections::HashMap<String, Arc<SingleServerBridge>> =
+                std::collections::HashMap::new();
+            let mut bridge_guards: Vec<bitrouter_mcp::client::registry::RefreshGuard> = Vec::new();
+            if let Some(ref reg) = inner {
+                for config in mcp_configs.iter().filter(|c| c.bridge) {
+                    if let Some(conn) = connections.get(&config.name) {
+                        let (bridge, guard) = SingleServerBridge::new(
+                            Arc::clone(conn),
+                            McpToolServer::subscribe_tool_changes(reg.as_ref()),
+                            McpResourceServer::subscribe_resource_changes(reg.as_ref()),
+                            McpPromptServer::subscribe_prompt_changes(reg.as_ref()),
+                        );
+                        tracing::info!(server = %config.name, "MCP bridge enabled");
+                        bridge_map.insert(config.name.clone(), bridge);
+                        bridge_guards.push(guard);
+                    }
+                }
+            }
+            let bridges = mcp_admin::mcp_bridge_filter(Arc::new(bridge_map));
 
             let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
                 .and(admin_tools::admin_tools_filter(registry.clone()));
@@ -449,7 +484,7 @@ where
                     .boxed()
             };
 
-            (admin, server, tools, refresh_guard)
+            (admin, server, tools, bridges, refresh_guard, bridge_guards)
         };
 
         // ── Skills registry ───────────────────────────────────────────
@@ -535,7 +570,10 @@ where
             .or(admin_tool_routes)
             .or(tool_list)
             .or(skills_list)
-            .or(mcp_server);
+            .or(mcp_server)
+            // Bridge routes come after the aggregated MCP filter so that the static
+            // paths POST /mcp and GET /mcp/sse are matched first.
+            .or(bridge_routes);
 
         // ── Serve ────────────────────────────────────────────────────
         if let Some(ref db) = self.db {

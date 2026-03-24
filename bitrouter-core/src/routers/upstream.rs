@@ -36,6 +36,11 @@ use super::admin::{ParamRestrictions, ToolFilter};
 pub struct ToolServerConfig {
     pub name: String,
     pub transport: ToolServerTransport,
+    /// When `true`, this server is also exposed as a standalone Streamable HTTP
+    /// endpoint at `POST /mcp/{name}` and `GET /mcp/{name}/sse`, in addition to
+    /// participating in the aggregated `POST /mcp` registry.
+    #[serde(default)]
+    pub bridge: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_filter: Option<ToolFilter>,
     #[serde(default)]
@@ -70,6 +75,10 @@ impl<'de> Deserialize<'de> for ToolServerConfig {
             #[serde(default)]
             headers: HashMap<String, String>,
 
+            // ── Bridge flag ──
+            #[serde(default)]
+            bridge: bool,
+
             // ── Common fields ──
             #[serde(default)]
             tool_filter: Option<ToolFilter>,
@@ -101,6 +110,7 @@ impl<'de> Deserialize<'de> for ToolServerConfig {
         Ok(ToolServerConfig {
             name: raw.name,
             transport,
+            bridge: raw.bridge,
             tool_filter: raw.tool_filter,
             param_restrictions: raw.param_restrictions,
         })
@@ -115,6 +125,9 @@ impl ToolServerConfig {
         }
         if self.name.contains('/') {
             return Err(format!("server name '{}' must not contain '/'", self.name));
+        }
+        if self.name == "sse" {
+            return Err("server name 'sse' is reserved".into());
         }
         match &self.transport {
             ToolServerTransport::Stdio { command, .. } => {
@@ -272,6 +285,7 @@ mod tests {
                 args: vec![],
                 env: HashMap::new(),
             },
+            bridge: false,
             tool_filter: None,
             param_restrictions: ParamRestrictions::default(),
         }
@@ -300,6 +314,7 @@ mod tests {
                 url: String::new(),
                 headers: HashMap::new(),
             },
+            bridge: false,
             tool_filter: None,
             param_restrictions: ParamRestrictions::default(),
         };
@@ -319,6 +334,7 @@ mod tests {
                 url: "http://localhost:3000/mcp".into(),
                 headers: HashMap::new(),
             },
+            bridge: false,
             tool_filter: None,
             param_restrictions: ParamRestrictions::default(),
         };
@@ -334,6 +350,7 @@ mod tests {
                 args: vec!["-y".into(), "server".into()],
                 env: HashMap::from([("KEY".into(), "VAL".into())]),
             },
+            bridge: false,
             tool_filter: Some(ToolFilter {
                 allow: Some(vec!["tool1".into()]),
                 deny: None,
@@ -353,6 +370,7 @@ mod tests {
                 url: "http://localhost:3000/mcp".into(),
                 headers: HashMap::from([("Authorization".into(), "Bearer tok".into())]),
             },
+            bridge: false,
             tool_filter: None,
             param_restrictions: ParamRestrictions::default(),
         };
@@ -429,6 +447,34 @@ mod tests {
         let json = r#"{"name": "bad"}"#;
         let result = serde_json::from_str::<ToolServerConfig>(json);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn deserialize_bridge_flag() {
+        let json = r#"{
+            "name": "my-tools",
+            "command": "my-mcp-server",
+            "bridge": true
+        }"#;
+        let config: ToolServerConfig =
+            serde_json::from_str(json).expect("deserialize bridge flag");
+        assert!(config.bridge);
+    }
+
+    #[test]
+    fn deserialize_bridge_defaults_to_false() {
+        let json = r#"{
+            "name": "my-tools",
+            "command": "my-mcp-server"
+        }"#;
+        let config: ToolServerConfig =
+            serde_json::from_str(json).expect("deserialize without bridge flag");
+        assert!(!config.bridge);
+    }
+
+    #[test]
+    fn validate_rejects_reserved_name_sse() {
+        assert!(test_stdio_config("sse", "echo").validate().is_err());
     }
 
     // ── ToolServerAccessGroups tests ────────────────────────────────
