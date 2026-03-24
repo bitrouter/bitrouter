@@ -1,0 +1,35 @@
+name: Release Propagate
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  dispatch:
+    name: Dispatch to sibling repos
+    if: github.repository_owner == 'bitrouter' && startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: bitrouter-docs,bitrouter-plugins
+
+      - name: Dispatch to bitrouter-docs
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          repository: bitrouter/bitrouter-docs
+          event-type: bitrouter-release
+          client-payload: '{"tag": "${{ github.event.release.tag_name }}"}'
+
+      - name: Dispatch to bitrouter-plugins
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          repository: bitrouter/bitrouter-plugins
+          event-type: bitrouter-release
+          client-payload: '{"tag": "${{ github.event.release.tag_name }}"}'
