@@ -20,6 +20,6 @@ tracing = { version = "0.1" }
 
 [dev-dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
-serde_yaml = { version = "0.9" }
+serde-saphyr = { version = "0.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = { version = "3" }

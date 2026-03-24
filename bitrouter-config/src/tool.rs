@@ -63,8 +63,8 @@ mod tests {
             default_cost_per_call: 0.002,
             tools: HashMap::from([("expensive_tool".into(), 0.05)]),
         };
-        let yaml = serde_yaml::to_string(&pricing).expect("serialize");
-        let parsed: ToolPricing = serde_yaml::from_str(&yaml).expect("deserialize");
+        let yaml = serde_saphyr::to_string(&pricing).expect("serialize");
+        let parsed: ToolPricing = serde_saphyr::from_str(&yaml).expect("deserialize");
         assert!((parsed.default_cost_per_call - 0.002).abs() < 1e-10);
         assert!((parsed.cost_for("expensive_tool") - 0.05).abs() < 1e-10);
     }

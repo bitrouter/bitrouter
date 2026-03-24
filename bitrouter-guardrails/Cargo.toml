@@ -17,4 +17,4 @@ serde_json = { version = "1.0" }
 tracing = { version = "0.1" }
 
 [dev-dependencies]
-serde_yaml = { version = "0.9" }
+serde-saphyr = { version = "0.0" }

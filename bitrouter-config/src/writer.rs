@@ -281,7 +281,7 @@ mod tests {
         assert!(yaml.contains("openai:"));
         assert!(yaml.contains("${OPENAI_API_KEY}"));
         // Should be valid YAML
-        let _: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let _: serde_json::Value = serde_saphyr::from_str(&yaml).unwrap();
     }
 
     #[test]

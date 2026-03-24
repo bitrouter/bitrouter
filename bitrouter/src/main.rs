@@ -950,7 +950,7 @@ fn write_cloud_provider_config(
     let existing = fs::read_to_string(config_path).unwrap_or_default();
 
     // Parse YAML to check if cloud provider is already configured.
-    if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&existing)
+    if let Ok(value) = serde_saphyr::from_str::<serde_json::Value>(&existing)
         && value
             .get("providers")
             .and_then(|p| p.get("bitrouter-cloud"))
