@@ -40,7 +40,7 @@ enum MppBackend {
 struct SolanaState {
     realm: String,
     secret_key: String,
-    currency: String,
+    asset: bitrouter_config::config::SolanaAssetConfig,
     recipient: String,
     session_method: super::solana_session_method::SolanaSessionMethod,
 }
@@ -178,14 +178,12 @@ impl MppState {
         };
         let session_method = SolanaSessionMethod::new(store, config);
 
-        let currency = "SOL".to_string();
-
         self.backends.insert(
             "solana".to_string(),
             MppBackend::Solana(SolanaState {
                 realm: self.realm.clone(),
                 secret_key,
-                currency,
+                asset: solana.asset.clone(),
                 recipient: solana.recipient.clone(),
                 session_method,
             }),
@@ -426,10 +424,10 @@ fn solana_session_challenge(
 
     let request = SolanaSessionChallengeRequest {
         asset: SolanaAsset {
-            kind: "sol".to_string(),
-            decimals: 9,
-            mint: None,
-            symbol: Some(state.currency.clone()),
+            kind: state.asset.kind.clone(),
+            decimals: state.asset.decimals,
+            mint: state.asset.mint.clone(),
+            symbol: state.asset.symbol.clone(),
         },
         channel_program: config.channel_program.clone(),
         network: Some(config.network.clone()),
