@@ -51,6 +51,11 @@ impl SolanaSessionMethod {
         &*self.store
     }
 
+    /// Access the session method configuration.
+    pub fn config(&self) -> &SolanaSessionMethodConfig {
+        &self.config
+    }
+
     /// Normalize a network name to a CAIP-2 Solana chain ID.
     fn normalize_chain_id(network: &str) -> String {
         let normalized = network.trim();
