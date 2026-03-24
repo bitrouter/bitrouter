@@ -14,10 +14,7 @@ const PROVIDER_DEFS: &[(&str, &str)] = &[
         "bitrouter-cloud",
         include_str!("../providers/bitrouter-cloud.yaml"),
     ),
-    (
-        "openrouter",
-        include_str!("../providers/openrouter.yaml"),
-    ),
+    ("openrouter", include_str!("../providers/openrouter.yaml")),
     ("deepseek", include_str!("../providers/deepseek.yaml")),
     ("minimax", include_str!("../providers/minimax.yaml")),
     ("zai", include_str!("../providers/zai.yaml")),
@@ -226,10 +223,7 @@ mod tests {
             providers["deepseek"].api_protocol,
             Some(ApiProtocol::Openai)
         );
-        assert_eq!(
-            providers["minimax"].api_protocol,
-            Some(ApiProtocol::Openai)
-        );
+        assert_eq!(providers["minimax"].api_protocol, Some(ApiProtocol::Openai));
         assert_eq!(providers["zai"].api_protocol, Some(ApiProtocol::Openai));
         assert_eq!(
             providers["moonshot"].api_protocol,
