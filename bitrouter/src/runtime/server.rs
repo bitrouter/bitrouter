@@ -794,7 +794,7 @@ async fn wait_for_reload_signal(paths: &Option<crate::runtime::paths::RuntimePat
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
         loop {
             tokio::time::sleep(POLL_INTERVAL).await;
-            if let Some(ref p) = paths {
+            if let Some(p) = &paths {
                 let flag = p.runtime_dir.join("reload");
                 if flag.exists() {
                     // Remove the flag so we don't fire again immediately.
