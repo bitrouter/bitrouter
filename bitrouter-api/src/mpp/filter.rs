@@ -156,3 +156,58 @@ pub async fn verify_mpp_payment(
 ) -> Result<MppPaymentContext, warp::Rejection> {
     verify_payment(auth_header, state, chain).await
 }
+
+/// Converts MPP-related warp rejections into proper HTTP 402 responses.
+///
+/// Call this inside your `.recover()` handler. Returns `Some(response)` if the
+/// rejection is an [`MppChallenge`] or [`MppVerificationFailed`], `None`
+/// otherwise — allowing callers to fall through to other rejection handling.
+///
+/// For [`MppChallenge`]:
+/// - Status: 402 Payment Required
+/// - Header: `WWW-Authenticate: <challenge>`
+///
+/// For [`MppVerificationFailed`]:
+/// - Status: 402 Payment Required
+pub fn handle_mpp_rejection(err: &warp::Rejection) -> Option<warp::http::Response<String>> {
+    use warp::http::StatusCode;
+
+    if let Some(challenge) = err.find::<MppChallenge>() {
+        let body = serde_json::json!({
+            "error": {
+                "message": "payment required",
+                "code": 402
+            }
+        })
+        .to_string();
+
+        let response = warp::http::Response::builder()
+            .status(StatusCode::PAYMENT_REQUIRED)
+            .header("content-type", "application/json")
+            .header("www-authenticate", &challenge.www_authenticate)
+            .body(body)
+            .ok()?;
+
+        return Some(response);
+    }
+
+    if let Some(failed) = err.find::<MppVerificationFailed>() {
+        let body = serde_json::json!({
+            "error": {
+                "message": failed.message,
+                "code": 402
+            }
+        })
+        .to_string();
+
+        let response = warp::http::Response::builder()
+            .status(StatusCode::PAYMENT_REQUIRED)
+            .header("content-type", "application/json")
+            .body(body)
+            .ok()?;
+
+        return Some(response);
+    }
+
+    None
+}
