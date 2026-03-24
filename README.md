@@ -9,23 +9,6 @@
 [![Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/G3zVrZDa5C)
 [![Docs](https://img.shields.io/badge/Docs-bitrouter.ai-green)](https://bitrouter.ai)
 
-<!--## ⚠ Notice
-
-We are waiting for the upstream `mpp` crate to publish. Now we depend on its git version, so we can't publish our packages to `crates.io` registry.
-
-Now you have to install bitrouter like this:
-
-```bash
-cargo install bitrouter --git https://github.com/bitrouter/bitroute
-```
-
-And add bitrouter framework to your project like this:
-
-```toml
-[dependencies]
-bitrouter-core = { git = "https://github.com/bitrouter/bitrouter" }
-```-->
-
 ## Overview
 
 As LLM agents grow more autonomous, humans can no longer hand-pick the best model, tool, or sub-agent for every runtime decision. BitRouter is a proxy layer purpose-built for LLM agents (OpenClaw, OpenCode, etc.) to discover and route to LLMs, tools, and other agents autonomously — with agent-native control, guardrails, and observability via CLI + TUI, backed by a high-performance Rust proxy that optimizes for performance, cost, and safety during runtime.
@@ -63,6 +46,7 @@ bitrouter
 ```
 
 On first launch, BitRouter runs an interactive setup wizard with two modes:
+
 - **Cloud** — connect to BitRouter Cloud with x402/Solana wallet payments
 - **BYOK** — bring your own API keys for OpenAI, Anthropic, Google, or custom providers
 
@@ -93,12 +77,12 @@ npx skills add BitRouterAI/agent-skills
 
 ## Supported Providers
 
-| Provider  | Status | Notes                            |
-| --------- | ------ | -------------------------------- |
-| OpenAI    | ✅     | Chat Completions + Responses API |
-| Anthropic | ✅     | Messages API                     |
-| Google    | ✅     | Generative AI API                |
-| OpenRouter| ✅     | Chat Completions + Responses API |
+| Provider   | Status | Notes                            |
+| ---------- | ------ | -------------------------------- |
+| OpenAI     | ✅     | Chat Completions + Responses API |
+| Anthropic  | ✅     | Messages API                     |
+| Google     | ✅     | Generative AI API                |
+| OpenRouter | ✅     | Chat Completions + Responses API |
 
 Want to see another provider supported? [Open an issue](https://github.com/AIMOverse/bitrouter/issues) or submit a PR — contributions are welcome. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
 
@@ -106,14 +90,14 @@ Want to see another provider supported? [Open an issue](https://github.com/AIMOv
 
 BitRouter works as a drop-in proxy for agent runtimes that support custom API base URLs. Point your runtime at `http://localhost:8787` and route to any configured provider.
 
-| Runtime | Integration |
-| ------- | ----------- |
-| [OpenClaw](https://github.com/openclaw/openclaw) | [Native plugin](https://github.com/bitrouter/bitrouter-openclaw) |
-| [Claude Code](https://github.com/anthropics/claude-code) | CLI + Skills |
-| [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) | CLI + Skills |
-| [Codex CLI](https://github.com/openai/codex) | CLI + Skills |
-| [OpenCode](https://github.com/opencode-ai/opencode) | CLI + Skills |
-| [Kilo Code](https://github.com/Kilo-Org/kilocode) | CLI + Skills |
+| Runtime                                                  | Integration                                                      |
+| -------------------------------------------------------- | ---------------------------------------------------------------- |
+| [OpenClaw](https://github.com/openclaw/openclaw)         | [Native plugin](https://github.com/bitrouter/bitrouter-openclaw) |
+| [Claude Code](https://github.com/anthropics/claude-code) | CLI + Skills                                                     |
+| [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw)    | CLI + Skills                                                     |
+| [Codex CLI](https://github.com/openai/codex)             | CLI + Skills                                                     |
+| [OpenCode](https://github.com/opencode-ai/opencode)      | CLI + Skills                                                     |
+| [Kilo Code](https://github.com/Kilo-Org/kilocode)        | CLI + Skills                                                     |
 
 Any agent runtime that can target a custom OpenAI or Anthropic base URL works with BitRouter out of the box. **Building an agent runtime or framework?** We partner with teams to build native BitRouter integrations — reach out on [Discord](https://discord.gg/G3zVrZDa5C) or [open an issue](https://github.com/AIMOverse/bitrouter/issues).
 

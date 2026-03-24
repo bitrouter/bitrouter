@@ -30,7 +30,7 @@ bitrouter-config = { path = "../bitrouter-config", version = "0.12", optional = 
 bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.12" }
 bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.12" }
 futures-core = { version = "0.3" }
-mpp = { git = "https://github.com/tempoxyz/mpp-rs", default-features = false, features = [
+mpp = { version = "0.7", default-features = false, features = [
     "reqwest-rustls-tls",
 ], optional = true }
 serde = { version = "1.0", features = ["derive"] }
