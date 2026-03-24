@@ -322,7 +322,7 @@ pub struct ModelInfo {
 ///
 /// Field names mirror the sub-category fields of `LanguageModelInputTokens`
 /// and `LanguageModelOutputTokens` from `bitrouter-core` for cross-provider
-/// compatibility. Defaults to `0.0` for all fields.
+/// compatibility. Fields are `None` when not configured.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelPricing {
     #[serde(default)]
@@ -336,13 +336,13 @@ pub struct ModelPricing {
 pub struct InputTokenPricing {
     /// Cost per million non-cached input tokens.
     #[serde(default)]
-    pub no_cache: f64,
+    pub no_cache: Option<f64>,
     /// Cost per million cache-read input tokens.
     #[serde(default)]
-    pub cache_read: f64,
+    pub cache_read: Option<f64>,
     /// Cost per million cache-write input tokens.
     #[serde(default)]
-    pub cache_write: f64,
+    pub cache_write: Option<f64>,
 }
 
 /// Output token pricing per million tokens.
@@ -350,10 +350,10 @@ pub struct InputTokenPricing {
 pub struct OutputTokenPricing {
     /// Cost per million text output tokens.
     #[serde(default)]
-    pub text: f64,
+    pub text: Option<f64>,
     /// Cost per million reasoning output tokens.
     #[serde(default)]
-    pub reasoning: f64,
+    pub reasoning: Option<f64>,
 }
 
 // ── MPP (Machine Payment Protocol) configuration ─────────────────────
@@ -708,12 +708,12 @@ providers:
             gpt4o.input_modalities,
             vec![Modality::Text, Modality::Image]
         );
-        assert_eq!(gpt4o.pricing.input_tokens.no_cache, 2.50);
-        assert_eq!(gpt4o.pricing.output_tokens.text, 10.00);
+        assert_eq!(gpt4o.pricing.input_tokens.no_cache, Some(2.50));
+        assert_eq!(gpt4o.pricing.output_tokens.text, Some(10.00));
 
         let mini = &models["gpt-4o-mini"];
         assert_eq!(mini.name.as_deref(), Some("GPT-4o Mini"));
-        assert_eq!(mini.pricing.input_tokens.no_cache, 0.0); // default
+        assert_eq!(mini.pricing.input_tokens.no_cache, None); // default
     }
 
     #[test]

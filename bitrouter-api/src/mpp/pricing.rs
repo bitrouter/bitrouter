@@ -45,12 +45,12 @@ pub fn calculate_usage_cost(usage: &LanguageModelUsage, pricing: &ModelPricing) 
             let no_cache = usage.input_tokens.no_cache.unwrap_or(0) as f64;
             let cache_read = usage.input_tokens.cache_read.unwrap_or(0) as f64;
             let cache_write = usage.input_tokens.cache_write.unwrap_or(0) as f64;
-            (no_cache * pricing.input_tokens.no_cache
-                + cache_read * pricing.input_tokens.cache_read
-                + cache_write * pricing.input_tokens.cache_write)
+            (no_cache * pricing.input_tokens.no_cache.unwrap_or(0.0)
+                + cache_read * pricing.input_tokens.cache_read.unwrap_or(0.0)
+                + cache_write * pricing.input_tokens.cache_write.unwrap_or(0.0))
                 / PER_MILLION
         } else if let Some(total) = usage.input_tokens.total {
-            total as f64 * pricing.input_tokens.no_cache / PER_MILLION
+            total as f64 * pricing.input_tokens.no_cache.unwrap_or(0.0) / PER_MILLION
         } else {
             0.0
         }
@@ -63,10 +63,11 @@ pub fn calculate_usage_cost(usage: &LanguageModelUsage, pricing: &ModelPricing) 
         if has_granular {
             let text = usage.output_tokens.text.unwrap_or(0) as f64;
             let reasoning = usage.output_tokens.reasoning.unwrap_or(0) as f64;
-            (text * pricing.output_tokens.text + reasoning * pricing.output_tokens.reasoning)
+            (text * pricing.output_tokens.text.unwrap_or(0.0)
+                + reasoning * pricing.output_tokens.reasoning.unwrap_or(0.0))
                 / PER_MILLION
         } else if let Some(total) = usage.output_tokens.total {
-            total as f64 * pricing.output_tokens.text / PER_MILLION
+            total as f64 * pricing.output_tokens.text.unwrap_or(0.0) / PER_MILLION
         } else {
             0.0
         }

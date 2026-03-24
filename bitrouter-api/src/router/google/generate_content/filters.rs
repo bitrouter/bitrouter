@@ -264,7 +264,9 @@ where
             tokio::sync::mpsc::channel::<Result<warp::sse::Event, std::convert::Infallible>>(32);
 
         let pricing = table.model_pricing(&provider_name, &target_model_id);
-        let tick_cost = crate::mpp::cost_to_micro_units(pricing.output_tokens.text / 1_000_000.0);
+        let tick_cost = crate::mpp::cost_to_micro_units(
+            pricing.output_tokens.text.unwrap_or(0.0) / 1_000_000.0,
+        );
 
         let metered = crate::mpp::metered_sse::MeteredSseContext {
             mpp_state: mpp_state.clone(),
