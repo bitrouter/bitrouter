@@ -26,7 +26,7 @@ impl PricingLookup for bitrouter_config::ConfigRoutingTable {
 
 impl<T: PricingLookup> PricingLookup for bitrouter_core::routers::dynamic::DynamicRoutingTable<T> {
     fn model_pricing(&self, provider: &str, model_id: &str) -> ModelPricing {
-        self.inner().model_pricing(provider, model_id)
+        self.read_inner().model_pricing(provider, model_id)
     }
 }
 

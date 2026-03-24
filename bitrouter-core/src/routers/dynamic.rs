@@ -5,15 +5,17 @@
 //! table during resolution. All mutations are protected by a [`RwLock`].
 //!
 //! Dynamic routes are ephemeral — they are lost when the process exits.
+//! The inner table can be hot-reloaded via [`ReloadableRoutingTable::reload`].
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::errors::{BitrouterError, Result};
 
 use super::admin::{AdminRoutingTable, DynamicRoute, RouteEndpoint, RouteStrategy};
 use super::registry::{ModelEntry, ModelRegistry};
+use super::reload::ReloadableRoutingTable;
 use super::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
 
 /// Internal representation of a dynamic route with its round-robin counter.
@@ -27,8 +29,12 @@ struct DynamicRouteData {
 ///
 /// Wraps any `T: RoutingTable` and layers an in-memory set of dynamic routes
 /// on top. Dynamic routes take precedence during resolution.
+///
+/// The inner table is stored behind an [`Arc`] + [`RwLock`] so it can be
+/// replaced at runtime via the [`ReloadableRoutingTable`] trait — for example,
+/// when the configuration file is hot-reloaded.
 pub struct DynamicRoutingTable<T> {
-    inner: T,
+    inner: RwLock<Arc<T>>,
     routes: RwLock<HashMap<String, DynamicRouteData>>,
 }
 
@@ -36,14 +42,20 @@ impl<T> DynamicRoutingTable<T> {
     /// Create a new dynamic routing table wrapping the given inner table.
     pub fn new(inner: T) -> Self {
         Self {
-            inner,
+            inner: RwLock::new(Arc::new(inner)),
             routes: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Returns a reference to the wrapped inner routing table.
-    pub fn inner(&self) -> &T {
-        &self.inner
+    /// Returns an `Arc` snapshot of the current inner routing table.
+    ///
+    /// The returned `Arc` is cheaply cloned and does not hold any lock,
+    /// so callers may keep it for as long as needed.
+    pub fn read_inner(&self) -> Arc<T> {
+        self.inner
+            .read()
+            .map(|guard| Arc::clone(&guard))
+            .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()))
     }
 
     /// Resolve a model name against dynamic routes only.
@@ -72,18 +84,23 @@ impl<T> DynamicRoutingTable<T> {
     }
 }
 
-impl<T: RoutingTable + Sync> RoutingTable for DynamicRoutingTable<T> {
+impl<T: RoutingTable + Send + Sync> RoutingTable for DynamicRoutingTable<T> {
     async fn route(&self, incoming_model_name: &str) -> Result<RoutingTarget> {
         // Dynamic routes take precedence.
         if let Some(target) = self.resolve_dynamic(incoming_model_name) {
             return Ok(target);
         }
-        // Fall back to the inner table.
-        self.inner.route(incoming_model_name).await
+        // Clone the Arc and drop the lock before the async call.
+        let inner = self.read_inner();
+        inner.route(incoming_model_name).await
     }
 
     fn list_routes(&self) -> Vec<RouteEntry> {
-        let mut entries = self.inner.list_routes();
+        let mut entries = self
+            .inner
+            .read()
+            .map(|inner| inner.list_routes())
+            .unwrap_or_default();
 
         if let Ok(routes) = self.routes.read() {
             // Remove config entries that are shadowed by dynamic routes.
@@ -109,11 +126,14 @@ impl<T: RoutingTable + Sync> RoutingTable for DynamicRoutingTable<T> {
 
 impl<T: ModelRegistry> ModelRegistry for DynamicRoutingTable<T> {
     fn list_models(&self) -> Vec<ModelEntry> {
-        self.inner.list_models()
+        self.inner
+            .read()
+            .map(|inner| inner.list_models())
+            .unwrap_or_default()
     }
 }
 
-impl<T: RoutingTable + Sync> AdminRoutingTable for DynamicRoutingTable<T> {
+impl<T: RoutingTable + Send + Sync> AdminRoutingTable for DynamicRoutingTable<T> {
     fn add_route(&self, route: DynamicRoute) -> Result<()> {
         if route.endpoints.is_empty() {
             return Err(BitrouterError::invalid_request(
@@ -163,6 +183,19 @@ impl<T: RoutingTable + Sync> AdminRoutingTable for DynamicRoutingTable<T> {
     }
 }
 
+impl<T> ReloadableRoutingTable for DynamicRoutingTable<T> {
+    type Inner = T;
+
+    fn reload(&self, new_inner: T) -> Result<()> {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| BitrouterError::transport(None, "inner routing table lock poisoned"))?;
+        *inner = Arc::new(new_inner);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +223,34 @@ mod tests {
                 model: "default".to_owned(),
                 provider: "openai".to_owned(),
                 protocol: "openai".to_owned(),
+            }]
+        }
+    }
+
+    /// A second table used to test hot-reload.
+    struct ReloadedTable;
+
+    impl RoutingTable for ReloadedTable {
+        async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
+            if incoming == "default" {
+                Ok(RoutingTarget {
+                    provider_name: "anthropic".to_owned(),
+                    model_id: "claude-sonnet-4-20250514".to_owned(),
+                })
+            } else {
+                Err(BitrouterError::invalid_request(
+                    None,
+                    format!("no route: {incoming}"),
+                    None,
+                ))
+            }
+        }
+
+        fn list_routes(&self) -> Vec<RouteEntry> {
+            vec![RouteEntry {
+                model: "default".to_owned(),
+                provider: "anthropic".to_owned(),
+                protocol: "anthropic".to_owned(),
             }]
         }
     }
@@ -339,5 +400,132 @@ mod tests {
         let defaults: Vec<_> = routes.iter().filter(|r| r.model == "default").collect();
         assert_eq!(defaults.len(), 1);
         assert_eq!(defaults[0].provider, "anthropic");
+    }
+
+    #[tokio::test]
+    async fn reload_replaces_inner_table() {
+        struct FlexTable {
+            use_anthropic: bool,
+        }
+
+        impl RoutingTable for FlexTable {
+            async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
+                if incoming == "default" {
+                    if self.use_anthropic {
+                        Ok(RoutingTarget {
+                            provider_name: "anthropic".to_owned(),
+                            model_id: "claude-sonnet-4-20250514".to_owned(),
+                        })
+                    } else {
+                        Ok(RoutingTarget {
+                            provider_name: "openai".to_owned(),
+                            model_id: "gpt-4o".to_owned(),
+                        })
+                    }
+                } else {
+                    Err(BitrouterError::invalid_request(
+                        None,
+                        format!("no route: {incoming}"),
+                        None,
+                    ))
+                }
+            }
+        }
+
+        async fn flex_route(
+            t: &DynamicRoutingTable<FlexTable>,
+            m: &str,
+        ) -> Result<RoutingTarget> {
+            <DynamicRoutingTable<FlexTable> as RoutingTable>::route(t, m).await
+        }
+
+        let table = DynamicRoutingTable::new(FlexTable {
+            use_anthropic: false,
+        });
+
+        // Before reload: routes to openai
+        let target = flex_route(&table, "default").await.unwrap();
+        assert_eq!(target.provider_name, "openai");
+
+        // Reload with anthropic config
+        table
+            .reload(FlexTable {
+                use_anthropic: true,
+            })
+            .unwrap();
+
+        // After reload: routes to anthropic
+        let target = flex_route(&table, "default").await.unwrap();
+        assert_eq!(target.provider_name, "anthropic");
+    }
+
+    #[tokio::test]
+    async fn reload_preserves_dynamic_routes() {
+        struct FlexTable {
+            use_anthropic: bool,
+        }
+
+        impl RoutingTable for FlexTable {
+            async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
+                if incoming == "default" {
+                    if self.use_anthropic {
+                        Ok(RoutingTarget {
+                            provider_name: "anthropic".to_owned(),
+                            model_id: "claude-sonnet-4-20250514".to_owned(),
+                        })
+                    } else {
+                        Ok(RoutingTarget {
+                            provider_name: "openai".to_owned(),
+                            model_id: "gpt-4o".to_owned(),
+                        })
+                    }
+                } else {
+                    Err(BitrouterError::invalid_request(
+                        None,
+                        format!("no route: {incoming}"),
+                        None,
+                    ))
+                }
+            }
+        }
+
+        async fn flex_route(
+            t: &DynamicRoutingTable<FlexTable>,
+            m: &str,
+        ) -> Result<RoutingTarget> {
+            <DynamicRoutingTable<FlexTable> as RoutingTable>::route(t, m).await
+        }
+
+        let table = DynamicRoutingTable::new(FlexTable {
+            use_anthropic: false,
+        });
+
+        // Add a dynamic route
+        table
+            .add_route(DynamicRoute {
+                model: "research".to_owned(),
+                strategy: RouteStrategy::Priority,
+                endpoints: vec![RouteEndpoint {
+                    provider: "openai".to_owned(),
+                    model_id: "o1".to_owned(),
+                }],
+            })
+            .unwrap();
+
+        // Reload inner table
+        table
+            .reload(FlexTable {
+                use_anthropic: true,
+            })
+            .unwrap();
+
+        // Dynamic route is still intact
+        let target = flex_route(&table, "research").await.unwrap();
+        assert_eq!(target.provider_name, "openai");
+        assert_eq!(target.model_id, "o1");
+
+        // Inner table was reloaded
+        let target = flex_route(&table, "default").await.unwrap();
+        assert_eq!(target.provider_name, "anthropic");
     }
 }
