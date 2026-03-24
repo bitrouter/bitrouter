@@ -204,6 +204,11 @@ impl ModelRegistry for ConfigRoutingTable {
                     .map(|ep| ep.provider.clone())
                     .collect();
                 let pricing = convert_pricing(&model_config.pricing);
+                let pricing = if pricing.is_empty() {
+                    None
+                } else {
+                    Some(pricing)
+                };
                 ModelEntry {
                     id: model_name.clone(),
                     providers,
@@ -221,7 +226,7 @@ impl ModelRegistry for ConfigRoutingTable {
                         .iter()
                         .map(|m| m.to_string())
                         .collect(),
-                    pricing: Some(pricing),
+                    pricing,
                 }
             })
             .collect();
