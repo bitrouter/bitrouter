@@ -14,6 +14,12 @@ const PROVIDER_DEFS: &[(&str, &str)] = &[
         "bitrouter-cloud",
         include_str!("../providers/bitrouter-cloud.yaml"),
     ),
+    ("openrouter", include_str!("../providers/openrouter.yaml")),
+    ("deepseek", include_str!("../providers/deepseek.yaml")),
+    ("minimax", include_str!("../providers/minimax.yaml")),
+    ("zai", include_str!("../providers/zai.yaml")),
+    ("moonshot", include_str!("../providers/moonshot.yaml")),
+    ("qwen", include_str!("../providers/qwen.yaml")),
 ];
 
 /// Raw YAML shape for built-in provider files.
@@ -202,11 +208,28 @@ mod tests {
         assert!(providers.contains_key("openai"));
         assert!(providers.contains_key("anthropic"));
         assert!(providers.contains_key("google"));
+        assert!(providers.contains_key("openrouter"));
+        assert!(providers.contains_key("deepseek"));
+        assert!(providers.contains_key("minimax"));
+        assert!(providers.contains_key("zai"));
+        assert!(providers.contains_key("moonshot"));
+        assert!(providers.contains_key("qwen"));
         assert_eq!(providers["openai"].api_protocol, Some(ApiProtocol::Openai));
         assert_eq!(
             providers["anthropic"].api_protocol,
             Some(ApiProtocol::Anthropic)
         );
+        assert_eq!(
+            providers["deepseek"].api_protocol,
+            Some(ApiProtocol::Openai)
+        );
+        assert_eq!(providers["minimax"].api_protocol, Some(ApiProtocol::Openai));
+        assert_eq!(providers["zai"].api_protocol, Some(ApiProtocol::Openai));
+        assert_eq!(
+            providers["moonshot"].api_protocol,
+            Some(ApiProtocol::Openai)
+        );
+        assert_eq!(providers["qwen"].api_protocol, Some(ApiProtocol::Openai));
     }
 
     #[test]

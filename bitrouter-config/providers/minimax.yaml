@@ -1,0 +1,52 @@
+api_protocol: openai
+api_base: https://api.minimax.chat/v1
+env_prefix: MINIMAX
+models:
+  MiniMax-Text-01:
+    max_input_tokens: 1000000
+    max_output_tokens: 1000000
+    pricing:
+      input_tokens:
+        no_cache: 0.8
+      output_tokens:
+        text: 8.0
+  MiniMax-M1:
+    max_input_tokens: 1000000
+    max_output_tokens: 80000
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 3.3
+  abab6.5s-chat:
+    max_input_tokens: 245760
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 4.2
+      output_tokens:
+        text: 4.2
+  abab6.5g-chat:
+    max_input_tokens: 245760
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 4.2
+      output_tokens:
+        text: 4.2
+  abab5.5-chat:
+    max_input_tokens: 16384
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 2.1
+      output_tokens:
+        text: 2.1
+  abab5.5s-chat:
+    max_input_tokens: 16384
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.7
+      output_tokens:
+        text: 0.7
