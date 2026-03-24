@@ -1,0 +1,305 @@
+api_protocol: openai
+api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+env_prefix: DASHSCOPE
+models:
+  qwen-turbo:
+    max_input_tokens: 1000000
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.056
+      output_tokens:
+        text: 0.22
+  qwen-plus:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+      output_tokens:
+        text: 0.84
+  qwen-max:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 1.6
+      output_tokens:
+        text: 6.4
+  qwen-long:
+    max_input_tokens: 10000000
+    max_output_tokens: 6000
+    pricing:
+      input_tokens:
+        no_cache: 0.014
+      output_tokens:
+        text: 0.056
+  qwen3-235b-a22b:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 2.4
+  qwen3-30b-a3b:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+      output_tokens:
+        text: 0.6
+  qwen3-32b:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.56
+  qwen3-14b:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.07
+      output_tokens:
+        text: 0.28
+  qwen3-8b:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.035
+      output_tokens:
+        text: 0.14
+  qwen3-4b:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.018
+      output_tokens:
+        text: 0.07
+  qwen3-1.7b:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.007
+      output_tokens:
+        text: 0.028
+  qwen3-0.6b:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.003
+      output_tokens:
+        text: 0.012
+  qwen2.5-72b-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+      output_tokens:
+        text: 0.84
+  qwen2.5-32b-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.42
+  qwen2.5-14b-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.07
+      output_tokens:
+        text: 0.21
+  qwen2.5-7b-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.035
+      output_tokens:
+        text: 0.1
+  qwen2.5-3b-instruct:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.014
+      output_tokens:
+        text: 0.042
+  qwen2.5-1.5b-instruct:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.007
+      output_tokens:
+        text: 0.021
+  qwen2.5-0.5b-instruct:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.003
+      output_tokens:
+        text: 0.009
+  qwen2.5-coder-32b-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+      output_tokens:
+        text: 0.84
+  qwen2.5-coder-14b-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.42
+  qwen2.5-coder-7b-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.035
+      output_tokens:
+        text: 0.1
+  qwen2.5-coder-3b-instruct:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.014
+      output_tokens:
+        text: 0.042
+  qwen2.5-coder-1.5b-instruct:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.007
+      output_tokens:
+        text: 0.021
+  qwen2.5-math-72b-instruct:
+    max_input_tokens: 4096
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+      output_tokens:
+        text: 0.84
+  qwen2.5-math-7b-instruct:
+    max_input_tokens: 4096
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 0.035
+      output_tokens:
+        text: 0.1
+  qwq-32b:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.42
+      output_tokens:
+        text: 1.68
+  qwq-plus:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 1.12
+      output_tokens:
+        text: 4.48
+  qvq-72b-preview:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+      output_tokens:
+        text: 0.84
+  qwen-vl-max:
+    max_input_tokens: 32768
+    max_output_tokens: 2000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+      output_tokens:
+        text: 6.0
+  qwen-vl-plus:
+    max_input_tokens: 8192
+    max_output_tokens: 2000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 3.0
+  qwen2.5-vl-72b-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+      output_tokens:
+        text: 0.84
+  qwen2.5-vl-7b-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.035
+      output_tokens:
+        text: 0.1
+  qwen2.5-vl-3b-instruct:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.014
+      output_tokens:
+        text: 0.042
+  qwen2.5-vl-2b-instruct:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.007
+      output_tokens:
+        text: 0.021

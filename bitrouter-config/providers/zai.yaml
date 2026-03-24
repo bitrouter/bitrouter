@@ -1,0 +1,122 @@
+api_protocol: openai
+api_base: https://open.bigmodel.cn/api/paas/v4
+env_prefix: ZAI
+models:
+  glm-4-plus:
+    max_input_tokens: 128000
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 7.0
+      output_tokens:
+        text: 7.0
+  glm-4-0520:
+    max_input_tokens: 128000
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 14.0
+      output_tokens:
+        text: 14.0
+  glm-4:
+    max_input_tokens: 128000
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 14.0
+      output_tokens:
+        text: 14.0
+  glm-4-air:
+    max_input_tokens: 128000
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 1.0
+  glm-4-airx:
+    max_input_tokens: 8192
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+      output_tokens:
+        text: 2.0
+  glm-4-flash:
+    max_input_tokens: 128000
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  glm-4-flashx:
+    max_input_tokens: 128000
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 1.0
+  glm-4-long:
+    max_input_tokens: 1000000
+    max_output_tokens: 4096
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 1.0
+  glm-4v-plus:
+    max_input_tokens: 8192
+    max_output_tokens: 4096
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 14.0
+      output_tokens:
+        text: 14.0
+  glm-4v:
+    max_input_tokens: 2048
+    max_output_tokens: 1024
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 7.0
+      output_tokens:
+        text: 7.0
+  glm-z1-flash:
+    max_input_tokens: 65536
+    max_output_tokens: 65536
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  glm-z1-air:
+    max_input_tokens: 65536
+    max_output_tokens: 65536
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 1.0
+  glm-z1-airx:
+    max_input_tokens: 32768
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+      output_tokens:
+        text: 2.0
+  glm-z1-preview:
+    max_input_tokens: 65536
+    max_output_tokens: 65536
+    pricing:
+      input_tokens:
+        no_cache: 7.0
+      output_tokens:
+        text: 7.0
