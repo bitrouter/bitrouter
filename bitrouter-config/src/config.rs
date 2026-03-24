@@ -670,6 +670,59 @@ a2a_agents:
     }
 
     #[test]
+    fn load_with_flat_mcp_servers_config() {
+        let yaml = r#"
+mcp_servers:
+  - name: "filesystem"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "/tmp/workspace"
+  - name: "remote"
+    url: "http://localhost:3000/mcp"
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        assert_eq!(config.mcp_servers.len(), 2);
+
+        let fs = &config.mcp_servers[0];
+        assert_eq!(fs.name, "filesystem");
+        match &fs.transport {
+            bitrouter_core::routers::upstream::ToolServerTransport::Stdio {
+                command, args, ..
+            } => {
+                assert_eq!(command, "npx");
+                assert_eq!(args.len(), 3);
+            }
+            _ => panic!("expected Stdio transport"),
+        }
+
+        let remote = &config.mcp_servers[1];
+        assert_eq!(remote.name, "remote");
+        match &remote.transport {
+            bitrouter_core::routers::upstream::ToolServerTransport::Http { url, .. } => {
+                assert_eq!(url, "http://localhost:3000/mcp");
+            }
+            _ => panic!("expected Http transport"),
+        }
+    }
+
+    #[test]
+    fn load_with_nested_mcp_servers_config() {
+        let yaml = r#"
+mcp_servers:
+  - name: "filesystem"
+    transport:
+      type: stdio
+      command: "npx"
+      args: ["-y", "server"]
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        assert_eq!(config.mcp_servers.len(), 1);
+        assert_eq!(config.mcp_servers[0].name, "filesystem");
+    }
+
+    #[test]
     fn derives_inherits_model_catalog() {
         let yaml = r#"
 providers:
