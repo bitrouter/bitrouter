@@ -113,10 +113,10 @@ impl BitrouterConfig {
         let env = load_env(env_file);
 
         // Substitute env vars in the YAML tree, then deserialize
-        let yaml_value: serde_yaml::Value = serde_yaml::from_str(raw)
+        let yaml_value: serde_json::Value = serde_saphyr::from_str(raw)
             .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
         let substituted = substitute_in_value(yaml_value, &env);
-        let mut config: BitrouterConfig = serde_yaml::from_value(substituted)
+        let mut config: BitrouterConfig = serde_json::from_value(substituted)
             .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
 
         // Merge built-in providers with user overrides
@@ -509,8 +509,8 @@ mod tests {
     #[test]
     fn default_config_round_trips_through_yaml() {
         let config = BitrouterConfig::default();
-        let yaml = serde_yaml::to_string(&config).unwrap();
-        let parsed: BitrouterConfig = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_saphyr::to_string(&config).unwrap();
+        let parsed: BitrouterConfig = serde_saphyr::from_str(&yaml).unwrap();
         assert_eq!(parsed.server.listen, config.server.listen);
     }
 

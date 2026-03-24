@@ -144,8 +144,8 @@ mod tests {
             default_cost_per_call: 0.02,
             methods: HashMap::from([("message/send".into(), 0.1)]),
         };
-        let yaml = serde_yaml::to_string(&pricing).expect("serialize");
-        let parsed: AgentPricing = serde_yaml::from_str(&yaml).expect("deserialize");
+        let yaml = serde_saphyr::to_string(&pricing).expect("serialize");
+        let parsed: AgentPricing = serde_saphyr::from_str(&yaml).expect("deserialize");
         assert!((parsed.default_cost_per_call - 0.02).abs() < 1e-10);
         assert!((parsed.cost_for("message/send") - 0.1).abs() < 1e-10);
     }

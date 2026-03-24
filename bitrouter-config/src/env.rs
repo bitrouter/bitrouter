@@ -93,19 +93,19 @@ pub fn substitute_env_vars(input: &str, env: &HashMap<String, String>) -> String
 
 /// Recursively substitutes `${VAR}` references in all string values of a YAML value tree.
 pub fn substitute_in_value(
-    value: serde_yaml::Value,
+    value: serde_json::Value,
     env: &HashMap<String, String>,
-) -> serde_yaml::Value {
+) -> serde_json::Value {
     match value {
-        serde_yaml::Value::String(s) => serde_yaml::Value::String(substitute_env_vars(&s, env)),
-        serde_yaml::Value::Mapping(map) => {
-            let mut out = serde_yaml::Mapping::new();
+        serde_json::Value::String(s) => serde_json::Value::String(substitute_env_vars(&s, env)),
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
             for (k, v) in map {
                 out.insert(k, substitute_in_value(v, env));
             }
-            serde_yaml::Value::Mapping(out)
+            serde_json::Value::Object(out)
         }
-        serde_yaml::Value::Sequence(seq) => serde_yaml::Value::Sequence(
+        serde_json::Value::Array(seq) => serde_json::Value::Array(
             seq.into_iter()
                 .map(|v| substitute_in_value(v, env))
                 .collect(),
@@ -161,29 +161,20 @@ mod tests {
     #[test]
     fn yaml_value_substitution() {
         let env = HashMap::from([("KEY".into(), "secret".into())]);
-        let input = serde_yaml::Value::Mapping({
-            let mut m = serde_yaml::Mapping::new();
-            m.insert(
-                serde_yaml::Value::String("api_key".into()),
-                serde_yaml::Value::String("${KEY}".into()),
-            );
-            m.insert(
-                serde_yaml::Value::String("port".into()),
-                serde_yaml::Value::Number(8080.into()),
-            );
+        let input = serde_json::Value::Object({
+            let mut m = serde_json::Map::new();
+            m.insert("api_key".into(), serde_json::Value::String("${KEY}".into()));
+            m.insert("port".into(), serde_json::Value::Number(8080.into()));
             m
         });
         let output = substitute_in_value(input, &env);
-        if let serde_yaml::Value::Mapping(m) = output {
+        if let serde_json::Value::Object(m) = output {
             assert_eq!(
-                m.get(&serde_yaml::Value::String("api_key".into())),
-                Some(&serde_yaml::Value::String("secret".into()))
+                m.get("api_key"),
+                Some(&serde_json::Value::String("secret".into()))
             );
             // numeric values are untouched
-            assert_eq!(
-                m.get(&serde_yaml::Value::String("port".into())),
-                Some(&serde_yaml::Value::Number(8080.into()))
-            );
+            assert_eq!(m.get("port"), Some(&serde_json::Value::Number(8080.into())));
         } else {
             panic!("expected mapping");
         }

@@ -236,7 +236,7 @@ upgoing:
 downgoing:
   suspicious_commands: block
 "#;
-        let config: GuardrailConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: GuardrailConfig = serde_saphyr::from_str(yaml).unwrap();
         assert!(config.enabled);
         assert_eq!(config.upgoing_action(PatternId::ApiKeys), Action::Redact);
         assert_eq!(config.upgoing_action(PatternId::PrivateKeys), Action::Block);
@@ -246,14 +246,14 @@ downgoing:
         );
 
         // Round-trip through serialization
-        let serialized = serde_yaml::to_string(&config).unwrap();
-        let reparsed: GuardrailConfig = serde_yaml::from_str(&serialized).unwrap();
+        let serialized = serde_saphyr::to_string(&config).unwrap();
+        let reparsed: GuardrailConfig = serde_saphyr::from_str(&serialized).unwrap();
         assert_eq!(reparsed.upgoing_action(PatternId::ApiKeys), Action::Redact);
     }
 
     #[test]
     fn empty_yaml_deserializes_to_defaults() {
-        let config: GuardrailConfig = serde_yaml::from_str("{}").unwrap();
+        let config: GuardrailConfig = serde_saphyr::from_str("{}").unwrap();
         assert!(config.enabled);
         assert!(config.upgoing.is_empty());
         assert!(config.downgoing.is_empty());
@@ -268,7 +268,7 @@ disabled_patterns:
   - ip_addresses
   - pii_phone_numbers
 "#;
-        let config: GuardrailConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: GuardrailConfig = serde_saphyr::from_str(yaml).unwrap();
         assert!(config.is_pattern_disabled(PatternId::IpAddresses));
         assert!(config.is_pattern_disabled(PatternId::PiiPhoneNumbers));
         assert!(!config.is_pattern_disabled(PatternId::ApiKeys));
@@ -288,7 +288,7 @@ custom_patterns:
     regex: "secret_value"
     direction: both
 "#;
-        let config: GuardrailConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: GuardrailConfig = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(config.custom_patterns.len(), 3);
         assert_eq!(config.custom_patterns[0].name, "my_token");
         assert_eq!(
@@ -311,7 +311,7 @@ custom_patterns:
 custom_upgoing:
   my_token: block
 "#;
-        let config: GuardrailConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: GuardrailConfig = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(config.custom_upgoing_action("my_token"), Action::Block);
         assert_eq!(config.custom_upgoing_action("nonexistent"), Action::Warn);
     }
@@ -323,7 +323,7 @@ block_message:
   include_details: false
   include_help_link: false
 "#;
-        let config: GuardrailConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: GuardrailConfig = serde_saphyr::from_str(yaml).unwrap();
         assert!(!config.block_message.include_details);
         assert!(!config.block_message.include_help_link);
     }

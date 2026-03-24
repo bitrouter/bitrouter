@@ -38,7 +38,7 @@ pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
     PROVIDER_DEFS
         .iter()
         .filter_map(|(name, yaml)| {
-            let def: ProviderDef = match serde_yaml::from_str(yaml) {
+            let def: ProviderDef = match serde_saphyr::from_str(yaml) {
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!("warning: invalid built-in provider YAML '{name}': {e}");

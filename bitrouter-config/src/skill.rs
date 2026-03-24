@@ -44,7 +44,7 @@ mod tests {
 name: "code-review"
 description: "Reviews code for quality and security issues"
 "#;
-        let config: SkillConfig = serde_yaml::from_str(yaml).expect("deserialize");
+        let config: SkillConfig = serde_saphyr::from_str(yaml).expect("deserialize");
         assert_eq!(config.name, "code-review");
         assert_eq!(
             config.description,
@@ -53,8 +53,8 @@ description: "Reviews code for quality and security issues"
         assert!(config.source.is_none());
         assert!(config.required_apis.is_empty());
 
-        let serialized = serde_yaml::to_string(&config).expect("serialize");
-        let parsed: SkillConfig = serde_yaml::from_str(&serialized).expect("re-deserialize");
+        let serialized = serde_saphyr::to_string(&config).expect("serialize");
+        let parsed: SkillConfig = serde_saphyr::from_str(&serialized).expect("re-deserialize");
         assert_eq!(parsed.name, config.name);
         assert_eq!(parsed.description, config.description);
     }
@@ -69,7 +69,7 @@ required_apis:
   - provider: deepl
   - provider: openai
 "#;
-        let config: SkillConfig = serde_yaml::from_str(yaml).expect("deserialize");
+        let config: SkillConfig = serde_saphyr::from_str(yaml).expect("deserialize");
         assert_eq!(config.name, "translate");
         assert_eq!(
             config.source.as_deref(),
@@ -79,19 +79,19 @@ required_apis:
         assert_eq!(config.required_apis[0].provider, "deepl");
         assert_eq!(config.required_apis[1].provider, "openai");
 
-        let serialized = serde_yaml::to_string(&config).expect("serialize");
-        let parsed: SkillConfig = serde_yaml::from_str(&serialized).expect("re-deserialize");
+        let serialized = serde_saphyr::to_string(&config).expect("serialize");
+        let parsed: SkillConfig = serde_saphyr::from_str(&serialized).expect("re-deserialize");
         assert_eq!(parsed.required_apis.len(), 2);
     }
 
     #[test]
     fn skill_required_api_round_trip() {
         let yaml = r#"provider: "anthropic""#;
-        let api: SkillRequiredApi = serde_yaml::from_str(yaml).expect("deserialize");
+        let api: SkillRequiredApi = serde_saphyr::from_str(yaml).expect("deserialize");
         assert_eq!(api.provider, "anthropic");
 
-        let serialized = serde_yaml::to_string(&api).expect("serialize");
-        let parsed: SkillRequiredApi = serde_yaml::from_str(&serialized).expect("re-deserialize");
+        let serialized = serde_saphyr::to_string(&api).expect("serialize");
+        let parsed: SkillRequiredApi = serde_saphyr::from_str(&serialized).expect("re-deserialize");
         assert_eq!(parsed.provider, "anthropic");
     }
 
@@ -103,7 +103,7 @@ required_apis:
             source: None,
             required_apis: Vec::new(),
         };
-        let yaml = serde_yaml::to_string(&config).expect("serialize");
+        let yaml = serde_saphyr::to_string(&config).expect("serialize");
         assert!(!yaml.contains("required_apis"));
         assert!(!yaml.contains("source"));
     }
