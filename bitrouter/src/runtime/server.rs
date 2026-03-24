@@ -387,10 +387,8 @@ where
             let groups = self.config.mcp_groups.as_map().clone();
 
             // Build all upstream connections upfront so bridges can share them.
-            let mut connections: std::collections::HashMap<
-                String,
-                Arc<UpstreamConnection>,
-            > = std::collections::HashMap::with_capacity(mcp_configs.len());
+            let mut connections: std::collections::HashMap<String, Arc<UpstreamConnection>> =
+                std::collections::HashMap::with_capacity(mcp_configs.len());
             for config in &mcp_configs {
                 let name = config.name.clone();
                 match UpstreamConnection::connect(config.clone()).await {
@@ -409,10 +407,7 @@ where
 
             let (inner, registry, refresh_guard) = if !connections.is_empty() {
                 let reg = ConfigMcpRegistry::from_connections(connections.clone(), mcp_groups);
-                tracing::info!(
-                    "MCP registry started with {} upstreams",
-                    connections.len()
-                );
+                tracing::info!("MCP registry started with {} upstreams", connections.len());
                 let inner = Arc::new(reg);
                 let guard = inner.spawn_refresh_listeners().await;
                 let wrapped = Arc::new(DynamicToolRegistry::new(

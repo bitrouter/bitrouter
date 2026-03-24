@@ -456,8 +456,7 @@ mod tests {
             "command": "my-mcp-server",
             "bridge": true
         }"#;
-        let config: ToolServerConfig =
-            serde_json::from_str(json).expect("deserialize bridge flag");
+        let config: ToolServerConfig = serde_json::from_str(json).expect("deserialize bridge flag");
         assert!(config.bridge);
     }
 

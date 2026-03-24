@@ -132,9 +132,15 @@ async fn handle_jsonrpc_value<T: McpServer>(
 
     match message {
         JsonRpcMessage::Request(req) => {
-            let resp =
-                dispatch_request(&req.id, &req.method, req.params, &*server, &observe_ctx, None)
-                    .await;
+            let resp = dispatch_request(
+                &req.id,
+                &req.method,
+                req.params,
+                &*server,
+                &observe_ctx,
+                None,
+            )
+            .await;
             Box::new(warp::reply::json(&resp))
         }
         JsonRpcMessage::Notification(notif) => {
@@ -190,10 +196,7 @@ async fn dispatch_request<T: McpServer>(
 
 fn handle_initialize(id: &JsonRpcId, server_name: Option<&str>) -> JsonRpcResponse {
     let (name, instructions) = match server_name {
-        Some(name) => (
-            name.to_string(),
-            format!("BitRouter MCP Bridge — {name}"),
-        ),
+        Some(name) => (name.to_string(), format!("BitRouter MCP Bridge — {name}")),
         None => (
             SERVER_NAME.to_string(),
             "BitRouter MCP Gateway — aggregated tools from multiple upstream MCP servers"
