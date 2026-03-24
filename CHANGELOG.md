@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/bitrouter/bitrouter/compare/v0.13.0...v0.14.0)
+
+
+### ⛰️ Features
+
+- *(solana-mpp)* Make session challenge asset configurable ([#173](https://github.com/bitrouter/bitrouter/pull/173)) - ([a9426ce](https://github.com/bitrouter/bitrouter/commit/a9426ceb10f09c4cf5a645a071e8a033e2a97286))
+
+### 🐛 Bug Fixes
+
+- *(api)* Fixed solana mpp api types ([#170](https://github.com/bitrouter/bitrouter/pull/170)) - ([aba8e6a](https://github.com/bitrouter/bitrouter/commit/aba8e6ac0f4ff7ece1558f7ad21b584315db5b16))
+- *(models)* Return configured routing models instead of built-in provider catalogs ([#177](https://github.com/bitrouter/bitrouter/pull/177)) - ([2b415ea](https://github.com/bitrouter/bitrouter/commit/2b415ea22c4ce9f27a440d839f8d614b9a1619ed))
+- *(pricing)* Make pricing fields Optional instead of defaulting to zero ([#180](https://github.com/bitrouter/bitrouter/pull/180)) - ([6b02882](https://github.com/bitrouter/bitrouter/commit/6b02882b67c74601a0094b6e5e9112da99f32470))
+- *(solana-mpp)* Pass through open action to process request ([#175](https://github.com/bitrouter/bitrouter/pull/175)) - ([1fef327](https://github.com/bitrouter/bitrouter/commit/1fef3275d3259376479e2ee9e7697254f1d0e379))
+
+### 🚜 Refactor
+
+- *(deps)* Replace serde-yaml with serde-saphyr ([#167](https://github.com/bitrouter/bitrouter/pull/167)) - ([d62b7bd](https://github.com/bitrouter/bitrouter/commit/d62b7bd079c2107f7a19a99298c35da1a61bfeb7))
+
+
 ## [0.12.0](https://github.com/bitrouter/bitrouter/compare/v0.11.0...v0.12.0)
 
 
