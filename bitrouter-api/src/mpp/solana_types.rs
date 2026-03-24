@@ -142,6 +142,42 @@ pub struct SolanaSessionMethodDetails {
     pub network: String,
 }
 
+/// Solana session challenge request — matches the `@solana/mpp` SDK schema.
+///
+/// Replaces the generic `mpp::SessionRequest` for Solana session challenges
+/// so the wire format contains `asset`, top-level `channelProgram`/`network`,
+/// and optional `sessionDefaults`/`pricing`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolanaSessionChallengeRequest {
+    pub asset: SolanaAsset,
+    pub channel_program: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    pub recipient: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_defaults: Option<SolanaSessionDefaults>,
+}
+
+/// Asset descriptor for a Solana session challenge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolanaAsset {
+    pub kind: String,
+    pub decimals: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+}
+
+/// Default session hints for a Solana session challenge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolanaSessionDefaults {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_deposit: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

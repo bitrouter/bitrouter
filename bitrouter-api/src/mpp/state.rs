@@ -417,21 +417,26 @@ async fn backend_verify_session(
 #[cfg(feature = "mpp-solana")]
 fn solana_session_challenge(
     state: &SolanaState,
-    amount: &str,
+    _amount: &str,
     options: SessionChallengeOptions<'_>,
 ) -> Result<mpp::PaymentChallenge, mpp::MppError> {
-    use mpp::protocol::traits::SessionMethod as _;
+    use super::solana_types::{SolanaAsset, SolanaSessionChallengeRequest, SolanaSessionDefaults};
 
-    let method_details = state.session_method.challenge_method_details();
+    let config = state.session_method.config();
 
-    let request = mpp::SessionRequest {
-        amount: amount.to_string(),
-        unit_type: options.unit_type.map(|s| s.to_string()),
-        currency: state.currency.clone(),
-        recipient: Some(state.recipient.clone()),
-        suggested_deposit: options.suggested_deposit.map(|s| s.to_string()),
-        method_details,
-        ..Default::default()
+    let request = SolanaSessionChallengeRequest {
+        asset: SolanaAsset {
+            kind: "sol".to_string(),
+            decimals: 9,
+            mint: None,
+            symbol: Some(state.currency.clone()),
+        },
+        channel_program: config.channel_program.clone(),
+        network: Some(config.network.clone()),
+        recipient: state.recipient.clone(),
+        session_defaults: options.suggested_deposit.map(|d| SolanaSessionDefaults {
+            suggested_deposit: Some(d.to_string()),
+        }),
     };
 
     let encoded = mpp::Base64UrlJson::from_typed(&request)?;
@@ -503,11 +508,18 @@ async fn solana_verify_session(
         }
     }
 
-    // Decode session request.
-    let request: mpp::SessionRequest =
+    // Decode session request and convert to the SessionRequest expected by the trait.
+    let solana_request: super::solana_types::SolanaSessionChallengeRequest =
         credential.challenge.request.decode().map_err(|e| {
             VerificationError::new(format!("Failed to decode session request: {e}"))
         })?;
+
+    let request = mpp::SessionRequest {
+        amount: "0".to_string(),
+        currency: solana_request.asset.symbol.clone().unwrap_or_default(),
+        recipient: Some(solana_request.recipient.clone()),
+        ..Default::default()
+    };
 
     let receipt = state
         .session_method
