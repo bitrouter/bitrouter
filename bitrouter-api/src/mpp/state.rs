@@ -56,12 +56,28 @@ impl MppState {
 
     /// Add a Tempo backend for the given chain IDs.
     ///
+    /// Uses the default in-memory session channel store.
     /// Typically called with `"eip155:4217"` (mainnet) or `"eip155:42431"` (testnet).
     #[cfg(feature = "mpp-tempo")]
     pub fn add_tempo(
         &mut self,
         tempo: &TempoMppConfig,
         secret_key: Option<&str>,
+    ) -> Result<(), mpp::MppError> {
+        let store: Arc<dyn TempoChannelStore> = Arc::new(mpp::server::SessionChannelStore::new());
+        self.add_tempo_with_store(tempo, secret_key, store)
+    }
+
+    /// Add a Tempo backend with a caller-provided channel store.
+    ///
+    /// This allows injecting a custom (e.g. database-backed) store instead of
+    /// the default in-memory store.
+    #[cfg(feature = "mpp-tempo")]
+    pub fn add_tempo_with_store(
+        &mut self,
+        tempo: &TempoMppConfig,
+        secret_key: Option<&str>,
+        store: Arc<dyn TempoChannelStore>,
     ) -> Result<(), mpp::MppError> {
         let rpc_url = tempo.rpc_url.as_deref().unwrap_or("https://rpc.tempo.xyz");
 
@@ -84,7 +100,6 @@ impl MppState {
         let mpp_instance = Mpp::create(builder)?;
 
         let session_provider = mpp::server::tempo_provider(rpc_url)?;
-        let store: Arc<dyn TempoChannelStore> = Arc::new(mpp::server::SessionChannelStore::new());
 
         let escrow = tempo
             .escrow_contract
@@ -119,6 +134,8 @@ impl MppState {
     }
 
     /// Add a Solana backend keyed by `"solana"`.
+    ///
+    /// Uses the default in-memory channel store.
     #[cfg(feature = "mpp-solana")]
     pub fn add_solana(
         &mut self,
@@ -126,6 +143,23 @@ impl MppState {
         secret_key: Option<&str>,
     ) -> Result<(), mpp::MppError> {
         use super::solana_channel_store::InMemorySolanaChannelStore;
+
+        let store: Arc<dyn super::solana_channel_store::SolanaChannelStore> =
+            Arc::new(InMemorySolanaChannelStore::new());
+        self.add_solana_with_store(solana, secret_key, store)
+    }
+
+    /// Add a Solana backend with a caller-provided channel store.
+    ///
+    /// This allows injecting a custom (e.g. database-backed) store instead of
+    /// the default in-memory store.
+    #[cfg(feature = "mpp-solana")]
+    pub fn add_solana_with_store(
+        &mut self,
+        solana: &bitrouter_config::SolanaMppConfig,
+        secret_key: Option<&str>,
+        store: Arc<dyn super::solana_channel_store::SolanaChannelStore>,
+    ) -> Result<(), mpp::MppError> {
         use super::solana_session_method::{SolanaSessionMethod, SolanaSessionMethodConfig};
 
         let secret_key = secret_key
@@ -138,7 +172,6 @@ impl MppState {
                 )
             })?;
 
-        let store = Arc::new(InMemorySolanaChannelStore::new());
         let config = SolanaSessionMethodConfig {
             channel_program: solana.channel_program.clone(),
             network: solana.network.clone(),

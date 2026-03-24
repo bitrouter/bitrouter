@@ -14,6 +14,7 @@
 use std::sync::Arc;
 
 use bitrouter_core::routers::registry::ModelRegistry;
+use bitrouter_core::routers::routing_table::ModelPricing;
 use serde::Serialize;
 use warp::Filter;
 
@@ -57,7 +58,7 @@ fn optional_raw_query()
 #[derive(Serialize)]
 struct ModelResponse {
     id: String,
-    provider: String,
+    providers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +71,8 @@ struct ModelResponse {
     input_modalities: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     output_modalities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pricing: Option<ModelPricing>,
 }
 
 fn parse_query(raw: &str) -> ModelQuery {
@@ -99,7 +102,11 @@ fn handle_list_models<T: ModelRegistry>(
     let models: Vec<ModelResponse> = entries
         .into_iter()
         .filter(|e| {
-            if query.provider.as_deref().is_some_and(|p| e.provider != p) {
+            if query
+                .provider
+                .as_deref()
+                .is_some_and(|p| !e.providers.iter().any(|x| x == p))
+            {
                 return false;
             }
             if id_lower
@@ -126,14 +133,15 @@ fn handle_list_models<T: ModelRegistry>(
         })
         .map(|e| ModelResponse {
             id: e.id,
-            provider: e.provider,
+            providers: e.providers,
             name: e.name,
             description: e.description,
             max_input_tokens: e.max_input_tokens,
             max_output_tokens: e.max_output_tokens,
             input_modalities: e.input_modalities,
             output_modalities: e.output_modalities,
+            pricing: e.pricing,
         })
         .collect();
-    warp::reply::json(&serde_json::json!({ "models": models }))
+    warp::reply::json(&serde_json::json!({ "data": models }))
 }

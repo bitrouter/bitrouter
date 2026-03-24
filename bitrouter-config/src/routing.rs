@@ -4,7 +4,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     routers::registry::{ModelEntry, ModelRegistry},
-    routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget},
+    routers::routing_table::{
+        InputTokenPricing as CoreInputTokenPricing, ModelPricing as CoreModelPricing,
+        OutputTokenPricing as CoreOutputTokenPricing, RouteEntry, RoutingTable, RoutingTarget,
+    },
 };
 
 use crate::config::{
@@ -139,6 +142,20 @@ impl ConfigRoutingTable {
     }
 }
 
+fn convert_pricing(pricing: &ModelPricing) -> CoreModelPricing {
+    CoreModelPricing {
+        input_tokens: CoreInputTokenPricing {
+            no_cache: pricing.input_tokens.no_cache,
+            cache_read: pricing.input_tokens.cache_read,
+            cache_write: pricing.input_tokens.cache_write,
+        },
+        output_tokens: CoreOutputTokenPricing {
+            text: pricing.output_tokens.text,
+            reasoning: pricing.output_tokens.reasoning,
+        },
+    }
+}
+
 impl RoutingTable for ConfigRoutingTable {
     async fn route(&self, incoming_model_name: &str) -> Result<RoutingTarget> {
         let resolved = self.resolve(incoming_model_name)?;
@@ -177,7 +194,7 @@ impl RoutingTable for ConfigRoutingTable {
 
 impl ModelRegistry for ConfigRoutingTable {
     fn list_models(&self) -> Vec<ModelEntry> {
-        let mut entries = Vec::new();
+        let mut by_id: HashMap<String, ModelEntry> = HashMap::new();
         for (provider_name, provider_config) in &self.providers {
             // Only include providers that have an API key configured.
             if provider_config.api_key.is_none() {
@@ -185,28 +202,40 @@ impl ModelRegistry for ConfigRoutingTable {
             }
             if let Some(models) = &provider_config.models {
                 for (model_id, info) in models {
-                    entries.push(ModelEntry {
-                        id: model_id.clone(),
-                        provider: provider_name.clone(),
-                        name: info.name.clone(),
-                        description: info.description.clone(),
-                        max_input_tokens: info.max_input_tokens,
-                        max_output_tokens: info.max_output_tokens,
-                        input_modalities: info
-                            .input_modalities
-                            .iter()
-                            .map(|modality| modality.to_string())
-                            .collect(),
-                        output_modalities: info
-                            .output_modalities
-                            .iter()
-                            .map(|modality| modality.to_string())
-                            .collect(),
-                    });
+                    let pricing = convert_pricing(&info.pricing);
+                    if let Some(existing) = by_id.get_mut(model_id) {
+                        if !existing.providers.contains(provider_name) {
+                            existing.providers.push(provider_name.clone());
+                        }
+                    } else {
+                        by_id.insert(
+                            model_id.clone(),
+                            ModelEntry {
+                                id: model_id.clone(),
+                                providers: vec![provider_name.clone()],
+                                name: info.name.clone(),
+                                description: info.description.clone(),
+                                max_input_tokens: info.max_input_tokens,
+                                max_output_tokens: info.max_output_tokens,
+                                input_modalities: info
+                                    .input_modalities
+                                    .iter()
+                                    .map(|modality| modality.to_string())
+                                    .collect(),
+                                output_modalities: info
+                                    .output_modalities
+                                    .iter()
+                                    .map(|modality| modality.to_string())
+                                    .collect(),
+                                pricing: Some(pricing),
+                            },
+                        );
+                    }
                 }
             }
         }
-        entries.sort_by(|a, b| a.provider.cmp(&b.provider).then(a.id.cmp(&b.id)));
+        let mut entries: Vec<ModelEntry> = by_id.into_values().collect();
+        entries.sort_by(|a, b| a.id.cmp(&b.id));
         entries
     }
 }

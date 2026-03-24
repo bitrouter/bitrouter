@@ -9,6 +9,8 @@ use std::future::Future;
 
 use serde_json::Value;
 
+use super::routing_table::ModelPricing;
+
 // ── Model ──────────────────────────────────────────────────────────
 
 /// A single model available through a provider, with its metadata.
@@ -16,8 +18,8 @@ use serde_json::Value;
 pub struct ModelEntry {
     /// The upstream model ID (e.g. "gpt-4o", "claude-sonnet-4-20250514").
     pub id: String,
-    /// The provider that offers this model.
-    pub provider: String,
+    /// The providers that offer this model.
+    pub providers: Vec<String>,
     /// Human-readable display name.
     pub name: Option<String>,
     /// Brief description of the model's capabilities.
@@ -30,6 +32,8 @@ pub struct ModelEntry {
     pub input_modalities: Vec<String>,
     /// Output modalities the model can produce.
     pub output_modalities: Vec<String>,
+    /// Token pricing per million tokens.
+    pub pricing: Option<ModelPricing>,
 }
 
 /// Read-only registry for discovering models available across all configured providers.
