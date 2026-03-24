@@ -22,3 +22,6 @@ run
 
 # Temporary directory
 temp
+
+# Keys
+.keys/
