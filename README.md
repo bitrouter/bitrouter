@@ -98,6 +98,7 @@ npx skills add BitRouterAI/agent-skills
 | OpenAI    | ✅     | Chat Completions + Responses API |
 | Anthropic | ✅     | Messages API                     |
 | Google    | ✅     | Generative AI API                |
+| OpenRouter| ✅     | Chat Completions + Responses API |
 
 Want to see another provider supported? [Open an issue](https://github.com/AIMOverse/bitrouter/issues) or submit a PR — contributions are welcome. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
 
