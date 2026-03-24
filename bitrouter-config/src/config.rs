@@ -433,6 +433,53 @@ pub struct SolanaMppConfig {
     /// Solana network name (e.g., "mainnet-beta", "devnet").
     #[serde(default = "default_solana_network")]
     pub network: String,
+
+    /// Payment asset configuration. Defaults to native SOL.
+    #[serde(default)]
+    pub asset: SolanaAssetConfig,
+}
+
+/// Payment asset descriptor for Solana MPP.
+#[cfg(feature = "mpp-solana")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolanaAssetConfig {
+    /// Asset kind: `"sol"` for native SOL, `"spl"` for an SPL token.
+    #[serde(default = "default_solana_asset_kind")]
+    pub kind: String,
+
+    /// Decimal precision (9 for SOL, 6 for USDC).
+    #[serde(default = "default_solana_asset_decimals")]
+    pub decimals: u8,
+
+    /// SPL token mint address. Required when `kind` is `"spl"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mint: Option<String>,
+
+    /// Display symbol (e.g. `"SOL"`, `"USDC"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+}
+
+#[cfg(feature = "mpp-solana")]
+impl Default for SolanaAssetConfig {
+    fn default() -> Self {
+        Self {
+            kind: default_solana_asset_kind(),
+            decimals: default_solana_asset_decimals(),
+            mint: None,
+            symbol: None,
+        }
+    }
+}
+
+#[cfg(feature = "mpp-solana")]
+fn default_solana_asset_kind() -> String {
+    "sol".into()
+}
+
+#[cfg(feature = "mpp-solana")]
+fn default_solana_asset_decimals() -> u8 {
+    9
 }
 
 #[cfg(feature = "mpp-solana")]
