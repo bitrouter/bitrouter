@@ -194,47 +194,37 @@ impl RoutingTable for ConfigRoutingTable {
 
 impl ModelRegistry for ConfigRoutingTable {
     fn list_models(&self) -> Vec<ModelEntry> {
-        let mut by_id: HashMap<String, ModelEntry> = HashMap::new();
-        for (provider_name, provider_config) in &self.providers {
-            // Only include providers that have an API key configured.
-            if provider_config.api_key.is_none() {
-                continue;
-            }
-            if let Some(models) = &provider_config.models {
-                for (model_id, info) in models {
-                    let pricing = convert_pricing(&info.pricing);
-                    if let Some(existing) = by_id.get_mut(model_id) {
-                        if !existing.providers.contains(provider_name) {
-                            existing.providers.push(provider_name.clone());
-                        }
-                    } else {
-                        by_id.insert(
-                            model_id.clone(),
-                            ModelEntry {
-                                id: model_id.clone(),
-                                providers: vec![provider_name.clone()],
-                                name: info.name.clone(),
-                                description: info.description.clone(),
-                                max_input_tokens: info.max_input_tokens,
-                                max_output_tokens: info.max_output_tokens,
-                                input_modalities: info
-                                    .input_modalities
-                                    .iter()
-                                    .map(|modality| modality.to_string())
-                                    .collect(),
-                                output_modalities: info
-                                    .output_modalities
-                                    .iter()
-                                    .map(|modality| modality.to_string())
-                                    .collect(),
-                                pricing: Some(pricing),
-                            },
-                        );
-                    }
+        let mut entries: Vec<ModelEntry> = self
+            .models
+            .iter()
+            .map(|(model_name, model_config)| {
+                let providers: Vec<String> = model_config
+                    .endpoints
+                    .iter()
+                    .map(|ep| ep.provider.clone())
+                    .collect();
+                let pricing = convert_pricing(&model_config.pricing);
+                ModelEntry {
+                    id: model_name.clone(),
+                    providers,
+                    name: model_config.name.clone(),
+                    description: None,
+                    max_input_tokens: model_config.max_input_tokens,
+                    max_output_tokens: model_config.max_output_tokens,
+                    input_modalities: model_config
+                        .input_modalities
+                        .iter()
+                        .map(|m| m.to_string())
+                        .collect(),
+                    output_modalities: model_config
+                        .output_modalities
+                        .iter()
+                        .map(|m| m.to_string())
+                        .collect(),
+                    pricing: Some(pricing),
                 }
-            }
-        }
-        let mut entries: Vec<ModelEntry> = by_id.into_values().collect();
+            })
+            .collect();
         entries.sort_by(|a, b| a.id.cmp(&b.id));
         entries
     }
@@ -305,6 +295,7 @@ mod tests {
                     api_key: None,
                     api_base: None,
                 }],
+                ..Default::default()
             },
         );
         let table = ConfigRoutingTable::new(test_providers(), models);
@@ -326,6 +317,7 @@ mod tests {
                     api_key: Some("sk-override".into()),
                     api_base: None,
                 }],
+                ..Default::default()
             },
         );
         let table = ConfigRoutingTable::new(test_providers(), models);
@@ -364,6 +356,7 @@ mod tests {
                         api_base: None,
                     },
                 ],
+                ..Default::default()
             },
         );
         let table = ConfigRoutingTable::new(test_providers(), models);
@@ -398,6 +391,7 @@ mod tests {
                         api_base: None,
                     },
                 ],
+                ..Default::default()
             },
         );
         let table = ConfigRoutingTable::new(test_providers(), models);
@@ -423,6 +417,7 @@ mod tests {
             ModelConfig {
                 strategy: RoutingStrategy::Priority,
                 endpoints: vec![],
+                ..Default::default()
             },
         );
         let table = ConfigRoutingTable::new(test_providers(), models);

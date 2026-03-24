@@ -58,7 +58,6 @@ fn optional_raw_query()
 #[derive(Serialize)]
 struct ModelResponse {
     id: String,
-    providers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,7 +132,6 @@ fn handle_list_models<T: ModelRegistry>(
         })
         .map(|e| ModelResponse {
             id: e.id,
-            providers: e.providers,
             name: e.name,
             description: e.description,
             max_input_tokens: e.max_input_tokens,

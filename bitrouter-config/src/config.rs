@@ -542,12 +542,36 @@ pub struct ModelEndpoint {
 }
 
 /// Routing configuration for a virtual model name.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelConfig {
     #[serde(default)]
     pub strategy: RoutingStrategy,
 
     pub endpoints: Vec<ModelEndpoint>,
+
+    /// Human-readable display name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Maximum input context window in tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u64>,
+
+    /// Maximum number of output tokens the model can produce.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+
+    /// Input modalities the model accepts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_modalities: Vec<Modality>,
+
+    /// Output modalities the model can produce.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<Modality>,
+
+    /// Token pricing per million tokens.
+    #[serde(default)]
+    pub pricing: ModelPricing,
 }
 #[cfg(test)]
 mod tests {
