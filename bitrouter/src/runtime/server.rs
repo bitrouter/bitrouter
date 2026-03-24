@@ -352,7 +352,14 @@ where
             );
 
         // ── MCP registry ─────────────────────────────────────────────
-        let (admin_tool_routes, mcp_server, tool_list, bridge_routes, _refresh_guard, _bridge_guards) = {
+        let (
+            admin_tool_routes,
+            mcp_server,
+            tool_list,
+            bridge_routes,
+            _refresh_guard,
+            _bridge_guards,
+        ) = {
             use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
             use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
             use bitrouter_mcp::bridge::SingleServerBridge;
@@ -391,7 +398,11 @@ where
                         connections.insert(name, Arc::new(conn));
                     }
                     Err(e) => {
-                        tracing::warn!(upstream = %name, error = %e, "failed to connect to MCP upstream");
+                        tracing::warn!(
+                            upstream = %name,
+                            error = %e,
+                            "failed to connect to MCP upstream"
+                        );
                     }
                 }
             }
