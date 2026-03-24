@@ -35,6 +35,7 @@ If the user cancels the wizard, the TUI launches in its empty state.
 | `stop`    | Stop the running daemon                                                       |
 | `status`  | Print resolved paths, listen address, configured providers, and daemon status |
 | `restart` | Restart the background daemon                                                 |
+| `reload`  | Hot-reload the configuration file without restarting                           |
 | `account` | Manage local Ed25519 account keypairs used to sign BitRouter JWTs             |
 | `keygen`  | Sign a JWT with the active account key                                        |
 | `keys`    | List, inspect, and remove locally stored JWTs                                 |

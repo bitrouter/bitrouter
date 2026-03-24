@@ -8,8 +8,8 @@
 //! The inner table can be hot-reloaded via [`ReloadableRoutingTable::reload`].
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 use crate::errors::{BitrouterError, Result};
 
@@ -227,34 +227,6 @@ mod tests {
         }
     }
 
-    /// A second table used to test hot-reload.
-    struct ReloadedTable;
-
-    impl RoutingTable for ReloadedTable {
-        async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
-            if incoming == "default" {
-                Ok(RoutingTarget {
-                    provider_name: "anthropic".to_owned(),
-                    model_id: "claude-sonnet-4-20250514".to_owned(),
-                })
-            } else {
-                Err(BitrouterError::invalid_request(
-                    None,
-                    format!("no route: {incoming}"),
-                    None,
-                ))
-            }
-        }
-
-        fn list_routes(&self) -> Vec<RouteEntry> {
-            vec![RouteEntry {
-                model: "default".to_owned(),
-                provider: "anthropic".to_owned(),
-                protocol: "anthropic".to_owned(),
-            }]
-        }
-    }
-
     /// Helper to call the trait method with explicit type annotation.
     async fn route(table: &DynamicRoutingTable<StaticTable>, model: &str) -> Result<RoutingTarget> {
         <DynamicRoutingTable<StaticTable> as RoutingTable>::route(table, model).await
@@ -432,10 +404,7 @@ mod tests {
             }
         }
 
-        async fn flex_route(
-            t: &DynamicRoutingTable<FlexTable>,
-            m: &str,
-        ) -> Result<RoutingTarget> {
+        async fn flex_route(t: &DynamicRoutingTable<FlexTable>, m: &str) -> Result<RoutingTarget> {
             <DynamicRoutingTable<FlexTable> as RoutingTable>::route(t, m).await
         }
 
@@ -489,10 +458,7 @@ mod tests {
             }
         }
 
-        async fn flex_route(
-            t: &DynamicRoutingTable<FlexTable>,
-            m: &str,
-        ) -> Result<RoutingTarget> {
+        async fn flex_route(t: &DynamicRoutingTable<FlexTable>, m: &str) -> Result<RoutingTarget> {
             <DynamicRoutingTable<FlexTable> as RoutingTable>::route(t, m).await
         }
 

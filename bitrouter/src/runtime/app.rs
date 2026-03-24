@@ -30,22 +30,6 @@ impl<R: ServerTableBound + Send + Sync + 'static> AppRuntime<R> {
         }
     }
 
-    pub async fn serve<M>(self, model_router: M) -> Result<()>
-    where
-        M: bitrouter_core::routers::model_router::LanguageModelRouter + Send + Sync + 'static,
-    {
-        use crate::runtime::server::ServerPlan;
-        let mut plan = ServerPlan::new(
-            self.config,
-            Arc::new(self.routing_table),
-            Arc::new(model_router),
-        );
-        if let Some(db) = self.db {
-            plan = plan.with_db(db);
-        }
-        plan.serve().await
-    }
-
     pub async fn start(&self) -> Result<()> {
         let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
         let pid = dm.start().await?;
@@ -64,6 +48,13 @@ impl<R: ServerTableBound + Send + Sync + 'static> AppRuntime<R> {
         let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
         let pid = dm.restart().await?;
         println!("bitrouter daemon restarted (pid {pid})");
+        Ok(())
+    }
+
+    pub fn reload(&self) -> Result<()> {
+        let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
+        dm.reload()?;
+        println!("bitrouter configuration reload signal sent");
         Ok(())
     }
 }
@@ -113,6 +104,49 @@ impl
             routing_table,
             db: None,
         }
+    }
+
+    /// Start the server with configuration hot-reload enabled.
+    ///
+    /// When the server receives a reload signal (SIGHUP on Unix, flag file on
+    /// Windows), it re-reads the configuration file from disk and replaces the
+    /// inner routing table without dropping in-flight requests or dynamic routes.
+    pub async fn serve_with_reload<M>(self, model_router: M) -> Result<()>
+    where
+        M: bitrouter_core::routers::model_router::LanguageModelRouter + Send + Sync + 'static,
+    {
+        use bitrouter_core::routers::reload::ReloadableRoutingTable;
+
+        let paths = self.paths.clone();
+        let table = Arc::new(self.routing_table);
+
+        // Build the reload callback — captures `Arc<DynamicRoutingTable>` and
+        // `RuntimePaths` so it can re-read config and swap the inner table.
+        let reload_table = Arc::clone(&table);
+        let reload_paths = paths.clone();
+        let reload_fn = move || {
+            let env_file = reload_paths
+                .env_file
+                .exists()
+                .then_some(reload_paths.env_file.as_path());
+            let config = BitrouterConfig::load_from_file(&reload_paths.config_file, env_file)
+                .map_err(|e| e.to_string())?;
+            let new_table = bitrouter_config::ConfigRoutingTable::new(
+                config.providers.clone(),
+                config.models.clone(),
+            );
+            reload_table.reload(new_table).map_err(|e| e.to_string())
+        };
+
+        let mut plan =
+            crate::runtime::server::ServerPlan::new(self.config, table, Arc::new(model_router))
+                .with_paths(paths)
+                .with_reload(reload_fn);
+
+        if let Some(db) = self.db {
+            plan = plan.with_db(db);
+        }
+        plan.serve().await
     }
 }
 

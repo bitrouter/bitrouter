@@ -53,6 +53,22 @@ pub(crate) fn signal_stop(pid: u32) -> Result<()> {
     Ok(())
 }
 
+/// Send SIGHUP to request configuration reload.
+pub(crate) fn signal_reload(pid: u32) -> Result<()> {
+    // SAFETY: sending SIGHUP to a process ID is well-defined.
+    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGHUP) };
+    if result != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        return Err(RuntimeError::Daemon(format!(
+            "failed to send SIGHUP to pid {pid}: {err}"
+        )));
+    }
+    Ok(())
+}
+
 /// Send SIGKILL to force-terminate the process.
 pub(crate) fn signal_kill(pid: u32) -> Result<()> {
     // SAFETY: sending SIGKILL to a process ID is well-defined.

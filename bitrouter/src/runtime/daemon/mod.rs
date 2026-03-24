@@ -115,4 +115,30 @@ impl DaemonManager {
         }
         self.start().await
     }
+
+    /// Signal the running daemon to hot-reload its configuration file.
+    ///
+    /// On Unix this sends `SIGHUP`; on Windows it writes a reload flag file
+    /// that the server polls for.
+    pub fn reload(&self) -> Result<()> {
+        let pid = match self.is_running()? {
+            Some(pid) => pid,
+            None => {
+                return Err(RuntimeError::Daemon("daemon is not running".into()));
+            }
+        };
+
+        #[cfg(unix)]
+        {
+            platform::signal_reload(pid)?;
+        }
+
+        #[cfg(windows)]
+        {
+            let _ = pid;
+            platform::signal_reload(&self.paths)?;
+        }
+
+        Ok(())
+    }
 }
