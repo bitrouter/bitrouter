@@ -479,14 +479,16 @@ impl SessionMethodTrait for SolanaSessionMethod {
         credential: &PaymentCredential,
         _receipt: &Receipt,
     ) -> Option<serde_json::Value> {
-        // Management actions (open, topup, close) should short-circuit the
-        // normal request flow and return an empty response.
+        // Management actions (topup, close) short-circuit the normal request
+        // flow and return an empty response. "Open" falls through so the
+        // server processes the actual request after accepting the channel,
+        // matching the mppx client's single-retry 402 flow.
         let payload: SolanaSessionCredentialPayload = credential.payload_as().ok()?;
         match payload {
-            SolanaSessionCredentialPayload::Open { .. }
-            | SolanaSessionCredentialPayload::TopUp { .. }
+            SolanaSessionCredentialPayload::TopUp { .. }
             | SolanaSessionCredentialPayload::Close { .. } => Some(serde_json::json!(null)),
-            SolanaSessionCredentialPayload::Update { .. } => None,
+            SolanaSessionCredentialPayload::Open { .. }
+            | SolanaSessionCredentialPayload::Update { .. } => None,
         }
     }
 }
