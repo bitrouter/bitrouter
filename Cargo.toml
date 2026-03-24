@@ -3,7 +3,7 @@ resolver = "3"
 members = ["bitrouter", "bitrouter-*"]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 
 [patch.crates-io]
 tempo-alloy = { git = "https://github.com/tempoxyz/tempo" }
