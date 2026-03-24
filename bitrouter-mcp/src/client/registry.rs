@@ -101,11 +101,6 @@ impl ConfigMcpRegistry {
         Ok(Self::from_connections(connections, groups))
     }
 
-    /// Return a shared reference to a specific upstream connection, if it exists.
-    pub async fn connection(&self, name: &str) -> Option<Arc<UpstreamConnection>> {
-        self.upstreams.read().await.get(name).cloned()
-    }
-
     /// Spawn background tasks that listen for upstream change notifications
     /// and refresh tool, resource, and prompt caches accordingly.
     ///
