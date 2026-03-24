@@ -141,6 +141,26 @@ impl UpstreamConnection {
         }
     }
 
+    /// Return all tools with their original names (no server prefix).
+    pub async fn raw_tools(&self) -> Vec<McpTool> {
+        self.tools.read().await.clone()
+    }
+
+    /// Return all resources with their original URIs (no server prefix).
+    pub async fn raw_resources(&self) -> Vec<McpResource> {
+        self.resources.read().await.clone()
+    }
+
+    /// Return all resource templates with their original URI templates (no prefix).
+    pub async fn raw_resource_templates(&self) -> Vec<McpResourceTemplate> {
+        self.resource_templates.read().await.clone()
+    }
+
+    /// Return all prompts with their original names (no server prefix).
+    pub async fn raw_prompts(&self) -> Vec<McpPrompt> {
+        self.prompts.read().await.clone()
+    }
+
     /// Return all tools from this upstream, namespaced as `{name}/{tool_name}`.
     pub async fn namespaced_tools(&self) -> Vec<McpTool> {
         let tools = self.tools.read().await;

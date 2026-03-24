@@ -5,6 +5,7 @@
 //! [`bitrouter_core::routers::upstream`].
 //!
 //! Enable the `client-stdio` feature for child-process MCP connections.
+pub mod bridge;
 pub mod client;
 pub mod error;
 pub mod server;

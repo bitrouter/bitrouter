@@ -23,6 +23,13 @@ pub struct RefreshGuard {
     handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
+impl RefreshGuard {
+    /// Build a guard from a list of already-spawned task handles.
+    pub fn from_handles(handles: Vec<tokio::task::JoinHandle<()>>) -> Self {
+        Self { handles }
+    }
+}
+
 impl Drop for RefreshGuard {
     fn drop(&mut self) {
         for handle in &self.handles {
@@ -37,7 +44,7 @@ impl Drop for RefreshGuard {
 /// upstreams. Filter and restriction management is handled by the
 /// [`DynamicToolRegistry`] wrapper that wraps this registry.
 pub struct ConfigMcpRegistry {
-    upstreams: RwLock<HashMap<String, UpstreamConnection>>,
+    upstreams: RwLock<HashMap<String, Arc<UpstreamConnection>>>,
     groups: ToolServerAccessGroups,
     /// Broadcast sender for notifying downstream MCP clients of tool list changes.
     tool_change_tx: broadcast::Sender<()>,
@@ -48,6 +55,26 @@ pub struct ConfigMcpRegistry {
 }
 
 impl ConfigMcpRegistry {
+    /// Build a registry from pre-built, Arc-wrapped upstream connections.
+    ///
+    /// This is the preferred constructor when connections are created externally
+    /// (e.g. to share them with bridge endpoints).
+    pub fn from_connections(
+        connections: HashMap<String, Arc<UpstreamConnection>>,
+        groups: ToolServerAccessGroups,
+    ) -> Self {
+        let (tool_change_tx, _) = broadcast::channel(16);
+        let (resource_change_tx, _) = broadcast::channel(16);
+        let (prompt_change_tx, _) = broadcast::channel(16);
+        Self {
+            upstreams: RwLock::new(connections),
+            groups,
+            tool_change_tx,
+            resource_change_tx,
+            prompt_change_tx,
+        }
+    }
+
     /// Connect to all configured upstreams. Fails on first error or duplicate name.
     pub async fn from_configs(
         configs: Vec<ToolServerConfig>,
@@ -63,24 +90,15 @@ impl ConfigMcpRegistry {
             }
         }
 
-        let mut upstreams = HashMap::with_capacity(configs.len());
+        let mut connections = HashMap::with_capacity(configs.len());
         for config in configs {
             let name = config.name.clone();
             tracing::info!(upstream = %name, "connecting to upstream");
             let conn = UpstreamConnection::connect(config).await?;
-            upstreams.insert(name, conn);
+            connections.insert(name, Arc::new(conn));
         }
 
-        let (tool_change_tx, _) = broadcast::channel(16);
-        let (resource_change_tx, _) = broadcast::channel(16);
-        let (prompt_change_tx, _) = broadcast::channel(16);
-        Ok(Self {
-            upstreams: RwLock::new(upstreams),
-            groups,
-            tool_change_tx,
-            resource_change_tx,
-            prompt_change_tx,
-        })
+        Ok(Self::from_connections(connections, groups))
     }
 
     /// Spawn background tasks that listen for upstream change notifications
