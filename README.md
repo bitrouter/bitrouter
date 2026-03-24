@@ -91,13 +91,6 @@ Install [Agent Skills](https://github.com/bitrouter/agent-skills) to give your A
 npx skills add BitRouterAI/agent-skills
 ```
 
-## Learn More
-
-- [CLI reference & configuration](bitrouter/) — subcommands, global options, home directory, YAML config, custom providers
-- [Agent firewall](bitrouter-guardrails/) — inspect, redact, or block agent traffic at the proxy layer
-- [Development guide](DEVELOPMENT.md) — workspace architecture and server composition
-- [Contributing](CONTRIBUTING.md) — contribution workflow and provider updates
-
 ## Supported Providers
 
 | Provider  | Status | Notes                            |
