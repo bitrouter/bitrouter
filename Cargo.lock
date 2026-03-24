@@ -4486,7 +4486,8 @@ dependencies = [
 [[package]]
 name = "mpp"
 version = "0.7.0"
-source = "git+https://github.com/tempoxyz/mpp-rs#cdc32a99be7954613c009f2ac2ef3e24aead9883"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "440a7df54d44c52101bb46fe4bd712e8a0677e5ef8b19c20e79ed2e6122e3034"
 dependencies = [
  "alloy",
  "async-stream",
