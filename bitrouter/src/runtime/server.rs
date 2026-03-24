@@ -52,6 +52,8 @@ pub struct ServerPlan<T, R> {
     table: Arc<T>,
     router: Arc<R>,
     db: Option<Arc<DatabaseConnection>>,
+    paths: Option<crate::runtime::paths::RuntimePaths>,
+    reload_fn: Option<Arc<dyn Fn() -> std::result::Result<(), String> + Send + Sync>>,
 }
 
 impl<T, R> ServerPlan<T, R>
@@ -65,11 +67,31 @@ where
             table,
             router,
             db: None,
+            paths: None,
+            reload_fn: None,
         }
     }
 
     pub fn with_db(mut self, db: Arc<DatabaseConnection>) -> Self {
         self.db = Some(db);
+        self
+    }
+
+    pub fn with_paths(mut self, paths: crate::runtime::paths::RuntimePaths) -> Self {
+        self.paths = Some(paths);
+        self
+    }
+
+    /// Register a callback invoked when the server receives a reload signal.
+    ///
+    /// The callback should re-read the configuration from disk and swap the
+    /// inner routing table.  It is called from a background task; errors are
+    /// logged but do not stop the server.
+    pub fn with_reload(
+        mut self,
+        f: impl Fn() -> std::result::Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.reload_fn = Some(Arc::new(f));
         self
     }
 }
@@ -581,6 +603,14 @@ where
             // paths POST /mcp and GET /mcp/sse are matched first.
             .or(bridge_routes);
 
+        // ── Reload listener ────────────────────────────────────────
+        let _reload_guard = if let Some(reload_fn) = self.reload_fn {
+            let paths = self.paths.clone();
+            Some(tokio::spawn(reload_listener(reload_fn, paths)))
+        } else {
+            None
+        };
+
         // ── Serve ────────────────────────────────────────────────────
         if let Some(ref db) = self.db {
             let db_conn = db.as_ref().clone();
@@ -719,4 +749,59 @@ async fn shutdown_signal() {
     }
 
     tracing::info!("shutdown signal received");
+}
+
+/// Background task that listens for reload signals and invokes the callback.
+///
+/// On Unix this waits for `SIGHUP`; on Windows it polls for a reload flag
+/// file in the runtime directory.
+async fn reload_listener(
+    reload_fn: Arc<dyn Fn() -> std::result::Result<(), String> + Send + Sync>,
+    paths: Option<crate::runtime::paths::RuntimePaths>,
+) {
+    tracing::info!("configuration reload listener started");
+    loop {
+        wait_for_reload_signal(&paths).await;
+        tracing::info!("reload signal received, reloading configuration...");
+        match reload_fn() {
+            Ok(()) => tracing::info!("configuration reloaded successfully"),
+            Err(e) => tracing::error!("configuration reload failed: {e}"),
+        }
+    }
+}
+
+/// Wait for a platform-specific reload signal.
+///
+/// - **Unix**: waits for `SIGHUP`.
+/// - **Windows**: polls for the existence of a `reload` flag file inside the
+///   runtime directory every second.
+async fn wait_for_reload_signal(paths: &Option<crate::runtime::paths::RuntimePaths>) {
+    #[cfg(unix)]
+    {
+        let _ = paths;
+        let Ok(mut hup) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        else {
+            // If we can't register a handler, sleep forever.
+            std::future::pending::<()>().await;
+            return;
+        };
+        hup.recv().await;
+    }
+
+    #[cfg(not(unix))]
+    {
+        // Windows: poll for a reload flag file.
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        loop {
+            tokio::time::sleep(POLL_INTERVAL).await;
+            if let Some(p) = &paths {
+                let flag = p.runtime_dir.join("reload");
+                if flag.exists() {
+                    // Remove the flag so we don't fire again immediately.
+                    let _ = std::fs::remove_file(&flag);
+                    return;
+                }
+            }
+        }
+    }
 }

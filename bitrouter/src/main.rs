@@ -59,6 +59,8 @@ enum Command {
     Status,
     /// Restart the daemon
     Restart,
+    /// Hot-reload the configuration file
+    Reload,
 
     /// Manage runtime routes (requires a running daemon)
     Route {
@@ -462,7 +464,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             {
                 model_router = model_router.with_mpp_client(mpp_client);
             }
-            runtime.serve(model_router).await?
+            runtime.serve_with_reload(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
         Some(Command::Stop) => runtime.stop().await?,
@@ -482,6 +484,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Some(Command::Restart) => runtime.restart().await?,
+        Some(Command::Reload) => runtime.reload()?,
         _ => {
             // All other commands (Init, A2a, Account, Keygen, Keys, Route,
             // Sudo, Tools) are handled above and return early.
@@ -563,7 +566,7 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
         };
 
         tokio::select! {
-            result = runtime.serve(model_router) => {
+            result = runtime.serve_with_reload(model_router) => {
                 if let Err(e) = result {
                     tracing::error!("server error: {e}");
                 }
@@ -577,7 +580,7 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
     #[cfg(not(feature = "tui"))]
     {
         let _ = status;
-        runtime.serve(model_router).await?;
+        runtime.serve_with_reload(model_router).await?;
     }
 
     Ok(())

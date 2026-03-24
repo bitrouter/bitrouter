@@ -66,6 +66,16 @@ pub(crate) fn signal_stop(pid: u32) -> Result<()> {
     Ok(())
 }
 
+/// Request configuration reload by writing a flag file.
+///
+/// Windows has no SIGHUP equivalent, so a sentinel file in the runtime
+/// directory signals the server to reload.
+pub(crate) fn signal_reload(paths: &RuntimePaths) -> Result<()> {
+    fs::create_dir_all(&paths.runtime_dir)?;
+    fs::write(paths.runtime_dir.join("reload"), "")?;
+    Ok(())
+}
+
 /// Force-terminate the process via `taskkill /F`.
 pub(crate) fn signal_kill(pid: u32) -> Result<()> {
     let output = Command::new("taskkill")
