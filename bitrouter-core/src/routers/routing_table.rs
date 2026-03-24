@@ -25,27 +25,53 @@ pub struct RouteEntry {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct InputTokenPricing {
     /// Cost per million non-cached input tokens.
-    pub no_cache: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_cache: Option<f64>,
     /// Cost per million cache-read input tokens.
-    pub cache_read: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<f64>,
     /// Cost per million cache-write input tokens.
-    pub cache_write: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<f64>,
+}
+
+impl InputTokenPricing {
+    fn is_empty(&self) -> bool {
+        self.no_cache.is_none() && self.cache_read.is_none() && self.cache_write.is_none()
+    }
 }
 
 /// Output token pricing per million tokens.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct OutputTokenPricing {
     /// Cost per million text output tokens.
-    pub text: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<f64>,
     /// Cost per million reasoning output tokens.
-    pub reasoning: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<f64>,
+}
+
+impl OutputTokenPricing {
+    fn is_empty(&self) -> bool {
+        self.text.is_none() && self.reasoning.is_none()
+    }
 }
 
 /// Token pricing per million tokens for a model.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ModelPricing {
+    #[serde(skip_serializing_if = "InputTokenPricing::is_empty")]
     pub input_tokens: InputTokenPricing,
+    #[serde(skip_serializing_if = "OutputTokenPricing::is_empty")]
     pub output_tokens: OutputTokenPricing,
+}
+
+impl ModelPricing {
+    /// Returns `true` when no pricing data is set.
+    pub fn is_empty(&self) -> bool {
+        self.input_tokens.is_empty() && self.output_tokens.is_empty()
+    }
 }
 
 /// A routing table that maps incoming model names to routing targets (provider + model ID).

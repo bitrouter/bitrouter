@@ -114,11 +114,11 @@ where
                 .cloned()
                 .unwrap_or_default();
             Pricing {
-                input_no_cache: mp.input_tokens.no_cache,
-                input_cache_read: mp.input_tokens.cache_read,
-                input_cache_write: mp.input_tokens.cache_write,
-                output_text: mp.output_tokens.text,
-                output_reasoning: mp.output_tokens.reasoning,
+                input_no_cache: mp.input_tokens.no_cache.unwrap_or(0.0),
+                input_cache_read: mp.input_tokens.cache_read.unwrap_or(0.0),
+                input_cache_write: mp.input_tokens.cache_write.unwrap_or(0.0),
+                output_text: mp.output_tokens.text.unwrap_or(0.0),
+                output_reasoning: mp.output_tokens.reasoning.unwrap_or(0.0),
             }
         };
 

@@ -204,6 +204,11 @@ impl ModelRegistry for ConfigRoutingTable {
                     .map(|ep| ep.provider.clone())
                     .collect();
                 let pricing = convert_pricing(&model_config.pricing);
+                let pricing = if pricing.is_empty() {
+                    None
+                } else {
+                    Some(pricing)
+                };
                 ModelEntry {
                     id: model_name.clone(),
                     providers,
@@ -221,7 +226,7 @@ impl ModelRegistry for ConfigRoutingTable {
                         .iter()
                         .map(|m| m.to_string())
                         .collect(),
-                    pricing: Some(pricing),
+                    pricing,
                 }
             })
             .collect();
@@ -433,13 +438,13 @@ mod tests {
             ModelInfo {
                 pricing: ModelPricing {
                     input_tokens: InputTokenPricing {
-                        no_cache: 2.50,
-                        cache_read: 1.25,
-                        cache_write: 2.50,
+                        no_cache: Some(2.50),
+                        cache_read: Some(1.25),
+                        cache_write: Some(2.50),
                     },
                     output_tokens: OutputTokenPricing {
-                        text: 10.00,
-                        reasoning: 10.00,
+                        text: Some(10.00),
+                        reasoning: Some(10.00),
                     },
                 },
                 ..Default::default()
@@ -448,24 +453,24 @@ mod tests {
         let table = ConfigRoutingTable::new(providers, HashMap::new());
 
         let pricing = table.model_pricing("openai", "gpt-4o");
-        assert_eq!(pricing.input_tokens.no_cache, 2.50);
-        assert_eq!(pricing.input_tokens.cache_read, 1.25);
-        assert_eq!(pricing.output_tokens.text, 10.00);
+        assert_eq!(pricing.input_tokens.no_cache, Some(2.50));
+        assert_eq!(pricing.input_tokens.cache_read, Some(1.25));
+        assert_eq!(pricing.output_tokens.text, Some(10.00));
     }
 
     #[test]
-    fn model_pricing_unknown_model_returns_zeros() {
+    fn model_pricing_unknown_model_returns_defaults() {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         let pricing = table.model_pricing("openai", "nonexistent");
-        assert_eq!(pricing.input_tokens.no_cache, 0.0);
-        assert_eq!(pricing.output_tokens.text, 0.0);
+        assert_eq!(pricing.input_tokens.no_cache, None);
+        assert_eq!(pricing.output_tokens.text, None);
     }
 
     #[test]
-    fn model_pricing_unknown_provider_returns_zeros() {
+    fn model_pricing_unknown_provider_returns_defaults() {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         let pricing = table.model_pricing("unknown-provider", "gpt-4o");
-        assert_eq!(pricing.input_tokens.no_cache, 0.0);
+        assert_eq!(pricing.input_tokens.no_cache, None);
     }
 
     #[test]
