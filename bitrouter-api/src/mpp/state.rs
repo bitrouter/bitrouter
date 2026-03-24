@@ -43,6 +43,7 @@ struct SolanaState {
     asset: bitrouter_config::config::SolanaAssetConfig,
     recipient: String,
     session_method: super::solana_session_method::SolanaSessionMethod,
+    suggested_deposit: Option<String>,
 }
 
 impl MppState {
@@ -186,6 +187,7 @@ impl MppState {
                 asset: solana.asset.clone(),
                 recipient: solana.recipient.clone(),
                 session_method,
+                suggested_deposit: solana.suggested_deposit.clone(),
             }),
         );
         Ok(())
@@ -422,6 +424,11 @@ fn solana_session_challenge(
 
     let config = state.session_method.config();
 
+    let deposit = options
+        .suggested_deposit
+        .map(|d| d.to_string())
+        .or_else(|| state.suggested_deposit.clone());
+
     let request = SolanaSessionChallengeRequest {
         asset: SolanaAsset {
             kind: state.asset.kind.clone(),
@@ -432,8 +439,8 @@ fn solana_session_challenge(
         channel_program: config.channel_program.clone(),
         network: Some(config.network.clone()),
         recipient: state.recipient.clone(),
-        session_defaults: options.suggested_deposit.map(|d| SolanaSessionDefaults {
-            suggested_deposit: Some(d.to_string()),
+        session_defaults: deposit.map(|d| SolanaSessionDefaults {
+            suggested_deposit: Some(d),
         }),
     };
 

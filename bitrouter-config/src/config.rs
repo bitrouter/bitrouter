@@ -437,6 +437,12 @@ pub struct SolanaMppConfig {
     /// Payment asset configuration. Defaults to native SOL.
     #[serde(default)]
     pub asset: SolanaAssetConfig,
+
+    /// Default deposit amount (in base units) suggested to clients when
+    /// opening a session channel. Included in the 402 challenge as
+    /// `sessionDefaults.suggestedDeposit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_deposit: Option<String>,
 }
 
 /// Payment asset descriptor for Solana MPP.
