@@ -6,7 +6,7 @@ mod tui;
 
 use std::path::PathBuf;
 
-use crate::runtime::{AppRuntime, PathOverrides, resolve_home};
+use crate::runtime::{AppRuntime, PathOverrides, RuntimePaths, resolve_home};
 use bitrouter_core::auth::claims::{BudgetScope, TokenScope};
 use clap::{Parser, Subcommand};
 
@@ -306,8 +306,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         Some(Command::Agents { action }) => {
-            let runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
-                .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
                 AgentsAction::List => cli::agents::run_list(&keys_dir, addr)?,
@@ -316,8 +315,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         Some(Command::Tools { action }) => {
-            let runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
-                .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
                 ToolsAction::List => cli::tools::run_list(&keys_dir, addr)?,
@@ -341,8 +339,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Route { action }) => {
             // Route commands talk to a running daemon, so we only need the
             // config to know the listen address.
-            let runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
-                .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
                 RouteAction::List => cli::route::run_list(&keys_dir, addr)?,
@@ -373,8 +370,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         init_tracing();
     }
 
-    let mut runtime: DefaultRuntime = DefaultRuntime::load(paths.clone())
-        .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+    let mut runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
 
     // ── First-run guidance ────────────────────────────────────────
     // On serve/start, if onboarding hasn't been completed, print a message
@@ -402,8 +398,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             match init::run_init(&paths) {
                 Ok(init::InitOutcome::Configured) => {
                     // Reload runtime with the newly written config
-                    runtime = DefaultRuntime::load(paths.clone())
-                        .unwrap_or_else(|_| DefaultRuntime::scaffold(paths.clone()));
+                    runtime = load_or_warn_scaffold(&paths);
                 }
                 Ok(init::InitOutcome::Cancelled) => {
                     // User cancelled — fall through to TUI with empty state
@@ -495,6 +490,25 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Load config from disk, warning on stderr if the file exists but fails to
+/// parse (and falling back to scaffold defaults).
+fn load_or_warn_scaffold(paths: &RuntimePaths) -> DefaultRuntime {
+    match DefaultRuntime::load(paths.clone()) {
+        Ok(rt) => rt,
+        Err(e) => {
+            if paths.config_file.exists() {
+                eprintln!(
+                    "warning: failed to parse {}: {e}",
+                    paths.config_file.display()
+                );
+                eprintln!("         falling back to default configuration");
+                eprintln!();
+            }
+            DefaultRuntime::scaffold(paths.clone())
+        }
+    }
 }
 
 fn print_first_run_guidance(runtime: &DefaultRuntime) {

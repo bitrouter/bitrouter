@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
 use super::admin::{ParamRestrictions, ToolFilter};
@@ -13,14 +14,97 @@ use super::admin::{ParamRestrictions, ToolFilter};
 // ── Tool server config ──────────────────────────────────────────────
 
 /// Configuration for a single upstream tool server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Supports two YAML formats:
+///
+/// **Nested** (explicit transport):
+/// ```yaml
+/// - name: my-server
+///   transport:
+///     type: stdio
+///     command: npx
+///     args: ["-y", "server"]
+/// ```
+///
+/// **Flat** (inferred transport — `command` implies stdio, `url` implies http):
+/// ```yaml
+/// - name: my-server
+///   command: npx
+///   args: ["-y", "server"]
+/// ```
+#[derive(Debug, Clone, Serialize)]
 pub struct ToolServerConfig {
     pub name: String,
     pub transport: ToolServerTransport,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_filter: Option<ToolFilter>,
     #[serde(default)]
     pub param_restrictions: ParamRestrictions,
+}
+
+impl<'de> Deserialize<'de> for ToolServerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        /// Helper that accepts both nested and flat transport layouts.
+        #[derive(Deserialize)]
+        struct Raw {
+            name: String,
+
+            // ── Nested format ──
+            #[serde(default)]
+            transport: Option<ToolServerTransport>,
+
+            // ── Flat stdio fields ──
+            #[serde(default)]
+            command: Option<String>,
+            #[serde(default)]
+            args: Vec<String>,
+            #[serde(default)]
+            env: HashMap<String, String>,
+
+            // ── Flat http fields ──
+            #[serde(default)]
+            url: Option<String>,
+            #[serde(default)]
+            headers: HashMap<String, String>,
+
+            // ── Common fields ──
+            #[serde(default)]
+            tool_filter: Option<ToolFilter>,
+            #[serde(default)]
+            param_restrictions: ParamRestrictions,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+
+        let transport = if let Some(t) = raw.transport {
+            t
+        } else if let Some(command) = raw.command {
+            ToolServerTransport::Stdio {
+                command,
+                args: raw.args,
+                env: raw.env,
+            }
+        } else if let Some(url) = raw.url {
+            ToolServerTransport::Http {
+                url,
+                headers: raw.headers,
+            }
+        } else {
+            return Err(serde::de::Error::custom(
+                "mcp_servers entry must have `transport`, `command` (stdio), or `url` (http)",
+            ));
+        };
+
+        Ok(ToolServerConfig {
+            name: raw.name,
+            transport,
+            tool_filter: raw.tool_filter,
+            param_restrictions: raw.param_restrictions,
+        })
+    }
 }
 
 impl ToolServerConfig {
@@ -275,6 +359,76 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         let parsed: ToolServerConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.name, "remote");
+    }
+
+    // ── Flat format deserialization tests ─────────────────────────────
+
+    #[test]
+    fn deserialize_flat_stdio() {
+        let json = r#"{
+            "name": "fs",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+        }"#;
+        let config: ToolServerConfig = serde_json::from_str(json).expect("deserialize flat stdio");
+        assert_eq!(config.name, "fs");
+        match &config.transport {
+            ToolServerTransport::Stdio { command, args, .. } => {
+                assert_eq!(command, "npx");
+                assert_eq!(args.len(), 3);
+            }
+            _ => panic!("expected Stdio transport"),
+        }
+    }
+
+    #[test]
+    fn deserialize_flat_http() {
+        let json = r#"{
+            "name": "remote",
+            "url": "http://localhost:3000/mcp",
+            "headers": {"Authorization": "Bearer tok"}
+        }"#;
+        let config: ToolServerConfig = serde_json::from_str(json).expect("deserialize flat http");
+        assert_eq!(config.name, "remote");
+        match &config.transport {
+            ToolServerTransport::Http { url, headers } => {
+                assert_eq!(url, "http://localhost:3000/mcp");
+                assert_eq!(
+                    headers.get("Authorization").map(String::as_str),
+                    Some("Bearer tok")
+                );
+            }
+            _ => panic!("expected Http transport"),
+        }
+    }
+
+    #[test]
+    fn deserialize_nested_still_works() {
+        let json = r#"{
+            "name": "test",
+            "transport": {
+                "type": "stdio",
+                "command": "echo",
+                "args": ["hello"]
+            }
+        }"#;
+        let config: ToolServerConfig =
+            serde_json::from_str(json).expect("deserialize nested transport");
+        assert_eq!(config.name, "test");
+        match &config.transport {
+            ToolServerTransport::Stdio { command, args, .. } => {
+                assert_eq!(command, "echo");
+                assert_eq!(args, &["hello"]);
+            }
+            _ => panic!("expected Stdio transport"),
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_missing_transport() {
+        let json = r#"{"name": "bad"}"#;
+        let result = serde_json::from_str::<ToolServerConfig>(json);
+        assert!(result.is_err());
     }
 
     // ── ToolServerAccessGroups tests ────────────────────────────────
