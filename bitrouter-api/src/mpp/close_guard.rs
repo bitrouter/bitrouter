@@ -29,13 +29,13 @@ impl SessionCloseGuard {
 }
 
 impl Drop for SessionCloseGuard {
+    #[cfg(feature = "mpp-tempo")]
     fn drop(&mut self) {
         let mpp_state = Arc::clone(&self.mpp_state);
         let backend_key = self.backend_key.clone();
         let channel_id = self.channel_id.clone();
 
         tokio::spawn(async move {
-            #[cfg(feature = "mpp-tempo")]
             if let Err(e) = mpp_state.close_channel(&backend_key, &channel_id).await {
                 tracing::warn!(
                     channel_id = %channel_id,
@@ -44,5 +44,11 @@ impl Drop for SessionCloseGuard {
                 );
             }
         });
+    }
+
+    #[cfg(not(feature = "mpp-tempo"))]
+    fn drop(&mut self) {
+        // Channel close is only implemented for Tempo currently.
+        let _ = (&self.mpp_state, &self.backend_key, &self.channel_id);
     }
 }

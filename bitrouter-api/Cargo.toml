@@ -13,7 +13,15 @@ default = ["openai", "anthropic", "google"]
 openai = []
 anthropic = []
 google = []
-mpp-tempo = ["dep:mpp", "mpp/tempo", "mpp/server", "dep:bitrouter-config", "dep:alloy", "dep:tempo-primitives", "dep:tempo-alloy"]
+mpp-tempo = [
+    "dep:mpp",
+    "mpp/tempo",
+    "mpp/server",
+    "dep:bitrouter-config",
+    "dep:alloy",
+    "dep:tempo-primitives",
+    "dep:tempo-alloy",
+]
 mpp-solana = [
     "dep:mpp",
     "mpp/server",
