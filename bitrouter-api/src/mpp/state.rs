@@ -36,6 +36,21 @@ enum MppBackend {
     Solana(SolanaState),
 }
 
+impl MppBackend {
+    /// The protocol-level payment method name (e.g. `"tempo"`, `"solana"`).
+    ///
+    /// This is the value that appears in a 402 challenge's `method` field and
+    /// may differ from the CAIP-2 key used to register the backend.
+    fn method_name(&self) -> &'static str {
+        match self {
+            #[cfg(feature = "mpp-tempo")]
+            Self::Tempo { .. } => "tempo",
+            #[cfg(feature = "mpp-solana")]
+            Self::Solana(_) => "solana",
+        }
+    }
+}
+
 #[cfg(feature = "mpp-solana")]
 struct SolanaState {
     realm: String,
@@ -195,8 +210,10 @@ impl MppState {
 
     /// Look up the backend that handles the given CAIP-2 chain identifier.
     ///
-    /// Supports exact match (`"eip155:4217"`) and namespace-prefix match
-    /// (`"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"` matches key `"solana"`).
+    /// Supports exact match (`"eip155:4217"`), namespace-prefix match
+    /// (`"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"` matches key `"solana"`),
+    /// and payment-method-name match (`"tempo"` matches a Tempo backend
+    /// regardless of its CAIP-2 registration key).
     fn backend_for_chain(&self, chain: &str) -> Option<(&String, &MppBackend)> {
         // Exact match first.
         if let Some((key, backend)) = self.backends.get_key_value(chain) {
@@ -206,6 +223,13 @@ impl MppState {
         let namespace = chain.split_once(':').map(|(ns, _)| ns).unwrap_or(chain);
         for (key, backend) in &self.backends {
             if key == namespace {
+                return Some((key, backend));
+            }
+        }
+        // Payment method name match (e.g. "tempo" matches a Tempo backend
+        // even when it is registered under "eip155:42431").
+        for (key, backend) in &self.backends {
+            if backend.method_name() == chain {
                 return Some((key, backend));
             }
         }
