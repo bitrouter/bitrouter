@@ -143,12 +143,21 @@ fn scaffold_home(home: &Path) -> std::io::Result<()> {
         std::fs::write(
             &gitignore_path,
             "\
-logs/
-run/
+# Secrets and credentials
 .env
 .keys/
+
+# Runtime state
+bitrouter.db
+logs/
+run/
 ",
         )?;
+    }
+
+    let readme_path = home.join("README.md");
+    if !readme_path.exists() {
+        std::fs::write(&readme_path, include_str!("../../templates/home_readme.md"))?;
     }
 
     Ok(())
