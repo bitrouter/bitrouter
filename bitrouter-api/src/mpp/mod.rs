@@ -1,3 +1,4 @@
+mod close_guard;
 mod filter;
 pub mod metered_sse;
 mod pricing;
@@ -12,6 +13,7 @@ pub mod solana_types;
 #[cfg(feature = "mpp-solana")]
 pub mod solana_voucher;
 
+pub use close_guard::SessionCloseGuard;
 pub use filter::{
     MppChallenge, MppPaymentContext, MppVerificationFailed, handle_mpp_rejection,
     mpp_payment_filter, verify_mpp_payment,
