@@ -14,6 +14,9 @@ use mpp::server::SessionChallengeOptions;
 use mpp::protocol::methods::tempo::session_method::ChannelStore as TempoChannelStore;
 
 #[cfg(feature = "mpp-tempo")]
+use mpp::Address;
+
+#[cfg(feature = "mpp-tempo")]
 type TempoMpp = Mpp<TempoChargeMethod<TempoProvider>, TempoSessionMethod<TempoProvider>>;
 
 /// Server-side MPP (Machine Payment Protocol) state.
@@ -31,6 +34,15 @@ enum MppBackend {
     Tempo {
         mpp: TempoMpp,
         store: Arc<dyn TempoChannelStore>,
+        /// RPC provider for server-initiated close transactions.
+        /// Only created when `close_signer` is configured.
+        provider: Option<Arc<TempoProvider>>,
+        /// Signer for server-initiated close transactions.
+        // TODO: abstract signer (KMS, hardware wallet) — currently PrivateKeySigner only
+        // because the mpp crate does not yet support abstract signers.
+        close_signer: Option<Arc<mpp::PrivateKeySigner>>,
+        escrow_contract: Address,
+        chain_id: u64,
     },
     #[cfg(feature = "mpp-solana")]
     Solana(SolanaState),
@@ -117,7 +129,7 @@ impl MppState {
 
         let session_provider = mpp::server::tempo_provider(rpc_url)?;
 
-        let escrow = tempo
+        let escrow: Address = tempo
             .escrow_contract
             .parse()
             .map_err(|e| mpp::MppError::InvalidConfig(format!("invalid escrow_contract: {e}")))?;
@@ -137,13 +149,26 @@ impl MppState {
         let session_method =
             TempoSessionMethod::new(session_provider, store.clone(), session_config);
 
-        let session_method = if let Some(ref key_hex) = tempo.close_signer {
+        let close_signer = if let Some(ref key_hex) = tempo.close_signer {
             let signer: mpp::PrivateKeySigner = key_hex
                 .parse()
                 .map_err(|e| mpp::MppError::InvalidConfig(format!("invalid close_signer: {e}")))?;
-            session_method.with_close_signer(signer)
+            Some(Arc::new(signer))
+        } else {
+            None
+        };
+
+        let session_method = if let Some(ref signer) = close_signer {
+            session_method.with_close_signer(mpp::PrivateKeySigner::clone(signer))
         } else {
             session_method
+        };
+
+        // Create a separate provider for server-initiated close operations.
+        let close_provider = if close_signer.is_some() {
+            Some(Arc::new(mpp::server::tempo_provider(rpc_url)?))
+        } else {
+            None
         };
 
         let mpp_instance = mpp_instance.with_session_method(session_method);
@@ -154,6 +179,10 @@ impl MppState {
             MppBackend::Tempo {
                 mpp: mpp_instance,
                 store,
+                provider: close_provider,
+                close_signer,
+                escrow_contract: escrow,
+                chain_id,
             },
         );
         Ok(())
@@ -411,6 +440,112 @@ impl MppState {
     pub fn realm(&self) -> &str {
         &self.realm
     }
+
+    /// Close a Tempo payment channel on-chain using the highest stored voucher.
+    ///
+    /// Reads the channel state from the store, constructs and broadcasts a
+    /// `close(channelId, cumulativeAmount, signature)` transaction to the
+    /// escrow contract, then marks the channel as finalized.
+    ///
+    /// This is fire-and-forget: errors are returned but callers should log
+    /// them rather than propagate, since close failures do not affect the
+    /// already-served response. The channel can be settled later if this fails.
+    // TODO: implement server-side close for Solana sessions
+    #[cfg(feature = "mpp-tempo")]
+    pub async fn close_channel(&self, backend_key: &str, channel_id: &str) -> Result<(), String> {
+        let (_key, backend) = self
+            .backend_for_chain(backend_key)
+            .ok_or_else(|| format!("no backend for key: {backend_key}"))?;
+
+        let (store, provider, signer, escrow_contract, chain_id) = match backend {
+            MppBackend::Tempo {
+                store,
+                provider,
+                close_signer,
+                escrow_contract,
+                chain_id,
+                ..
+            } => {
+                let signer = close_signer.as_ref().ok_or("close_signer not configured")?;
+                let provider = provider.as_ref().ok_or("close provider not available")?;
+                (
+                    Arc::clone(store),
+                    Arc::clone(provider),
+                    Arc::clone(signer),
+                    *escrow_contract,
+                    *chain_id,
+                )
+            }
+            #[cfg(feature = "mpp-solana")]
+            MppBackend::Solana(_) => {
+                return Err("server-side close not implemented for Solana".into());
+            }
+        };
+
+        let channel = store
+            .get_channel(channel_id)
+            .await
+            .map_err(|e| format!("failed to read channel: {e}"))?
+            .ok_or_else(|| format!("channel not found: {channel_id}"))?;
+
+        if channel.finalized {
+            return Ok(());
+        }
+
+        let voucher_sig = channel
+            .highest_voucher_signature
+            .as_ref()
+            .ok_or("no voucher signature stored — nothing to settle")?;
+
+        if channel.highest_voucher_amount == 0 {
+            return Ok(());
+        }
+
+        let tx_hash = submit_close_tx(
+            &provider,
+            &signer,
+            escrow_contract,
+            chain_id,
+            channel_id,
+            channel.highest_voucher_amount,
+            voucher_sig,
+        )
+        .await?;
+
+        // Mark channel finalized in store.
+        let channel_id_owned = channel_id.to_string();
+        let voucher_sig_clone = voucher_sig.clone();
+        let highest = channel.highest_voucher_amount;
+        let _ = store
+            .update_channel(
+                &channel_id_owned,
+                Box::new(move |current| {
+                    let state = match current {
+                        Some(s) => s,
+                        None => return Ok(None),
+                    };
+                    Ok(Some(
+                        mpp::protocol::methods::tempo::session_method::ChannelState {
+                            highest_voucher_amount: highest,
+                            highest_voucher_signature: Some(voucher_sig_clone),
+                            finalized: true,
+                            ..state
+                        },
+                    ))
+                }),
+            )
+            .await
+            .map_err(|e| format!("failed to finalize channel in store: {e}"))?;
+
+        tracing::info!(
+            channel_id = %channel_id_owned,
+            tx_hash = %tx_hash,
+            amount = highest,
+            "channel closed on-chain"
+        );
+
+        Ok(())
+    }
 }
 
 fn backend_session_challenge(
@@ -571,4 +706,90 @@ async fn solana_verify_session(
         receipt,
         management_response,
     })
+}
+
+// ── Tempo close helper ───────────────────────────────────────────────
+
+/// Build, sign, and broadcast a `close(channelId, cumulativeAmount, signature)`
+/// transaction on the Tempo escrow contract.
+///
+/// Returns the transaction hash on success.
+#[cfg(feature = "mpp-tempo")]
+async fn submit_close_tx(
+    provider: &TempoProvider,
+    signer: &mpp::PrivateKeySigner,
+    escrow_contract: Address,
+    chain_id: u64,
+    channel_id: &str,
+    cumulative_amount: u128,
+    voucher_signature: &[u8],
+) -> Result<String, String> {
+    use alloy::eips::Encodable2718;
+    use alloy::primitives::{B256, Bytes};
+    use alloy::providers::Provider;
+    use alloy::signers::SignerSync;
+    use alloy::sol_types::SolCall;
+    use tempo_primitives::TempoTransaction;
+    use tempo_primitives::transaction::Call;
+
+    alloy::sol! {
+        interface IEscrowClose {
+            function close(bytes32 channelId, uint128 cumulativeAmount, bytes calldata signature) external;
+        }
+    }
+
+    let channel_id_b256: B256 = channel_id
+        .parse()
+        .map_err(|e| format!("invalid channel_id: {e}"))?;
+
+    let close_data = IEscrowClose::closeCall::new((
+        channel_id_b256,
+        cumulative_amount,
+        Bytes::from(voucher_signature.to_vec()),
+    ))
+    .abi_encode();
+
+    let nonce = provider
+        .get_transaction_count(signer.address())
+        .await
+        .map_err(|e| format!("failed to get nonce: {e}"))?;
+
+    let gas_price = provider
+        .get_gas_price()
+        .await
+        .map_err(|e| format!("failed to get gas price: {e}"))?;
+
+    let tempo_tx = TempoTransaction {
+        chain_id,
+        nonce,
+        gas_limit: 2_000_000,
+        max_fee_per_gas: gas_price,
+        max_priority_fee_per_gas: gas_price,
+        calls: vec![Call {
+            to: alloy::primitives::TxKind::Call(escrow_contract),
+            value: alloy::primitives::U256::ZERO,
+            input: Bytes::from(close_data),
+        }],
+        ..Default::default()
+    };
+
+    let sig_hash = tempo_tx.signature_hash();
+    let signature = signer
+        .sign_hash_sync(&sig_hash)
+        .map_err(|e| format!("failed to sign close tx: {e}"))?;
+
+    let signed_tx = tempo_tx.into_signed(signature.into());
+    let tx_bytes = Bytes::from(signed_tx.encoded_2718());
+
+    let pending = provider
+        .send_raw_transaction(&tx_bytes)
+        .await
+        .map_err(|e| format!("failed to send close tx: {e}"))?;
+
+    let receipt = pending
+        .get_receipt()
+        .await
+        .map_err(|e| format!("close tx failed: {e}"))?;
+
+    Ok(receipt.transaction_hash.to_string())
 }

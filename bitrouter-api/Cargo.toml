@@ -13,7 +13,7 @@ default = ["openai", "anthropic", "google"]
 openai = []
 anthropic = []
 google = []
-mpp-tempo = ["dep:mpp", "mpp/tempo", "mpp/server", "dep:bitrouter-config"]
+mpp-tempo = ["dep:mpp", "mpp/tempo", "mpp/server", "dep:bitrouter-config", "dep:alloy", "dep:tempo-primitives", "dep:tempo-alloy"]
 mpp-solana = [
     "dep:mpp",
     "mpp/server",
@@ -33,6 +33,16 @@ futures-core = { version = "0.3" }
 mpp = { version = "0.7", default-features = false, features = [
     "reqwest-rustls-tls",
 ], optional = true }
+alloy = { version = "1.7", default-features = false, features = [
+    "signers",
+    "sol-types",
+    "consensus",
+    "providers",
+    "network",
+    "eips",
+], optional = true }
+tempo-primitives = { version = "1", optional = true }
+tempo-alloy = { version = "1", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 ed25519-dalek = { version = "2", features = ["std"], optional = true }

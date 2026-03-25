@@ -172,6 +172,14 @@ where
         return Ok(Box::new(reply));
     }
 
+    // Guard closes the payment channel on-chain when the request finishes.
+    // Moved into the streaming task or dropped at handler scope end.
+    let _close_guard = crate::mpp::SessionCloseGuard::new(
+        mpp_state.clone(),
+        mpp_ctx.backend_key.clone(),
+        mpp_ctx.channel_id.clone(),
+    );
+
     let is_stream = request.stream.unwrap_or(false);
     let incoming_model = convert::extract_model_name(&request).to_owned();
 
@@ -226,6 +234,10 @@ where
         };
 
         tokio::spawn(async move {
+            // Hold the close guard inside the task; channel is closed when the
+            // task ends (success, error, or disconnect).
+            let _close_guard = _close_guard;
+
             let mut stream = stream_result.stream;
             let mut converter = convert::StreamConverter::new(model_id, stream_id);
             use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;

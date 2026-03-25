@@ -1755,6 +1755,7 @@ dependencies = [
 name = "bitrouter-api"
 version = "0.14.0"
 dependencies = [
+ "alloy",
  "bitrouter-a2a",
  "bitrouter-config",
  "bitrouter-core",
@@ -1767,6 +1768,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tempo-alloy",
+ "tempo-primitives",
  "time",
  "tokio",
  "tokio-stream",
