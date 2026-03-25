@@ -77,15 +77,11 @@ pub fn save_state(home_dir: &Path, state: &OnboardingState) -> Result<(), String
 
 /// Returns `true` if onboarding should be triggered.
 ///
-/// Onboarding runs when:
-/// - The state is `NotStarted` (first run), OR
-/// - The state is `Deferred` (user skipped previously, re-prompt once).
+/// Only fires for `NotStarted` (true first run). Users who explicitly
+/// deferred or completed onboarding must use `bitrouter init` to re-enter.
 pub fn should_onboard(home_dir: &Path) -> bool {
     let state = load_state(home_dir);
-    matches!(
-        state.status,
-        OnboardingStatus::NotStarted | OnboardingStatus::Deferred
-    )
+    state.status == OnboardingStatus::NotStarted
 }
 
 // ── Interactive onboarding flow ───────────────────────────────
@@ -240,7 +236,7 @@ fn generate_keypair(keys_dir: &Path) -> Result<String, Box<dyn std::error::Error
     println!("  Generated web3 master key:");
     println!("    evm:    {evm_addr}");
     println!("    solana: {sol_addr}");
-    println!("    prefix: {prefix}");
+    // println!("    prefix: {prefix}");
 
     Ok(prefix)
 }

@@ -374,49 +374,35 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
 
-    // ── First-run guidance ────────────────────────────────────────
-    // On serve/start, if onboarding hasn't been completed, print a message
-    // directing the user to run `bitrouter init` instead of auto-triggering.
+    // ── First-run: auto-launch unified init ───────────────────────
+    // When onboarding has never been completed and stdin is a terminal,
+    // launch the Node/BYOK setup wizard inline so the user is fully
+    // configured before the server starts.
     let is_server_start =
         cli.command.is_none() || matches!(cli.command, Some(Command::Serve | Command::Start));
     if is_server_start && cli::onboarding::should_onboard(&paths.home_dir) {
         let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
         if is_interactive {
-            eprintln!();
-            eprintln!("  No wallet configured. Run `bitrouter init` to set up your node.");
-            eprintln!();
-        }
-    }
-
-    // Auto-init: when launching in TUI mode with no providers, run the setup
-    // wizard first so the user lands in a fully configured TUI.
-    if use_tui && !runtime.config.has_configured_providers() {
-        let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
-        if is_interactive {
-            eprintln!();
-            eprintln!("  No providers configured. Starting setup wizard...");
-            eprintln!();
-
-            match init::run_init(&paths) {
-                Ok(init::InitOutcome::Configured) => {
-                    // Reload runtime with the newly written config
+            match run_unified_init(&paths) {
+                Ok(()) => {
+                    // Pause so the user can read onboarding output before TUI takes over.
+                    if use_tui {
+                        eprint!("  Press Enter to continue...");
+                        let _ = std::io::stdin().read_line(&mut String::new());
+                    }
                     runtime = load_or_warn_scaffold(&paths);
-                }
-                Ok(init::InitOutcome::Cancelled) => {
-                    // User cancelled — fall through to TUI with empty state
                 }
                 Err(e) => {
                     eprintln!("  Setup wizard failed: {e}");
                     eprintln!("  Continuing with empty configuration...");
+                    eprintln!("  Run `bitrouter init` anytime to retry.");
                     eprintln!();
                 }
             }
+        } else {
+            // Non-interactive: print guidance instead of launching the wizard
+            print_first_run_guidance(&runtime);
         }
-    }
-
-    // First-run guidance
-    if !use_tui {
-        print_first_run_guidance(&runtime);
     }
 
     // Connect to database for commands that start the server.
@@ -938,15 +924,13 @@ fn write_node_provider_config(
         # BitRouter Node (added by onboarding)\n\
         # Uses MPP (Machine Payment Protocol) on Tempo for request payments.\n\
         # Fund your EVM wallet on Tempo: https://app.tempo.xyz\n\
+        #\n\
+        # Route requests with: bitrouter-node:<model>\n\
+        # Example: bitrouter-node:gpt-4o\n\
         providers:\n\
         \x20 bitrouter-node:\n\
         \x20   auth:\n\
-        \x20     type: mpp\n\n\
-        models:\n\
-        \x20 default:\n\
-        \x20   strategy: priority\n\
-        \x20   endpoints:\n\
-        \x20     - provider: bitrouter-node\n";
+        \x20     type: mpp\n";
 
     // Append node config to existing file.
     let mut content = existing;
