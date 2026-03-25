@@ -1,19 +1,15 @@
-//! First-run onboarding flow for BitRouter cloud node.
+//! First-run onboarding flow for BitRouter Node.
 //!
 //! Auto-triggered on first `serve` / `start` when no onboarding state marker
-//! exists. Guides the user through wallet setup and cloud provider config.
+//! exists. Guides the user through web3 wallet setup and node provider config.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use dialoguer::{Input, Select, theme::ColorfulTheme};
+use dialoguer::{Select, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::swig;
-
-// ── Default Solana wallet path ────────────────────────────────
-
-const DEFAULT_SOLANA_WALLET: &str = ".config/solana/id.json";
+use crate::cli::account;
 
 // ── Onboarding state model ────────────────────────────────────
 
@@ -22,12 +18,10 @@ const DEFAULT_SOLANA_WALLET: &str = ".config/solana/id.json";
 pub struct OnboardingState {
     /// Current status of the onboarding process.
     pub status: OnboardingStatus,
-    /// Path to the master wallet file used during onboarding (if any).
+    /// Prefix of the active keypair used during onboarding (if any).
+    /// Links to `~/.bitrouter/.keys/<prefix>/master.json`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub master_wallet_path: Option<PathBuf>,
-    /// Solana RPC URL chosen during onboarding.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rpc_url: Option<String>,
+    pub keypair_prefix: Option<String>,
 }
 
 /// Discrete onboarding outcomes.
@@ -36,9 +30,9 @@ pub struct OnboardingState {
 pub enum OnboardingStatus {
     /// Onboarding has never been started.
     NotStarted,
-    /// User completed onboarding with BitRouter cloud node.
-    CompletedCloud,
-    /// User chose to bring their own API keys (skipped cloud onboarding).
+    /// User completed onboarding with BitRouter Node (MPP payments).
+    CompletedNode,
+    /// User chose to bring their own API keys (skipped node onboarding).
     CompletedByok,
     /// User deferred onboarding (e.g., Ctrl-C or explicit skip).
     Deferred,
@@ -50,8 +44,7 @@ impl OnboardingState {
     pub fn new() -> Self {
         Self {
             status: OnboardingStatus::NotStarted,
-            master_wallet_path: None,
-            rpc_url: None,
+            keypair_prefix: None,
         }
     }
 }
@@ -59,7 +52,7 @@ impl OnboardingState {
 // ── Persistence helpers ───────────────────────────────────────
 
 /// Path to the onboarding state file.
-pub fn state_file(home_dir: &Path) -> PathBuf {
+pub fn state_file(home_dir: &Path) -> std::path::PathBuf {
     home_dir.join("onboarding.json")
 }
 
@@ -100,10 +93,10 @@ pub fn should_onboard(home_dir: &Path) -> bool {
 /// Outcome of the interactive onboarding flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OnboardingOutcome {
-    /// User completed the cloud onboarding path.
-    CompletedCloud {
-        /// Solana RPC URL chosen during onboarding.
-        rpc_url: String,
+    /// User completed the node onboarding path.
+    CompletedNode {
+        /// Public-key prefix of the active keypair.
+        keypair_prefix: String,
     },
     /// User chose BYOK (bring your own keys).
     CompletedByok,
@@ -113,7 +106,8 @@ pub enum OnboardingOutcome {
 
 /// Run the interactive onboarding flow.
 ///
-/// Guides the user through wallet selection and RPC URL configuration.
+/// Generates (or reuses) a web3 master keypair for MPP payments on Tempo,
+/// shows the EVM wallet address, and instructs the user to fund it.
 pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std::error::Error>> {
     let theme = ColorfulTheme::default();
 
@@ -127,162 +121,138 @@ pub fn run_onboarding(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std:
     }
 
     println!();
-    println!("  BitRouter Cloud Node Onboarding");
-    println!("  ───────────────────────────────");
+    println!("  BitRouter Node Onboarding");
+    println!("  ────────────────────────");
     println!();
-    println!("  BitRouter Cloud uses x402 for request payments.");
-    println!("  You need a Solana wallet to pay for agent requests,");
-    println!("  or you can skip and bring your own API keys (BYOK).");
+    println!("  BitRouter Node uses MPP (Machine Payment Protocol) on Tempo");
+    println!("  to pay for LLM requests. A web3 wallet will be generated for");
+    println!("  you, or you can skip and bring your own API keys (BYOK).");
     println!();
 
-    // ── Step 1: Wallet selection ────────────────────────────────
-    let wallet_path = match prompt_wallet_selection(home_dir, &theme)? {
-        WalletChoice::UseDefault(path) => Some(path),
-        WalletChoice::Import(path) => Some(path),
-        WalletChoice::Create(path) => Some(path),
-        WalletChoice::SkipByok => {
-            let mut state = load_state(home_dir);
-            state.status = OnboardingStatus::CompletedByok;
-            save_state(home_dir, &state)?;
+    // ── Keypair setup ───────────────────────────────────────────
+    let keys_dir = home_dir.join(".keys");
+    let prefix = match account::load_active_keypair(&keys_dir) {
+        Ok((existing_prefix, kp)) => {
+            let evm_addr = kp
+                .evm_address_string()
+                .map_err(|e| format!("failed to derive EVM address: {e}"))?;
+            let sol_addr = kp.solana_pubkey_b58();
+            println!("  Existing wallet found:");
+            println!("    evm:    {evm_addr}");
+            println!("    solana: {sol_addr}");
+            println!("    prefix: {existing_prefix}");
             println!();
-            println!("  Skipped cloud onboarding. Configure providers manually:");
-            println!("    bitrouter init");
-            println!();
-            return Ok(OnboardingOutcome::CompletedByok);
+
+            let choices = &[
+                "Use this wallet",
+                "Generate a new wallet",
+                "Skip \u{2014} I'll bring my own API keys (BYOK)",
+            ];
+
+            let selection = Select::with_theme(&theme)
+                .with_prompt("Wallet setup")
+                .items(choices)
+                .default(0)
+                .interact()?;
+
+            match selection {
+                0 => existing_prefix,
+                1 => generate_keypair(&keys_dir)?,
+                _ => return complete_byok(home_dir),
+            }
+        }
+        Err(_) => {
+            let choices = &[
+                "Generate a new wallet",
+                "Skip \u{2014} I'll bring my own API keys (BYOK)",
+            ];
+
+            let selection = Select::with_theme(&theme)
+                .with_prompt("No wallet found. Choose an option")
+                .items(choices)
+                .default(0)
+                .interact()?;
+
+            match selection {
+                0 => generate_keypair(&keys_dir)?,
+                _ => return complete_byok(home_dir),
+            }
         }
     };
 
-    let wallet_path = wallet_path.ok_or("no wallet path selected")?;
+    // ── Show funding instructions ───────────────────────────────
+    let (_, kp) = account::load_active_keypair(&keys_dir)
+        .map_err(|e| format!("failed to reload keypair: {e}"))?;
+    let evm_addr = kp
+        .evm_address_string()
+        .map_err(|e| format!("failed to derive EVM address: {e}"))?;
 
-    // ── Step 2: Solana RPC URL ──────────────────────────────────
     println!();
-    let rpc_url: String = Input::with_theme(&theme)
-        .with_prompt("Solana RPC URL")
-        .default(swig::DEFAULT_RPC_URL.to_string())
-        .interact_text()?;
+    println!("  ✓ Wallet ready!");
+    println!();
+    println!("  Fund your EVM wallet on Tempo to start making requests:");
+    println!("    Address: {evm_addr}");
+    println!("    Fund at: https://app.tempo.xyz");
+    println!();
 
-    // ── Step 3: Save state ──────────────────────────────────────
+    // ── Save state ──────────────────────────────────────────────
     let mut state = load_state(home_dir);
-    state.master_wallet_path = Some(wallet_path);
-    state.rpc_url = Some(rpc_url.clone());
-    state.status = OnboardingStatus::CompletedCloud;
+    state.keypair_prefix = Some(prefix.clone());
+    state.status = OnboardingStatus::CompletedNode;
     save_state(home_dir, &state)?;
 
-    println!();
     println!("  ✓ Onboarding complete!");
     println!();
 
-    Ok(OnboardingOutcome::CompletedCloud { rpc_url })
+    Ok(OnboardingOutcome::CompletedNode {
+        keypair_prefix: prefix,
+    })
 }
 
-// ── Wallet selection ──────────────────────────────────────────
+/// Generate a new keypair and set it as active. Returns the prefix.
+fn generate_keypair(keys_dir: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    use bitrouter_core::auth::keys::MasterKeypair;
 
-enum WalletChoice {
-    UseDefault(PathBuf),
-    Import(PathBuf),
-    Create(PathBuf),
-    SkipByok,
+    let kp = MasterKeypair::generate();
+    let prefix = kp.public_key_prefix();
+    let sol_addr = kp.solana_pubkey_b58();
+    let evm_addr = kp
+        .evm_address_string()
+        .map_err(|e| format!("failed to derive EVM address: {e}"))?;
+
+    let key_dir = keys_dir.join(&prefix);
+    fs::create_dir_all(&key_dir).map_err(|e| format!("failed to create key directory: {e}"))?;
+
+    let json = kp.to_json();
+    let json_str =
+        serde_json::to_string_pretty(&json).map_err(|e| format!("failed to serialize key: {e}"))?;
+    fs::write(key_dir.join("master.json"), json_str)
+        .map_err(|e| format!("failed to write master.json: {e}"))?;
+
+    // Create tokens directory for this account.
+    fs::create_dir_all(key_dir.join("tokens"))
+        .map_err(|e| format!("failed to create tokens directory: {e}"))?;
+
+    // Set as active.
+    fs::write(keys_dir.join("active"), &prefix)
+        .map_err(|e| format!("failed to write active file: {e}"))?;
+
+    println!("  Generated web3 master key:");
+    println!("    evm:    {evm_addr}");
+    println!("    solana: {sol_addr}");
+    println!("    prefix: {prefix}");
+
+    Ok(prefix)
 }
 
-fn prompt_wallet_selection(
-    home_dir: &Path,
-    theme: &ColorfulTheme,
-) -> Result<WalletChoice, Box<dyn std::error::Error>> {
-    let default_wallet = dirs::home_dir()
-        .map(|h| h.join(DEFAULT_SOLANA_WALLET))
-        .filter(|p| p.exists());
-
-    if let Some(ref default_path) = default_wallet {
-        println!(
-            "  Detected default Solana wallet: {}",
-            default_path.display()
-        );
-        println!();
-
-        let choices = &[
-            "Use this wallet as master wallet",
-            "Import a different wallet file",
-            "Create a new wallet",
-            "Skip \u{2014} I'll bring my own API keys (BYOK)",
-        ];
-
-        let selection = Select::with_theme(theme)
-            .with_prompt("Choose wallet setup")
-            .items(choices)
-            .default(0)
-            .interact()?;
-
-        match selection {
-            0 => Ok(WalletChoice::UseDefault(default_path.clone())),
-            1 => prompt_import_wallet(theme),
-            2 => prompt_create_wallet(home_dir, theme),
-            _ => Ok(WalletChoice::SkipByok),
-        }
-    } else {
-        println!("  No default Solana wallet found (~/.config/solana/id.json).");
-        println!();
-
-        let choices = &[
-            "Import an existing wallet file",
-            "Create a new wallet",
-            "Skip \u{2014} I'll bring my own API keys (BYOK)",
-        ];
-
-        let selection = Select::with_theme(theme)
-            .with_prompt("Choose wallet setup")
-            .items(choices)
-            .default(1)
-            .interact()?;
-
-        match selection {
-            0 => prompt_import_wallet(theme),
-            1 => prompt_create_wallet(home_dir, theme),
-            _ => Ok(WalletChoice::SkipByok),
-        }
-    }
-}
-
-fn prompt_import_wallet(theme: &ColorfulTheme) -> Result<WalletChoice, Box<dyn std::error::Error>> {
-    let path_str: String = Input::with_theme(theme)
-        .with_prompt("Path to Solana wallet JSON file")
-        .interact_text()?;
-
-    let path = expand_tilde(&path_str);
-    if !path.exists() {
-        return Err(format!("wallet file not found: {}", path.display()).into());
-    }
-
-    Ok(WalletChoice::Import(path))
-}
-
-fn prompt_create_wallet(
-    home_dir: &Path,
-    theme: &ColorfulTheme,
-) -> Result<WalletChoice, Box<dyn std::error::Error>> {
-    let default_path = home_dir.join("wallet.json");
-
-    let path_str: String = Input::with_theme(theme)
-        .with_prompt("Save new wallet to")
-        .default(default_path.display().to_string())
-        .interact_text()?;
-
-    let path = expand_tilde(&path_str);
-
-    // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create directory {}: {e}", parent.display()))?;
-    }
-
-    Ok(WalletChoice::Create(path))
-}
-
-/// Expand leading `~` to the user's home directory.
-fn expand_tilde(s: &str) -> PathBuf {
-    if let Some(rest) = s.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir()
-    {
-        return home.join(rest);
-    }
-    PathBuf::from(s)
+/// Complete onboarding with BYOK status.
+fn complete_byok(home_dir: &Path) -> Result<OnboardingOutcome, Box<dyn std::error::Error>> {
+    let mut state = load_state(home_dir);
+    state.status = OnboardingStatus::CompletedByok;
+    save_state(home_dir, &state)?;
+    println!();
+    println!("  Skipped node onboarding. Configure providers manually:");
+    println!("    bitrouter init");
+    println!();
+    Ok(OnboardingOutcome::CompletedByok)
 }

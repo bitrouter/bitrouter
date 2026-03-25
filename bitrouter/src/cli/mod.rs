@@ -5,6 +5,5 @@ pub mod keys;
 pub mod onboarding;
 pub mod route;
 pub mod sudo;
-pub mod swig;
 pub mod tools;
 pub mod update_check;

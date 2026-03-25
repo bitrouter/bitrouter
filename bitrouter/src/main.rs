@@ -458,12 +458,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(mpp_client) = build_mpp_client_from_state(&runtime.paths, &runtime.config) {
                 model_router = model_router.with_mpp_client(mpp_client);
             }
-            #[cfg(feature = "mpp-solana")]
-            if let Some(mpp_client) =
-                build_mpp_solana_client_from_state(&runtime.paths, &runtime.config)
-            {
-                model_router = model_router.with_mpp_client(mpp_client);
-            }
             runtime.serve_with_reload(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
@@ -551,11 +545,6 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
     if let Some(mpp_client) = build_mpp_client_from_state(&runtime.paths, &runtime.config) {
         model_router = model_router.with_mpp_client(mpp_client);
     }
-    #[cfg(feature = "mpp-solana")]
-    if let Some(mpp_client) = build_mpp_solana_client_from_state(&runtime.paths, &runtime.config) {
-        model_router = model_router.with_mpp_client(mpp_client);
-    }
-
     #[cfg(feature = "tui")]
     {
         let tui_config = crate::tui::TuiConfig {
@@ -611,60 +600,39 @@ fn build_x402_client_from_state(
         .map(|(name, _)| name.as_str())
         .collect();
 
-    let state = cli::onboarding::load_state(&paths.home_dir);
+    if x402_providers.is_empty() {
+        return None;
+    }
 
-    let wallet_path = match state.master_wallet_path.as_ref() {
-        Some(p) => p,
-        None => {
-            if !x402_providers.is_empty() {
-                tracing::warn!(
-                    providers = ?x402_providers,
-                    "x402 providers configured but no wallet set up — run `bitrouter init`",
-                );
-            }
+    let keys_dir = paths.home_dir.join(".keys");
+    let (_prefix, keypair) = match cli::account::load_active_keypair(&keys_dir) {
+        Ok(kp) => kp,
+        Err(e) => {
+            tracing::warn!(
+                providers = ?x402_providers,
+                "x402 providers configured but no keypair available: {e}",
+            );
             return None;
         }
     };
 
-    if !wallet_path.exists() {
-        tracing::warn!(
-            path = %wallet_path.display(),
-            "wallet file not found — run `bitrouter init` to reconfigure",
-        );
-        return None;
-    }
+    let rpc_url = config.solana_rpc_url.as_deref().unwrap_or_else(|| {
+        tracing::warn!("no Solana RPC URL configured, falling back to mainnet-beta",);
+        "https://api.mainnet-beta.solana.com"
+    });
 
-    let rpc_url = state
-        .rpc_url
-        .as_deref()
-        .or(config.solana_rpc_url.as_deref())
-        .unwrap_or_else(|| {
-            tracing::warn!(
-                "no Solana RPC URL configured, falling back to {}",
-                cli::swig::DEFAULT_RPC_URL,
-            );
-            cli::swig::DEFAULT_RPC_URL
-        });
-
-    match crate::runtime::x402::build_x402_client(
-        wallet_path,
+    let client = crate::runtime::x402::build_x402_client_from_master(
+        &keypair,
         rpc_url,
         reqwest::Client::new(),
         true,
-    ) {
-        Ok(client) => {
-            tracing::info!(
-                wallet = %wallet_path.display(),
-                rpc = %rpc_url,
-                "x402 payment signer loaded",
-            );
-            Some(client)
-        }
-        Err(e) => {
-            tracing::warn!("failed to load x402 signer: {e} — x402 providers will be unavailable",);
-            None
-        }
-    }
+    );
+    tracing::info!(
+        rpc = %rpc_url,
+        providers = ?x402_providers,
+        "x402 payment signer loaded",
+    );
+    Some(client)
 }
 
 /// Build an MPP payment client from the active keypair, if any MPP providers are configured.
@@ -706,7 +674,12 @@ fn build_mpp_client_from_state(
         .and_then(|t| t.rpc_url.as_deref())
         .unwrap_or(crate::runtime::mpp_client::DEFAULT_TEMPO_RPC_URL);
 
-    match crate::runtime::mpp_client::build_mpp_client(&keypair, rpc_url, reqwest::Client::new()) {
+    match crate::runtime::mpp_client::build_mpp_client(
+        &keypair,
+        rpc_url,
+        reqwest::Client::new(),
+        true,
+    ) {
         Ok(client) => {
             tracing::info!(
                 rpc = %rpc_url,
@@ -829,8 +802,8 @@ fn init_tracing() {
 
 /// Unified `bitrouter init` entry point.
 ///
-/// Detects existing onboarding state and offers Cloud vs BYOK mode selection.
-/// - Cloud: delegates to [`cli::onboarding::run_onboarding`], then writes cloud
+/// Detects existing onboarding state and offers Node vs BYOK mode selection.
+/// - Node: delegates to [`cli::onboarding::run_onboarding`], then writes node
 ///   provider config.
 /// - BYOK: delegates to [`init::run_init`], then writes `onboarding.json` with
 ///   `completed_byok` status.
@@ -846,9 +819,9 @@ fn run_unified_init(
     // ── Idempotency: detect existing state ────────────────────
     let state = load_state(home);
     match state.status {
-        OnboardingStatus::CompletedCloud | OnboardingStatus::CompletedByok => {
+        OnboardingStatus::CompletedNode | OnboardingStatus::CompletedByok => {
             let label = match state.status {
-                OnboardingStatus::CompletedCloud => "Cloud (x402 wallet)",
+                OnboardingStatus::CompletedNode => "BitRouter Node (MPP wallet)",
                 _ => "BYOK (bring your own keys)",
             };
             println!();
@@ -871,7 +844,7 @@ fn run_unified_init(
             println!();
             println!("  Previous onboarding attempt failed. Resuming...");
             println!();
-            // Fall through to mode selection — user can retry cloud or switch to BYOK
+            // Fall through to mode selection — user can retry or switch to BYOK
         }
         OnboardingStatus::NotStarted | OnboardingStatus::Deferred => {
             // First run or previously deferred — proceed normally
@@ -887,7 +860,7 @@ fn run_unified_init(
     println!();
 
     let choices = &[
-        "Cloud — use BitRouter Cloud Node with x402 payments (requires Solana wallet)",
+        "BitRouter Node — pay per request with Tempo MPP (auto-generates web3 wallet)",
         "BYOK  — bring your own API keys (OpenAI, Anthropic, Google, custom)",
     ];
 
@@ -898,12 +871,12 @@ fn run_unified_init(
         .interact()?;
 
     match selection {
-        // ── Cloud path ────────────────────────────────────────
+        // ── Node path ────────────────────────────────────────
         0 => {
             match cli::onboarding::run_onboarding(home)? {
-                cli::onboarding::OnboardingOutcome::CompletedCloud { rpc_url } => {
-                    if let Err(e) = write_cloud_provider_config(paths, &rpc_url) {
-                        eprintln!("  Warning: failed to write cloud config: {e}");
+                cli::onboarding::OnboardingOutcome::CompletedNode { .. } => {
+                    if let Err(e) = write_node_provider_config(paths) {
+                        eprintln!("  Warning: failed to write node config: {e}");
                     }
                 }
                 cli::onboarding::OnboardingOutcome::CompletedByok => {
@@ -937,13 +910,12 @@ fn run_unified_init(
     Ok(())
 }
 
-/// Write a cloud provider config entry to `bitrouter.yaml` after onboarding.
+/// Write a node provider config entry to `bitrouter.yaml` after onboarding.
 ///
-/// Since `bitrouter-cloud` is a builtin provider (api_base and api_protocol
+/// Since `bitrouter-node` is a builtin provider (api_base and api_protocol
 /// come from the registry), the user config only needs to supply auth.
-fn write_cloud_provider_config(
+fn write_node_provider_config(
     paths: &crate::runtime::RuntimePaths,
-    rpc_url: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
 
@@ -952,36 +924,33 @@ fn write_cloud_provider_config(
     // Read existing config or start fresh.
     let existing = fs::read_to_string(config_path).unwrap_or_default();
 
-    // Parse YAML to check if cloud provider is already configured.
+    // Parse YAML to check if node provider is already configured.
     if let Ok(value) = serde_saphyr::from_str::<serde_json::Value>(&existing)
         && value
             .get("providers")
-            .and_then(|p| p.get("bitrouter-cloud"))
+            .and_then(|p| p.get("bitrouter-node"))
             .is_some()
     {
         return Ok(());
     }
 
-    let cloud_block = format!(
-        "\n\
-        # Solana RPC endpoint for x402 wallet operations\n\
-        solana_rpc_url: \"{rpc_url}\"\n\n\
-        # BitRouter Cloud Node (added by onboarding)\n\
-        # Uses x402 for request payments — only a wallet is needed.\n\
+    let node_block = "\n\
+        # BitRouter Node (added by onboarding)\n\
+        # Uses MPP (Machine Payment Protocol) on Tempo for request payments.\n\
+        # Fund your EVM wallet on Tempo: https://app.tempo.xyz\n\
         providers:\n\
-        \x20 bitrouter-cloud:\n\
+        \x20 bitrouter-node:\n\
         \x20   auth:\n\
-        \x20     type: x402\n\n\
+        \x20     type: mpp\n\n\
         models:\n\
         \x20 default:\n\
         \x20   strategy: priority\n\
         \x20   endpoints:\n\
-        \x20     - provider: bitrouter-cloud\n"
-    );
+        \x20     - provider: bitrouter-node\n";
 
-    // Append cloud config to existing file.
+    // Append node config to existing file.
     let mut content = existing;
-    content.push_str(&cloud_block);
+    content.push_str(node_block);
 
     fs::create_dir_all(&paths.home_dir).map_err(|e| format!("failed to create home dir: {e}"))?;
     fs::write(config_path, content)
