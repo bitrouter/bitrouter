@@ -898,7 +898,7 @@ fn run_unified_init(
 
 /// Write a node provider config entry to `bitrouter.yaml` after onboarding.
 ///
-/// Since `bitrouter-node` is a builtin provider (api_base and api_protocol
+/// Since `bitrouter` is a builtin provider (api_base and api_protocol
 /// come from the registry), the user config only needs to supply auth.
 fn write_node_provider_config(
     paths: &crate::runtime::RuntimePaths,
@@ -914,7 +914,7 @@ fn write_node_provider_config(
     if let Ok(value) = serde_saphyr::from_str::<serde_json::Value>(&existing)
         && value
             .get("providers")
-            .and_then(|p| p.get("bitrouter-node"))
+            .and_then(|p| p.get("bitrouter"))
             .is_some()
     {
         return Ok(());
@@ -925,10 +925,10 @@ fn write_node_provider_config(
         # Uses MPP (Machine Payment Protocol) on Tempo for request payments.\n\
         # Fund your EVM wallet on Tempo: https://app.tempo.xyz\n\
         #\n\
-        # Route requests with: bitrouter-node:<model>\n\
-        # Example: bitrouter-node:gpt-4o\n\
+        # Route requests with: bitrouter:<model>\n\
+        # Example: bitrouter:gpt-4o\n\
         providers:\n\
-        \x20 bitrouter-node:\n\
+        \x20 bitrouter:\n\
         \x20   auth:\n\
         \x20     type: mpp\n";
 

@@ -1,4 +1,0 @@
-api_protocol: openai
-api_base: https://api.bitrouter.ai/v1
-env_prefix: BITROUTER_NODE
-models: {}

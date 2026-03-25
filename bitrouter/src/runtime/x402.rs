@@ -4,7 +4,7 @@
 //! [`ClientWithMiddleware`] that automatically signs payment flows
 //! when an upstream provider returns HTTP 402.
 //!
-//! For bitrouter-node, a [`JwtAuthMiddleware`] is stacked on top so
+//! For the bitrouter provider, a [`JwtAuthMiddleware`] is stacked on top so
 //! that every request also carries a short-lived JWT proving the
 //! caller's on-chain identity.
 
