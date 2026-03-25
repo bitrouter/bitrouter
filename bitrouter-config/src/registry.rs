@@ -11,8 +11,8 @@ const PROVIDER_DEFS: &[(&str, &str)] = &[
     ("anthropic", include_str!("../providers/anthropic.yaml")),
     ("google", include_str!("../providers/google.yaml")),
     (
-        "bitrouter-cloud",
-        include_str!("../providers/bitrouter-cloud.yaml"),
+        "bitrouter-node",
+        include_str!("../providers/bitrouter-node.yaml"),
     ),
     ("openrouter", include_str!("../providers/openrouter.yaml")),
     ("deepseek", include_str!("../providers/deepseek.yaml")),

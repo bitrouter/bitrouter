@@ -4,11 +4,9 @@
 //! [`ClientWithMiddleware`] that automatically signs payment flows
 //! when an upstream provider returns HTTP 402.
 //!
-//! For bitrouter-cloud, a [`JwtAuthMiddleware`] is stacked on top so
+//! For bitrouter-node, a [`JwtAuthMiddleware`] is stacked on top so
 //! that every request also carries a short-lived JWT proving the
 //! caller's on-chain identity.
-
-use std::path::Path;
 
 use async_trait::async_trait;
 use bitrouter_core::auth::{
@@ -20,10 +18,8 @@ use bitrouter_core::auth::{
 use http::Extensions;
 use reqwest::{Request, Response, header::HeaderValue};
 use reqwest_middleware::{ClientWithMiddleware, Middleware, Next};
-use solana_keypair::read_keypair_file;
+use solana_keypair::Keypair as SolanaKeypair;
 use x402_signer::{X402Client, middleware::X402PaymentMiddleware, svm::SvmPaymentSigner};
-
-use crate::runtime::error::{Result, RuntimeError};
 
 /// JWT validity period (5 minutes).
 const JWT_LIFETIME_SECS: u64 = 300;
@@ -93,47 +89,30 @@ impl Middleware for JwtAuthMiddleware {
 
 /// Build an x402-capable HTTP client from the master wallet and RPC URL.
 ///
-/// The returned [`ClientWithMiddleware`] wraps the given base client with
-/// [`X402PaymentMiddleware`]: every outgoing request is sent normally, but if
-/// the upstream returns HTTP 402 with a `PAYMENT-REQUIRED` header the
-/// middleware automatically signs a Solana payment and retries.
+/// Build an x402 payment client from a [`MasterKeypair`].
 ///
-/// When `with_jwt` is `true`, a [`JwtAuthMiddleware`] is also stacked so that
-/// each request carries an `Authorization: Bearer <jwt>` header signed by the
-/// master keypair. This is used for bitrouter-cloud, which requires both
-/// identity (JWT) and payment (x402).
-pub fn build_x402_client(
-    wallet_path: &Path,
+/// Reconstructs the Solana keypair from the master seed, then delegates to
+/// the same middleware stack as the file-based builder.
+pub fn build_x402_client_from_master(
+    master: &MasterKeypair,
     rpc_url: &str,
     base_client: reqwest::Client,
     with_jwt: bool,
-) -> Result<ClientWithMiddleware> {
-    let keypair = read_keypair_file(wallet_path).map_err(|e| {
-        RuntimeError::X402(format!(
-            "failed to load master wallet from {}: {e}",
-            wallet_path.display(),
-        ))
-    })?;
-
-    // Extract the 32-byte seed for MasterKeypair (first 32 bytes of the 64-byte keypair).
-    let seed: [u8; 32] = keypair.to_bytes()[..32]
-        .try_into()
-        .map_err(|_| RuntimeError::X402("invalid keypair seed length".to_owned()))?;
+) -> ClientWithMiddleware {
+    let solana_kp = SolanaKeypair::new_from_array(*master.seed());
 
     let rpc = solana_client::nonblocking::rpc_client::RpcClient::new(rpc_url.to_owned());
-    let signer = SvmPaymentSigner::new(keypair, rpc);
+    let signer = SvmPaymentSigner::new(solana_kp, rpc);
     let x402_client = X402Client::new(signer);
     let x402_middleware = X402PaymentMiddleware::new(x402_client);
 
     let mut builder = reqwest_middleware::ClientBuilder::new(base_client);
 
     if with_jwt {
-        let master_keypair = MasterKeypair::from_seed(seed);
-        let jwt_middleware = JwtAuthMiddleware::new(master_keypair, Chain::solana_mainnet());
+        let jwt_kp = MasterKeypair::from_seed(*master.seed());
+        let jwt_middleware = JwtAuthMiddleware::new(jwt_kp, Chain::solana_mainnet());
         builder = builder.with(jwt_middleware);
     }
 
-    let client = builder.with(x402_middleware).build();
-
-    Ok(client)
+    builder.with(x402_middleware).build()
 }

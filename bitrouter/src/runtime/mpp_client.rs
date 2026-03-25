@@ -11,7 +11,7 @@
 //! provider's `pay()` method directly.
 
 use async_trait::async_trait;
-use bitrouter_core::auth::keys::MasterKeypair;
+use bitrouter_core::auth::{chain::Chain, keys::MasterKeypair};
 use http::Extensions;
 use mpp::client::{PaymentProvider, TempoProvider};
 use mpp::protocol::core::{AUTHORIZATION_HEADER, format_authorization, parse_www_authenticate};
@@ -19,6 +19,7 @@ use reqwest::{Request, Response, StatusCode, header::WWW_AUTHENTICATE};
 use reqwest_middleware::{ClientWithMiddleware, Middleware, Next};
 
 use crate::runtime::error::{Result, RuntimeError};
+use crate::runtime::x402::JwtAuthMiddleware;
 
 /// Default Tempo RPC endpoint.
 pub const DEFAULT_TEMPO_RPC_URL: &str = "https://rpc.tempo.xyz";
@@ -127,10 +128,16 @@ where
 /// [`MppPaymentMiddleware`]: every outgoing request is sent normally, but if
 /// the upstream returns HTTP 402 with a `WWW-Authenticate` header the
 /// middleware signs a Tempo payment and retries.
+///
+/// When `with_jwt` is `true`, a [`JwtAuthMiddleware`] is also stacked so that
+/// each request carries an `Authorization: Bearer <jwt>` header signed by the
+/// master keypair. The MPP payment middleware then combines the JWT with the
+/// payment credential on 402 retry.
 pub fn build_mpp_client(
     keypair: &MasterKeypair,
     rpc_url: &str,
     base_client: reqwest::Client,
+    with_jwt: bool,
 ) -> Result<ClientWithMiddleware> {
     let signer = keypair
         .evm_signer()
@@ -138,8 +145,15 @@ pub fn build_mpp_client(
     let provider = TempoProvider::new(signer, rpc_url)
         .map_err(|e| RuntimeError::Mpp(format!("failed to create Tempo provider: {e}")))?;
     let middleware = MppPaymentMiddleware::new(provider);
-    let client = reqwest_middleware::ClientBuilder::new(base_client)
-        .with(middleware)
-        .build();
+
+    let mut builder = reqwest_middleware::ClientBuilder::new(base_client);
+
+    if with_jwt {
+        let jwt_kp = MasterKeypair::from_seed(*keypair.seed());
+        let jwt_middleware = JwtAuthMiddleware::new(jwt_kp, Chain::solana_mainnet());
+        builder = builder.with(jwt_middleware);
+    }
+
+    let client = builder.with(middleware).build();
     Ok(client)
 }

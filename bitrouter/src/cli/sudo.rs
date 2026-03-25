@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
+use crate::cli::account;
 use crate::cli::onboarding;
-use crate::cli::swig;
 
 /// Run `bitrouter sudo show-wallet` (read-only).
 pub fn run_show_wallet(home_dir: &Path) -> Result<(), String> {
@@ -13,14 +13,27 @@ pub fn run_show_wallet(home_dir: &Path) -> Result<(), String> {
     println!("  ─────────────");
     println!("  Onboarding: {:?}", state.status);
 
-    if let Some(ref path) = state.master_wallet_path {
-        println!("  Master wallet: {}", path.display());
+    if let Some(ref prefix) = state.keypair_prefix {
+        println!("  Keypair prefix: {prefix}");
     } else {
-        println!("  Master wallet: not configured");
+        println!("  Keypair: not configured");
     }
 
-    let rpc_url = state.rpc_url.as_deref().unwrap_or(swig::DEFAULT_RPC_URL);
-    println!("  RPC: {rpc_url}");
+    let keys_dir = home_dir.join(".keys");
+    match account::load_active_keypair(&keys_dir) {
+        Ok((prefix, kp)) => {
+            let evm_addr = kp
+                .evm_address_string()
+                .unwrap_or_else(|_| "unknown".to_string());
+            let sol_addr = kp.solana_pubkey_b58();
+            println!("  Active key: {prefix}");
+            println!("  EVM:    {evm_addr}");
+            println!("  Solana: {sol_addr}");
+        }
+        Err(_) => {
+            println!("  Active key: none");
+        }
+    }
 
     Ok(())
 }

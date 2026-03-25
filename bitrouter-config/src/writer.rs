@@ -87,7 +87,20 @@ pub fn write_init_config(
     // Write .gitignore if missing
     let gitignore_path = options.home_dir.join(".gitignore");
     if !gitignore_path.exists() {
-        std::fs::write(&gitignore_path, "logs/\nrun/\n.env\n").ok();
+        std::fs::write(
+            &gitignore_path,
+            "\
+# Secrets and credentials
+.env
+.keys/
+
+# Runtime state
+bitrouter.db
+logs/
+run/
+",
+        )
+        .ok();
     }
 
     let mut providers_configured = options.providers.clone();

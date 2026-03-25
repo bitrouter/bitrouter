@@ -64,9 +64,6 @@ jobs:
             feature_set: mpp-tempo
             cargo_args: --no-default-features --features mpp-tempo
           - crate: bitrouter
-            feature_set: mpp-solana
-            cargo_args: --no-default-features --features mpp-solana
-          - crate: bitrouter
             feature_set: tui
             cargo_args: --no-default-features --features tui
           - crate: bitrouter
@@ -88,9 +85,6 @@ jobs:
             feature_set: mpp-tempo
             cargo_args: --no-default-features --features mpp-tempo
           - crate: bitrouter-api
-            feature_set: mpp-solana
-            cargo_args: --no-default-features --features mpp-solana
-          - crate: bitrouter-api
             feature_set: all-features
             cargo_args: --all-features
           - crate: bitrouter-config
@@ -99,9 +93,6 @@ jobs:
           - crate: bitrouter-config
             feature_set: mpp-tempo
             cargo_args: --no-default-features --features mpp-tempo
-          - crate: bitrouter-config
-            feature_set: mpp-solana
-            cargo_args: --no-default-features --features mpp-solana
           - crate: bitrouter-config
             feature_set: no-features
             cargo_args: --no-default-features

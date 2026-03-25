@@ -112,10 +112,17 @@ impl BitrouterConfig {
         // Load environment (.env + process env)
         let env = load_env(env_file);
 
-        // Substitute env vars in the YAML tree, then deserialize
+        // Substitute env vars in the YAML tree, then deserialize.
+        // A comments-only YAML file parses as `null`; treat it as an empty object
+        // so that all `#[serde(default)]` fields are populated normally.
         let yaml_value: serde_json::Value = serde_saphyr::from_str(raw)
             .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
         let substituted = substitute_in_value(yaml_value, &env);
+        let substituted = if substituted.is_null() {
+            serde_json::Value::Object(serde_json::Map::new())
+        } else {
+            substituted
+        };
         let mut config: BitrouterConfig = serde_json::from_value(substituted)
             .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
 
