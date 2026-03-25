@@ -45,6 +45,9 @@ enum MppBackend {
         chain_id: u64,
         /// TIP-20 token used to pay gas fees for close transactions.
         currency: Address,
+        /// Serializes close transactions to prevent nonce collisions when
+        /// multiple channels close concurrently on the same signer.
+        close_lock: tokio::sync::Mutex<()>,
     },
     #[cfg(feature = "mpp-solana")]
     Solana(SolanaState),
@@ -198,6 +201,7 @@ impl MppState {
                 escrow_contract: escrow,
                 chain_id,
                 currency,
+                close_lock: tokio::sync::Mutex::new(()),
             },
         );
         Ok(())
@@ -472,32 +476,40 @@ impl MppState {
             .backend_for_chain(backend_key)
             .ok_or_else(|| format!("no backend for key: {backend_key}"))?;
 
-        let (store, provider, signer, escrow_contract, chain_id, currency) = match backend {
-            MppBackend::Tempo {
-                store,
-                provider,
-                close_signer,
-                escrow_contract,
-                chain_id,
-                currency,
-                ..
-            } => {
-                let signer = close_signer.as_ref().ok_or("close_signer not configured")?;
-                let provider = provider.as_ref().ok_or("close provider not available")?;
-                (
-                    Arc::clone(store),
-                    Arc::clone(provider),
-                    Arc::clone(signer),
-                    *escrow_contract,
-                    *chain_id,
-                    *currency,
-                )
-            }
-            #[cfg(feature = "mpp-solana")]
-            MppBackend::Solana(_) => {
-                return Err("server-side close not implemented for Solana".into());
-            }
-        };
+        let (store, provider, signer, escrow_contract, chain_id, currency, close_lock) =
+            match backend {
+                MppBackend::Tempo {
+                    store,
+                    provider,
+                    close_signer,
+                    escrow_contract,
+                    chain_id,
+                    currency,
+                    close_lock,
+                    ..
+                } => {
+                    let signer = close_signer.as_ref().ok_or("close_signer not configured")?;
+                    let provider = provider.as_ref().ok_or("close provider not available")?;
+                    (
+                        Arc::clone(store),
+                        Arc::clone(provider),
+                        Arc::clone(signer),
+                        *escrow_contract,
+                        *chain_id,
+                        *currency,
+                        close_lock,
+                    )
+                }
+                #[cfg(feature = "mpp-solana")]
+                MppBackend::Solana(_) => {
+                    return Err("server-side close not implemented for Solana".into());
+                }
+            };
+
+        // Serialize the entire read-submit-finalize flow to prevent:
+        // 1. Nonce collisions when multiple channels close on the same signer
+        // 2. Double-close when the same channel is closed by concurrent guards
+        let _guard = close_lock.lock().await;
 
         let channel = store
             .get_channel(channel_id)
