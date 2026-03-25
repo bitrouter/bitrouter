@@ -1,6 +1,6 @@
 api_protocol: openai
 api_base: https://api.bitrouter.ai/v1
-env_prefix: BITROUTER_NODE
+env_prefix: BITROUTER
 models:
   ai21/jamba-large-1.7:
     name: "AI21: Jamba Large 1.7"

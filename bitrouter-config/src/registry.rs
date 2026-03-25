@@ -10,10 +10,7 @@ const PROVIDER_DEFS: &[(&str, &str)] = &[
     ("openai", include_str!("../providers/openai.yaml")),
     ("anthropic", include_str!("../providers/anthropic.yaml")),
     ("google", include_str!("../providers/google.yaml")),
-    (
-        "bitrouter-node",
-        include_str!("../providers/bitrouter-node.yaml"),
-    ),
+    ("bitrouter", include_str!("../providers/bitrouter.yaml")),
     ("openrouter", include_str!("../providers/openrouter.yaml")),
     ("deepseek", include_str!("../providers/deepseek.yaml")),
     ("minimax", include_str!("../providers/minimax.yaml")),
