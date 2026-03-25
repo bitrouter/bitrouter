@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/bitrouter/bitrouter/compare/v0.14.0...v0.15.0)
+
+
+### ⛰️ Features
+
+- *(config)* Add deepseek, minimax, zai, moonshot, qwen, openrouter providers ([#185](https://github.com/bitrouter/bitrouter/pull/185)) - ([2ddd7cf](https://github.com/bitrouter/bitrouter/commit/2ddd7cfe40358351659ef9c08977759c6b9aab2a))
+- Configuration hot reload ([#179](https://github.com/bitrouter/bitrouter/pull/179)) - ([d116de2](https://github.com/bitrouter/bitrouter/commit/d116de233437f9476e0bbb9971efc8825a6ad7e8))
+
+### 🐛 Bug Fixes
+
+- *(mpp)* Add suggested_deposit to Solana session challenges ([#184](https://github.com/bitrouter/bitrouter/pull/184)) - ([82e02ab](https://github.com/bitrouter/bitrouter/commit/82e02ab9ed321f0eaa50002f85da3b1c84b022ba))
+- *(mpp)* Resolve Tempo backend lookup by payment method name ([#186](https://github.com/bitrouter/bitrouter/pull/186)) - ([fb2c81f](https://github.com/bitrouter/bitrouter/commit/fb2c81fb6372eeaf1d6d976c6e3451df40c99197))
+
+
 ## [0.14.0](https://github.com/bitrouter/bitrouter/compare/v0.13.0...v0.14.0)
 
 
