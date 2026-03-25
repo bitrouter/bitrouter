@@ -13,6 +13,10 @@ use crate::registry::{builtin_providers, merge_provider, resolve_providers};
 use crate::skill::SkillConfig;
 use crate::tool::ToolPricing;
 
+fn default_true() -> bool {
+    true
+}
+
 // ── Top-level configuration ──────────────────────────────────────────
 
 /// Root configuration file, typically `bitrouter.yaml`.
@@ -36,6 +40,12 @@ pub struct BitrouterConfig {
     /// MPP (Machine Payment Protocol) configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mpp: Option<MppConfig>,
+
+    /// When `true` (the default), built-in provider definitions are merged
+    /// into the provider set before user overrides are applied.  Set to
+    /// `false` to use *only* the providers declared in the config file.
+    #[serde(default = "default_true")]
+    pub inherit_defaults: bool,
 
     /// Provider definitions (merged on top of built-in providers).
     #[serde(default)]
@@ -126,15 +136,20 @@ impl BitrouterConfig {
         let mut config: BitrouterConfig = serde_json::from_value(substituted)
             .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
 
-        // Merge built-in providers with user overrides
-        let mut providers = builtin_providers();
-        for (name, user_provider) in config.providers.drain() {
-            if let Some(existing) = providers.get_mut(&name) {
-                merge_provider(existing, user_provider);
-            } else {
-                providers.insert(name, user_provider);
+        // Merge built-in providers with user overrides (unless opted out)
+        let providers = if config.inherit_defaults {
+            let mut base = builtin_providers();
+            for (name, user_provider) in config.providers.drain() {
+                if let Some(existing) = base.get_mut(&name) {
+                    merge_provider(existing, user_provider);
+                } else {
+                    base.insert(name, user_provider);
+                }
             }
-        }
+            base
+        } else {
+            std::mem::take(&mut config.providers)
+        };
 
         // Resolve derives + env_prefix
         config.providers = resolve_providers(providers, &env);
@@ -825,5 +840,31 @@ providers:
         // Should inherit the built-in openai models catalog
         let models = my_openai.models.as_ref().unwrap();
         assert!(models.contains_key("gpt-4o"));
+    }
+
+    #[test]
+    fn inherit_defaults_true_by_default() {
+        let config = BitrouterConfig::load_from_str("{}", None).unwrap();
+        assert!(config.inherit_defaults);
+        assert!(config.providers.contains_key("openai"));
+        assert!(config.providers.contains_key("bitrouter"));
+    }
+
+    #[test]
+    fn inherit_defaults_false_excludes_builtins() {
+        let yaml = r#"
+inherit_defaults: false
+providers:
+  custom:
+    api_protocol: openai
+    api_base: "https://custom.example.com/v1"
+    api_key: "sk-custom"
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        assert!(!config.inherit_defaults);
+        assert!(config.providers.contains_key("custom"));
+        assert!(!config.providers.contains_key("openai"));
+        assert!(!config.providers.contains_key("bitrouter"));
+        assert_eq!(config.providers.len(), 1);
     }
 }

@@ -14,6 +14,10 @@ use crate::config::{
     ApiProtocol, ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy,
 };
 
+/// The provider name used as fallback when the user has no explicit `models:`
+/// section configured.
+const DEFAULT_PROVIDER: &str = "bitrouter";
+
 /// A routing target with full resolution context including any per-endpoint overrides.
 #[derive(Debug, Clone)]
 pub struct ResolvedTarget {
@@ -27,11 +31,14 @@ pub struct ResolvedTarget {
 
 /// Configuration-driven routing table.
 ///
-/// Routes incoming model names to concrete provider targets using two strategies:
+/// Routes incoming model names to concrete provider targets using three strategies:
 ///
 /// 1. **Direct routing**: `"provider:model_id"` routes directly to the named provider.
-/// 2. **Model lookup**: Other names are looked up in the `models` map, which supports
-///    prioritized failover and round-robin load balancing.
+/// 2. **Model lookup**: Names are looked up in the `models` map, which supports
+///    prioritised failover and round-robin load balancing.
+/// 3. **Default provider fallback**: When no explicit `models` section is
+///    configured and the default provider (`bitrouter`) exists, bare model
+///    names are forwarded to that provider.
 pub struct ConfigRoutingTable {
     providers: HashMap<String, ProviderConfig>,
     models: HashMap<String, ModelConfig>,
@@ -102,6 +109,17 @@ impl ConfigRoutingTable {
             return self.select_endpoint(incoming, model_config);
         }
 
+        // Strategy 3: when no explicit models section is configured, fall back
+        // to the default provider (if it exists in the provider set).
+        if self.models.is_empty() && self.providers.contains_key(DEFAULT_PROVIDER) {
+            return Ok(ResolvedTarget {
+                provider_name: DEFAULT_PROVIDER.to_owned(),
+                model_id: incoming.to_owned(),
+                api_key_override: None,
+                api_base_override: None,
+            });
+        }
+
         Err(BitrouterError::invalid_request(
             None,
             format!("no route found for model: {incoming}"),
@@ -167,12 +185,13 @@ impl RoutingTable for ConfigRoutingTable {
 
     fn list_routes(&self) -> Vec<RouteEntry> {
         let mut entries = Vec::new();
-        for (model_name, model_config) in &self.models {
-            if let Some(endpoint) = model_config.endpoints.first() {
-                let protocol = self
-                    .providers
-                    .get(&endpoint.provider)
-                    .and_then(|p| p.api_protocol.as_ref())
+
+        if self.models.is_empty() {
+            // Fallback mode: surface the default provider's model catalog.
+            if let Some(provider) = self.providers.get(DEFAULT_PROVIDER) {
+                let protocol = provider
+                    .api_protocol
+                    .as_ref()
                     .map(|p| match p {
                         ApiProtocol::Openai => "openai",
                         ApiProtocol::Anthropic => "anthropic",
@@ -180,13 +199,39 @@ impl RoutingTable for ConfigRoutingTable {
                     })
                     .unwrap_or("openai")
                     .to_owned();
-                entries.push(RouteEntry {
-                    model: model_name.clone(),
-                    provider: endpoint.provider.clone(),
-                    protocol,
-                });
+                if let Some(models) = &provider.models {
+                    for model_id in models.keys() {
+                        entries.push(RouteEntry {
+                            model: model_id.clone(),
+                            provider: DEFAULT_PROVIDER.to_owned(),
+                            protocol: protocol.clone(),
+                        });
+                    }
+                }
+            }
+        } else {
+            for (model_name, model_config) in &self.models {
+                if let Some(endpoint) = model_config.endpoints.first() {
+                    let protocol = self
+                        .providers
+                        .get(&endpoint.provider)
+                        .and_then(|p| p.api_protocol.as_ref())
+                        .map(|p| match p {
+                            ApiProtocol::Openai => "openai",
+                            ApiProtocol::Anthropic => "anthropic",
+                            ApiProtocol::Google => "google",
+                        })
+                        .unwrap_or("openai")
+                        .to_owned();
+                    entries.push(RouteEntry {
+                        model: model_name.clone(),
+                        provider: endpoint.provider.clone(),
+                        protocol,
+                    });
+                }
             }
         }
+
         entries.sort_by(|a, b| a.model.cmp(&b.model));
         entries
     }
@@ -194,42 +239,79 @@ impl RoutingTable for ConfigRoutingTable {
 
 impl ModelRegistry for ConfigRoutingTable {
     fn list_models(&self) -> Vec<ModelEntry> {
-        let mut entries: Vec<ModelEntry> = self
-            .models
-            .iter()
-            .map(|(model_name, model_config)| {
-                let providers: Vec<String> = model_config
-                    .endpoints
-                    .iter()
-                    .map(|ep| ep.provider.clone())
-                    .collect();
-                let pricing = convert_pricing(&model_config.pricing);
-                let pricing = if pricing.is_empty() {
-                    None
-                } else {
-                    Some(pricing)
-                };
-                ModelEntry {
-                    id: model_name.clone(),
-                    providers,
-                    name: model_config.name.clone(),
-                    description: None,
-                    max_input_tokens: model_config.max_input_tokens,
-                    max_output_tokens: model_config.max_output_tokens,
-                    input_modalities: model_config
-                        .input_modalities
+        let mut entries: Vec<ModelEntry> = if self.models.is_empty() {
+            // Fallback mode: surface the default provider's model catalog.
+            self.providers
+                .get(DEFAULT_PROVIDER)
+                .and_then(|p| p.models.as_ref())
+                .into_iter()
+                .flat_map(|models| {
+                    models.iter().map(|(model_id, info)| {
+                        let pricing = convert_pricing(&info.pricing);
+                        let pricing = if pricing.is_empty() {
+                            None
+                        } else {
+                            Some(pricing)
+                        };
+                        ModelEntry {
+                            id: model_id.clone(),
+                            providers: vec![DEFAULT_PROVIDER.to_owned()],
+                            name: info.name.clone(),
+                            description: info.description.clone(),
+                            max_input_tokens: info.max_input_tokens,
+                            max_output_tokens: info.max_output_tokens,
+                            input_modalities: info
+                                .input_modalities
+                                .iter()
+                                .map(|m| m.to_string())
+                                .collect(),
+                            output_modalities: info
+                                .output_modalities
+                                .iter()
+                                .map(|m| m.to_string())
+                                .collect(),
+                            pricing,
+                        }
+                    })
+                })
+                .collect()
+        } else {
+            self.models
+                .iter()
+                .map(|(model_name, model_config)| {
+                    let providers: Vec<String> = model_config
+                        .endpoints
                         .iter()
-                        .map(|m| m.to_string())
-                        .collect(),
-                    output_modalities: model_config
-                        .output_modalities
-                        .iter()
-                        .map(|m| m.to_string())
-                        .collect(),
-                    pricing,
-                }
-            })
-            .collect();
+                        .map(|ep| ep.provider.clone())
+                        .collect();
+                    let pricing = convert_pricing(&model_config.pricing);
+                    let pricing = if pricing.is_empty() {
+                        None
+                    } else {
+                        Some(pricing)
+                    };
+                    ModelEntry {
+                        id: model_name.clone(),
+                        providers,
+                        name: model_config.name.clone(),
+                        description: None,
+                        max_input_tokens: model_config.max_input_tokens,
+                        max_output_tokens: model_config.max_output_tokens,
+                        input_modalities: model_config
+                            .input_modalities
+                            .iter()
+                            .map(|m| m.to_string())
+                            .collect(),
+                        output_modalities: model_config
+                            .output_modalities
+                            .iter()
+                            .map(|m| m.to_string())
+                            .collect(),
+                        pricing,
+                    }
+                })
+                .collect()
+        };
         entries.sort_by(|a, b| a.id.cmp(&b.id));
         entries
     }
@@ -504,5 +586,141 @@ mod tests {
         assert!(info.name.is_none());
         assert!(info.max_input_tokens.is_none());
         assert!(info.input_modalities.is_empty());
+    }
+
+    // ── Default provider fallback tests ──────────────────────────────
+
+    fn providers_with_bitrouter() -> HashMap<String, ProviderConfig> {
+        let mut p = test_providers();
+        p.insert(
+            "bitrouter".into(),
+            ProviderConfig {
+                api_protocol: Some(ApiProtocol::Openai),
+                api_base: Some("https://api.bitrouter.ai/v1".into()),
+                models: Some(HashMap::from([
+                    (
+                        "openai/gpt-4o".into(),
+                        ModelInfo {
+                            name: Some("GPT-4o".into()),
+                            max_input_tokens: Some(128000),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        "anthropic/claude-sonnet-4".into(),
+                        ModelInfo {
+                            name: Some("Claude Sonnet 4".into()),
+                            max_input_tokens: Some(200000),
+                            ..Default::default()
+                        },
+                    ),
+                ])),
+                ..Default::default()
+            },
+        );
+        p
+    }
+
+    #[test]
+    fn fallback_routes_bare_name_to_default_provider() {
+        let table = ConfigRoutingTable::new(providers_with_bitrouter(), HashMap::new());
+        let target = table.resolve("openai/gpt-4o").unwrap();
+        assert_eq!(target.provider_name, "bitrouter");
+        assert_eq!(target.model_id, "openai/gpt-4o");
+    }
+
+    #[test]
+    fn fallback_routes_arbitrary_bare_name() {
+        let table = ConfigRoutingTable::new(providers_with_bitrouter(), HashMap::new());
+        let target = table.resolve("some-unknown-model").unwrap();
+        assert_eq!(target.provider_name, "bitrouter");
+        assert_eq!(target.model_id, "some-unknown-model");
+    }
+
+    #[test]
+    fn fallback_does_not_fire_when_models_configured() {
+        let mut models = HashMap::new();
+        models.insert(
+            "my-gpt4".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![ModelEndpoint {
+                    provider: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::new(providers_with_bitrouter(), models);
+        // A name NOT in the models map should error (no fallback).
+        let result = table.resolve("openai/gpt-4o");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fallback_not_active_without_default_provider() {
+        // test_providers() has no "bitrouter" provider
+        let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
+        let result = table.resolve("openai/gpt-4o");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn direct_routing_takes_precedence_over_fallback() {
+        let table = ConfigRoutingTable::new(providers_with_bitrouter(), HashMap::new());
+        // With colon syntax, should route to openai directly, not bitrouter
+        let target = table.resolve("openai:gpt-4o").unwrap();
+        assert_eq!(target.provider_name, "openai");
+        assert_eq!(target.model_id, "gpt-4o");
+    }
+
+    #[test]
+    fn explicit_bitrouter_prefix_routes_directly() {
+        let table = ConfigRoutingTable::new(providers_with_bitrouter(), HashMap::new());
+        let target = table.resolve("bitrouter:openai/gpt-4o").unwrap();
+        assert_eq!(target.provider_name, "bitrouter");
+        assert_eq!(target.model_id, "openai/gpt-4o");
+    }
+
+    #[test]
+    fn fallback_list_routes_surfaces_default_catalog() {
+        let table = ConfigRoutingTable::new(providers_with_bitrouter(), HashMap::new());
+        let routes = table.list_routes();
+        assert_eq!(routes.len(), 2);
+        assert!(routes.iter().all(|r| r.provider == "bitrouter"));
+        assert!(routes.iter().any(|r| r.model == "openai/gpt-4o"));
+        assert!(
+            routes
+                .iter()
+                .any(|r| r.model == "anthropic/claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn fallback_list_models_surfaces_default_catalog() {
+        let table = ConfigRoutingTable::new(providers_with_bitrouter(), HashMap::new());
+        let models = table.list_models();
+        assert_eq!(models.len(), 2);
+        assert!(models.iter().any(|m| m.id == "openai/gpt-4o"));
+        assert!(models.iter().any(|m| m.id == "anthropic/claude-sonnet-4"));
+        // Verify metadata is surfaced
+        let gpt = models.iter().find(|m| m.id == "openai/gpt-4o").unwrap();
+        assert_eq!(gpt.name.as_deref(), Some("GPT-4o"));
+        assert_eq!(gpt.max_input_tokens, Some(128000));
+        assert_eq!(gpt.providers, vec!["bitrouter"]);
+    }
+
+    #[test]
+    fn no_fallback_list_routes_empty_without_default_provider() {
+        let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
+        assert!(table.list_routes().is_empty());
+    }
+
+    #[test]
+    fn no_fallback_list_models_empty_without_default_provider() {
+        let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
+        assert!(table.list_models().is_empty());
     }
 }
