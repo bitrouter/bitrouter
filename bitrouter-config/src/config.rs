@@ -418,6 +418,12 @@ pub struct TempoMppConfig {
     /// Enable fee sponsorship for all challenges.
     #[serde(default)]
     pub fee_payer: bool,
+
+    /// EVM hex private key for server-initiated channel close and settlement.
+    /// When set, the server can call `close()` on the escrow contract on behalf
+    /// of the payee after a client sends a close credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_signer: Option<String>,
 }
 
 /// Solana-specific MPP configuration.

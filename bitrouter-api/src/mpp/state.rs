@@ -136,6 +136,16 @@ impl MppState {
 
         let session_method =
             TempoSessionMethod::new(session_provider, store.clone(), session_config);
+
+        let session_method = if let Some(ref key_hex) = tempo.close_signer {
+            let signer: mpp::PrivateKeySigner = key_hex
+                .parse()
+                .map_err(|e| mpp::MppError::InvalidConfig(format!("invalid close_signer: {e}")))?;
+            session_method.with_close_signer(signer)
+        } else {
+            session_method
+        };
+
         let mpp_instance = mpp_instance.with_session_method(session_method);
 
         let caip2 = format!("eip155:{chain_id}");
