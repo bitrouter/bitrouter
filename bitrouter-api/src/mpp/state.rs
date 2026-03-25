@@ -43,6 +43,8 @@ enum MppBackend {
         close_signer: Option<Arc<mpp::PrivateKeySigner>>,
         escrow_contract: Address,
         chain_id: u64,
+        /// TIP-20 token used to pay gas fees for close transactions.
+        currency: Address,
     },
     #[cfg(feature = "mpp-solana")]
     Solana(SolanaState),
@@ -173,6 +175,18 @@ impl MppState {
 
         let mpp_instance = mpp_instance.with_session_method(session_method);
 
+        // Resolve the TIP-20 currency address for gas fee payment on close transactions.
+        let currency: Address = tempo
+            .currency
+            .as_deref()
+            .unwrap_or(if chain_id == 42431 {
+                mpp::protocol::methods::tempo::DEFAULT_CURRENCY_TESTNET
+            } else {
+                mpp::protocol::methods::tempo::DEFAULT_CURRENCY_MAINNET
+            })
+            .parse()
+            .map_err(|e| mpp::MppError::InvalidConfig(format!("invalid currency: {e}")))?;
+
         let caip2 = format!("eip155:{chain_id}");
         self.backends.insert(
             caip2,
@@ -183,6 +197,7 @@ impl MppState {
                 close_signer,
                 escrow_contract: escrow,
                 chain_id,
+                currency,
             },
         );
         Ok(())
@@ -457,13 +472,14 @@ impl MppState {
             .backend_for_chain(backend_key)
             .ok_or_else(|| format!("no backend for key: {backend_key}"))?;
 
-        let (store, provider, signer, escrow_contract, chain_id) = match backend {
+        let (store, provider, signer, escrow_contract, chain_id, currency) = match backend {
             MppBackend::Tempo {
                 store,
                 provider,
                 close_signer,
                 escrow_contract,
                 chain_id,
+                currency,
                 ..
             } => {
                 let signer = close_signer.as_ref().ok_or("close_signer not configured")?;
@@ -474,6 +490,7 @@ impl MppState {
                     Arc::clone(signer),
                     *escrow_contract,
                     *chain_id,
+                    *currency,
                 )
             }
             #[cfg(feature = "mpp-solana")]
@@ -509,6 +526,7 @@ impl MppState {
             channel_id,
             channel.highest_voucher_amount,
             voucher_sig,
+            currency,
         )
         .await?;
 
@@ -715,6 +733,7 @@ async fn solana_verify_session(
 ///
 /// Returns the transaction hash on success.
 #[cfg(feature = "mpp-tempo")]
+#[allow(clippy::too_many_arguments)]
 async fn submit_close_tx(
     provider: &TempoProvider,
     signer: &mpp::PrivateKeySigner,
@@ -723,6 +742,7 @@ async fn submit_close_tx(
     channel_id: &str,
     cumulative_amount: u128,
     voucher_signature: &[u8],
+    fee_token: Address,
 ) -> Result<String, String> {
     use alloy::eips::Encodable2718;
     use alloy::primitives::{B256, Bytes};
@@ -770,6 +790,7 @@ async fn submit_close_tx(
             value: alloy::primitives::U256::ZERO,
             input: Bytes::from(close_data),
         }],
+        fee_token: Some(fee_token),
         ..Default::default()
     };
 
