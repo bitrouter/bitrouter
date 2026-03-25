@@ -1,0 +1,132 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: -D warnings
+  RUSTUP_MAX_RETRIES: 10
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: Check for new commits
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'bitrouter'
+    outputs:
+      has_new_commits: ${{ steps.check.outputs.has_new_commits }}
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check for new commits since last nightly
+        id: check
+        run: |
+          HEAD=$(git rev-parse HEAD)
+          echo "sha=$HEAD" >> "$GITHUB_OUTPUT"
+          NIGHTLY_SHA=$(git rev-list -n 1 nightly 2>/dev/null || echo "")
+          if [ "$HEAD" = "$NIGHTLY_SHA" ]; then
+            echo "No new commits since last nightly. Skipping."
+            echo "has_new_commits=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New commits found. Proceeding with nightly build."
+            echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  prepare-release:
+    name: Prepare nightly release
+    needs: check
+    if: needs.check.outputs.has_new_commits == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Force-update nightly tag to HEAD
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f nightly "${{ needs.check.outputs.sha }}"
+          git push origin nightly --force
+          echo "date=$(date -u '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+        id: tag
+      - uses: ncipollo/release-action@v1
+        with:
+          tag: nightly
+          commit: ${{ needs.check.outputs.sha }}
+          name: "Nightly ${{ steps.tag.outputs.date }}"
+          body: |
+            Automated nightly build from [`${{ needs.check.outputs.sha }}`](https://github.com/${{ github.repository }}/commit/${{ needs.check.outputs.sha }}).
+          prerelease: true
+          makeLatest: false
+          allowUpdates: true
+          removeArtifacts: true
+          omitNameDuringUpdate: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-assets:
+    name: ${{ matrix.target }}
+    needs: [check, prepare-release]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
+        if: startsWith(matrix.os, 'ubuntu') && !contains(matrix.target, '-musl')
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+        if: contains(matrix.target, '-musl')
+      - run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "${GITHUB_ENV}"
+        if: endsWith(matrix.target, 'windows-msvc')
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: bitrouter
+          target: ${{ matrix.target }}
+          tar: unix
+          zip: windows
+          ref: refs/tags/nightly
+          token: ${{ secrets.GITHUB_TOKEN }}
