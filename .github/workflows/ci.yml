@@ -82,6 +82,12 @@ jobs:
             feature_set: google
             cargo_args: --no-default-features --features google
           - crate: bitrouter-api
+            feature_set: a2a
+            cargo_args: --no-default-features --features a2a
+          - crate: bitrouter-api
+            feature_set: mcp
+            cargo_args: --no-default-features --features mcp
+          - crate: bitrouter-api
             feature_set: mpp-tempo
             cargo_args: --no-default-features --features mpp-tempo
           - crate: bitrouter-api
