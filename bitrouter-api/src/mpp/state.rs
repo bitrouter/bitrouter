@@ -45,6 +45,8 @@ enum MppBackend {
         chain_id: u64,
         /// TIP-20 token used to pay gas fees for close transactions.
         currency: Address,
+        /// Suggested deposit for session channel opening (base units).
+        suggested_deposit: Option<String>,
         /// Serializes close transactions to prevent nonce collisions when
         /// multiple channels close concurrently on the same signer.
         close_lock: tokio::sync::Mutex<()>,
@@ -201,6 +203,7 @@ impl MppState {
                 escrow_contract: escrow,
                 chain_id,
                 currency,
+                suggested_deposit: tempo.default_deposit.clone(),
                 close_lock: tokio::sync::Mutex::new(()),
             },
         );
@@ -585,7 +588,21 @@ fn backend_session_challenge(
 ) -> Result<mpp::PaymentChallenge, mpp::MppError> {
     match backend {
         #[cfg(feature = "mpp-tempo")]
-        MppBackend::Tempo { mpp, .. } => {
+        MppBackend::Tempo {
+            mpp,
+            suggested_deposit,
+            ..
+        } => {
+            // Merge backend-level suggested_deposit into options when the
+            // caller did not provide one.
+            let options = if options.suggested_deposit.is_none() {
+                SessionChallengeOptions {
+                    suggested_deposit: suggested_deposit.as_deref(),
+                    ..options
+                }
+            } else {
+                options
+            };
             let currency = mpp
                 .currency()
                 .ok_or_else(|| mpp::MppError::InvalidConfig("currency not configured".into()))?;

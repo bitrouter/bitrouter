@@ -662,11 +662,19 @@ fn build_mpp_client_from_state(
         .and_then(|t| t.rpc_url.as_deref())
         .unwrap_or(crate::runtime::mpp_client::DEFAULT_TEMPO_RPC_URL);
 
+    let default_deposit = config
+        .mpp
+        .as_ref()
+        .and_then(|m| m.networks.tempo.as_ref())
+        .and_then(|t| t.default_deposit.as_deref())
+        .and_then(|s| s.parse::<u128>().ok());
+
     match crate::runtime::mpp_client::build_mpp_client(
         &keypair,
         rpc_url,
         reqwest::Client::new(),
         true,
+        default_deposit,
     ) {
         Ok(client) => {
             tracing::info!(
