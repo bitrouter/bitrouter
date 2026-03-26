@@ -723,6 +723,10 @@ async fn handle_auth_rejection(
         )) as Box<dyn warp::Reply>);
     }
 
+    if let Some(resp) = bitrouter_api::error::handle_bitrouter_rejection(&rejection) {
+        return Ok(Box::new(resp) as Box<dyn warp::Reply>);
+    }
+
     Err(rejection)
 }
 
