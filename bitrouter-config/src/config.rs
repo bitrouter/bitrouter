@@ -446,6 +446,11 @@ pub struct TempoMppConfig {
     /// of the payee after a client sends a close credential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close_signer: Option<String>,
+
+    /// Default deposit amount (in base units) for client-side session channels.
+    /// Used when the server challenge does not include `suggestedDeposit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_deposit: Option<String>,
 }
 
 /// Solana-specific MPP configuration.

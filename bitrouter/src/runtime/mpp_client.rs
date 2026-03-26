@@ -1,9 +1,10 @@
 //! MPP (Machine Payment Protocol) client builder.
 //!
 //! Constructs a [`ClientWithMiddleware`] that automatically handles HTTP 402
-//! responses from upstream providers using the Tempo payment network.
+//! responses from upstream providers using Tempo session payments.
 //! When an upstream returns 402 with a `WWW-Authenticate` challenge, the
-//! middleware signs a TIP-20 transfer and retries with a credential.
+//! middleware opens a payment channel (or sends a voucher on an existing one)
+//! and retries with a credential.
 //!
 //! The mpp crate ships its own `PaymentMiddleware` for `reqwest-middleware 0.4`,
 //! but bitrouter uses `0.5`. This module provides a thin adapter
@@ -13,7 +14,7 @@
 use async_trait::async_trait;
 use bitrouter_core::auth::{chain::Chain, keys::MasterKeypair};
 use http::Extensions;
-use mpp::client::{PaymentProvider, TempoProvider};
+use mpp::client::{PaymentProvider, TempoSessionProvider};
 use mpp::protocol::core::{AUTHORIZATION_HEADER, format_authorization, parse_www_authenticate};
 use reqwest::{Request, Response, StatusCode, header::WWW_AUTHENTICATE};
 use reqwest_middleware::{ClientWithMiddleware, Middleware, Next};
@@ -127,23 +128,32 @@ where
 /// The returned [`ClientWithMiddleware`] wraps the given base client with
 /// [`MppPaymentMiddleware`]: every outgoing request is sent normally, but if
 /// the upstream returns HTTP 402 with a `WWW-Authenticate` header the
-/// middleware signs a Tempo payment and retries.
+/// middleware opens a payment channel (or sends a voucher) and retries.
 ///
 /// When `with_jwt` is `true`, a [`JwtAuthMiddleware`] is also stacked so that
 /// each request carries an `Authorization: Bearer <jwt>` header signed by the
 /// master keypair. The MPP payment middleware then combines the JWT with the
 /// payment credential on 402 retry.
+///
+/// `default_deposit` sets the fallback deposit (in base units) when the server
+/// challenge omits `suggestedDeposit`. If `None`, a built-in default of
+/// 10 pathUSD (10_000_000 atomic units) is used.
 pub fn build_mpp_client(
     keypair: &MasterKeypair,
     rpc_url: &str,
     base_client: reqwest::Client,
     with_jwt: bool,
+    default_deposit: Option<u128>,
 ) -> Result<ClientWithMiddleware> {
+    // 0.1 USDC.e (6 decimals).
+    const FALLBACK_DEPOSIT: u128 = 100_000;
+
     let signer = keypair
         .evm_signer()
         .map_err(|e| RuntimeError::Mpp(format!("failed to derive EVM signer: {e}")))?;
-    let provider = TempoProvider::new(signer, rpc_url)
-        .map_err(|e| RuntimeError::Mpp(format!("failed to create Tempo provider: {e}")))?;
+    let provider = TempoSessionProvider::new(signer, rpc_url)
+        .map_err(|e| RuntimeError::Mpp(format!("failed to create Tempo session provider: {e}")))?
+        .with_default_deposit(default_deposit.unwrap_or(FALLBACK_DEPOSIT));
     let middleware = MppPaymentMiddleware::new(provider);
 
     let mut builder = reqwest_middleware::ClientBuilder::new(base_client);
