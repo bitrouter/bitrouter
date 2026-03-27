@@ -129,7 +129,7 @@ pub enum McpPromptContent {
 
 // ── Core conversion ────────────────────────────────────────────────
 
-impl From<McpTool> for bitrouter_core::routers::registry::ToolEntry {
+impl From<McpTool> for crate::routers::registry::ToolEntry {
     fn from(t: McpTool) -> Self {
         let provider = t
             .name

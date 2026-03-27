@@ -382,12 +382,14 @@ where
             _refresh_guard,
             _bridge_guards,
         ) = {
+            use bitrouter_core::api::mcp::gateway::{
+                McpPromptServer, McpResourceServer, McpToolServer,
+            };
             use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
             use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
-            use bitrouter_mcp::bridge::SingleServerBridge;
-            use bitrouter_mcp::client::registry::ConfigMcpRegistry;
-            use bitrouter_mcp::client::upstream::UpstreamConnection;
-            use bitrouter_mcp::server::{McpPromptServer, McpResourceServer, McpToolServer};
+            use bitrouter_providers::mcp::client::bridge::SingleServerBridge;
+            use bitrouter_providers::mcp::client::registry::ConfigMcpRegistry;
+            use bitrouter_providers::mcp::client::upstream::UpstreamConnection;
 
             let mcp_configs = self.config.mcp_servers.clone();
             let mcp_groups = self.config.mcp_groups.clone();
@@ -446,7 +448,8 @@ where
             // Build bridge endpoints for servers with `bridge: true`.
             let mut bridge_map: std::collections::HashMap<String, Arc<SingleServerBridge>> =
                 std::collections::HashMap::new();
-            let mut bridge_guards: Vec<bitrouter_mcp::client::registry::RefreshGuard> = Vec::new();
+            let mut bridge_guards: Vec<bitrouter_providers::mcp::client::registry::RefreshGuard> =
+                Vec::new();
             if let Some(ref reg) = inner {
                 for config in mcp_configs.iter().filter(|c| c.bridge) {
                     if let Some(conn) = connections.get(&config.name) {

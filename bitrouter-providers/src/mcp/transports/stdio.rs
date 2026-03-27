@@ -1,6 +1,6 @@
 //! Stdio transport for upstream MCP connections via `rmcp`.
 //!
-//! This module is feature-gated behind `client-stdio` and provides
+//! This module is feature-gated behind `mcp-stdio` and provides
 //! child-process MCP connections. It converts `rmcp` types to the
 //! crate's own `types` module types at the boundary.
 
@@ -16,8 +16,8 @@ use rmcp::service::{RoleClient, RunningService, ServiceExt as _};
 use rmcp::transport::TokioChildProcess;
 use tokio::sync::Notify;
 
-use crate::error::McpGatewayError;
-use crate::types::{
+use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::types::{
     InitializeResult, McpContent, McpGetPromptResult, McpPrompt, McpPromptArgument,
     McpPromptContent, McpPromptMessage, McpResource, McpResourceContent, McpResourceTemplate,
     McpRole, McpTool, McpToolCallResult, ServerCapabilities, ServerInfo, ToolsCapability,

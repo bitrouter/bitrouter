@@ -1,17 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
 use tokio::sync::{Notify, RwLock, broadcast};
 
 use bitrouter_core::routers::upstream::{ToolServerAccessGroups, ToolServerConfig};
 
-use crate::error::McpGatewayError;
-use crate::server::{
+use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::gateway::{
     McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
     McpSubscriptionServer, McpToolServer,
 };
-use crate::types::{
+use bitrouter_core::api::mcp::types::{
     CompleteParams, CompleteResult, Completion, LoggingLevel, McpGetPromptResult, McpPrompt,
     McpResource, McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
 };
@@ -277,90 +276,6 @@ impl bitrouter_core::routers::registry::ToolRegistry for ConfigMcpRegistry {
     }
 }
 
-// ── McpToolServer impl (raw, on ConfigMcpRegistry) ──────────────────
-
-/// `McpToolServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
-impl McpToolServer for Arc<ConfigMcpRegistry> {
-    async fn list_tools(&self) -> Vec<McpTool> {
-        <ConfigMcpRegistry as McpToolServer>::list_tools(self).await
-    }
-
-    async fn call_tool(
-        &self,
-        name: &str,
-        arguments: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> Result<McpToolCallResult, McpGatewayError> {
-        <ConfigMcpRegistry as McpToolServer>::call_tool(self, name, arguments).await
-    }
-
-    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
-        <ConfigMcpRegistry as McpToolServer>::subscribe_tool_changes(self)
-    }
-}
-
-/// `McpResourceServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
-impl McpResourceServer for Arc<ConfigMcpRegistry> {
-    async fn list_resources(&self) -> Vec<McpResource> {
-        (**self).list_resources().await
-    }
-
-    async fn read_resource(&self, uri: &str) -> Result<Vec<McpResourceContent>, McpGatewayError> {
-        (**self).read_resource(uri).await
-    }
-
-    async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
-        (**self).list_resource_templates().await
-    }
-
-    fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
-        (**self).subscribe_resource_changes()
-    }
-}
-
-/// `McpSubscriptionServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
-impl McpSubscriptionServer for Arc<ConfigMcpRegistry> {
-    async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
-        (**self).subscribe_resource(uri).await
-    }
-
-    async fn unsubscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
-        (**self).unsubscribe_resource(uri).await
-    }
-}
-
-/// `McpLoggingServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
-impl McpLoggingServer for Arc<ConfigMcpRegistry> {
-    async fn set_logging_level(&self, level: LoggingLevel) -> Result<(), McpGatewayError> {
-        (**self).set_logging_level(level).await
-    }
-}
-
-/// `McpCompletionServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
-impl McpCompletionServer for Arc<ConfigMcpRegistry> {
-    async fn complete(&self, params: CompleteParams) -> Result<CompleteResult, McpGatewayError> {
-        (**self).complete(params).await
-    }
-}
-
-/// `McpPromptServer` for `Arc<ConfigMcpRegistry>` — delegates to inner.
-impl McpPromptServer for Arc<ConfigMcpRegistry> {
-    async fn list_prompts(&self) -> Vec<McpPrompt> {
-        (**self).list_prompts().await
-    }
-
-    async fn get_prompt(
-        &self,
-        name: &str,
-        arguments: Option<std::collections::HashMap<String, String>>,
-    ) -> Result<McpGetPromptResult, McpGatewayError> {
-        (**self).get_prompt(name, arguments).await
-    }
-
-    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
-        (**self).subscribe_prompt_changes()
-    }
-}
-
 /// Raw [`McpToolServer`] impl on `ConfigMcpRegistry`.
 impl McpToolServer for ConfigMcpRegistry {
     async fn list_tools(&self) -> Vec<McpTool> {
@@ -377,122 +292,6 @@ impl McpToolServer for ConfigMcpRegistry {
 
     fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
         self.tool_change_tx.subscribe()
-    }
-}
-
-// ── Protocol trait impls on DynamicToolRegistry<ConfigMcpRegistry> ───
-
-/// [`McpToolServer`] for the wrapped registry — applies param restrictions
-/// at call time and delegates tool listing through the filtered wrapper.
-impl McpToolServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
-    async fn list_tools(&self) -> Vec<McpTool> {
-        let core_tools =
-            <Self as bitrouter_core::routers::registry::ToolRegistry>::list_tools(self).await;
-        core_tools
-            .into_iter()
-            .map(|t| McpTool {
-                name: t.id,
-                description: t.description,
-                input_schema: t.input_schema.unwrap_or_default(),
-            })
-            .collect()
-    }
-
-    async fn call_tool(
-        &self,
-        name: &str,
-        mut arguments: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> Result<McpToolCallResult, McpGatewayError> {
-        // Extract server name from namespaced tool call.
-        let (server_name, tool_name) = parse_namespaced(name)?;
-
-        // Enforce parameter restrictions from the wrapper's state.
-        if let Some(restrictions) = self.get_param_restrictions(server_name) {
-            restrictions
-                .check(tool_name, &mut arguments)
-                .map_err(|e| match e {
-                    bitrouter_core::errors::BitrouterError::InvalidRequest { message, .. } => {
-                        McpGatewayError::ParamDenied {
-                            tool: name.to_owned(),
-                            param: message,
-                        }
-                    }
-                    other => McpGatewayError::UpstreamCall {
-                        name: name.to_owned(),
-                        reason: other.to_string(),
-                    },
-                })?;
-        }
-
-        // Delegate actual call to inner ConfigMcpRegistry.
-        self.inner().call_tool(name, arguments).await
-    }
-
-    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
-        self.inner().subscribe_tool_changes()
-    }
-}
-
-/// [`McpResourceServer`] — delegates to inner `ConfigMcpRegistry`.
-impl McpResourceServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
-    async fn list_resources(&self) -> Vec<McpResource> {
-        <ConfigMcpRegistry as McpResourceServer>::list_resources(self.inner()).await
-    }
-
-    async fn read_resource(&self, uri: &str) -> Result<Vec<McpResourceContent>, McpGatewayError> {
-        <ConfigMcpRegistry as McpResourceServer>::read_resource(self.inner(), uri).await
-    }
-
-    async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
-        <ConfigMcpRegistry as McpResourceServer>::list_resource_templates(self.inner()).await
-    }
-
-    fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
-        <ConfigMcpRegistry as McpResourceServer>::subscribe_resource_changes(self.inner())
-    }
-}
-
-/// [`McpSubscriptionServer`] — delegates to inner `ConfigMcpRegistry`.
-impl McpSubscriptionServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
-    async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
-        <ConfigMcpRegistry as McpSubscriptionServer>::subscribe_resource(self.inner(), uri).await
-    }
-
-    async fn unsubscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
-        <ConfigMcpRegistry as McpSubscriptionServer>::unsubscribe_resource(self.inner(), uri).await
-    }
-}
-
-/// [`McpLoggingServer`] — delegates to inner `ConfigMcpRegistry`.
-impl McpLoggingServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
-    async fn set_logging_level(&self, level: LoggingLevel) -> Result<(), McpGatewayError> {
-        <ConfigMcpRegistry as McpLoggingServer>::set_logging_level(self.inner(), level).await
-    }
-}
-
-/// [`McpCompletionServer`] — delegates to inner `ConfigMcpRegistry`.
-impl McpCompletionServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
-    async fn complete(&self, params: CompleteParams) -> Result<CompleteResult, McpGatewayError> {
-        <ConfigMcpRegistry as McpCompletionServer>::complete(self.inner(), params).await
-    }
-}
-
-/// [`McpPromptServer`] — delegates to inner `ConfigMcpRegistry`.
-impl McpPromptServer for DynamicToolRegistry<Arc<ConfigMcpRegistry>> {
-    async fn list_prompts(&self) -> Vec<McpPrompt> {
-        <ConfigMcpRegistry as McpPromptServer>::list_prompts(self.inner()).await
-    }
-
-    async fn get_prompt(
-        &self,
-        name: &str,
-        arguments: Option<std::collections::HashMap<String, String>>,
-    ) -> Result<McpGetPromptResult, McpGatewayError> {
-        <ConfigMcpRegistry as McpPromptServer>::get_prompt(self.inner(), name, arguments).await
-    }
-
-    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
-        <ConfigMcpRegistry as McpPromptServer>::subscribe_prompt_changes(self.inner())
     }
 }
 

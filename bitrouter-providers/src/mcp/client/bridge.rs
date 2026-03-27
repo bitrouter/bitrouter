@@ -6,7 +6,7 @@
 //! `POST /mcp/{name}` and `GET /mcp/{name}/sse`.
 //!
 //! The bridge shares the same [`UpstreamConnection`] as the aggregated
-//! [`ConfigMcpRegistry`](crate::client::registry::ConfigMcpRegistry), so
+//! [`ConfigMcpRegistry`](crate::mcp::client::registry::ConfigMcpRegistry), so
 //! only one child process is spawned per stdio server.  Change notifications
 //! are forwarded from the registry's downstream broadcast channels to the
 //! bridge's own broadcast channels.
@@ -15,14 +15,14 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
-use crate::client::registry::RefreshGuard;
-use crate::client::upstream::UpstreamConnection;
-use crate::error::McpGatewayError;
-use crate::server::{
+use super::registry::RefreshGuard;
+use super::upstream::UpstreamConnection;
+use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::gateway::{
     McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
     McpSubscriptionServer, McpToolServer,
 };
-use crate::types::{
+use bitrouter_core::api::mcp::types::{
     CompleteParams, CompleteResult, Completion, LoggingLevel, McpGetPromptResult, McpPrompt,
     McpResource, McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
 };

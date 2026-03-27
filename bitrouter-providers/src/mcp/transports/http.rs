@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use tokio::sync::RwLock;
 
-use crate::error::McpGatewayError;
-use crate::types::{
+use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::types::{
     CallToolParams, CallToolResult, ClientCapabilities, ClientInfo, GetPromptParams,
     InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,

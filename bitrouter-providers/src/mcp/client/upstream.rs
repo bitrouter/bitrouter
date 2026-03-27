@@ -1,7 +1,7 @@
 //! Transport-agnostic upstream MCP connection.
 //!
-//! Uses [`McpTransport`](crate::transports::McpTransport) implementations
-//! via [`TransportKind`](crate::transports::TransportKind) for static dispatch.
+//! Uses [`McpTransport`](crate::mcp::transports::McpTransport) implementations
+//! via [`TransportKind`](crate::mcp::transports::TransportKind) for static dispatch.
 
 use std::sync::Arc;
 
@@ -9,10 +9,10 @@ use tokio::sync::{Notify, RwLock};
 
 use bitrouter_core::routers::upstream::{ToolServerConfig, ToolServerTransport};
 
-use crate::error::McpGatewayError;
-use crate::transports::McpTransport;
-use crate::transports::TransportKind;
-use crate::types::{
+use crate::mcp::transports::McpTransport;
+use crate::mcp::transports::TransportKind;
+use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::types::{
     McpGetPromptResult, McpPrompt, McpPromptArgument, McpResource, McpResourceContent,
     McpResourceTemplate, McpTool, McpToolCallResult,
 };
@@ -50,7 +50,7 @@ impl UpstreamConnection {
                 ref url,
                 ref headers,
             } => {
-                let client = crate::transports::http::McpHttpClient::new(
+                let client = crate::mcp::transports::http::McpHttpClient::new(
                     name.clone(),
                     url.clone(),
                     headers,
@@ -89,13 +89,13 @@ impl UpstreamConnection {
                     prompt_notify,
                 })
             }
-            #[cfg(feature = "client-stdio")]
+            #[cfg(feature = "mcp-stdio")]
             ToolServerTransport::Stdio {
                 ref command,
                 ref args,
                 ref env,
             } => {
-                let conn = crate::transports::stdio::StdioConnection::connect(
+                let conn = crate::mcp::transports::stdio::StdioConnection::connect(
                     name.clone(),
                     command.clone(),
                     args.clone(),
@@ -131,10 +131,10 @@ impl UpstreamConnection {
                     prompt_notify: pn,
                 })
             }
-            #[cfg(not(feature = "client-stdio"))]
+            #[cfg(not(feature = "mcp-stdio"))]
             ToolServerTransport::Stdio { .. } => Err(McpGatewayError::InvalidConfig {
                 reason: format!(
-                    "server '{}': stdio transport requires the 'client-stdio' feature",
+                    "server '{}': stdio transport requires the 'mcp-stdio' feature",
                     config.name
                 ),
             }),

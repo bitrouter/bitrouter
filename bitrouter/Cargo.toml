@@ -26,7 +26,7 @@ mysql = [
     "bitrouter-observe/mysql",
     "bitrouter-skills/mysql",
 ]
-mcp-stdio = ["bitrouter-mcp/client-stdio"]
+mcp-stdio = ["bitrouter-providers/mcp-stdio"]
 mpp-tempo = [
     "bitrouter-api/mpp-tempo",
     "bitrouter-config/mpp-tempo",
@@ -49,9 +49,8 @@ bitrouter-api = { path = "../bitrouter-api", version = "0.14" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.14" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.14" }
 bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.14" }
-bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.14" }
 bitrouter-observe = { path = "../bitrouter-observe", version = "0.14" }
-bitrouter-providers = { path = "../bitrouter-providers", version = "0.14" }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.14", features = ["mcp"] }
 bitrouter-skills = { path = "../bitrouter-skills", version = "0.14" }
 
 # CLI

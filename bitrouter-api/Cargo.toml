@@ -11,7 +11,7 @@ readme = "README.md"
 [features]
 default = ["openai", "anthropic", "google", "a2a", "mcp"]
 a2a = ["dep:bitrouter-a2a"]
-mcp = ["dep:bitrouter-mcp"]
+mcp = []
 openai = []
 anthropic = []
 google = []
@@ -38,7 +38,6 @@ mpp-solana = [
 bitrouter-core = { path = "../bitrouter-core", version = "0.14" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.14", optional = true }
 bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.14", optional = true }
-bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.14", optional = true }
 futures-core = { version = "0.3" }
 mpp = { version = "0.7", default-features = false, features = [
     "reqwest-rustls-tls",

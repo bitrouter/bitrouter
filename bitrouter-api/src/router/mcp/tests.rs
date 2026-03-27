@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use bitrouter_mcp::types::{
+use bitrouter_core::api::mcp::types::{
     McpContent, McpGetPromptResult, McpPrompt, McpPromptArgument, McpPromptContent,
     McpPromptMessage, McpResource, McpResourceContent, McpResourceTemplate, McpRole, McpTool,
     McpToolCallResult,
@@ -10,7 +10,7 @@ use warp::Filter;
 
 use super::filters::mcp_server_filter;
 
-use bitrouter_mcp::types::{CompleteParams, CompleteResult, Completion, LoggingLevel};
+use bitrouter_core::api::mcp::types::{CompleteParams, CompleteResult, Completion, LoggingLevel};
 
 use super::types::{
     McpCompletionServer, McpGatewayError, McpLoggingServer, McpPromptServer, McpResourceServer,

@@ -1688,7 +1688,6 @@ dependencies = [
  "bitrouter-config",
  "bitrouter-core",
  "bitrouter-guardrails",
- "bitrouter-mcp",
  "bitrouter-observe",
  "bitrouter-providers",
  "bitrouter-skills",
@@ -1759,7 +1758,6 @@ dependencies = [
  "bitrouter-a2a",
  "bitrouter-config",
  "bitrouter-core",
- "bitrouter-mcp",
  "bs58",
  "ed25519-dalek",
  "futures-core",
@@ -1840,20 +1838,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-mcp"
-version = "0.14.0"
-dependencies = [
- "bitrouter-core",
- "reqwest 0.13.2",
- "rmcp",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "bitrouter-observe"
 version = "0.14.0"
 dependencies = [
@@ -1878,12 +1862,14 @@ dependencies = [
  "regex",
  "reqwest 0.13.2",
  "reqwest-middleware 0.5.1",
+ "rmcp",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]

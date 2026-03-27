@@ -2,7 +2,7 @@
 
 use super::tools::gateway_error_to_jsonrpc;
 use super::types::{JsonRpcId, JsonRpcResponse, McpCompletionServer, error_codes};
-use bitrouter_mcp::types::CompleteParams;
+use bitrouter_core::api::mcp::types::CompleteParams;
 
 pub async fn handle_complete<T: McpCompletionServer>(
     id: &JsonRpcId,
