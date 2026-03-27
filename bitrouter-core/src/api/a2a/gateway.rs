@@ -103,3 +103,20 @@ pub trait A2aProxy: Send + Sync {
         config_id: &str,
     ) -> impl Future<Output = Result<(), A2aGatewayError>> + Send;
 }
+
+/// Trait for a named collection of A2A agents.
+///
+/// Provides agent lookup by name and card retrieval for the API layer.
+/// The API layer is generic over this trait — concrete registries live
+/// in `bitrouter-providers`.
+pub trait A2aGateway: Send + Sync {
+    /// The per-agent proxy type.
+    type Agent: A2aProxy;
+
+    /// Look up an agent by name, returning an error if not found.
+    fn require_agent(&self, name: &str) -> Result<&Self::Agent, A2aGatewayError>;
+
+    /// Return the agent card for the given name, with URL rewritten to the
+    /// gateway's external address.
+    fn get_card(&self, name: &str) -> impl Future<Output = Option<AgentCard>> + Send;
+}

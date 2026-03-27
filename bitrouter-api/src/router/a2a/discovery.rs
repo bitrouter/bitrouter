@@ -3,8 +3,7 @@
 use std::sync::Arc;
 
 use bitrouter_core::api::a2a::error::A2aGatewayError;
-use bitrouter_providers::a2a::client::registry::UpstreamAgentRegistry;
-use bitrouter_providers::a2a::client::upstream::UpstreamA2aAgent;
+use bitrouter_core::api::a2a::gateway::{A2aGateway, A2aProxy};
 use tokio::time::Instant;
 use warp::Filter;
 
@@ -13,8 +12,8 @@ use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
 use super::types::*;
 
 /// Warp filter for `GET /a2a/{agent_name}/.well-known/agent-card.json`.
-pub(crate) fn well_known_filter(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+pub(crate) fn well_known_filter<G: A2aGateway + 'static>(
+    registry: Option<Arc<G>>,
     ctx: Option<A2aObserveContext>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("a2a")
@@ -25,7 +24,7 @@ pub(crate) fn well_known_filter(
         .and(warp::any().map(move || ctx.clone()))
         .then(
             |agent_name: String,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              ctx: Option<A2aObserveContext>| async move {
                 let Some(reg) = registry.as_ref() else {
                     return Box::new(warp::reply::with_status(
@@ -36,7 +35,7 @@ pub(crate) fn well_known_filter(
                     )) as Box<dyn warp::Reply>;
                 };
                 let start = Instant::now();
-                match reg.rewritten_card(&agent_name).await {
+                match reg.get_card(&agent_name).await {
                     Some(card) => {
                         emit_agent_success(
                             &ctx,
@@ -76,7 +75,7 @@ pub(crate) fn well_known_filter(
 /// Handle `agent/getAuthenticatedExtendedCard` JSON-RPC method.
 pub(crate) async fn dispatch_get_extended(
     request: &JsonRpcRequest,
-    agent: &UpstreamA2aAgent,
+    agent: &impl A2aProxy,
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {

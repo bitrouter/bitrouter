@@ -140,6 +140,20 @@ impl UpstreamAgentRegistry {
     }
 }
 
+// ── A2aGateway trait impl ───────────────────────────────────────────
+
+impl bitrouter_core::api::a2a::gateway::A2aGateway for UpstreamAgentRegistry {
+    type Agent = UpstreamA2aAgent;
+
+    fn require_agent(&self, name: &str) -> Result<&UpstreamA2aAgent, A2aGatewayError> {
+        UpstreamAgentRegistry::require_agent(self, name)
+    }
+
+    async fn get_card(&self, name: &str) -> Option<AgentCard> {
+        self.rewritten_card(name).await
+    }
+}
+
 // ── A2A-internal admin trait impls ──────────────────────────────────
 
 impl A2aAgentRegistry for UpstreamAgentRegistry {

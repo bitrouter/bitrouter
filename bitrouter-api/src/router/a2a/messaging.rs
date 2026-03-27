@@ -4,7 +4,6 @@ use std::convert::Infallible;
 use std::pin::Pin;
 
 use bitrouter_core::api::a2a::gateway::A2aProxy;
-use bitrouter_providers::a2a::client::upstream::UpstreamA2aAgent;
 use futures_core::Stream;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
@@ -18,7 +17,7 @@ use super::types::*;
 /// Handle `message/send` JSON-RPC method.
 pub(crate) async fn dispatch_send_message(
     request: &JsonRpcRequest,
-    agent: &UpstreamA2aAgent,
+    agent: &impl A2aProxy,
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
@@ -41,7 +40,7 @@ pub(crate) async fn dispatch_send_message(
 /// Handle streaming JSON-RPC methods (`message/stream`, `tasks/resubscribe`).
 pub(crate) async fn handle_streaming_jsonrpc(
     request: JsonRpcRequest,
-    agent: &UpstreamA2aAgent,
+    agent: &impl A2aProxy,
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> Box<dyn warp::Reply> {

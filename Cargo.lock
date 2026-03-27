@@ -1740,7 +1740,6 @@ dependencies = [
  "alloy",
  "bitrouter-config",
  "bitrouter-core",
- "bitrouter-providers",
  "bs58",
  "ed25519-dalek",
  "futures-core",

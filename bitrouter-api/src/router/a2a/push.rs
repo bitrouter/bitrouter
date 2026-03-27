@@ -1,6 +1,6 @@
 //! Push notification config handlers for A2A gateway.
 
-use bitrouter_providers::a2a::client::upstream::UpstreamA2aAgent;
+use bitrouter_core::api::a2a::gateway::A2aProxy;
 use tokio::time::Instant;
 
 use super::convert::{WithId, deserialize_params, gateway_error_response, success_response};
@@ -10,7 +10,7 @@ use super::types::*;
 /// Handle `tasks/pushNotificationConfig/set` JSON-RPC method.
 pub(crate) async fn dispatch_set_push(
     request: &JsonRpcRequest,
-    agent: &UpstreamA2aAgent,
+    agent: &impl A2aProxy,
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
@@ -39,7 +39,7 @@ pub(crate) async fn dispatch_set_push(
 /// Handle `tasks/pushNotificationConfig/get` JSON-RPC method.
 pub(crate) async fn dispatch_get_push(
     request: &JsonRpcRequest,
-    agent: &UpstreamA2aAgent,
+    agent: &impl A2aProxy,
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
@@ -70,7 +70,7 @@ pub(crate) async fn dispatch_get_push(
 /// Handle `tasks/pushNotificationConfig/list` JSON-RPC method.
 pub(crate) async fn dispatch_list_push(
     request: &JsonRpcRequest,
-    agent: &UpstreamA2aAgent,
+    agent: &impl A2aProxy,
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
@@ -99,7 +99,7 @@ pub(crate) async fn dispatch_list_push(
 /// Handle `tasks/pushNotificationConfig/delete` JSON-RPC method.
 pub(crate) async fn dispatch_delete_push(
     request: &JsonRpcRequest,
-    agent: &UpstreamA2aAgent,
+    agent: &impl A2aProxy,
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {

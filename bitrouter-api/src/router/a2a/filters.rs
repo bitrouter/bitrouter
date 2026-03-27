@@ -6,10 +6,8 @@
 use std::sync::Arc;
 
 use bitrouter_core::api::a2a::error::A2aGatewayError;
-use bitrouter_core::api::a2a::gateway::A2aProxy;
+use bitrouter_core::api::a2a::gateway::{A2aGateway, A2aProxy};
 use bitrouter_core::observe::{AgentObserveCallback, CallerContext};
-use bitrouter_providers::a2a::client::registry::UpstreamAgentRegistry;
-use bitrouter_providers::a2a::client::upstream::UpstreamA2aAgent;
 use serde::Deserialize;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
@@ -28,12 +26,13 @@ use super::{discovery, messaging, push, tasks};
 ///
 /// When `observer` and `account_filter` are provided, every handler fires
 /// observation events through the observer with caller context.
-pub fn a2a_gateway_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+pub fn a2a_gateway_filter<G, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
+    G: A2aGateway + 'static,
     A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
     // For discovery endpoints (no auth required), use a static observe context
@@ -110,10 +109,10 @@ where
 
 // -- Agent lookup helper ---------------------------------------------------------
 
-fn require_agent<'a>(
-    registry: &'a Option<Arc<UpstreamAgentRegistry>>,
+fn require_agent<'a, G: A2aGateway>(
+    registry: &'a Option<Arc<G>>,
     agent_name: &str,
-) -> Result<&'a UpstreamA2aAgent, A2aGatewayError> {
+) -> Result<&'a G::Agent, A2aGatewayError> {
     let reg = registry
         .as_ref()
         .ok_or_else(|| A2aGatewayError::AgentNotFound {
@@ -135,8 +134,8 @@ fn make_ctx(
 
 // -- JSON-RPC dispatch -----------------------------------------------------------
 
-fn jsonrpc_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn jsonrpc_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -154,11 +153,11 @@ where
         .then(
             |agent_name: String,
              request: JsonRpcRequest,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => {
                         let resp = error_response(&request.id, -32001, e.to_string());
@@ -181,7 +180,7 @@ where
 
 async fn dispatch_jsonrpc(
     request: JsonRpcRequest,
-    agent: &UpstreamA2aAgent,
+    agent: &impl A2aProxy,
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
@@ -215,8 +214,8 @@ async fn dispatch_jsonrpc(
 
 // -- SSE streaming ---------------------------------------------------------------
 
-fn streaming_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn streaming_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -234,11 +233,11 @@ where
         .then(
             |agent_name: String,
              request: JsonRpcRequest,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => {
                         let resp = error_response(&request.id, -32001, e.to_string());
@@ -271,8 +270,8 @@ fn rest_gateway_error_reply(err: &A2aGatewayError) -> Box<dyn warp::Reply> {
     rest_error_reply(status, &err.to_string())
 }
 
-fn rest_send_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_send_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -291,11 +290,11 @@ where
         .then(
             |agent_name: String,
              body: SendMessageRequest,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
@@ -315,8 +314,8 @@ where
         )
 }
 
-fn rest_stream_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_stream_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -335,11 +334,11 @@ where
         .then(
             |agent_name: String,
              body: SendMessageRequest,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
@@ -372,8 +371,8 @@ where
         )
 }
 
-fn rest_get_task_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_get_task_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -392,11 +391,11 @@ where
         .then(
             |agent_name: String,
              task_id: String,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
@@ -440,8 +439,8 @@ struct ListTasksQueryParams {
     include_artifacts: Option<bool>,
 }
 
-fn rest_list_tasks_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_list_tasks_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -472,11 +471,11 @@ where
         .then(
             |agent_name: String,
              params: ListTasksQueryParams,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
@@ -505,8 +504,8 @@ where
         )
 }
 
-fn rest_cancel_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_cancel_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -525,14 +524,14 @@ where
         .and_then(
             |agent_name: String,
              task_id_action: String,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let Some(task_id) = task_id_action.strip_suffix(":cancel") else {
                     return Err(warp::reject::not_found());
                 };
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return Ok(rest_gateway_error_reply(&e)),
                 };
@@ -556,8 +555,8 @@ where
         )
 }
 
-fn rest_subscribe_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_subscribe_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -576,14 +575,14 @@ where
         .and_then(
             |agent_name: String,
              task_id_action: String,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let Some(task_id) = task_id_action.strip_suffix(":subscribe") else {
                     return Err(warp::reject::not_found());
                 };
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return Ok(rest_gateway_error_reply(&e)),
                 };
@@ -617,8 +616,8 @@ where
         )
 }
 
-fn rest_card_filter(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_card_filter<G: A2aGateway + 'static>(
+    registry: Option<Arc<G>>,
     ctx: Option<A2aObserveContext>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("a2a")
@@ -630,7 +629,7 @@ fn rest_card_filter(
         .and(warp::any().map(move || ctx.clone()))
         .then(
             |agent_name: String,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              ctx: Option<A2aObserveContext>| async move {
                 let reg = match registry.as_ref() {
                     Some(r) => r,
@@ -642,7 +641,7 @@ fn rest_card_filter(
                     }
                 };
                 let start = Instant::now();
-                let result = reg.rewritten_card(&agent_name).await;
+                let result = reg.get_card(&agent_name).await;
                 match result {
                     Some(card) => {
                         emit_agent_success(&ctx, &agent_name, "card/get", start);
@@ -669,8 +668,8 @@ fn rest_card_filter(
         )
 }
 
-fn rest_extended_card_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_extended_card_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -687,11 +686,11 @@ where
         .and(account_filter)
         .then(
             |agent_name: String,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
@@ -720,8 +719,8 @@ where
         )
 }
 
-fn rest_push_create_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_push_create_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -743,11 +742,11 @@ where
             |agent_name: String,
              _task_id: String,
              config: TaskPushNotificationConfig,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
@@ -779,8 +778,8 @@ where
         )
 }
 
-fn rest_push_get_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_push_get_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -802,11 +801,11 @@ where
             |agent_name: String,
              task_id: String,
              config_id: String,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
@@ -835,8 +834,8 @@ where
         )
 }
 
-fn rest_push_list_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_push_list_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -856,11 +855,11 @@ where
         .then(
             |agent_name: String,
              task_id: String,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
@@ -889,8 +888,8 @@ where
         )
 }
 
-fn rest_push_delete_filter<A>(
-    registry: Option<Arc<UpstreamAgentRegistry>>,
+fn rest_push_delete_filter<G: A2aGateway + 'static, A>(
+    registry: Option<Arc<G>>,
     observer: Option<Arc<dyn AgentObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -912,11 +911,11 @@ where
             |agent_name: String,
              task_id: String,
              config_id: String,
-             registry: Option<Arc<UpstreamAgentRegistry>>,
+             registry: Option<Arc<G>>,
              observer: Option<Arc<dyn AgentObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
-                let agent = match require_agent(&registry, &agent_name) {
+                let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => return rest_gateway_error_reply(&e),
                 };
