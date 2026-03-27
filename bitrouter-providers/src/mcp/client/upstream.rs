@@ -89,7 +89,6 @@ impl UpstreamConnection {
                     prompt_notify,
                 })
             }
-            #[cfg(feature = "mcp-stdio")]
             ToolServerTransport::Stdio {
                 ref command,
                 ref args,
@@ -131,13 +130,6 @@ impl UpstreamConnection {
                     prompt_notify: pn,
                 })
             }
-            #[cfg(not(feature = "mcp-stdio"))]
-            ToolServerTransport::Stdio { .. } => Err(McpGatewayError::InvalidConfig {
-                reason: format!(
-                    "server '{}': stdio transport requires the 'mcp-stdio' feature",
-                    config.name
-                ),
-            }),
         }
     }
 

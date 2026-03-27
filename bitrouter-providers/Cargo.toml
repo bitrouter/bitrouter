@@ -13,17 +13,11 @@ default = ["openai", "anthropic", "google"]
 openai = []
 anthropic = []
 google = []
-mcp = ["dep:tracing"]
-mcp-stdio = ["mcp", "dep:rmcp"]
+mcp = ["dep:tracing", "tokio/process", "tokio/io-util"]
 
 [dependencies]
 bitrouter-core = { path = "../bitrouter-core", version = "0.14" }
 tracing = { version = "0.1", optional = true }
-rmcp = { version = "1.2", optional = true, features = [
-    "client",
-    "server",
-    "transport-child-process",
-] }
 
 base64 = "0.22"
 bytes = "1"
@@ -39,5 +33,5 @@ schemars = { version = "1.2", default-features = false, features = ["std"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7"

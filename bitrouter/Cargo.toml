@@ -26,7 +26,6 @@ mysql = [
     "bitrouter-observe/mysql",
     "bitrouter-skills/mysql",
 ]
-mcp-stdio = ["bitrouter-providers/mcp-stdio"]
 mpp-tempo = [
     "bitrouter-api/mpp-tempo",
     "bitrouter-config/mpp-tempo",
