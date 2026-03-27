@@ -544,8 +544,8 @@ where
 
         // ── A2A protocol ─────────────────────────────────────────────
         let (a2a_routes, admin_agent_routes, agent_list, _a2a_refresh_guard) = {
-            use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
             use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
+            use bitrouter_providers::a2a::client::registry::UpstreamAgentRegistry;
 
             let external_base_url = format!("http://{}/a2a", self.config.server.listen);
             let a2a_configs = self.config.a2a_agents.clone();

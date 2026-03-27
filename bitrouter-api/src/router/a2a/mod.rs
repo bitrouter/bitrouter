@@ -1,7 +1,7 @@
 //! A2A v0.3.0 gateway routes.
 //!
 //! Provides Warp filters that proxy A2A protocol operations
-//! to upstream agents via the [`UpstreamAgentRegistry`](bitrouter_a2a::client::registry::UpstreamAgentRegistry).
+//! to upstream agents via the [`UpstreamAgentRegistry`](bitrouter_providers::a2a::client::registry::UpstreamAgentRegistry).
 
 mod convert;
 mod discovery;

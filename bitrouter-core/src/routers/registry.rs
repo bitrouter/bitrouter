@@ -180,7 +180,7 @@ impl<T: SkillService> SkillService for std::sync::Arc<T> {
 /// A single agent available through the router, with its metadata.
 ///
 /// Protocol-agnostic summary of an agent's identity and capabilities.
-/// Conversion from A2A `AgentCard` happens in `bitrouter-a2a`.
+/// Conversion from A2A `AgentCard` happens in [`crate::api::a2a::types`].
 #[derive(Debug, Clone)]
 pub struct AgentEntry {
     /// Machine-readable agent identifier.

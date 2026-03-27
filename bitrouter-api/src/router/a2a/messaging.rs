@@ -3,8 +3,8 @@
 use std::convert::Infallible;
 use std::pin::Pin;
 
-use bitrouter_a2a::client::upstream::UpstreamA2aAgent;
-use bitrouter_a2a::server::A2aProxy;
+use bitrouter_core::api::a2a::gateway::A2aProxy;
+use bitrouter_providers::a2a::client::upstream::UpstreamA2aAgent;
 use futures_core::Stream;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;

@@ -1,6 +1,6 @@
 //! Task operation handlers for A2A gateway.
 
-use bitrouter_a2a::client::upstream::UpstreamA2aAgent;
+use bitrouter_providers::a2a::client::upstream::UpstreamA2aAgent;
 use tokio::time::Instant;
 
 use super::convert::{WithId, deserialize_params, gateway_error_response, success_response};

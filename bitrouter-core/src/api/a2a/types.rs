@@ -222,7 +222,7 @@ pub fn minimal_card(name: &str, description: &str, version: &str, url: &str) -> 
 
 // ── Core conversions ───────────────────────────────────────────────
 
-impl From<AgentSkill> for bitrouter_core::routers::registry::AgentSkillEntry {
+impl From<AgentSkill> for crate::routers::registry::AgentSkillEntry {
     fn from(s: AgentSkill) -> Self {
         Self {
             id: s.id,
@@ -234,7 +234,7 @@ impl From<AgentSkill> for bitrouter_core::routers::registry::AgentSkillEntry {
     }
 }
 
-impl From<AgentCard> for bitrouter_core::routers::registry::AgentEntry {
+impl From<AgentCard> for crate::routers::registry::AgentEntry {
     fn from(card: AgentCard) -> Self {
         let provider = card
             .provider

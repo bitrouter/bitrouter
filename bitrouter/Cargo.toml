@@ -42,14 +42,13 @@ mpp-solana = [
 
 [dependencies]
 # Internal crates
-bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.14" }
 bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.14" }
 bitrouter-api = { path = "../bitrouter-api", version = "0.14" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.14" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.14" }
 bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.14" }
 bitrouter-observe = { path = "../bitrouter-observe", version = "0.14" }
-bitrouter-providers = { path = "../bitrouter-providers", version = "0.14", features = ["mcp"] }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.14", features = ["mcp", "a2a"] }
 bitrouter-skills = { path = "../bitrouter-skills", version = "0.14" }
 
 # CLI

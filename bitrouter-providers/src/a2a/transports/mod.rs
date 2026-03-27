@@ -8,8 +8,8 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 
-use crate::error::A2aGatewayError;
-use crate::types::{
+use bitrouter_core::api::a2a::error::A2aGatewayError;
+use bitrouter_core::api::a2a::types::{
     AgentCard, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, GetTaskRequest, ListTaskPushNotificationConfigsRequest,
     ListTasksRequest, ListTasksResponse, SendMessageRequest, SendMessageResult, StreamResponse,
@@ -26,7 +26,7 @@ type StreamingResult = Result<
 ///
 /// Implementors handle protocol framing (JSON-RPC 2.0, HTTP+JSON REST, gRPC)
 /// and wire format conversion. Higher-level concerns like card caching and
-/// URL rewriting are managed by [`UpstreamA2aAgent`](crate::client::upstream::UpstreamA2aAgent).
+/// URL rewriting are managed by [`UpstreamA2aAgent`](crate::a2a::client::upstream::UpstreamA2aAgent).
 pub trait A2aTransport: Send + Sync {
     /// Fetch an Agent Card from a remote server's well-known endpoint.
     fn discover(

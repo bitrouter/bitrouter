@@ -5,8 +5,8 @@
 //! cancellation (`tasks/cancel`), listing (`tasks/list`), streaming, and
 //! push notification config CRUD.
 
-use crate::error::A2aGatewayError;
-use crate::types::{
+use bitrouter_core::api::a2a::error::A2aGatewayError;
+use bitrouter_core::api::a2a::types::{
     AgentCard, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, GetTaskRequest, JsonRpcRequest, JsonRpcResponse,
     ListTaskPushNotificationConfigsRequest, ListTasksRequest, ListTasksResponse, Message,
@@ -317,7 +317,7 @@ fn generate_request_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transports::A2aTransport;
+    use crate::a2a::transports::A2aTransport;
 
     #[test]
     fn text_message_builds_correctly() {
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn resolve_endpoint_from_card() {
-        let card = crate::types::minimal_card(
+        let card = bitrouter_core::api::a2a::types::minimal_card(
             "test",
             "test agent",
             "1.0.0",

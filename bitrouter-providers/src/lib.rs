@@ -7,5 +7,8 @@ pub mod anthropic;
 #[cfg(feature = "google")]
 pub mod google;
 
+#[cfg(feature = "a2a")]
+pub mod a2a;
+
 #[cfg(feature = "mcp")]
 pub mod mcp;

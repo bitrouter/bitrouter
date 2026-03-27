@@ -4,12 +4,11 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
+use bitrouter_core::api::a2a::error::A2aGatewayError;
+use bitrouter_core::api::a2a::types::AgentCard;
 use bitrouter_core::routers::admin::{AgentUpstreamEntry, AgentUpstreamSource};
-use tokio::sync::broadcast;
-
-use crate::error::A2aGatewayError;
-use crate::types::AgentCard;
 use bitrouter_core::routers::upstream::AgentConfig;
+use tokio::sync::broadcast;
 
 use super::upstream::UpstreamA2aAgent;
 

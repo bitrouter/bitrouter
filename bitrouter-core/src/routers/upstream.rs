@@ -2,7 +2,7 @@
 //!
 //! Transport-neutral data types describing how to connect to upstream tool
 //! servers and agents. Used by both `bitrouter-config` (YAML parsing) and
-//! protocol crates (`bitrouter-mcp`, `bitrouter-a2a`) at runtime.
+//! protocol implementations in `bitrouter-providers` at runtime.
 
 use std::collections::HashMap;
 

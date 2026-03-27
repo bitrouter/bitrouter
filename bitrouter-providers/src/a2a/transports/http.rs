@@ -5,8 +5,8 @@
 //! and uses the same serde types as the JSON-RPC transport without the
 //! JSON-RPC 2.0 envelope.
 
-use crate::error::A2aGatewayError;
-use crate::types::{
+use bitrouter_core::api::a2a::error::A2aGatewayError;
+use bitrouter_core::api::a2a::types::{
     AgentCard, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, GetTaskRequest, ListTaskPushNotificationConfigsRequest,
     ListTasksRequest, ListTasksResponse, Message, SendMessageRequest, SendMessageResult, Task,

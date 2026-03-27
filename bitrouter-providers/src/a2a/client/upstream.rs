@@ -6,18 +6,18 @@ use std::sync::Arc;
 use futures_core::Stream;
 use tokio::sync::{Notify, RwLock};
 
-use bitrouter_core::routers::upstream::AgentConfig;
-
-use crate::error::A2aGatewayError;
-use crate::server::A2aProxy;
-use crate::transports::A2aTransport;
-use crate::transports::jsonrpc::A2aClient;
-use crate::types::{
+use bitrouter_core::api::a2a::error::A2aGatewayError;
+use bitrouter_core::api::a2a::gateway::A2aProxy;
+use bitrouter_core::api::a2a::types::{
     AgentCard, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, GetTaskRequest, ListTaskPushNotificationConfigsRequest,
     ListTasksRequest, ListTasksResponse, SendMessageRequest, SendMessageResult, StreamResponse,
     Task, TaskPushNotificationConfig,
 };
+use bitrouter_core::routers::upstream::AgentConfig;
+
+use crate::a2a::transports::A2aTransport;
+use crate::a2a::transports::jsonrpc::A2aClient;
 
 /// A live connection to a single upstream A2A agent.
 ///

@@ -10,7 +10,7 @@ readme = "README.md"
 
 [features]
 default = ["openai", "anthropic", "google", "a2a", "mcp"]
-a2a = ["dep:bitrouter-a2a"]
+a2a = ["dep:bitrouter-providers", "bitrouter-providers/a2a"]
 mcp = []
 openai = []
 anthropic = []
@@ -37,7 +37,7 @@ mpp-solana = [
 [dependencies]
 bitrouter-core = { path = "../bitrouter-core", version = "0.14" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.14", optional = true }
-bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.14", optional = true }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.14", optional = true }
 futures-core = { version = "0.3" }
 mpp = { version = "0.7", default-features = false, features = [
     "reqwest-rustls-tls",
@@ -66,7 +66,7 @@ tracing = { version = "0.1" }
 warp = { version = "0.4" }
 
 [dev-dependencies]
-bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.14" }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.14", features = ["a2a"] }
 regex = { version = "1.12" }
 tempfile = { version = "3" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod tests {
-    use bitrouter_a2a::types::*;
+    use bitrouter_core::api::a2a::types::*;
 
     // ── v0.3.0 wire format validation ────────────────────────────────
 

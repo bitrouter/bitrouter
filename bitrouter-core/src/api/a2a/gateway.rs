@@ -9,8 +9,8 @@ use std::pin::Pin;
 use futures_core::Stream;
 use tokio::sync::broadcast;
 
-use crate::error::A2aGatewayError;
-use crate::types::{
+use crate::api::a2a::error::A2aGatewayError;
+use crate::api::a2a::types::{
     AgentCard, GetTaskRequest, ListTasksRequest, ListTasksResponse, SendMessageRequest,
     StreamResponse, Task, TaskPushNotificationConfig,
 };
@@ -47,7 +47,7 @@ pub trait A2aProxy: Send + Sync {
     /// Forward a `tasks/cancel` request.
     fn cancel_task(
         &self,
-        request: crate::types::CancelTaskRequest,
+        request: crate::api::a2a::types::CancelTaskRequest,
     ) -> impl Future<Output = Result<Task, A2aGatewayError>> + Send;
 
     /// Forward a `tasks/list` request.

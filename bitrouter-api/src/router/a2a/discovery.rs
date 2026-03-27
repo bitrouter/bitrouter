@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
-use bitrouter_a2a::client::upstream::UpstreamA2aAgent;
-use bitrouter_a2a::error::A2aGatewayError;
+use bitrouter_core::api::a2a::error::A2aGatewayError;
+use bitrouter_providers::a2a::client::registry::UpstreamAgentRegistry;
+use bitrouter_providers::a2a::client::upstream::UpstreamA2aAgent;
 use tokio::time::Instant;
 use warp::Filter;
 

@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
-use bitrouter_a2a::client::upstream::UpstreamA2aAgent;
-use bitrouter_a2a::error::A2aGatewayError;
-use bitrouter_a2a::server::A2aProxy;
+use bitrouter_core::api::a2a::error::A2aGatewayError;
+use bitrouter_core::api::a2a::gateway::A2aProxy;
 use bitrouter_core::observe::{AgentObserveCallback, CallerContext};
+use bitrouter_providers::a2a::client::registry::UpstreamAgentRegistry;
+use bitrouter_providers::a2a::client::upstream::UpstreamA2aAgent;
 use serde::Deserialize;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
@@ -427,7 +427,7 @@ struct ListTasksQueryParams {
     #[serde(default)]
     context_id: Option<String>,
     #[serde(default)]
-    status: Option<bitrouter_a2a::types::TaskState>,
+    status: Option<bitrouter_core::api::a2a::types::TaskState>,
     #[serde(default)]
     status_timestamp_after: Option<String>,
     #[serde(default)]
