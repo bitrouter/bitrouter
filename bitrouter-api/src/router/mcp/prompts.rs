@@ -4,20 +4,15 @@ use super::tools::gateway_error_to_jsonrpc;
 use super::types::{
     GetPromptParams, JsonRpcId, JsonRpcResponse, ListPromptsResult, McpPromptServer, error_codes,
 };
-use bitrouter_core::api::mcp::types::ListPromptsParams;
 
 pub async fn handle_prompts_list<T: McpPromptServer>(
     id: &JsonRpcId,
-    params: Option<serde_json::Value>,
     server: &T,
 ) -> JsonRpcResponse {
-    let cursor = params
-        .and_then(|v| serde_json::from_value::<ListPromptsParams>(v).ok())
-        .and_then(|p| p.cursor);
-    let (prompts, next_cursor) = server.list_prompts(cursor.as_deref()).await;
+    let prompts = server.list_prompts().await;
     let result = ListPromptsResult {
         prompts,
-        next_cursor,
+        next_cursor: None,
     };
     let value = serde_json::to_value(&result).unwrap_or_default();
     JsonRpcResponse::success(id.clone(), value)

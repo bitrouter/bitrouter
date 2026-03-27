@@ -1,10 +1,10 @@
 //! JSON-RPC handlers for `resources/subscribe` and `resources/unsubscribe`.
 
 use super::tools::gateway_error_to_jsonrpc;
-use super::types::{JsonRpcId, JsonRpcResponse, McpResourceServer, error_codes};
+use super::types::{JsonRpcId, JsonRpcResponse, McpSubscriptionServer, error_codes};
 use bitrouter_core::api::mcp::types::{SubscribeResourceParams, UnsubscribeResourceParams};
 
-pub async fn handle_resource_subscribe<T: McpResourceServer>(
+pub async fn handle_resource_subscribe<T: McpSubscriptionServer>(
     id: &JsonRpcId,
     params: Option<serde_json::Value>,
     server: &T,
@@ -39,7 +39,7 @@ pub async fn handle_resource_subscribe<T: McpResourceServer>(
     }
 }
 
-pub async fn handle_resource_unsubscribe<T: McpResourceServer>(
+pub async fn handle_resource_unsubscribe<T: McpSubscriptionServer>(
     id: &JsonRpcId,
     params: Option<serde_json::Value>,
     server: &T,

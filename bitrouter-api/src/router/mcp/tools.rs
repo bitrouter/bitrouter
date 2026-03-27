@@ -4,7 +4,6 @@ use super::types::{
     CallToolParams, JsonRpcId, JsonRpcResponse, ListToolsResult, McpGatewayError, McpToolServer,
     error_codes,
 };
-use bitrouter_core::api::mcp::types::ListToolsParams;
 
 /// Separator used in wire-format tool names exposed to downstream MCP clients.
 ///
@@ -29,19 +28,15 @@ fn from_wire_name(wire: &str) -> String {
     }
 }
 
-pub async fn handle_tools_list<T: McpToolServer>(
-    id: &JsonRpcId,
-    params: Option<serde_json::Value>,
-    server: &T,
-) -> JsonRpcResponse {
-    let cursor = params
-        .and_then(|v| serde_json::from_value::<ListToolsParams>(v).ok())
-        .and_then(|p| p.cursor);
-    let (mut tools, next_cursor) = server.list_tools(cursor.as_deref()).await;
+pub async fn handle_tools_list<T: McpToolServer>(id: &JsonRpcId, server: &T) -> JsonRpcResponse {
+    let mut tools = server.list_tools().await;
     for tool in &mut tools {
         tool.name = to_wire_name(&tool.name);
     }
-    let result = ListToolsResult { tools, next_cursor };
+    let result = ListToolsResult {
+        tools,
+        next_cursor: None,
+    };
     let value = serde_json::to_value(&result).unwrap_or_default();
     JsonRpcResponse::success(id.clone(), value)
 }

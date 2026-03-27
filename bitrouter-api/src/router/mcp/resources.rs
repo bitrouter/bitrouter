@@ -5,20 +5,15 @@ use super::types::{
     JsonRpcId, JsonRpcResponse, ListResourceTemplatesResult, ListResourcesResult,
     McpResourceServer, ReadResourceParams, ReadResourceResult, error_codes,
 };
-use bitrouter_core::api::mcp::types::{ListResourceTemplatesParams, ListResourcesParams};
 
 pub async fn handle_resources_list<T: McpResourceServer>(
     id: &JsonRpcId,
-    params: Option<serde_json::Value>,
     server: &T,
 ) -> JsonRpcResponse {
-    let cursor = params
-        .and_then(|v| serde_json::from_value::<ListResourcesParams>(v).ok())
-        .and_then(|p| p.cursor);
-    let (resources, next_cursor) = server.list_resources(cursor.as_deref()).await;
+    let resources = server.list_resources().await;
     let result = ListResourcesResult {
         resources,
-        next_cursor,
+        next_cursor: None,
     };
     let value = serde_json::to_value(&result).unwrap_or_default();
     JsonRpcResponse::success(id.clone(), value)
@@ -65,16 +60,12 @@ pub async fn handle_resources_read<T: McpResourceServer>(
 
 pub async fn handle_resource_templates_list<T: McpResourceServer>(
     id: &JsonRpcId,
-    params: Option<serde_json::Value>,
     server: &T,
 ) -> JsonRpcResponse {
-    let cursor = params
-        .and_then(|v| serde_json::from_value::<ListResourceTemplatesParams>(v).ok())
-        .and_then(|p| p.cursor);
-    let (resource_templates, next_cursor) = server.list_resource_templates(cursor.as_deref()).await;
+    let templates = server.list_resource_templates().await;
     let result = ListResourceTemplatesResult {
-        resource_templates,
-        next_cursor,
+        resource_templates: templates,
+        next_cursor: None,
     };
     let value = serde_json::to_value(&result).unwrap_or_default();
     JsonRpcResponse::success(id.clone(), value)

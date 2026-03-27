@@ -172,18 +172,16 @@ async fn dispatch_request<T: McpServer>(
     match method {
         "initialize" => handle_initialize(id, server_name),
         "ping" => handle_ping(id),
-        "tools/list" => tools::handle_tools_list(id, params, server).await,
+        "tools/list" => tools::handle_tools_list(id, server).await,
         "tools/call" => tools::handle_tools_call(id, params, server, observe_ctx).await,
-        "resources/list" => resources::handle_resources_list(id, params, server).await,
+        "resources/list" => resources::handle_resources_list(id, server).await,
         "resources/read" => resources::handle_resources_read(id, params, server).await,
-        "resources/templates/list" => {
-            resources::handle_resource_templates_list(id, params, server).await
-        }
+        "resources/templates/list" => resources::handle_resource_templates_list(id, server).await,
         "resources/subscribe" => subscriptions::handle_resource_subscribe(id, params, server).await,
         "resources/unsubscribe" => {
             subscriptions::handle_resource_unsubscribe(id, params, server).await
         }
-        "prompts/list" => prompts::handle_prompts_list(id, params, server).await,
+        "prompts/list" => prompts::handle_prompts_list(id, server).await,
         "prompts/get" => prompts::handle_prompts_get(id, params, server).await,
         "logging/setLevel" => logging::handle_set_level(id, params, server).await,
         "completion/complete" => completion::handle_complete(id, params, server).await,
@@ -364,32 +362,47 @@ async fn handle_sse<T: McpServer>(
         return Err(warp::reject::not_found());
     };
 
-    let tool_stream = server.subscribe_tool_changes().map(|()| {
-        let notification = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/tools/list_changed"
+    let tool_rx = server.subscribe_tool_changes();
+    let tool_stream =
+        tokio_stream::wrappers::BroadcastStream::new(tool_rx).filter_map(|item| match item {
+            Ok(()) => {
+                let notification = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/tools/list_changed"
+                });
+                let data = serde_json::to_string(&notification).unwrap_or_default();
+                Some(Ok::<_, Infallible>(warp::sse::Event::default().data(data)))
+            }
+            Err(_) => None,
         });
-        let data = serde_json::to_string(&notification).unwrap_or_default();
-        Ok::<_, Infallible>(warp::sse::Event::default().data(data))
-    });
 
-    let resource_stream = server.subscribe_resource_changes().map(|()| {
-        let notification = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/resources/list_changed"
+    let resource_rx = server.subscribe_resource_changes();
+    let resource_stream =
+        tokio_stream::wrappers::BroadcastStream::new(resource_rx).filter_map(|item| match item {
+            Ok(()) => {
+                let notification = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/resources/list_changed"
+                });
+                let data = serde_json::to_string(&notification).unwrap_or_default();
+                Some(Ok::<_, Infallible>(warp::sse::Event::default().data(data)))
+            }
+            Err(_) => None,
         });
-        let data = serde_json::to_string(&notification).unwrap_or_default();
-        Ok::<_, Infallible>(warp::sse::Event::default().data(data))
-    });
 
-    let prompt_stream = server.subscribe_prompt_changes().map(|()| {
-        let notification = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/prompts/list_changed"
+    let prompt_rx = server.subscribe_prompt_changes();
+    let prompt_stream =
+        tokio_stream::wrappers::BroadcastStream::new(prompt_rx).filter_map(|item| match item {
+            Ok(()) => {
+                let notification = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/prompts/list_changed"
+                });
+                let data = serde_json::to_string(&notification).unwrap_or_default();
+                Some(Ok::<_, Infallible>(warp::sse::Event::default().data(data)))
+            }
+            Err(_) => None,
         });
-        let data = serde_json::to_string(&notification).unwrap_or_default();
-        Ok::<_, Infallible>(warp::sse::Event::default().data(data))
-    });
 
     let merged = tool_stream.merge(resource_stream).merge(prompt_stream);
 
