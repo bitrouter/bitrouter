@@ -34,7 +34,17 @@ pub struct McpToolCallResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum McpContent {
-    Text { text: String },
+    Text {
+        text: String,
+    },
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    Resource {
+        resource: McpResourceContent,
+    },
 }
 
 // ── Resource types ─────────────────────────────────────────────────
@@ -245,6 +255,13 @@ pub type CallToolResult = McpToolCallResult;
 
 // ── resources/list ─────────────────────────────────────────────────
 
+/// Parameters for the `resources/list` request.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListResourcesParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
 /// Response to the `resources/list` request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -270,6 +287,13 @@ pub struct ReadResourceResult {
 
 // ── resources/templates/list ───────────────────────────────────────
 
+/// Parameters for the `resources/templates/list` request.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListResourceTemplatesParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
 /// Response to the `resources/templates/list` request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -290,6 +314,13 @@ pub struct ResourcesCapability {
 }
 
 // ── prompts/list ───────────────────────────────────────────────────
+
+/// Parameters for the `prompts/list` request.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListPromptsParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
 
 /// Response to the `prompts/list` request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -702,6 +733,35 @@ mod tool_tests {
         };
         let json = serde_json::to_string(&content).expect("serialize");
         assert!(json.contains(r#""type":"text""#));
+    }
+
+    #[test]
+    fn content_image_variant_tagged() {
+        let content = McpContent::Image {
+            data: "iVBORw0KGgo=".to_string(),
+            mime_type: "image/png".to_string(),
+        };
+        let json = serde_json::to_string(&content).expect("serialize");
+        assert!(json.contains(r#""type":"image""#));
+        assert!(json.contains(r#""mimeType":"image/png""#));
+        let parsed: McpContent = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(parsed, McpContent::Image { .. }));
+    }
+
+    #[test]
+    fn content_resource_variant_round_trip() {
+        let content = McpContent::Resource {
+            resource: McpResourceContent {
+                uri: "file:///test.txt".to_string(),
+                mime_type: Some("text/plain".to_string()),
+                text: Some("hello".to_string()),
+                blob: None,
+            },
+        };
+        let json = serde_json::to_string(&content).expect("serialize");
+        assert!(json.contains(r#""type":"resource""#));
+        let parsed: McpContent = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(parsed, McpContent::Resource { .. }));
     }
 
     #[test]

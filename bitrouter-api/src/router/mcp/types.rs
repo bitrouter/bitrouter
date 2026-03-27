@@ -9,26 +9,15 @@ pub use bitrouter_core::api::mcp::gateway::McpCompletionServer;
 pub use bitrouter_core::api::mcp::gateway::McpLoggingServer;
 pub use bitrouter_core::api::mcp::gateway::McpPromptServer;
 pub use bitrouter_core::api::mcp::gateway::McpResourceServer;
-pub use bitrouter_core::api::mcp::gateway::McpSubscriptionServer;
 pub use bitrouter_core::api::mcp::gateway::McpToolServer;
 
 /// Combined trait for an MCP server that supports all capabilities.
 pub trait McpServer:
-    McpToolServer
-    + McpResourceServer
-    + McpPromptServer
-    + McpSubscriptionServer
-    + McpLoggingServer
-    + McpCompletionServer
+    McpToolServer + McpResourceServer + McpPromptServer + McpLoggingServer + McpCompletionServer
 {
 }
 impl<
-    T: McpToolServer
-        + McpResourceServer
-        + McpPromptServer
-        + McpSubscriptionServer
-        + McpLoggingServer
-        + McpCompletionServer,
+    T: McpToolServer + McpResourceServer + McpPromptServer + McpLoggingServer + McpCompletionServer,
 > McpServer for T
 {
 }

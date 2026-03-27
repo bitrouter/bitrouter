@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
+use bitrouter_core::api::mcp::gateway::ChangeStream;
 use bitrouter_core::api::mcp::types::{
     McpContent, McpGetPromptResult, McpPrompt, McpPromptArgument, McpPromptContent,
     McpPromptMessage, McpResource, McpResourceContent, McpResourceTemplate, McpRole, McpTool,
     McpToolCallResult,
 };
 use tokio::sync::broadcast;
+use tokio_stream::StreamExt;
 use warp::Filter;
 
 use super::filters::mcp_server_filter;
@@ -14,7 +16,7 @@ use bitrouter_core::api::mcp::types::{CompleteParams, CompleteResult, Completion
 
 use super::types::{
     McpCompletionServer, McpGatewayError, McpLoggingServer, McpPromptServer, McpResourceServer,
-    McpSubscriptionServer, McpToolServer, error_codes,
+    McpToolServer, error_codes,
 };
 
 // ── Mock server ─────────────────────────────────────────────────────
@@ -39,15 +41,18 @@ impl MockServer {
 }
 
 impl McpToolServer for MockServer {
-    async fn list_tools(&self) -> Vec<McpTool> {
-        vec![McpTool {
-            name: "test/echo".to_string(),
-            description: Some("Echo tool".to_string()),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {"message": {"type": "string"}}
-            }),
-        }]
+    async fn list_tools(&self, _cursor: Option<&str>) -> (Vec<McpTool>, Option<String>) {
+        (
+            vec![McpTool {
+                name: "test/echo".to_string(),
+                description: Some("Echo tool".to_string()),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}}
+                }),
+            }],
+            None,
+        )
     }
 
     async fn call_tool(
@@ -69,19 +74,25 @@ impl McpToolServer for MockServer {
         }
     }
 
-    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
-        self.tool_change_tx.subscribe()
+    fn subscribe_tool_changes(&self) -> ChangeStream {
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.tool_change_tx.subscribe())
+                .filter_map(|r| r.ok()),
+        )
     }
 }
 
 impl McpResourceServer for MockServer {
-    async fn list_resources(&self) -> Vec<McpResource> {
-        vec![McpResource {
-            uri: "test+file:///readme.md".to_string(),
-            name: "readme".to_string(),
-            description: Some("Test readme".to_string()),
-            mime_type: Some("text/markdown".to_string()),
-        }]
+    async fn list_resources(&self, _cursor: Option<&str>) -> (Vec<McpResource>, Option<String>) {
+        (
+            vec![McpResource {
+                uri: "test+file:///readme.md".to_string(),
+                name: "readme".to_string(),
+                description: Some("Test readme".to_string()),
+                mime_type: Some("text/markdown".to_string()),
+            }],
+            None,
+        )
     }
 
     async fn read_resource(&self, uri: &str) -> Result<Vec<McpResourceContent>, McpGatewayError> {
@@ -99,31 +110,57 @@ impl McpResourceServer for MockServer {
         }
     }
 
-    async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
-        vec![McpResourceTemplate {
-            uri_template: "test+file:///{path}".to_string(),
-            name: "files".to_string(),
-            description: Some("Access files".to_string()),
-            mime_type: None,
-        }]
+    async fn list_resource_templates(
+        &self,
+        _cursor: Option<&str>,
+    ) -> (Vec<McpResourceTemplate>, Option<String>) {
+        (
+            vec![McpResourceTemplate {
+                uri_template: "test+file:///{path}".to_string(),
+                name: "files".to_string(),
+                description: Some("Access files".to_string()),
+                mime_type: None,
+            }],
+            None,
+        )
     }
 
-    fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
-        self.resource_change_tx.subscribe()
+    fn subscribe_resource_changes(&self) -> ChangeStream {
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.resource_change_tx.subscribe())
+                .filter_map(|r| r.ok()),
+        )
+    }
+
+    async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
+        if uri.starts_with("test+") {
+            Ok(())
+        } else {
+            Err(McpGatewayError::SubscriptionNotSupported {
+                uri: uri.to_string(),
+            })
+        }
+    }
+
+    async fn unsubscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
+        Ok(())
     }
 }
 
 impl McpPromptServer for MockServer {
-    async fn list_prompts(&self) -> Vec<McpPrompt> {
-        vec![McpPrompt {
-            name: "test/summarize".to_string(),
-            description: Some("Summarize text".to_string()),
-            arguments: vec![McpPromptArgument {
-                name: "text".to_string(),
-                description: Some("The text to summarize".to_string()),
-                required: Some(true),
+    async fn list_prompts(&self, _cursor: Option<&str>) -> (Vec<McpPrompt>, Option<String>) {
+        (
+            vec![McpPrompt {
+                name: "test/summarize".to_string(),
+                description: Some("Summarize text".to_string()),
+                arguments: vec![McpPromptArgument {
+                    name: "text".to_string(),
+                    description: Some("The text to summarize".to_string()),
+                    required: Some(true),
+                }],
             }],
-        }]
+            None,
+        )
     }
 
     async fn get_prompt(
@@ -148,24 +185,11 @@ impl McpPromptServer for MockServer {
         }
     }
 
-    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
-        self.prompt_change_tx.subscribe()
-    }
-}
-
-impl McpSubscriptionServer for MockServer {
-    async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
-        if uri.starts_with("test+") {
-            Ok(())
-        } else {
-            Err(McpGatewayError::SubscriptionNotSupported {
-                uri: uri.to_string(),
-            })
-        }
-    }
-
-    async fn unsubscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
-        Ok(())
+    fn subscribe_prompt_changes(&self) -> ChangeStream {
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.prompt_change_tx.subscribe())
+                .filter_map(|r| r.ok()),
+        )
     }
 }
 

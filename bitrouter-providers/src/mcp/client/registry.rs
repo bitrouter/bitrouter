@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock, broadcast};
+use tokio_stream::StreamExt;
 
 use bitrouter_core::routers::upstream::{ToolServerAccessGroups, ToolServerConfig};
 
 use bitrouter_core::api::mcp::error::McpGatewayError;
 use bitrouter_core::api::mcp::gateway::{
-    McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
-    McpSubscriptionServer, McpToolServer,
+    ChangeStream, McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
+    McpToolServer,
 };
 use bitrouter_core::api::mcp::types::{
     CompleteParams, CompleteResult, Completion, LoggingLevel, McpGetPromptResult, McpPrompt,
@@ -268,18 +269,15 @@ impl ConfigMcpRegistry {
 
 impl bitrouter_core::routers::registry::ToolRegistry for ConfigMcpRegistry {
     async fn list_tools(&self) -> Vec<bitrouter_core::routers::registry::ToolEntry> {
-        McpToolServer::list_tools(self)
-            .await
-            .into_iter()
-            .map(Into::into)
-            .collect()
+        let (tools, _) = McpToolServer::list_tools(self, None).await;
+        tools.into_iter().map(Into::into).collect()
     }
 }
 
 /// Raw [`McpToolServer`] impl on `ConfigMcpRegistry`.
 impl McpToolServer for ConfigMcpRegistry {
-    async fn list_tools(&self) -> Vec<McpTool> {
-        self.aggregated_tools().await
+    async fn list_tools(&self, _cursor: Option<&str>) -> (Vec<McpTool>, Option<String>) {
+        (self.aggregated_tools().await, None)
     }
 
     async fn call_tool(
@@ -290,14 +288,17 @@ impl McpToolServer for ConfigMcpRegistry {
         self.route_call(name, arguments).await
     }
 
-    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
-        self.tool_change_tx.subscribe()
+    fn subscribe_tool_changes(&self) -> ChangeStream {
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.tool_change_tx.subscribe())
+                .filter_map(|r| r.ok()),
+        )
     }
 }
 
 /// [`McpResourceServer`] impl on raw `ConfigMcpRegistry`.
 impl McpResourceServer for ConfigMcpRegistry {
-    async fn list_resources(&self) -> Vec<McpResource> {
+    async fn list_resources(&self, _cursor: Option<&str>) -> (Vec<McpResource>, Option<String>) {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
         for upstream in upstreams.values() {
@@ -310,7 +311,7 @@ impl McpResourceServer for ConfigMcpRegistry {
                 });
             }
         }
-        all
+        (all, None)
     }
 
     async fn read_resource(&self, uri: &str) -> Result<Vec<McpResourceContent>, McpGatewayError> {
@@ -325,7 +326,10 @@ impl McpResourceServer for ConfigMcpRegistry {
         upstream.read_resource(original_uri).await
     }
 
-    async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
+    async fn list_resource_templates(
+        &self,
+        _cursor: Option<&str>,
+    ) -> (Vec<McpResourceTemplate>, Option<String>) {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
         for upstream in upstreams.values() {
@@ -340,17 +344,28 @@ impl McpResourceServer for ConfigMcpRegistry {
                 });
             }
         }
-        all
+        (all, None)
     }
 
-    fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
-        self.resource_change_tx.subscribe()
+    fn subscribe_resource_changes(&self) -> ChangeStream {
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.resource_change_tx.subscribe())
+                .filter_map(|r| r.ok()),
+        )
+    }
+
+    async fn subscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
+        Ok(())
+    }
+
+    async fn unsubscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
+        Ok(())
     }
 }
 
 /// [`McpPromptServer`] impl on raw `ConfigMcpRegistry`.
 impl McpPromptServer for ConfigMcpRegistry {
-    async fn list_prompts(&self) -> Vec<McpPrompt> {
+    async fn list_prompts(&self, _cursor: Option<&str>) -> (Vec<McpPrompt>, Option<String>) {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
         for upstream in upstreams.values() {
@@ -362,7 +377,7 @@ impl McpPromptServer for ConfigMcpRegistry {
                 });
             }
         }
-        all
+        (all, None)
     }
 
     async fn get_prompt(
@@ -381,23 +396,11 @@ impl McpPromptServer for ConfigMcpRegistry {
         upstream.get_prompt(prompt_name, arguments).await
     }
 
-    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
-        self.prompt_change_tx.subscribe()
-    }
-}
-
-/// [`McpSubscriptionServer`] impl on raw `ConfigMcpRegistry`.
-///
-/// Resource subscriptions are accepted but currently no-ops — the upstream
-/// refresh listeners already detect list-level changes. Per-resource
-/// granularity can be added later.
-impl McpSubscriptionServer for ConfigMcpRegistry {
-    async fn subscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
-        Ok(())
-    }
-
-    async fn unsubscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
-        Ok(())
+    fn subscribe_prompt_changes(&self) -> ChangeStream {
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.prompt_change_tx.subscribe())
+                .filter_map(|r| r.ok()),
+        )
     }
 }
 

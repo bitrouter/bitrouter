@@ -19,13 +19,14 @@ use super::registry::RefreshGuard;
 use super::upstream::UpstreamConnection;
 use bitrouter_core::api::mcp::error::McpGatewayError;
 use bitrouter_core::api::mcp::gateway::{
-    McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
-    McpSubscriptionServer, McpToolServer,
+    ChangeStream, McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
+    McpToolServer,
 };
 use bitrouter_core::api::mcp::types::{
     CompleteParams, CompleteResult, Completion, LoggingLevel, McpGetPromptResult, McpPrompt,
     McpResource, McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
 };
+use tokio_stream::StreamExt;
 
 /// A bridge that re-exposes a single upstream [`UpstreamConnection`] as an
 /// independent MCP server without name-prefixing.
@@ -52,9 +53,9 @@ impl SingleServerBridge {
     /// forwarding tasks alive.  Drop the guard to stop background activity.
     pub fn new(
         upstream: Arc<UpstreamConnection>,
-        upstream_tool_rx: broadcast::Receiver<()>,
-        upstream_resource_rx: broadcast::Receiver<()>,
-        upstream_prompt_rx: broadcast::Receiver<()>,
+        upstream_tool_rx: ChangeStream,
+        upstream_resource_rx: ChangeStream,
+        upstream_prompt_rx: ChangeStream,
     ) -> (Arc<Self>, RefreshGuard) {
         let (tool_tx, _) = broadcast::channel(16);
         let (resource_tx, _) = broadcast::channel(16);
@@ -78,51 +79,33 @@ impl SingleServerBridge {
     /// Spawn background tasks that forward registry notifications to bridge subscribers.
     fn spawn_forward_listeners(
         self: &Arc<Self>,
-        mut tool_rx: broadcast::Receiver<()>,
-        mut resource_rx: broadcast::Receiver<()>,
-        mut prompt_rx: broadcast::Receiver<()>,
+        mut tool_rx: ChangeStream,
+        mut resource_rx: ChangeStream,
+        mut prompt_rx: ChangeStream,
     ) -> RefreshGuard {
         let mut handles = Vec::new();
 
         // Forward tool-change notifications.
         let tx = self.tool_change_tx.clone();
         handles.push(tokio::spawn(async move {
-            loop {
-                match tool_rx.recv().await {
-                    Ok(()) => {
-                        let _ = tx.send(());
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
+            while tool_rx.next().await.is_some() {
+                let _ = tx.send(());
             }
         }));
 
         // Forward resource-change notifications.
         let tx = self.resource_change_tx.clone();
         handles.push(tokio::spawn(async move {
-            loop {
-                match resource_rx.recv().await {
-                    Ok(()) => {
-                        let _ = tx.send(());
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
+            while resource_rx.next().await.is_some() {
+                let _ = tx.send(());
             }
         }));
 
         // Forward prompt-change notifications.
         let tx = self.prompt_change_tx.clone();
         handles.push(tokio::spawn(async move {
-            loop {
-                match prompt_rx.recv().await {
-                    Ok(()) => {
-                        let _ = tx.send(());
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
+            while prompt_rx.next().await.is_some() {
+                let _ = tx.send(());
             }
         }));
 
@@ -131,8 +114,8 @@ impl SingleServerBridge {
 }
 
 impl McpToolServer for SingleServerBridge {
-    async fn list_tools(&self) -> Vec<McpTool> {
-        self.upstream.raw_tools().await
+    async fn list_tools(&self, _cursor: Option<&str>) -> (Vec<McpTool>, Option<String>) {
+        (self.upstream.raw_tools().await, None)
     }
 
     async fn call_tool(
@@ -143,32 +126,49 @@ impl McpToolServer for SingleServerBridge {
         self.upstream.call_tool(name, arguments).await
     }
 
-    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
-        self.tool_change_tx.subscribe()
+    fn subscribe_tool_changes(&self) -> ChangeStream {
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.tool_change_tx.subscribe())
+                .filter_map(|r| r.ok()),
+        )
     }
 }
 
 impl McpResourceServer for SingleServerBridge {
-    async fn list_resources(&self) -> Vec<McpResource> {
-        self.upstream.raw_resources().await
+    async fn list_resources(&self, _cursor: Option<&str>) -> (Vec<McpResource>, Option<String>) {
+        (self.upstream.raw_resources().await, None)
     }
 
     async fn read_resource(&self, uri: &str) -> Result<Vec<McpResourceContent>, McpGatewayError> {
         self.upstream.read_resource(uri).await
     }
 
-    async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
-        self.upstream.raw_resource_templates().await
+    async fn list_resource_templates(
+        &self,
+        _cursor: Option<&str>,
+    ) -> (Vec<McpResourceTemplate>, Option<String>) {
+        (self.upstream.raw_resource_templates().await, None)
     }
 
-    fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
-        self.resource_change_tx.subscribe()
+    fn subscribe_resource_changes(&self) -> ChangeStream {
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.resource_change_tx.subscribe())
+                .filter_map(|r| r.ok()),
+        )
+    }
+
+    async fn subscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
+        Ok(())
+    }
+
+    async fn unsubscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
+        Ok(())
     }
 }
 
 impl McpPromptServer for SingleServerBridge {
-    async fn list_prompts(&self) -> Vec<McpPrompt> {
-        self.upstream.raw_prompts().await
+    async fn list_prompts(&self, _cursor: Option<&str>) -> (Vec<McpPrompt>, Option<String>) {
+        (self.upstream.raw_prompts().await, None)
     }
 
     async fn get_prompt(
@@ -179,20 +179,11 @@ impl McpPromptServer for SingleServerBridge {
         self.upstream.get_prompt(name, arguments).await
     }
 
-    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
-        self.prompt_change_tx.subscribe()
-    }
-}
-
-/// Resource subscriptions are accepted but currently no-ops — list-level
-/// change notifications cover the bridge's use case.
-impl McpSubscriptionServer for SingleServerBridge {
-    async fn subscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
-        Ok(())
-    }
-
-    async fn unsubscribe_resource(&self, _uri: &str) -> Result<(), McpGatewayError> {
-        Ok(())
+    fn subscribe_prompt_changes(&self) -> ChangeStream {
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.prompt_change_tx.subscribe())
+                .filter_map(|r| r.ok()),
+        )
     }
 }
 
