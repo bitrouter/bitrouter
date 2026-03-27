@@ -8,6 +8,7 @@
 //! when concrete types live in downstream crates like `bitrouter-providers`.
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
@@ -18,8 +19,10 @@ use crate::routers::registry::ToolRegistry;
 
 use super::error::McpGatewayError;
 use super::types::{
-    CompleteParams, CompleteResult, LoggingLevel, McpGetPromptResult, McpPrompt, McpResource,
-    McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
+    CompleteParams, CompleteResult, CreateMessageParams, CreateMessageResult,
+    ElicitationCreateParams, ElicitationCreateResult, JsonRpcError, LoggingLevel,
+    McpGetPromptResult, McpPrompt, McpResource, McpResourceContent, McpResourceTemplate, McpTool,
+    McpToolCallResult,
 };
 
 /// Trait for serving MCP tools to downstream clients.
@@ -115,6 +118,37 @@ pub trait McpCompletionServer: Send + Sync {
         &self,
         params: CompleteParams,
     ) -> impl Future<Output = Result<CompleteResult, McpGatewayError>> + Send;
+}
+
+// ── Client-side handler for server→client requests ──────────────────
+
+/// Handler for server→client requests (sampling, elicitation).
+///
+/// When an upstream MCP server sends a request to the client, the
+/// transport layer dispatches it to this handler. Implementations
+/// provide the application-level logic (e.g. routing to an LLM for
+/// sampling, or collecting user input for elicitation).
+///
+/// Returns `Pin<Box<dyn Future>>` for dyn-compatibility, since concrete
+/// handler types live in downstream crates (e.g. the binary crate).
+pub trait McpClientRequestHandler: Send + Sync {
+    /// Handle a `sampling/createMessage` request from an upstream server.
+    ///
+    /// `server_name` identifies which upstream MCP server is making the request.
+    fn handle_sampling(
+        &self,
+        server_name: &str,
+        params: CreateMessageParams,
+    ) -> Pin<Box<dyn Future<Output = Result<CreateMessageResult, JsonRpcError>> + Send + '_>>;
+
+    /// Handle an `elicitation/create` request from an upstream server.
+    ///
+    /// `server_name` identifies which upstream MCP server is making the request.
+    fn handle_elicitation(
+        &self,
+        server_name: &str,
+        params: ElicitationCreateParams,
+    ) -> Pin<Box<dyn Future<Output = Result<ElicitationCreateResult, JsonRpcError>> + Send + '_>>;
 }
 
 // ── Blanket impls for Arc<T> ────────────────────────────────────────

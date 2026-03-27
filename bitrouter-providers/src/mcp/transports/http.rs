@@ -252,7 +252,7 @@ impl super::McpTransport for McpHttpClient {
     async fn initialize(&self) -> Result<InitializeResult, McpGatewayError> {
         let params = InitializeParams {
             protocol_version: PROTOCOL_VERSION.to_owned(),
-            capabilities: ClientCapabilities {},
+            capabilities: ClientCapabilities::default(),
             client_info: ClientInfo {
                 name: "bitrouter".to_owned(),
                 version: Some(env!("CARGO_PKG_VERSION").to_owned()),

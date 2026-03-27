@@ -160,7 +160,35 @@ pub struct InitializeParams {
 
 /// Client capabilities declared during initialization.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ClientCapabilities {}
+#[serde(rename_all = "camelCase")]
+pub struct ClientCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<SamplingCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<ElicitationCapability>,
+}
+
+/// Client capability for sampling (LLM generation).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SamplingCapability {
+    /// Whether the client supports tool use in sampling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<serde_json::Value>,
+    /// Whether the client supports context inclusion (soft-deprecated).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<serde_json::Value>,
+}
+
+/// Client capability for elicitation (user input collection).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ElicitationCapability {
+    /// Whether form mode is supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form: Option<serde_json::Value>,
+    /// Whether URL mode is supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<serde_json::Value>,
+}
 
 /// Client identity sent during initialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -475,6 +503,175 @@ pub struct LogMessageNotificationParams {
     pub data: serde_json::Value,
 }
 
+// ── Sampling types (server→client) ─────────────────────────────────
+
+/// Parameters for the `sampling/createMessage` server→client request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMessageParams {
+    /// The conversation messages to send to the LLM.
+    pub messages: Vec<SamplingMessage>,
+    /// Optional model selection preferences.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_preferences: Option<ModelPreferences>,
+    /// Optional system prompt to prepend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    /// Maximum number of tokens to generate.
+    pub max_tokens: u32,
+    /// Tools available for the LLM to use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<SamplingToolDefinition>>,
+    /// Tool selection strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<SamplingToolChoice>,
+    /// Context inclusion mode (soft-deprecated).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_context: Option<String>,
+    /// Arbitrary metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Result of a `sampling/createMessage` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMessageResult {
+    /// Role of the generated message.
+    pub role: McpRole,
+    /// Generated content (single block or array).
+    pub content: SamplingContent,
+    /// The model that was used.
+    pub model: String,
+    /// Why generation stopped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+}
+
+/// A message in a sampling request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplingMessage {
+    pub role: McpRole,
+    pub content: SamplingContentOrArray,
+}
+
+/// Content that is either a single block or an array of blocks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SamplingContentOrArray {
+    Single(SamplingContent),
+    Array(Vec<SamplingContent>),
+}
+
+/// A content block in a sampling message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SamplingContent {
+    /// Text content.
+    Text { text: String },
+    /// Base64-encoded image content.
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    /// Base64-encoded audio content.
+    Audio {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    /// A tool use request from the assistant.
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// A tool result from the user.
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        #[serde(rename = "toolUseId")]
+        tool_use_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<Vec<SamplingContent>>,
+    },
+}
+
+/// Model selection preferences for sampling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPreferences {
+    /// Hints for model selection (tried in order).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hints: Option<Vec<ModelHint>>,
+    /// Priority for minimizing cost (0-1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_priority: Option<f64>,
+    /// Priority for low latency (0-1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_priority: Option<f64>,
+    /// Priority for advanced capabilities (0-1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intelligence_priority: Option<f64>,
+}
+
+/// A hint for model selection — treated as a substring match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelHint {
+    /// Substring to match against model names.
+    pub name: String,
+}
+
+/// A tool definition in a sampling request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SamplingToolDefinition {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub input_schema: serde_json::Value,
+}
+
+/// Tool selection strategy for sampling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplingToolChoice {
+    /// One of "auto", "required", or "none".
+    pub mode: String,
+}
+
+// ── Elicitation types (server→client) ──────────────────────────────
+
+/// Parameters for the `elicitation/create` server→client request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationCreateParams {
+    /// The elicitation mode: "form" or "url".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Human-readable message explaining the request.
+    pub message: String,
+    /// JSON Schema for form mode responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_schema: Option<serde_json::Value>,
+    /// URL for url mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Unique identifier for url mode elicitation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elicitation_id: Option<String>,
+}
+
+/// Result of an `elicitation/create` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElicitationCreateResult {
+    /// One of "accept", "decline", or "cancel".
+    pub action: String,
+    /// User-submitted data (for form mode accept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
+}
+
 // ── JSON-RPC 2.0 envelope types ───────────────────────────────────
 
 /// A JSON-RPC 2.0 request ID -- may be a number or a string.
@@ -785,7 +982,7 @@ mod protocol_tests {
     fn initialize_params_round_trip() {
         let params = InitializeParams {
             protocol_version: "2025-03-26".to_string(),
-            capabilities: ClientCapabilities {},
+            capabilities: ClientCapabilities::default(),
             client_info: ClientInfo {
                 name: "test-client".to_string(),
                 version: Some("1.0".to_string()),

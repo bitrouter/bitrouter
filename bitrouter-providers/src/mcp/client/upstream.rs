@@ -12,6 +12,7 @@ use bitrouter_core::routers::upstream::{ToolServerConfig, ToolServerTransport};
 use crate::mcp::transports::McpTransport;
 use crate::mcp::transports::TransportKind;
 use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::gateway::McpClientRequestHandler;
 use bitrouter_core::api::mcp::types::{
     McpGetPromptResult, McpPrompt, McpPromptArgument, McpResource, McpResourceContent,
     McpResourceTemplate, McpTool, McpToolCallResult,
@@ -35,7 +36,13 @@ pub struct UpstreamConnection {
 
 impl UpstreamConnection {
     /// Connect to an upstream MCP server.
-    pub async fn connect(config: ToolServerConfig) -> Result<Self, McpGatewayError> {
+    ///
+    /// If a `handler` is provided, the connection will handle server→client
+    /// requests (sampling, elicitation) by dispatching to it.
+    pub async fn connect(
+        config: ToolServerConfig,
+        handler: Option<Arc<dyn McpClientRequestHandler>>,
+    ) -> Result<Self, McpGatewayError> {
         config
             .validate()
             .map_err(|reason| McpGatewayError::InvalidConfig { reason })?;
@@ -99,6 +106,7 @@ impl UpstreamConnection {
                     command.clone(),
                     args.clone(),
                     env.clone(),
+                    handler,
                 )
                 .await?;
 

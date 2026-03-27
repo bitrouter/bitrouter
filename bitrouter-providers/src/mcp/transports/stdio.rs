@@ -14,12 +14,14 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::gateway::McpClientRequestHandler;
 use bitrouter_core::api::mcp::types::{
-    CallToolParams, ClientCapabilities, ClientInfo, GetPromptParams, InitializeParams,
-    InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsParams,
-    ListToolsResult, McpGetPromptResult, McpPrompt, McpResource, McpResourceContent,
-    McpResourceTemplate, McpTool, McpToolCallResult, ReadResourceParams, ReadResourceResult,
+    CallToolParams, ClientCapabilities, ClientInfo, CreateMessageParams, ElicitationCreateParams,
+    GetPromptParams, InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, ListPromptsResult, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsParams, ListToolsResult, McpGetPromptResult, McpPrompt,
+    McpResource, McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
+    ReadResourceParams, ReadResourceResult, SamplingCapability,
 };
 
 /// MCP protocol version this client advertises.
@@ -61,11 +63,16 @@ impl Drop for StdioConnection {
 
 impl StdioConnection {
     /// Spawn a child process and connect via stdio.
+    ///
+    /// If a `handler` is provided, the connection will handle server→client
+    /// requests (sampling, elicitation) by dispatching to it. The client
+    /// will also advertise the corresponding capabilities during init.
     pub async fn connect(
         name: String,
         command: String,
         args: Vec<String>,
         env: HashMap<String, String>,
+        handler: Option<Arc<dyn McpClientRequestHandler>>,
     ) -> Result<Self, McpGatewayError> {
         let mut cmd = tokio::process::Command::new(&command);
         cmd.args(&args);
@@ -101,15 +108,24 @@ impl StdioConnection {
         let prompt_notify = Arc::new(Notify::new());
 
         let (request_tx, request_rx) = mpsc::channel::<PendingRequest>(32);
+        let (response_tx, response_rx) = mpsc::channel::<Vec<u8>>(32);
 
+        let has_handler = handler.is_some();
+        let state = IoLoopState {
+            _child: child,
+            tool_notify: Arc::clone(&tool_notify),
+            resource_notify: Arc::clone(&resource_notify),
+            prompt_notify: Arc::clone(&prompt_notify),
+            handler,
+            server_name: name.clone(),
+            response_tx,
+        };
         let task = tokio::spawn(io_loop(
-            child,
+            state,
             BufReader::new(stdout),
             stdin,
             request_rx,
-            Arc::clone(&tool_notify),
-            Arc::clone(&resource_notify),
-            Arc::clone(&prompt_notify),
+            response_rx,
         ));
 
         let conn = Self {
@@ -122,9 +138,17 @@ impl StdioConnection {
         };
 
         // Perform MCP initialize handshake.
+        let capabilities = ClientCapabilities {
+            sampling: if has_handler {
+                Some(SamplingCapability::default())
+            } else {
+                None
+            },
+            elicitation: None, // Not advertised; we decline all requests.
+        };
         let params = InitializeParams {
             protocol_version: PROTOCOL_VERSION.to_owned(),
-            capabilities: ClientCapabilities {},
+            capabilities,
             client_info: ClientInfo {
                 name: "bitrouter".to_owned(),
                 version: Some(env!("CARGO_PKG_VERSION").to_owned()),
@@ -256,19 +280,29 @@ impl StdioConnection {
 
 // ── Background IO loop ──────────────────────────────────────────
 
+/// All state needed by the background IO loop.
+struct IoLoopState {
+    _child: Child,
+    tool_notify: Arc<Notify>,
+    resource_notify: Arc<Notify>,
+    prompt_notify: Arc<Notify>,
+    handler: Option<Arc<dyn McpClientRequestHandler>>,
+    server_name: String,
+    response_tx: mpsc::Sender<Vec<u8>>,
+}
+
 /// Drives stdin/stdout communication with the child process.
 ///
 /// Reads newline-delimited JSON-RPC messages from stdout, routes
 /// responses to pending callers, and dispatches notifications.
 /// Writes outgoing requests received via the channel to stdin.
+/// Handler responses from spawned tasks are also written to stdin.
 async fn io_loop(
-    _child: Child,
+    state: IoLoopState,
     mut reader: BufReader<tokio::process::ChildStdout>,
     mut writer: ChildStdin,
     mut request_rx: mpsc::Receiver<PendingRequest>,
-    tool_notify: Arc<Notify>,
-    resource_notify: Arc<Notify>,
-    prompt_notify: Arc<Notify>,
+    mut response_rx: mpsc::Receiver<Vec<u8>>,
 ) {
     let mut pending: HashMap<String, oneshot::Sender<JsonRpcResponse>> = HashMap::new();
     let mut line_buf = String::new();
@@ -285,9 +319,7 @@ async fn io_loop(
                             dispatch_incoming(
                                 line,
                                 &mut pending,
-                                &tool_notify,
-                                &resource_notify,
-                                &prompt_notify,
+                                &state,
                             );
                         }
                         line_buf.clear();
@@ -321,6 +353,23 @@ async fn io_loop(
                     None => break, // Channel closed
                 }
             }
+
+            // Outgoing: write handler responses to child stdin.
+            resp = response_rx.recv() => {
+                match resp {
+                    Some(data) => {
+                        if let Err(e) = writer.write_all(&data).await {
+                            tracing::error!(error = %e, "stdio write error (handler response)");
+                            break;
+                        }
+                        if let Err(e) = writer.flush().await {
+                            tracing::error!(error = %e, "stdio flush error (handler response)");
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
         }
     }
 }
@@ -329,10 +378,17 @@ async fn io_loop(
 fn dispatch_incoming(
     line: &str,
     pending: &mut HashMap<String, oneshot::Sender<JsonRpcResponse>>,
-    tool_notify: &Notify,
-    resource_notify: &Notify,
-    prompt_notify: &Notify,
+    state: &IoLoopState,
 ) {
+    let IoLoopState {
+        tool_notify,
+        resource_notify,
+        prompt_notify,
+        handler,
+        server_name,
+        response_tx,
+        ..
+    } = state;
     // Parse as raw JSON to determine message type.
     let Ok(raw) = serde_json::from_str::<serde_json::Value>(line) else {
         tracing::warn!(line, "ignoring unparseable JSON-RPC line");
@@ -366,17 +422,134 @@ fn dispatch_incoming(
                 _ => tracing::trace!(method, "ignoring notification"),
             }
         }
-        // Server-to-client request: has id + method. Not handled yet.
+        // Server-to-client request: has id + method.
         (true, true) => {
-            tracing::debug!(
-                method = raw["method"].as_str().unwrap_or(""),
-                "ignoring server-to-client request"
-            );
+            let method = raw["method"].as_str().unwrap_or("").to_owned();
+            let id = match serde_json::from_value::<JsonRpcId>(raw["id"].clone()) {
+                Ok(id) => id,
+                Err(_) => return,
+            };
+            let params = raw
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            if let Some(h) = handler {
+                let h = Arc::clone(h);
+                let name = server_name.to_owned();
+                let tx = response_tx.clone();
+                tokio::spawn(async move {
+                    let response =
+                        handle_server_request(&h, &name, &method, params, id.clone()).await;
+                    let mut data = match serde_json::to_vec(&response) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::error!(error = %e, "failed to serialize handler response");
+                            return;
+                        }
+                    };
+                    data.push(b'\n');
+                    let _ = tx.send(data).await;
+                });
+            } else {
+                // No handler — respond with method not found.
+                let response = JsonRpcResponse::error(
+                    id,
+                    bitrouter_core::api::mcp::types::error_codes::METHOD_NOT_FOUND,
+                    format!("unsupported server-to-client method: {method}"),
+                    None,
+                );
+                let tx = response_tx.clone();
+                tokio::spawn(async move {
+                    if let Ok(mut data) = serde_json::to_vec(&response) {
+                        data.push(b'\n');
+                        let _ = tx.send(data).await;
+                    }
+                });
+            }
         }
         // Invalid: neither id nor method.
         (false, false) => {
             tracing::warn!(line, "ignoring JSON-RPC message with no id or method");
         }
+    }
+}
+
+/// Dispatch a server→client request to the appropriate handler method.
+async fn handle_server_request(
+    handler: &Arc<dyn McpClientRequestHandler>,
+    server_name: &str,
+    method: &str,
+    params: serde_json::Value,
+    id: JsonRpcId,
+) -> JsonRpcResponse {
+    match method {
+        "sampling/createMessage" => {
+            let parsed = match serde_json::from_value::<CreateMessageParams>(params) {
+                Ok(p) => p,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        bitrouter_core::api::mcp::types::error_codes::INVALID_PARAMS,
+                        format!("invalid sampling params: {e}"),
+                        None,
+                    );
+                }
+            };
+            match handler.handle_sampling(server_name, parsed).await {
+                Ok(result) => match serde_json::to_value(result) {
+                    Ok(v) => JsonRpcResponse::success(id, v),
+                    Err(e) => JsonRpcResponse::error(
+                        id,
+                        bitrouter_core::api::mcp::types::error_codes::INTERNAL_ERROR,
+                        format!("failed to serialize sampling result: {e}"),
+                        None,
+                    ),
+                },
+                Err(e) => JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        "elicitation/create" => {
+            let parsed = match serde_json::from_value::<ElicitationCreateParams>(params) {
+                Ok(p) => p,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        bitrouter_core::api::mcp::types::error_codes::INVALID_PARAMS,
+                        format!("invalid elicitation params: {e}"),
+                        None,
+                    );
+                }
+            };
+            match handler.handle_elicitation(server_name, parsed).await {
+                Ok(result) => match serde_json::to_value(result) {
+                    Ok(v) => JsonRpcResponse::success(id, v),
+                    Err(e) => JsonRpcResponse::error(
+                        id,
+                        bitrouter_core::api::mcp::types::error_codes::INTERNAL_ERROR,
+                        format!("failed to serialize elicitation result: {e}"),
+                        None,
+                    ),
+                },
+                Err(e) => JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        _ => JsonRpcResponse::error(
+            id,
+            bitrouter_core::api::mcp::types::error_codes::METHOD_NOT_FOUND,
+            format!("unsupported server-to-client method: {method}"),
+            None,
+        ),
     }
 }
 
@@ -408,7 +581,7 @@ impl super::McpTransport for StdioConnection {
         // that already ran in `connect()`, so this is a formality.
         let params = InitializeParams {
             protocol_version: PROTOCOL_VERSION.to_owned(),
-            capabilities: ClientCapabilities {},
+            capabilities: ClientCapabilities::default(),
             client_info: ClientInfo {
                 name: "bitrouter".to_owned(),
                 version: Some(env!("CARGO_PKG_VERSION").to_owned()),
@@ -544,6 +717,7 @@ mod tests {
                 "@modelcontextprotocol/server-everything".to_owned(),
             ],
             HashMap::new(),
+            None,
         )
         .await
         .expect("failed to connect to everything server")

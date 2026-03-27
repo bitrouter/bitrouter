@@ -7,8 +7,8 @@ use bitrouter_core::routers::upstream::{ToolServerAccessGroups, ToolServerConfig
 
 use bitrouter_core::api::mcp::error::McpGatewayError;
 use bitrouter_core::api::mcp::gateway::{
-    McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
-    McpSubscriptionServer, McpToolServer,
+    McpClientRequestHandler, McpCompletionServer, McpLoggingServer, McpPromptServer,
+    McpResourceServer, McpSubscriptionServer, McpToolServer,
 };
 use bitrouter_core::api::mcp::types::{
     CompleteParams, CompleteResult, Completion, LoggingLevel, McpGetPromptResult, McpPrompt,
@@ -75,9 +75,13 @@ impl ConfigMcpRegistry {
     }
 
     /// Connect to all configured upstreams. Fails on first error or duplicate name.
+    ///
+    /// If a `handler` is provided, all connections will handle server→client
+    /// requests (sampling, elicitation) by dispatching to it.
     pub async fn from_configs(
         configs: Vec<ToolServerConfig>,
         groups: ToolServerAccessGroups,
+        handler: Option<Arc<dyn McpClientRequestHandler>>,
     ) -> Result<Self, McpGatewayError> {
         // Check for duplicate names
         let mut seen = std::collections::HashSet::new();
@@ -93,7 +97,7 @@ impl ConfigMcpRegistry {
         for config in configs {
             let name = config.name.clone();
             tracing::info!(upstream = %name, "connecting to upstream");
-            let conn = UpstreamConnection::connect(config).await?;
+            let conn = UpstreamConnection::connect(config, handler.clone()).await?;
             connections.insert(name, Arc::new(conn));
         }
 

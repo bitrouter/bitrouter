@@ -105,6 +105,7 @@ where
         let addr = self.config.server.listen;
 
         // Build guardrail engine from config and wrap the model router.
+        let raw_router = Arc::clone(&self.router);
         let guardrail = Arc::new(Guardrail::new(self.config.guardrails.clone()));
         let guarded_router = Arc::new(GuardedRouter::new(self.router, guardrail.clone()));
 
@@ -383,13 +384,15 @@ where
             _bridge_guards,
         ) = {
             use bitrouter_core::api::mcp::gateway::{
-                McpPromptServer, McpResourceServer, McpToolServer,
+                McpClientRequestHandler, McpPromptServer, McpResourceServer, McpToolServer,
             };
             use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
             use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
             use bitrouter_providers::mcp::client::bridge::SingleServerBridge;
             use bitrouter_providers::mcp::client::registry::ConfigMcpRegistry;
             use bitrouter_providers::mcp::client::upstream::UpstreamConnection;
+
+            use crate::runtime::mcp_handler::McpSamplingHandler;
 
             let mcp_configs = self.config.mcp_servers.clone();
             let mcp_groups = self.config.mcp_groups.clone();
@@ -410,12 +413,18 @@ where
                 .collect();
             let groups = self.config.mcp_groups.as_map().clone();
 
+            // Build the sampling handler so upstream MCP servers can request
+            // LLM generation via sampling/createMessage.
+            let sampling_handler: Option<Arc<dyn McpClientRequestHandler>> = Some(Arc::new(
+                McpSamplingHandler::new(self.table.clone(), raw_router.clone()),
+            ));
+
             // Build all upstream connections upfront so bridges can share them.
             let mut connections: std::collections::HashMap<String, Arc<UpstreamConnection>> =
                 std::collections::HashMap::with_capacity(mcp_configs.len());
             for config in &mcp_configs {
                 let name = config.name.clone();
-                match UpstreamConnection::connect(config.clone()).await {
+                match UpstreamConnection::connect(config.clone(), sampling_handler.clone()).await {
                     Ok(conn) => {
                         connections.insert(name, Arc::new(conn));
                     }
