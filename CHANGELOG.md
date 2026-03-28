@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/bitrouter/bitrouter/compare/v0.15.0...v0.16.0)
+
+
+### 🚜 Refactor
+
+- *(api)* Accept trait-based signer on Tempo ([#210](https://github.com/bitrouter/bitrouter/pull/210)) - ([7c6cb35](https://github.com/bitrouter/bitrouter/commit/7c6cb35c7520f55df3c9e83e5a750c86002e246e))
+
+
 ## [0.15.0](https://github.com/bitrouter/bitrouter/compare/v0.14.0...v0.15.0)
 
 

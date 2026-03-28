@@ -43,16 +43,16 @@ mpp-solana = [
 
 [dependencies]
 # Internal crates
-bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.15" }
-bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.15" }
-bitrouter-api = { path = "../bitrouter-api", version = "0.15" }
-bitrouter-config = { path = "../bitrouter-config", version = "0.15" }
-bitrouter-core = { path = "../bitrouter-core", version = "0.15" }
-bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.15" }
-bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.15" }
-bitrouter-observe = { path = "../bitrouter-observe", version = "0.15" }
-bitrouter-providers = { path = "../bitrouter-providers", version = "0.15" }
-bitrouter-skills = { path = "../bitrouter-skills", version = "0.15" }
+bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.16" }
+bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.16" }
+bitrouter-api = { path = "../bitrouter-api", version = "0.16" }
+bitrouter-config = { path = "../bitrouter-config", version = "0.16" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.16" }
+bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.16" }
+bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.16" }
+bitrouter-observe = { path = "../bitrouter-observe", version = "0.16" }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.16" }
+bitrouter-skills = { path = "../bitrouter-skills", version = "0.16" }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
