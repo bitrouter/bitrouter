@@ -10,9 +10,9 @@ use bitrouter_core::{
     },
 };
 
-use crate::config::{
-    ApiProtocol, ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy,
-};
+use bitrouter_core::routers::routing_table::ApiProtocol;
+
+use crate::config::{ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy};
 
 /// The provider name used as fallback when the user has no explicit `models:`
 /// section configured.
@@ -23,6 +23,10 @@ const DEFAULT_PROVIDER: &str = "bitrouter";
 pub struct ResolvedTarget {
     pub provider_name: String,
     pub model_id: String,
+    /// The resolved API protocol for this endpoint.
+    ///
+    /// Resolution order: endpoint override > provider default.
+    pub api_protocol: ApiProtocol,
     /// Per-endpoint API key override (from the model endpoint config).
     pub api_key_override: Option<String>,
     /// Per-endpoint API base override.
@@ -90,15 +94,39 @@ impl ConfigRoutingTable {
         self.model_info(provider_name, model_id).pricing
     }
 
+    /// Resolves the API protocol for a given provider, with an optional
+    /// per-endpoint override.
+    fn resolve_protocol(
+        &self,
+        provider_name: &str,
+        endpoint_override: Option<ApiProtocol>,
+    ) -> Result<ApiProtocol> {
+        if let Some(proto) = endpoint_override {
+            return Ok(proto);
+        }
+        self.providers
+            .get(provider_name)
+            .and_then(|p| p.api_protocol)
+            .ok_or_else(|| {
+                BitrouterError::invalid_request(
+                    Some(provider_name),
+                    format!("provider '{provider_name}' has no api_protocol configured"),
+                    None,
+                )
+            })
+    }
+
     /// Resolves an incoming model name to a full target with any per-endpoint overrides.
     pub fn resolve(&self, incoming: &str) -> Result<ResolvedTarget> {
         // Strategy 1: "provider:model_id" → direct route if provider is known
         if let Some((prefix, suffix)) = incoming.split_once(':')
             && self.providers.contains_key(prefix)
         {
+            let api_protocol = self.resolve_protocol(prefix, None)?;
             return Ok(ResolvedTarget {
                 provider_name: prefix.to_owned(),
                 model_id: suffix.to_owned(),
+                api_protocol,
                 api_key_override: None,
                 api_base_override: None,
             });
@@ -112,9 +140,11 @@ impl ConfigRoutingTable {
         // Strategy 3: when no explicit models section is configured, fall back
         // to the default provider (if it exists in the provider set).
         if self.models.is_empty() && self.providers.contains_key(DEFAULT_PROVIDER) {
+            let api_protocol = self.resolve_protocol(DEFAULT_PROVIDER, None)?;
             return Ok(ResolvedTarget {
                 provider_name: DEFAULT_PROVIDER.to_owned(),
                 model_id: incoming.to_owned(),
+                api_protocol,
                 api_key_override: None,
                 api_base_override: None,
             });
@@ -151,9 +181,12 @@ impl ConfigRoutingTable {
             }
         };
 
+        let api_protocol = self.resolve_protocol(&endpoint.provider, endpoint.api_protocol)?;
+
         Ok(ResolvedTarget {
             provider_name: endpoint.provider.clone(),
             model_id: endpoint.model_id.clone(),
+            api_protocol,
             api_key_override: endpoint.api_key.clone(),
             api_base_override: endpoint.api_base.clone(),
         })
@@ -189,22 +222,13 @@ impl RoutingTable for ConfigRoutingTable {
         if self.models.is_empty() {
             // Fallback mode: surface the default provider's model catalog.
             if let Some(provider) = self.providers.get(DEFAULT_PROVIDER) {
-                let protocol = provider
-                    .api_protocol
-                    .as_ref()
-                    .map(|p| match p {
-                        ApiProtocol::Openai => "openai",
-                        ApiProtocol::Anthropic => "anthropic",
-                        ApiProtocol::Google => "google",
-                    })
-                    .unwrap_or("openai")
-                    .to_owned();
+                let protocol = provider.api_protocol.unwrap_or(ApiProtocol::Openai);
                 if let Some(models) = &provider.models {
                     for model_id in models.keys() {
                         entries.push(RouteEntry {
                             model: model_id.clone(),
                             provider: DEFAULT_PROVIDER.to_owned(),
-                            protocol: protocol.clone(),
+                            protocol,
                         });
                     }
                 }
@@ -215,14 +239,8 @@ impl RoutingTable for ConfigRoutingTable {
                     let protocol = self
                         .providers
                         .get(&endpoint.provider)
-                        .and_then(|p| p.api_protocol.as_ref())
-                        .map(|p| match p {
-                            ApiProtocol::Openai => "openai",
-                            ApiProtocol::Anthropic => "anthropic",
-                            ApiProtocol::Google => "google",
-                        })
-                        .unwrap_or("openai")
-                        .to_owned();
+                        .and_then(|p| p.api_protocol)
+                        .unwrap_or(ApiProtocol::Openai);
                     entries.push(RouteEntry {
                         model: model_name.clone(),
                         provider: endpoint.provider.clone(),
@@ -320,9 +338,9 @@ impl ModelRegistry for ConfigRoutingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        ApiProtocol, InputTokenPricing, Modality, ModelEndpoint, OutputTokenPricing,
-    };
+    use bitrouter_core::routers::routing_table::ApiProtocol;
+
+    use crate::config::{InputTokenPricing, Modality, ModelEndpoint, OutputTokenPricing};
 
     fn test_providers() -> HashMap<String, ProviderConfig> {
         let mut p = HashMap::new();
@@ -379,6 +397,7 @@ mod tests {
                 endpoints: vec![ModelEndpoint {
                     provider: "openai".into(),
                     model_id: "custom-model".into(),
+                    api_protocol: None,
                     api_key: None,
                     api_base: None,
                 }],
@@ -401,6 +420,7 @@ mod tests {
                 endpoints: vec![ModelEndpoint {
                     provider: "openai".into(),
                     model_id: "gpt-4o".into(),
+                    api_protocol: None,
                     api_key: Some("sk-override".into()),
                     api_base: None,
                 }],
@@ -433,12 +453,14 @@ mod tests {
                     ModelEndpoint {
                         provider: "openai".into(),
                         model_id: "gpt-4o".into(),
+                        api_protocol: None,
                         api_key: Some("key-a".into()),
                         api_base: None,
                     },
                     ModelEndpoint {
                         provider: "openai".into(),
                         model_id: "gpt-4o".into(),
+                        api_protocol: None,
                         api_key: Some("key-b".into()),
                         api_base: None,
                     },
@@ -468,12 +490,14 @@ mod tests {
                     ModelEndpoint {
                         provider: "openai".into(),
                         model_id: "gpt-4o".into(),
+                        api_protocol: None,
                         api_key: Some("primary-key".into()),
                         api_base: None,
                     },
                     ModelEndpoint {
                         provider: "openai".into(),
                         model_id: "gpt-4o".into(),
+                        api_protocol: None,
                         api_key: Some("fallback-key".into()),
                         api_base: None,
                     },
@@ -647,6 +671,7 @@ mod tests {
                 endpoints: vec![ModelEndpoint {
                     provider: "openai".into(),
                     model_id: "gpt-4o".into(),
+                    api_protocol: None,
                     api_key: None,
                     api_base: None,
                 }],

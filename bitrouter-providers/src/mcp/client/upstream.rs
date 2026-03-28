@@ -41,7 +41,8 @@ impl UpstreamConnection {
     /// requests (sampling, elicitation) by dispatching to it.
     pub async fn connect(
         config: ToolServerConfig,
-        handler: Option<Arc<dyn McpClientRequestHandler>>,
+        #[cfg(feature = "mcp-stdio")] handler: Option<Arc<dyn McpClientRequestHandler>>,
+        #[cfg(not(feature = "mcp-stdio"))] _handler: Option<Arc<dyn McpClientRequestHandler>>,
     ) -> Result<Self, McpGatewayError> {
         config
             .validate()
@@ -96,6 +97,7 @@ impl UpstreamConnection {
                     prompt_notify,
                 })
             }
+            #[cfg(feature = "mcp-stdio")]
             ToolServerTransport::Stdio {
                 ref command,
                 ref args,
@@ -138,6 +140,12 @@ impl UpstreamConnection {
                     prompt_notify: pn,
                 })
             }
+            #[cfg(not(feature = "mcp-stdio"))]
+            ToolServerTransport::Stdio { .. } => Err(McpGatewayError::InvalidConfig {
+                reason: format!(
+                    "server '{name}': stdio transport requires the 'mcp-stdio' feature"
+                ),
+            }),
         }
     }
 

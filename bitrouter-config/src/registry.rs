@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::config::{ApiProtocol, ModelInfo, ProviderConfig};
+use bitrouter_core::routers::routing_table::ApiProtocol;
+
+use crate::config::{ModelInfo, ProviderConfig};
 
 // ── Compile-time embedded provider definitions ──────────────────────
 

@@ -7,6 +7,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use bitrouter_core::routers::routing_table::ApiProtocol;
+
 use crate::agent::AgentPricing;
 use crate::env::{load_env, substitute_in_value};
 use crate::registry::{builtin_providers, merge_provider, resolve_providers};
@@ -222,15 +224,6 @@ fn default_socket_path() -> PathBuf {
 }
 
 // ── Provider configuration ───────────────────────────────────────────
-
-/// The API protocol / adapter that a provider uses.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ApiProtocol {
-    Openai,
-    Anthropic,
-    Google,
-}
 
 /// Configuration for a single provider.
 ///
@@ -571,6 +564,13 @@ pub struct ModelEndpoint {
     /// The upstream model ID to send to this provider.
     pub model_id: String,
 
+    /// Optional per-endpoint API protocol override.
+    ///
+    /// When set, overrides the provider's default `api_protocol` for this
+    /// endpoint only. Useful when a provider speaks multiple protocols.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_protocol: Option<ApiProtocol>,
+
     /// Optional per-endpoint API key override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
@@ -612,6 +612,46 @@ pub struct ModelConfig {
     #[serde(default)]
     pub pricing: ModelPricing,
 }
+
+// ── Tool routing configuration ──────────────────────────────────────
+
+/// A single endpoint that a tool can be routed to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolEndpoint {
+    /// Provider name (must exist in the providers section or built-ins).
+    pub provider: String,
+
+    /// The upstream tool identifier.
+    pub tool_id: String,
+
+    /// Optional per-endpoint API protocol override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_protocol: Option<ApiProtocol>,
+
+    /// Optional per-endpoint API key override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+
+    /// Optional per-endpoint API base override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_base: Option<String>,
+}
+
+/// Routing configuration for a virtual tool name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolConfig {
+    /// Strategy for selecting among multiple endpoints.
+    #[serde(default)]
+    pub strategy: RoutingStrategy,
+
+    /// One or more upstream endpoints to route this tool to.
+    pub endpoints: Vec<ToolEndpoint>,
+
+    /// Optional per-tool invocation pricing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<crate::tool::ToolPricing>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

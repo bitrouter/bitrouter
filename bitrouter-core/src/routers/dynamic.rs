@@ -16,7 +16,7 @@ use crate::errors::{BitrouterError, Result};
 use super::admin::{AdminRoutingTable, DynamicRoute, RouteEndpoint, RouteStrategy};
 use super::registry::{ModelEntry, ModelRegistry};
 use super::reload::ReloadableRoutingTable;
-use super::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
+use super::routing_table::{ApiProtocol, RouteEntry, RoutingTable, RoutingTarget};
 
 /// Internal representation of a dynamic route with its round-robin counter.
 struct DynamicRouteData {
@@ -112,8 +112,8 @@ impl<T: RoutingTable + Send + Sync> RoutingTable for DynamicRoutingTable<T> {
                     entries.push(RouteEntry {
                         model: model.clone(),
                         provider: ep.provider.clone(),
-                        // Dynamic routes don't track protocol; default to provider name.
-                        protocol: ep.provider.clone(),
+                        // Dynamic routes don't track protocol; default to openai.
+                        protocol: ApiProtocol::Openai,
                     });
                 }
             }
@@ -222,7 +222,7 @@ mod tests {
             vec![RouteEntry {
                 model: "default".to_owned(),
                 provider: "openai".to_owned(),
-                protocol: "openai".to_owned(),
+                protocol: ApiProtocol::Openai,
             }]
         }
     }

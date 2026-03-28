@@ -63,6 +63,7 @@ pub trait McpTransport: Send + Sync {
 }
 
 pub mod http;
+#[cfg(feature = "mcp-stdio")]
 pub mod stdio;
 
 /// Internal transport dispatch enum.
@@ -71,6 +72,7 @@ pub mod stdio;
 /// this enum provides static dispatch across transport backends.
 pub(crate) enum TransportKind {
     Http(http::McpHttpClient),
+    #[cfg(feature = "mcp-stdio")]
     Stdio(stdio::StdioConnection),
 }
 
@@ -78,6 +80,7 @@ impl McpTransport for TransportKind {
     async fn initialize(&self) -> Result<InitializeResult, McpGatewayError> {
         match self {
             Self::Http(c) => c.initialize().await,
+            #[cfg(feature = "mcp-stdio")]
             Self::Stdio(c) => c.initialize().await,
         }
     }
@@ -85,6 +88,7 @@ impl McpTransport for TransportKind {
     async fn terminate(&self) {
         match self {
             Self::Http(c) => c.terminate().await,
+            #[cfg(feature = "mcp-stdio")]
             Self::Stdio(c) => c.terminate().await,
         }
     }
@@ -92,6 +96,7 @@ impl McpTransport for TransportKind {
     async fn list_tools(&self) -> Result<Vec<McpTool>, McpGatewayError> {
         match self {
             Self::Http(c) => c.list_tools().await,
+            #[cfg(feature = "mcp-stdio")]
             Self::Stdio(c) => c.list_tools().await,
         }
     }
@@ -103,6 +108,7 @@ impl McpTransport for TransportKind {
     ) -> Result<McpToolCallResult, McpGatewayError> {
         match self {
             Self::Http(c) => c.call_tool(name, arguments).await,
+            #[cfg(feature = "mcp-stdio")]
             Self::Stdio(c) => c.call_tool(name, arguments).await,
         }
     }
@@ -110,6 +116,7 @@ impl McpTransport for TransportKind {
     async fn list_resources(&self) -> Result<Vec<McpResource>, McpGatewayError> {
         match self {
             Self::Http(c) => c.list_resources().await,
+            #[cfg(feature = "mcp-stdio")]
             Self::Stdio(c) => c.list_resources().await,
         }
     }
@@ -117,6 +124,7 @@ impl McpTransport for TransportKind {
     async fn read_resource(&self, uri: &str) -> Result<Vec<McpResourceContent>, McpGatewayError> {
         match self {
             Self::Http(c) => c.read_resource(uri).await,
+            #[cfg(feature = "mcp-stdio")]
             Self::Stdio(c) => c.read_resource(uri).await,
         }
     }
@@ -124,6 +132,7 @@ impl McpTransport for TransportKind {
     async fn list_resource_templates(&self) -> Result<Vec<McpResourceTemplate>, McpGatewayError> {
         match self {
             Self::Http(c) => c.list_resource_templates().await,
+            #[cfg(feature = "mcp-stdio")]
             Self::Stdio(c) => c.list_resource_templates().await,
         }
     }
@@ -131,6 +140,7 @@ impl McpTransport for TransportKind {
     async fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpGatewayError> {
         match self {
             Self::Http(c) => c.list_prompts().await,
+            #[cfg(feature = "mcp-stdio")]
             Self::Stdio(c) => c.list_prompts().await,
         }
     }
@@ -142,6 +152,7 @@ impl McpTransport for TransportKind {
     ) -> Result<McpGetPromptResult, McpGatewayError> {
         match self {
             Self::Http(c) => c.get_prompt(name, arguments).await,
+            #[cfg(feature = "mcp-stdio")]
             Self::Stdio(c) => c.get_prompt(name, arguments).await,
         }
     }

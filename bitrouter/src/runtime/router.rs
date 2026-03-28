@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use bitrouter_config::{ApiProtocol, AuthConfig, ProviderConfig};
+use bitrouter_config::{AuthConfig, ProviderConfig};
+use bitrouter_core::routers::routing_table::ApiProtocol;
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::language::language_model::DynLanguageModel,
@@ -178,6 +179,16 @@ impl LanguageModelRouter for Router {
                     config,
                 );
                 Ok(DynLanguageModel::new_box(model))
+            }
+            ApiProtocol::Mcp | ApiProtocol::A2a | ApiProtocol::Rest | ApiProtocol::Skill => {
+                Err(BitrouterError::invalid_request(
+                    Some(&target.provider_name),
+                    format!(
+                        "provider '{}' uses tool protocol '{}' which cannot serve models",
+                        target.provider_name, protocol
+                    ),
+                    None,
+                ))
             }
         }
     }

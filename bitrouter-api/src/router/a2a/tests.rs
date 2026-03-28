@@ -9,47 +9,47 @@ mod tests {
 
     // -- v0.3.0 wire format validation ----------------------------------------
 
-#[test]
-fn part_types_serialize_with_kind_tag() {
-    let text_part = Part::text("hello");
-    let json = serde_json::to_value(&text_part).unwrap_or_default();
-    assert_eq!(json["kind"], "text");
-    assert_eq!(json["text"], "hello");
+    #[test]
+    fn part_types_serialize_with_kind_tag() {
+        let text_part = Part::text("hello");
+        let json = serde_json::to_value(&text_part).unwrap_or_default();
+        assert_eq!(json["kind"], "text");
+        assert_eq!(json["text"], "hello");
 
-    let data_part = Part::data(serde_json::json!({"key": "value"}));
-    let json = serde_json::to_value(&data_part).unwrap_or_default();
-    assert_eq!(json["kind"], "data");
-    assert!(json["data"].is_object());
+        let data_part = Part::data(serde_json::json!({"key": "value"}));
+        let json = serde_json::to_value(&data_part).unwrap_or_default();
+        assert_eq!(json["kind"], "data");
+        assert!(json["data"].is_object());
 
-    let file_part = Part::file_uri("https://example.com/f.png", Some("f.png".to_string()));
-    let json = serde_json::to_value(&file_part).unwrap_or_default();
-    assert_eq!(json["kind"], "file");
-    assert!(json["file"].is_object());
-    assert_eq!(json["file"]["uri"], "https://example.com/f.png");
-}
-
-#[test]
-fn task_state_serializes_lowercase() {
-    let cases = vec![
-        (TaskState::Submitted, "submitted"),
-        (TaskState::Working, "working"),
-        (TaskState::Completed, "completed"),
-        (TaskState::Failed, "failed"),
-        (TaskState::Canceled, "canceled"),
-        (TaskState::Rejected, "rejected"),
-        (TaskState::InputRequired, "input-required"),
-        (TaskState::AuthRequired, "auth-required"),
-        (TaskState::Unknown, "unknown"),
-    ];
-    for (state, expected) in cases {
-        let json = serde_json::to_value(&state).unwrap_or_default();
-        assert_eq!(
-            json.as_str().unwrap_or_default(),
-            expected,
-            "TaskState::{state:?} should serialize as \"{expected}\""
-        );
+        let file_part = Part::file_uri("https://example.com/f.png", Some("f.png".to_string()));
+        let json = serde_json::to_value(&file_part).unwrap_or_default();
+        assert_eq!(json["kind"], "file");
+        assert!(json["file"].is_object());
+        assert_eq!(json["file"]["uri"], "https://example.com/f.png");
     }
-}
+
+    #[test]
+    fn task_state_serializes_lowercase() {
+        let cases = vec![
+            (TaskState::Submitted, "submitted"),
+            (TaskState::Working, "working"),
+            (TaskState::Completed, "completed"),
+            (TaskState::Failed, "failed"),
+            (TaskState::Canceled, "canceled"),
+            (TaskState::Rejected, "rejected"),
+            (TaskState::InputRequired, "input-required"),
+            (TaskState::AuthRequired, "auth-required"),
+            (TaskState::Unknown, "unknown"),
+        ];
+        for (state, expected) in cases {
+            let json = serde_json::to_value(&state).unwrap_or_default();
+            assert_eq!(
+                json.as_str().unwrap_or_default(),
+                expected,
+                "TaskState::{state:?} should serialize as \"{expected}\""
+            );
+        }
+    }
 
     #[test]
     fn message_role_serializes_lowercase() {
@@ -332,19 +332,6 @@ mod filter_tests {
         assert_eq!(resp.status(), 404);
     }
 
-    #[tokio::test]
-    async fn rest_card() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/test-agent/card")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 200);
-        let body: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        assert_eq!(body["name"], "test-agent");
-    }
-
     // -- JSON-RPC dispatch tests ----------------------------------------------
 
     #[tokio::test]
@@ -578,233 +565,6 @@ mod filter_tests {
         assert_eq!(json["result"]["success"], true);
     }
 
-    // -- REST endpoint tests --------------------------------------------------
-
-    #[tokio::test]
-    async fn rest_message_send() {
-        let filter = make_filter();
-        let body = serde_json::json!({
-            "message": {
-                "role": "user",
-                "parts": [{"kind": "text", "text": "Hello"}],
-                "messageId": "msg-1"
-            }
-        });
-        let resp = warp::test::request()
-            .method("POST")
-            .path("/a2a/test-agent/message:send")
-            .json(&body)
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 200);
-        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        // StreamResponse::Task is internally tagged with kind = "task"
-        assert_eq!(json["kind"], "task");
-        assert_eq!(json["id"], "new-task");
-        assert_eq!(json["status"]["state"], "submitted");
-    }
-
-    #[tokio::test]
-    async fn rest_get_task() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/test-agent/tasks/task-1")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 200);
-        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        assert_eq!(json["id"], "task-1");
-        assert_eq!(json["status"]["state"], "completed");
-    }
-
-    #[tokio::test]
-    async fn rest_get_task_not_found() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/test-agent/tasks/nonexistent")
-            .reply(&filter)
-            .await;
-        // The mock returns a Client error for unknown tasks, which maps to BAD_GATEWAY
-        assert!(resp.status() == 502 || resp.status() == 404);
-    }
-
-    #[tokio::test]
-    async fn rest_list_tasks() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/test-agent/tasks")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 200);
-        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        let tasks = json["tasks"].as_array().expect("tasks array");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(json["pageSize"], 1);
-    }
-
-    #[tokio::test]
-    async fn rest_cancel_task() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("POST")
-            .path("/a2a/test-agent/tasks/task-1:cancel")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 200);
-        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        assert_eq!(json["id"], "task-1");
-        assert_eq!(json["status"]["state"], "canceled");
-    }
-
-    #[tokio::test]
-    async fn rest_extended_card() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/test-agent/extendedAgentCard")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 200);
-        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        assert_eq!(json["name"], "test-agent");
-        assert_eq!(json["protocolVersion"], "0.3.0");
-    }
-
-    #[tokio::test]
-    async fn rest_unknown_agent_message_send() {
-        let filter = make_filter();
-        let body = serde_json::json!({
-            "message": {
-                "role": "user",
-                "parts": [{"kind": "text", "text": "Hello"}],
-                "messageId": "msg-1"
-            }
-        });
-        let resp = warp::test::request()
-            .method("POST")
-            .path("/a2a/unknown/message:send")
-            .json(&body)
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 404);
-    }
-
-    #[tokio::test]
-    async fn rest_unknown_agent_get_task() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/unknown/tasks/task-1")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 404);
-    }
-
-    #[tokio::test]
-    async fn rest_unknown_agent_list_tasks() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/unknown/tasks")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 404);
-    }
-
-    #[tokio::test]
-    async fn rest_unknown_agent_cancel_task() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("POST")
-            .path("/a2a/unknown/tasks/task-1:cancel")
-            .reply(&filter)
-            .await;
-        // cancel uses and_then which rejects, so either 404 from gateway error or warp rejection
-        assert!(resp.status() == 404);
-    }
-
-    #[tokio::test]
-    async fn rest_unknown_agent_extended_card() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/unknown/extendedAgentCard")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 404);
-    }
-
-    // -- REST push notification endpoint tests --------------------------------
-
-    #[tokio::test]
-    async fn rest_push_create() {
-        let filter = make_filter();
-        let body = serde_json::json!({
-            "taskId": "task-1",
-            "pushNotificationConfig": {
-                "url": "https://example.com/push"
-            }
-        });
-        let resp = warp::test::request()
-            .method("POST")
-            .path("/a2a/test-agent/tasks/task-1/push-notification-configs")
-            .json(&body)
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 201);
-        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        assert_eq!(json["taskId"], "task-1");
-        assert_eq!(
-            json["pushNotificationConfig"]["url"],
-            "https://example.com/push"
-        );
-    }
-
-    #[tokio::test]
-    async fn rest_push_get() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/test-agent/tasks/task-1/push-notification-configs/cfg-1")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 200);
-        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        assert_eq!(json["taskId"], "task-1");
-        assert_eq!(json["pushNotificationConfig"]["id"], "cfg-1");
-    }
-
-    #[tokio::test]
-    async fn rest_push_list() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/test-agent/tasks/task-1/push-notification-configs")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 200);
-        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        let configs = json.as_array().expect("configs array");
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0]["pushNotificationConfig"]["id"], "cfg-1");
-    }
-
-    #[tokio::test]
-    async fn rest_push_delete() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("DELETE")
-            .path("/a2a/test-agent/tasks/task-1/push-notification-configs/cfg-1")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 200);
-        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
-        assert_eq!(json["success"], true);
-    }
-
     // -- Edge case tests ------------------------------------------------------
 
     #[tokio::test]
@@ -893,29 +653,5 @@ mod filter_tests {
         let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("json");
         // Agent not found returns -32001 gateway error
         assert_eq!(json["error"]["code"], -32001);
-    }
-
-    #[tokio::test]
-    async fn rest_card_unknown_agent_returns_404() {
-        let filter = make_filter();
-        let resp = warp::test::request()
-            .method("GET")
-            .path("/a2a/unknown/card")
-            .reply(&filter)
-            .await;
-        assert_eq!(resp.status(), 404);
-    }
-
-    #[tokio::test]
-    async fn rest_cancel_requires_suffix() {
-        let filter = make_filter();
-        // POST to tasks/{id} without :cancel suffix should not match the cancel filter
-        let resp = warp::test::request()
-            .method("POST")
-            .path("/a2a/test-agent/tasks/task-1")
-            .reply(&filter)
-            .await;
-        // Without :cancel suffix, this should be a rejection (405 or 404)
-        assert!(resp.status() == 404 || resp.status() == 405);
     }
 }

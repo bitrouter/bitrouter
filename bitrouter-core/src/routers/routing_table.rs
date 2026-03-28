@@ -1,6 +1,48 @@
-use serde::Serialize;
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 use crate::errors::Result;
+
+// ── API protocol ──────────────────────────────────────────────────
+
+/// The API protocol / wire format that an endpoint uses.
+///
+/// Model protocols determine how LLM requests are serialized (OpenAI chat
+/// completions, Anthropic messages, Google generative AI). Tool protocols
+/// determine how tool discovery and invocation work (MCP, A2A, REST, Skill).
+///
+/// A provider may default to one protocol but individual endpoints can
+/// override it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiProtocol {
+    // Model protocols
+    Openai,
+    Anthropic,
+    Google,
+    // Tool protocols
+    Mcp,
+    A2a,
+    Rest,
+    Skill,
+}
+
+impl fmt::Display for ApiProtocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Openai => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Google => "google",
+            Self::Mcp => "mcp",
+            Self::A2a => "a2a",
+            Self::Rest => "rest",
+            Self::Skill => "skill",
+        })
+    }
+}
+
+// ── Model routing ─────────────────────────────────────────────────
 
 /// The target to route a request to.
 pub struct RoutingTarget {
@@ -17,8 +59,8 @@ pub struct RouteEntry {
     pub model: String,
     /// The provider name this model routes to.
     pub provider: String,
-    /// The API protocol the provider uses ("openai", "anthropic", "google").
-    pub protocol: String,
+    /// The API protocol the provider uses.
+    pub protocol: ApiProtocol,
 }
 
 /// Input token pricing per million tokens.

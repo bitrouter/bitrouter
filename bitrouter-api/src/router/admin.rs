@@ -191,7 +191,9 @@ mod tests {
         AdminRoutingTable, DynamicRoute, RouteEndpoint, RouteStrategy,
     };
     use bitrouter_core::routers::dynamic::DynamicRoutingTable;
-    use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
+    use bitrouter_core::routers::routing_table::{
+        ApiProtocol, RouteEntry, RoutingTable, RoutingTarget,
+    };
 
     use super::admin_routes_filter;
 
@@ -217,7 +219,7 @@ mod tests {
             vec![RouteEntry {
                 model: "default".to_owned(),
                 provider: "openai".to_owned(),
-                protocol: "openai".to_owned(),
+                protocol: ApiProtocol::Openai,
             }]
         }
     }

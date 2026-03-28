@@ -2,7 +2,7 @@
 //!
 //! Defines [`A2aTransport`] — the wire-level interface for communicating
 //! with upstream A2A agents. Implementations handle protocol framing
-//! (JSON-RPC, REST, gRPC) and wire format conversion.
+//! (JSON-RPC 2.0, gRPC) and wire format conversion.
 
 use std::pin::Pin;
 
@@ -24,9 +24,9 @@ type StreamingResult = Result<
 
 /// Wire-level transport for communicating with an upstream A2A agent.
 ///
-/// Implementors handle protocol framing (JSON-RPC 2.0, HTTP+JSON REST, gRPC)
-/// and wire format conversion. Higher-level concerns like card caching and
-/// URL rewriting are managed by [`UpstreamA2aAgent`](crate::a2a::client::upstream::UpstreamA2aAgent).
+/// Implementors handle protocol framing (JSON-RPC 2.0, gRPC) and wire format
+/// conversion. Higher-level concerns like card caching and URL rewriting are
+/// managed by [`UpstreamA2aAgent`](crate::a2a::client::upstream::UpstreamA2aAgent).
 pub trait A2aTransport: Send + Sync {
     /// Fetch an Agent Card from a remote server's well-known endpoint.
     fn discover(
@@ -119,7 +119,6 @@ pub trait A2aTransport: Send + Sync {
     ) -> impl Future<Output = Result<(), A2aGatewayError>> + Send;
 }
 
-pub mod http;
 pub mod jsonrpc;
 
 // gRPC transport is not yet implemented.

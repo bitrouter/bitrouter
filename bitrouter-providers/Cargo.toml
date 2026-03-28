@@ -14,7 +14,8 @@ openai = []
 anthropic = []
 google = []
 a2a = ["dep:tracing"]
-mcp = ["dep:tracing", "tokio/process", "tokio/io-util"]
+mcp = ["dep:tracing"]
+mcp-stdio = ["mcp", "tokio/process", "tokio/io-util"]
 
 [dependencies]
 bitrouter-core = { path = "../bitrouter-core", version = "0.16" }
