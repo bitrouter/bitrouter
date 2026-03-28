@@ -1,6 +1,6 @@
 //! Server-side session payment verification for Solana.
 //!
-//! Implements the `SessionMethod` trait from mpp-rs for Solana session
+//! Implements the `SessionMethod` trait from `mpp-br` for Solana session
 //! payments (pay-as-you-go with Ed25519 vouchers). Handles four channel
 //! lifecycle actions: open, topUp, update, close.
 //!

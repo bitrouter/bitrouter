@@ -4,7 +4,3 @@ members = ["bitrouter", "bitrouter-*"]
 
 [workspace.package]
 version = "0.14.0"
-
-[patch.crates-io]
-tempo-alloy = { git = "https://github.com/tempoxyz/tempo" }
-tempo-primitives = { git = "https://github.com/tempoxyz/tempo" }

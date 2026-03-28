@@ -38,9 +38,10 @@ enum MppBackend {
         /// Only created when `close_signer` is configured.
         provider: Option<Arc<TempoProvider>>,
         /// Signer for server-initiated close transactions.
-        // TODO: abstract signer (KMS, hardware wallet) — currently PrivateKeySigner only
-        // because the mpp crate does not yet support abstract signers.
-        close_signer: Option<Arc<mpp::PrivateKeySigner>>,
+        ///
+        /// `mpp-br` accepts any alloy-compatible signer implementation here,
+        /// including local keys, KMS-backed signers, and hardware wallets.
+        close_signer: Option<Arc<dyn mpp::Signer + Send + Sync>>,
         escrow_contract: Address,
         chain_id: u64,
         /// TIP-20 token used to pay gas fees for close transactions.
@@ -160,13 +161,16 @@ impl MppState {
             let signer: mpp::PrivateKeySigner = key_hex
                 .parse()
                 .map_err(|e| mpp::MppError::InvalidConfig(format!("invalid close_signer: {e}")))?;
-            Some(Arc::new(signer))
+            Some((
+                signer.clone(),
+                Arc::new(signer) as Arc<dyn mpp::Signer + Send + Sync>,
+            ))
         } else {
             None
         };
 
-        let session_method = if let Some(ref signer) = close_signer {
-            session_method.with_close_signer(mpp::PrivateKeySigner::clone(signer))
+        let session_method = if let Some((signer, _)) = close_signer.as_ref() {
+            session_method.with_close_signer(signer.clone())
         } else {
             session_method
         };
@@ -199,7 +203,7 @@ impl MppState {
                 mpp: mpp_instance,
                 store,
                 provider: close_provider,
-                close_signer,
+                close_signer: close_signer.map(|(_, signer)| signer),
                 escrow_contract: escrow,
                 chain_id,
                 currency,
@@ -535,7 +539,7 @@ impl MppState {
 
         let tx_hash = submit_close_tx(
             &provider,
-            &signer,
+            signer.as_ref(),
             escrow_contract,
             chain_id,
             channel_id,
@@ -765,7 +769,7 @@ async fn solana_verify_session(
 #[allow(clippy::too_many_arguments)]
 async fn submit_close_tx(
     provider: &TempoProvider,
-    signer: &mpp::PrivateKeySigner,
+    signer: &(dyn mpp::Signer + Send + Sync),
     escrow_contract: Address,
     chain_id: u64,
     channel_id: &str,
@@ -776,7 +780,6 @@ async fn submit_close_tx(
     use alloy::eips::Encodable2718;
     use alloy::primitives::{B256, Bytes};
     use alloy::providers::Provider;
-    use alloy::signers::SignerSync;
     use alloy::sol_types::SolCall;
     use tempo_primitives::TempoTransaction;
     use tempo_primitives::transaction::Call;
@@ -825,7 +828,8 @@ async fn submit_close_tx(
 
     let sig_hash = tempo_tx.signature_hash();
     let signature = signer
-        .sign_hash_sync(&sig_hash)
+        .sign_hash(&sig_hash)
+        .await
         .map_err(|e| format!("failed to sign close tx: {e}"))?;
 
     let signed_tx = tempo_tx.into_signed(signature.into());
