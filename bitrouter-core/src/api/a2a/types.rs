@@ -1019,18 +1019,6 @@ pub struct JsonRpcError {
     pub data: Option<serde_json::Value>,
 }
 
-impl JsonRpcRequest {
-    /// Create a new JSON-RPC 2.0 request.
-    pub fn new(id: &str, method: &str, params: serde_json::Value) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id: id.to_string(),
-            method: method.to_string(),
-            params,
-        }
-    }
-}
-
 impl JsonRpcResponse {
     /// Returns the result value, or an error if the response is an error.
     pub fn into_result(self) -> Result<serde_json::Value, JsonRpcError> {
@@ -1041,6 +1029,77 @@ impl JsonRpcResponse {
             code: -32603,
             message: "response contains neither result nor error".to_string(),
             data: None,
+        })
+    }
+
+    /// Build a successful JSON-RPC response.
+    pub fn success(id: &str, result: &impl serde::Serialize) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: id.to_string(),
+            result: serde_json::to_value(result).ok(),
+            error: None,
+        }
+    }
+
+    /// Build an error JSON-RPC response.
+    pub fn error(id: &str, code: i64, message: String) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: id.to_string(),
+            result: None,
+            error: Some(JsonRpcError {
+                code,
+                message,
+                data: None,
+            }),
+        }
+    }
+
+    /// Map an [`A2aGatewayError`](super::error::A2aGatewayError) to a JSON-RPC error response.
+    pub fn gateway_error(id: &str, err: &super::error::A2aGatewayError) -> Self {
+        use super::error::A2aGatewayError;
+        let code = match err {
+            A2aGatewayError::AgentNotFound { .. } => -32001,
+            A2aGatewayError::InvalidConfig { .. } => -32602,
+            A2aGatewayError::UpstreamCall { .. }
+            | A2aGatewayError::UpstreamConnect { .. }
+            | A2aGatewayError::UpstreamClosed { .. } => -32000,
+            A2aGatewayError::Client(_) => -32603,
+        };
+        Self::error(id, code, err.to_string())
+    }
+
+    /// Set the id field on a response.
+    pub fn with_id(mut self, id: &str) -> Self {
+        self.id = id.to_string();
+        self
+    }
+}
+
+impl JsonRpcRequest {
+    /// Create a new JSON-RPC 2.0 request.
+    pub fn new(id: &str, method: &str, params: serde_json::Value) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: id.to_string(),
+            method: method.to_string(),
+            params,
+        }
+    }
+
+    /// Deserialize the `params` field into a typed request.
+    ///
+    /// On failure, returns a `JsonRpcResponse` with an invalid-params error.
+    pub fn deserialize_params<T: serde::de::DeserializeOwned>(
+        &self,
+    ) -> Result<T, Box<JsonRpcResponse>> {
+        serde_json::from_value(self.params.clone()).map_err(|e| {
+            Box::new(JsonRpcResponse::error(
+                &self.id,
+                -32602,
+                format!("invalid params: {e}"),
+            ))
         })
     }
 }

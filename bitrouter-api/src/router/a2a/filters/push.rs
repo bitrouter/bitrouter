@@ -3,9 +3,8 @@
 use bitrouter_core::api::a2a::gateway::A2aProxy;
 use tokio::time::Instant;
 
-use super::convert::{WithId, deserialize_params, gateway_error_response, success_response};
+use super::super::types::*;
 use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
-use super::types::*;
 
 /// Handle `tasks/pushNotificationConfig/set` JSON-RPC method.
 pub(crate) async fn dispatch_set_push(
@@ -14,9 +13,9 @@ pub(crate) async fn dispatch_set_push(
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
-    let config: TaskPushNotificationConfig = match deserialize_params(&request.params) {
+    let config: TaskPushNotificationConfig = match request.deserialize_params() {
         Ok(r) => r,
-        Err(resp) => return (*resp).with_id(&request.id),
+        Err(resp) => return *resp,
     };
     let start = Instant::now();
     let result = agent.set_push_config(config).await;
@@ -31,8 +30,8 @@ pub(crate) async fn dispatch_set_push(
         ),
     }
     match result {
-        Ok(stored) => success_response(&request.id, &stored),
-        Err(e) => gateway_error_response(&request.id, &e),
+        Ok(stored) => JsonRpcResponse::success(&request.id, &stored),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
     }
 }
 
@@ -43,9 +42,9 @@ pub(crate) async fn dispatch_get_push(
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
-    let req: GetTaskPushNotificationConfigRequest = match deserialize_params(&request.params) {
+    let req: GetTaskPushNotificationConfigRequest = match request.deserialize_params() {
         Ok(r) => r,
-        Err(resp) => return (*resp).with_id(&request.id),
+        Err(resp) => return *resp,
     };
     let start = Instant::now();
     let result = agent
@@ -62,8 +61,8 @@ pub(crate) async fn dispatch_get_push(
         ),
     }
     match result {
-        Ok(config) => success_response(&request.id, &config),
-        Err(e) => gateway_error_response(&request.id, &e),
+        Ok(config) => JsonRpcResponse::success(&request.id, &config),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
     }
 }
 
@@ -74,9 +73,9 @@ pub(crate) async fn dispatch_list_push(
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
-    let req: ListTaskPushNotificationConfigsRequest = match deserialize_params(&request.params) {
+    let req: ListTaskPushNotificationConfigsRequest = match request.deserialize_params() {
         Ok(r) => r,
-        Err(resp) => return (*resp).with_id(&request.id),
+        Err(resp) => return *resp,
     };
     let start = Instant::now();
     let result = agent.list_push_configs(&req.id).await;
@@ -91,8 +90,8 @@ pub(crate) async fn dispatch_list_push(
         ),
     }
     match result {
-        Ok(resp) => success_response(&request.id, &resp),
-        Err(e) => gateway_error_response(&request.id, &e),
+        Ok(resp) => JsonRpcResponse::success(&request.id, &resp),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
     }
 }
 
@@ -103,9 +102,9 @@ pub(crate) async fn dispatch_delete_push(
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
-    let req: DeleteTaskPushNotificationConfigRequest = match deserialize_params(&request.params) {
+    let req: DeleteTaskPushNotificationConfigRequest = match request.deserialize_params() {
         Ok(r) => r,
-        Err(resp) => return (*resp).with_id(&request.id),
+        Err(resp) => return *resp,
     };
     let start = Instant::now();
     let result = agent
@@ -127,7 +126,7 @@ pub(crate) async fn dispatch_delete_push(
         ),
     }
     match result {
-        Ok(()) => success_response(&request.id, &serde_json::json!({"success": true})),
-        Err(e) => gateway_error_response(&request.id, &e),
+        Ok(()) => JsonRpcResponse::success(&request.id, &serde_json::json!({"success": true})),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
     }
 }

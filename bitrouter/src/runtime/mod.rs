@@ -2,6 +2,7 @@ pub mod app;
 pub mod auth;
 pub mod daemon;
 pub mod error;
+#[cfg(feature = "mcp")]
 pub mod mcp_handler;
 pub mod migration;
 #[cfg(feature = "mpp-tempo")]

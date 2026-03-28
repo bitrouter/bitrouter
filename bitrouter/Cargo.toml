@@ -9,7 +9,9 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["tui", "sqlite", "postgres", "mpp-tempo"]
+default = ["tui", "sqlite", "postgres", "mpp-tempo", "mcp", "a2a"]
+mcp = ["bitrouter-api/mcp", "bitrouter-providers/mcp"]
+a2a = ["bitrouter-api/a2a", "bitrouter-providers/a2a"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
 sqlite = [
     "bitrouter-accounts/sqlite",
@@ -43,12 +45,12 @@ mpp-solana = [
 [dependencies]
 # Internal crates
 bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.14" }
-bitrouter-api = { path = "../bitrouter-api", version = "0.14" }
+bitrouter-api = { path = "../bitrouter-api", version = "0.14", default-features = false, features = ["openai", "anthropic", "google"] }
 bitrouter-config = { path = "../bitrouter-config", version = "0.14" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.14" }
 bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.14" }
 bitrouter-observe = { path = "../bitrouter-observe", version = "0.14" }
-bitrouter-providers = { path = "../bitrouter-providers", version = "0.14", features = ["mcp", "a2a"] }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.14" }
 bitrouter-skills = { path = "../bitrouter-skills", version = "0.14" }
 
 # CLI

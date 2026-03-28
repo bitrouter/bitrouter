@@ -5,12 +5,19 @@
 //! cancellation (`tasks/cancel`), listing (`tasks/list`), streaming, and
 //! push notification config CRUD.
 
+use std::pin::Pin;
+
+use bytes::BytesMut;
+use futures_core::Stream;
+use tokio_stream::StreamExt;
+
 use bitrouter_core::api::a2a::error::A2aGatewayError;
 use bitrouter_core::api::a2a::types::{
     AgentCard, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, GetTaskRequest, JsonRpcRequest, JsonRpcResponse,
     ListTaskPushNotificationConfigsRequest, ListTasksRequest, ListTasksResponse, Message,
-    MessageRole, Part, SendMessageRequest, SendMessageResult, Task, TaskPushNotificationConfig,
+    MessageRole, Part, SendMessageRequest, SendMessageResult, StreamResponse, Task,
+    TaskPushNotificationConfig,
 };
 
 /// A2A JSON-RPC 2.0 transport client.
@@ -73,6 +80,31 @@ impl A2aClient {
     }
 
     // ── Internal ───────────────────────────────────────────────
+
+    /// Send a JSON-RPC request and return the raw HTTP response (for streaming).
+    async fn rpc_raw(
+        &self,
+        endpoint: &str,
+        request: &JsonRpcRequest,
+    ) -> Result<reqwest::Response, A2aGatewayError> {
+        let resp = self
+            .http
+            .post(endpoint)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| A2aGatewayError::Client(format!("request failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(A2aGatewayError::Client(format!("HTTP {status}: {body}")));
+        }
+
+        Ok(resp)
+    }
 
     async fn rpc_call(
         &self,
@@ -210,6 +242,29 @@ impl super::A2aTransport for A2aClient {
         })
     }
 
+    async fn send_streaming_message(
+        &self,
+        endpoint: &str,
+        request: SendMessageRequest,
+    ) -> super::StreamingResult {
+        let request_id = generate_request_id();
+        let params = serde_json::to_value(&request)
+            .map_err(|e| A2aGatewayError::Client(format!("failed to serialize request: {e}")))?;
+        let rpc = JsonRpcRequest::new(&request_id, "message/stream", params);
+
+        let resp = self.rpc_raw(endpoint, &rpc).await?;
+        Ok(sse_stream(resp))
+    }
+
+    async fn subscribe_to_task(&self, endpoint: &str, task_id: &str) -> super::StreamingResult {
+        let request_id = generate_request_id();
+        let params = serde_json::json!({ "taskId": task_id });
+        let rpc = JsonRpcRequest::new(&request_id, "tasks/resubscribe", params);
+
+        let resp = self.rpc_raw(endpoint, &rpc).await?;
+        Ok(sse_stream(resp))
+    }
+
     async fn set_push_config(
         &self,
         endpoint: &str,
@@ -271,6 +326,74 @@ impl super::A2aTransport for A2aClient {
         let _ = self.rpc_call(endpoint, &rpc).await?;
         Ok(())
     }
+}
+
+/// Convert a raw HTTP response (SSE text/event-stream) into a typed stream.
+///
+/// Each SSE `data:` line is expected to contain a JSON-RPC response envelope
+/// whose `result` field deserializes as [`StreamResponse`].
+fn sse_stream(
+    resp: reqwest::Response,
+) -> Pin<Box<dyn Stream<Item = Result<StreamResponse, A2aGatewayError>> + Send>> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+    tokio::spawn(async move {
+        let mut byte_stream = resp.bytes_stream();
+        let mut buf = BytesMut::new();
+
+        while let Some(chunk) = byte_stream.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Err(A2aGatewayError::Client(format!(
+                        "stream read error: {e}"
+                    ))));
+                    return;
+                }
+            };
+
+            buf.extend_from_slice(&chunk);
+
+            // Process complete lines from the buffer.
+            while let Some(newline_pos) = buf.iter().position(|&b| b == b'\n') {
+                let line_bytes = buf.split_to(newline_pos + 1);
+                let line = String::from_utf8_lossy(&line_bytes);
+                let line = line.trim();
+
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
+
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.trim();
+                    if data.is_empty() {
+                        continue;
+                    }
+
+                    let item = parse_sse_data(data);
+                    if tx.send(item).is_err() {
+                        return; // Receiver dropped.
+                    }
+                }
+            }
+        }
+    });
+
+    Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(rx))
+}
+
+/// Parse a single SSE `data:` payload as a JSON-RPC envelope containing a [`StreamResponse`].
+fn parse_sse_data(data: &str) -> Result<StreamResponse, A2aGatewayError> {
+    let rpc_resp = serde_json::from_str::<JsonRpcResponse>(data).map_err(|e| {
+        A2aGatewayError::Client(format!("failed to parse SSE JSON-RPC envelope: {e}"))
+    })?;
+
+    let result_value = rpc_resp
+        .into_result()
+        .map_err(|e| A2aGatewayError::Client(format!("{e}")))?;
+
+    serde_json::from_value::<StreamResponse>(result_value)
+        .map_err(|e| A2aGatewayError::Client(format!("failed to parse StreamResponse: {e}")))
 }
 
 fn parse_send_message_result(

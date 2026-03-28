@@ -3,9 +3,8 @@
 use bitrouter_core::api::a2a::gateway::A2aProxy;
 use tokio::time::Instant;
 
-use super::convert::{WithId, deserialize_params, gateway_error_response, success_response};
+use super::super::types::*;
 use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
-use super::types::*;
 
 /// Handle `tasks/get` JSON-RPC method.
 pub(crate) async fn dispatch_get_task(
@@ -14,9 +13,9 @@ pub(crate) async fn dispatch_get_task(
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
-    let req: GetTaskRequest = match deserialize_params(&request.params) {
+    let req: GetTaskRequest = match request.deserialize_params() {
         Ok(r) => r,
-        Err(resp) => return (*resp).with_id(&request.id),
+        Err(resp) => return *resp,
     };
     let start = Instant::now();
     let result = agent.get_task(req).await;
@@ -25,8 +24,8 @@ pub(crate) async fn dispatch_get_task(
         Err(e) => emit_agent_failure(ctx, agent_name, "tasks/get", start, &e.to_string()),
     }
     match result {
-        Ok(task) => success_response(&request.id, &task),
-        Err(e) => gateway_error_response(&request.id, &e),
+        Ok(task) => JsonRpcResponse::success(&request.id, &task),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
     }
 }
 
@@ -37,9 +36,9 @@ pub(crate) async fn dispatch_cancel_task(
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
-    let req: CancelTaskRequest = match deserialize_params(&request.params) {
+    let req: CancelTaskRequest = match request.deserialize_params() {
         Ok(r) => r,
-        Err(resp) => return (*resp).with_id(&request.id),
+        Err(resp) => return *resp,
     };
     let start = Instant::now();
     let result = agent.cancel_task(req).await;
@@ -48,8 +47,8 @@ pub(crate) async fn dispatch_cancel_task(
         Err(e) => emit_agent_failure(ctx, agent_name, "tasks/cancel", start, &e.to_string()),
     }
     match result {
-        Ok(task) => success_response(&request.id, &task),
-        Err(e) => gateway_error_response(&request.id, &e),
+        Ok(task) => JsonRpcResponse::success(&request.id, &task),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
     }
 }
 
@@ -60,9 +59,9 @@ pub(crate) async fn dispatch_list_tasks(
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
-    let req: ListTasksRequest = match deserialize_params(&request.params) {
+    let req: ListTasksRequest = match request.deserialize_params() {
         Ok(r) => r,
-        Err(resp) => return (*resp).with_id(&request.id),
+        Err(resp) => return *resp,
     };
     let start = Instant::now();
     let result = agent.list_tasks(req).await;
@@ -71,7 +70,7 @@ pub(crate) async fn dispatch_list_tasks(
         Err(e) => emit_agent_failure(ctx, agent_name, "tasks/list", start, &e.to_string()),
     }
     match result {
-        Ok(resp) => success_response(&request.id, &resp),
-        Err(e) => gateway_error_response(&request.id, &e),
+        Ok(resp) => JsonRpcResponse::success(&request.id, &resp),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
     }
 }

@@ -8,11 +8,8 @@ use futures_core::Stream;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 
-use super::convert::{
-    WithId, deserialize_params, error_response, gateway_error_response, success_response,
-};
+use super::super::types::*;
 use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
-use super::types::*;
 
 /// Handle `message/send` JSON-RPC method.
 pub(crate) async fn dispatch_send_message(
@@ -21,9 +18,9 @@ pub(crate) async fn dispatch_send_message(
     agent_name: &str,
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
-    let req: SendMessageRequest = match deserialize_params(&request.params) {
+    let req: SendMessageRequest = match request.deserialize_params() {
         Ok(r) => r,
-        Err(resp) => return (*resp).with_id(&request.id),
+        Err(resp) => return *resp,
     };
     let start = Instant::now();
     let result = agent.send_message(req).await;
@@ -32,8 +29,8 @@ pub(crate) async fn dispatch_send_message(
         Err(e) => emit_agent_failure(ctx, agent_name, "message/send", start, &e.to_string()),
     }
     match result {
-        Ok(r) => success_response(&request.id, &r),
-        Err(e) => gateway_error_response(&request.id, &e),
+        Ok(r) => JsonRpcResponse::success(&request.id, &r),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
     }
 }
 
@@ -46,10 +43,9 @@ pub(crate) async fn handle_streaming_jsonrpc(
 ) -> Box<dyn warp::Reply> {
     match request.method.as_str() {
         "message/stream" => {
-            let req: SendMessageRequest = match deserialize_params(&request.params) {
+            let req: SendMessageRequest = match request.deserialize_params() {
                 Ok(r) => r,
                 Err(resp) => {
-                    let resp = (*resp).with_id(&request.id);
                     return Box::new(warp::reply::with_status(
                         warp::reply::json(&resp),
                         warp::http::StatusCode::BAD_REQUEST,
@@ -72,7 +68,7 @@ pub(crate) async fn handle_streaming_jsonrpc(
                 }
                 Err(ref e) => {
                     emit_agent_failure(ctx, agent_name, "message/stream", start, &e.to_string());
-                    let resp = gateway_error_response(&request.id, e);
+                    let resp = JsonRpcResponse::gateway_error(&request.id, e);
                     Box::new(warp::reply::with_status(
                         warp::reply::json(&resp),
                         warp::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -81,10 +77,9 @@ pub(crate) async fn handle_streaming_jsonrpc(
             }
         }
         "tasks/resubscribe" => {
-            let req: SubscribeToTaskRequest = match deserialize_params(&request.params) {
+            let req: SubscribeToTaskRequest = match request.deserialize_params() {
                 Ok(r) => r,
                 Err(resp) => {
-                    let resp = (*resp).with_id(&request.id);
                     return Box::new(warp::reply::with_status(
                         warp::reply::json(&resp),
                         warp::http::StatusCode::BAD_REQUEST,
@@ -107,7 +102,7 @@ pub(crate) async fn handle_streaming_jsonrpc(
                 }
                 Err(ref e) => {
                     emit_agent_failure(ctx, agent_name, "tasks/resubscribe", start, &e.to_string());
-                    let resp = gateway_error_response(&request.id, e);
+                    let resp = JsonRpcResponse::gateway_error(&request.id, e);
                     Box::new(warp::reply::with_status(
                         warp::reply::json(&resp),
                         warp::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -116,7 +111,7 @@ pub(crate) async fn handle_streaming_jsonrpc(
             }
         }
         _ => {
-            let resp = error_response(
+            let resp = JsonRpcResponse::error(
                 &request.id,
                 -32601,
                 format!("method not found: {}", request.method),

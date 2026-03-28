@@ -18,7 +18,13 @@ use super::types::{
     LoggingCapability, McpServer, PromptsCapability, ResourcesCapability, ServerCapabilities,
     ServerInfo, ToolsCapability, error_codes,
 };
-use super::{completion, logging, prompts, resources, subscriptions, tools};
+mod completion;
+mod logging;
+mod observe;
+mod prompts;
+mod resources;
+mod subscriptions;
+mod tools;
 
 /// The MCP protocol version this server advertises.
 const PROTOCOL_VERSION: &str = "2025-11-25";
@@ -26,7 +32,7 @@ const PROTOCOL_VERSION: &str = "2025-11-25";
 /// Server name returned during initialization.
 const SERVER_NAME: &str = "bitrouter";
 
-use super::observe::McpObserveContext;
+use observe::McpObserveContext;
 
 /// Combined MCP server filter: `POST /mcp` + `GET /mcp/sse`.
 ///

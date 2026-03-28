@@ -1,9 +1,9 @@
 //! JSON-RPC handlers for the `prompts/*` MCP methods.
 
-use super::tools::gateway_error_to_jsonrpc;
-use super::types::{
+use super::super::types::{
     GetPromptParams, JsonRpcId, JsonRpcResponse, ListPromptsResult, McpPromptServer, error_codes,
 };
+use super::tools::gateway_error_to_jsonrpc;
 
 pub async fn handle_prompts_list<T: McpPromptServer>(
     id: &JsonRpcId,

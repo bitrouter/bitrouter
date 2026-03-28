@@ -1,7 +1,7 @@
 //! JSON-RPC handler for `completion/complete`.
 
+use super::super::types::{JsonRpcId, JsonRpcResponse, McpCompletionServer, error_codes};
 use super::tools::gateway_error_to_jsonrpc;
-use super::types::{JsonRpcId, JsonRpcResponse, McpCompletionServer, error_codes};
 use bitrouter_core::api::mcp::types::CompleteParams;
 
 pub async fn handle_complete<T: McpCompletionServer>(

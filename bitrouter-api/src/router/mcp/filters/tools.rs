@@ -1,6 +1,6 @@
 //! JSON-RPC handlers for the `tools/*` MCP methods.
 
-use super::types::{
+use super::super::types::{
     CallToolParams, JsonRpcId, JsonRpcResponse, ListToolsResult, McpGatewayError, McpToolServer,
     error_codes,
 };

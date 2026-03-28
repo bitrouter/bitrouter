@@ -7,9 +7,8 @@ use bitrouter_core::api::a2a::gateway::{A2aGateway, A2aProxy};
 use tokio::time::Instant;
 use warp::Filter;
 
-use super::convert::{gateway_error_response, success_response};
+use super::super::types::*;
 use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
-use super::types::*;
 
 /// Warp filter for `GET /a2a/{agent_name}/.well-known/agent-card.json`.
 pub(crate) fn well_known_filter<G: A2aGateway + 'static>(
@@ -92,7 +91,7 @@ pub(crate) async fn dispatch_get_extended(
         ),
     }
     match result {
-        Ok(card) => success_response(&request.id, &card),
-        Err(e) => gateway_error_response(&request.id, &e),
+        Ok(card) => JsonRpcResponse::success(&request.id, &card),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
     }
 }

@@ -22,6 +22,7 @@ use bitrouter_observe::tool_observer::ToolSpendObserver;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
+#[cfg(feature = "mcp")]
 use bitrouter_api::router::mcp as mcp_admin;
 
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
@@ -375,6 +376,7 @@ where
             );
 
         // ── MCP registry ─────────────────────────────────────────────
+        #[cfg(feature = "mcp")]
         let (
             admin_tool_routes,
             mcp_server,
@@ -526,6 +528,14 @@ where
 
             (admin, server, tools, bridges, refresh_guard, bridge_guards)
         };
+        #[cfg(not(feature = "mcp"))]
+        let (admin_tool_routes, mcp_server, tool_list, bridge_routes) = {
+            let noop = warp::path!("mcp" / ..)
+                .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
+                .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed();
+            (noop.clone(), noop.clone(), noop.clone(), noop)
+        };
 
         // ── Skills registry ───────────────────────────────────────────
         let skills_list = if let Some(ref db) = self.db {
@@ -543,6 +553,7 @@ where
         };
 
         // ── A2A protocol ─────────────────────────────────────────────
+        #[cfg(feature = "a2a")]
         let (a2a_routes, admin_agent_routes, agent_list, _a2a_refresh_guard) = {
             use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
             use bitrouter_providers::a2a::client::registry::UpstreamAgentRegistry;
@@ -589,6 +600,14 @@ where
                 agents,
                 refresh_guard,
             )
+        };
+        #[cfg(not(feature = "a2a"))]
+        let (a2a_routes, admin_agent_routes, agent_list) = {
+            let noop = warp::path!("a2a" / ..)
+                .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
+                .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed();
+            (noop.clone(), noop.clone(), noop)
         };
 
         // ── Base route tree (always present) ─────────────────────────

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use futures_core::Stream;
 use tokio::sync::{Notify, RwLock};
+use tokio_stream::StreamExt;
 
 use bitrouter_core::api::a2a::error::A2aGatewayError;
 use bitrouter_core::api::a2a::gateway::A2aProxy;
@@ -259,6 +260,40 @@ impl UpstreamA2aAgent {
                 reason: e.to_string(),
             })
     }
+
+    /// Forward a `message/stream` request to the upstream.
+    pub async fn send_streaming_message(
+        &self,
+        request: SendMessageRequest,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<StreamResponse, A2aGatewayError>> + Send>>,
+        A2aGatewayError,
+    > {
+        self.transport
+            .send_streaming_message(&self.endpoint, request)
+            .await
+            .map_err(|e| A2aGatewayError::UpstreamCall {
+                name: self.name.clone(),
+                reason: e.to_string(),
+            })
+    }
+
+    /// Forward a `tasks/resubscribe` request to the upstream.
+    pub async fn subscribe_to_task(
+        &self,
+        task_id: &str,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<StreamResponse, A2aGatewayError>> + Send>>,
+        A2aGatewayError,
+    > {
+        self.transport
+            .subscribe_to_task(&self.endpoint, task_id)
+            .await
+            .map_err(|e| A2aGatewayError::UpstreamCall {
+                name: self.name.clone(),
+                reason: e.to_string(),
+            })
+    }
 }
 
 // ── A2aProxy trait impl ─────────────────────────────────────────────
@@ -288,22 +323,34 @@ impl A2aProxy for UpstreamA2aAgent {
 
     async fn send_streaming_message(
         &self,
-        _request: SendMessageRequest,
+        request: SendMessageRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
-        Err(A2aGatewayError::UpstreamCall {
-            name: self.name.clone(),
-            reason: "streaming proxy not yet implemented".to_string(),
-        })
+        let name = self.name.clone();
+        let inner = UpstreamA2aAgent::send_streaming_message(self, request).await?;
+        let filtered = inner.filter_map(move |item| match item {
+            Ok(event) => Some(event),
+            Err(e) => {
+                tracing::warn!(agent = %name, error = %e, "streaming message error; skipping event");
+                None
+            }
+        });
+        Ok(Box::pin(filtered))
     }
 
     async fn subscribe_to_task(
         &self,
-        _task_id: &str,
+        task_id: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
-        Err(A2aGatewayError::UpstreamCall {
-            name: self.name.clone(),
-            reason: "streaming proxy not yet implemented".to_string(),
-        })
+        let name = self.name.clone();
+        let inner = UpstreamA2aAgent::subscribe_to_task(self, task_id).await?;
+        let filtered = inner.filter_map(move |item| match item {
+            Ok(event) => Some(event),
+            Err(e) => {
+                tracing::warn!(agent = %name, error = %e, "task subscription error; skipping event");
+                None
+            }
+        });
+        Ok(Box::pin(filtered))
     }
 
     async fn get_extended_agent_card(&self) -> Result<AgentCard, A2aGatewayError> {

@@ -13,11 +13,15 @@ use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use warp::Filter;
 
-use super::convert::error_response;
-use super::messaging::{stream_response_to_sse, sync_bridge_with_observe};
-use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
+mod discovery;
+mod messaging;
+mod observe;
+mod push;
+mod tasks;
+
 use super::types::*;
-use super::{discovery, messaging, push, tasks};
+use messaging::{stream_response_to_sse, sync_bridge_with_observe};
+use observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
 
 /// Combined A2A gateway filter: per-agent discovery + JSON-RPC + streaming + REST.
 ///
@@ -160,7 +164,7 @@ where
                 let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => {
-                        let resp = error_response(&request.id, -32001, e.to_string());
+                        let resp = JsonRpcResponse::error(&request.id, -32001, e.to_string());
                         return Box::new(warp::reply::json(&resp)) as Box<dyn warp::Reply>;
                     }
                 };
@@ -204,7 +208,7 @@ async fn dispatch_jsonrpc(
         "tasks/pushNotificationConfig/delete" => {
             push::dispatch_delete_push(&request, agent, agent_name, ctx).await
         }
-        _ => error_response(
+        _ => JsonRpcResponse::error(
             &request.id,
             -32601,
             format!("method not found: {}", request.method),
@@ -240,7 +244,7 @@ where
                 let agent = match require_agent::<G>(&registry, &agent_name) {
                     Ok(a) => a,
                     Err(e) => {
-                        let resp = error_response(&request.id, -32001, e.to_string());
+                        let resp = JsonRpcResponse::error(&request.id, -32001, e.to_string());
                         return Box::new(warp::reply::with_status(
                             warp::reply::json(&resp),
                             warp::http::StatusCode::NOT_FOUND,
