@@ -1,8 +1,9 @@
 //! JSON-RPC handlers for the `tools/*` MCP methods.
 
-use super::super::types::{
-    CallToolParams, JsonRpcId, JsonRpcResponse, ListToolsResult, McpGatewayError, McpToolServer,
-    error_codes,
+use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::gateway::McpToolServer;
+use bitrouter_core::api::mcp::types::{
+    CallToolParams, JsonRpcId, JsonRpcResponse, ListToolsResult, error_codes,
 };
 
 /// Separator used in wire-format tool names exposed to downstream MCP clients.

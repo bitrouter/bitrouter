@@ -19,7 +19,7 @@ mod observe;
 mod push;
 mod tasks;
 
-use super::types::*;
+use bitrouter_core::api::a2a::types::*;
 use messaging::{stream_response_to_sse, sync_bridge_with_observe};
 use observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
 

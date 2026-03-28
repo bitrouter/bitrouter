@@ -1,8 +1,10 @@
 //! JSON-RPC handler for `logging/setLevel`.
 
-use super::super::types::{JsonRpcId, JsonRpcResponse, McpLoggingServer, error_codes};
 use super::tools::gateway_error_to_jsonrpc;
-use bitrouter_core::api::mcp::types::SetLoggingLevelParams;
+use bitrouter_core::api::mcp::gateway::McpLoggingServer;
+use bitrouter_core::api::mcp::types::{
+    JsonRpcId, JsonRpcResponse, SetLoggingLevelParams, error_codes,
+};
 
 pub async fn handle_set_level<T: McpLoggingServer>(
     id: &JsonRpcId,

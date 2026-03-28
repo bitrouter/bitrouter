@@ -1,9 +1,10 @@
 //! JSON-RPC handlers for the `prompts/*` MCP methods.
 
-use super::super::types::{
-    GetPromptParams, JsonRpcId, JsonRpcResponse, ListPromptsResult, McpPromptServer, error_codes,
-};
 use super::tools::gateway_error_to_jsonrpc;
+use bitrouter_core::api::mcp::gateway::McpPromptServer;
+use bitrouter_core::api::mcp::types::{
+    GetPromptParams, JsonRpcId, JsonRpcResponse, ListPromptsResult, error_codes,
+};
 
 pub async fn handle_prompts_list<T: McpPromptServer>(
     id: &JsonRpcId,

@@ -8,8 +8,8 @@ use futures_core::Stream;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 
-use super::super::types::*;
 use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
+use bitrouter_core::api::a2a::types::*;
 
 /// Handle `message/send` JSON-RPC method.
 pub(crate) async fn dispatch_send_message(

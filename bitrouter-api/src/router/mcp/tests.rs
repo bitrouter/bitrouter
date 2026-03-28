@@ -12,10 +12,12 @@ use super::filters::mcp_server_filter;
 
 use bitrouter_core::api::mcp::types::{CompleteParams, CompleteResult, Completion, LoggingLevel};
 
-use super::types::{
-    McpCompletionServer, McpGatewayError, McpLoggingServer, McpPromptServer, McpResourceServer,
-    McpSubscriptionServer, McpToolServer, error_codes,
+use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::gateway::{
+    McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
+    McpSubscriptionServer, McpToolServer,
 };
+use bitrouter_core::api::mcp::types::error_codes;
 
 // ── Mock server ─────────────────────────────────────────────────────
 

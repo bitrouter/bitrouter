@@ -3,8 +3,8 @@
 use bitrouter_core::api::a2a::gateway::A2aProxy;
 use tokio::time::Instant;
 
-use super::super::types::*;
 use super::observe::{A2aObserveContext, emit_agent_failure, emit_agent_success};
+use bitrouter_core::api::a2a::types::*;
 
 /// Handle `tasks/pushNotificationConfig/set` JSON-RPC method.
 pub(crate) async fn dispatch_set_push(

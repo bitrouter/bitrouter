@@ -120,6 +120,27 @@ pub trait McpCompletionServer: Send + Sync {
     ) -> impl Future<Output = Result<CompleteResult, McpGatewayError>> + Send;
 }
 
+/// Combined trait for an MCP server that supports all capabilities.
+pub trait McpServer:
+    McpToolServer
+    + McpResourceServer
+    + McpPromptServer
+    + McpSubscriptionServer
+    + McpLoggingServer
+    + McpCompletionServer
+{
+}
+impl<
+    T: McpToolServer
+        + McpResourceServer
+        + McpPromptServer
+        + McpSubscriptionServer
+        + McpLoggingServer
+        + McpCompletionServer,
+> McpServer for T
+{
+}
+
 // ── Client-side handler for server→client requests ──────────────────
 
 /// Handler for server→client requests (sampling, elicitation).

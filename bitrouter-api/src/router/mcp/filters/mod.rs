@@ -13,10 +13,11 @@ use bitrouter_core::observe::{CallerContext, ToolObserveCallback};
 use tokio_stream::StreamExt;
 use warp::Filter;
 
-use super::types::{
+use bitrouter_core::api::mcp::gateway::McpServer;
+use bitrouter_core::api::mcp::types::{
     CompletionsCapability, InitializeResult, JsonRpcId, JsonRpcMessage, JsonRpcResponse,
-    LoggingCapability, McpServer, PromptsCapability, ResourcesCapability, ServerCapabilities,
-    ServerInfo, ToolsCapability, error_codes,
+    LoggingCapability, PromptsCapability, ResourcesCapability, ServerCapabilities, ServerInfo,
+    ToolsCapability, error_codes,
 };
 mod completion;
 mod logging;

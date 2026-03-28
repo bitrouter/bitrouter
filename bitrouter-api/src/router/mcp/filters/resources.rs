@@ -1,10 +1,11 @@
 //! JSON-RPC handlers for the `resources/*` MCP methods.
 
-use super::super::types::{
-    JsonRpcId, JsonRpcResponse, ListResourceTemplatesResult, ListResourcesResult,
-    McpResourceServer, ReadResourceParams, ReadResourceResult, error_codes,
-};
 use super::tools::gateway_error_to_jsonrpc;
+use bitrouter_core::api::mcp::gateway::McpResourceServer;
+use bitrouter_core::api::mcp::types::{
+    JsonRpcId, JsonRpcResponse, ListResourceTemplatesResult, ListResourcesResult,
+    ReadResourceParams, ReadResourceResult, error_codes,
+};
 
 pub async fn handle_resources_list<T: McpResourceServer>(
     id: &JsonRpcId,
