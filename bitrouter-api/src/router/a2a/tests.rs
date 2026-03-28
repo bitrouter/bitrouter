@@ -9,47 +9,47 @@ mod tests {
 
     // -- v0.3.0 wire format validation ----------------------------------------
 
-    #[test]
-    fn part_types_serialize_with_kind_tag() {
-        let text_part = Part::text("hello");
-        let json = serde_json::to_value(&text_part).unwrap_or_default();
-        assert_eq!(json["kind"], "text");
-        assert_eq!(json["text"], "hello");
+#[test]
+fn part_types_serialize_with_kind_tag() {
+    let text_part = Part::text("hello");
+    let json = serde_json::to_value(&text_part).unwrap_or_default();
+    assert_eq!(json["kind"], "text");
+    assert_eq!(json["text"], "hello");
 
-        let data_part = Part::data(serde_json::json!({"key": "value"}));
-        let json = serde_json::to_value(&data_part).unwrap_or_default();
-        assert_eq!(json["kind"], "data");
-        assert!(json["data"].is_object());
+    let data_part = Part::data(serde_json::json!({"key": "value"}));
+    let json = serde_json::to_value(&data_part).unwrap_or_default();
+    assert_eq!(json["kind"], "data");
+    assert!(json["data"].is_object());
 
-        let file_part = Part::file_uri("https://example.com/f.png", Some("f.png".to_string()));
-        let json = serde_json::to_value(&file_part).unwrap_or_default();
-        assert_eq!(json["kind"], "file");
-        assert!(json["file"].is_object());
-        assert_eq!(json["file"]["uri"], "https://example.com/f.png");
+    let file_part = Part::file_uri("https://example.com/f.png", Some("f.png".to_string()));
+    let json = serde_json::to_value(&file_part).unwrap_or_default();
+    assert_eq!(json["kind"], "file");
+    assert!(json["file"].is_object());
+    assert_eq!(json["file"]["uri"], "https://example.com/f.png");
+}
+
+#[test]
+fn task_state_serializes_lowercase() {
+    let cases = vec![
+        (TaskState::Submitted, "submitted"),
+        (TaskState::Working, "working"),
+        (TaskState::Completed, "completed"),
+        (TaskState::Failed, "failed"),
+        (TaskState::Canceled, "canceled"),
+        (TaskState::Rejected, "rejected"),
+        (TaskState::InputRequired, "input-required"),
+        (TaskState::AuthRequired, "auth-required"),
+        (TaskState::Unknown, "unknown"),
+    ];
+    for (state, expected) in cases {
+        let json = serde_json::to_value(&state).unwrap_or_default();
+        assert_eq!(
+            json.as_str().unwrap_or_default(),
+            expected,
+            "TaskState::{state:?} should serialize as \"{expected}\""
+        );
     }
-
-    #[test]
-    fn task_state_serializes_lowercase() {
-        let cases = vec![
-            (TaskState::Submitted, "submitted"),
-            (TaskState::Working, "working"),
-            (TaskState::Completed, "completed"),
-            (TaskState::Failed, "failed"),
-            (TaskState::Canceled, "canceled"),
-            (TaskState::Rejected, "rejected"),
-            (TaskState::InputRequired, "input-required"),
-            (TaskState::AuthRequired, "auth-required"),
-            (TaskState::Unknown, "unknown"),
-        ];
-        for (state, expected) in cases {
-            let json = serde_json::to_value(&state).unwrap_or_default();
-            assert_eq!(
-                json.as_str().unwrap_or_default(),
-                expected,
-                "TaskState::{state:?} should serialize as \"{expected}\""
-            );
-        }
-    }
+}
 
     #[test]
     fn message_role_serializes_lowercase() {

@@ -663,10 +663,9 @@ async fn messages_stream_tool_input_deltas() {
         }
         if event_name.as_deref() == Some("content_block_delta")
             && json["delta"]["type"] == "input_json_delta"
+            && let Some(pj) = json["delta"]["partial_json"].as_str()
         {
-            if let Some(pj) = json["delta"]["partial_json"].as_str() {
-                partial_json_fragments.push(pj.to_owned());
-            }
+            partial_json_fragments.push(pj.to_owned());
         }
         if event_name.as_deref() == Some("content_block_stop") {
             tool_stop_seen = true;

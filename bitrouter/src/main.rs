@@ -693,6 +693,7 @@ fn build_mpp_client_from_state(
 
 /// Build a Solana session MPP client from the active keypair, if any MPP providers are configured.
 #[cfg(feature = "mpp-solana")]
+#[allow(dead_code)]
 fn build_mpp_solana_client_from_state(
     paths: &crate::runtime::RuntimePaths,
     config: &bitrouter_config::BitrouterConfig,
@@ -737,53 +738,6 @@ fn build_mpp_solana_client_from_state(
             );
             None
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::CommandFactory;
-    use clap::error::ErrorKind;
-
-    #[test]
-    fn serve_subcommand_parses_correctly() {
-        let cli = Cli::try_parse_from(["bitrouter", "serve"]).ok();
-        assert!(cli.is_some());
-        assert!(matches!(
-            cli,
-            Some(Cli {
-                command: Some(Command::Serve),
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn headless_flag_is_rejected() {
-        let err = Cli::try_parse_from(["bitrouter", "--headless"]).err();
-        assert!(matches!(
-            err.as_ref().map(clap::Error::kind),
-            Some(ErrorKind::UnknownArgument)
-        ));
-    }
-
-    #[test]
-    fn help_mentions_serve_but_not_headless() {
-        let mut command = Cli::command();
-        let mut help = Vec::new();
-        assert!(command.write_long_help(&mut help).is_ok());
-
-        let help_text = String::from_utf8(help).ok();
-        assert!(help_text.is_some());
-        assert!(matches!(help_text.as_deref(), Some(text) if text.contains("serve")));
-        assert!(matches!(help_text.as_deref(), Some(text) if !text.contains("--headless")));
-    }
-
-    #[test]
-    fn removed_headless_flag_is_detected_before_parse() {
-        assert!(has_removed_headless_flag(["bitrouter", "--headless"]));
-        assert!(!has_removed_headless_flag(["bitrouter", "serve"]));
     }
 }
 
@@ -951,4 +905,51 @@ fn write_node_provider_config(
         .map_err(|e| format!("failed to write {}: {e}", config_path.display()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn serve_subcommand_parses_correctly() {
+        let cli = Cli::try_parse_from(["bitrouter", "serve"]).ok();
+        assert!(cli.is_some());
+        assert!(matches!(
+            cli,
+            Some(Cli {
+                command: Some(Command::Serve),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn headless_flag_is_rejected() {
+        let err = Cli::try_parse_from(["bitrouter", "--headless"]).err();
+        assert!(matches!(
+            err.as_ref().map(clap::Error::kind),
+            Some(ErrorKind::UnknownArgument)
+        ));
+    }
+
+    #[test]
+    fn help_mentions_serve_but_not_headless() {
+        let mut command = Cli::command();
+        let mut help = Vec::new();
+        assert!(command.write_long_help(&mut help).is_ok());
+
+        let help_text = String::from_utf8(help).ok();
+        assert!(help_text.is_some());
+        assert!(matches!(help_text.as_deref(), Some(text) if text.contains("serve")));
+        assert!(matches!(help_text.as_deref(), Some(text) if !text.contains("--headless")));
+    }
+
+    #[test]
+    fn removed_headless_flag_is_detected_before_parse() {
+        assert!(has_removed_headless_flag(["bitrouter", "--headless"]));
+        assert!(!has_removed_headless_flag(["bitrouter", "serve"]));
+    }
 }
