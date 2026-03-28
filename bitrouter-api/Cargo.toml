@@ -43,7 +43,7 @@ futures-core = { version = "0.3" }
 mpp = { package = "mpp-br", version = "0.8.0", default-features = false, features = [
     "reqwest-rustls-tls",
 ], optional = true }
-alloy = { version = "1.7", default-features = false, features = [
+alloy = { version = "1", default-features = false, features = [
     "signers",
     "sol-types",
     "consensus",
