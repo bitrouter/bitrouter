@@ -5,14 +5,15 @@ use bitrouter_core::{
     errors::{BitrouterError, Result},
     routers::registry::{ModelEntry, ModelRegistry},
     routers::routing_table::{
-        InputTokenPricing as CoreInputTokenPricing, ModelPricing as CoreModelPricing,
+        ApiProtocol, InputTokenPricing as CoreInputTokenPricing, ModelPricing as CoreModelPricing,
         OutputTokenPricing as CoreOutputTokenPricing, RouteEntry, RoutingTable, RoutingTarget,
+        ToolRouteEntry, ToolRoutingTable, ToolRoutingTarget,
     },
 };
 
-use bitrouter_core::routers::routing_table::ApiProtocol;
-
-use crate::config::{ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy};
+use crate::config::{
+    ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy, ToolConfig,
+};
 
 /// The provider name used as fallback when the user has no explicit `models:`
 /// section configured.
@@ -331,6 +332,180 @@ impl ModelRegistry for ConfigRoutingTable {
                 .collect()
         };
         entries.sort_by(|a, b| a.id.cmp(&b.id));
+        entries
+    }
+}
+
+// ── Tool routing table ──────────────────────────────────────────────
+
+/// A routing target with full resolution context for tool invocations.
+#[derive(Debug, Clone)]
+pub struct ResolvedToolTarget {
+    pub provider_name: String,
+    pub tool_id: String,
+    /// The resolved API protocol for this endpoint.
+    pub api_protocol: ApiProtocol,
+    /// Per-endpoint API key override.
+    pub api_key_override: Option<String>,
+    /// Per-endpoint API base override.
+    pub api_base_override: Option<String>,
+}
+
+/// Configuration-driven tool routing table.
+///
+/// Routes incoming tool names to concrete provider targets using two strategies:
+///
+/// 1. **Direct routing**: `"provider:tool_id"` routes directly to the named provider.
+/// 2. **Tool lookup**: Names are looked up in the `tools` map, which supports
+///    prioritised failover and round-robin load balancing.
+///
+/// Unlike model routing, there is no default-provider fallback for tools.
+pub struct ConfigToolRoutingTable {
+    providers: HashMap<String, ProviderConfig>,
+    tools: HashMap<String, ToolConfig>,
+    /// Per-tool round-robin counters for load balancing.
+    counters: HashMap<String, AtomicUsize>,
+}
+
+impl ConfigToolRoutingTable {
+    pub fn new(
+        providers: HashMap<String, ProviderConfig>,
+        tools: HashMap<String, ToolConfig>,
+    ) -> Self {
+        let counters = tools
+            .keys()
+            .map(|k| (k.clone(), AtomicUsize::new(0)))
+            .collect();
+        Self {
+            providers,
+            tools,
+            counters,
+        }
+    }
+
+    /// Returns a reference to the resolved provider configurations.
+    pub fn providers(&self) -> &HashMap<String, ProviderConfig> {
+        &self.providers
+    }
+
+    /// Resolves the API protocol for a given provider, with an optional
+    /// per-endpoint override.
+    fn resolve_protocol(
+        &self,
+        provider_name: &str,
+        endpoint_override: Option<ApiProtocol>,
+    ) -> Result<ApiProtocol> {
+        if let Some(proto) = endpoint_override {
+            return Ok(proto);
+        }
+        self.providers
+            .get(provider_name)
+            .and_then(|p| p.api_protocol)
+            .ok_or_else(|| {
+                BitrouterError::invalid_request(
+                    Some(provider_name),
+                    format!("provider '{provider_name}' has no api_protocol configured"),
+                    None,
+                )
+            })
+    }
+
+    /// Resolves an incoming tool name to a full target with any per-endpoint overrides.
+    pub fn resolve(&self, incoming: &str) -> Result<ResolvedToolTarget> {
+        // Strategy 1: "provider:tool_id" → direct route if provider is known
+        if let Some((prefix, suffix)) = incoming.split_once(':')
+            && self.providers.contains_key(prefix)
+        {
+            let api_protocol = self.resolve_protocol(prefix, None)?;
+            return Ok(ResolvedToolTarget {
+                provider_name: prefix.to_owned(),
+                tool_id: suffix.to_owned(),
+                api_protocol,
+                api_key_override: None,
+                api_base_override: None,
+            });
+        }
+
+        // Strategy 2: lookup in tools section
+        if let Some(tool_config) = self.tools.get(incoming) {
+            return self.select_endpoint(incoming, tool_config);
+        }
+
+        Err(BitrouterError::invalid_request(
+            None,
+            format!("no route found for tool: {incoming}"),
+            None,
+        ))
+    }
+
+    fn select_endpoint(&self, tool_name: &str, config: &ToolConfig) -> Result<ResolvedToolTarget> {
+        if config.endpoints.is_empty() {
+            return Err(BitrouterError::invalid_request(
+                None,
+                format!("tool '{tool_name}' has no configured endpoints"),
+                None,
+            ));
+        }
+
+        let endpoint = match config.strategy {
+            RoutingStrategy::Priority => &config.endpoints[0],
+            RoutingStrategy::LoadBalance => {
+                let Some(counter) = self.counters.get(tool_name) else {
+                    return Err(BitrouterError::invalid_request(
+                        None,
+                        format!("load-balance counter missing for tool '{tool_name}'"),
+                        None,
+                    ));
+                };
+                let idx = counter.fetch_add(1, Ordering::Relaxed) % config.endpoints.len();
+                &config.endpoints[idx]
+            }
+        };
+
+        let api_protocol = self.resolve_protocol(&endpoint.provider, endpoint.api_protocol)?;
+
+        Ok(ResolvedToolTarget {
+            provider_name: endpoint.provider.clone(),
+            tool_id: endpoint.tool_id.clone(),
+            api_protocol,
+            api_key_override: endpoint.api_key.clone(),
+            api_base_override: endpoint.api_base.clone(),
+        })
+    }
+}
+
+impl ToolRoutingTable for ConfigToolRoutingTable {
+    async fn route_tool(&self, tool_name: &str) -> Result<ToolRoutingTarget> {
+        let resolved = self.resolve(tool_name)?;
+        Ok(ToolRoutingTarget {
+            provider_name: resolved.provider_name,
+            tool_id: resolved.tool_id,
+            api_protocol: resolved.api_protocol,
+        })
+    }
+
+    fn list_tool_routes(&self) -> Vec<ToolRouteEntry> {
+        let mut entries: Vec<ToolRouteEntry> = self
+            .tools
+            .iter()
+            .filter_map(|(tool_name, tool_config)| {
+                let endpoint = tool_config.endpoints.first()?;
+                let protocol = endpoint
+                    .api_protocol
+                    .or_else(|| {
+                        self.providers
+                            .get(&endpoint.provider)
+                            .and_then(|p| p.api_protocol)
+                    })
+                    .unwrap_or(ApiProtocol::Mcp);
+                Some(ToolRouteEntry {
+                    tool: tool_name.clone(),
+                    provider: endpoint.provider.clone(),
+                    protocol,
+                })
+            })
+            .collect();
+        entries.sort_by(|a, b| a.tool.cmp(&b.tool));
         entries
     }
 }
@@ -747,5 +922,165 @@ mod tests {
     fn no_fallback_list_models_empty_without_default_provider() {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         assert!(table.list_models().is_empty());
+    }
+
+    // ── ConfigToolRoutingTable tests ────────────────────────────────
+
+    use crate::config::ToolEndpoint;
+
+    fn tool_providers() -> HashMap<String, ProviderConfig> {
+        let mut p = HashMap::new();
+        p.insert(
+            "github-mcp".into(),
+            ProviderConfig {
+                api_protocol: Some(ApiProtocol::Mcp),
+                api_base: Some("https://api.githubcopilot.com/mcp".into()),
+                ..Default::default()
+            },
+        );
+        p.insert(
+            "anthropic".into(),
+            ProviderConfig {
+                api_protocol: Some(ApiProtocol::Anthropic),
+                api_base: Some("https://api.anthropic.com".into()),
+                ..Default::default()
+            },
+        );
+        p
+    }
+
+    #[test]
+    fn tool_direct_provider_routing() {
+        let table = ConfigToolRoutingTable::new(tool_providers(), HashMap::new());
+        let target = table.resolve("github-mcp:create_issue").unwrap();
+        assert_eq!(target.provider_name, "github-mcp");
+        assert_eq!(target.tool_id, "create_issue");
+        assert_eq!(target.api_protocol, ApiProtocol::Mcp);
+    }
+
+    #[test]
+    fn tool_lookup() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "create_issue".into(),
+            ToolConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![ToolEndpoint {
+                    provider: "github-mcp".into(),
+                    tool_id: "create_issue".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigToolRoutingTable::new(tool_providers(), tools);
+        let target = table.resolve("create_issue").unwrap();
+        assert_eq!(target.provider_name, "github-mcp");
+        assert_eq!(target.tool_id, "create_issue");
+        assert_eq!(target.api_protocol, ApiProtocol::Mcp);
+    }
+
+    #[test]
+    fn tool_endpoint_protocol_override() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "web_search".into(),
+            ToolConfig {
+                endpoints: vec![ToolEndpoint {
+                    provider: "anthropic".into(),
+                    tool_id: "web_search".into(),
+                    api_protocol: Some(ApiProtocol::Mcp),
+                    api_key: None,
+                    api_base: Some("https://mcp.anthropic.com".into()),
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigToolRoutingTable::new(tool_providers(), tools);
+        let target = table.resolve("web_search").unwrap();
+        assert_eq!(target.provider_name, "anthropic");
+        assert_eq!(target.api_protocol, ApiProtocol::Mcp);
+        assert_eq!(
+            target.api_base_override.as_deref(),
+            Some("https://mcp.anthropic.com")
+        );
+    }
+
+    #[test]
+    fn tool_no_route_found() {
+        let table = ConfigToolRoutingTable::new(tool_providers(), HashMap::new());
+        let result = table.resolve("nonexistent-tool");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tool_no_fallback_for_bare_names() {
+        // Unlike models, tools don't have a default provider fallback
+        let table = ConfigToolRoutingTable::new(tool_providers(), HashMap::new());
+        let result = table.resolve("some-tool");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tool_load_balance_round_robin() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "search".into(),
+            ToolConfig {
+                strategy: RoutingStrategy::LoadBalance,
+                endpoints: vec![
+                    ToolEndpoint {
+                        provider: "github-mcp".into(),
+                        tool_id: "search".into(),
+                        api_protocol: None,
+                        api_key: Some("key-a".into()),
+                        api_base: None,
+                    },
+                    ToolEndpoint {
+                        provider: "github-mcp".into(),
+                        tool_id: "search".into(),
+                        api_protocol: None,
+                        api_key: Some("key-b".into()),
+                        api_base: None,
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+        let table = ConfigToolRoutingTable::new(tool_providers(), tools);
+
+        let t1 = table.resolve("search").unwrap();
+        let t2 = table.resolve("search").unwrap();
+        let t3 = table.resolve("search").unwrap();
+
+        assert_eq!(t1.api_key_override.as_deref(), Some("key-a"));
+        assert_eq!(t2.api_key_override.as_deref(), Some("key-b"));
+        assert_eq!(t3.api_key_override.as_deref(), Some("key-a"));
+    }
+
+    #[test]
+    fn tool_list_routes() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "create_issue".into(),
+            ToolConfig {
+                endpoints: vec![ToolEndpoint {
+                    provider: "github-mcp".into(),
+                    tool_id: "create_issue".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigToolRoutingTable::new(tool_providers(), tools);
+        let routes = table.list_tool_routes();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].tool, "create_issue");
+        assert_eq!(routes[0].provider, "github-mcp");
+        assert_eq!(routes[0].protocol, ApiProtocol::Mcp);
     }
 }

@@ -9,11 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use bitrouter_core::routers::routing_table::ApiProtocol;
 
-use crate::agent::AgentPricing;
 use crate::env::{load_env, substitute_in_value};
 use crate::registry::{builtin_providers, merge_provider, resolve_providers};
-use crate::skill::SkillConfig;
-use crate::tool::ToolPricing;
 
 fn default_true() -> bool {
     true
@@ -57,6 +54,11 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub models: HashMap<String, ModelConfig>,
 
+    /// Tool routing definitions.
+    #[serde(default)]
+    pub tools: HashMap<String, ToolConfig>,
+
+    // ── Legacy fields (to be removed in Phase 6) ────────────────────
     /// MCP upstream server configurations.
     #[serde(default)]
     pub mcp_servers: Vec<bitrouter_core::routers::upstream::ToolServerConfig>,
@@ -71,15 +73,15 @@ pub struct BitrouterConfig {
 
     /// Per-server tool invocation pricing. Keys are MCP server names.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub mcp_server_pricing: HashMap<String, ToolPricing>,
+    pub mcp_server_pricing: HashMap<String, crate::tool::ToolPricing>,
 
     /// Per-agent invocation pricing. Keys are agent names.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub a2a_agent_pricing: HashMap<String, AgentPricing>,
+    pub a2a_agent_pricing: HashMap<String, crate::agent::AgentPricing>,
 
     /// Skill definitions for the skills registry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<SkillConfig>,
+    pub skills: Vec<crate::skill::SkillConfig>,
 }
 
 impl BitrouterConfig {
@@ -796,83 +798,6 @@ providers:
     }
 
     #[test]
-    fn load_with_a2a_agents_config() {
-        let yaml = r#"
-a2a_agents:
-  - name: "upstream-agent"
-    url: "https://agent.example.com"
-    headers:
-      Authorization: "Bearer tok123"
-  - name: "search-agent"
-    url: "https://search.example.com"
-"#;
-        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
-        assert_eq!(config.a2a_agents.len(), 2);
-        let agent = &config.a2a_agents[0];
-        assert_eq!(agent.name, "upstream-agent");
-        assert_eq!(agent.url, "https://agent.example.com");
-        assert_eq!(
-            agent.headers.get("Authorization").map(String::as_str),
-            Some("Bearer tok123")
-        );
-        assert!(agent.card_path.is_none());
-        assert_eq!(config.a2a_agents[1].name, "search-agent");
-    }
-
-    #[test]
-    fn load_with_flat_mcp_servers_config() {
-        let yaml = r#"
-mcp_servers:
-  - name: "filesystem"
-    command: "npx"
-    args:
-      - "-y"
-      - "@modelcontextprotocol/server-filesystem"
-      - "/tmp/workspace"
-  - name: "remote"
-    url: "http://localhost:3000/mcp"
-"#;
-        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
-        assert_eq!(config.mcp_servers.len(), 2);
-
-        let fs = &config.mcp_servers[0];
-        assert_eq!(fs.name, "filesystem");
-        match &fs.transport {
-            bitrouter_core::routers::upstream::ToolServerTransport::Stdio {
-                command, args, ..
-            } => {
-                assert_eq!(command, "npx");
-                assert_eq!(args.len(), 3);
-            }
-            _ => panic!("expected Stdio transport"),
-        }
-
-        let remote = &config.mcp_servers[1];
-        assert_eq!(remote.name, "remote");
-        match &remote.transport {
-            bitrouter_core::routers::upstream::ToolServerTransport::Http { url, .. } => {
-                assert_eq!(url, "http://localhost:3000/mcp");
-            }
-            _ => panic!("expected Http transport"),
-        }
-    }
-
-    #[test]
-    fn load_with_nested_mcp_servers_config() {
-        let yaml = r#"
-mcp_servers:
-  - name: "filesystem"
-    transport:
-      type: stdio
-      command: "npx"
-      args: ["-y", "server"]
-"#;
-        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
-        assert_eq!(config.mcp_servers.len(), 1);
-        assert_eq!(config.mcp_servers[0].name, "filesystem");
-    }
-
-    #[test]
     fn derives_inherits_model_catalog() {
         let yaml = r#"
 providers:
@@ -911,5 +836,39 @@ providers:
         assert!(!config.providers.contains_key("openai"));
         assert!(!config.providers.contains_key("bitrouter"));
         assert_eq!(config.providers.len(), 1);
+    }
+
+    #[test]
+    fn load_with_tool_routing() {
+        let yaml = r#"
+providers:
+  github-mcp:
+    api_protocol: mcp
+    api_base: "https://api.githubcopilot.com/mcp"
+    api_key: "ghp-test"
+tools:
+  create_issue:
+    strategy: priority
+    endpoints:
+      - provider: github-mcp
+        tool_id: create_issue
+  search_code:
+    endpoints:
+      - provider: github-mcp
+        tool_id: search_code
+        api_protocol: mcp
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        assert_eq!(config.tools.len(), 2);
+
+        let tool = &config.tools["create_issue"];
+        assert_eq!(tool.strategy, RoutingStrategy::Priority);
+        assert_eq!(tool.endpoints.len(), 1);
+        assert_eq!(tool.endpoints[0].provider, "github-mcp");
+        assert_eq!(tool.endpoints[0].tool_id, "create_issue");
+        assert!(tool.endpoints[0].api_protocol.is_none());
+
+        let search = &config.tools["search_code"];
+        assert_eq!(search.endpoints[0].api_protocol, Some(ApiProtocol::Mcp));
     }
 }

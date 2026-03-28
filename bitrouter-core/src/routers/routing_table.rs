@@ -129,3 +129,38 @@ pub trait RoutingTable {
         Vec::new()
     }
 }
+
+// ── Tool routing ──────────────────────────────────────────────────
+
+/// The target to route a tool invocation to.
+pub struct ToolRoutingTarget {
+    /// The provider name to route to.
+    pub provider_name: String,
+    /// The upstream tool identifier.
+    pub tool_id: String,
+    /// The resolved API protocol for this tool endpoint.
+    pub api_protocol: ApiProtocol,
+}
+
+/// A single entry in the tool route listing.
+#[derive(Debug, Clone)]
+pub struct ToolRouteEntry {
+    /// The virtual tool name.
+    pub tool: String,
+    /// The provider name this tool routes to.
+    pub provider: String,
+    /// The API protocol the endpoint uses.
+    pub protocol: ApiProtocol,
+}
+
+/// A routing table that maps incoming tool names to routing targets.
+pub trait ToolRoutingTable {
+    /// Routes an incoming tool name to a routing target.
+    fn route_tool(&self, tool_name: &str)
+    -> impl Future<Output = Result<ToolRoutingTarget>> + Send;
+
+    /// Lists all configured tool routes.
+    fn list_tool_routes(&self) -> Vec<ToolRouteEntry> {
+        Vec::new()
+    }
+}
