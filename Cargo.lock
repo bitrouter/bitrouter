@@ -1719,6 +1719,7 @@ name = "bitrouter-api"
 version = "0.15.0"
 dependencies = [
  "alloy",
+ "async-trait",
  "bitrouter-a2a",
  "bitrouter-config",
  "bitrouter-core",
