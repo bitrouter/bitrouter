@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/bitrouter/bitrouter/compare/v0.14.0...v0.15.0)
+
+
+### ⛰️ Features
+
+- *(cli)* Node tempo mpp onboarding ([#193](https://github.com/bitrouter/bitrouter/pull/193)) - ([f204f02](https://github.com/bitrouter/bitrouter/commit/f204f0248305a3366d94e5ce7dbec2dcd34e0ccb))
+- *(config)* Add deepseek, minimax, zai, moonshot, qwen, openrouter providers ([#185](https://github.com/bitrouter/bitrouter/pull/185)) - ([2ddd7cf](https://github.com/bitrouter/bitrouter/commit/2ddd7cfe40358351659ef9c08977759c6b9aab2a))
+- *(mpp)* Add server-side close support for Tempo ([#187](https://github.com/bitrouter/bitrouter/pull/187)) - ([4e69203](https://github.com/bitrouter/bitrouter/commit/4e6920370498d12739436922c40fade03920bf62))
+- Configuration hot reload ([#179](https://github.com/bitrouter/bitrouter/pull/179)) - ([d116de2](https://github.com/bitrouter/bitrouter/commit/d116de233437f9476e0bbb9971efc8825a6ad7e8))
+
+### 🐛 Bug Fixes
+
+- *(cli)* Increase warp recursion limit ([#199](https://github.com/bitrouter/bitrouter/pull/199)) - ([ffb4e88](https://github.com/bitrouter/bitrouter/commit/ffb4e88e677445ff35dd525428e9ddda20b116ac))
+- *(config)* Default provider config ([#194](https://github.com/bitrouter/bitrouter/pull/194)) - ([154eecf](https://github.com/bitrouter/bitrouter/commit/154eecf11448c73d9ed59261a484f264a384882e))
+- *(mpp)* Tempo payment flow ([#202](https://github.com/bitrouter/bitrouter/pull/202)) - ([9e08658](https://github.com/bitrouter/bitrouter/commit/9e086585b037775ec0666ae7548c6262e74479b8))
+- *(mpp)* Add suggested_deposit to Solana session challenges ([#184](https://github.com/bitrouter/bitrouter/pull/184)) - ([82e02ab](https://github.com/bitrouter/bitrouter/commit/82e02ab9ed321f0eaa50002f85da3b1c84b022ba))
+- *(mpp)* Use Mutex to lock close guard ([#192](https://github.com/bitrouter/bitrouter/pull/192)) - ([3040ce9](https://github.com/bitrouter/bitrouter/commit/3040ce9f6f28a86312b458f2952d07206faafaf2))
+- *(mpp)* Use `channel.token` for gas fee ([#190](https://github.com/bitrouter/bitrouter/pull/190)) - ([3ed5f09](https://github.com/bitrouter/bitrouter/commit/3ed5f09216e09ca4feb54c428517df8695a9c6c7))
+- *(mpp)* Resolve Tempo backend lookup by payment method name ([#186](https://github.com/bitrouter/bitrouter/pull/186)) - ([fb2c81f](https://github.com/bitrouter/bitrouter/commit/fb2c81fb6372eeaf1d6d976c6e3451df40c99197))
+- *(rejection)* Handle BitrouterRejection in recover handler ([#200](https://github.com/bitrouter/bitrouter/pull/200)) - ([1064c14](https://github.com/bitrouter/bitrouter/commit/1064c140ac8129230084b93f55d3334c55f5f170))
+
+### 🚜 Refactor
+
+- *(api)* Gate A2A and MCP handlers behind feature flags ([#204](https://github.com/bitrouter/bitrouter/pull/204)) - ([b193538](https://github.com/bitrouter/bitrouter/commit/b1935386b9e582b5b97b5ed0f794e5bbba2409d6))
+
+
 ## [0.14.0](https://github.com/bitrouter/bitrouter/compare/v0.13.0...v0.14.0)
 
 

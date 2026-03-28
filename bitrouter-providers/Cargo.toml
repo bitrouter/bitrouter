@@ -15,7 +15,7 @@ anthropic = []
 google = []
 
 [dependencies]
-bitrouter-core = { path = "../bitrouter-core", version = "0.14" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.15" }
 
 base64 = "0.22"
 bytes = "1"

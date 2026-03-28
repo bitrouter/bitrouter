@@ -15,7 +15,7 @@ postgres = ["sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
 mysql = ["sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]
 
 [dependencies]
-bitrouter-core = { path = "../bitrouter-core", version = "0.14" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.15" }
 sea-orm = { version = "1.1", default-features = false, features = [
     "macros",
     "with-chrono",
