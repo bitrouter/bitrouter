@@ -3,7 +3,7 @@
 //! Provides Warp filters that proxy A2A protocol operations
 //! to upstream agents via any [`A2aGateway`](bitrouter_core::api::a2a::gateway::A2aGateway) implementation.
 
-pub mod filters;
+mod filters;
 #[cfg(test)]
 mod tests;
 
