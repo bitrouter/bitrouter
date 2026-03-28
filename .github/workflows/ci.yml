@@ -12,7 +12,7 @@ env:
 
 jobs:
   fmt:
-    name: stable / fmt
+    name: fmt
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,7 +31,7 @@ jobs:
         run: cargo fmt -- --check
 
   clippy:
-    name: stable / clippy
+    name: clippy
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -51,7 +51,7 @@ jobs:
           args: --all-features
 
   feature-build:
-    name: stable / build / ${{ matrix.crate }} / ${{ matrix.feature_set }}
+    name: build / ${{ matrix.crate }} / ${{ matrix.feature_set }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -116,8 +116,8 @@ jobs:
       - name: Build crate
         run: cargo build -p ${{ matrix.crate }} ${{ matrix.cargo_args }}
 
-  cross-platform:
-    name: stable / build / bitrouter / ${{ matrix.os }}
+  test:
+    name: test / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -134,35 +134,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build bitrouter
-        run: cargo build -p bitrouter --all-features
-
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
           tool: nextest
 
       - name: Test bitrouter with nextest
-        run: cargo nextest run --no-tests=pass -p bitrouter
-
-  test:
-    name: stable / test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust stable
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Install nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-
-      - name: Test with latest nextest release
         run: cargo nextest run --all-features
