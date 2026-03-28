@@ -237,11 +237,26 @@ where
 
                     #[cfg(feature = "mpp-tempo")]
                     if let Some(tempo) = mpp_config.networks.tempo.as_ref() {
-                        state.add_tempo(tempo, secret_key).map_err(|e| {
-                            bitrouter_config::ConfigError::ConfigParse(format!(
-                                "MPP Tempo initialization failed: {e}"
-                            ))
-                        })?;
+                        let close_signer: Option<Arc<dyn mpp::Signer + Send + Sync>> =
+                            match tempo.close_signer.as_deref() {
+                                Some(key_hex) => {
+                                    let signer: mpp::PrivateKeySigner =
+                                        key_hex.parse().map_err(|e| {
+                                            bitrouter_config::ConfigError::ConfigParse(format!(
+                                                "invalid close_signer: {e}"
+                                            ))
+                                        })?;
+                                    Some(Arc::new(signer))
+                                }
+                                None => None,
+                            };
+                        state
+                            .add_tempo(tempo, secret_key, close_signer)
+                            .map_err(|e| {
+                                bitrouter_config::ConfigError::ConfigParse(format!(
+                                    "MPP Tempo initialization failed: {e}"
+                                ))
+                            })?;
                         tracing::info!("MPP Tempo backend enabled");
                     }
 

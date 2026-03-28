@@ -19,6 +19,39 @@ use mpp::Address;
 #[cfg(feature = "mpp-tempo")]
 type TempoMpp = Mpp<TempoChargeMethod<TempoProvider>, TempoSessionMethod<TempoProvider>>;
 
+/// Wrapper that bridges `Arc<dyn mpp::Signer>` into `impl mpp::Signer`.
+///
+/// Alloy's `Signer` trait uses `#[auto_impl(&mut, Box)]`, so `Box<dyn Signer>`
+/// implements `Signer` but `Arc<dyn Signer>` does not. This newtype allows an
+/// `Arc`-shared signer to be passed to APIs that require `impl Signer + 'static`
+/// (such as `TempoSessionMethod::with_close_signer`).
+#[cfg(feature = "mpp-tempo")]
+struct ArcSigner(Arc<dyn mpp::Signer + Send + Sync>);
+
+#[cfg(feature = "mpp-tempo")]
+#[async_trait::async_trait]
+impl alloy::signers::Signer for ArcSigner {
+    async fn sign_hash(
+        &self,
+        hash: &alloy::primitives::B256,
+    ) -> alloy::signers::Result<alloy::primitives::Signature> {
+        self.0.sign_hash(hash).await
+    }
+
+    fn address(&self) -> alloy::primitives::Address {
+        self.0.address()
+    }
+
+    fn chain_id(&self) -> Option<alloy::primitives::ChainId> {
+        self.0.chain_id()
+    }
+
+    fn set_chain_id(&mut self, _chain_id: Option<alloy::primitives::ChainId>) {
+        // Arc-shared signers cannot mutate chain_id. Transaction chain_id is
+        // set independently during Tempo transaction construction.
+    }
+}
+
 /// Server-side MPP (Machine Payment Protocol) state.
 ///
 /// Holds one or more configured payment backends, keyed by CAIP-2 chain
@@ -94,26 +127,36 @@ impl MppState {
     ///
     /// Uses the default in-memory session channel store.
     /// Typically called with `"eip155:4217"` (mainnet) or `"eip155:42431"` (testnet).
+    ///
+    /// `close_signer` is an optional trait-object signer for server-initiated
+    /// channel close transactions. Callers provide any `alloy::signers::Signer`
+    /// implementation (local key, KMS, hardware wallet, etc.) wrapped in `Arc`.
     #[cfg(feature = "mpp-tempo")]
     pub fn add_tempo(
         &mut self,
         tempo: &TempoMppConfig,
         secret_key: Option<&str>,
+        close_signer: Option<Arc<dyn mpp::Signer + Send + Sync>>,
     ) -> Result<(), mpp::MppError> {
         let store: Arc<dyn TempoChannelStore> = Arc::new(mpp::server::SessionChannelStore::new());
-        self.add_tempo_with_store(tempo, secret_key, store)
+        self.add_tempo_with_store(tempo, secret_key, store, close_signer)
     }
 
     /// Add a Tempo backend with a caller-provided channel store.
     ///
     /// This allows injecting a custom (e.g. database-backed) store instead of
     /// the default in-memory store.
+    ///
+    /// `close_signer` is an optional trait-object signer for server-initiated
+    /// channel close transactions. Pass any `alloy::signers::Signer`
+    /// implementation wrapped in `Arc`.
     #[cfg(feature = "mpp-tempo")]
     pub fn add_tempo_with_store(
         &mut self,
         tempo: &TempoMppConfig,
         secret_key: Option<&str>,
         store: Arc<dyn TempoChannelStore>,
+        close_signer: Option<Arc<dyn mpp::Signer + Send + Sync>>,
     ) -> Result<(), mpp::MppError> {
         let rpc_url = tempo.rpc_url.as_deref().unwrap_or("https://rpc.tempo.xyz");
 
@@ -157,20 +200,8 @@ impl MppState {
         let session_method =
             TempoSessionMethod::new(session_provider, store.clone(), session_config);
 
-        let close_signer = if let Some(ref key_hex) = tempo.close_signer {
-            let signer: mpp::PrivateKeySigner = key_hex
-                .parse()
-                .map_err(|e| mpp::MppError::InvalidConfig(format!("invalid close_signer: {e}")))?;
-            Some((
-                signer.clone(),
-                Arc::new(signer) as Arc<dyn mpp::Signer + Send + Sync>,
-            ))
-        } else {
-            None
-        };
-
-        let session_method = if let Some((signer, _)) = close_signer.as_ref() {
-            session_method.with_close_signer(signer.clone())
+        let session_method = if let Some(ref signer) = close_signer {
+            session_method.with_close_signer(ArcSigner(Arc::clone(signer)))
         } else {
             session_method
         };
@@ -203,7 +234,7 @@ impl MppState {
                 mpp: mpp_instance,
                 store,
                 provider: close_provider,
-                close_signer: close_signer.map(|(_, signer)| signer),
+                close_signer,
                 escrow_contract: escrow,
                 chain_id,
                 currency,
