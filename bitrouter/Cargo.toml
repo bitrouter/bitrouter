@@ -101,7 +101,7 @@ solana-keypair = { version = "3.1" }
 x402-signer = { version = "2.5" }
 
 # MPP payment middleware (optional)
-mpp = { version = "0.7", default-features = false, features = [
+mpp = { package = "mpp-br", version = "0.8.0", default-features = false, features = [
     "client",
     "tempo",
     "reqwest-rustls-tls",

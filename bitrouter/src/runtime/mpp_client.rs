@@ -6,7 +6,7 @@
 //! middleware opens a payment channel (or sends a voucher on an existing one)
 //! and retries with a credential.
 //!
-//! The mpp crate ships its own `PaymentMiddleware` for `reqwest-middleware 0.4`,
+//! The `mpp-br` crate ships its own `PaymentMiddleware` for `reqwest-middleware 0.4`,
 //! but bitrouter uses `0.5`. This module provides a thin adapter
 //! ([`MppPaymentMiddleware`]) that bridges the version gap by calling the
 //! provider's `pay()` method directly.

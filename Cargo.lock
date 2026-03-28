@@ -1736,7 +1736,7 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "libc",
- "mpp",
+ "mpp-br",
  "ratatui",
  "reqwest 0.13.2",
  "reqwest-middleware 0.5.1",
@@ -1799,7 +1799,7 @@ dependencies = [
  "bs58",
  "ed25519-dalek",
  "futures-core",
- "mpp",
+ "mpp-br",
  "regex",
  "serde",
  "serde_json",
@@ -4899,10 +4899,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "mpp"
-version = "0.7.0"
+name = "mpp-br"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "440a7df54d44c52101bb46fe4bd712e8a0677e5ef8b19c20e79ed2e6122e3034"
+checksum = "d460559abc28a998508e4fab3829c3a11c36dbc57a83cbc0b649bea831db5eda"
 dependencies = [
  "alloy",
  "async-stream",
