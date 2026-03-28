@@ -614,15 +614,6 @@ pub mod error_codes {
         use super::*;
 
         #[test]
-        fn codes_are_negative() {
-            assert!(PARSE_ERROR < 0);
-            assert!(INVALID_REQUEST < 0);
-            assert!(METHOD_NOT_FOUND < 0);
-            assert!(INVALID_PARAMS < 0);
-            assert!(INTERNAL_ERROR < 0);
-        }
-
-        #[test]
         fn codes_match_spec() {
             assert_eq!(PARSE_ERROR, -32700);
             assert_eq!(INVALID_REQUEST, -32600);

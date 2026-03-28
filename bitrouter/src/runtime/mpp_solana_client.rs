@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Solana MPP session client builder.
 //!
 //! Constructs a [`ClientWithMiddleware`] that automatically handles HTTP 402
