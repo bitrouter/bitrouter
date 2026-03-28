@@ -10,12 +10,13 @@ use std::future::Future;
 use std::pin::Pin;
 
 use bitrouter_core::observe::{ObserveCallback, RequestFailureEvent, RequestSuccessEvent};
+use bitrouter_core::pricing::calculate_cost;
+use bitrouter_core::routers::routing_table::ModelPricing;
 
-use crate::cost::{Pricing, calculate_cost};
 use crate::spend::store::{ServiceType, SpendLog, SpendStore};
 
-/// A thread-safe closure that maps `(provider, model)` to [`Pricing`].
-type PricingLookup = dyn Fn(&str, &str) -> Pricing + Send + Sync;
+/// A thread-safe closure that maps `(provider, model)` to [`ModelPricing`].
+type PricingLookup = dyn Fn(&str, &str) -> ModelPricing + Send + Sync;
 
 /// Observes completed requests, calculates cost, and writes spend logs.
 ///
@@ -119,19 +120,25 @@ mod tests {
     use bitrouter_core::observe::{
         CallerContext, RequestContext, RequestFailureEvent, RequestSuccessEvent,
     };
+    use bitrouter_core::routers::routing_table::{
+        InputTokenPricing, ModelPricing, OutputTokenPricing,
+    };
 
-    use crate::cost::Pricing;
     use crate::spend::memory::InMemorySpendStore;
 
     use super::*;
 
-    fn test_pricing() -> Pricing {
-        Pricing {
-            input_no_cache: 2.50,
-            input_cache_read: 0.0,
-            input_cache_write: 0.0,
-            output_text: 10.00,
-            output_reasoning: 0.0,
+    fn test_pricing() -> ModelPricing {
+        ModelPricing {
+            input_tokens: InputTokenPricing {
+                no_cache: Some(2.50),
+                cache_read: None,
+                cache_write: None,
+            },
+            output_tokens: OutputTokenPricing {
+                text: Some(10.00),
+                reasoning: None,
+            },
         }
     }
 

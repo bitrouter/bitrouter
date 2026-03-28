@@ -5,15 +5,12 @@ use bitrouter_core::{
     errors::{BitrouterError, Result},
     routers::registry::{ModelEntry, ModelRegistry},
     routers::routing_table::{
-        ApiProtocol, InputTokenPricing as CoreInputTokenPricing, ModelPricing as CoreModelPricing,
-        OutputTokenPricing as CoreOutputTokenPricing, RouteEntry, RoutingTable, RoutingTarget,
-        ToolRouteEntry, ToolRoutingTable, ToolRoutingTarget,
+        ApiProtocol, ModelPricing, RouteEntry, RoutingTable, RoutingTarget, ToolRouteEntry,
+        ToolRoutingTable, ToolRoutingTarget,
     },
 };
 
-use crate::config::{
-    ModelConfig, ModelInfo, ModelPricing, ProviderConfig, RoutingStrategy, ToolConfig,
-};
+use crate::config::{ModelConfig, ModelInfo, ProviderConfig, RoutingStrategy, ToolConfig};
 
 /// The provider name used as fallback when the user has no explicit `models:`
 /// section configured.
@@ -194,20 +191,6 @@ impl ConfigRoutingTable {
     }
 }
 
-fn convert_pricing(pricing: &ModelPricing) -> CoreModelPricing {
-    CoreModelPricing {
-        input_tokens: CoreInputTokenPricing {
-            no_cache: pricing.input_tokens.no_cache,
-            cache_read: pricing.input_tokens.cache_read,
-            cache_write: pricing.input_tokens.cache_write,
-        },
-        output_tokens: CoreOutputTokenPricing {
-            text: pricing.output_tokens.text,
-            reasoning: pricing.output_tokens.reasoning,
-        },
-    }
-}
-
 impl RoutingTable for ConfigRoutingTable {
     async fn route(&self, incoming_model_name: &str) -> Result<RoutingTarget> {
         let resolved = self.resolve(incoming_model_name)?;
@@ -266,7 +249,7 @@ impl ModelRegistry for ConfigRoutingTable {
                 .into_iter()
                 .flat_map(|models| {
                     models.iter().map(|(model_id, info)| {
-                        let pricing = convert_pricing(&info.pricing);
+                        let pricing = info.pricing.clone();
                         let pricing = if pricing.is_empty() {
                             None
                         } else {
@@ -303,7 +286,7 @@ impl ModelRegistry for ConfigRoutingTable {
                         .iter()
                         .map(|ep| ep.provider.clone())
                         .collect();
-                    let pricing = convert_pricing(&model_config.pricing);
+                    let pricing = model_config.pricing.clone();
                     let pricing = if pricing.is_empty() {
                         None
                     } else {

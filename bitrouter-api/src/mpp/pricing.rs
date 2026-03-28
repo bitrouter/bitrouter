@@ -4,10 +4,8 @@
 //! micro-units suitable for on-chain or session-channel deductions. Assumes
 //! a 1:1 stablecoin peg with 6 decimal places (e.g. USDC).
 
-use bitrouter_config::ModelPricing;
 use bitrouter_core::models::language::usage::LanguageModelUsage;
-
-const PER_MILLION: f64 = 1_000_000.0;
+use bitrouter_core::routers::routing_table::ModelPricing;
 
 /// Trait for looking up per-model pricing.
 ///
@@ -32,48 +30,9 @@ impl<T: PricingLookup> PricingLookup for bitrouter_core::routers::dynamic::Dynam
 
 /// Calculates the cost in USD from token usage and per-million-token pricing.
 ///
-/// Mirrors `bitrouter-observe::cost::calculate_cost` but uses the
-/// `ModelPricing` type from `bitrouter-config` directly, avoiding a
-/// heavy crate dependency.
+/// Delegates to [`bitrouter_core::pricing::calculate_cost`].
 pub fn calculate_usage_cost(usage: &LanguageModelUsage, pricing: &ModelPricing) -> f64 {
-    let input_cost = {
-        let has_granular = usage.input_tokens.no_cache.is_some()
-            || usage.input_tokens.cache_read.is_some()
-            || usage.input_tokens.cache_write.is_some();
-
-        if has_granular {
-            let no_cache = usage.input_tokens.no_cache.unwrap_or(0) as f64;
-            let cache_read = usage.input_tokens.cache_read.unwrap_or(0) as f64;
-            let cache_write = usage.input_tokens.cache_write.unwrap_or(0) as f64;
-            (no_cache * pricing.input_tokens.no_cache.unwrap_or(0.0)
-                + cache_read * pricing.input_tokens.cache_read.unwrap_or(0.0)
-                + cache_write * pricing.input_tokens.cache_write.unwrap_or(0.0))
-                / PER_MILLION
-        } else if let Some(total) = usage.input_tokens.total {
-            total as f64 * pricing.input_tokens.no_cache.unwrap_or(0.0) / PER_MILLION
-        } else {
-            0.0
-        }
-    };
-
-    let output_cost = {
-        let has_granular =
-            usage.output_tokens.text.is_some() || usage.output_tokens.reasoning.is_some();
-
-        if has_granular {
-            let text = usage.output_tokens.text.unwrap_or(0) as f64;
-            let reasoning = usage.output_tokens.reasoning.unwrap_or(0) as f64;
-            (text * pricing.output_tokens.text.unwrap_or(0.0)
-                + reasoning * pricing.output_tokens.reasoning.unwrap_or(0.0))
-                / PER_MILLION
-        } else if let Some(total) = usage.output_tokens.total {
-            total as f64 * pricing.output_tokens.text.unwrap_or(0.0) / PER_MILLION
-        } else {
-            0.0
-        }
-    };
-
-    input_cost + output_cost
+    bitrouter_core::pricing::calculate_cost(usage, pricing)
 }
 
 /// Converts a USD cost to stablecoin micro-units (6 decimal places).

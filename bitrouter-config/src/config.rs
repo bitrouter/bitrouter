@@ -335,43 +335,11 @@ pub struct ModelInfo {
     pub pricing: ModelPricing,
 }
 
-/// Token pricing per million tokens for a model.
-///
-/// Field names mirror the sub-category fields of `LanguageModelInputTokens`
-/// and `LanguageModelOutputTokens` from `bitrouter-core` for cross-provider
-/// compatibility. Fields are `None` when not configured.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ModelPricing {
-    #[serde(default)]
-    pub input_tokens: InputTokenPricing,
-    #[serde(default)]
-    pub output_tokens: OutputTokenPricing,
-}
-
-/// Input token pricing per million tokens.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct InputTokenPricing {
-    /// Cost per million non-cached input tokens.
-    #[serde(default)]
-    pub no_cache: Option<f64>,
-    /// Cost per million cache-read input tokens.
-    #[serde(default)]
-    pub cache_read: Option<f64>,
-    /// Cost per million cache-write input tokens.
-    #[serde(default)]
-    pub cache_write: Option<f64>,
-}
-
-/// Output token pricing per million tokens.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct OutputTokenPricing {
-    /// Cost per million text output tokens.
-    #[serde(default)]
-    pub text: Option<f64>,
-    /// Cost per million reasoning output tokens.
-    #[serde(default)]
-    pub reasoning: Option<f64>,
-}
+// Model pricing types are defined in `bitrouter-core::routers::routing_table`
+// and re-exported from this crate's `lib.rs` for backward compatibility.
+pub use bitrouter_core::routers::routing_table::{
+    InputTokenPricing, ModelPricing, OutputTokenPricing,
+};
 
 // ── MPP (Machine Payment Protocol) configuration ─────────────────────
 

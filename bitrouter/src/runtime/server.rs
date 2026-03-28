@@ -10,15 +10,7 @@ use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::model_router::LanguageModelRouter;
 use bitrouter_core::routers::registry::ModelRegistry;
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
-use bitrouter_observe::agent_observer::AgentSpendObserver;
-use bitrouter_observe::composite::CompositeObserver;
-use bitrouter_observe::cost::Pricing;
-use bitrouter_observe::metrics::MetricsCollector;
-use bitrouter_observe::observer::SpendObserver;
-use bitrouter_observe::spend::memory::InMemorySpendStore;
-use bitrouter_observe::spend::sea_orm_store::SeaOrmSpendStore;
-use bitrouter_observe::spend::store;
-use bitrouter_observe::tool_observer::ToolSpendObserver;
+use bitrouter_observe::builder::ObserveStack;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
@@ -121,66 +113,36 @@ where
             self.db.as_ref().map(|db| db.as_ref().clone()),
         ));
 
-        // Build spend store: SeaORM-backed if DB is available, otherwise in-memory.
-        let spend_store: Arc<dyn store::SpendStore> = match &self.db {
-            Some(db) => Arc::new(SeaOrmSpendStore::new(db.as_ref().clone())),
-            None => Arc::new(InMemorySpendStore::new()),
-        };
+        // Build the observation stack: spend tracking + metrics for all service types.
+        let mut observe_builder = ObserveStack::builder();
 
-        // Build pricing lookup from the config's provider definitions.
+        if let Some(ref db) = self.db {
+            observe_builder = observe_builder.with_db(db.as_ref());
+        }
+
         let providers = self.config.providers.clone();
-        let pricing_fn = move |provider: &str, model: &str| {
-            let mp = providers
+        observe_builder = observe_builder.model_pricing(move |provider, model| {
+            providers
                 .get(provider)
                 .and_then(|p| p.models.as_ref())
                 .and_then(|models| models.get(model))
-                .map(|info| &info.pricing)
-                .cloned()
-                .unwrap_or_default();
-            Pricing {
-                input_no_cache: mp.input_tokens.no_cache.unwrap_or(0.0),
-                input_cache_read: mp.input_tokens.cache_read.unwrap_or(0.0),
-                input_cache_write: mp.input_tokens.cache_write.unwrap_or(0.0),
-                output_text: mp.output_tokens.text.unwrap_or(0.0),
-                output_reasoning: mp.output_tokens.reasoning.unwrap_or(0.0),
-            }
-        };
+                .map(|info| info.pricing.clone())
+                .unwrap_or_default()
+        });
 
-        // Compose observers: spend tracking + metrics aggregation for all service types.
-        let spend_observer = Arc::new(SpendObserver::new(
-            spend_store.clone(),
-            Arc::new(pricing_fn),
-        ));
         let tool_pricing = self.config.mcp_server_pricing.clone();
-        let tool_cost_fn: bitrouter_observe::tool_observer::ToolCostFn =
-            Arc::new(move |server: &str, tool: &str| {
-                tool_pricing.get(server).map_or(0.0, |p| p.cost_for(tool))
-            });
-        let tool_spend_observer =
-            Arc::new(ToolSpendObserver::new(spend_store.clone(), tool_cost_fn));
+        observe_builder = observe_builder.tool_cost(move |server, tool| {
+            tool_pricing.get(server).map_or(0.0, |p| p.cost_for(tool))
+        });
 
         let agent_pricing = self.config.a2a_agent_pricing.clone();
-        let agent_cost_fn: bitrouter_observe::agent_observer::AgentCostFn =
-            Arc::new(move |agent: &str, method: &str| {
-                agent_pricing.get(agent).map_or(0.0, |p| p.cost_for(method))
-            });
-        let agent_spend_observer = Arc::new(AgentSpendObserver::new(spend_store, agent_cost_fn));
-        let metrics_collector = Arc::new(MetricsCollector::new());
-        let composite = Arc::new(CompositeObserver::new(
-            vec![
-                spend_observer as Arc<dyn ObserveCallback>,
-                metrics_collector.clone() as Arc<dyn ObserveCallback>,
-            ],
-            vec![
-                tool_spend_observer as Arc<dyn ToolObserveCallback>,
-                metrics_collector.clone() as Arc<dyn ToolObserveCallback>,
-            ],
-            vec![
-                agent_spend_observer as Arc<dyn AgentObserveCallback>,
-                metrics_collector.clone() as Arc<dyn AgentObserveCallback>,
-            ],
-        ));
-        let observer: Arc<dyn ObserveCallback> = composite.clone();
+        observe_builder = observe_builder.agent_cost(move |agent, method| {
+            agent_pricing.get(agent).map_or(0.0, |p| p.cost_for(method))
+        });
+
+        let observe = observe_builder.build();
+        let observer: Arc<dyn ObserveCallback> = observe.observer.clone();
+        let metrics_collector = observe.metrics.clone();
 
         let health = warp::path("health")
             .and(warp::get())
@@ -390,6 +352,33 @@ where
                 account_filter.clone(),
             );
 
+        // ── Skills registry (filesystem-backed, no DB) ──────────────
+        let skills_dir = self
+            .paths
+            .as_ref()
+            .map(|p| p.home_dir.join("skills"))
+            .unwrap_or_else(|| std::path::PathBuf::from("skills"));
+
+        let skill_registry = match bitrouter_providers::agentskills::registry::FilesystemSkillRegistry::from_config_and_dir(
+            self.config.skills.clone(),
+            skills_dir.clone(),
+        )
+        .await
+        {
+            Ok(reg) => Arc::new(reg),
+            Err(e) => {
+                tracing::warn!("failed to initialize skills from config: {e}");
+                Arc::new(
+                    bitrouter_providers::agentskills::registry::FilesystemSkillRegistry::from_dir(
+                        skills_dir,
+                    )
+                    .await
+                    .map_err(|e2| tracing::warn!("skills registry unavailable: {e2}"))
+                    .unwrap_or_default(),
+                )
+            }
+        };
+
         // ── MCP registry ─────────────────────────────────────────────
         #[cfg(feature = "mcp")]
         let (
@@ -497,44 +486,28 @@ where
                 .and(admin_tools::admin_tools_filter(registry.clone()));
 
             // Build MCP server filter with tool call observation.
-            let tool_observer: Arc<dyn ToolObserveCallback> = composite.clone();
+            let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
             let server = mcp_admin::mcp_server_filter_with_observe(
                 registry.clone(),
                 tool_observer,
                 account_filter.clone(),
             );
-            // Compose MCP tools + config skills into a single ToolRegistry
+            // Compose MCP tools + agentskills into a single ToolRegistry
             // for the unified GET /v1/tools endpoint.
-            let skill_entries: Vec<bitrouter_core::routers::registry::ToolEntry> = self
-                .config
-                .skills
-                .iter()
-                .map(|cfg| bitrouter_core::routers::registry::ToolEntry {
-                    id: format!("skill/{}", cfg.name),
-                    name: Some(cfg.name.clone()),
-                    provider: "skill".to_string(),
-                    description: Some(cfg.description.clone()),
-                    input_schema: None,
-                })
-                .collect();
-
-            let tools = if !skill_entries.is_empty() {
-                let skill_reg = bitrouter_skills::registry::ConfigSkillRegistry::new(skill_entries);
-                if let Some(ref mcp_reg) = registry {
-                    let composite = Arc::new(
-                        bitrouter_core::routers::registry::CompositeToolRegistry::new(
-                            mcp_reg.clone(),
-                            skill_reg,
-                        ),
-                    );
-                    bitrouter_api::router::tools::tools_filter(Some(composite))
-                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                        .boxed()
-                } else {
-                    bitrouter_api::router::tools::tools_filter(Some(Arc::new(skill_reg)))
-                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                        .boxed()
-                }
+            let tools = if let Some(ref mcp_reg) = registry {
+                let composite = Arc::new(
+                    bitrouter_core::routers::registry::CompositeToolRegistry::new(
+                        mcp_reg.clone(),
+                        skill_registry.clone(),
+                    ),
+                );
+                bitrouter_api::router::tools::tools_filter(Some(composite))
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            } else if !self.config.skills.is_empty() {
+                bitrouter_api::router::tools::tools_filter(Some(skill_registry.clone()))
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
             } else {
                 bitrouter_api::router::tools::tools_filter(registry)
                     .map(|r| Box::new(r) as Box<dyn warp::Reply>)
@@ -553,19 +526,11 @@ where
         };
 
         // ── Skills registry ───────────────────────────────────────────
-        let skills_list = if let Some(ref db) = self.db {
-            let skill_registry =
-                Arc::new(bitrouter_skills::registry::SkillRegistry::new(db.clone()));
-            bitrouter_api::router::skills::skills_filter(skill_registry)
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        } else {
-            // No DB — return 404 for all skills endpoints.
-            warp::path!("v1" / "skills" / ..)
-                .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
-                .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        };
+        // The same FilesystemSkillRegistry serves both /v1/tools (ToolRegistry)
+        // and /v1/skills CRUD (SkillService) — no database needed.
+        let skills_list = bitrouter_api::router::skills::skills_filter(skill_registry)
+            .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+            .boxed();
 
         // ── A2A protocol ─────────────────────────────────────────────
         #[cfg(feature = "a2a")]
@@ -589,7 +554,7 @@ where
             };
 
             let agent_observer: Option<Arc<dyn AgentObserveCallback>> =
-                Some(composite.clone() as Arc<dyn AgentObserveCallback>);
+                Some(observe.observer.clone() as Arc<dyn AgentObserveCallback>);
 
             let a2a_account_filter = if self.db.is_some() {
                 let auth_filter = auth::openai_auth(auth_ctx.clone());

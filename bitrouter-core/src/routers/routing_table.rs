@@ -64,16 +64,16 @@ pub struct RouteEntry {
 }
 
 /// Input token pricing per million tokens.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InputTokenPricing {
     /// Cost per million non-cached input tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_cache: Option<f64>,
     /// Cost per million cache-read input tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_read: Option<f64>,
     /// Cost per million cache-write input tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_write: Option<f64>,
 }
 
@@ -84,13 +84,13 @@ impl InputTokenPricing {
 }
 
 /// Output token pricing per million tokens.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OutputTokenPricing {
     /// Cost per million text output tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<f64>,
     /// Cost per million reasoning output tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<f64>,
 }
 
@@ -101,11 +101,11 @@ impl OutputTokenPricing {
 }
 
 /// Token pricing per million tokens for a model.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelPricing {
-    #[serde(skip_serializing_if = "InputTokenPricing::is_empty")]
+    #[serde(default, skip_serializing_if = "InputTokenPricing::is_empty")]
     pub input_tokens: InputTokenPricing,
-    #[serde(skip_serializing_if = "OutputTokenPricing::is_empty")]
+    #[serde(default, skip_serializing_if = "OutputTokenPricing::is_empty")]
     pub output_tokens: OutputTokenPricing,
 }
 

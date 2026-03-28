@@ -1,35 +1,14 @@
 //! Config-driven agent registry and pricing — parallel to [`ConfigRoutingTable`] for models.
 
-use std::collections::HashMap;
-
-use serde::{Deserialize, Serialize};
-
 use bitrouter_core::routers::registry::{AgentEntry, AgentRegistry};
 use bitrouter_core::routers::upstream::AgentConfig;
 
 /// Pricing for agent invocations.
 ///
 /// Each A2A method call has a flat per-invocation cost. Individual
-/// methods can override the default rate.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AgentPricing {
-    /// Default cost per agent method invocation (USD).
-    #[serde(default)]
-    pub default_cost_per_call: f64,
-    /// Per-method cost overrides. Keys are A2A method names (e.g. `"message/send"`).
-    #[serde(default)]
-    pub methods: HashMap<String, f64>,
-}
-
-impl AgentPricing {
-    /// Return the cost for a given method, falling back to the default.
-    pub fn cost_for(&self, method: &str) -> f64 {
-        self.methods
-            .get(method)
-            .copied()
-            .unwrap_or(self.default_cost_per_call)
-    }
-}
+/// methods can override the default rate. This is a type alias for
+/// [`bitrouter_core::pricing::FlatPricing`].
+pub type AgentPricing = bitrouter_core::pricing::FlatPricing;
 
 /// Immutable agent registry loaded from config.
 ///
@@ -74,6 +53,8 @@ impl AgentRegistry for ConfigAgentRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     fn test_config() -> AgentConfig {
@@ -116,8 +97,8 @@ mod tests {
     #[test]
     fn agent_pricing_cost_for_default() {
         let pricing = AgentPricing {
-            default_cost_per_call: 0.01,
-            methods: HashMap::new(),
+            default: 0.01,
+            overrides: HashMap::new(),
         };
         assert!((pricing.cost_for("message/send") - 0.01).abs() < 1e-10);
     }
@@ -125,8 +106,8 @@ mod tests {
     #[test]
     fn agent_pricing_cost_for_override() {
         let pricing = AgentPricing {
-            default_cost_per_call: 0.01,
-            methods: HashMap::from([("message/send".into(), 0.05)]),
+            default: 0.01,
+            overrides: HashMap::from([("message/send".into(), 0.05)]),
         };
         assert!((pricing.cost_for("message/send") - 0.05).abs() < 1e-10);
         assert!((pricing.cost_for("tasks/get") - 0.01).abs() < 1e-10);
@@ -141,12 +122,20 @@ mod tests {
     #[test]
     fn agent_pricing_serde_round_trip() {
         let pricing = AgentPricing {
-            default_cost_per_call: 0.02,
-            methods: HashMap::from([("message/send".into(), 0.1)]),
+            default: 0.02,
+            overrides: HashMap::from([("message/send".into(), 0.1)]),
         };
         let yaml = serde_saphyr::to_string(&pricing).expect("serialize");
         let parsed: AgentPricing = serde_saphyr::from_str(&yaml).expect("deserialize");
-        assert!((parsed.default_cost_per_call - 0.02).abs() < 1e-10);
+        assert!((parsed.default - 0.02).abs() < 1e-10);
+        assert!((parsed.cost_for("message/send") - 0.1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn agent_pricing_deserializes_legacy_field_names() {
+        let yaml = "default_cost_per_call: 0.03\nmethods:\n  message/send: 0.1\n";
+        let parsed: AgentPricing = serde_saphyr::from_str(yaml).expect("deserialize legacy");
+        assert!((parsed.default - 0.03).abs() < 1e-10);
         assert!((parsed.cost_for("message/send") - 0.1).abs() < 1e-10);
     }
 }
