@@ -3,6 +3,8 @@ pub mod auth;
 pub mod daemon;
 pub mod error;
 pub mod migration;
+#[cfg(feature = "wallet-ows")]
+pub mod ows_signer;
 pub mod paths;
 pub mod router;
 pub mod server;

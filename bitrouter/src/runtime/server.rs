@@ -94,6 +94,57 @@ where
         self.reload_fn = Some(Arc::new(f));
         self
     }
+
+    /// Resolve the close signer for Tempo MPP.
+    ///
+    /// Priority:
+    /// 1. OWS wallet (if `wallet-ows` feature enabled and `wallet` config present)
+    /// 2. Hex private key from `tempo.close_signer`
+    /// 3. None (close signing disabled)
+    #[cfg(feature = "mpp-tempo")]
+    fn resolve_close_signer(
+        tempo: &bitrouter_config::TempoMppConfig,
+        config: &BitrouterConfig,
+    ) -> std::result::Result<Option<Arc<dyn mpp::Signer + Send + Sync>>, Box<dyn std::error::Error>>
+    {
+        // Try OWS wallet first.
+        #[cfg(feature = "wallet-ows")]
+        if let Some(wallet) = config.wallet.as_ref() {
+            let credential = wallet
+                .ows_key
+                .clone()
+                .or_else(|| std::env::var("OWS_KEY").ok())
+                .unwrap_or_default();
+            let vault_path = wallet.vault_path.as_deref().map(std::path::Path::new);
+
+            let signer = crate::runtime::ows_signer::OwsSigner::new(
+                &wallet.name,
+                &credential,
+                None,
+                vault_path,
+                None,
+            )?;
+            tracing::info!(
+                wallet = %wallet.name,
+                address = %alloy::signers::Signer::address(&signer),
+                "OWS wallet loaded for MPP close signing",
+            );
+            return Ok(Some(Arc::new(signer)));
+        }
+
+        // Suppress unused-variable warning when wallet-ows is disabled.
+        let _ = config;
+
+        // Fall back to hex private key.
+        if let Some(key_hex) = tempo.close_signer.as_deref() {
+            let signer: mpp::PrivateKeySigner = key_hex
+                .parse()
+                .map_err(|e| format!("invalid close_signer hex key: {e}"))?;
+            return Ok(Some(Arc::new(signer)));
+        }
+
+        Ok(None)
+    }
 }
 
 impl<T, R> ServerPlan<T, R>
@@ -238,17 +289,14 @@ where
                     #[cfg(feature = "mpp-tempo")]
                     if let Some(tempo) = mpp_config.networks.tempo.as_ref() {
                         let close_signer: Option<Arc<dyn mpp::Signer + Send + Sync>> =
-                            match tempo.close_signer.as_deref() {
-                                Some(key_hex) => {
-                                    let signer: mpp::PrivateKeySigner =
-                                        key_hex.parse().map_err(|e| {
-                                            bitrouter_config::ConfigError::ConfigParse(format!(
-                                                "invalid close_signer: {e}"
-                                            ))
-                                        })?;
-                                    Some(Arc::new(signer))
+                            match Self::resolve_close_signer(tempo, &self.config) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    return Err(bitrouter_config::ConfigError::ConfigParse(
+                                        format!("close_signer: {e}"),
+                                    )
+                                    .into());
                                 }
-                                None => None,
                             };
                         state
                             .add_tempo(tempo, secret_key, close_signer)

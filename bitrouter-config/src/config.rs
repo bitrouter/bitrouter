@@ -41,6 +41,13 @@ pub struct BitrouterConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mpp: Option<MppConfig>,
 
+    /// OWS (Open Wallet Standard) wallet configuration.
+    ///
+    /// When set, the OWS wallet is used for policy-gated signing in place
+    /// of raw private keys. Requires the `wallet-ows` feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<WalletConfig>,
+
     /// When `true` (the default), built-in provider definitions are merged
     /// into the provider set before user overrides are applied.  Set to
     /// `false` to use *only* the providers declared in the config file.
@@ -524,6 +531,37 @@ fn default_solana_asset_decimals() -> u8 {
 #[cfg(feature = "mpp-solana")]
 fn default_solana_network() -> String {
     "mainnet-beta".into()
+}
+
+// ── Wallet configuration ─────────────────────────────────────────────
+
+/// OWS (Open Wallet Standard) wallet configuration.
+///
+/// When present, BitRouter uses the named OWS wallet for signing
+/// operations (e.g. MPP close transactions) instead of raw private keys.
+///
+/// ```yaml
+/// wallet:
+///   name: treasury
+///   ows_key: ows_key_7f3a...     # or via OWS_KEY env var
+///   vault_path: ~/.ows           # optional, defaults to OWS standard path
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletConfig {
+    /// OWS wallet name (or UUID).
+    pub name: String,
+
+    /// OWS API key or passphrase used to decrypt the wallet for signing.
+    ///
+    /// API keys (`ows_key_...`) enable policy-gated agent access.
+    /// A plain passphrase grants direct owner access.
+    /// Falls back to `OWS_KEY` env var, then empty passphrase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ows_key: Option<String>,
+
+    /// Custom OWS vault directory. Defaults to `~/.ows`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_path: Option<String>,
 }
 
 /// Authentication configuration.
