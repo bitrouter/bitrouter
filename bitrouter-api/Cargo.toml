@@ -41,7 +41,7 @@ bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.17", optional = true }
 bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.17", optional = true }
 async-trait = { version = "0.1" }
 futures-core = { version = "0.3" }
-mpp = { package = "mpp-br", version = "0.8.0", default-features = false, features = [
+mpp = { package = "mpp-br", version = "0.8.1", default-features = false, features = [
     "reqwest-rustls-tls",
 ], optional = true }
 alloy = { version = "1", default-features = false, features = [

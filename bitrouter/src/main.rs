@@ -249,7 +249,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Handle init before loading runtime
     if matches!(cli.command, Some(Command::Init)) {
-        run_unified_init(&paths)?;
+        init::run_init(&paths)?;
         return Ok(());
     }
 
@@ -376,37 +376,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
 
-    // ── First-run: auto-launch unified init ───────────────────────
-    // When onboarding has never been completed and stdin is a terminal,
-    // launch the Node/BYOK setup wizard inline so the user is fully
-    // configured before the server starts.
-    let is_server_start =
-        cli.command.is_none() || matches!(cli.command, Some(Command::Serve | Command::Start));
-    if is_server_start && cli::onboarding::should_onboard(&paths.home_dir) {
-        let is_interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
-        if is_interactive {
-            match run_unified_init(&paths) {
-                Ok(()) => {
-                    // Pause so the user can read onboarding output before TUI takes over.
-                    if use_tui {
-                        eprint!("  Press Enter to continue...");
-                        let _ = std::io::stdin().read_line(&mut String::new());
-                    }
-                    runtime = load_or_warn_scaffold(&paths);
-                }
-                Err(e) => {
-                    eprintln!("  Setup wizard failed: {e}");
-                    eprintln!("  Continuing with empty configuration...");
-                    eprintln!("  Run `bitrouter init` anytime to retry.");
-                    eprintln!();
-                }
-            }
-        } else {
-            // Non-interactive: print guidance instead of launching the wizard
-            print_first_run_guidance(&runtime);
-        }
-    }
-
     // Connect to database for commands that start the server.
     let serves = cli.command.is_none() || matches!(cli.command, Some(Command::Serve));
     if serves {
@@ -433,19 +402,12 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         None => run_default(runtime).await?,
         Some(Command::Serve) => {
+            print_first_run_guidance(&runtime);
             let base_client = reqwest::Client::new();
-            let mut model_router = crate::runtime::Router::new(
-                reqwest_middleware::ClientBuilder::new(base_client.clone()).build(),
+            let model_router = crate::runtime::Router::new(
+                reqwest_middleware::ClientBuilder::new(base_client).build(),
                 runtime.config.providers.clone(),
             );
-            if let Some(x402_client) = build_x402_client_from_state(&runtime.paths, &runtime.config)
-            {
-                model_router = model_router.with_x402_client(x402_client);
-            }
-            #[cfg(feature = "mpp-tempo")]
-            if let Some(mpp_client) = build_mpp_client_from_state(&runtime.paths, &runtime.config) {
-                model_router = model_router.with_mpp_client(mpp_client);
-            }
             runtime.serve_with_reload(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
@@ -519,20 +481,14 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
 }
 
 async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::Error>> {
+    print_first_run_guidance(&runtime);
     let status = runtime.status();
 
     let base_client = reqwest::Client::new();
-    let mut model_router = crate::runtime::Router::new(
-        reqwest_middleware::ClientBuilder::new(base_client.clone()).build(),
+    let model_router = crate::runtime::Router::new(
+        reqwest_middleware::ClientBuilder::new(base_client).build(),
         runtime.config.providers.clone(),
     );
-    if let Some(x402_client) = build_x402_client_from_state(&runtime.paths, &runtime.config) {
-        model_router = model_router.with_x402_client(x402_client);
-    }
-    #[cfg(feature = "mpp-tempo")]
-    if let Some(mpp_client) = build_mpp_client_from_state(&runtime.paths, &runtime.config) {
-        model_router = model_router.with_mpp_client(mpp_client);
-    }
     #[cfg(feature = "tui")]
     {
         let tui_config = crate::tui::TuiConfig {
@@ -571,176 +527,6 @@ where
     args.into_iter().any(|arg| arg.as_ref() == "--headless")
 }
 
-/// Build an x402 payment client from onboarding state, if a wallet is configured.
-///
-/// Returns `None` when no wallet has been set up (BYOK mode).
-/// Logs a warning and returns `None` on load failure so the server can still
-/// start for non-x402 providers.
-fn build_x402_client_from_state(
-    paths: &crate::runtime::RuntimePaths,
-    config: &bitrouter_config::BitrouterConfig,
-) -> Option<reqwest_middleware::ClientWithMiddleware> {
-    // Check if any provider uses x402 auth.
-    let x402_providers: Vec<&str> = config
-        .providers
-        .iter()
-        .filter(|(_, p)| matches!(&p.auth, Some(bitrouter_config::AuthConfig::X402)))
-        .map(|(name, _)| name.as_str())
-        .collect();
-
-    if x402_providers.is_empty() {
-        return None;
-    }
-
-    let keys_dir = paths.home_dir.join(".keys");
-    let (_prefix, keypair) = match cli::account::load_active_keypair(&keys_dir) {
-        Ok(kp) => kp,
-        Err(e) => {
-            tracing::warn!(
-                providers = ?x402_providers,
-                "x402 providers configured but no keypair available: {e}",
-            );
-            return None;
-        }
-    };
-
-    let rpc_url = config.solana_rpc_url.as_deref().unwrap_or_else(|| {
-        tracing::warn!("no Solana RPC URL configured, falling back to mainnet-beta",);
-        "https://api.mainnet-beta.solana.com"
-    });
-
-    let client = crate::runtime::x402::build_x402_client_from_master(
-        &keypair,
-        rpc_url,
-        reqwest::Client::new(),
-        true,
-    );
-    tracing::info!(
-        rpc = %rpc_url,
-        providers = ?x402_providers,
-        "x402 payment signer loaded",
-    );
-    Some(client)
-}
-
-/// Build an MPP payment client from the active keypair, if any MPP providers are configured.
-///
-/// Returns `None` when no wallet has been set up or no providers use MPP auth.
-/// Logs a warning and returns `None` on failure so the server can still start.
-#[cfg(feature = "mpp-tempo")]
-fn build_mpp_client_from_state(
-    paths: &crate::runtime::RuntimePaths,
-    config: &bitrouter_config::BitrouterConfig,
-) -> Option<reqwest_middleware::ClientWithMiddleware> {
-    let mpp_providers: Vec<&str> = config
-        .providers
-        .iter()
-        .filter(|(_, p)| matches!(&p.auth, Some(bitrouter_config::AuthConfig::Mpp)))
-        .map(|(name, _)| name.as_str())
-        .collect();
-
-    if mpp_providers.is_empty() {
-        return None;
-    }
-
-    let keys_dir = paths.home_dir.join(".keys");
-    let (_prefix, keypair) = match cli::account::load_active_keypair(&keys_dir) {
-        Ok(kp) => kp,
-        Err(e) => {
-            tracing::warn!(
-                providers = ?mpp_providers,
-                "MPP providers configured but no keypair available: {e}",
-            );
-            return None;
-        }
-    };
-
-    let rpc_url = config
-        .mpp
-        .as_ref()
-        .and_then(|m| m.networks.tempo.as_ref())
-        .and_then(|t| t.rpc_url.as_deref())
-        .unwrap_or(crate::runtime::mpp_client::DEFAULT_TEMPO_RPC_URL);
-
-    let default_deposit = config
-        .mpp
-        .as_ref()
-        .and_then(|m| m.networks.tempo.as_ref())
-        .and_then(|t| t.default_deposit.as_deref())
-        .and_then(|s| s.parse::<u128>().ok());
-
-    match crate::runtime::mpp_client::build_mpp_client(
-        &keypair,
-        rpc_url,
-        reqwest::Client::new(),
-        true,
-        default_deposit,
-    ) {
-        Ok(client) => {
-            tracing::info!(
-                rpc = %rpc_url,
-                providers = ?mpp_providers,
-                "MPP payment signer loaded",
-            );
-            Some(client)
-        }
-        Err(e) => {
-            tracing::warn!("failed to load MPP signer: {e} — MPP providers will be unavailable",);
-            None
-        }
-    }
-}
-
-/// Build a Solana session MPP client from the active keypair, if any MPP providers are configured.
-#[cfg(feature = "mpp-solana")]
-#[allow(dead_code)]
-fn build_mpp_solana_client_from_state(
-    paths: &crate::runtime::RuntimePaths,
-    config: &bitrouter_config::BitrouterConfig,
-) -> Option<reqwest_middleware::ClientWithMiddleware> {
-    let mpp_providers: Vec<&str> = config
-        .providers
-        .iter()
-        .filter(|(_, p)| matches!(&p.auth, Some(bitrouter_config::AuthConfig::Mpp)))
-        .map(|(name, _)| name.as_str())
-        .collect();
-
-    if mpp_providers.is_empty() {
-        return None;
-    }
-
-    let keys_dir = paths.home_dir.join(".keys");
-    let (_prefix, keypair) = match cli::account::load_active_keypair(&keys_dir) {
-        Ok(kp) => kp,
-        Err(e) => {
-            tracing::warn!(
-                providers = ?mpp_providers,
-                "Solana MPP providers configured but no keypair available: {e}",
-            );
-            return None;
-        }
-    };
-
-    match crate::runtime::mpp_solana_client::build_mpp_solana_client(
-        &keypair,
-        reqwest::Client::new(),
-    ) {
-        Ok(client) => {
-            tracing::info!(
-                providers = ?mpp_providers,
-                "Solana MPP session signer loaded",
-            );
-            Some(client)
-        }
-        Err(e) => {
-            tracing::warn!(
-                "failed to load Solana MPP signer: {e} — MPP providers will be unavailable",
-            );
-            None
-        }
-    }
-}
-
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -748,163 +534,6 @@ fn init_tracing() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .try_init();
-}
-
-/// Unified `bitrouter init` entry point.
-///
-/// Detects existing onboarding state and offers Node vs BYOK mode selection.
-/// - Node: delegates to [`cli::onboarding::run_onboarding`], then writes node
-///   provider config.
-/// - BYOK: delegates to [`init::run_init`], then writes `onboarding.json` with
-///   `completed_byok` status.
-fn run_unified_init(
-    paths: &crate::runtime::RuntimePaths,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use cli::onboarding::{OnboardingStatus, load_state, save_state};
-    use dialoguer::{Select, theme::ColorfulTheme};
-
-    let theme = ColorfulTheme::default();
-    let home = &paths.home_dir;
-
-    // ── Idempotency: detect existing state ────────────────────
-    let state = load_state(home);
-    match state.status {
-        OnboardingStatus::CompletedNode | OnboardingStatus::CompletedByok => {
-            let label = match state.status {
-                OnboardingStatus::CompletedNode => "BitRouter Node (MPP wallet)",
-                _ => "BYOK (bring your own keys)",
-            };
-            println!();
-            println!("  Onboarding already completed: {label}");
-            println!();
-
-            let choices = &["Reconfigure from scratch", "Exit"];
-            let selection = Select::with_theme(&theme)
-                .with_prompt("What would you like to do?")
-                .items(choices)
-                .default(1)
-                .interact()?;
-
-            if selection == 1 {
-                return Ok(());
-            }
-            // Fall through to re-run mode selection
-        }
-        OnboardingStatus::FailedRecoverable => {
-            println!();
-            println!("  Previous onboarding attempt failed. Resuming...");
-            println!();
-            // Fall through to mode selection — user can retry or switch to BYOK
-        }
-        OnboardingStatus::NotStarted | OnboardingStatus::Deferred => {
-            // First run or previously deferred — proceed normally
-        }
-    }
-
-    // ── Mode selection ────────────────────────────────────────
-    println!();
-    println!("  BitRouter Setup");
-    println!("  ───────────────");
-    println!();
-    println!("  Choose how to connect to LLM providers:");
-    println!();
-
-    let choices = &[
-        "BitRouter Node — pay per request with Tempo MPP (auto-generates web3 wallet)",
-        "BYOK  — bring your own API keys (OpenAI, Anthropic, Google, custom)",
-    ];
-
-    let selection = Select::with_theme(&theme)
-        .with_prompt("Setup mode")
-        .items(choices)
-        .default(0)
-        .interact()?;
-
-    match selection {
-        // ── Node path ────────────────────────────────────────
-        0 => {
-            match cli::onboarding::run_onboarding(home)? {
-                cli::onboarding::OnboardingOutcome::CompletedNode { .. } => {
-                    if let Err(e) = write_node_provider_config(paths) {
-                        eprintln!("  Warning: failed to write node config: {e}");
-                    }
-                }
-                cli::onboarding::OnboardingOutcome::CompletedByok => {
-                    // User switched to BYOK during onboarding (wallet skip)
-                }
-                cli::onboarding::OnboardingOutcome::Deferred => {
-                    // Will re-prompt on next run
-                }
-            }
-        }
-        // ── BYOK path ────────────────────────────────────────
-        _ => {
-            match init::run_init(paths)? {
-                init::InitOutcome::Configured => {
-                    let mut state = load_state(home);
-                    state.status = OnboardingStatus::CompletedByok;
-                    save_state(home, &state)?;
-                }
-                init::InitOutcome::Cancelled => {
-                    // User cancelled — write deferred so we re-prompt
-                    let mut state = load_state(home);
-                    if state.status == OnboardingStatus::NotStarted {
-                        state.status = OnboardingStatus::Deferred;
-                        save_state(home, &state)?;
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Write a node provider config entry to `bitrouter.yaml` after onboarding.
-///
-/// Since `bitrouter` is a builtin provider (api_base and api_protocol
-/// come from the registry), the user config only needs to supply auth.
-fn write_node_provider_config(
-    paths: &crate::runtime::RuntimePaths,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use std::fs;
-
-    let config_path = &paths.config_file;
-
-    // Read existing config or start fresh.
-    let existing = fs::read_to_string(config_path).unwrap_or_default();
-
-    // Parse YAML to check if node provider is already configured.
-    if let Ok(value) = serde_saphyr::from_str::<serde_json::Value>(&existing)
-        && value
-            .get("providers")
-            .and_then(|p| p.get("bitrouter"))
-            .is_some()
-    {
-        return Ok(());
-    }
-
-    let node_block = "\n\
-        # BitRouter Node (added by onboarding)\n\
-        # Uses MPP (Machine Payment Protocol) on Tempo for request payments.\n\
-        # Fund your EVM wallet on Tempo: https://app.tempo.xyz\n\
-        #\n\
-        # Route requests with: bitrouter:<model>\n\
-        # Example: bitrouter:gpt-4o\n\
-        providers:\n\
-        \x20 bitrouter:\n\
-        \x20   auth:\n\
-        \x20     type: mpp\n";
-
-    // Append node config to existing file.
-    let mut content = existing;
-    content.push_str(node_block);
-
-    fs::create_dir_all(&paths.home_dir).map_err(|e| format!("failed to create home dir: {e}"))?;
-    fs::write(config_path, content)
-        .map_err(|e| format!("failed to write {}: {e}", config_path.display()))?;
-
-    Ok(())
 }
 
 #[cfg(test)]
