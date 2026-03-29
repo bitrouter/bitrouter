@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use bitrouter_core::routers::routing_table::ApiProtocol;
 
-use crate::config::{ModelInfo, ProviderConfig};
+use crate::config::{AuthConfig, ModelInfo, ProviderConfig, ToolConfig, ToolEndpoint};
 
 // ── Compile-time embedded provider definitions ──────────────────────
 
@@ -81,6 +81,97 @@ pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
                         ..Default::default()
                     },
                     models,
+                },
+            ))
+        })
+        .collect()
+}
+
+// ── Compile-time embedded tool provider definitions ──────────────────
+
+const TOOL_PROVIDER_DEFS: &[(&str, &str)] = &[("exa", include_str!("../providers/tools/exa.yaml"))];
+
+/// Raw YAML shape for built-in tool provider files.
+///
+/// Mirrors [`ProviderDef`] but with a `tools` catalog instead of `models`.
+/// Each file defines a single provider with per-tool protocol/base overrides.
+#[derive(Debug, Deserialize)]
+struct ToolProviderDef {
+    api_protocol: ApiProtocol,
+    api_base: String,
+    env_prefix: String,
+    #[serde(default)]
+    auth: Option<AuthConfig>,
+    #[serde(default)]
+    tools: HashMap<String, ToolDef>,
+}
+
+/// A single tool entry in the provider's catalog.
+#[derive(Debug, Deserialize)]
+struct ToolDef {
+    tool_id: String,
+    #[serde(default)]
+    api_protocol: Option<ApiProtocol>,
+    #[serde(default)]
+    api_base: Option<String>,
+}
+
+/// A built-in tool provider with its configuration and tool routes.
+#[derive(Debug, Clone)]
+pub struct BuiltinToolProvider {
+    pub config: ProviderConfig,
+    pub tools: Vec<String>,
+    pub tool_configs: HashMap<String, ToolConfig>,
+}
+
+/// Returns the full built-in tool provider definitions keyed by provider name.
+pub fn builtin_tool_provider_defs() -> HashMap<String, BuiltinToolProvider> {
+    TOOL_PROVIDER_DEFS
+        .iter()
+        .filter_map(|(name, yaml)| {
+            let def: ToolProviderDef = match serde_saphyr::from_str(yaml) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("warning: invalid built-in tool provider YAML '{name}': {e}");
+                    return None;
+                }
+            };
+
+            let tools: Vec<String> = def.tools.keys().cloned().collect();
+
+            let tool_configs = def
+                .tools
+                .into_iter()
+                .map(|(tool_name, tool_def)| {
+                    let endpoint = ToolEndpoint {
+                        provider: (*name).to_owned(),
+                        tool_id: tool_def.tool_id,
+                        api_protocol: tool_def.api_protocol,
+                        api_key: None,
+                        api_base: tool_def.api_base,
+                    };
+                    (
+                        tool_name,
+                        ToolConfig {
+                            endpoints: vec![endpoint],
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect();
+
+            Some((
+                (*name).to_owned(),
+                BuiltinToolProvider {
+                    config: ProviderConfig {
+                        api_protocol: Some(def.api_protocol),
+                        api_base: Some(def.api_base),
+                        env_prefix: Some(def.env_prefix),
+                        auth: def.auth,
+                        ..Default::default()
+                    },
+                    tools,
+                    tool_configs,
                 },
             ))
         })
@@ -509,5 +600,46 @@ mod tests {
         // Child's own models take precedence, parent models not inherited
         assert!(models.contains_key("child-model"));
         assert!(!models.contains_key("model-a"));
+    }
+
+    #[test]
+    fn builtin_tool_providers_contain_exa() {
+        let defs = builtin_tool_provider_defs();
+        assert!(defs.contains_key("exa"));
+
+        let exa = &defs["exa"];
+
+        // Single provider entry
+        assert_eq!(exa.config.api_protocol, Some(ApiProtocol::Rest));
+        assert_eq!(exa.config.api_base.as_deref(), Some("https://api.exa.ai"));
+        assert_eq!(exa.config.env_prefix.as_deref(), Some("EXA"));
+        assert!(exa.config.auth.is_some());
+
+        // All 6 tools present
+        assert_eq!(exa.tools.len(), 6);
+        assert_eq!(exa.tool_configs.len(), 6);
+
+        // REST tools — inherit provider defaults (no overrides)
+        let search = &exa.tool_configs["exa_search"];
+        assert_eq!(search.endpoints[0].provider, "exa");
+        assert_eq!(search.endpoints[0].tool_id, "search");
+        assert!(search.endpoints[0].api_protocol.is_none());
+        assert!(search.endpoints[0].api_base.is_none());
+
+        // MCP tools — per-endpoint protocol + base overrides
+        let web_search = &exa.tool_configs["exa_web_search"];
+        assert_eq!(web_search.endpoints[0].provider, "exa");
+        assert_eq!(web_search.endpoints[0].tool_id, "web_search_exa");
+        assert_eq!(web_search.endpoints[0].api_protocol, Some(ApiProtocol::Mcp));
+        assert_eq!(
+            web_search.endpoints[0].api_base.as_deref(),
+            Some("https://mcp.exa.ai/mcp")
+        );
+
+        // Skill tools — per-endpoint protocol + base overrides
+        let research = &exa.tool_configs["exa_company_research"];
+        assert_eq!(research.endpoints[0].provider, "exa");
+        assert_eq!(research.endpoints[0].tool_id, "web_search_advanced_exa");
+        assert_eq!(research.endpoints[0].api_protocol, Some(ApiProtocol::Skill));
     }
 }

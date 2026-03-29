@@ -1,0 +1,44 @@
+# Exa — search, content retrieval, and company research tools.
+#
+# Default protocol is REST (https://api.exa.ai). MCP and skill tools
+# override the protocol and base URL per-endpoint.
+#
+# All tools share a single API key (EXA_API_KEY).
+
+api_protocol: rest
+api_base: https://api.exa.ai
+env_prefix: EXA
+auth:
+  type: header
+  header_name: x-api-key
+  api_key: "${EXA_API_KEY}"
+
+tools:
+  # ── REST tools ────────────────────────────────────────────────────
+  exa_search:
+    tool_id: search
+
+  exa_get_contents:
+    tool_id: contents
+
+  # ── MCP tools ─────────────────────────────────────────────────────
+  exa_web_search:
+    tool_id: web_search_exa
+    api_protocol: mcp
+    api_base: https://mcp.exa.ai/mcp
+
+  exa_code_context:
+    tool_id: get_code_context_exa
+    api_protocol: mcp
+    api_base: https://mcp.exa.ai/mcp
+
+  exa_crawl:
+    tool_id: crawling_exa
+    api_protocol: mcp
+    api_base: https://mcp.exa.ai/mcp
+
+  # ── Skill tools ───────────────────────────────────────────────────
+  exa_company_research:
+    tool_id: web_search_advanced_exa
+    api_protocol: skill
+    api_base: https://mcp.exa.ai/mcp?tools=web_search_advanced_exa

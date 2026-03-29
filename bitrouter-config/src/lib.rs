@@ -17,6 +17,8 @@ pub use config::{
 };
 pub use detect::{DetectedProvider, detect_providers, detect_providers_from_env};
 pub use error::{ConfigError, Result};
-pub use registry::{BuiltinProvider, builtin_provider_defs};
+pub use registry::{
+    BuiltinProvider, BuiltinToolProvider, builtin_provider_defs, builtin_tool_provider_defs,
+};
 pub use routing::{ConfigRoutingTable, ConfigToolRoutingTable, ResolvedTarget, ResolvedToolTarget};
 pub use writer::{CustomProviderInit, InitOptions, InitResult, write_init_config};

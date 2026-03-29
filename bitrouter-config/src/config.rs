@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use bitrouter_core::routers::routing_table::ApiProtocol;
 
 use crate::env::{load_env, substitute_in_value};
-use crate::registry::{builtin_providers, merge_provider, resolve_providers};
+use crate::registry::{
+    builtin_providers, builtin_tool_provider_defs, merge_provider, resolve_providers,
+};
 
 fn default_true() -> bool {
     true
@@ -116,7 +118,7 @@ impl BitrouterConfig {
             .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
 
         // Merge built-in providers with user overrides (unless opted out)
-        let providers = if config.inherit_defaults {
+        let mut providers = if config.inherit_defaults {
             let mut base = builtin_providers();
             for (name, user_provider) in config.providers.drain() {
                 if let Some(existing) = base.get_mut(&name) {
@@ -129,6 +131,16 @@ impl BitrouterConfig {
         } else {
             std::mem::take(&mut config.providers)
         };
+
+        // Merge built-in tool provider definitions (providers + tool routes)
+        if config.inherit_defaults {
+            for (name, builtin) in builtin_tool_provider_defs() {
+                providers.entry(name).or_insert(builtin.config);
+                for (tool_name, tool_config) in builtin.tool_configs {
+                    config.tools.entry(tool_name).or_insert(tool_config);
+                }
+            }
+        }
 
         // Resolve derives + env_prefix
         config.providers = resolve_providers(providers, &env);
@@ -816,7 +828,10 @@ tools:
         api_protocol: mcp
 "#;
         let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
-        assert_eq!(config.tools.len(), 2);
+        // 2 user-defined + 6 built-in exa tools
+        assert!(config.tools.len() >= 2);
+        assert!(config.tools.contains_key("create_issue"));
+        assert!(config.tools.contains_key("search_code"));
 
         let tool = &config.tools["create_issue"];
         assert_eq!(tool.strategy, RoutingStrategy::Priority);
