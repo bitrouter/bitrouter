@@ -162,6 +162,54 @@ where
         .and_then(handle_responses_with_mpp)
 }
 
+/// Creates a warp filter for `/v1/responses` with a custom [`PaymentGate`].
+///
+/// Like [`responses_filter_with_mpp`], but accepts any
+/// [`crate::mpp::PaymentGate`] implementation instead of requiring
+/// [`crate::mpp::MppState`] directly.
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+pub fn responses_filter_with_payment_gate<T, R, A>(
+    table: Arc<T>,
+    router: Arc<R>,
+    observer: Arc<dyn ObserveCallback>,
+    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
+    warp::path!("v1" / "responses")
+        .and(warp::post())
+        .and(account_filter)
+        .and(warp::any().map(move || payment_gate.clone()))
+        .and(warp::header::optional::<String>("authorization"))
+        .and(warp::body::json::<ResponsesRequest>())
+        .and(warp::any().map(move || table.clone()))
+        .and(warp::any().map(move || router.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and_then(
+            |caller: CallerContext,
+             gate: Arc<dyn crate::mpp::PaymentGate>,
+             auth_header: Option<String>,
+             request: ResponsesRequest,
+             table: Arc<T>,
+             router: Arc<R>,
+             observer: Arc<dyn ObserveCallback>| {
+                handle_responses_with_gate(
+                    caller,
+                    gate,
+                    auth_header,
+                    request,
+                    table,
+                    router,
+                    observer,
+                )
+            },
+        )
+}
+
 #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
 async fn handle_responses_with_mpp<T, R>(
     caller: CallerContext,
@@ -176,9 +224,36 @@ where
     T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
-    let mpp_ctx =
-        crate::mpp::verify_mpp_payment(mpp_state.clone(), caller.chain.clone(), auth_header)
-            .await?;
+    let payment_gate: Arc<dyn crate::mpp::PaymentGate> = mpp_state;
+    handle_responses_with_gate(
+        caller,
+        payment_gate,
+        auth_header,
+        request,
+        table,
+        router,
+        observer,
+    )
+    .await
+}
+
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+async fn handle_responses_with_gate<T, R>(
+    caller: CallerContext,
+    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    auth_header: Option<String>,
+    request: ResponsesRequest,
+    table: Arc<T>,
+    router: Arc<R>,
+    observer: Arc<dyn ObserveCallback>,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection>
+where
+    T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
+    let mpp_ctx = payment_gate
+        .verify_payment(caller.chain.clone(), auth_header)
+        .await?;
 
     if let Some(ref management) = mpp_ctx.management_response {
         let reply = warp::reply::json(management);
@@ -237,7 +312,7 @@ where
         );
 
         let metered = crate::mpp::metered_sse::MeteredSseContext {
-            mpp_state: mpp_state.clone(),
+            payment_gate: payment_gate.clone(),
             backend_key: mpp_ctx.backend_key.clone(),
             channel_id: mpp_ctx.channel_id.clone(),
             tick_cost,
@@ -339,7 +414,7 @@ where
                 let micro_units = crate::mpp::cost_to_micro_units(cost_usd);
 
                 if micro_units > 0
-                    && let Err(e) = mpp_state
+                    && let Err(e) = payment_gate
                         .deduct(&mpp_ctx.backend_key, &mpp_ctx.channel_id, micro_units)
                         .await
                 {

@@ -616,6 +616,71 @@ impl MppState {
     }
 }
 
+impl super::payment_gate::PaymentGate for MppState {
+    fn verify_payment(
+        &self,
+        chain: Option<String>,
+        auth_header: Option<String>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<super::filter::MppPaymentContext, warp::Rejection>,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(super::filter::verify_payment_impl(auth_header, self, chain))
+    }
+
+    fn deduct<'a>(
+        &'a self,
+        backend_key: &'a str,
+        channel_id: &'a str,
+        amount: u128,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), mpp::server::VerificationError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(self.deduct(backend_key, channel_id, amount))
+    }
+
+    fn wait_for_update<'a>(
+        &'a self,
+        backend_key: &'a str,
+        channel_id: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(self.wait_for_update(backend_key, channel_id))
+    }
+
+    fn channel_balance<'a>(
+        &'a self,
+        backend_key: &'a str,
+        channel_id: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<(u128, u128, u128)>> + Send + 'a>>
+    {
+        Box::pin(self.channel_balance(backend_key, channel_id))
+    }
+
+    fn close_channel<'a>(
+        &'a self,
+        backend_key: &'a str,
+        channel_id: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+        #[cfg(feature = "mpp-tempo")]
+        {
+            Box::pin(self.close_channel(backend_key, channel_id))
+        }
+        #[cfg(not(feature = "mpp-tempo"))]
+        {
+            let _ = (backend_key, channel_id);
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+}
+
 fn backend_session_challenge(
     backend: &MppBackend,
     amount: &str,

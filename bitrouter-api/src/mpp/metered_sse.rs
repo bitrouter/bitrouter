@@ -11,7 +11,7 @@ use std::sync::Arc;
 use mpp::server::sse::NeedVoucherEvent;
 use tokio::sync::mpsc;
 
-use super::MppState;
+use super::payment_gate::PaymentGate;
 
 /// Default poll interval when `wait_for_update` returns immediately.
 const DEFAULT_POLL_INTERVAL_MS: u64 = 100;
@@ -25,7 +25,7 @@ const MAX_NEED_VOUCHER_RETRIES: u32 = 60;
 /// costs from the payment channel and emit `payment-need-voucher` events
 /// when the balance is exhausted.
 pub struct MeteredSseContext {
-    pub mpp_state: Arc<MppState>,
+    pub payment_gate: Arc<dyn PaymentGate>,
     pub backend_key: String,
     pub channel_id: String,
     pub tick_cost: u128,
@@ -48,7 +48,7 @@ impl MeteredSseContext {
 
         for _ in 0..MAX_NEED_VOUCHER_RETRIES {
             match self
-                .mpp_state
+                .payment_gate
                 .deduct(&self.backend_key, &self.channel_id, self.tick_cost)
                 .await
             {
@@ -56,7 +56,7 @@ impl MeteredSseContext {
                 Err(_) => {
                     // Emit need-voucher event.
                     if let Some((settled, authorized, deposit)) = self
-                        .mpp_state
+                        .payment_gate
                         .channel_balance(&self.backend_key, &self.channel_id)
                         .await
                     {
@@ -76,7 +76,7 @@ impl MeteredSseContext {
 
                     // Wait for channel update or poll interval.
                     tokio::select! {
-                        () = self.mpp_state.wait_for_update(&self.backend_key, &self.channel_id) => {},
+                        () = self.payment_gate.wait_for_update(&self.backend_key, &self.channel_id) => {},
                         () = tokio::time::sleep(tokio::time::Duration::from_millis(DEFAULT_POLL_INTERVAL_MS)) => {},
                     }
                 }
