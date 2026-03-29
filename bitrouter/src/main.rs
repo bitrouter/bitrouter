@@ -402,6 +402,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         None => run_default(runtime).await?,
         Some(Command::Serve) => {
+            print_first_run_guidance(&runtime);
             let base_client = reqwest::Client::new();
             let model_router = crate::runtime::Router::new(
                 reqwest_middleware::ClientBuilder::new(base_client).build(),
@@ -480,6 +481,7 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
 }
 
 async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::Error>> {
+    print_first_run_guidance(&runtime);
     let status = runtime.status();
 
     let base_client = reqwest::Client::new();
