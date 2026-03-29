@@ -12,7 +12,4 @@ pub enum RuntimeError {
     Config(#[from] bitrouter_config::ConfigError),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
-    #[cfg(feature = "mpp-tempo")]
-    #[error("mpp error: {0}")]
-    Mpp(String),
 }

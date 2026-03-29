@@ -42,13 +42,13 @@ mpp-solana = [
 
 [dependencies]
 # Internal crates
-bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.16" }
-bitrouter-api = { path = "../bitrouter-api", version = "0.16", default-features = false, features = ["openai", "anthropic", "google"] }
-bitrouter-config = { path = "../bitrouter-config", version = "0.16" }
-bitrouter-core = { path = "../bitrouter-core", version = "0.16" }
-bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.16" }
-bitrouter-observe = { path = "../bitrouter-observe", version = "0.16" }
-bitrouter-providers = { path = "../bitrouter-providers", version = "0.16", features = ["agentskills"] }
+bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.17" }
+bitrouter-api = { path = "../bitrouter-api", version = "0.17", default-features = false, features = ["openai", "anthropic", "google"] }
+bitrouter-config = { path = "../bitrouter-config", version = "0.17" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.17" }
+bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.17" }
+bitrouter-observe = { path = "../bitrouter-observe", version = "0.17" }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.17", features = ["agentskills"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -89,15 +89,10 @@ crossterm = { version = "0.29", features = ["event-stream"], optional = true }
 futures = { version = "0.3", optional = true }
 anyhow = { version = "1", optional = true }
 
-# x402 payment signing
-async-trait = { version = "0.1" }
-http = { version = "1.4" }
-solana-client = { version = "3.1" }
-solana-keypair = { version = "3.1" }
-x402-signer = { version = "2.5" }
+
 
 # MPP payment middleware (optional)
-mpp = { package = "mpp-br", version = "0.8.0", default-features = false, features = [
+mpp = { package = "mpp-br", version = "0.8.1", default-features = false, features = [
     "client",
     "tempo",
     "reqwest-rustls-tls",

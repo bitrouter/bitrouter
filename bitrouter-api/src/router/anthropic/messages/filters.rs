@@ -176,9 +176,10 @@ where
     T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
-    let mpp_ctx =
-        crate::mpp::verify_mpp_payment(mpp_state.clone(), caller.chain.clone(), auth_header)
-            .await?;
+    let payment_gate: Arc<dyn crate::mpp::PaymentGate> = mpp_state;
+    let mpp_ctx = payment_gate
+        .verify_payment(caller.chain.clone(), auth_header)
+        .await?;
 
     if let Some(ref management) = mpp_ctx.management_response {
         let reply = warp::reply::json(management);
@@ -237,7 +238,7 @@ where
         );
 
         let metered = crate::mpp::metered_sse::MeteredSseContext {
-            mpp_state: mpp_state.clone(),
+            payment_gate: payment_gate.clone(),
             backend_key: mpp_ctx.backend_key.clone(),
             channel_id: mpp_ctx.channel_id.clone(),
             tick_cost,
@@ -339,7 +340,7 @@ where
                 let micro_units = crate::mpp::cost_to_micro_units(cost_usd);
 
                 if micro_units > 0
-                    && let Err(e) = mpp_state
+                    && let Err(e) = payment_gate
                         .deduct(&mpp_ctx.backend_key, &mpp_ctx.channel_id, micro_units)
                         .await
                 {

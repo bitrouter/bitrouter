@@ -2,7 +2,6 @@ pub mod account;
 pub mod agents;
 pub mod keygen;
 pub mod keys;
-pub mod onboarding;
 pub mod route;
 pub mod sudo;
 pub mod tools;

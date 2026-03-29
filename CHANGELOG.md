@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/bitrouter/bitrouter/compare/v0.16.0...v0.17.0)
+
+
+### ⛰️ Features
+
+- *(api)* Add PaymentGate trait for pluggable payment verification ([#213](https://github.com/bitrouter/bitrouter/pull/213)) - ([5699c2b](https://github.com/bitrouter/bitrouter/commit/5699c2b6dd3964531f40eeab2bc0c367868da663))
+
+
 ## [0.16.0](https://github.com/bitrouter/bitrouter/compare/v0.15.0...v0.16.0)
 
 

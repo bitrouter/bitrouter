@@ -55,12 +55,16 @@ pub fn mpp_payment_filter(
     warp::header::optional::<String>("authorization")
         .and(warp::any().map(move || state.clone()))
         .and(warp::any().map(move || chain.clone()))
-        .and_then(verify_payment)
+        .and_then(
+            |auth_header: Option<String>, state: Arc<MppState>, chain: Option<String>| async move {
+                verify_payment_impl(auth_header, &state, chain).await
+            },
+        )
 }
 
-async fn verify_payment(
+pub(crate) async fn verify_payment_impl(
     auth_header: Option<String>,
-    state: Arc<MppState>,
+    state: &MppState,
     chain: Option<String>,
 ) -> Result<MppPaymentContext, warp::Rejection> {
     // Check if the Authorization header contains a Payment credential.
@@ -154,7 +158,7 @@ pub async fn verify_mpp_payment(
     chain: Option<String>,
     auth_header: Option<String>,
 ) -> Result<MppPaymentContext, warp::Rejection> {
-    verify_payment(auth_header, state, chain).await
+    verify_payment_impl(auth_header, &state, chain).await
 }
 
 /// Converts MPP-related warp rejections into proper HTTP 402 responses.
