@@ -22,7 +22,11 @@ use bitrouter_core::api::mcp::types::{
 /// MCP protocol version this client advertises.
 const PROTOCOL_VERSION: &str = "2025-03-26";
 
-/// Monotonic request ID counter.
+/// Process-global monotonic request ID counter shared by all MCP HTTP clients.
+///
+/// Upstream MCP servers treat request IDs as opaque and do not correlate
+/// them across connections, so sharing a single counter is harmless and
+/// simplifies debugging (IDs are globally unique within a process).
 static REQUEST_ID: AtomicI64 = AtomicI64::new(1);
 
 /// MCP Streamable HTTP session state.

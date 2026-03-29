@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
-use super::registry::RefreshGuard;
 use super::upstream::UpstreamConnection;
+use crate::util::RefreshGuard;
 use bitrouter_core::api::mcp::error::McpGatewayError;
 use bitrouter_core::api::mcp::gateway::{
     McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,

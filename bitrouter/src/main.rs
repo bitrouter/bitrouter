@@ -304,7 +304,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 budget_scope,
                 budget_range,
                 name,
-                mcp_groups: bitrouter_core::routers::upstream::ToolServerAccessGroups::default(),
             };
             cli::keygen::run(&keys_dir, opts)?;
             return Ok(());

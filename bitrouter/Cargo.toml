@@ -17,17 +17,14 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
 sqlite = [
     "bitrouter-accounts/sqlite",
     "bitrouter-observe/sqlite",
-    "bitrouter-skills/sqlite",
 ]
 postgres = [
     "bitrouter-accounts/postgres",
     "bitrouter-observe/postgres",
-    "bitrouter-skills/postgres",
 ]
 mysql = [
     "bitrouter-accounts/mysql",
     "bitrouter-observe/mysql",
-    "bitrouter-skills/mysql",
 ]
 mpp-tempo = [
     "bitrouter-api/mpp-tempo",
@@ -51,8 +48,7 @@ bitrouter-config = { path = "../bitrouter-config", version = "0.16" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.16" }
 bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.16" }
 bitrouter-observe = { path = "../bitrouter-observe", version = "0.16" }
-bitrouter-providers = { path = "../bitrouter-providers", version = "0.16" }
-bitrouter-skills = { path = "../bitrouter-skills", version = "0.16" }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.16", features = ["agentskills"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }

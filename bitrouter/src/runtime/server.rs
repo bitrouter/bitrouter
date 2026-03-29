@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
-use bitrouter_api::router::{admin, admin_agents, admin_tools, models, routes};
+use bitrouter_api::router::{admin, models, routes};
 use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
-use bitrouter_core::observe::{
-    AgentObserveCallback, CallerContext, ObserveCallback, ToolObserveCallback,
-};
+#[cfg(feature = "a2a")]
+use bitrouter_core::observe::AgentObserveCallback;
+#[cfg(feature = "mcp")]
+use bitrouter_core::observe::ToolObserveCallback;
+use bitrouter_core::observe::{CallerContext, ObserveCallback};
 use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::model_router::LanguageModelRouter;
 use bitrouter_core::routers::registry::ModelRegistry;
@@ -13,9 +15,6 @@ use bitrouter_guardrails::{GuardedRouter, Guardrail};
 use bitrouter_observe::builder::ObserveStack;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
-
-#[cfg(feature = "mcp")]
-use bitrouter_api::router::mcp as mcp_admin;
 
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
 use crate::runtime::error::Result;
@@ -130,14 +129,20 @@ where
                 .unwrap_or_default()
         });
 
-        let tool_pricing = self.config.mcp_server_pricing.clone();
-        observe_builder = observe_builder.tool_cost(move |server, tool| {
-            tool_pricing.get(server).map_or(0.0, |p| p.cost_for(tool))
+        let tool_configs = self.config.tools.clone();
+        observe_builder = observe_builder.tool_cost(move |_server, tool| {
+            tool_configs
+                .get(tool)
+                .and_then(|tc| tc.pricing.as_ref())
+                .map_or(0.0, |p| p.cost_for(tool))
         });
 
-        let agent_pricing = self.config.a2a_agent_pricing.clone();
+        let agent_tool_configs = self.config.tools.clone();
         observe_builder = observe_builder.agent_cost(move |agent, method| {
-            agent_pricing.get(agent).map_or(0.0, |p| p.cost_for(method))
+            agent_tool_configs
+                .get(agent)
+                .and_then(|tc| tc.pricing.as_ref())
+                .map_or(0.0, |p| p.cost_for(method))
         });
 
         let observe = observe_builder.build();
@@ -163,7 +168,7 @@ where
         let model_list = models::models_filter(self.table.clone());
 
         // Admin route management — gated by management auth.
-        let admin_routes = auth_gate(auth::management_auth(auth_ctx.clone()))
+        let admin_routes = auth::auth_gate(auth::management_auth(auth_ctx.clone()))
             .and(admin::admin_routes_filter(self.table.clone()));
 
         // Build account filter that extracts caller context when auth is enabled,
@@ -352,6 +357,13 @@ where
                 account_filter.clone(),
             );
 
+        // ── Tool routing table ────────────────────────────────────────
+        let tool_table = bitrouter_config::ConfigToolRoutingTable::new(
+            self.config.providers.clone(),
+            self.config.tools.clone(),
+        );
+        let providers_by_protocol = tool_table.providers_by_protocol();
+
         // ── Skills registry (filesystem-backed, no DB) ──────────────
         let skills_dir = self
             .paths
@@ -359,236 +371,49 @@ where
             .map(|p| p.home_dir.join("skills"))
             .unwrap_or_else(|| std::path::PathBuf::from("skills"));
 
-        let skill_registry = match bitrouter_providers::agentskills::registry::FilesystemSkillRegistry::from_config_and_dir(
-            self.config.skills.clone(),
-            skills_dir.clone(),
+        let skills = crate::runtime::agentskills_client::AgentSkillsClient::new(
+            &providers_by_protocol,
+            &tool_table,
+            skills_dir,
         )
-        .await
-        {
-            Ok(reg) => Arc::new(reg),
-            Err(e) => {
-                tracing::warn!("failed to initialize skills from config: {e}");
-                Arc::new(
-                    bitrouter_providers::agentskills::registry::FilesystemSkillRegistry::from_dir(
-                        skills_dir,
-                    )
-                    .await
-                    .map_err(|e2| tracing::warn!("skills registry unavailable: {e2}"))
-                    .unwrap_or_default(),
-                )
-            }
-        };
+        .build()
+        .await;
 
         // ── MCP registry ─────────────────────────────────────────────
         #[cfg(feature = "mcp")]
-        let (
-            admin_tool_routes,
-            mcp_server,
-            tool_list,
-            bridge_routes,
-            _refresh_guard,
-            _bridge_guards,
-        ) = {
-            use bitrouter_core::api::mcp::gateway::{
-                McpClientRequestHandler, McpPromptServer, McpResourceServer, McpToolServer,
-            };
-            use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
-            use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
-            use bitrouter_providers::mcp::client::bridge::SingleServerBridge;
-            use bitrouter_providers::mcp::client::registry::ConfigMcpRegistry;
-            use bitrouter_providers::mcp::client::upstream::UpstreamConnection;
-
-            use crate::runtime::mcp_handler::McpSamplingHandler;
-
-            let mcp_configs = self.config.mcp_servers.clone();
-            let mcp_groups = self.config.mcp_groups.clone();
-
-            // Extract initial filters and restrictions from config for the wrapper.
-            let initial_filters: std::collections::HashMap<String, ToolFilter> = self
-                .config
-                .mcp_servers
-                .iter()
-                .filter_map(|cfg| cfg.tool_filter.clone().map(|f| (cfg.name.clone(), f)))
-                .collect();
-            let initial_restrictions: std::collections::HashMap<String, ParamRestrictions> = self
-                .config
-                .mcp_servers
-                .iter()
-                .filter(|cfg| !cfg.param_restrictions.rules.is_empty())
-                .map(|cfg| (cfg.name.clone(), cfg.param_restrictions.clone()))
-                .collect();
-            let groups = self.config.mcp_groups.as_map().clone();
-
-            // Build the sampling handler so upstream MCP servers can request
-            // LLM generation via sampling/createMessage.
-            let sampling_handler: Option<Arc<dyn McpClientRequestHandler>> = Some(Arc::new(
-                McpSamplingHandler::new(self.table.clone(), raw_router.clone()),
-            ));
-
-            // Build all upstream connections upfront so bridges can share them.
-            let mut connections: std::collections::HashMap<String, Arc<UpstreamConnection>> =
-                std::collections::HashMap::with_capacity(mcp_configs.len());
-            for config in &mcp_configs {
-                let name = config.name.clone();
-                match UpstreamConnection::connect(config.clone(), sampling_handler.clone()).await {
-                    Ok(conn) => {
-                        connections.insert(name, Arc::new(conn));
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            upstream = %name,
-                            error = %e,
-                            "failed to connect to MCP upstream"
-                        );
-                    }
-                }
-            }
-
-            let (inner, registry, refresh_guard) = if !connections.is_empty() {
-                let reg = ConfigMcpRegistry::from_connections(connections.clone(), mcp_groups);
-                tracing::info!("MCP registry started with {} upstreams", connections.len());
-                let inner = Arc::new(reg);
-                let guard = inner.spawn_refresh_listeners().await;
-                let wrapped = Arc::new(DynamicToolRegistry::new(
-                    Arc::clone(&inner),
-                    initial_filters,
-                    initial_restrictions,
-                    groups,
-                ));
-                (Some(inner), Some(wrapped), Some(guard))
-            } else {
-                (None, None, None)
-            };
-
-            // Build bridge endpoints for servers with `bridge: true`.
-            let mut bridge_map: std::collections::HashMap<String, Arc<SingleServerBridge>> =
-                std::collections::HashMap::new();
-            let mut bridge_guards: Vec<bitrouter_providers::mcp::client::registry::RefreshGuard> =
-                Vec::new();
-            if let Some(ref reg) = inner {
-                for config in mcp_configs.iter().filter(|c| c.bridge) {
-                    if let Some(conn) = connections.get(&config.name) {
-                        let (bridge, guard) = SingleServerBridge::new(
-                            Arc::clone(conn),
-                            McpToolServer::subscribe_tool_changes(reg.as_ref()),
-                            McpResourceServer::subscribe_resource_changes(reg.as_ref()),
-                            McpPromptServer::subscribe_prompt_changes(reg.as_ref()),
-                        );
-                        tracing::info!(server = %config.name, "MCP bridge enabled");
-                        bridge_map.insert(config.name.clone(), bridge);
-                        bridge_guards.push(guard);
-                    }
-                }
-            }
-            let bridges = mcp_admin::mcp_bridge_filter(Arc::new(bridge_map));
-
-            let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(admin_tools::admin_tools_filter(registry.clone()));
-
-            // Build MCP server filter with tool call observation.
+        let mcp = {
             let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
-            let server = mcp_admin::mcp_server_filter_with_observe(
-                registry.clone(),
-                tool_observer,
-                account_filter.clone(),
-            );
-            // Compose MCP tools + agentskills into a single ToolRegistry
-            // for the unified GET /v1/tools endpoint.
-            let tools = if let Some(ref mcp_reg) = registry {
-                let composite = Arc::new(
-                    bitrouter_core::routers::registry::CompositeToolRegistry::new(
-                        mcp_reg.clone(),
-                        skill_registry.clone(),
-                    ),
-                );
-                bitrouter_api::router::tools::tools_filter(Some(composite))
-                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                    .boxed()
-            } else if !self.config.skills.is_empty() {
-                bitrouter_api::router::tools::tools_filter(Some(skill_registry.clone()))
-                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                    .boxed()
-            } else {
-                bitrouter_api::router::tools::tools_filter(registry)
-                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                    .boxed()
-            };
-
-            (admin, server, tools, bridges, refresh_guard, bridge_guards)
+            crate::runtime::mcp_client::McpClient::new(
+                &providers_by_protocol,
+                self.table.clone(),
+                raw_router,
+            )
+            .with_auth(auth_ctx.clone())
+            .with_observe(tool_observer)
+            .with_account_filter(account_filter.clone())
+            .with_skill_registry(skills.registry.clone())
+            .build()
+            .await
         };
         #[cfg(not(feature = "mcp"))]
-        let (admin_tool_routes, mcp_server, tool_list, bridge_routes) = {
-            let noop = warp::path!("mcp" / ..)
-                .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
-                .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed();
-            (noop.clone(), noop.clone(), noop.clone(), noop)
-        };
-
-        // ── Skills registry ───────────────────────────────────────────
-        // The same FilesystemSkillRegistry serves both /v1/tools (ToolRegistry)
-        // and /v1/skills CRUD (SkillService) — no database needed.
-        let skills_list = bitrouter_api::router::skills::skills_filter(skill_registry)
-            .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-            .boxed();
+        let mcp = crate::runtime::mcp_client::McpRoutes::noop();
 
         // ── A2A protocol ─────────────────────────────────────────────
         #[cfg(feature = "a2a")]
-        let (a2a_routes, admin_agent_routes, agent_list, _a2a_refresh_guard) = {
-            use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
-            use bitrouter_providers::a2a::client::registry::UpstreamAgentRegistry;
-
-            let external_base_url = format!("http://{}/a2a", self.config.server.listen);
-            let a2a_configs = self.config.a2a_agents.clone();
-
-            let reg = UpstreamAgentRegistry::from_configs(a2a_configs, external_base_url).await;
-
-            let (gateway_reg, discovery_reg, refresh_guard) = if reg.has_agents() {
-                tracing::info!("A2A gateway started");
-                let inner = Arc::new(reg);
-                let guard = inner.spawn_refresh_listeners();
-                let wrapped = Arc::new(DynamicAgentRegistry::new(Arc::clone(&inner)));
-                (Some(inner), Some(wrapped), Some(guard))
-            } else {
-                (None, None, None)
-            };
-
-            let agent_observer: Option<Arc<dyn AgentObserveCallback>> =
-                Some(observe.observer.clone() as Arc<dyn AgentObserveCallback>);
-
-            let a2a_account_filter = if self.db.is_some() {
-                let auth_filter = auth::openai_auth(auth_ctx.clone());
-                warp::any()
-                    .and(auth_filter)
-                    .map(identity_to_caller_context)
-                    .boxed()
-            } else {
-                warp::any().map(CallerContext::default).boxed()
-            };
-
-            let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(admin_agents::admin_agents_filter(discovery_reg.clone()));
-            let agents = bitrouter_api::router::agents::agents_filter(discovery_reg);
-
-            (
-                bitrouter_api::router::a2a::a2a_gateway_filter(
-                    gateway_reg,
-                    agent_observer,
-                    a2a_account_filter,
-                ),
-                admin,
-                agents,
-                refresh_guard,
+        let a2a = {
+            let agent_observer: Arc<dyn AgentObserveCallback> = observe.observer.clone();
+            crate::runtime::a2a_client::A2aClient::new(
+                &providers_by_protocol,
+                self.config.server.listen,
             )
+            .with_auth(auth_ctx.clone())
+            .with_observe(agent_observer)
+            .with_account_filter(account_filter.clone())
+            .build()
+            .await
         };
         #[cfg(not(feature = "a2a"))]
-        let (a2a_routes, admin_agent_routes, agent_list) = {
-            let noop = warp::path!("a2a" / ..)
-                .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
-                .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed();
-            (noop.clone(), noop.clone(), noop)
-        };
+        let a2a = crate::runtime::a2a_client::A2aRoutes::noop();
 
         // ── Base route tree (always present) ─────────────────────────
         let base = health
@@ -603,16 +428,16 @@ where
 
         // ── Compose all routes ─────────────────────────────────────────
         let all_routes = base
-            .or(a2a_routes)
-            .or(admin_agent_routes)
-            .or(agent_list)
-            .or(admin_tool_routes)
-            .or(tool_list)
-            .or(skills_list)
-            .or(mcp_server)
+            .or(a2a.gateway)
+            .or(a2a.admin_agent_routes)
+            .or(a2a.agent_list)
+            .or(mcp.admin_tool_routes)
+            .or(mcp.tool_list)
+            .or(skills.skills_list)
+            .or(mcp.server)
             // Bridge routes come after the aggregated MCP filter so that the static
             // paths POST /mcp and GET /mcp/sse are matched first.
-            .or(bridge_routes);
+            .or(mcp.bridge_routes);
 
         // ── Reload listener ────────────────────────────────────────
         let _reload_guard = if let Some(reload_fn) = self.reload_fn {
@@ -671,15 +496,6 @@ fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> Cal
         budget_range: id.budget_range,
         chain: id.chain,
     }
-}
-
-/// Convert an auth filter into a gate that rejects unauthorized requests
-/// but does not add anything to the extract tuple.
-fn auth_gate(
-    auth: impl Filter<Extract = (bitrouter_accounts::identity::Identity,), Error = warp::Rejection>
-    + Clone,
-) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
-    auth.map(|_| ()).untuple_one()
 }
 
 /// Rejection handler that turns [`Unauthorized`] into a JSON 401 response

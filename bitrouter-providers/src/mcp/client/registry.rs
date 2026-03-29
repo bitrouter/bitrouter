@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock, broadcast};
 
-use bitrouter_core::routers::upstream::{ToolServerAccessGroups, ToolServerConfig};
+use bitrouter_core::routers::upstream::ToolServerConfig;
 
 use bitrouter_core::api::mcp::error::McpGatewayError;
 use bitrouter_core::api::mcp::gateway::{
@@ -17,25 +17,7 @@ use bitrouter_core::api::mcp::types::{
 
 use super::upstream::UpstreamConnection;
 
-/// Guard that aborts background refresh tasks on drop.
-pub struct RefreshGuard {
-    handles: Vec<tokio::task::JoinHandle<()>>,
-}
-
-impl RefreshGuard {
-    /// Build a guard from a list of already-spawned task handles.
-    pub fn from_handles(handles: Vec<tokio::task::JoinHandle<()>>) -> Self {
-        Self { handles }
-    }
-}
-
-impl Drop for RefreshGuard {
-    fn drop(&mut self) {
-        for handle in &self.handles {
-            handle.abort();
-        }
-    }
-}
+pub use crate::util::RefreshGuard;
 
 /// Aggregates multiple upstream MCP connections and routes tool calls.
 ///
@@ -44,7 +26,6 @@ impl Drop for RefreshGuard {
 /// [`DynamicToolRegistry`] wrapper that wraps this registry.
 pub struct ConfigMcpRegistry {
     upstreams: RwLock<HashMap<String, Arc<UpstreamConnection>>>,
-    groups: ToolServerAccessGroups,
     /// Broadcast sender for notifying downstream MCP clients of tool list changes.
     tool_change_tx: broadcast::Sender<()>,
     /// Broadcast sender for notifying downstream MCP clients of resource list changes.
@@ -58,16 +39,12 @@ impl ConfigMcpRegistry {
     ///
     /// This is the preferred constructor when connections are created externally
     /// (e.g. to share them with bridge endpoints).
-    pub fn from_connections(
-        connections: HashMap<String, Arc<UpstreamConnection>>,
-        groups: ToolServerAccessGroups,
-    ) -> Self {
+    pub fn from_connections(connections: HashMap<String, Arc<UpstreamConnection>>) -> Self {
         let (tool_change_tx, _) = broadcast::channel(16);
         let (resource_change_tx, _) = broadcast::channel(16);
         let (prompt_change_tx, _) = broadcast::channel(16);
         Self {
             upstreams: RwLock::new(connections),
-            groups,
             tool_change_tx,
             resource_change_tx,
             prompt_change_tx,
@@ -80,7 +57,6 @@ impl ConfigMcpRegistry {
     /// requests (sampling, elicitation) by dispatching to it.
     pub async fn from_configs(
         configs: Vec<ToolServerConfig>,
-        groups: ToolServerAccessGroups,
         handler: Option<Arc<dyn McpClientRequestHandler>>,
     ) -> Result<Self, McpGatewayError> {
         // Check for duplicate names
@@ -101,7 +77,7 @@ impl ConfigMcpRegistry {
             connections.insert(name, Arc::new(conn));
         }
 
-        Ok(Self::from_connections(connections, groups))
+        Ok(Self::from_connections(connections))
     }
 
     /// Spawn background tasks that listen for upstream change notifications
@@ -156,12 +132,7 @@ impl ConfigMcpRegistry {
             }));
         }
 
-        RefreshGuard { handles }
-    }
-
-    /// Return the access groups.
-    pub fn groups(&self) -> &ToolServerAccessGroups {
-        &self.groups
+        RefreshGuard::from_handles(handles)
     }
 
     /// Merge all namespaced tools from all upstreams (unfiltered).
@@ -305,12 +276,12 @@ impl McpResourceServer for ConfigMcpRegistry {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
         for upstream in upstreams.values() {
-            for (uri, name, description, mime_type) in upstream.namespaced_resources().await {
+            for r in upstream.namespaced_resources().await {
                 all.push(McpResource {
-                    uri,
-                    name,
-                    description,
-                    mime_type,
+                    uri: r.uri,
+                    name: r.name,
+                    description: r.description,
+                    mime_type: r.mime_type,
                 });
             }
         }
@@ -333,14 +304,12 @@ impl McpResourceServer for ConfigMcpRegistry {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
         for upstream in upstreams.values() {
-            for (uri_template, name, description, mime_type) in
-                upstream.namespaced_resource_templates().await
-            {
+            for t in upstream.namespaced_resource_templates().await {
                 all.push(McpResourceTemplate {
-                    uri_template,
-                    name,
-                    description,
-                    mime_type,
+                    uri_template: t.uri_template,
+                    name: t.name,
+                    description: t.description,
+                    mime_type: t.mime_type,
                 });
             }
         }
@@ -358,11 +327,11 @@ impl McpPromptServer for ConfigMcpRegistry {
         let upstreams = self.upstreams.read().await;
         let mut all = Vec::new();
         for upstream in upstreams.values() {
-            for (name, description, arguments) in upstream.namespaced_prompts().await {
+            for p in upstream.namespaced_prompts().await {
                 all.push(McpPrompt {
-                    name,
-                    description,
-                    arguments,
+                    name: p.name,
+                    description: p.description,
+                    arguments: p.arguments,
                 });
             }
         }

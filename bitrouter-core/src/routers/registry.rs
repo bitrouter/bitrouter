@@ -128,7 +128,7 @@ pub struct SkillEntry {
 
 /// CRUD service for the skills registry.
 ///
-/// Implemented by `bitrouter-skills`, consumed by `bitrouter-api` filters.
+/// Implemented by `bitrouter-providers::agentskills`, consumed by `bitrouter-api` filters.
 pub trait SkillService: Send + Sync {
     /// Register a new skill. Returns the assigned ID.
     fn create(

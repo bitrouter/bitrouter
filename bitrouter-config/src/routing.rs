@@ -371,6 +371,47 @@ impl ConfigToolRoutingTable {
         &self.providers
     }
 
+    /// Returns a reference to the tool configurations.
+    pub fn tools(&self) -> &HashMap<String, ToolConfig> {
+        &self.tools
+    }
+
+    /// Groups providers by their [`ApiProtocol`], considering only providers
+    /// that are actually referenced by at least one tool endpoint.
+    ///
+    /// Providers without a resolvable `api_protocol` are skipped with a
+    /// warning log.
+    pub fn providers_by_protocol(&self) -> HashMap<ApiProtocol, Vec<(String, ProviderConfig)>> {
+        // Collect the set of provider names actually referenced by tool endpoints.
+        let mut referenced: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for tool_config in self.tools.values() {
+            for endpoint in &tool_config.endpoints {
+                referenced.insert(&endpoint.provider);
+            }
+        }
+
+        let mut map: HashMap<ApiProtocol, Vec<(String, ProviderConfig)>> = HashMap::new();
+        for name in referenced {
+            let Some(provider) = self.providers.get(name) else {
+                eprintln!("warning: tool endpoint references unknown provider '{name}' — skipping");
+                continue;
+            };
+            let Some(protocol) = provider.api_protocol else {
+                eprintln!("warning: provider '{name}' has no api_protocol configured — skipping");
+                continue;
+            };
+            map.entry(protocol)
+                .or_default()
+                .push((name.to_owned(), provider.clone()));
+        }
+        map
+    }
+
+    /// Returns the pricing configuration for a tool, if any.
+    pub fn tool_pricing(&self, tool_name: &str) -> Option<&crate::tool::ToolPricing> {
+        self.tools.get(tool_name)?.pricing.as_ref()
+    }
+
     /// Resolves the API protocol for a given provider, with an optional
     /// per-endpoint override.
     fn resolve_protocol(

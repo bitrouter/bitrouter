@@ -296,6 +296,35 @@ impl UpstreamA2aAgent {
     }
 }
 
+/// Wrap a fallible stream so that the first error terminates the stream
+/// (logged at warn level) instead of silently dropping individual errors.
+///
+/// Uses a channel bridge because `tokio_stream::StreamExt` does not
+/// provide `scan` / `map_while` combinators on `dyn Stream`.
+fn terminate_on_error(
+    source: Pin<Box<dyn Stream<Item = Result<StreamResponse, A2aGatewayError>> + Send>>,
+    agent_name: String,
+) -> impl Stream<Item = StreamResponse> {
+    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    tokio::spawn(async move {
+        tokio::pin!(source);
+        while let Some(item) = source.next().await {
+            match item {
+                Ok(event) => {
+                    if tx.send(event).await.is_err() {
+                        break; // Receiver dropped.
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(agent = %agent_name, error = %e, "streaming error; ending stream");
+                    break;
+                }
+            }
+        }
+    });
+    tokio_stream::wrappers::ReceiverStream::new(rx)
+}
+
 // ── A2aProxy trait impl ─────────────────────────────────────────────
 
 impl A2aProxy for UpstreamA2aAgent {
@@ -327,14 +356,7 @@ impl A2aProxy for UpstreamA2aAgent {
     ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
         let name = self.name.clone();
         let inner = UpstreamA2aAgent::send_streaming_message(self, request).await?;
-        let filtered = inner.filter_map(move |item| match item {
-            Ok(event) => Some(event),
-            Err(e) => {
-                tracing::warn!(agent = %name, error = %e, "streaming message error; skipping event");
-                None
-            }
-        });
-        Ok(Box::pin(filtered))
+        Ok(Box::pin(terminate_on_error(inner, name)))
     }
 
     async fn subscribe_to_task(
@@ -343,14 +365,7 @@ impl A2aProxy for UpstreamA2aAgent {
     ) -> Result<Pin<Box<dyn Stream<Item = StreamResponse> + Send>>, A2aGatewayError> {
         let name = self.name.clone();
         let inner = UpstreamA2aAgent::subscribe_to_task(self, task_id).await?;
-        let filtered = inner.filter_map(move |item| match item {
-            Ok(event) => Some(event),
-            Err(e) => {
-                tracing::warn!(agent = %name, error = %e, "task subscription error; skipping event");
-                None
-            }
-        });
-        Ok(Box::pin(filtered))
+        Ok(Box::pin(terminate_on_error(inner, name)))
     }
 
     async fn get_extended_agent_card(&self) -> Result<AgentCard, A2aGatewayError> {

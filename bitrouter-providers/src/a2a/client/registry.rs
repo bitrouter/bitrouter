@@ -24,18 +24,7 @@ pub trait A2aAgentRegistry: Send + Sync {
     fn list(&self) -> impl Future<Output = Vec<AgentCard>> + Send;
 }
 
-/// Guard that aborts background refresh tasks on drop.
-pub struct RefreshGuard {
-    handles: Vec<tokio::task::JoinHandle<()>>,
-}
-
-impl Drop for RefreshGuard {
-    fn drop(&mut self) {
-        for handle in &self.handles {
-            handle.abort();
-        }
-    }
-}
+pub use crate::util::RefreshGuard;
 
 /// Multi-agent upstream registry for the A2A gateway.
 ///
@@ -120,7 +109,7 @@ impl UpstreamAgentRegistry {
             }));
         }
 
-        RefreshGuard { handles }
+        RefreshGuard::from_handles(handles)
     }
 
     /// Return the agent card with URL rewritten to the gateway's external address.

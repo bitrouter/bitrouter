@@ -15,10 +15,10 @@ use bitrouter_core::api::mcp::gateway::{
     McpSubscriptionServer, McpToolServer,
 };
 use bitrouter_core::api::mcp::types::{
-    CallToolParams, CompleteParams, CompletionsCapability, GetPromptParams, InitializeResult,
-    JsonRpcId, JsonRpcMessage, JsonRpcResponse, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, LoggingCapability, PromptsCapability, ReadResourceParams,
-    ReadResourceResult, ResourcesCapability, ServerCapabilities, ServerInfo, SetLoggingLevelParams,
+    CallToolParams, CompleteParams, GetPromptParams, InitializeResult, JsonRpcId, JsonRpcMessage,
+    JsonRpcResponse, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListToolsResult, LoggingCapability, PromptsCapability, ReadResourceParams, ReadResourceResult,
+    ResourcesCapability, ServerCapabilities, ServerInfo, SetLoggingLevelParams,
     SubscribeResourceParams, ToolsCapability, UnsubscribeResourceParams, error_codes,
 };
 use bitrouter_core::observe::{
@@ -40,6 +40,12 @@ const SERVER_NAME: &str = "bitrouter";
 /// Internally bitrouter namespaces tools as `"server/tool"`, but `/` is
 /// invalid in many LLM function-name constraints (e.g. Gemini). On the wire
 /// we emit `"server__tool"` and translate incoming calls back.
+///
+/// **Constraint:** Upstream MCP server names must not contain `__`, because
+/// `from_wire_name` splits on the first `__` occurrence. A server named
+/// `"my__srv"` with tool `"foo"` would produce the wire name `"my__srv__foo"`,
+/// which would be incorrectly parsed as server `"my"`, tool `"srv__foo"`.
+/// Server name validation enforces this at config load time.
 const WIRE_SEPARATOR: &str = "__";
 
 // ── Public entry points ─────────────────────────────────────────────
@@ -244,13 +250,13 @@ fn handle_initialize(id: &JsonRpcId, server_name: Option<&str>) -> JsonRpcRespon
             }),
             resources: Some(ResourcesCapability {
                 list_changed: Some(true),
-                subscribe: Some(true),
+                subscribe: None,
             }),
             prompts: Some(PromptsCapability {
                 list_changed: Some(true),
             }),
             logging: Some(LoggingCapability {}),
-            completions: Some(CompletionsCapability {}),
+            completions: None,
         },
         server_info: ServerInfo {
             name,
@@ -258,12 +264,49 @@ fn handle_initialize(id: &JsonRpcId, server_name: Option<&str>) -> JsonRpcRespon
         },
         instructions: Some(instructions),
     };
-    let value = serde_json::to_value(&result).unwrap_or_default();
-    JsonRpcResponse::success(id.clone(), value)
+    serialize_success(id, &result)
 }
 
 fn handle_ping(id: &JsonRpcId) -> JsonRpcResponse {
     JsonRpcResponse::success(id.clone(), serde_json::json!({}))
+}
+
+/// Extract and deserialize JSON-RPC params, returning an error response on failure.
+fn extract_params<T: serde::de::DeserializeOwned>(
+    id: &JsonRpcId,
+    params: Option<serde_json::Value>,
+    method: &str,
+) -> Result<T, Box<JsonRpcResponse>> {
+    let value = params.ok_or_else(|| {
+        Box::new(JsonRpcResponse::error(
+            id.clone(),
+            error_codes::INVALID_PARAMS,
+            format!("{method} requires params"),
+            None,
+        ))
+    })?;
+    serde_json::from_value(value).map_err(|e| {
+        Box::new(JsonRpcResponse::error(
+            id.clone(),
+            error_codes::INVALID_PARAMS,
+            format!("invalid params: {e}"),
+            None,
+        ))
+    })
+}
+
+/// Serialize a result into a JSON-RPC success response, returning an internal
+/// error response if serialization fails.
+fn serialize_success(id: &JsonRpcId, result: &impl serde::Serialize) -> JsonRpcResponse {
+    match serde_json::to_value(result) {
+        Ok(value) => JsonRpcResponse::success(id.clone(), value),
+        Err(e) => JsonRpcResponse::error(
+            id.clone(),
+            error_codes::INTERNAL_ERROR,
+            format!("serialization error: {e}"),
+            None,
+        ),
+    }
 }
 
 // ── GET /mcp/sse ────────────────────────────────────────────────────
@@ -280,6 +323,30 @@ where
         .and_then(handle_sse::<T>)
 }
 
+/// Build an SSE event stream from a broadcast receiver that emits a JSON-RPC
+/// notification with the given method name on each signal.
+fn notification_stream(
+    rx: tokio::sync::broadcast::Receiver<()>,
+    method: &'static str,
+) -> impl tokio_stream::Stream<Item = Result<warp::sse::Event, Infallible>> {
+    tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(move |item| match item {
+        Ok(()) => {
+            let notification = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": method
+            });
+            match serde_json::to_string(&notification) {
+                Ok(data) => Some(Ok(warp::sse::Event::default().data(data))),
+                Err(e) => {
+                    tracing::warn!(method, error = %e, "failed to serialize SSE notification");
+                    None
+                }
+            }
+        }
+        Err(_) => None,
+    })
+}
+
 async fn handle_sse<T: McpServer>(
     server: Option<Arc<T>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -288,48 +355,19 @@ async fn handle_sse<T: McpServer>(
     };
 
     let tool_rx = server.subscribe_tool_changes();
-    let tool_stream =
-        tokio_stream::wrappers::BroadcastStream::new(tool_rx).filter_map(|item| match item {
-            Ok(()) => {
-                let notification = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "notifications/tools/list_changed"
-                });
-                let data = serde_json::to_string(&notification).unwrap_or_default();
-                Some(Ok::<_, Infallible>(warp::sse::Event::default().data(data)))
-            }
-            Err(_) => None,
-        });
+    let tool_stream = notification_stream(tool_rx, "notifications/tools/list_changed");
 
     let resource_rx = server.subscribe_resource_changes();
-    let resource_stream =
-        tokio_stream::wrappers::BroadcastStream::new(resource_rx).filter_map(|item| match item {
-            Ok(()) => {
-                let notification = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "notifications/resources/list_changed"
-                });
-                let data = serde_json::to_string(&notification).unwrap_or_default();
-                Some(Ok::<_, Infallible>(warp::sse::Event::default().data(data)))
-            }
-            Err(_) => None,
-        });
+    let resource_stream = notification_stream(resource_rx, "notifications/resources/list_changed");
 
     let prompt_rx = server.subscribe_prompt_changes();
-    let prompt_stream =
-        tokio_stream::wrappers::BroadcastStream::new(prompt_rx).filter_map(|item| match item {
-            Ok(()) => {
-                let notification = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "notifications/prompts/list_changed"
-                });
-                let data = serde_json::to_string(&notification).unwrap_or_default();
-                Some(Ok::<_, Infallible>(warp::sse::Event::default().data(data)))
-            }
-            Err(_) => None,
-        });
+    let prompt_stream = notification_stream(prompt_rx, "notifications/prompts/list_changed");
 
-    let merged = tool_stream.merge(resource_stream).merge(prompt_stream);
+    // Send an initial comment event to signal the SSE connection is established.
+    let initial = tokio_stream::once(Ok::<_, Infallible>(
+        warp::sse::Event::default().comment("connected"),
+    ));
+    let merged = initial.chain(tool_stream.merge(resource_stream).merge(prompt_stream));
 
     Ok(warp::sse::reply(warp::sse::keep_alive().stream(merged)))
 }
@@ -452,8 +490,7 @@ async fn handle_tools_list<T: McpToolServer>(id: &JsonRpcId, server: &T) -> Json
         tools,
         next_cursor: None,
     };
-    let value = serde_json::to_value(&result).unwrap_or_default();
-    JsonRpcResponse::success(id.clone(), value)
+    serialize_success(id, &result)
 }
 
 async fn handle_tools_call<T: McpToolServer>(
@@ -462,25 +499,9 @@ async fn handle_tools_call<T: McpToolServer>(
     server: &T,
     observe_ctx: &Option<McpObserveContext>,
 ) -> JsonRpcResponse {
-    let Some(params_value) = params else {
-        return JsonRpcResponse::error(
-            id.clone(),
-            error_codes::INVALID_PARAMS,
-            "tools/call requires params".to_string(),
-            None,
-        );
-    };
-
-    let call_params: CallToolParams = match serde_json::from_value(params_value) {
+    let call_params: CallToolParams = match extract_params(id, params, "tools/call") {
         Ok(p) => p,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id.clone(),
-                error_codes::INVALID_PARAMS,
-                format!("invalid params: {e}"),
-                None,
-            );
-        }
+        Err(resp) => return *resp,
     };
 
     let internal_name = from_wire_name(&call_params.name);
@@ -495,8 +516,7 @@ async fn handle_tools_call<T: McpToolServer>(
     {
         Ok(result) => {
             emit_tool_success(observe_ctx, server_name, tool_name, start);
-            let value = serde_json::to_value(&result).unwrap_or_default();
-            JsonRpcResponse::success(id.clone(), value)
+            serialize_success(id, &result)
         }
         Err(err) => {
             let err_str = err.to_string();
@@ -518,8 +538,7 @@ async fn handle_resources_list<T: McpResourceServer>(
         resources,
         next_cursor: None,
     };
-    let value = serde_json::to_value(&result).unwrap_or_default();
-    JsonRpcResponse::success(id.clone(), value)
+    serialize_success(id, &result)
 }
 
 async fn handle_resources_read<T: McpResourceServer>(
@@ -527,32 +546,15 @@ async fn handle_resources_read<T: McpResourceServer>(
     params: Option<serde_json::Value>,
     server: &T,
 ) -> JsonRpcResponse {
-    let Some(params_value) = params else {
-        return JsonRpcResponse::error(
-            id.clone(),
-            error_codes::INVALID_PARAMS,
-            "resources/read requires params".to_string(),
-            None,
-        );
-    };
-
-    let read_params: ReadResourceParams = match serde_json::from_value(params_value) {
+    let read_params: ReadResourceParams = match extract_params(id, params, "resources/read") {
         Ok(p) => p,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id.clone(),
-                error_codes::INVALID_PARAMS,
-                format!("invalid params: {e}"),
-                None,
-            );
-        }
+        Err(resp) => return *resp,
     };
 
     match server.read_resource(&read_params.uri).await {
         Ok(contents) => {
             let result = ReadResourceResult { contents };
-            let value = serde_json::to_value(&result).unwrap_or_default();
-            JsonRpcResponse::success(id.clone(), value)
+            serialize_success(id, &result)
         }
         Err(err) => {
             let (code, message) = gateway_error_to_jsonrpc(&err);
@@ -570,8 +572,7 @@ async fn handle_resource_templates_list<T: McpResourceServer>(
         resource_templates: templates,
         next_cursor: None,
     };
-    let value = serde_json::to_value(&result).unwrap_or_default();
-    JsonRpcResponse::success(id.clone(), value)
+    serialize_success(id, &result)
 }
 
 // ── Subscription handlers ───────────────────────────────────────────
@@ -581,26 +582,11 @@ async fn handle_resource_subscribe<T: McpSubscriptionServer>(
     params: Option<serde_json::Value>,
     server: &T,
 ) -> JsonRpcResponse {
-    let Some(params_value) = params else {
-        return JsonRpcResponse::error(
-            id.clone(),
-            error_codes::INVALID_PARAMS,
-            "resources/subscribe requires params".to_string(),
-            None,
-        );
-    };
-
-    let sub_params: SubscribeResourceParams = match serde_json::from_value(params_value) {
-        Ok(p) => p,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id.clone(),
-                error_codes::INVALID_PARAMS,
-                format!("invalid params: {e}"),
-                None,
-            );
-        }
-    };
+    let sub_params: SubscribeResourceParams =
+        match extract_params(id, params, "resources/subscribe") {
+            Ok(p) => p,
+            Err(resp) => return *resp,
+        };
 
     match server.subscribe_resource(&sub_params.uri).await {
         Ok(()) => JsonRpcResponse::success(id.clone(), serde_json::json!({})),
@@ -616,26 +602,11 @@ async fn handle_resource_unsubscribe<T: McpSubscriptionServer>(
     params: Option<serde_json::Value>,
     server: &T,
 ) -> JsonRpcResponse {
-    let Some(params_value) = params else {
-        return JsonRpcResponse::error(
-            id.clone(),
-            error_codes::INVALID_PARAMS,
-            "resources/unsubscribe requires params".to_string(),
-            None,
-        );
-    };
-
-    let unsub_params: UnsubscribeResourceParams = match serde_json::from_value(params_value) {
-        Ok(p) => p,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id.clone(),
-                error_codes::INVALID_PARAMS,
-                format!("invalid params: {e}"),
-                None,
-            );
-        }
-    };
+    let unsub_params: UnsubscribeResourceParams =
+        match extract_params(id, params, "resources/unsubscribe") {
+            Ok(p) => p,
+            Err(resp) => return *resp,
+        };
 
     match server.unsubscribe_resource(&unsub_params.uri).await {
         Ok(()) => JsonRpcResponse::success(id.clone(), serde_json::json!({})),
@@ -654,8 +625,7 @@ async fn handle_prompts_list<T: McpPromptServer>(id: &JsonRpcId, server: &T) -> 
         prompts,
         next_cursor: None,
     };
-    let value = serde_json::to_value(&result).unwrap_or_default();
-    JsonRpcResponse::success(id.clone(), value)
+    serialize_success(id, &result)
 }
 
 async fn handle_prompts_get<T: McpPromptServer>(
@@ -663,35 +633,16 @@ async fn handle_prompts_get<T: McpPromptServer>(
     params: Option<serde_json::Value>,
     server: &T,
 ) -> JsonRpcResponse {
-    let Some(params_value) = params else {
-        return JsonRpcResponse::error(
-            id.clone(),
-            error_codes::INVALID_PARAMS,
-            "prompts/get requires params".to_string(),
-            None,
-        );
-    };
-
-    let get_params: GetPromptParams = match serde_json::from_value(params_value) {
+    let get_params: GetPromptParams = match extract_params(id, params, "prompts/get") {
         Ok(p) => p,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id.clone(),
-                error_codes::INVALID_PARAMS,
-                format!("invalid params: {e}"),
-                None,
-            );
-        }
+        Err(resp) => return *resp,
     };
 
     match server
         .get_prompt(&get_params.name, get_params.arguments)
         .await
     {
-        Ok(result) => {
-            let value = serde_json::to_value(&result).unwrap_or_default();
-            JsonRpcResponse::success(id.clone(), value)
-        }
+        Ok(result) => serialize_success(id, &result),
         Err(err) => {
             let (code, message) = gateway_error_to_jsonrpc(&err);
             JsonRpcResponse::error(id.clone(), code, message, None)
@@ -706,25 +657,9 @@ async fn handle_set_level<T: McpLoggingServer>(
     params: Option<serde_json::Value>,
     server: &T,
 ) -> JsonRpcResponse {
-    let Some(params_value) = params else {
-        return JsonRpcResponse::error(
-            id.clone(),
-            error_codes::INVALID_PARAMS,
-            "logging/setLevel requires params".to_string(),
-            None,
-        );
-    };
-
-    let level_params: SetLoggingLevelParams = match serde_json::from_value(params_value) {
+    let level_params: SetLoggingLevelParams = match extract_params(id, params, "logging/setLevel") {
         Ok(p) => p,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id.clone(),
-                error_codes::INVALID_PARAMS,
-                format!("invalid params: {e}"),
-                None,
-            );
-        }
+        Err(resp) => return *resp,
     };
 
     match server.set_logging_level(level_params.level).await {
@@ -743,32 +678,13 @@ async fn handle_complete<T: McpCompletionServer>(
     params: Option<serde_json::Value>,
     server: &T,
 ) -> JsonRpcResponse {
-    let Some(params_value) = params else {
-        return JsonRpcResponse::error(
-            id.clone(),
-            error_codes::INVALID_PARAMS,
-            "completion/complete requires params".to_string(),
-            None,
-        );
-    };
-
-    let complete_params: CompleteParams = match serde_json::from_value(params_value) {
+    let complete_params: CompleteParams = match extract_params(id, params, "completion/complete") {
         Ok(p) => p,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id.clone(),
-                error_codes::INVALID_PARAMS,
-                format!("invalid params: {e}"),
-                None,
-            );
-        }
+        Err(resp) => return *resp,
     };
 
     match server.complete(complete_params).await {
-        Ok(result) => {
-            let value = serde_json::to_value(&result).unwrap_or_default();
-            JsonRpcResponse::success(id.clone(), value)
-        }
+        Ok(result) => serialize_success(id, &result),
         Err(err) => {
             let (code, message) = gateway_error_to_jsonrpc(&err);
             JsonRpcResponse::error(id.clone(), code, message, None)

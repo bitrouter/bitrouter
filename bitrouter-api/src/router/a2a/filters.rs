@@ -131,24 +131,90 @@ async fn dispatch_jsonrpc(
     ctx: &Option<A2aObserveContext>,
 ) -> JsonRpcResponse {
     match request.method.as_str() {
-        "message/send" => dispatch_send_message(&request, agent, agent_name, ctx).await,
-        "tasks/get" => dispatch_get_task(&request, agent, agent_name, ctx).await,
-        "tasks/cancel" => dispatch_cancel_task(&request, agent, agent_name, ctx).await,
-        "tasks/list" => dispatch_list_tasks(&request, agent, agent_name, ctx).await,
+        "message/send" => {
+            dispatch_observed(&request, agent_name, "message/send", ctx, |req| {
+                agent.send_message(req)
+            })
+            .await
+        }
+        "tasks/get" => {
+            dispatch_observed(&request, agent_name, "tasks/get", ctx, |req| {
+                agent.get_task(req)
+            })
+            .await
+        }
+        "tasks/cancel" => {
+            dispatch_observed(&request, agent_name, "tasks/cancel", ctx, |req| {
+                agent.cancel_task(req)
+            })
+            .await
+        }
+        "tasks/list" => {
+            dispatch_observed(&request, agent_name, "tasks/list", ctx, |req| {
+                agent.list_tasks(req)
+            })
+            .await
+        }
         "agent/getAuthenticatedExtendedCard" => {
-            dispatch_get_extended(&request, agent, agent_name, ctx).await
+            dispatch_observed_no_params(
+                &request,
+                agent_name,
+                "agent/getAuthenticatedExtendedCard",
+                ctx,
+                || agent.get_extended_agent_card(),
+            )
+            .await
         }
         "tasks/pushNotificationConfig/set" => {
-            dispatch_set_push(&request, agent, agent_name, ctx).await
+            dispatch_observed(
+                &request,
+                agent_name,
+                "tasks/pushNotificationConfig/set",
+                ctx,
+                |config| agent.set_push_config(config),
+            )
+            .await
         }
         "tasks/pushNotificationConfig/get" => {
-            dispatch_get_push(&request, agent, agent_name, ctx).await
+            dispatch_observed(
+                &request,
+                agent_name,
+                "tasks/pushNotificationConfig/get",
+                ctx,
+                |req: GetTaskPushNotificationConfigRequest| async move {
+                    agent
+                        .get_push_config(&req.id, req.push_notification_config_id.as_deref())
+                        .await
+                },
+            )
+            .await
         }
         "tasks/pushNotificationConfig/list" => {
-            dispatch_list_push(&request, agent, agent_name, ctx).await
+            dispatch_observed(
+                &request,
+                agent_name,
+                "tasks/pushNotificationConfig/list",
+                ctx,
+                |req: ListTaskPushNotificationConfigsRequest| async move {
+                    agent.list_push_configs(&req.id).await
+                },
+            )
+            .await
         }
         "tasks/pushNotificationConfig/delete" => {
-            dispatch_delete_push(&request, agent, agent_name, ctx).await
+            dispatch_observed(
+                &request,
+                agent_name,
+                "tasks/pushNotificationConfig/delete",
+                ctx,
+                |req: DeleteTaskPushNotificationConfigRequest| async move {
+                    agent
+                        .delete_push_config(&req.id, &req.push_notification_config_id)
+                        .await
+                        .map(|()| serde_json::json!({"success": true}))
+                },
+            )
+            .await
         }
         _ => JsonRpcResponse::error(
             &request.id,
@@ -261,49 +327,55 @@ fn well_known_filter<G: A2aGateway + 'static>(
         )
 }
 
-/// Handle `agent/getAuthenticatedExtendedCard` JSON-RPC method.
-async fn dispatch_get_extended(
+/// Generic dispatch helper: deserialize params, time the call, emit observation,
+/// and convert the result to a JSON-RPC response.
+async fn dispatch_observed<P, R, F, Fut>(
     request: &JsonRpcRequest,
-    agent: &impl A2aProxy,
     agent_name: &str,
+    method: &str,
     ctx: &Option<A2aObserveContext>,
-) -> JsonRpcResponse {
-    let start = Instant::now();
-    let result = agent.get_extended_agent_card().await;
-    match &result {
-        Ok(_) => emit_agent_success(ctx, agent_name, "agent/getAuthenticatedExtendedCard", start),
-        Err(e) => emit_agent_failure(
-            ctx,
-            agent_name,
-            "agent/getAuthenticatedExtendedCard",
-            start,
-            &e.to_string(),
-        ),
-    }
-    match result {
-        Ok(card) => JsonRpcResponse::success(&request.id, &card),
-        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
-    }
-}
-
-// ── Messaging handlers ──────────────────────────────────────────────
-
-/// Handle `message/send` JSON-RPC method.
-async fn dispatch_send_message(
-    request: &JsonRpcRequest,
-    agent: &impl A2aProxy,
-    agent_name: &str,
-    ctx: &Option<A2aObserveContext>,
-) -> JsonRpcResponse {
-    let req: SendMessageRequest = match request.deserialize_params() {
+    call: F,
+) -> JsonRpcResponse
+where
+    P: serde::de::DeserializeOwned,
+    R: serde::Serialize,
+    F: FnOnce(P) -> Fut,
+    Fut: std::future::Future<Output = Result<R, A2aGatewayError>>,
+{
+    let params: P = match request.deserialize_params() {
         Ok(r) => r,
         Err(resp) => return *resp,
     };
     let start = Instant::now();
-    let result = agent.send_message(req).await;
+    let result = call(params).await;
     match &result {
-        Ok(_) => emit_agent_success(ctx, agent_name, "message/send", start),
-        Err(e) => emit_agent_failure(ctx, agent_name, "message/send", start, &e.to_string()),
+        Ok(_) => emit_agent_success(ctx, agent_name, method, start),
+        Err(e) => emit_agent_failure(ctx, agent_name, method, start, &e.to_string()),
+    }
+    match result {
+        Ok(r) => JsonRpcResponse::success(&request.id, &r),
+        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
+    }
+}
+
+/// Variant for methods that take no params (e.g. `agent/getAuthenticatedExtendedCard`).
+async fn dispatch_observed_no_params<R, F, Fut>(
+    request: &JsonRpcRequest,
+    agent_name: &str,
+    method: &str,
+    ctx: &Option<A2aObserveContext>,
+    call: F,
+) -> JsonRpcResponse
+where
+    R: serde::Serialize,
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<R, A2aGatewayError>>,
+{
+    let start = Instant::now();
+    let result = call().await;
+    match &result {
+        Ok(_) => emit_agent_success(ctx, agent_name, method, start),
+        Err(e) => emit_agent_failure(ctx, agent_name, method, start, &e.to_string()),
     }
     match result {
         Ok(r) => JsonRpcResponse::success(&request.id, &r),
@@ -440,212 +512,35 @@ fn stream_response_to_sse(
     request_id: &str,
     item: &StreamResponse,
 ) -> Result<warp::sse::Event, Infallible> {
-    let result = serde_json::to_value(item).unwrap_or_default();
+    let result = match serde_json::to_value(item) {
+        Ok(v) => v,
+        Err(e) => {
+            let error_data = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32603, "message": format!("serialization error: {e}")}
+            });
+            let data = serde_json::to_string(&error_data).unwrap_or_else(|_| {
+                format!(r#"{{"jsonrpc":"2.0","id":"{}","error":{{"code":-32603,"message":"serialization error"}}}}"#, request_id)
+            });
+            return Ok(warp::sse::Event::default().data(data));
+        }
+    };
     let envelope = serde_json::json!({
         "jsonrpc": "2.0",
         "id": request_id,
         "result": result
     });
-    let data = serde_json::to_string(&envelope).unwrap_or_default();
+    let data = match serde_json::to_string(&envelope) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to serialize SSE envelope");
+            return Ok(warp::sse::Event::default().data(
+                format!(r#"{{"jsonrpc":"2.0","id":"{}","error":{{"code":-32603,"message":"serialization error"}}}}"#, request_id)
+            ));
+        }
+    };
     Ok(warp::sse::Event::default().data(data))
-}
-
-// ── Task handlers ───────────────────────────────────────────────────
-
-/// Handle `tasks/get` JSON-RPC method.
-async fn dispatch_get_task(
-    request: &JsonRpcRequest,
-    agent: &impl A2aProxy,
-    agent_name: &str,
-    ctx: &Option<A2aObserveContext>,
-) -> JsonRpcResponse {
-    let req: GetTaskRequest = match request.deserialize_params() {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    let start = Instant::now();
-    let result = agent.get_task(req).await;
-    match &result {
-        Ok(_) => emit_agent_success(ctx, agent_name, "tasks/get", start),
-        Err(e) => emit_agent_failure(ctx, agent_name, "tasks/get", start, &e.to_string()),
-    }
-    match result {
-        Ok(task) => JsonRpcResponse::success(&request.id, &task),
-        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
-    }
-}
-
-/// Handle `tasks/cancel` JSON-RPC method.
-async fn dispatch_cancel_task(
-    request: &JsonRpcRequest,
-    agent: &impl A2aProxy,
-    agent_name: &str,
-    ctx: &Option<A2aObserveContext>,
-) -> JsonRpcResponse {
-    let req: CancelTaskRequest = match request.deserialize_params() {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    let start = Instant::now();
-    let result = agent.cancel_task(req).await;
-    match &result {
-        Ok(_) => emit_agent_success(ctx, agent_name, "tasks/cancel", start),
-        Err(e) => emit_agent_failure(ctx, agent_name, "tasks/cancel", start, &e.to_string()),
-    }
-    match result {
-        Ok(task) => JsonRpcResponse::success(&request.id, &task),
-        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
-    }
-}
-
-/// Handle `tasks/list` JSON-RPC method.
-async fn dispatch_list_tasks(
-    request: &JsonRpcRequest,
-    agent: &impl A2aProxy,
-    agent_name: &str,
-    ctx: &Option<A2aObserveContext>,
-) -> JsonRpcResponse {
-    let req: ListTasksRequest = match request.deserialize_params() {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    let start = Instant::now();
-    let result = agent.list_tasks(req).await;
-    match &result {
-        Ok(_) => emit_agent_success(ctx, agent_name, "tasks/list", start),
-        Err(e) => emit_agent_failure(ctx, agent_name, "tasks/list", start, &e.to_string()),
-    }
-    match result {
-        Ok(resp) => JsonRpcResponse::success(&request.id, &resp),
-        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
-    }
-}
-
-// ── Push notification handlers ──────────────────────────────────────
-
-/// Handle `tasks/pushNotificationConfig/set` JSON-RPC method.
-async fn dispatch_set_push(
-    request: &JsonRpcRequest,
-    agent: &impl A2aProxy,
-    agent_name: &str,
-    ctx: &Option<A2aObserveContext>,
-) -> JsonRpcResponse {
-    let config: TaskPushNotificationConfig = match request.deserialize_params() {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    let start = Instant::now();
-    let result = agent.set_push_config(config).await;
-    match &result {
-        Ok(_) => emit_agent_success(ctx, agent_name, "tasks/pushNotificationConfig/set", start),
-        Err(e) => emit_agent_failure(
-            ctx,
-            agent_name,
-            "tasks/pushNotificationConfig/set",
-            start,
-            &e.to_string(),
-        ),
-    }
-    match result {
-        Ok(stored) => JsonRpcResponse::success(&request.id, &stored),
-        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
-    }
-}
-
-/// Handle `tasks/pushNotificationConfig/get` JSON-RPC method.
-async fn dispatch_get_push(
-    request: &JsonRpcRequest,
-    agent: &impl A2aProxy,
-    agent_name: &str,
-    ctx: &Option<A2aObserveContext>,
-) -> JsonRpcResponse {
-    let req: GetTaskPushNotificationConfigRequest = match request.deserialize_params() {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    let start = Instant::now();
-    let result = agent
-        .get_push_config(&req.id, req.push_notification_config_id.as_deref())
-        .await;
-    match &result {
-        Ok(_) => emit_agent_success(ctx, agent_name, "tasks/pushNotificationConfig/get", start),
-        Err(e) => emit_agent_failure(
-            ctx,
-            agent_name,
-            "tasks/pushNotificationConfig/get",
-            start,
-            &e.to_string(),
-        ),
-    }
-    match result {
-        Ok(config) => JsonRpcResponse::success(&request.id, &config),
-        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
-    }
-}
-
-/// Handle `tasks/pushNotificationConfig/list` JSON-RPC method.
-async fn dispatch_list_push(
-    request: &JsonRpcRequest,
-    agent: &impl A2aProxy,
-    agent_name: &str,
-    ctx: &Option<A2aObserveContext>,
-) -> JsonRpcResponse {
-    let req: ListTaskPushNotificationConfigsRequest = match request.deserialize_params() {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    let start = Instant::now();
-    let result = agent.list_push_configs(&req.id).await;
-    match &result {
-        Ok(_) => emit_agent_success(ctx, agent_name, "tasks/pushNotificationConfig/list", start),
-        Err(e) => emit_agent_failure(
-            ctx,
-            agent_name,
-            "tasks/pushNotificationConfig/list",
-            start,
-            &e.to_string(),
-        ),
-    }
-    match result {
-        Ok(resp) => JsonRpcResponse::success(&request.id, &resp),
-        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
-    }
-}
-
-/// Handle `tasks/pushNotificationConfig/delete` JSON-RPC method.
-async fn dispatch_delete_push(
-    request: &JsonRpcRequest,
-    agent: &impl A2aProxy,
-    agent_name: &str,
-    ctx: &Option<A2aObserveContext>,
-) -> JsonRpcResponse {
-    let req: DeleteTaskPushNotificationConfigRequest = match request.deserialize_params() {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    let start = Instant::now();
-    let result = agent
-        .delete_push_config(&req.id, &req.push_notification_config_id)
-        .await;
-    match &result {
-        Ok(_) => emit_agent_success(
-            ctx,
-            agent_name,
-            "tasks/pushNotificationConfig/delete",
-            start,
-        ),
-        Err(e) => emit_agent_failure(
-            ctx,
-            agent_name,
-            "tasks/pushNotificationConfig/delete",
-            start,
-            &e.to_string(),
-        ),
-    }
-    match result {
-        Ok(()) => JsonRpcResponse::success(&request.id, &serde_json::json!({"success": true})),
-        Err(e) => JsonRpcResponse::gateway_error(&request.id, &e),
-    }
 }
 
 // ── Observation helpers ─────────────────────────────────────────────

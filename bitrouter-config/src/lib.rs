@@ -1,4 +1,4 @@
-pub mod agent;
+pub mod compat;
 pub mod config;
 pub mod detect;
 pub mod env;

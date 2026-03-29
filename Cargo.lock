@@ -1652,7 +1652,6 @@ dependencies = [
  "bitrouter-guardrails",
  "bitrouter-observe",
  "bitrouter-providers",
- "bitrouter-skills",
  "bs58",
  "clap",
  "crossterm",
@@ -1803,32 +1802,23 @@ name = "bitrouter-providers"
 version = "0.16.0"
 dependencies = [
  "base64 0.22.1",
+ "bitrouter-config",
  "bitrouter-core",
  "bytes",
+ "chrono",
  "futures-core",
  "regex",
  "reqwest 0.13.2",
  "reqwest-middleware 0.5.1",
  "schemars 1.2.1",
  "serde",
+ "serde-saphyr",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "bitrouter-skills"
-version = "0.16.0"
-dependencies = [
- "bitrouter-core",
- "chrono",
- "sea-orm",
- "sea-orm-migration",
- "serde",
- "serde_json",
- "tokio",
  "uuid",
 ]
 

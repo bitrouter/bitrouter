@@ -57,31 +57,6 @@ pub struct BitrouterConfig {
     /// Tool routing definitions.
     #[serde(default)]
     pub tools: HashMap<String, ToolConfig>,
-
-    // ── Legacy fields (to be removed in Phase 6) ────────────────────
-    /// MCP upstream server configurations.
-    #[serde(default)]
-    pub mcp_servers: Vec<bitrouter_core::routers::upstream::ToolServerConfig>,
-
-    /// Named groups of tool servers for access control convenience.
-    #[serde(default)]
-    pub mcp_groups: bitrouter_core::routers::upstream::ToolServerAccessGroups,
-
-    /// Upstream A2A agents to proxy through the gateway.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub a2a_agents: Vec<bitrouter_core::routers::upstream::AgentConfig>,
-
-    /// Per-server tool invocation pricing. Keys are MCP server names.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub mcp_server_pricing: HashMap<String, crate::tool::ToolPricing>,
-
-    /// Per-agent invocation pricing. Keys are agent names.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub a2a_agent_pricing: HashMap<String, crate::agent::AgentPricing>,
-
-    /// Skill definitions for the skills registry.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<crate::skill::SkillConfig>,
 }
 
 impl BitrouterConfig {
@@ -269,6 +244,20 @@ pub struct ProviderConfig {
     /// token pricing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub models: Option<HashMap<String, ModelInfo>>,
+
+    // ── MCP-specific provider fields ────────────────────────────────
+    /// When `true`, this MCP provider is also exposed as a standalone
+    /// Streamable HTTP endpoint at `POST /mcp/{name}` and `GET /mcp/{name}/sse`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge: Option<bool>,
+
+    /// Tool allow/deny filter applied to this provider's tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_filter: Option<bitrouter_core::routers::admin::ToolFilter>,
+
+    /// Parameter restriction rules applied to this provider's tool calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub param_restrictions: Option<bitrouter_core::routers::admin::ParamRestrictions>,
 }
 
 // ── Model metadata & pricing ─────────────────────────────────────────

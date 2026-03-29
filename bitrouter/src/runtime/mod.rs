@@ -1,9 +1,10 @@
+pub mod a2a_client;
+pub mod agentskills_client;
 pub mod app;
 pub mod auth;
 pub mod daemon;
 pub mod error;
-#[cfg(feature = "mcp")]
-pub mod mcp_handler;
+pub mod mcp_client;
 pub mod migration;
 #[cfg(feature = "mpp-tempo")]
 pub mod mpp_client;

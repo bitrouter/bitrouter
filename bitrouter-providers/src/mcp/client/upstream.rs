@@ -18,6 +18,29 @@ use bitrouter_core::api::mcp::types::{
     McpResourceTemplate, McpTool, McpToolCallResult,
 };
 
+/// A namespaced resource from an upstream, with its URI prefixed by server name.
+pub struct NamespacedResource {
+    pub uri: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+/// A namespaced resource template from an upstream, with its URI template prefixed.
+pub struct NamespacedResourceTemplate {
+    pub uri_template: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+/// A namespaced prompt from an upstream, with its name prefixed by server name.
+pub struct NamespacedPrompt {
+    pub name: String,
+    pub description: Option<String>,
+    pub arguments: Vec<McpPromptArgument>,
+}
+
 /// A live connection to a single upstream MCP server.
 ///
 /// Stores cached tool, resource, and prompt lists. Filter and parameter
@@ -47,6 +70,17 @@ impl UpstreamConnection {
         config
             .validate()
             .map_err(|reason| McpGatewayError::InvalidConfig { reason })?;
+
+        // Server names must not contain "__" because the MCP gateway uses it
+        // as the wire-format separator between server and tool names.
+        if config.name.contains("__") {
+            return Err(McpGatewayError::InvalidConfig {
+                reason: format!(
+                    "server name '{}' must not contain '__' (reserved as wire-format separator)",
+                    config.name
+                ),
+            });
+        }
 
         let name = config.name.clone();
         let tool_notify = Arc::new(Notify::new());
@@ -222,39 +256,29 @@ impl UpstreamConnection {
     // ── Resource methods ────────────────────────────────────────────
 
     /// Return all resources from this upstream, namespaced as `{name}+{uri}`.
-    pub async fn namespaced_resources(
-        &self,
-    ) -> Vec<(String, String, Option<String>, Option<String>)> {
+    pub async fn namespaced_resources(&self) -> Vec<NamespacedResource> {
         let resources = self.resources.read().await;
         resources
             .iter()
-            .map(|r| {
-                let prefixed_uri = format!("{}+{}", self.name, r.uri);
-                (
-                    prefixed_uri,
-                    r.name.clone(),
-                    r.description.clone(),
-                    r.mime_type.clone(),
-                )
+            .map(|r| NamespacedResource {
+                uri: format!("{}+{}", self.name, r.uri),
+                name: r.name.clone(),
+                description: r.description.clone(),
+                mime_type: r.mime_type.clone(),
             })
             .collect()
     }
 
     /// Return all resource templates from this upstream, namespaced as `{name}+{uri_template}`.
-    pub async fn namespaced_resource_templates(
-        &self,
-    ) -> Vec<(String, String, Option<String>, Option<String>)> {
+    pub async fn namespaced_resource_templates(&self) -> Vec<NamespacedResourceTemplate> {
         let templates = self.resource_templates.read().await;
         templates
             .iter()
-            .map(|t| {
-                let prefixed = format!("{}+{}", self.name, t.uri_template);
-                (
-                    prefixed,
-                    t.name.clone(),
-                    t.description.clone(),
-                    t.mime_type.clone(),
-                )
+            .map(|t| NamespacedResourceTemplate {
+                uri_template: format!("{}+{}", self.name, t.uri_template),
+                name: t.name.clone(),
+                description: t.description.clone(),
+                mime_type: t.mime_type.clone(),
             })
             .collect()
     }
@@ -285,15 +309,14 @@ impl UpstreamConnection {
     // ── Prompt methods ──────────────────────────────────────────────
 
     /// Return all prompts from this upstream, namespaced as `{name}/{prompt_name}`.
-    pub async fn namespaced_prompts(
-        &self,
-    ) -> Vec<(String, Option<String>, Vec<McpPromptArgument>)> {
+    pub async fn namespaced_prompts(&self) -> Vec<NamespacedPrompt> {
         let prompts = self.prompts.read().await;
         prompts
             .iter()
-            .map(|p| {
-                let prefixed_name = format!("{}/{}", self.name, p.name);
-                (prefixed_name, p.description.clone(), p.arguments.clone())
+            .map(|p| NamespacedPrompt {
+                name: format!("{}/{}", self.name, p.name),
+                description: p.description.clone(),
+                arguments: p.arguments.clone(),
             })
             .collect()
     }

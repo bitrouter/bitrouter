@@ -169,62 +169,6 @@ pub enum ToolServerTransport {
     },
 }
 
-/// Named groups of tool servers for access control convenience.
-///
-/// Groups resolve at keygen time — JWT claims stay concrete server patterns.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ToolServerAccessGroups {
-    #[serde(flatten)]
-    groups: HashMap<String, Vec<String>>,
-}
-
-impl ToolServerAccessGroups {
-    /// Expand patterns that reference group names into concrete server patterns.
-    ///
-    /// For each input pattern, split on first `/`:
-    /// - If the prefix matches a group name, expand to one pattern per server
-    ///   in the group, preserving the suffix.
-    /// - If the prefix matches a group name and there is no suffix (bare group name),
-    ///   expand to `"server/*"` for each server in the group.
-    /// - Non-group patterns pass through unchanged.
-    pub fn expand_patterns(&self, patterns: &[String]) -> Vec<String> {
-        let mut result = Vec::new();
-        for pattern in patterns {
-            if let Some((prefix, suffix)) = pattern.split_once('/') {
-                if let Some(servers) = self.groups.get(prefix) {
-                    for server in servers {
-                        result.push(format!("{server}/{suffix}"));
-                    }
-                } else {
-                    result.push(pattern.clone());
-                }
-            } else if let Some(servers) = self.groups.get(pattern.as_str()) {
-                for server in servers {
-                    result.push(format!("{server}/*"));
-                }
-            } else {
-                result.push(pattern.clone());
-            }
-        }
-        result
-    }
-
-    /// Check if a group name exists.
-    pub fn contains(&self, name: &str) -> bool {
-        self.groups.contains_key(name)
-    }
-
-    /// Get the servers in a group.
-    pub fn servers(&self, name: &str) -> Option<&[String]> {
-        self.groups.get(name).map(|v| v.as_slice())
-    }
-
-    /// Return all groups as a map.
-    pub fn as_map(&self) -> &HashMap<String, Vec<String>> {
-        &self.groups
-    }
-}
-
 // ── Agent config ────────────────────────────────────────────────────
 
 /// Configuration for an upstream agent to proxy.
@@ -474,52 +418,6 @@ mod tests {
     #[test]
     fn validate_rejects_reserved_name_sse() {
         assert!(test_stdio_config("sse", "echo").validate().is_err());
-    }
-
-    // ── ToolServerAccessGroups tests ────────────────────────────────
-
-    #[test]
-    fn access_groups_expand_patterns() {
-        let groups = ToolServerAccessGroups {
-            groups: HashMap::from([
-                ("dev_tools".into(), vec!["github".into(), "jira".into()]),
-                ("comms".into(), vec!["slack".into(), "email".into()]),
-            ]),
-        };
-        let mut expanded = groups.expand_patterns(&["dev_tools/*".into()]);
-        expanded.sort();
-        assert_eq!(expanded, vec!["github/*", "jira/*"]);
-    }
-
-    #[test]
-    fn access_groups_bare_name_expands_to_wildcard() {
-        let groups = ToolServerAccessGroups {
-            groups: HashMap::from([("dev_tools".into(), vec!["github".into(), "jira".into()])]),
-        };
-        let mut expanded = groups.expand_patterns(&["dev_tools".into()]);
-        expanded.sort();
-        assert_eq!(expanded, vec!["github/*", "jira/*"]);
-    }
-
-    #[test]
-    fn access_groups_non_group_passthrough() {
-        let groups = ToolServerAccessGroups::default();
-        let expanded = groups.expand_patterns(&["direct_server/tool".into()]);
-        assert_eq!(expanded, vec!["direct_server/tool"]);
-    }
-
-    #[test]
-    fn access_groups_serde_roundtrip() {
-        let json = r#"{
-            "dev_tools": ["github", "jira"],
-            "comms": ["slack"]
-        }"#;
-        let groups: ToolServerAccessGroups = serde_json::from_str(json).unwrap_or_default();
-        assert!(groups.contains("dev_tools"));
-        assert_eq!(
-            groups.servers("dev_tools").map(|s: &[String]| s.len()),
-            Some(2)
-        );
     }
 
     // ── AgentConfig tests ───────────────────────────────────────────

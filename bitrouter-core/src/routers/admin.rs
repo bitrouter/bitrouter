@@ -221,8 +221,6 @@ pub struct ToolUpstreamEntry {
 pub trait AdminToolRegistry: ToolRegistry {
     /// List all upstream tool servers with their current state.
     fn list_upstreams(&self) -> impl Future<Output = Vec<ToolUpstreamEntry>> + Send;
-    /// List all configured access groups.
-    fn list_groups(&self) -> impl Future<Output = HashMap<String, Vec<String>>> + Send;
     /// Update the tool filter for a specific upstream server.
     fn update_filter(
         &self,

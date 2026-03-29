@@ -7,7 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bitrouter_core::auth::chain::Chain;
 use bitrouter_core::auth::claims::{BitrouterClaims, BudgetRange, BudgetScope, TokenScope};
 use bitrouter_core::auth::token;
-use bitrouter_core::routers::upstream::ToolServerAccessGroups;
 
 use crate::cli::account::load_active_keypair;
 
@@ -25,8 +24,6 @@ pub struct KeygenOpts {
     pub budget_scope: Option<BudgetScope>,
     pub budget_range: Option<String>,
     pub name: Option<String>,
-    /// Access groups loaded from config (for expanding group patterns in --tools).
-    pub mcp_groups: ToolServerAccessGroups,
 }
 
 struct SignJwtOpts {
@@ -44,10 +41,7 @@ struct SignJwtOpts {
 pub fn run(keys_dir: &Path, opts: KeygenOpts) -> Result<(), String> {
     let (prefix, kp) = load_active_keypair(keys_dir)?;
 
-    // Expand group patterns (e.g. "dev_tools/*" → "github/*", "jira/*")
-    let tools = opts
-        .tools
-        .map(|patterns| opts.mcp_groups.expand_patterns(&patterns));
+    let tools = opts.tools;
 
     let jwt = sign_jwt(
         &kp,

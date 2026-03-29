@@ -21,12 +21,10 @@ use super::registry::{ToolEntry, ToolRegistry};
 /// - **Filters** control which tools are visible in `list_tools()`.
 /// - **Restrictions** are stored here and exposed for protocol crates to
 ///   read at call time via [`get_param_restrictions`](Self::get_param_restrictions).
-/// - **Groups** map group names to sets of server names for access control.
 pub struct DynamicToolRegistry<T> {
     inner: T,
     filters: RwLock<HashMap<String, ToolFilter>>,
     restrictions: RwLock<HashMap<String, ParamRestrictions>>,
-    groups: HashMap<String, Vec<String>>,
 }
 
 impl<T> DynamicToolRegistry<T> {
@@ -35,13 +33,11 @@ impl<T> DynamicToolRegistry<T> {
         inner: T,
         filters: HashMap<String, ToolFilter>,
         restrictions: HashMap<String, ParamRestrictions>,
-        groups: HashMap<String, Vec<String>>,
     ) -> Self {
         Self {
             inner,
             filters: RwLock::new(filters),
             restrictions: RwLock::new(restrictions),
-            groups,
         }
     }
 
@@ -73,7 +69,7 @@ impl<T> DynamicToolRegistry<T> {
     where
         T: ToolRegistry,
     {
-        // We cannot call async list_tools here, so we derive from filters/restrictions/groups.
+        // We cannot call async list_tools here, so we derive from filters/restrictions.
         // The authoritative set is populated at construction time from config.
         let mut servers: std::collections::HashSet<String> = std::collections::HashSet::new();
         if let Ok(f) = self.filters.read() {
@@ -81,9 +77,6 @@ impl<T> DynamicToolRegistry<T> {
         }
         if let Ok(r) = self.restrictions.read() {
             servers.extend(r.keys().cloned());
-        }
-        for members in self.groups.values() {
-            servers.extend(members.iter().cloned());
         }
         servers.into_iter().collect()
     }
@@ -159,10 +152,6 @@ impl<T: ToolRegistry> AdminToolRegistry for DynamicToolRegistry<T> {
             .collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         entries
-    }
-
-    async fn list_groups(&self) -> HashMap<String, Vec<String>> {
-        self.groups.clone()
     }
 
     async fn update_filter(&self, server: &str, filter: Option<ToolFilter>) -> Result<()> {
@@ -246,10 +235,6 @@ mod tests {
             },
             HashMap::new(),
             HashMap::new(),
-            HashMap::from([(
-                "dev_tools".to_owned(),
-                vec!["github".to_owned(), "jira".to_owned()],
-            )]),
         )
     }
 
@@ -334,14 +319,6 @@ mod tests {
         let github = github.unwrap();
         assert_eq!(github.tool_count, 1); // only create_issue visible
         assert!(github.filter.is_some());
-    }
-
-    #[tokio::test]
-    async fn list_groups_returns_configured() {
-        let reg = test_registry();
-        let groups = reg.list_groups().await;
-        assert_eq!(groups.len(), 1);
-        assert!(groups.contains_key("dev_tools"));
     }
 
     #[tokio::test]

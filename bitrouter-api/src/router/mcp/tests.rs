@@ -728,7 +728,7 @@ async fn initialize_protocol_version_is_2025_11_25() {
 }
 
 #[tokio::test]
-async fn initialize_advertises_logging_and_completions() {
+async fn initialize_advertises_logging_but_not_unimplemented() {
     let filter = make_filter();
     let json = jsonrpc_request(
         &filter,
@@ -746,8 +746,9 @@ async fn initialize_advertises_logging_and_completions() {
     .await;
     let caps = &json["result"]["capabilities"];
     assert!(caps["logging"].is_object());
-    assert!(caps["completions"].is_object());
-    assert!(caps["resources"]["subscribe"].as_bool().unwrap_or(false));
+    // Completions and resource subscriptions are not advertised until implemented.
+    assert!(caps["completions"].is_null());
+    assert!(caps["resources"]["subscribe"].is_null());
 }
 
 // ── Notification tests ──────────────────────────────────────────────

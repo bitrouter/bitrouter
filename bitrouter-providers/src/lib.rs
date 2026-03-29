@@ -1,3 +1,5 @@
+pub mod util;
+
 #[cfg(feature = "openai")]
 pub mod openai;
 
@@ -12,3 +14,6 @@ pub mod a2a;
 
 #[cfg(feature = "mcp")]
 pub mod mcp;
+
+#[cfg(feature = "agentskills")]
+pub mod agentskills;

@@ -4,7 +4,6 @@
 //!
 //! - `GET /admin/tools` — list all aggregated tools
 //! - `GET /admin/tools/upstreams` — list upstream servers with status
-//! - `GET /admin/tools/groups` — list configured access groups
 //! - `PUT /admin/tools/:server/filter` — update allow/deny for a server
 //! - `PUT /admin/tools/:server/params` — update parameter restrictions
 //!
@@ -27,7 +26,6 @@ where
 {
     list_tools(registry.clone())
         .or(list_upstreams(registry.clone()))
-        .or(list_groups(registry.clone()))
         .or(update_filter(registry.clone()))
         .or(update_params(registry))
 }
@@ -94,30 +92,6 @@ async fn handle_list_upstreams<T: AdminToolRegistry>(
     Ok(warp::reply::json(
         &serde_json::json!({ "upstreams": upstreams }),
     ))
-}
-
-// ── GET /admin/tools/groups ─────────────────────────────────────────
-
-fn list_groups<T>(
-    registry: Option<Arc<T>>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
-where
-    T: AdminToolRegistry + 'static,
-{
-    warp::path!("admin" / "tools" / "groups")
-        .and(warp::get())
-        .and(warp::any().map(move || registry.clone()))
-        .and_then(handle_list_groups)
-}
-
-async fn handle_list_groups<T: AdminToolRegistry>(
-    registry: Option<Arc<T>>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let Some(registry) = registry else {
-        return Err(warp::reject::not_found());
-    };
-    let groups = registry.list_groups().await;
-    Ok(warp::reply::json(&serde_json::json!({ "groups": groups })))
 }
 
 // ── PUT /admin/tools/:server/filter ─────────────────────────────────
