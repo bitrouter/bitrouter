@@ -1,13 +1,12 @@
-//! Discovery registry types and traits for models, tools, and agents.
+//! Discovery registry types and traits for models and skills.
 //!
 //! These are the core abstractions powering public discovery endpoints
-//! (`GET /v1/models`, `GET /v1/tools`, `GET /v1/agents`). Each entry
-//! type is protocol-agnostic — conversion from protocol-specific types
-//! (MCP tools, A2A agent cards) happens in the respective crates.
+//! (`GET /v1/models`). Each entry type is protocol-agnostic — conversion
+//! from protocol-specific types happens in the respective crates.
+//!
+//! Tool registry types live in [`crate::tools::registry`].
 
 use std::future::Future;
-
-use serde_json::Value;
 
 use super::routing_table::ModelPricing;
 
@@ -45,60 +44,6 @@ pub trait ModelRegistry {
     /// Lists all models available across all configured providers.
     fn list_models(&self) -> Vec<ModelEntry> {
         Vec::new()
-    }
-}
-
-// ── Tool ───────────────────────────────────────────────────────────
-
-/// A single tool available through the router, regardless of origin protocol.
-///
-/// Unifies MCP tools (structured, schema-driven) and A2A skills
-/// (unstructured, tag-driven) into a common discovery type.
-#[derive(Debug, Clone)]
-pub struct ToolEntry {
-    /// Machine-readable tool identifier (e.g. `"github/search"`).
-    pub id: String,
-    /// Human-readable display name.
-    pub name: Option<String>,
-    /// The server or agent that provides this tool.
-    pub provider: String,
-    /// Description of what the tool does.
-    pub description: Option<String>,
-    /// JSON Schema describing input parameters.
-    pub input_schema: Option<Value>,
-}
-
-/// Read-only registry for discovering tools available across all sources.
-pub trait ToolRegistry: Send + Sync {
-    /// Lists all tools available through the router.
-    fn list_tools(&self) -> impl Future<Output = Vec<ToolEntry>> + Send;
-}
-
-impl<T: ToolRegistry> ToolRegistry for std::sync::Arc<T> {
-    async fn list_tools(&self) -> Vec<ToolEntry> {
-        (**self).list_tools().await
-    }
-}
-
-/// Combines two [`ToolRegistry`] implementations into one.
-///
-/// `list_tools()` returns entries from both registries (primary first).
-pub struct CompositeToolRegistry<A, B> {
-    primary: A,
-    secondary: B,
-}
-
-impl<A, B> CompositeToolRegistry<A, B> {
-    pub fn new(primary: A, secondary: B) -> Self {
-        Self { primary, secondary }
-    }
-}
-
-impl<A: ToolRegistry, B: ToolRegistry> ToolRegistry for CompositeToolRegistry<A, B> {
-    async fn list_tools(&self) -> Vec<ToolEntry> {
-        let mut tools = self.primary.list_tools().await;
-        tools.extend(self.secondary.list_tools().await);
-        tools
     }
 }
 
@@ -172,64 +117,5 @@ impl<T: SkillService> SkillService for std::sync::Arc<T> {
 
     async fn delete(&self, name: &str) -> Result<bool, String> {
         (**self).delete(name).await
-    }
-}
-
-// ── Agent ──────────────────────────────────────────────────────────
-
-/// A single agent available through the router, with its metadata.
-///
-/// Protocol-agnostic summary of an agent's identity and capabilities.
-/// Conversion from A2A `AgentCard` happens in [`crate::api::a2a::types`].
-#[derive(Debug, Clone)]
-pub struct AgentEntry {
-    /// Machine-readable agent identifier.
-    pub id: String,
-    /// Human-readable display name.
-    pub name: Option<String>,
-    /// The source that provides this agent.
-    pub provider: String,
-    /// Description of the agent's capabilities.
-    pub description: Option<String>,
-    /// Agent version string.
-    pub version: Option<String>,
-    /// Skills or capabilities the agent advertises.
-    pub skills: Vec<AgentSkillEntry>,
-    /// Input content types the agent accepts (MIME types).
-    pub input_modes: Vec<String>,
-    /// Output content types the agent produces (MIME types).
-    pub output_modes: Vec<String>,
-    /// Whether the agent supports streaming responses.
-    pub streaming: Option<bool>,
-    /// Icon URL for display.
-    pub icon_url: Option<String>,
-    /// Documentation URL.
-    pub documentation_url: Option<String>,
-}
-
-/// A skill advertised by an agent.
-#[derive(Debug, Clone)]
-pub struct AgentSkillEntry {
-    /// Unique skill identifier.
-    pub id: String,
-    /// Human-readable skill name.
-    pub name: String,
-    /// Description of the skill.
-    pub description: Option<String>,
-    /// Keywords for discovery.
-    pub tags: Vec<String>,
-    /// Example prompts or scenarios.
-    pub examples: Vec<String>,
-}
-
-/// Read-only registry for discovering agents available across all sources.
-pub trait AgentRegistry: Send + Sync {
-    /// Lists all agents available through the router.
-    fn list_agents(&self) -> impl Future<Output = Vec<AgentEntry>> + Send;
-}
-
-impl<T: AgentRegistry> AgentRegistry for std::sync::Arc<T> {
-    async fn list_agents(&self) -> Vec<AgentEntry> {
-        (**self).list_agents().await
     }
 }

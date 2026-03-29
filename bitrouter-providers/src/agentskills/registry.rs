@@ -7,7 +7,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use bitrouter_core::routers::registry::{SkillEntry, SkillService, ToolEntry, ToolRegistry};
+use bitrouter_core::routers::registry::{SkillEntry, SkillService};
+use bitrouter_core::tools::registry::{ToolEntry, ToolRegistry};
 use tokio::sync::RwLock;
 
 use super::catalog::SkillCatalogEntry;
@@ -51,33 +52,38 @@ impl FilesystemSkillRegistry {
     ///
     /// Config skills that don't have a `SKILL.md` on disk get a minimal one
     /// generated and written. Filesystem skills not in config are also included.
+    /// Create a registry from config-declared tools (with `ApiProtocol::Skill`)
+    /// merged with a filesystem scan.
+    ///
+    /// Config tools that don't have a `SKILL.md` on disk get a minimal one
+    /// generated and written. Filesystem skills not in config are also included.
     pub async fn from_config_and_dir(
-        configs: Vec<bitrouter_config::skill::SkillConfig>,
+        tool_configs: Vec<(String, bitrouter_config::ToolConfig)>,
         skills_dir: PathBuf,
     ) -> Result<Self, String> {
         // Scan existing filesystem skills first.
         let mut entries = scanner::scan_skills_dir(&skills_dir).await?;
 
-        // Merge config-declared skills: write SKILL.md for any not yet on disk.
-        for cfg in configs {
-            let already_exists = entries.iter().any(|e| e.name == cfg.name);
+        // Merge config-declared tools: write SKILL.md for any not yet on disk.
+        for (tool_name, tool_config) in tool_configs {
+            let already_exists = entries.iter().any(|e| e.name == tool_name);
             if already_exists {
                 continue;
             }
 
-            let skill_dir = skills_dir.join(&cfg.name);
+            let skill_dir = skills_dir.join(&tool_name);
             let skill_md = skill_dir.join("SKILL.md");
 
-            // Write a minimal SKILL.md from config.
-            let required_apis: Vec<String> = cfg
-                .required_apis
+            // Derive required APIs from the tool's endpoint providers.
+            let required_apis: Vec<String> = tool_config
+                .endpoints
                 .iter()
-                .map(|a| a.provider.clone())
+                .map(|ep| ep.provider.clone())
                 .collect();
 
             let mut yaml_parts = vec![
-                format!("name: \"{}\"", cfg.name),
-                format!("description: \"{}\"", cfg.description),
+                format!("name: \"{tool_name}\""),
+                "description: \"\"".to_string(),
             ];
             if !required_apis.is_empty() {
                 yaml_parts.push("required_apis:".to_string());
@@ -86,7 +92,7 @@ impl FilesystemSkillRegistry {
                 }
             }
 
-            let content = format!("---\n{}\n---\n", yaml_parts.join("\n"),);
+            let content = format!("---\n{}\n---\n", yaml_parts.join("\n"));
 
             tokio::fs::create_dir_all(&skill_dir)
                 .await
@@ -98,9 +104,9 @@ impl FilesystemSkillRegistry {
             let now = chrono::Utc::now().to_rfc3339();
             entries.push(SkillCatalogEntry {
                 id: uuid::Uuid::new_v4().to_string(),
-                name: cfg.name,
-                description: cfg.description,
-                source: cfg.source.unwrap_or_else(|| "config".to_string()),
+                name: tool_name,
+                description: String::new(),
+                source: "config".to_string(),
                 required_apis,
                 path: skill_md,
                 created_at: now.clone(),
@@ -381,7 +387,7 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].id, "skill/my-tool");
         assert_eq!(tools[0].provider, "skill");
-        assert_eq!(tools[0].name.as_deref(), Some("my-tool"));
+        assert_eq!(tools[0].definition.name, "my-tool");
     }
 
     #[tokio::test]
@@ -397,13 +403,15 @@ mod tests {
         )
         .expect("write");
 
-        // Config-declared skill not yet on disk.
-        let configs = vec![bitrouter_config::skill::SkillConfig {
-            name: "cfg-skill".to_string(),
-            description: "From config".to_string(),
-            source: None,
-            required_apis: vec![],
-        }];
+        // Config-declared tool not yet on disk.
+        let configs = vec![(
+            "cfg-skill".to_string(),
+            bitrouter_config::ToolConfig {
+                strategy: Default::default(),
+                endpoints: vec![],
+                pricing: None,
+            },
+        )];
 
         let reg = FilesystemSkillRegistry::from_config_and_dir(configs, tmp.path().to_path_buf())
             .await

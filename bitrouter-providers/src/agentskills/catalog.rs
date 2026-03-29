@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use bitrouter_core::routers::registry::{SkillEntry, ToolEntry};
+use bitrouter_core::routers::registry::SkillEntry;
+use bitrouter_core::tools::definition::ToolDefinition;
+use bitrouter_core::tools::registry::ToolEntry;
 
 /// Internal representation of a skill in the in-memory catalog.
 ///
@@ -46,10 +48,17 @@ impl SkillCatalogEntry {
     pub fn to_tool_entry(&self) -> ToolEntry {
         ToolEntry {
             id: format!("skill/{}", self.name),
-            name: Some(self.name.clone()),
             provider: "skill".to_string(),
-            description: Some(self.description.clone()),
-            input_schema: None,
+            definition: ToolDefinition {
+                name: self.name.clone(),
+                description: Some(self.description.clone()),
+                input_schema: None,
+                annotations: None,
+                input_modes: Vec::new(),
+                output_modes: Vec::new(),
+                examples: Vec::new(),
+                tags: Vec::new(),
+            },
         }
     }
 }

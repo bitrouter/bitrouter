@@ -14,7 +14,7 @@ use bitrouter_core::{
     },
     observe::{CallerContext, ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
     routers::{
-        model_router::LanguageModelRouter,
+        router::LanguageModelRouter,
         routing_table::{RoutingTable, RoutingTarget},
     },
 };

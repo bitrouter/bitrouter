@@ -13,7 +13,8 @@ use std::sync::RwLock;
 use crate::errors::{BitrouterError, Result};
 
 use super::admin::{AdminToolRegistry, ParamRestrictions, ToolFilter, ToolUpstreamEntry};
-use super::registry::{ToolEntry, ToolRegistry};
+use crate::tools::registry::{ToolEntry, ToolGateway, ToolRegistry};
+use crate::tools::result::ToolCallResult;
 
 /// A tool registry wrapper that adds runtime filter and restriction management.
 ///
@@ -95,6 +96,29 @@ fn tool_name_of(tool_id: &str) -> &str {
     tool_id.split_once('/').map(|(_, t)| t).unwrap_or(tool_id)
 }
 
+impl<T: ToolGateway> ToolGateway for DynamicToolRegistry<T> {
+    async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<ToolCallResult> {
+        let server = server_of(name);
+        let tool = tool_name_of(name);
+
+        // Enforce parameter restrictions before forwarding.
+        let arguments = if let Some(restrictions) = self.get_param_restrictions(server) {
+            let mut map = match arguments {
+                serde_json::Value::Object(m) => Some(m),
+                serde_json::Value::Null => None,
+                other => Some(serde_json::Map::from_iter([("value".to_owned(), other)])),
+            };
+            restrictions.check(tool, &mut map)?;
+            map.map(serde_json::Value::Object)
+                .unwrap_or(serde_json::Value::Null)
+        } else {
+            arguments
+        };
+
+        self.inner.call_tool(name, arguments).await
+    }
+}
+
 impl<T: ToolRegistry> ToolRegistry for DynamicToolRegistry<T> {
     async fn list_tools(&self) -> Vec<ToolEntry> {
         let all = self.inner.list_tools().await;
@@ -115,7 +139,7 @@ impl<T: ToolRegistry> ToolRegistry for DynamicToolRegistry<T> {
     }
 }
 
-impl<T: ToolRegistry> AdminToolRegistry for DynamicToolRegistry<T> {
+impl<T: ToolGateway> AdminToolRegistry for DynamicToolRegistry<T> {
     async fn list_upstreams(&self) -> Vec<ToolUpstreamEntry> {
         // Get the filtered tool list to compute per-server tool counts.
         let tools = <Self as ToolRegistry>::list_tools(self).await;
@@ -191,6 +215,7 @@ impl<T: ToolRegistry> AdminToolRegistry for DynamicToolRegistry<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::definition::ToolDefinition;
 
     struct StaticToolSource {
         tools: Vec<ToolEntry>,
@@ -202,28 +227,63 @@ mod tests {
         }
     }
 
+    impl ToolGateway for StaticToolSource {
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _arguments: serde_json::Value,
+        ) -> Result<ToolCallResult> {
+            Ok(ToolCallResult {
+                content: vec![],
+                is_error: false,
+                metadata: None,
+            })
+        }
+    }
+
     fn test_tools() -> Vec<ToolEntry> {
         vec![
             ToolEntry {
                 id: "github/search".to_owned(),
-                name: Some("Search".to_owned()),
                 provider: "github".to_owned(),
-                description: Some("Search GitHub".to_owned()),
-                input_schema: None,
+                definition: ToolDefinition {
+                    name: "Search".to_owned(),
+                    description: Some("Search GitHub".to_owned()),
+                    input_schema: None,
+                    annotations: None,
+                    input_modes: Vec::new(),
+                    output_modes: Vec::new(),
+                    examples: Vec::new(),
+                    tags: Vec::new(),
+                },
             },
             ToolEntry {
                 id: "github/create_issue".to_owned(),
-                name: Some("Create Issue".to_owned()),
                 provider: "github".to_owned(),
-                description: Some("Create an issue".to_owned()),
-                input_schema: None,
+                definition: ToolDefinition {
+                    name: "Create Issue".to_owned(),
+                    description: Some("Create an issue".to_owned()),
+                    input_schema: None,
+                    annotations: None,
+                    input_modes: Vec::new(),
+                    output_modes: Vec::new(),
+                    examples: Vec::new(),
+                    tags: Vec::new(),
+                },
             },
             ToolEntry {
                 id: "jira/search".to_owned(),
-                name: Some("Search".to_owned()),
                 provider: "jira".to_owned(),
-                description: Some("Search Jira".to_owned()),
-                input_schema: None,
+                definition: ToolDefinition {
+                    name: "Search".to_owned(),
+                    description: Some("Search Jira".to_owned()),
+                    input_schema: None,
+                    annotations: None,
+                    input_modes: Vec::new(),
+                    output_modes: Vec::new(),
+                    examples: Vec::new(),
+                    tags: Vec::new(),
+                },
             },
         ]
     }

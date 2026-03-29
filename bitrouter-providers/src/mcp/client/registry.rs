@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock, broadcast};
 
-use bitrouter_core::routers::upstream::ToolServerConfig;
+use super::config::McpServerConfig;
 
-use bitrouter_core::api::mcp::error::McpGatewayError;
 use bitrouter_core::api::mcp::gateway::{
     McpClientRequestHandler, McpCompletionServer, McpLoggingServer, McpPromptServer,
     McpResourceServer, McpSubscriptionServer, McpToolServer,
 };
+use bitrouter_core::api::mcp::types::McpGatewayError;
 use bitrouter_core::api::mcp::types::{
     CompleteParams, CompleteResult, Completion, LoggingLevel, McpGetPromptResult, McpPrompt,
     McpResource, McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
@@ -56,7 +56,7 @@ impl ConfigMcpRegistry {
     /// If a `handler` is provided, all connections will handle server→client
     /// requests (sampling, elicitation) by dispatching to it.
     pub async fn from_configs(
-        configs: Vec<ToolServerConfig>,
+        configs: Vec<McpServerConfig>,
         handler: Option<Arc<dyn McpClientRequestHandler>>,
     ) -> Result<Self, McpGatewayError> {
         // Check for duplicate names
@@ -239,11 +239,11 @@ impl ConfigMcpRegistry {
     }
 }
 
-// ── Core ToolRegistry impl ──────────────────────────────────────────
+// ── Core ToolRegistry + ToolGateway impls ──────────────────────────
 
-impl bitrouter_core::routers::registry::ToolRegistry for ConfigMcpRegistry {
-    async fn list_tools(&self) -> Vec<bitrouter_core::routers::registry::ToolEntry> {
-        McpToolServer::list_tools(self)
+impl bitrouter_core::tools::registry::ToolRegistry for ConfigMcpRegistry {
+    async fn list_tools(&self) -> Vec<bitrouter_core::tools::registry::ToolEntry> {
+        self.aggregated_tools()
             .await
             .into_iter()
             .map(Into::into)
@@ -251,7 +251,35 @@ impl bitrouter_core::routers::registry::ToolRegistry for ConfigMcpRegistry {
     }
 }
 
+impl bitrouter_core::tools::registry::ToolGateway for ConfigMcpRegistry {
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> bitrouter_core::errors::Result<bitrouter_core::tools::result::ToolCallResult> {
+        let args = match arguments {
+            serde_json::Value::Object(map) => Some(map),
+            serde_json::Value::Null => None,
+            other => {
+                let mut map = serde_json::Map::new();
+                map.insert("value".to_owned(), other);
+                Some(map)
+            }
+        };
+        let mcp_result = self
+            .route_call(name, args)
+            .await
+            .map_err(|e| bitrouter_core::errors::BitrouterError::transport(None, e.to_string()))?;
+        Ok(bitrouter_core::tools::result::ToolCallResult::from(
+            mcp_result,
+        ))
+    }
+}
+
 /// Raw [`McpToolServer`] impl on `ConfigMcpRegistry`.
+///
+/// Delegates to [`ToolGateway`] for list/call, keeps subscribe as
+/// MCP-specific (broadcast channel).
 impl McpToolServer for ConfigMcpRegistry {
     async fn list_tools(&self) -> Vec<McpTool> {
         self.aggregated_tools().await

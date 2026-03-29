@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use bitrouter_core::routers::registry::ToolRegistry;
+use bitrouter_core::tools::registry::ToolRegistry;
 use serde::Serialize;
 use warp::Filter;
 
@@ -101,12 +101,18 @@ async fn handle_list_tools<T: ToolRegistry>(
             }
             true
         })
-        .map(|e| ToolResponse {
-            id: e.id,
-            name: e.name,
-            provider: e.provider,
-            description: e.description,
-            input_schema: e.input_schema,
+        .map(|e| {
+            let input_schema = e
+                .definition
+                .input_schema
+                .and_then(|s| serde_json::to_value(s).ok());
+            ToolResponse {
+                id: e.id,
+                name: Some(e.definition.name),
+                provider: e.provider,
+                description: e.definition.description,
+                input_schema,
+            }
         })
         .collect();
     Ok(warp::reply::json(&serde_json::json!({ "tools": tools })))

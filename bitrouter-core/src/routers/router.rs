@@ -1,7 +1,8 @@
 use crate::{
     errors::Result,
     models::{image::image_model::DynImageModel, language::language_model::DynLanguageModel},
-    routers::routing_table::RoutingTarget,
+    routers::routing_table::{RoutingTarget, ToolRoutingTarget},
+    tools::provider::DynToolProvider,
 };
 
 /// A router that routes to the appropriate language model implementation based on the routing target.
@@ -23,4 +24,20 @@ pub trait ImageModelRouter {
         &self,
         target: RoutingTarget,
     ) -> impl Future<Output = Result<Box<DynImageModel<'static>>>> + Send;
+}
+
+/// A router that resolves a tool routing target to the appropriate tool
+/// provider implementation.
+///
+/// This is the tool equivalent of [`LanguageModelRouter`]. Unlike the model
+/// router (which instantiates providers per-request), tool providers are
+/// typically long-lived connections constructed at startup, so
+/// implementations will look up an existing provider rather than creating
+/// a new one.
+pub trait ToolRouter {
+    /// Resolves the routing target to a concrete tool provider.
+    fn route_tool(
+        &self,
+        target: ToolRoutingTarget,
+    ) -> impl Future<Output = Result<Box<DynToolProvider<'static>>>> + Send;
 }

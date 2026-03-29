@@ -13,11 +13,10 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
-use crate::routers::admin::ParamRestrictions;
 use crate::routers::dynamic_tool::DynamicToolRegistry;
-use crate::routers::registry::ToolRegistry;
+use crate::tools::registry::{ToolGateway, ToolRegistry};
 
-use super::error::McpGatewayError;
+use super::types::McpGatewayError;
 use super::types::{
     CompleteParams, CompleteResult, CreateMessageParams, CreateMessageResult,
     ElicitationCreateParams, ElicitationCreateResult, JsonRpcError, LoggingLevel,
@@ -255,39 +254,25 @@ impl<T: McpCompletionServer> McpCompletionServer for Arc<T> {
 // These impls live here (where the traits are defined) to satisfy orphan
 // rules.  The `DynamicToolRegistry` type is defined in `bitrouter-core`.
 
-/// Split a namespaced name `server/item` on the first `/`.
-fn parse_namespaced(name: &str) -> Result<(&str, &str), McpGatewayError> {
-    name.split_once('/')
-        .ok_or_else(|| McpGatewayError::ToolNotFound {
-            name: name.to_owned(),
-        })
-}
-
-impl<T: McpToolServer + ToolRegistry + Send + Sync> McpToolServer for DynamicToolRegistry<T> {
+impl<T: McpToolServer + ToolGateway + Send + Sync> McpToolServer for DynamicToolRegistry<T> {
     async fn list_tools(&self) -> Vec<McpTool> {
         let core_tools = <Self as ToolRegistry>::list_tools(self).await;
-        core_tools
-            .into_iter()
-            .map(|t| McpTool {
-                name: t.id,
-                description: t.description,
-                input_schema: t.input_schema.unwrap_or_default(),
-            })
-            .collect()
+        core_tools.into_iter().map(McpTool::from).collect()
     }
 
     async fn call_tool(
         &self,
         name: &str,
-        mut arguments: Option<serde_json::Map<String, serde_json::Value>>,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<McpToolCallResult, McpGatewayError> {
-        let (server_name, tool_name) = parse_namespaced(name)?;
-
-        if let Some(restrictions) = self.get_param_restrictions(server_name) {
-            enforce_param_restrictions(name, tool_name, &mut arguments, &restrictions)?;
-        }
-
-        self.inner().call_tool(name, arguments).await
+        let args = super::convert::args_to_value(arguments);
+        let result = <Self as ToolGateway>::call_tool(self, name, args)
+            .await
+            .map_err(|e| McpGatewayError::UpstreamCall {
+                name: name.to_owned(),
+                reason: e.to_string(),
+            })?;
+        Ok(McpToolCallResult::from(result))
     }
 
     fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
@@ -295,7 +280,7 @@ impl<T: McpToolServer + ToolRegistry + Send + Sync> McpToolServer for DynamicToo
     }
 }
 
-impl<T: McpResourceServer + ToolRegistry + Send + Sync> McpResourceServer
+impl<T: McpResourceServer + ToolGateway + Send + Sync> McpResourceServer
     for DynamicToolRegistry<T>
 {
     async fn list_resources(&self) -> Vec<McpResource> {
@@ -315,7 +300,7 @@ impl<T: McpResourceServer + ToolRegistry + Send + Sync> McpResourceServer
     }
 }
 
-impl<T: McpPromptServer + ToolRegistry + Send + Sync> McpPromptServer for DynamicToolRegistry<T> {
+impl<T: McpPromptServer + ToolGateway + Send + Sync> McpPromptServer for DynamicToolRegistry<T> {
     async fn list_prompts(&self) -> Vec<McpPrompt> {
         self.inner().list_prompts().await
     }
@@ -333,7 +318,7 @@ impl<T: McpPromptServer + ToolRegistry + Send + Sync> McpPromptServer for Dynami
     }
 }
 
-impl<T: McpSubscriptionServer + ToolRegistry + Send + Sync> McpSubscriptionServer
+impl<T: McpSubscriptionServer + ToolGateway + Send + Sync> McpSubscriptionServer
     for DynamicToolRegistry<T>
 {
     async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
@@ -345,39 +330,16 @@ impl<T: McpSubscriptionServer + ToolRegistry + Send + Sync> McpSubscriptionServe
     }
 }
 
-impl<T: McpLoggingServer + ToolRegistry + Send + Sync> McpLoggingServer for DynamicToolRegistry<T> {
+impl<T: McpLoggingServer + ToolGateway + Send + Sync> McpLoggingServer for DynamicToolRegistry<T> {
     async fn set_logging_level(&self, level: LoggingLevel) -> Result<(), McpGatewayError> {
         self.inner().set_logging_level(level).await
     }
 }
 
-impl<T: McpCompletionServer + ToolRegistry + Send + Sync> McpCompletionServer
+impl<T: McpCompletionServer + ToolGateway + Send + Sync> McpCompletionServer
     for DynamicToolRegistry<T>
 {
     async fn complete(&self, params: CompleteParams) -> Result<CompleteResult, McpGatewayError> {
         self.inner().complete(params).await
     }
-}
-
-/// Enforce parameter restrictions at call time.
-fn enforce_param_restrictions(
-    full_name: &str,
-    tool_name: &str,
-    arguments: &mut Option<serde_json::Map<String, serde_json::Value>>,
-    restrictions: &ParamRestrictions,
-) -> Result<(), McpGatewayError> {
-    restrictions
-        .check(tool_name, arguments)
-        .map_err(|e| match e {
-            crate::errors::BitrouterError::InvalidRequest { message, .. } => {
-                McpGatewayError::ParamDenied {
-                    tool: full_name.to_owned(),
-                    param: message,
-                }
-            }
-            other => McpGatewayError::UpstreamCall {
-                name: full_name.to_owned(),
-                reason: other.to_string(),
-            },
-        })
 }

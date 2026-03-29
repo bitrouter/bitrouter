@@ -1,12 +1,9 @@
-pub mod compat;
 pub mod config;
 pub mod detect;
 pub mod env;
 pub mod error;
 pub mod registry;
 pub mod routing;
-pub mod skill;
-pub mod tool;
 pub mod writer;
 
 pub use bitrouter_core::routers::routing_table::ApiProtocol;

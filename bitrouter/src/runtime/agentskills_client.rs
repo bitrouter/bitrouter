@@ -20,7 +20,7 @@ pub struct AgentSkillsRoutes {
 
 /// Builder for the filesystem-backed agent skills registry.
 pub struct AgentSkillsClient {
-    skill_configs: Vec<bitrouter_config::skill::SkillConfig>,
+    tool_configs: Vec<(String, bitrouter_config::ToolConfig)>,
     skills_dir: PathBuf,
 }
 
@@ -33,33 +33,32 @@ impl AgentSkillsClient {
         tool_table: &ConfigToolRoutingTable,
         skills_dir: PathBuf,
     ) -> Self {
-        let skill_configs = providers_by_protocol
+        let tool_configs = providers_by_protocol
             .get(&ApiProtocol::Skill)
             .map(|providers| {
                 providers
                     .iter()
                     .flat_map(|(name, _)| {
-                        let tools: Vec<(&str, &bitrouter_config::ToolConfig)> = tool_table
+                        tool_table
                             .tools()
                             .iter()
                             .filter(|(_, tc)| tc.endpoints.iter().any(|ep| ep.provider == *name))
-                            .map(|(tn, tc)| (tn.as_str(), tc))
-                            .collect();
-                        bitrouter_config::compat::tools_to_skill_configs(&tools)
+                            .map(|(tn, tc)| (tn.clone(), tc.clone()))
+                            .collect::<Vec<_>>()
                     })
                     .collect()
             })
             .unwrap_or_default();
 
         Self {
-            skill_configs,
+            tool_configs,
             skills_dir,
         }
     }
 
     pub async fn build(self) -> AgentSkillsRoutes {
         let registry = match FilesystemSkillRegistry::from_config_and_dir(
-            self.skill_configs,
+            self.tool_configs,
             self.skills_dir.clone(),
         )
         .await

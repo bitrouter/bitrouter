@@ -8,7 +8,7 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 
-use bitrouter_core::api::a2a::error::A2aGatewayError;
+use bitrouter_core::api::a2a::types::A2aGatewayError;
 use bitrouter_core::api::a2a::types::{
     AgentCard, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, GetTaskRequest, ListTaskPushNotificationConfigsRequest,

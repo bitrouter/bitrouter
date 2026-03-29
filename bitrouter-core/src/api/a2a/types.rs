@@ -8,6 +8,36 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+// ── Gateway errors ─────────────────────────────────────────────
+
+/// Errors that can occur during A2A gateway operations.
+#[derive(Debug, thiserror::Error)]
+pub enum A2aGatewayError {
+    /// Failed to connect to upstream A2A agent.
+    #[error("upstream '{name}' connection failed: {reason}")]
+    UpstreamConnect { name: String, reason: String },
+
+    /// Upstream A2A agent call failed.
+    #[error("upstream '{name}' call failed: {reason}")]
+    UpstreamCall { name: String, reason: String },
+
+    /// Upstream A2A agent closed.
+    #[error("upstream '{name}' closed")]
+    UpstreamClosed { name: String },
+
+    /// Agent not found.
+    #[error("agent not found: {name}")]
+    AgentNotFound { name: String },
+
+    /// Invalid configuration.
+    #[error("invalid config: {reason}")]
+    InvalidConfig { reason: String },
+
+    /// A2A client request error.
+    #[error("client error: {0}")]
+    Client(String),
+}
+
 // ── Agent Card ───────────────────────────────────────────────────
 
 /// An Agent Card — the self-describing manifest for an A2A agent.
@@ -217,43 +247,6 @@ pub fn minimal_card(name: &str, description: &str, version: &str, url: &str) -> 
         signatures: Vec::new(),
         icon_url: None,
         documentation_url: None,
-    }
-}
-
-// ── Core conversions ───────────────────────────────────────────────
-
-impl From<AgentSkill> for crate::routers::registry::AgentSkillEntry {
-    fn from(s: AgentSkill) -> Self {
-        Self {
-            id: s.id,
-            name: s.name,
-            description: Some(s.description),
-            tags: s.tags,
-            examples: s.examples,
-        }
-    }
-}
-
-impl From<AgentCard> for crate::routers::registry::AgentEntry {
-    fn from(card: AgentCard) -> Self {
-        let provider = card
-            .provider
-            .as_ref()
-            .map(|p| p.organization.clone())
-            .unwrap_or_default();
-        Self {
-            id: card.name.clone(),
-            name: Some(card.name),
-            provider,
-            description: Some(card.description),
-            version: Some(card.version),
-            skills: card.skills.into_iter().map(Into::into).collect(),
-            input_modes: card.default_input_modes,
-            output_modes: card.default_output_modes,
-            streaming: card.capabilities.streaming,
-            icon_url: card.icon_url,
-            documentation_url: card.documentation_url,
-        }
     }
 }
 
@@ -1056,9 +1049,8 @@ impl JsonRpcResponse {
         }
     }
 
-    /// Map an [`A2aGatewayError`](super::error::A2aGatewayError) to a JSON-RPC error response.
-    pub fn gateway_error(id: &str, err: &super::error::A2aGatewayError) -> Self {
-        use super::error::A2aGatewayError;
+    /// Map an [`A2aGatewayError`] to a JSON-RPC error response.
+    pub fn gateway_error(id: &str, err: &A2aGatewayError) -> Self {
         let code = match err {
             A2aGatewayError::AgentNotFound { .. } => -32001,
             A2aGatewayError::InvalidConfig { .. } => -32602,

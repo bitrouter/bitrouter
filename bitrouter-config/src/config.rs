@@ -608,7 +608,7 @@ pub struct ToolConfig {
 
     /// Optional per-tool invocation pricing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pricing: Option<crate::tool::ToolPricing>,
+    pub pricing: Option<bitrouter_core::pricing::FlatPricing>,
 }
 
 #[cfg(test)]

@@ -7,12 +7,12 @@ use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use bitrouter_core::api::a2a::error::A2aGatewayError;
 use bitrouter_core::api::a2a::gateway::{A2aGateway, A2aProxy};
+use bitrouter_core::api::a2a::types::A2aGatewayError;
 use bitrouter_core::api::a2a::types::*;
 use bitrouter_core::observe::{
-    AgentCallFailureEvent, AgentCallSuccessEvent, AgentObserveCallback, AgentRequestContext,
-    CallerContext,
+    CallerContext, ToolCallFailureEvent, ToolCallSuccessEvent, ToolObserveCallback,
+    ToolRequestContext,
 };
 use futures_core::Stream;
 use tokio::time::Instant;
@@ -30,7 +30,7 @@ use warp::Filter;
 /// observation events through the observer with caller context.
 pub fn a2a_gateway_filter<G, A>(
     registry: Option<Arc<G>>,
-    observer: Option<Arc<dyn AgentObserveCallback>>,
+    observer: Option<Arc<dyn ToolObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
@@ -69,7 +69,7 @@ fn require_agent<'a, G: A2aGateway>(
 
 /// Build an `Option<A2aObserveContext>` from per-request caller and shared observer.
 fn make_ctx(
-    observer: &Option<Arc<dyn AgentObserveCallback>>,
+    observer: &Option<Arc<dyn ToolObserveCallback>>,
     caller: CallerContext,
 ) -> Option<A2aObserveContext> {
     observer.as_ref().map(|obs| A2aObserveContext {
@@ -82,7 +82,7 @@ fn make_ctx(
 
 fn jsonrpc_filter<G: A2aGateway + 'static, A>(
     registry: Option<Arc<G>>,
-    observer: Option<Arc<dyn AgentObserveCallback>>,
+    observer: Option<Arc<dyn ToolObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
@@ -100,7 +100,7 @@ where
             |agent_name: String,
              request: JsonRpcRequest,
              registry: Option<Arc<G>>,
-             observer: Option<Arc<dyn AgentObserveCallback>>,
+             observer: Option<Arc<dyn ToolObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent::<G>(&registry, &agent_name) {
@@ -228,7 +228,7 @@ async fn dispatch_jsonrpc(
 
 fn streaming_filter<G: A2aGateway + 'static, A>(
     registry: Option<Arc<G>>,
-    observer: Option<Arc<dyn AgentObserveCallback>>,
+    observer: Option<Arc<dyn ToolObserveCallback>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
@@ -246,7 +246,7 @@ where
             |agent_name: String,
              request: JsonRpcRequest,
              registry: Option<Arc<G>>,
-             observer: Option<Arc<dyn AgentObserveCallback>>,
+             observer: Option<Arc<dyn ToolObserveCallback>>,
              caller: CallerContext| async move {
                 let ctx = make_ctx(&observer, caller);
                 let agent = match require_agent::<G>(&registry, &agent_name) {
@@ -548,11 +548,11 @@ fn stream_response_to_sse(
 /// Shared context threaded through A2A gateway filters for observation.
 #[derive(Clone)]
 struct A2aObserveContext {
-    observer: Arc<dyn AgentObserveCallback>,
+    observer: Arc<dyn ToolObserveCallback>,
     caller: CallerContext,
 }
 
-/// Fire a success [`AgentCallSuccessEvent`] for a completed A2A operation.
+/// Fire a success [`ToolCallSuccessEvent`] for a completed A2A operation.
 ///
 /// The event is spawned as an async task so it never blocks the response path.
 fn emit_agent_success(
@@ -562,19 +562,19 @@ fn emit_agent_success(
     start: Instant,
 ) {
     let Some(ctx) = ctx else { return };
-    let event = AgentCallSuccessEvent {
-        ctx: AgentRequestContext {
-            agent: agent_name.to_string(),
-            method: method.to_string(),
+    let event = ToolCallSuccessEvent {
+        ctx: ToolRequestContext {
+            provider: agent_name.to_string(),
+            operation: method.to_string(),
             caller: ctx.caller.clone(),
             latency_ms: start.elapsed().as_millis() as u64,
         },
     };
     let obs = ctx.observer.clone();
-    tokio::spawn(async move { obs.on_agent_call_success(event).await });
+    tokio::spawn(async move { obs.on_tool_call_success(event).await });
 }
 
-/// Fire a failure [`AgentCallFailureEvent`] from an error description.
+/// Fire a failure [`ToolCallFailureEvent`] from an error description.
 fn emit_agent_failure(
     ctx: &Option<A2aObserveContext>,
     agent_name: &str,
@@ -583,15 +583,15 @@ fn emit_agent_failure(
     error: &str,
 ) {
     let Some(ctx) = ctx else { return };
-    let event = AgentCallFailureEvent {
-        ctx: AgentRequestContext {
-            agent: agent_name.to_string(),
-            method: method.to_string(),
+    let event = ToolCallFailureEvent {
+        ctx: ToolRequestContext {
+            provider: agent_name.to_string(),
+            operation: method.to_string(),
             caller: ctx.caller.clone(),
             latency_ms: start.elapsed().as_millis() as u64,
         },
         error: error.to_string(),
     };
     let obs = ctx.observer.clone();
-    tokio::spawn(async move { obs.on_agent_call_failure(event).await });
+    tokio::spawn(async move { obs.on_tool_call_failure(event).await });
 }

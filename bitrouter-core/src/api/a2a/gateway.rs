@@ -9,7 +9,7 @@ use std::pin::Pin;
 use futures_core::Stream;
 use tokio::sync::broadcast;
 
-use crate::api::a2a::error::A2aGatewayError;
+use crate::api::a2a::types::A2aGatewayError;
 use crate::api::a2a::types::{
     AgentCard, GetTaskRequest, ListTasksRequest, ListTasksResponse, SendMessageRequest,
     StreamResponse, Task, TaskPushNotificationConfig,

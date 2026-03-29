@@ -56,12 +56,16 @@ async fn handle_list_tools<T: AdminToolRegistry>(
     let items: Vec<serde_json::Value> = tools
         .into_iter()
         .map(|t| {
+            let input_schema = t
+                .definition
+                .input_schema
+                .and_then(|s| serde_json::to_value(s).ok());
             serde_json::json!({
                 "id": t.id,
-                "name": t.name,
+                "name": t.definition.name,
                 "provider": t.provider,
-                "description": t.description,
-                "input_schema": t.input_schema,
+                "description": t.definition.description,
+                "input_schema": input_schema,
             })
         })
         .collect();

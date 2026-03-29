@@ -6,6 +6,51 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+// ── Gateway errors ─────────────────────────────────────────────────
+
+/// Errors produced by the MCP gateway.
+#[derive(Debug, thiserror::Error)]
+pub enum McpGatewayError {
+    #[error("upstream '{name}' connection failed: {reason}")]
+    UpstreamConnect { name: String, reason: String },
+
+    #[error("upstream '{name}' call failed: {reason}")]
+    UpstreamCall { name: String, reason: String },
+
+    #[error("tool not found: {name}")]
+    ToolNotFound { name: String },
+
+    #[error("invalid config: {reason}")]
+    InvalidConfig { reason: String },
+
+    #[error("upstream '{name}' closed")]
+    UpstreamClosed { name: String },
+
+    #[error("parameter '{param}' denied on tool '{tool}'")]
+    ParamDenied { tool: String, param: String },
+
+    #[error("budget exceeded for account '{account_id}'")]
+    BudgetExceeded { account_id: String },
+
+    #[error("resource not found: {uri}")]
+    ResourceNotFound { uri: String },
+
+    #[error("prompt not found: {name}")]
+    PromptNotFound { name: String },
+
+    #[error("HTTP transport error for '{name}': {reason}")]
+    HttpTransport { name: String, reason: String },
+
+    #[error("session expired for '{name}': server returned 404")]
+    SessionExpired { name: String },
+
+    #[error("subscription not supported for resource: {uri}")]
+    SubscriptionNotSupported { uri: String },
+
+    #[error("completion not available for: {reference}")]
+    CompletionNotAvailable { reference: String },
+}
+
 // ── Tool types ─────────────────────────────────────────────────────
 
 /// An MCP tool definition exposed to downstream clients.
@@ -128,24 +173,9 @@ pub enum McpPromptContent {
 }
 
 // ── Core conversion ────────────────────────────────────────────────
-
-impl From<McpTool> for crate::routers::registry::ToolEntry {
-    fn from(t: McpTool) -> Self {
-        let provider = t
-            .name
-            .split_once('/')
-            .map(|(s, _)| s)
-            .unwrap_or("unknown")
-            .to_owned();
-        Self {
-            id: t.name,
-            name: None,
-            provider,
-            description: t.description,
-            input_schema: Some(t.input_schema),
-        }
-    }
-}
+//
+// `McpTool ↔ ToolDefinition` and `McpTool → ToolEntry` conversions
+// live in `crate::api::mcp::convert`.
 
 // ── Initialize ─────────────────────────────────────────────────────
 
@@ -1128,5 +1158,23 @@ mod jsonrpc_tests {
         let json = serde_json::to_string(&resp).expect("serialize");
         assert!(!json.contains("\"result\""));
         assert!(json.contains("-32601"));
+    }
+
+    #[test]
+    fn error_display_messages() {
+        let err = McpGatewayError::ToolNotFound { name: "x/y".into() };
+        assert!(err.to_string().contains("x/y"));
+
+        let err = McpGatewayError::InvalidConfig {
+            reason: "bad".into(),
+        };
+        assert!(err.to_string().contains("bad"));
+
+        let err = McpGatewayError::ParamDenied {
+            tool: "delete".into(),
+            param: "force".into(),
+        };
+        assert!(err.to_string().contains("force"));
+        assert!(err.to_string().contains("delete"));
     }
 }

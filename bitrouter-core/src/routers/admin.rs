@@ -1,4 +1,4 @@
-//! Admin types and traits for runtime management of routes, tools, and agents.
+//! Admin types and traits for runtime management of routes and tools.
 //!
 //! Provides extension traits that layer admin (mutation / inspection) capabilities
 //! on top of the read-only discovery traits in [`registry`](super::registry):
@@ -7,7 +7,6 @@
 //! |---------|--------------------|------------------------|
 //! | Models  | `RoutingTable`     | `AdminRoutingTable`    |
 //! | Tools   | `ToolRegistry`     | `AdminToolRegistry`    |
-//! | Agents  | `AgentRegistry`    | `AdminAgentRegistry`   |
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -16,8 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::Result;
 
-use super::registry::{AgentRegistry, ToolRegistry};
 use super::routing_table::RoutingTable;
+use crate::tools::registry::ToolGateway;
 
 /// A single endpoint in a dynamic route.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,10 +214,10 @@ pub struct ToolUpstreamEntry {
 
 /// Admin interface for managing tool registries at runtime.
 ///
-/// Parallel to [`AdminRoutingTable`] for models. Extends [`ToolRegistry`]
+/// Parallel to [`AdminRoutingTable`] for models. Extends [`ToolGateway`]
 /// with methods for inspecting upstreams and updating filters and parameter
 /// restrictions without requiring config rewrites or daemon restarts.
-pub trait AdminToolRegistry: ToolRegistry {
+pub trait AdminToolRegistry: ToolGateway {
     /// List all upstream tool servers with their current state.
     fn list_upstreams(&self) -> impl Future<Output = Vec<ToolUpstreamEntry>> + Send;
     /// Update the tool filter for a specific upstream server.
@@ -233,41 +232,4 @@ pub trait AdminToolRegistry: ToolRegistry {
         server: &str,
         restrictions: ParamRestrictions,
     ) -> impl Future<Output = Result<()>> + Send;
-}
-
-// ── Agent admin ─────────────────────────────────────────────────────
-
-/// Metadata about a connected upstream agent.
-#[derive(Debug, Clone, Serialize)]
-pub struct AgentUpstreamEntry {
-    /// Agent name.
-    pub name: String,
-    /// Upstream agent URL.
-    pub url: String,
-    /// Whether the upstream connection is active.
-    pub connected: bool,
-}
-
-/// Trait for providing upstream agent metadata.
-///
-/// Implemented by protocol-specific registries (e.g. A2A) that can report
-/// connection-level details not captured in the generic [`AgentEntry`].
-pub trait AgentUpstreamSource: Send + Sync {
-    /// List upstream agents with connection status.
-    fn list_upstreams(&self) -> impl Future<Output = Vec<AgentUpstreamEntry>> + Send;
-}
-
-impl<T: AgentUpstreamSource> AgentUpstreamSource for std::sync::Arc<T> {
-    async fn list_upstreams(&self) -> Vec<AgentUpstreamEntry> {
-        (**self).list_upstreams().await
-    }
-}
-
-/// Admin interface for inspecting agent registries at runtime.
-///
-/// Parallel to [`AdminRoutingTable`] for models. Extends [`AgentRegistry`]
-/// with methods for inspecting upstream agent connections.
-pub trait AdminAgentRegistry: AgentRegistry {
-    /// List all upstream agents with connection status.
-    fn list_upstreams(&self) -> impl Future<Output = Vec<AgentUpstreamEntry>> + Send;
 }

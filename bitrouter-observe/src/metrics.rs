@@ -29,9 +29,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use bitrouter_core::observe::{
-    AgentCallFailureEvent, AgentCallSuccessEvent, AgentObserveCallback, ObserveCallback,
-    RequestFailureEvent, RequestSuccessEvent, ToolCallFailureEvent, ToolCallSuccessEvent,
-    ToolObserveCallback,
+    ObserveCallback, RequestFailureEvent, RequestSuccessEvent, ToolCallFailureEvent,
+    ToolCallSuccessEvent, ToolObserveCallback,
 };
 use serde::Serialize;
 
@@ -318,8 +317,8 @@ impl ToolObserveCallback for MetricsCollector {
         &self,
         event: ToolCallSuccessEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let route = format!("tool:{}", event.ctx.server);
-        let endpoint = event.ctx.tool;
+        let route = format!("tool:{}", event.ctx.provider);
+        let endpoint = event.ctx.operation;
         self.record(route, endpoint, event.ctx.latency_ms, false, None, None);
         Box::pin(async {})
     }
@@ -328,30 +327,8 @@ impl ToolObserveCallback for MetricsCollector {
         &self,
         event: ToolCallFailureEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let route = format!("tool:{}", event.ctx.server);
-        let endpoint = event.ctx.tool;
-        self.record(route, endpoint, event.ctx.latency_ms, true, None, None);
-        Box::pin(async {})
-    }
-}
-
-impl AgentObserveCallback for MetricsCollector {
-    fn on_agent_call_success(
-        &self,
-        event: AgentCallSuccessEvent,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let route = format!("agent:{}", event.ctx.agent);
-        let endpoint = event.ctx.method;
-        self.record(route, endpoint, event.ctx.latency_ms, false, None, None);
-        Box::pin(async {})
-    }
-
-    fn on_agent_call_failure(
-        &self,
-        event: AgentCallFailureEvent,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let route = format!("agent:{}", event.ctx.agent);
-        let endpoint = event.ctx.method;
+        let route = format!("tool:{}", event.ctx.provider);
+        let endpoint = event.ctx.operation;
         self.record(route, endpoint, event.ctx.latency_ms, true, None, None);
         Box::pin(async {})
     }
@@ -589,8 +566,8 @@ mod tests {
         collector
             .on_tool_call_success(ToolCallSuccessEvent {
                 ctx: ToolRequestContext {
-                    server: "github".into(),
-                    tool: "search".into(),
+                    provider: "github".into(),
+                    operation: "search".into(),
                     caller: CallerContext::default(),
                     latency_ms: 150,
                 },
@@ -605,15 +582,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_callback_records_metrics() {
-        use bitrouter_core::observe::{AgentCallFailureEvent, AgentRequestContext};
+    async fn tool_callback_records_failure() {
+        use bitrouter_core::observe::{ToolCallFailureEvent, ToolRequestContext};
 
         let collector = MetricsCollector::new();
         collector
-            .on_agent_call_failure(AgentCallFailureEvent {
-                ctx: AgentRequestContext {
-                    agent: "upstream".into(),
-                    method: "message/send".into(),
+            .on_tool_call_failure(ToolCallFailureEvent {
+                ctx: ToolRequestContext {
+                    provider: "upstream-agent".into(),
+                    operation: "message/send".into(),
                     caller: CallerContext::default(),
                     latency_ms: 300,
                 },
@@ -624,7 +601,7 @@ mod tests {
         let snap = collector.snapshot();
         let route = snap
             .routes
-            .get("agent:upstream")
+            .get("tool:upstream-agent")
             .expect("route should exist");
         assert_eq!(route.total_requests, 1);
         assert_eq!(route.total_errors, 1);

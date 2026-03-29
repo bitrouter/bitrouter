@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     errors::Result,
     models::language::language_model::DynLanguageModel,
-    routers::{model_router::LanguageModelRouter, routing_table::RoutingTarget},
+    routers::{router::LanguageModelRouter, routing_table::RoutingTarget},
 };
 
 use super::{GenerationHook, HookedModel};

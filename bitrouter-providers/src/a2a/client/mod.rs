@@ -3,5 +3,6 @@
 //! - [`upstream::UpstreamA2aAgent`] — Live connection to a single upstream agent
 //! - [`registry::UpstreamAgentRegistry`] — Single-agent registry implementing gateway traits
 
+pub mod config;
 pub mod registry;
 pub mod upstream;

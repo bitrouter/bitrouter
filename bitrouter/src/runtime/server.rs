@@ -3,14 +3,12 @@ use std::sync::Arc;
 use bitrouter_api::router::{admin, models, routes};
 use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
-#[cfg(feature = "a2a")]
-use bitrouter_core::observe::AgentObserveCallback;
-#[cfg(feature = "mcp")]
+#[cfg(any(feature = "mcp", feature = "a2a"))]
 use bitrouter_core::observe::ToolObserveCallback;
 use bitrouter_core::observe::{CallerContext, ObserveCallback};
 use bitrouter_core::routers::admin::AdminRoutingTable;
-use bitrouter_core::routers::model_router::LanguageModelRouter;
 use bitrouter_core::routers::registry::ModelRegistry;
+use bitrouter_core::routers::router::LanguageModelRouter;
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
 use bitrouter_observe::builder::ObserveStack;
 use sea_orm::DatabaseConnection;
@@ -130,19 +128,11 @@ where
         });
 
         let tool_configs = self.config.tools.clone();
-        observe_builder = observe_builder.tool_cost(move |_server, tool| {
+        observe_builder = observe_builder.tool_cost(move |provider, operation| {
             tool_configs
-                .get(tool)
+                .get(provider)
                 .and_then(|tc| tc.pricing.as_ref())
-                .map_or(0.0, |p| p.cost_for(tool))
-        });
-
-        let agent_tool_configs = self.config.tools.clone();
-        observe_builder = observe_builder.agent_cost(move |agent, method| {
-            agent_tool_configs
-                .get(agent)
-                .and_then(|tc| tc.pricing.as_ref())
-                .map_or(0.0, |p| p.cost_for(method))
+                .map_or(0.0, |p| p.cost_for(operation))
         });
 
         let observe = observe_builder.build();
@@ -401,19 +391,34 @@ where
         // ── A2A protocol ─────────────────────────────────────────────
         #[cfg(feature = "a2a")]
         let a2a = {
-            let agent_observer: Arc<dyn AgentObserveCallback> = observe.observer.clone();
+            let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
             crate::runtime::a2a_client::A2aClient::new(
                 &providers_by_protocol,
                 self.config.server.listen,
             )
-            .with_auth(auth_ctx.clone())
-            .with_observe(agent_observer)
+            .with_observe(tool_observer)
             .with_account_filter(account_filter.clone())
             .build()
             .await
         };
         #[cfg(not(feature = "a2a"))]
         let a2a = crate::runtime::a2a_client::A2aRoutes::noop();
+
+        // ── Unified tool router ─────────────────────────────────────
+        let mut tool_router = crate::runtime::router::ToolRouterImpl::new();
+        for (name, provider) in mcp.tool_providers {
+            tool_router.register(name, provider);
+        }
+        for (name, provider) in a2a.tool_providers {
+            tool_router.register(name, provider);
+        }
+        if tool_router.has_providers() {
+            tracing::info!(
+                "tool router initialized with {} providers",
+                tool_router.provider_count()
+            );
+        }
+        let _tool_router = std::sync::Arc::new(tool_router);
 
         // ── Base route tree (always present) ─────────────────────────
         let base = health
@@ -429,8 +434,6 @@ where
         // ── Compose all routes ─────────────────────────────────────────
         let all_routes = base
             .or(a2a.gateway)
-            .or(a2a.admin_agent_routes)
-            .or(a2a.agent_list)
             .or(mcp.admin_tool_routes)
             .or(mcp.tool_list)
             .or(skills.skills_list)

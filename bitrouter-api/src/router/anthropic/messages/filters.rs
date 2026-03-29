@@ -11,7 +11,7 @@ use bitrouter_core::{
     observe::{
         CallerContext, ObserveCallback, RequestContext, RequestFailureEvent, RequestSuccessEvent,
     },
-    routers::{model_router::LanguageModelRouter, routing_table::RoutingTable},
+    routers::{router::LanguageModelRouter, routing_table::RoutingTable},
 };
 use warp::Filter;
 

@@ -11,7 +11,7 @@ use bytes::BytesMut;
 use futures_core::Stream;
 use tokio_stream::StreamExt;
 
-use bitrouter_core::api::a2a::error::A2aGatewayError;
+use bitrouter_core::api::a2a::types::A2aGatewayError;
 use bitrouter_core::api::a2a::types::{
     AgentCard, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, GetTaskRequest, JsonRpcRequest, JsonRpcResponse,

@@ -1,5 +1,5 @@
-//! [`SpendObserver`] — an [`ObserveCallback`] that calculates cost and
-//! persists spend logs via a [`SpendStore`].
+//! [`ModelSpendObserver`] — an [`ObserveCallback`] that calculates cost for
+//! model requests and persists spend logs via a [`SpendStore`].
 
 use std::sync::Arc;
 
@@ -22,12 +22,12 @@ type PricingLookup = dyn Fn(&str, &str) -> ModelPricing + Send + Sync;
 ///
 /// The `pricing_lookup` closure maps `(provider, model)` to [`Pricing`],
 /// decoupling this crate from `bitrouter-config`.
-pub struct SpendObserver {
+pub struct ModelSpendObserver {
     store: Arc<dyn SpendStore>,
     pricing_lookup: Arc<PricingLookup>,
 }
 
-impl SpendObserver {
+impl ModelSpendObserver {
     pub fn new(store: Arc<dyn SpendStore>, pricing_lookup: Arc<PricingLookup>) -> Self {
         Self {
             store,
@@ -36,7 +36,7 @@ impl SpendObserver {
     }
 }
 
-impl ObserveCallback for SpendObserver {
+impl ObserveCallback for ModelSpendObserver {
     fn on_request_success(
         &self,
         event: RequestSuccessEvent,
@@ -158,7 +158,7 @@ mod tests {
     #[tokio::test]
     async fn success_writes_spend_log_with_cost() {
         let store = Arc::new(InMemorySpendStore::new());
-        let observer = SpendObserver::new(store.clone(), Arc::new(|_, _| test_pricing()));
+        let observer = ModelSpendObserver::new(store.clone(), Arc::new(|_, _| test_pricing()));
 
         let event = RequestSuccessEvent {
             ctx: test_ctx(),
@@ -195,7 +195,7 @@ mod tests {
     #[tokio::test]
     async fn failure_writes_spend_log_with_error_info() {
         let store = Arc::new(InMemorySpendStore::new());
-        let observer = SpendObserver::new(store.clone(), Arc::new(|_, _| test_pricing()));
+        let observer = ModelSpendObserver::new(store.clone(), Arc::new(|_, _| test_pricing()));
 
         let event = RequestFailureEvent {
             ctx: test_ctx(),

@@ -7,14 +7,17 @@ use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock};
 
-use bitrouter_core::routers::upstream::{ToolServerConfig, ToolServerTransport};
+use super::config::{McpServerConfig, McpServerTransport};
+use bitrouter_core::errors::{BitrouterError, Result as BResult};
+use bitrouter_core::tools::provider::ToolProvider;
+use bitrouter_core::tools::result::{ToolCallResult, ToolContent};
 
 use crate::mcp::transports::McpTransport;
 use crate::mcp::transports::TransportKind;
-use bitrouter_core::api::mcp::error::McpGatewayError;
 use bitrouter_core::api::mcp::gateway::McpClientRequestHandler;
+use bitrouter_core::api::mcp::types::McpGatewayError;
 use bitrouter_core::api::mcp::types::{
-    McpGetPromptResult, McpPrompt, McpPromptArgument, McpResource, McpResourceContent,
+    McpContent, McpGetPromptResult, McpPrompt, McpPromptArgument, McpResource, McpResourceContent,
     McpResourceTemplate, McpTool, McpToolCallResult,
 };
 
@@ -63,7 +66,7 @@ impl UpstreamConnection {
     /// If a `handler` is provided, the connection will handle server→client
     /// requests (sampling, elicitation) by dispatching to it.
     pub async fn connect(
-        config: ToolServerConfig,
+        config: McpServerConfig,
         #[cfg(feature = "mcp-stdio")] handler: Option<Arc<dyn McpClientRequestHandler>>,
         #[cfg(not(feature = "mcp-stdio"))] _handler: Option<Arc<dyn McpClientRequestHandler>>,
     ) -> Result<Self, McpGatewayError> {
@@ -88,7 +91,7 @@ impl UpstreamConnection {
         let prompt_notify = Arc::new(Notify::new());
 
         match config.transport {
-            ToolServerTransport::Http {
+            McpServerTransport::Http {
                 ref url,
                 ref headers,
             } => {
@@ -132,7 +135,7 @@ impl UpstreamConnection {
                 })
             }
             #[cfg(feature = "mcp-stdio")]
-            ToolServerTransport::Stdio {
+            McpServerTransport::Stdio {
                 ref command,
                 ref args,
                 ref env,
@@ -175,7 +178,7 @@ impl UpstreamConnection {
                 })
             }
             #[cfg(not(feature = "mcp-stdio"))]
-            ToolServerTransport::Stdio { .. } => Err(McpGatewayError::InvalidConfig {
+            McpServerTransport::Stdio { .. } => Err(McpGatewayError::InvalidConfig {
                 reason: format!(
                     "server '{name}': stdio transport requires the 'mcp-stdio' feature"
                 ),
@@ -336,5 +339,55 @@ impl UpstreamConnection {
         let mut cache = self.prompts.write().await;
         *cache = fresh;
         Ok(())
+    }
+}
+
+// ── ToolProvider impl ──────────────────────────────────────────────
+
+impl ToolProvider for UpstreamConnection {
+    fn provider_name(&self) -> &str {
+        &self.name
+    }
+
+    async fn call_tool(
+        &self,
+        tool_id: &str,
+        arguments: serde_json::Value,
+    ) -> BResult<ToolCallResult> {
+        let args = match arguments {
+            serde_json::Value::Object(map) => Some(map),
+            serde_json::Value::Null => None,
+            other => {
+                return Err(BitrouterError::invalid_request(
+                    Some(&self.name),
+                    format!("tool arguments must be a JSON object, got {}", other),
+                    None,
+                ));
+            }
+        };
+
+        let mcp_result = self
+            .transport
+            .call_tool(tool_id, args)
+            .await
+            .map_err(|e| BitrouterError::transport(Some(&self.name), e.to_string()))?;
+
+        Ok(mcp_result_to_tool_result(mcp_result))
+    }
+}
+
+fn mcp_result_to_tool_result(mcp: McpToolCallResult) -> ToolCallResult {
+    let content = mcp
+        .content
+        .into_iter()
+        .map(|c| match c {
+            McpContent::Text { text } => ToolContent::Text { text },
+        })
+        .collect();
+
+    ToolCallResult {
+        content,
+        is_error: mcp.is_error.unwrap_or(false),
+        metadata: None,
     }
 }

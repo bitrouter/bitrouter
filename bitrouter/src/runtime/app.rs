@@ -113,7 +113,7 @@ impl
     /// inner routing table without dropping in-flight requests or dynamic routes.
     pub async fn serve_with_reload<M>(self, model_router: M) -> Result<()>
     where
-        M: bitrouter_core::routers::model_router::LanguageModelRouter + Send + Sync + 'static,
+        M: bitrouter_core::routers::router::LanguageModelRouter + Send + Sync + 'static,
     {
         use bitrouter_core::routers::reload::ReloadableRoutingTable;
 

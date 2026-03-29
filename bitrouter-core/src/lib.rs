@@ -7,6 +7,7 @@ pub mod models;
 pub mod observe;
 pub mod pricing;
 pub mod routers;
+pub mod tools;
 
 pub mod jwt {
     //! Re-export auth-related types for JWT generation and validation.

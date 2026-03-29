@@ -10,10 +10,11 @@ type RouteFilter = warp::filters::BoxedFilter<(Box<dyn warp::Reply>,)>;
 pub struct A2aRoutes {
     /// A2A JSON-RPC gateway endpoint.
     pub gateway: RouteFilter,
-    /// Admin agent management endpoints (gated by management auth).
-    pub admin_agent_routes: RouteFilter,
-    /// `GET /v1/agents` discovery endpoint.
-    pub agent_list: RouteFilter,
+    /// Type-erased per-agent tool providers for [`ToolRouterImpl`].
+    pub tool_providers: Vec<(
+        String,
+        Arc<bitrouter_core::tools::provider::DynToolProvider<'static>>,
+    )>,
     /// Background task guards — dropped when routes are dropped.
     _guards: Vec<Box<dyn std::any::Any + Send>>,
 }
@@ -27,9 +28,8 @@ impl A2aRoutes {
             .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
             .boxed();
         Self {
-            gateway: noop.clone(),
-            admin_agent_routes: noop.clone(),
-            agent_list: noop,
+            gateway: noop,
+            tool_providers: Vec::new(),
             _guards: Vec::new(),
         }
     }
@@ -43,26 +43,18 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 #[cfg(feature = "a2a")]
-use bitrouter_api::router::{admin_agents, agents};
-#[cfg(feature = "a2a")]
 use bitrouter_config::{ApiProtocol, ProviderConfig};
 #[cfg(feature = "a2a")]
-use bitrouter_core::observe::{AgentObserveCallback, CallerContext};
-#[cfg(feature = "a2a")]
-use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
+use bitrouter_core::observe::{CallerContext, ToolObserveCallback};
 #[cfg(feature = "a2a")]
 use bitrouter_providers::a2a::client::registry::UpstreamAgentRegistry;
-
-#[cfg(feature = "a2a")]
-use crate::runtime::auth::{self, JwtAuthContext};
 
 /// Builder for A2A upstream agent registry and gateway routes.
 #[cfg(feature = "a2a")]
 pub struct A2aClient {
     providers: Vec<(String, ProviderConfig)>,
     listen_addr: SocketAddr,
-    auth_ctx: Option<Arc<JwtAuthContext>>,
-    observer: Option<Arc<dyn AgentObserveCallback>>,
+    observer: Option<Arc<dyn ToolObserveCallback>>,
     account_filter: Option<warp::filters::BoxedFilter<(CallerContext,)>>,
 }
 
@@ -79,18 +71,12 @@ impl A2aClient {
         Self {
             providers,
             listen_addr,
-            auth_ctx: None,
             observer: None,
             account_filter: None,
         }
     }
 
-    pub fn with_auth(mut self, auth_ctx: Arc<JwtAuthContext>) -> Self {
-        self.auth_ctx = Some(auth_ctx);
-        self
-    }
-
-    pub fn with_observe(mut self, observer: Arc<dyn AgentObserveCallback>) -> Self {
+    pub fn with_observe(mut self, observer: Arc<dyn ToolObserveCallback>) -> Self {
         self.observer = Some(observer);
         self
     }
@@ -110,16 +96,33 @@ impl A2aClient {
     pub async fn build(self) -> A2aRoutes {
         let external_base_url = format!("http://{}/a2a", self.listen_addr);
 
-        // Convert A2A providers into AgentConfigs.
-        let a2a_configs: Vec<bitrouter_core::routers::upstream::AgentConfig> = self
+        // Build A2A agent configs from provider configs.
+        use bitrouter_providers::a2a::client::config::A2aAgentConfig;
+
+        let a2a_configs: Vec<A2aAgentConfig> = self
             .providers
             .iter()
-            .filter_map(|(name, p)| {
-                bitrouter_config::compat::provider_to_agent_config(name, p)
-                    .map_err(|e| {
-                        tracing::warn!(provider = %name, error = %e, "skipping A2A provider");
-                    })
-                    .ok()
+            .filter_map(|(name, provider)| {
+                let url = match provider.api_base.as_deref() {
+                    Some(url) => url.to_owned(),
+                    None => {
+                        tracing::warn!(provider = %name, "A2A provider requires api_base, skipping");
+                        return None;
+                    }
+                };
+
+                let mut headers = provider.default_headers.clone().unwrap_or_default();
+                if let Some(ref key) = provider.api_key {
+                    headers
+                        .entry("Authorization".to_owned())
+                        .or_insert_with(|| format!("Bearer {key}"));
+                }
+
+                Some(A2aAgentConfig {
+                    name: name.clone(),
+                    url,
+                    headers,
+                })
             })
             .collect();
 
@@ -127,15 +130,34 @@ impl A2aClient {
 
         let mut guards: Vec<Box<dyn std::any::Any + Send>> = Vec::new();
 
-        let (gateway_reg, discovery_reg) = if reg.has_agents() {
+        let (gateway_reg, tool_providers) = if reg.has_agents() {
             tracing::info!("A2A gateway started");
             let inner = Arc::new(reg);
             let guard = inner.spawn_refresh_listeners();
             guards.push(Box::new(guard));
-            let wrapped = Arc::new(DynamicAgentRegistry::new(Arc::clone(&inner)));
-            (Some(inner), Some(wrapped))
+
+            // Build type-erased tool providers.
+            let providers: Vec<(
+                String,
+                Arc<bitrouter_core::tools::provider::DynToolProvider<'static>>,
+            )> = inner
+                .agent_names()
+                .into_iter()
+                .map(|name| {
+                    let provider: Arc<bitrouter_core::tools::provider::DynToolProvider<'static>> =
+                        Arc::from(bitrouter_core::tools::provider::DynToolProvider::new_box(
+                            A2aToolProviderAdapter {
+                                registry: Arc::clone(&inner),
+                                agent_name: name.clone(),
+                            },
+                        ));
+                    (name, provider)
+                })
+                .collect();
+
+            (Some(inner), providers)
         } else {
-            (None, None)
+            (None, Vec::new())
         };
 
         // Build A2A gateway with optional observation.
@@ -150,27 +172,39 @@ impl A2aClient {
         .map(|r| Box::new(r) as Box<dyn warp::Reply>)
         .boxed();
 
-        // Build admin agent routes (gated by management auth when configured).
-        let admin_agent_routes = if let Some(ref auth_ctx) = self.auth_ctx {
-            auth::auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(admin_agents::admin_agents_filter(discovery_reg.clone()))
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        } else {
-            admin_agents::admin_agents_filter(discovery_reg.clone())
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        };
-
-        let agent_list = agents::agents_filter(discovery_reg)
-            .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-            .boxed();
-
         A2aRoutes {
             gateway,
-            admin_agent_routes,
-            agent_list,
+            tool_providers,
             _guards: guards,
         }
+    }
+}
+
+/// Thin wrapper that delegates [`ToolProvider`] to a specific agent in the registry.
+#[cfg(feature = "a2a")]
+struct A2aToolProviderAdapter {
+    registry: Arc<UpstreamAgentRegistry>,
+    agent_name: String,
+}
+
+#[cfg(feature = "a2a")]
+impl bitrouter_core::tools::provider::ToolProvider for A2aToolProviderAdapter {
+    fn provider_name(&self) -> &str {
+        &self.agent_name
+    }
+
+    async fn call_tool(
+        &self,
+        tool_id: &str,
+        arguments: serde_json::Value,
+    ) -> bitrouter_core::errors::Result<bitrouter_core::tools::result::ToolCallResult> {
+        let agent = self.registry.get_agent(&self.agent_name).ok_or_else(|| {
+            bitrouter_core::errors::BitrouterError::invalid_request(
+                Some(&self.agent_name),
+                format!("A2A agent '{}' not found in registry", self.agent_name),
+                None,
+            )
+        })?;
+        agent.call_tool(tool_id, arguments).await
     }
 }

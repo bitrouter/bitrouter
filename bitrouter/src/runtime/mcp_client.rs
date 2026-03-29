@@ -17,6 +17,11 @@ pub struct McpRoutes {
     pub tool_list: RouteFilter,
     /// Per-server bridge endpoints (`POST /mcp/:server`, `GET /mcp/:server/sse`).
     pub bridge_routes: RouteFilter,
+    /// Type-erased per-server tool providers for [`ToolRouterImpl`].
+    pub tool_providers: Vec<(
+        String,
+        Arc<bitrouter_core::tools::provider::DynToolProvider<'static>>,
+    )>,
     /// Background task guards — dropped when routes are dropped.
     _guards: Vec<Box<dyn std::any::Any + Send>>,
 }
@@ -34,6 +39,7 @@ impl McpRoutes {
             server: noop.clone(),
             tool_list: noop.clone(),
             bridge_routes: noop,
+            tool_providers: Vec::new(),
             _guards: Vec::new(),
         }
     }
@@ -87,7 +93,7 @@ use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
 #[cfg(feature = "mcp")]
 use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
 #[cfg(feature = "mcp")]
-use bitrouter_core::routers::model_router::LanguageModelRouter;
+use bitrouter_core::routers::router::LanguageModelRouter;
 #[cfg(feature = "mcp")]
 use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
 #[cfg(feature = "mcp")]
@@ -174,29 +180,47 @@ where
     }
 
     pub async fn build(self) -> McpRoutes {
-        // Convert providers to ToolServerConfigs.
-        let mcp_configs: Vec<bitrouter_core::routers::upstream::ToolServerConfig> = self
-            .providers
-            .iter()
-            .filter_map(|(name, p)| {
-                bitrouter_config::compat::provider_to_tool_server_config(name, p)
-                    .map_err(|e| {
-                        tracing::warn!(provider = %name, error = %e, "skipping MCP provider");
-                    })
-                    .ok()
-            })
-            .collect();
+        use bitrouter_providers::mcp::client::config::{McpServerConfig, McpServerTransport};
 
-        // Extract initial filters and restrictions from configs.
-        let initial_filters: HashMap<String, ToolFilter> = mcp_configs
-            .iter()
-            .filter_map(|cfg| cfg.tool_filter.clone().map(|f| (cfg.name.clone(), f)))
-            .collect();
-        let initial_restrictions: HashMap<String, ParamRestrictions> = mcp_configs
-            .iter()
-            .filter(|cfg| !cfg.param_restrictions.rules.is_empty())
-            .map(|cfg| (cfg.name.clone(), cfg.param_restrictions.clone()))
-            .collect();
+        // Build MCP server configs from provider configs.
+        let mut mcp_configs: Vec<McpServerConfig> = Vec::new();
+        let mut bridge_names: HashMap<String, bool> = HashMap::new();
+        let mut initial_filters: HashMap<String, ToolFilter> = HashMap::new();
+        let mut initial_restrictions: HashMap<String, ParamRestrictions> = HashMap::new();
+
+        for (name, provider) in &self.providers {
+            let url = match provider.api_base.as_deref() {
+                Some(url) => url.to_owned(),
+                None => {
+                    tracing::warn!(provider = %name, "MCP provider requires api_base, skipping");
+                    continue;
+                }
+            };
+
+            let mut headers = provider.default_headers.clone().unwrap_or_default();
+            if let Some(ref key) = provider.api_key {
+                headers
+                    .entry("Authorization".to_owned())
+                    .or_insert_with(|| format!("Bearer {key}"));
+            }
+
+            mcp_configs.push(McpServerConfig {
+                name: name.clone(),
+                transport: McpServerTransport::Http { url, headers },
+            });
+
+            if provider.bridge.unwrap_or(false) {
+                bridge_names.insert(name.clone(), true);
+            }
+            if let Some(ref filter) = provider.tool_filter {
+                initial_filters.insert(name.clone(), filter.clone());
+            }
+            if let Some(ref restrictions) = provider.param_restrictions
+                && !restrictions.rules.is_empty()
+            {
+                initial_restrictions.insert(name.clone(), restrictions.clone());
+            }
+        }
 
         // Build the sampling handler so upstream MCP servers can request
         // LLM generation via sampling/createMessage.
@@ -243,18 +267,19 @@ where
         // Build bridge endpoints for servers with `bridge: true`.
         let mut bridge_map: HashMap<String, Arc<SingleServerBridge>> = HashMap::new();
         if let Some(ref reg) = inner {
-            for config in mcp_configs.iter().filter(|c| c.bridge) {
-                if let Some(conn) = connections.get(&config.name) {
-                    let (bridge, guard) = SingleServerBridge::new(
-                        Arc::clone(conn),
-                        McpToolServer::subscribe_tool_changes(reg.as_ref()),
-                        McpResourceServer::subscribe_resource_changes(reg.as_ref()),
-                        McpPromptServer::subscribe_prompt_changes(reg.as_ref()),
-                    );
-                    tracing::info!(server = %config.name, "MCP bridge enabled");
-                    bridge_map.insert(config.name.clone(), bridge);
-                    guards.push(Box::new(guard));
+            for (name, conn) in &connections {
+                if !bridge_names.contains_key(name) {
+                    continue;
                 }
+                let (bridge, guard) = SingleServerBridge::new(
+                    Arc::clone(conn),
+                    McpToolServer::subscribe_tool_changes(reg.as_ref()),
+                    McpResourceServer::subscribe_resource_changes(reg.as_ref()),
+                    McpPromptServer::subscribe_prompt_changes(reg.as_ref()),
+                );
+                tracing::info!(server = %name, "MCP bridge enabled");
+                bridge_map.insert(name.clone(), bridge);
+                guards.push(Box::new(guard));
             }
         }
         let bridge_routes = mcp_admin::mcp_bridge_filter(Arc::new(bridge_map))
@@ -290,12 +315,11 @@ where
         // for the unified GET /v1/tools endpoint.
         let tool_list = if let Some(ref mcp_reg) = registry {
             if let Some(ref skill_reg) = self.skill_registry {
-                let composite = Arc::new(
-                    bitrouter_core::routers::registry::CompositeToolRegistry::new(
+                let composite =
+                    Arc::new(bitrouter_core::tools::registry::CompositeToolRegistry::new(
                         mcp_reg.clone(),
                         skill_reg.clone(),
-                    ),
-                );
+                    ));
                 tools::tools_filter(Some(composite))
                     .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                     .boxed()
@@ -314,13 +338,56 @@ where
                 .boxed()
         };
 
+        // Collect type-erased tool providers for ToolRouterImpl.
+        let tool_providers: Vec<(
+            String,
+            Arc<bitrouter_core::tools::provider::DynToolProvider<'static>>,
+        )> = connections
+            .into_iter()
+            .map(|(name, conn)| {
+                let provider: Arc<bitrouter_core::tools::provider::DynToolProvider<'static>> =
+                    Arc::from(bitrouter_core::tools::provider::DynToolProvider::new_box(
+                        McpToolProviderAdapter(conn),
+                    ));
+                (name, provider)
+            })
+            .collect();
+
         McpRoutes {
             admin_tool_routes,
             server,
             tool_list,
             bridge_routes,
+            tool_providers,
             _guards: guards,
         }
+    }
+}
+
+// ── MCP → ToolProvider adapter ───────────────────────────────────
+
+/// Thin wrapper that delegates [`ToolProvider`] to an `Arc<UpstreamConnection>`.
+#[cfg(feature = "mcp")]
+struct McpToolProviderAdapter(Arc<UpstreamConnection>);
+
+#[cfg(feature = "mcp")]
+impl bitrouter_core::tools::provider::ToolProvider for McpToolProviderAdapter {
+    fn provider_name(&self) -> &str {
+        // UpstreamConnection doesn't expose name() publicly, use the trait method
+        bitrouter_core::tools::provider::ToolProvider::provider_name(self.0.as_ref())
+    }
+
+    async fn call_tool(
+        &self,
+        tool_id: &str,
+        arguments: serde_json::Value,
+    ) -> bitrouter_core::errors::Result<bitrouter_core::tools::result::ToolCallResult> {
+        bitrouter_core::tools::provider::ToolProvider::call_tool(
+            self.0.as_ref(),
+            tool_id,
+            arguments,
+        )
+        .await
     }
 }
 

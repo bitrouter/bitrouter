@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 
-use bitrouter_core::api::mcp::error::McpGatewayError;
+use bitrouter_core::api::mcp::types::McpGatewayError;
 use bitrouter_core::api::mcp::types::{
     InitializeResult, McpGetPromptResult, McpPrompt, McpResource, McpResourceContent,
     McpResourceTemplate, McpTool, McpToolCallResult,

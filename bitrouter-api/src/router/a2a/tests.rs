@@ -81,8 +81,8 @@ mod filter_tests {
     use std::pin::Pin;
     use std::sync::Arc;
 
-    use bitrouter_core::api::a2a::error::A2aGatewayError;
     use bitrouter_core::api::a2a::gateway::{A2aGateway, A2aProxy};
+    use bitrouter_core::api::a2a::types::A2aGatewayError;
     use bitrouter_core::api::a2a::types::*;
     use bitrouter_core::observe::CallerContext;
     use futures_core::Stream;

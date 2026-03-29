@@ -1,9 +1,7 @@
 #[cfg(feature = "a2a")]
 pub mod a2a;
 pub mod admin;
-pub mod admin_agents;
 pub mod admin_tools;
-pub mod agents;
 pub mod agentskills;
 #[cfg(feature = "anthropic")]
 pub mod anthropic;

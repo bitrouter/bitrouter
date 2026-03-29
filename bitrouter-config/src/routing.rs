@@ -408,7 +408,7 @@ impl ConfigToolRoutingTable {
     }
 
     /// Returns the pricing configuration for a tool, if any.
-    pub fn tool_pricing(&self, tool_name: &str) -> Option<&crate::tool::ToolPricing> {
+    pub fn tool_pricing(&self, tool_name: &str) -> Option<&bitrouter_core::pricing::FlatPricing> {
         self.tools.get(tool_name)?.pricing.as_ref()
     }
 

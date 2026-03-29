@@ -9,16 +9,31 @@ use crate::config::{ModelInfo, ProviderConfig};
 // ── Compile-time embedded provider definitions ──────────────────────
 
 const PROVIDER_DEFS: &[(&str, &str)] = &[
-    ("openai", include_str!("../providers/openai.yaml")),
-    ("anthropic", include_str!("../providers/anthropic.yaml")),
-    ("google", include_str!("../providers/google.yaml")),
-    ("bitrouter", include_str!("../providers/bitrouter.yaml")),
-    ("openrouter", include_str!("../providers/openrouter.yaml")),
-    ("deepseek", include_str!("../providers/deepseek.yaml")),
-    ("minimax", include_str!("../providers/minimax.yaml")),
-    ("zai", include_str!("../providers/zai.yaml")),
-    ("moonshot", include_str!("../providers/moonshot.yaml")),
-    ("qwen", include_str!("../providers/qwen.yaml")),
+    ("openai", include_str!("../providers/models/openai.yaml")),
+    (
+        "anthropic",
+        include_str!("../providers/models/anthropic.yaml"),
+    ),
+    ("google", include_str!("../providers/models/google.yaml")),
+    (
+        "bitrouter",
+        include_str!("../providers/models/bitrouter.yaml"),
+    ),
+    (
+        "openrouter",
+        include_str!("../providers/models/openrouter.yaml"),
+    ),
+    (
+        "deepseek",
+        include_str!("../providers/models/deepseek.yaml"),
+    ),
+    ("minimax", include_str!("../providers/models/minimax.yaml")),
+    ("zai", include_str!("../providers/models/zai.yaml")),
+    (
+        "moonshot",
+        include_str!("../providers/models/moonshot.yaml"),
+    ),
+    ("qwen", include_str!("../providers/models/qwen.yaml")),
 ];
 
 /// Raw YAML shape for built-in provider files.

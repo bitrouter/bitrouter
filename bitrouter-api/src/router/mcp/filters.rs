@@ -9,11 +9,11 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use bitrouter_core::api::mcp::error::McpGatewayError;
 use bitrouter_core::api::mcp::gateway::{
     McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer, McpServer,
     McpSubscriptionServer, McpToolServer,
 };
+use bitrouter_core::api::mcp::types::McpGatewayError;
 use bitrouter_core::api::mcp::types::{
     CallToolParams, CompleteParams, GetPromptParams, InitializeResult, JsonRpcId, JsonRpcMessage,
     JsonRpcResponse, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
@@ -728,8 +728,8 @@ fn emit_tool_success(ctx: &Option<McpObserveContext>, server: &str, tool: &str, 
     let Some(ctx) = ctx else { return };
     let event = ToolCallSuccessEvent {
         ctx: ToolRequestContext {
-            server: server.to_string(),
-            tool: tool.to_string(),
+            provider: server.to_string(),
+            operation: tool.to_string(),
             caller: ctx.caller.clone(),
             latency_ms: start.elapsed().as_millis() as u64,
         },
@@ -751,8 +751,8 @@ fn emit_tool_failure(
     let Some(ctx) = ctx else { return };
     let event = ToolCallFailureEvent {
         ctx: ToolRequestContext {
-            server: server.to_string(),
-            tool: tool.to_string(),
+            provider: server.to_string(),
+            operation: tool.to_string(),
             caller: ctx.caller.clone(),
             latency_ms: start.elapsed().as_millis() as u64,
         },

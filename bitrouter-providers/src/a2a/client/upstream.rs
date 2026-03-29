@@ -7,15 +7,18 @@ use futures_core::Stream;
 use tokio::sync::{Notify, RwLock};
 use tokio_stream::StreamExt;
 
-use bitrouter_core::api::a2a::error::A2aGatewayError;
+use super::config::A2aAgentConfig;
 use bitrouter_core::api::a2a::gateway::A2aProxy;
+use bitrouter_core::api::a2a::types::A2aGatewayError;
 use bitrouter_core::api::a2a::types::{
     AgentCard, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
     GetTaskPushNotificationConfigRequest, GetTaskRequest, ListTaskPushNotificationConfigsRequest,
-    ListTasksRequest, ListTasksResponse, SendMessageRequest, SendMessageResult, StreamResponse,
-    Task, TaskPushNotificationConfig,
+    ListTasksRequest, ListTasksResponse, Message, MessageRole, Part, SendMessageRequest,
+    SendMessageResult, StreamResponse, Task, TaskPushNotificationConfig,
 };
-use bitrouter_core::routers::upstream::AgentConfig;
+use bitrouter_core::errors::{BitrouterError, Result as BResult};
+use bitrouter_core::tools::provider::ToolProvider;
+use bitrouter_core::tools::result::{ToolCallResult, ToolContent};
 
 use crate::a2a::transports::A2aTransport;
 use crate::a2a::transports::jsonrpc::A2aClient;
@@ -35,7 +38,7 @@ pub struct UpstreamA2aAgent {
 
 impl UpstreamA2aAgent {
     /// Connect to an upstream A2A agent by discovering its agent card.
-    pub async fn connect(config: AgentConfig) -> Result<Self, A2aGatewayError> {
+    pub async fn connect(config: A2aAgentConfig) -> Result<Self, A2aGatewayError> {
         config
             .validate()
             .map_err(|reason| A2aGatewayError::InvalidConfig { reason })?;
@@ -323,6 +326,173 @@ fn terminate_on_error(
         }
     });
     tokio_stream::wrappers::ReceiverStream::new(rx)
+}
+
+// ── ToolProvider impl ──────────────────────────────────────────────
+
+impl ToolProvider for UpstreamA2aAgent {
+    fn provider_name(&self) -> &str {
+        &self.name
+    }
+
+    async fn call_tool(
+        &self,
+        _tool_id: &str,
+        arguments: serde_json::Value,
+    ) -> BResult<ToolCallResult> {
+        // A2A agents receive a message (text), not a structured tool call.
+        // The arguments are expected to contain a "message" field with the
+        // user's text, or we serialize the full arguments as the message.
+        let message_text = match arguments.get("message") {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            _ => serde_json::to_string(&arguments).unwrap_or_default(),
+        };
+
+        let request = SendMessageRequest {
+            message: Message {
+                kind: "message".into(),
+                role: MessageRole::User,
+                parts: vec![Part::text(message_text)],
+                message_id: format!(
+                    "msg-{:x}-{:x}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos(),
+                    std::process::id(),
+                ),
+                context_id: None,
+                task_id: None,
+                reference_task_ids: Vec::new(),
+                metadata: None,
+            },
+            configuration: None,
+            metadata: None,
+        };
+
+        let response = UpstreamA2aAgent::send_message(self, request)
+            .await
+            .map_err(|e| BitrouterError::transport(Some(&self.name), e.to_string()))?;
+
+        Ok(a2a_response_to_tool_result(response))
+    }
+}
+
+fn a2a_response_to_tool_result(response: StreamResponse) -> ToolCallResult {
+    match response {
+        StreamResponse::Task(task) => {
+            let is_error = task.status.state == bitrouter_core::api::a2a::types::TaskState::Failed;
+            let mut content: Vec<ToolContent> = task
+                .artifacts
+                .into_iter()
+                .flat_map(|artifact| a2a_parts_to_content(artifact.parts))
+                .collect();
+
+            // Include the status message if present and no artifact content.
+            if content.is_empty()
+                && let Some(msg) = &task.status.message
+            {
+                content.extend(a2a_message_to_content(msg));
+            }
+
+            ToolCallResult {
+                content,
+                is_error,
+                metadata: Some(serde_json::json!({
+                    "task_id": task.id,
+                    "state": task.status.state,
+                })),
+            }
+        }
+        StreamResponse::Message(msg) => {
+            let content = a2a_parts_to_content(msg.parts);
+            ToolCallResult {
+                content,
+                is_error: false,
+                metadata: None,
+            }
+        }
+        StreamResponse::StatusUpdate(event) => {
+            let is_error = event.status.state == bitrouter_core::api::a2a::types::TaskState::Failed;
+            let content = event
+                .status
+                .message
+                .as_ref()
+                .map(a2a_message_to_content)
+                .unwrap_or_default();
+            ToolCallResult {
+                content,
+                is_error,
+                metadata: Some(serde_json::json!({
+                    "task_id": event.task_id,
+                    "state": event.status.state,
+                })),
+            }
+        }
+        StreamResponse::ArtifactUpdate(event) => {
+            let content = a2a_parts_to_content(event.artifact.parts);
+            ToolCallResult {
+                content,
+                is_error: false,
+                metadata: Some(serde_json::json!({
+                    "task_id": event.task_id,
+                    "artifact_id": event.artifact.artifact_id,
+                })),
+            }
+        }
+    }
+}
+
+fn a2a_parts_to_content(parts: Vec<Part>) -> Vec<ToolContent> {
+    parts
+        .into_iter()
+        .map(|part| match part {
+            Part::Text { text, .. } => ToolContent::Text { text },
+            Part::File { file, .. } => {
+                if let Some(uri) = file.uri {
+                    ToolContent::Resource { uri, text: None }
+                } else if file
+                    .mime_type
+                    .as_deref()
+                    .is_some_and(|m| m.starts_with("image/"))
+                {
+                    ToolContent::Image {
+                        data: file.bytes.unwrap_or_default(),
+                        mime_type: file
+                            .mime_type
+                            .unwrap_or_else(|| "application/octet-stream".into()),
+                    }
+                } else {
+                    ToolContent::Text {
+                        text: file.bytes.unwrap_or_default(),
+                    }
+                }
+            }
+            Part::Data { data, .. } => ToolContent::Json { data },
+        })
+        .collect()
+}
+
+fn a2a_message_to_content(msg: &Message) -> Vec<ToolContent> {
+    msg.parts
+        .iter()
+        .map(|part| match part {
+            Part::Text { text, .. } => ToolContent::Text { text: text.clone() },
+            Part::Data { data, .. } => ToolContent::Json { data: data.clone() },
+            Part::File { file, .. } => {
+                if let Some(ref uri) = file.uri {
+                    ToolContent::Resource {
+                        uri: uri.clone(),
+                        text: None,
+                    }
+                } else {
+                    ToolContent::Text {
+                        text: file.bytes.clone().unwrap_or_default(),
+                    }
+                }
+            }
+        })
+        .collect()
 }
 
 // ── A2aProxy trait impl ─────────────────────────────────────────────

@@ -4,10 +4,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
-use bitrouter_core::api::a2a::error::A2aGatewayError;
+use super::config::A2aAgentConfig;
+use bitrouter_core::api::a2a::types::A2aGatewayError;
 use bitrouter_core::api::a2a::types::AgentCard;
-use bitrouter_core::routers::admin::{AgentUpstreamEntry, AgentUpstreamSource};
-use bitrouter_core::routers::upstream::AgentConfig;
+use bitrouter_core::tools::definition::ToolDefinition;
+use bitrouter_core::tools::provider::ToolProvider;
+use bitrouter_core::tools::registry::{ToolEntry, ToolGateway, ToolRegistry};
+use bitrouter_core::tools::result::ToolCallResult;
 use tokio::sync::broadcast;
 
 use super::upstream::UpstreamA2aAgent;
@@ -15,8 +18,8 @@ use super::upstream::UpstreamA2aAgent;
 /// Read-only registry for A2A agent lookup.
 ///
 /// Provides protocol-specific access to [`AgentCard`] objects. The core
-/// [`AgentRegistry`](bitrouter_core::routers::registry::AgentRegistry) trait
-/// handles protocol-agnostic discovery.
+/// [`ToolRegistry`](bitrouter_core::tools::registry::ToolRegistry) trait
+/// handles protocol-agnostic tool discovery.
 pub trait A2aAgentRegistry: Send + Sync {
     /// Get an agent card by name.
     fn get(&self, name: &str) -> impl Future<Output = Option<AgentCard>> + Send;
@@ -42,7 +45,7 @@ impl UpstreamAgentRegistry {
     ///
     /// Agents that fail to connect are logged and skipped so that one
     /// unreachable agent does not prevent the gateway from starting.
-    pub async fn from_configs(configs: Vec<AgentConfig>, external_base_url: String) -> Self {
+    pub async fn from_configs(configs: Vec<A2aAgentConfig>, external_base_url: String) -> Self {
         let (card_change_tx, _) = broadcast::channel(16);
         let mut agents = HashMap::new();
 
@@ -73,6 +76,11 @@ impl UpstreamAgentRegistry {
     /// Get a reference to an upstream agent by name.
     pub fn get_agent(&self, name: &str) -> Option<&UpstreamA2aAgent> {
         self.agents.get(name)
+    }
+
+    /// Return the names of all registered agents.
+    pub fn agent_names(&self) -> Vec<String> {
+        self.agents.keys().cloned().collect()
     }
 
     /// Require an agent by name, returning an error if not found.
@@ -163,29 +171,46 @@ impl A2aAgentRegistry for UpstreamAgentRegistry {
 
 // ── Core trait impls ────────────────────────────────────────────────
 
-/// Implement core [`AgentRegistry`](bitrouter_core::routers::registry::AgentRegistry)
-/// for public discovery (`GET /v1/agents`).
-impl bitrouter_core::routers::registry::AgentRegistry for UpstreamAgentRegistry {
-    async fn list_agents(&self) -> Vec<bitrouter_core::routers::registry::AgentEntry> {
-        A2aAgentRegistry::list(self)
-            .await
-            .into_iter()
-            .map(Into::into)
-            .collect()
+/// Implement core [`ToolRegistry`] so A2A agent skills appear in `GET /v1/tools`.
+impl ToolRegistry for UpstreamAgentRegistry {
+    async fn list_tools(&self) -> Vec<ToolEntry> {
+        let mut tools = Vec::new();
+        for (name, agent) in &self.agents {
+            let Some(card) = agent.cached_card().await else {
+                continue;
+            };
+            for skill in card.skills {
+                tools.push(ToolEntry {
+                    id: format!("{name}/{}", skill.name),
+                    provider: name.clone(),
+                    definition: ToolDefinition::from(skill),
+                });
+            }
+        }
+        tools
     }
 }
 
-/// Implement core [`AgentUpstreamSource`] for admin inspection.
-impl AgentUpstreamSource for UpstreamAgentRegistry {
-    async fn list_upstreams(&self) -> Vec<AgentUpstreamEntry> {
-        let mut entries = Vec::new();
-        for agent in self.agents.values() {
-            entries.push(AgentUpstreamEntry {
-                name: agent.name().to_string(),
-                url: agent.url().to_string(),
-                connected: agent.cached_card().await.is_some(),
-            });
-        }
-        entries
+impl ToolGateway for UpstreamAgentRegistry {
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> bitrouter_core::errors::Result<ToolCallResult> {
+        let (agent_name, _tool_name) = name.split_once('/').ok_or_else(|| {
+            bitrouter_core::errors::BitrouterError::invalid_request(
+                None,
+                format!("invalid tool name: {name}"),
+                None,
+            )
+        })?;
+        let agent = self.agents.get(agent_name).ok_or_else(|| {
+            bitrouter_core::errors::BitrouterError::invalid_request(
+                None,
+                format!("agent not found: {agent_name}"),
+                None,
+            )
+        })?;
+        agent.call_tool(name, arguments).await
     }
 }

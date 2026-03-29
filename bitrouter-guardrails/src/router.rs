@@ -6,7 +6,7 @@ use bitrouter_core::{
         language_model::{DynLanguageModel, LanguageModel},
         stream_result::LanguageModelStreamResult,
     },
-    routers::{model_router::LanguageModelRouter, routing_table::RoutingTarget},
+    routers::{router::LanguageModelRouter, routing_table::RoutingTarget},
 };
 
 use crate::engine::Guardrail;
