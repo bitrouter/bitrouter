@@ -15,14 +15,14 @@ use solana_signature::Signature as SolanaSignature;
 use crate::auth::JwtError;
 use crate::auth::chain::{Caip10, JwtAlgorithm};
 use crate::auth::claims::BitrouterClaims;
-use crate::auth::keys::MasterKeypair;
+use crate::auth::keys::JwtSigner;
 
-/// Sign a set of claims into a JWT string using the master keypair.
+/// Sign a set of claims into a JWT string using any [`JwtSigner`].
 ///
 /// The algorithm and signing method are determined by the chain in the claims:
 /// - Solana → SOL_EDDSA (Ed25519 over raw message)
 /// - EVM → EIP191K (EIP-191 prefixed secp256k1 ECDSA)
-pub fn sign(claims: &BitrouterClaims, keypair: &MasterKeypair) -> Result<String, JwtError> {
+pub fn sign(claims: &BitrouterClaims, signer: &dyn JwtSigner) -> Result<String, JwtError> {
     let caip10 = Caip10::parse(&claims.iss)?;
     let alg = caip10.chain.jwt_algorithm();
 
@@ -42,8 +42,8 @@ pub fn sign(claims: &BitrouterClaims, keypair: &MasterKeypair) -> Result<String,
     let message = format!("{header_b64}.{payload_b64}");
 
     let sig_bytes = match alg {
-        JwtAlgorithm::SolEdDsa => keypair.sign_ed25519(message.as_bytes()),
-        JwtAlgorithm::Eip191K => keypair.sign_eip191(message.as_bytes())?,
+        JwtAlgorithm::SolEdDsa => signer.sign_ed25519(message.as_bytes())?,
+        JwtAlgorithm::Eip191K => signer.sign_eip191(message.as_bytes())?,
     };
 
     let sig_b64 = URL_SAFE_NO_PAD.encode(&sig_bytes);

@@ -9,7 +9,7 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["tui", "sqlite", "postgres", "mpp-tempo", "wallet-ows"]
+default = ["tui", "sqlite", "postgres", "mpp-tempo"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
 sqlite = [
     "bitrouter-accounts/sqlite",
@@ -40,7 +40,6 @@ mpp-solana = [
     "dep:anyhow",
     "dep:bs58",
 ]
-wallet-ows = ["dep:ows-lib", "dep:ows-core", "dep:ows-signer", "dep:alloy", "dep:async-trait"]
 
 [dependencies]
 # Internal crates
@@ -104,14 +103,14 @@ mpp = { package = "mpp-br", version = "0.8.1", default-features = false, feature
 ], optional = true }
 bs58 = { version = "0.5", optional = true }
 
-# OWS wallet integration (optional)
-ows-lib = { version = "1.1", optional = true }
-ows-core = { version = "1.1", optional = true }
-ows-signer = { version = "1.1", optional = true }
+# OWS wallet integration
+ows-lib = { version = "1.1" }
+ows-core = { version = "1.1" }
+ows-signer = { version = "1.1" }
 alloy = { version = "1", default-features = false, features = [
     "signers",
-], optional = true }
-async-trait = { version = "0.1", optional = true }
+] }
+async-trait = { version = "0.1" }
 
 [dev-dependencies]
 tempfile = { version = "3" }

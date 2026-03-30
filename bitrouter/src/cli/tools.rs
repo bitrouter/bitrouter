@@ -1,17 +1,15 @@
 //! `bitrouter tools` subcommand — inspect MCP tools on a running daemon.
 
 use std::net::SocketAddr;
-use std::path::Path;
 
-use reqwest::blocking::{Client, RequestBuilder, Response};
-
-use crate::cli::keygen::generate_local_admin_jwt;
+use crate::cli::admin_auth::{admin_get, parse_error_message};
 
 /// Run the `tools list` subcommand — prints all tools from the running daemon.
-pub fn run_list(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let url = format!("http://{addr}/admin/tools");
-    let client = Client::new();
-    let resp = request_with_admin_auth(keys_dir, client.get(&url))?.send()?;
+pub fn run_list(
+    config: &bitrouter_config::BitrouterConfig,
+    addr: SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let resp = admin_get(config, addr, "/admin/tools")?;
 
     if !resp.status().is_success() {
         let msg = parse_error_message(resp)?;
@@ -42,10 +40,11 @@ pub fn run_list(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::er
 }
 
 /// Run the `tools status` subcommand — shows upstream server health.
-pub fn run_status(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let url = format!("http://{addr}/admin/tools/upstreams");
-    let client = Client::new();
-    let resp = request_with_admin_auth(keys_dir, client.get(&url))?.send()?;
+pub fn run_status(
+    config: &bitrouter_config::BitrouterConfig,
+    addr: SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let resp = admin_get(config, addr, "/admin/tools/upstreams")?;
 
     if !resp.status().is_success() {
         let msg = parse_error_message(resp)?;
@@ -69,35 +68,4 @@ pub fn run_status(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::
         }
     }
     Ok(())
-}
-
-pub(crate) fn request_with_admin_auth(
-    keys_dir: &Path,
-    request: RequestBuilder,
-) -> Result<RequestBuilder, Box<dyn std::error::Error>> {
-    let jwt = generate_local_admin_jwt(keys_dir)?;
-    Ok(request.bearer_auth(jwt))
-}
-
-pub(crate) fn parse_error_message(
-    response: Response,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let status = response.status();
-    let body = response.text()?;
-    let parsed = serde_json::from_str::<serde_json::Value>(&body).ok();
-
-    if let Some(message) = parsed
-        .as_ref()
-        .and_then(|value| value.get("error"))
-        .and_then(|value| value.get("message"))
-        .and_then(serde_json::Value::as_str)
-    {
-        return Ok(message.to_owned());
-    }
-
-    if body.trim().is_empty() {
-        Ok(format!("request failed with status {status}"))
-    } else {
-        Ok(format!("request failed with status {status}: {body}"))
-    }
 }
