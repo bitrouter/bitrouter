@@ -540,24 +540,19 @@ fn default_solana_network() -> String {
 /// When present, BitRouter uses the named OWS wallet for signing
 /// operations (e.g. MPP close transactions) instead of raw private keys.
 ///
+/// The passphrase (or API key) is **not** stored in the config file.
+/// At server startup the runtime reads `OWS_PASSPHRASE` from the
+/// environment, or prompts interactively if a TTY is available.
+///
 /// ```yaml
 /// wallet:
 ///   name: treasury
-///   ows_key: ows_key_7f3a...     # or via OWS_KEY env var
-///   vault_path: ~/.ows           # optional, defaults to OWS standard path
+///   vault_path: ~/.ows  # optional, defaults to OWS standard path
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
     /// OWS wallet name (or UUID).
     pub name: String,
-
-    /// OWS API key or passphrase used to decrypt the wallet for signing.
-    ///
-    /// API keys (`ows_key_...`) enable policy-gated agent access.
-    /// A plain passphrase grants direct owner access.
-    /// Falls back to `OWS_KEY` env var, then empty passphrase.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ows_key: Option<String>,
 
     /// Custom OWS vault directory. Defaults to `~/.ows`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

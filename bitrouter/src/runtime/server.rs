@@ -110,11 +110,7 @@ where
         // Try OWS wallet first.
         #[cfg(feature = "wallet-ows")]
         if let Some(wallet) = config.wallet.as_ref() {
-            let credential = wallet
-                .ows_key
-                .clone()
-                .or_else(|| std::env::var("OWS_KEY").ok())
-                .unwrap_or_default();
+            let credential = std::env::var("OWS_PASSPHRASE").unwrap_or_default();
             let vault_path = wallet.vault_path.as_deref().map(std::path::Path::new);
 
             let signer = crate::runtime::ows_signer::OwsSigner::new(
