@@ -1,12 +1,7 @@
-pub mod account;
+pub mod admin_auth;
 pub mod agents;
-#[cfg(feature = "wallet-ows")]
 pub mod key;
-pub mod keygen;
-pub mod keys;
 pub mod route;
-pub mod sudo;
 pub mod tools;
 pub mod update_check;
-#[cfg(feature = "wallet-ows")]
 pub mod wallet;

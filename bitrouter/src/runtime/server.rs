@@ -98,7 +98,7 @@ where
     /// Resolve the close signer for Tempo MPP.
     ///
     /// Priority:
-    /// 1. OWS wallet (if `wallet-ows` feature enabled and `wallet` config present)
+    /// 1. OWS wallet (if `wallet` config present)
     /// 2. Hex private key from `tempo.close_signer`
     /// 3. None (close signing disabled)
     #[cfg(feature = "mpp-tempo")]
@@ -108,7 +108,6 @@ where
     ) -> std::result::Result<Option<Arc<dyn mpp::Signer + Send + Sync>>, Box<dyn std::error::Error>>
     {
         // Try OWS wallet first.
-        #[cfg(feature = "wallet-ows")]
         if let Some(wallet) = config.wallet.as_ref() {
             let credential = std::env::var("OWS_PASSPHRASE").unwrap_or_default();
             let vault_path = wallet.vault_path.as_deref().map(std::path::Path::new);
@@ -127,9 +126,6 @@ where
             );
             return Ok(Some(Arc::new(signer)));
         }
-
-        // Suppress unused-variable warning when wallet-ows is disabled.
-        let _ = config;
 
         // Fall back to hex private key.
         if let Some(key_hex) = tempo.close_signer.as_deref() {

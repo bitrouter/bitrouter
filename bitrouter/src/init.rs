@@ -247,8 +247,7 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         all_provider_names.join(", ")
     );
 
-    // Offer OWS wallet creation when the feature is enabled.
-    #[cfg(feature = "wallet-ows")]
+    // Offer OWS wallet creation.
     {
         println!();
         let create_wallet = Confirm::with_theme(&theme)

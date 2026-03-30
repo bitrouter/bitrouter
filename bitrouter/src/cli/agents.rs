@@ -1,17 +1,15 @@
 //! `bitrouter agents` subcommand — inspect upstream agents on a running daemon.
 
 use std::net::SocketAddr;
-use std::path::Path;
 
-use reqwest::blocking::Client;
-
-use crate::cli::tools::{parse_error_message, request_with_admin_auth};
+use crate::cli::admin_auth::{admin_get, parse_error_message};
 
 /// Run the `agents list` subcommand — prints all agents from the running daemon.
-pub fn run_list(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let url = format!("http://{addr}/admin/agents");
-    let client = Client::new();
-    let resp = request_with_admin_auth(keys_dir, client.get(&url))?.send()?;
+pub fn run_list(
+    config: &bitrouter_config::BitrouterConfig,
+    addr: SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let resp = admin_get(config, addr, "/admin/agents")?;
 
     if !resp.status().is_success() {
         let msg = parse_error_message(resp)?;
@@ -36,10 +34,11 @@ pub fn run_list(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::er
 }
 
 /// Run the `agents status` subcommand — shows upstream agent connection health.
-pub fn run_status(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let url = format!("http://{addr}/admin/agents");
-    let client = Client::new();
-    let resp = request_with_admin_auth(keys_dir, client.get(&url))?.send()?;
+pub fn run_status(
+    config: &bitrouter_config::BitrouterConfig,
+    addr: SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let resp = admin_get(config, addr, "/admin/agents")?;
 
     if !resp.status().is_success() {
         let msg = parse_error_message(resp)?;

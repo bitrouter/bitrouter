@@ -9,7 +9,6 @@ mod tui;
 use std::path::PathBuf;
 
 use crate::runtime::{AppRuntime, PathOverrides, RuntimePaths, resolve_home};
-use bitrouter_core::auth::claims::{BudgetScope, TokenScope};
 use clap::{Parser, Subcommand};
 
 type DefaultRuntime = AppRuntime<
@@ -70,72 +69,16 @@ enum Command {
         action: RouteAction,
     },
 
-    /// Manage local web3 account keypairs [deprecated: use `wallet`]
-    Account {
-        /// Generate a new web3 master key and set as active
-        #[arg(short, long)]
-        generate_key: bool,
-
-        /// List all local account keys
-        #[arg(short, long)]
-        list: bool,
-
-        /// Set active account by index or pubkey prefix
-        #[arg(long)]
-        set: Option<String>,
-    },
-
     /// Manage OWS wallets
-    #[cfg(feature = "wallet-ows")]
     Wallet {
         #[command(subcommand)]
         action: WalletAction,
     },
 
     /// Manage OWS API keys for agent access
-    #[cfg(feature = "wallet-ows")]
     Key {
         #[command(subcommand)]
         action: KeyAction,
-    },
-
-    /// Sign a JWT with the active master key
-    Keygen {
-        /// Chain to sign with: "solana" or "base"
-        #[arg(long, default_value = "solana")]
-        chain: String,
-
-        /// Token scope: admin or api
-        #[arg(long, default_value = "api")]
-        scope: String,
-
-        /// Expiration duration (e.g., "5m", "1h", "30d", "never")
-        #[arg(long)]
-        exp: Option<String>,
-
-        /// Comma-separated list of allowed model patterns
-        #[arg(long, value_delimiter = ',')]
-        models: Option<Vec<String>>,
-
-        /// Budget limit in micro USD
-        #[arg(long)]
-        budget: Option<u64>,
-
-        /// Budget scope: session or account
-        #[arg(long)]
-        budget_scope: Option<String>,
-
-        /// Budget range (e.g., "rounds:10", "duration:3600s")
-        #[arg(long)]
-        budget_range: Option<String>,
-
-        /// Comma-separated list of allowed tool patterns (e.g., "github/*,jira/search")
-        #[arg(long, value_delimiter = ',')]
-        tools: Option<Vec<String>>,
-
-        /// Optional label for saving the token locally
-        #[arg(long)]
-        name: Option<String>,
     },
 
     /// Inspect upstream agents on a running daemon
@@ -148,27 +91,6 @@ enum Command {
     Tools {
         #[command(subcommand)]
         action: ToolsAction,
-    },
-
-    /// Manage locally-stored JWTs for the active account
-    Keys {
-        /// List saved tokens
-        #[arg(short, long)]
-        list: bool,
-
-        /// Show decoded claims of a token (by name or index)
-        #[arg(long)]
-        show: Option<String>,
-
-        /// Remove a saved token (by name or index)
-        #[arg(long)]
-        rm: Option<String>,
-    },
-
-    /// Wallet status and diagnostics
-    Sudo {
-        #[command(subcommand)]
-        action: SudoAction,
     },
 }
 
@@ -212,13 +134,6 @@ enum ToolsAction {
     Status,
 }
 
-#[derive(Debug, Subcommand)]
-enum SudoAction {
-    /// Display wallet info and status
-    ShowWallet,
-}
-
-#[cfg(feature = "wallet-ows")]
 #[derive(Debug, Subcommand)]
 enum WalletAction {
     /// Create a new wallet with a fresh BIP-39 mnemonic
@@ -289,7 +204,6 @@ enum WalletAction {
     },
 }
 
-#[cfg(feature = "wallet-ows")]
 #[derive(Debug, Subcommand)]
 enum KeyAction {
     /// Create a new API key for agent access
@@ -369,19 +283,8 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Handle key management commands — these only need paths, not a full runtime.
-    let keys_dir = paths.home_dir.join(".keys");
+    // Handle wallet and key management — these only need the OWS vault, not a runtime.
     match cli.command {
-        Some(Command::Account {
-            generate_key,
-            list,
-            set,
-        }) => {
-            eprintln!("note: `bitrouter account` is deprecated — use `bitrouter wallet` instead.");
-            cli::account::run(&keys_dir, generate_key, list, set)?;
-            return Ok(());
-        }
-        #[cfg(feature = "wallet-ows")]
         Some(Command::Wallet { action }) => {
             match action {
                 WalletAction::Create {
@@ -414,7 +317,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             return Ok(());
         }
-        #[cfg(feature = "wallet-ows")]
         Some(Command::Key { action }) => {
             match action {
                 KeyAction::Create {
@@ -428,57 +330,12 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             return Ok(());
         }
-        Some(Command::Keygen {
-            chain,
-            scope,
-            exp,
-            models,
-            tools,
-            budget,
-            budget_scope,
-            budget_range,
-            name,
-        }) => {
-            let scope = match scope.as_str() {
-                "admin" => TokenScope::Admin,
-                "api" => TokenScope::Api,
-                other => {
-                    return Err(
-                        format!("invalid scope \"{other}\" — use \"admin\" or \"api\"").into(),
-                    );
-                }
-            };
-            let budget_scope = budget_scope
-                .as_deref()
-                .map(|s| match s {
-                    "session" => Ok(BudgetScope::Session),
-                    "account" => Ok(BudgetScope::Account),
-                    other => Err(format!(
-                        "invalid budget scope \"{other}\" — use \"session\" or \"account\""
-                    )),
-                })
-                .transpose()?;
-            let opts = cli::keygen::KeygenOpts {
-                chain,
-                scope,
-                exp,
-                models,
-                tools,
-                budget,
-                budget_scope,
-                budget_range,
-                name,
-                mcp_groups: bitrouter_core::routers::upstream::ToolServerAccessGroups::default(),
-            };
-            cli::keygen::run(&keys_dir, opts)?;
-            return Ok(());
-        }
         Some(Command::Agents { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
-                AgentsAction::List => cli::agents::run_list(&keys_dir, addr)?,
-                AgentsAction::Status => cli::agents::run_status(&keys_dir, addr)?,
+                AgentsAction::List => cli::agents::run_list(&runtime.config, addr)?,
+                AgentsAction::Status => cli::agents::run_status(&runtime.config, addr)?,
             }
             return Ok(());
         }
@@ -486,37 +343,22 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
-                ToolsAction::List => cli::tools::run_list(&keys_dir, addr)?,
-                ToolsAction::Status => cli::tools::run_status(&keys_dir, addr)?,
-            }
-            return Ok(());
-        }
-        Some(Command::Keys { list, show, rm }) => {
-            cli::keys::run(&keys_dir, list, show, rm)?;
-            return Ok(());
-        }
-        Some(Command::Sudo { action }) => {
-            let home = &paths.home_dir;
-            match action {
-                SudoAction::ShowWallet => {
-                    cli::sudo::run_show_wallet(home)?;
-                }
+                ToolsAction::List => cli::tools::run_list(&runtime.config, addr)?,
+                ToolsAction::Status => cli::tools::run_status(&runtime.config, addr)?,
             }
             return Ok(());
         }
         Some(Command::Route { action }) => {
-            // Route commands talk to a running daemon, so we only need the
-            // config to know the listen address.
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
-                RouteAction::List => cli::route::run_list(&keys_dir, addr)?,
+                RouteAction::List => cli::route::run_list(&runtime.config, addr)?,
                 RouteAction::Add {
                     model,
                     endpoints,
                     strategy,
                 } => cli::route::run_add(
-                    &keys_dir,
+                    &runtime.config,
                     addr,
                     cli::route::RouteAddOpts {
                         model,
@@ -524,7 +366,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         strategy: Some(strategy),
                     },
                 )?,
-                RouteAction::Rm { model } => cli::route::run_remove(&keys_dir, addr, &model)?,
+                RouteAction::Rm { model } => cli::route::run_remove(&runtime.config, addr, &model)?,
             }
             return Ok(());
         }
@@ -603,8 +445,8 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Restart) => runtime.restart().await?,
         Some(Command::Reload) => runtime.reload()?,
         _ => {
-            // All other commands (Init, A2a, Account, Keygen, Keys, Route,
-            // Sudo, Tools) are handled above and return early.
+            // All other commands (Init, Route, Wallet, Key, Tools, Agents)
+            // are handled above and return early.
             unreachable!()
         }
     }

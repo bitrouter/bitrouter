@@ -3,7 +3,7 @@ pub mod auth;
 pub mod daemon;
 pub mod error;
 pub mod migration;
-#[cfg(feature = "wallet-ows")]
+#[cfg(feature = "mpp-tempo")]
 pub mod ows_signer;
 pub mod paths;
 pub mod router;

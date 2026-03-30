@@ -1,22 +1,38 @@
 //! Multi-chain key management for BitRouter JWT authentication.
 //!
-//! A `MasterKeypair` wraps a 32-byte seed from which both Ed25519 (Solana)
-//! and secp256k1 (EVM) keypairs are derived. Addresses are formatted per
-//! CAIP-10 for cross-chain identity.
-//!
-//! Key storage: `BITROUTER_HOME/.keys/<prefix>/master.json`
+//! Provides the [`JwtSigner`] trait for signing JWTs with Ed25519 (Solana) or
+//! EIP-191 secp256k1 (EVM) keys, plus a seed-based [`MasterKeypair`]
+//! implementation. Addresses are formatted per CAIP-10 for cross-chain
+//! identity.
 
 use alloy_primitives::Address;
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde::{Deserialize, Serialize};
 use solana_keypair::{Keypair as SolanaKeypair, Signer as SolanaSigner};
 use solana_pubkey::Pubkey;
 
 use crate::auth::JwtError;
 use crate::auth::chain::{Caip10, Chain};
+
+/// Trait for signing JWT payloads across supported chains.
+///
+/// Implementations must provide both Ed25519 (Solana) and EIP-191 (EVM)
+/// signing capabilities. The concrete signer may derive keys from a raw
+/// seed ([`MasterKeypair`]) or from an encrypted wallet (e.g. OWS).
+pub trait JwtSigner {
+    /// Sign a byte slice using Ed25519 (Solana / SOL_EDDSA).
+    ///
+    /// Returns the 64-byte Ed25519 signature.
+    fn sign_ed25519(&self, message: &[u8]) -> Result<Vec<u8>, JwtError>;
+
+    /// Sign a byte slice using EIP-191 prefixed secp256k1 (EVM / EIP191K).
+    ///
+    /// The implementation must apply the `"\x19Ethereum Signed Message:\n{len}"`
+    /// prefix, hash with keccak256, and sign with secp256k1 ECDSA.
+    ///
+    /// Returns the 65-byte signature (r\[32\] + s\[32\] + v\[1\]).
+    fn sign_eip191(&self, message: &[u8]) -> Result<Vec<u8>, JwtError>;
+}
 
 /// A master keypair for signing BitRouter JWTs across chains.
 ///
@@ -88,83 +104,30 @@ impl MasterKeypair {
             address,
         })
     }
+}
 
-    // ── Display / prefix ──────────────────────────────────────
-
-    /// A short prefix for display and directory naming.
-    ///
-    /// Uses the first 16 characters of the Solana base58 public key.
-    pub fn public_key_prefix(&self) -> String {
-        let b58 = self.solana_pubkey_b58();
-        b58[..16.min(b58.len())].to_string()
-    }
-
-    // ── Signing helpers ───────────────────────────────────────
-
-    /// Sign a byte slice using Ed25519 (Solana / SOL_EDDSA) via the Solana SDK.
-    ///
-    /// Returns the 64-byte Ed25519 signature.
-    pub fn sign_ed25519(&self, message: &[u8]) -> Vec<u8> {
-        self.solana_keypair()
+impl JwtSigner for MasterKeypair {
+    fn sign_ed25519(&self, message: &[u8]) -> Result<Vec<u8>, JwtError> {
+        Ok(self
+            .solana_keypair()
             .sign_message(message)
             .as_ref()
-            .to_vec()
+            .to_vec())
     }
 
-    /// Sign a byte slice using EIP-191 prefixed secp256k1 (EVM / EIP191K).
-    ///
-    /// The alloy signer applies the `"\x19Ethereum Signed Message:\n{len}"`
-    /// prefix, hashes with keccak256, and signs with secp256k1 ECDSA.
-    ///
-    /// Returns the 65-byte signature (r[32] + s[32] + v[1]).
-    pub fn sign_eip191(&self, message: &[u8]) -> Result<Vec<u8>, JwtError> {
+    fn sign_eip191(&self, message: &[u8]) -> Result<Vec<u8>, JwtError> {
         let signer = self.evm_signer()?;
         let sig = signer
             .sign_message_sync(message)
             .map_err(|e| JwtError::Signing(e.to_string()))?;
         Ok(sig.as_bytes().to_vec())
     }
-
-    // ── Serialization ─────────────────────────────────────────
-
-    /// Serialize to the JSON format stored in `master.json`.
-    pub fn to_json(&self) -> MasterKeyJson {
-        MasterKeyJson {
-            algorithm: "web3".to_string(),
-            seed: URL_SAFE_NO_PAD.encode(self.seed),
-        }
-    }
-
-    /// Deserialize from the JSON format stored in `master.json`.
-    pub fn from_json(json: &MasterKeyJson) -> Result<Self, JwtError> {
-        if json.algorithm != "web3" {
-            return Err(JwtError::InvalidKeypair);
-        }
-        let bytes = URL_SAFE_NO_PAD
-            .decode(&json.seed)
-            .map_err(|_| JwtError::InvalidKeypair)?;
-        let seed: [u8; 32] = bytes.try_into().map_err(|_| JwtError::InvalidKeypair)?;
-        Ok(Self::from_seed(seed))
-    }
 }
-
-// ── Verification helpers (no private key needed) ──────────────
 
 /// Decode a base58-encoded Solana public key into a `Pubkey`.
 pub fn decode_solana_pubkey(b58: &str) -> Result<Pubkey, JwtError> {
     b58.parse::<Pubkey>()
         .map_err(|_| JwtError::InvalidPublicKey)
-}
-
-/// JSON-serializable format for the master key file.
-///
-/// Stored at `BITROUTER_HOME/.keys/<prefix>/master.json`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MasterKeyJson {
-    /// Algorithm identifier. `"web3"` for multi-chain seed.
-    pub algorithm: String,
-    /// The 32-byte seed, base64url-encoded (no padding).
-    pub seed: String,
 }
 
 #[cfg(test)]
@@ -176,14 +139,6 @@ mod tests {
         let kp = MasterKeypair::generate();
         let seed = *kp.seed();
         let kp2 = MasterKeypair::from_seed(seed);
-        assert_eq!(kp.solana_pubkey_b58(), kp2.solana_pubkey_b58());
-    }
-
-    #[test]
-    fn roundtrip_json() {
-        let kp = MasterKeypair::generate();
-        let json = kp.to_json();
-        let kp2 = MasterKeypair::from_json(&json).expect("valid json");
         assert_eq!(kp.solana_pubkey_b58(), kp2.solana_pubkey_b58());
     }
 
@@ -204,12 +159,6 @@ mod tests {
         let sol = kp.solana_pubkey_b58();
         let evm = kp.evm_address_string().expect("evm");
         assert_ne!(sol, evm);
-    }
-
-    #[test]
-    fn public_key_prefix_length() {
-        let kp = MasterKeypair::generate();
-        assert_eq!(kp.public_key_prefix().len(), 16);
     }
 
     #[test]
@@ -244,7 +193,7 @@ mod tests {
     #[test]
     fn sign_ed25519_produces_64_bytes() {
         let kp = MasterKeypair::generate();
-        let sig = kp.sign_ed25519(b"test message");
+        let sig = kp.sign_ed25519(b"test message").expect("sign");
         assert_eq!(sig.len(), 64);
     }
 
@@ -253,14 +202,6 @@ mod tests {
         let kp = MasterKeypair::generate();
         let sig = kp.sign_eip191(b"test message").expect("sign");
         assert_eq!(sig.len(), 65);
-    }
-
-    #[test]
-    fn from_json_rejects_wrong_algorithm() {
-        let kp = MasterKeypair::generate();
-        let mut json = kp.to_json();
-        json.algorithm = "rsa".to_string();
-        assert!(MasterKeypair::from_json(&json).is_err());
     }
 
     #[test]
