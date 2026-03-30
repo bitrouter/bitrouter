@@ -22,6 +22,7 @@ pub fn create(
     let (token, key_file) =
         ows_lib::key_ops::create_api_key(name, wallets, policies, &passphrase, expires_at, None)?;
 
+    // Metadata only — name, ID, wallet IDs, and policy IDs are not secrets.
     println!("API key created: {}", key_file.name);
     println!("  ID:       {}", key_file.id);
     println!("  Wallets:  {}", key_file.wallet_ids.join(", "));
@@ -32,6 +33,9 @@ pub fn create(
         println!("  Expires:  {exp}");
     }
     println!();
+    // Intentional: OWS API tokens are displayed exactly once at creation.
+    // The operator copies the token to provision it to the agent; OWS only
+    // stores the SHA-256 hash, so the raw token cannot be recovered later.
     println!("  Token (shown once — save it now):");
     println!("  {token}");
 
@@ -47,6 +51,8 @@ pub fn list() -> Result {
         return Ok(());
     }
 
+    // Metadata only — names, IDs, expiry, and wallet IDs are not secrets.
+    // Raw tokens are never stored; list_api_keys returns only SHA-256 hashes.
     println!("{:<20} {:<38} {:<12} Wallets", "NAME", "ID", "EXPIRES");
     println!("{}", "-".repeat(80));
     for k in &keys {

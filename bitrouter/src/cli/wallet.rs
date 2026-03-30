@@ -127,6 +127,7 @@ pub fn info(name: &str, vault_path: Option<&Path>) -> Result {
     println!("Name:       {}", w.name);
     println!("ID:         {}", w.id);
     println!("Created:    {}", w.created_at);
+    // Public data only — blockchain addresses and derivation paths are not secrets.
     println!("Accounts:");
     for a in &w.accounts {
         println!("  {} ({})", a.address, chain_label(&a.chain_id));
@@ -185,6 +186,7 @@ pub fn rename(name: &str, new_name: &str) -> Result {
     Ok(())
 }
 
+// Public data only — blockchain addresses are derived from the public key.
 fn print_accounts(accounts: &[ows_lib::AccountInfo]) {
     if accounts.is_empty() {
         return;
