@@ -70,7 +70,7 @@ enum Command {
         action: RouteAction,
     },
 
-    /// Manage local web3 account keypairs
+    /// Manage local web3 account keypairs [deprecated: use `wallet`]
     Account {
         /// Generate a new web3 master key and set as active
         #[arg(short, long)]
@@ -83,6 +83,20 @@ enum Command {
         /// Set active account by index or pubkey prefix
         #[arg(long)]
         set: Option<String>,
+    },
+
+    /// Manage OWS wallets
+    #[cfg(feature = "wallet-ows")]
+    Wallet {
+        #[command(subcommand)]
+        action: WalletAction,
+    },
+
+    /// Manage OWS API keys for agent access
+    #[cfg(feature = "wallet-ows")]
+    Key {
+        #[command(subcommand)]
+        action: KeyAction,
     },
 
     /// Sign a JWT with the active master key
@@ -204,6 +218,108 @@ enum SudoAction {
     ShowWallet,
 }
 
+#[cfg(feature = "wallet-ows")]
+#[derive(Debug, Subcommand)]
+enum WalletAction {
+    /// Create a new wallet with a fresh BIP-39 mnemonic
+    Create {
+        /// Wallet name
+        #[arg(long)]
+        name: String,
+
+        /// Mnemonic word count (12 or 24)
+        #[arg(long, default_value = "12")]
+        words: u32,
+
+        /// Display the mnemonic phrase after creation
+        #[arg(long)]
+        show_mnemonic: bool,
+    },
+    /// Import a wallet from a mnemonic phrase
+    Import {
+        /// Wallet name
+        #[arg(long)]
+        name: String,
+
+        /// Import from mnemonic phrase (prompted interactively)
+        #[arg(long)]
+        mnemonic: bool,
+
+        /// Import from a hex private key (prompted interactively)
+        #[arg(long)]
+        private_key: bool,
+
+        /// Chain hint for private-key import (e.g. "evm", "solana")
+        #[arg(long)]
+        chain: Option<String>,
+
+        /// HD derivation index (mnemonic import only)
+        #[arg(long)]
+        index: Option<u32>,
+    },
+    /// List all wallets
+    List,
+    /// Show detailed wallet info
+    Info {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Export a wallet's mnemonic phrase
+    Export {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Delete a wallet
+    Delete {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Rename a wallet
+    Rename {
+        /// Current wallet name or ID
+        #[arg(long)]
+        wallet: String,
+
+        /// New wallet name
+        #[arg(long)]
+        new_name: String,
+    },
+}
+
+#[cfg(feature = "wallet-ows")]
+#[derive(Debug, Subcommand)]
+enum KeyAction {
+    /// Create a new API key for agent access
+    Create {
+        /// Key name (e.g. "claude-agent")
+        #[arg(long)]
+        name: String,
+
+        /// Wallet name(s) this key can access
+        #[arg(long, required = true, num_args = 1..)]
+        wallet: Vec<String>,
+
+        /// Policy ID(s) to attach
+        #[arg(long)]
+        policy: Vec<String>,
+
+        /// Expiration timestamp (ISO 8601)
+        #[arg(long)]
+        expires_at: Option<String>,
+    },
+    /// List all API keys
+    List,
+    /// Revoke an API key
+    Revoke {
+        /// Key ID to revoke
+        #[arg(long)]
+        id: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if has_removed_headless_flag(std::env::args_os()) {
@@ -261,7 +377,55 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             list,
             set,
         }) => {
+            eprintln!("note: `bitrouter account` is deprecated — use `bitrouter wallet` instead.");
             cli::account::run(&keys_dir, generate_key, list, set)?;
+            return Ok(());
+        }
+        #[cfg(feature = "wallet-ows")]
+        Some(Command::Wallet { action }) => {
+            match action {
+                WalletAction::Create {
+                    name,
+                    words,
+                    show_mnemonic,
+                } => cli::wallet::create(&name, Some(words), show_mnemonic)?,
+                WalletAction::Import {
+                    name,
+                    mnemonic,
+                    private_key,
+                    chain,
+                    index,
+                } => {
+                    if mnemonic {
+                        cli::wallet::import_mnemonic(&name, index)?;
+                    } else if private_key {
+                        cli::wallet::import_private_key(&name, chain.as_deref())?;
+                    } else {
+                        return Err("specify --mnemonic or --private-key for wallet import".into());
+                    }
+                }
+                WalletAction::List => cli::wallet::list(None)?,
+                WalletAction::Info { wallet } => cli::wallet::info(&wallet, None)?,
+                WalletAction::Export { wallet } => cli::wallet::export(&wallet)?,
+                WalletAction::Delete { wallet } => cli::wallet::delete(&wallet)?,
+                WalletAction::Rename { wallet, new_name } => {
+                    cli::wallet::rename(&wallet, &new_name)?
+                }
+            }
+            return Ok(());
+        }
+        #[cfg(feature = "wallet-ows")]
+        Some(Command::Key { action }) => {
+            match action {
+                KeyAction::Create {
+                    name,
+                    wallet,
+                    policy,
+                    expires_at,
+                } => cli::key::create(&name, &wallet, &policy, expires_at.as_deref())?,
+                KeyAction::List => cli::key::list()?,
+                KeyAction::Revoke { id } => cli::key::revoke(&id)?,
+            }
             return Ok(());
         }
         Some(Command::Keygen {
