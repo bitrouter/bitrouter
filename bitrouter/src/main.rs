@@ -403,9 +403,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // prompt interactively (if a TTY is attached) or warn the user.
     let starts_server =
         cli.command.is_none() || matches!(cli.command, Some(Command::Serve | Command::Start));
-    if starts_server
-        && let Err(e) = ensure_ows_passphrase(&runtime.config)
-    {
+    if starts_server && let Err(e) = ensure_ows_passphrase(&runtime.config) {
         eprintln!("wallet passphrase error: {e}");
         std::process::exit(1);
     }
