@@ -246,6 +246,38 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         },
         all_provider_names.join(", ")
     );
+
+    // Offer OWS wallet creation.
+    {
+        println!();
+        let create_wallet = Confirm::with_theme(&theme)
+            .with_prompt("Create an OWS wallet for payment signing?")
+            .default(false)
+            .interact()?;
+
+        if create_wallet {
+            let wallet_name: String = Input::with_theme(&theme)
+                .with_prompt("  Wallet name")
+                .default("default".into())
+                .interact_text()?;
+
+            match crate::cli::wallet::create(&wallet_name, None, false) {
+                Ok(()) => {
+                    println!();
+                    println!("  Add this to bitrouter.yaml to enable the wallet:");
+                    println!("    wallet:");
+                    println!("      name: {wallet_name}");
+                }
+                Err(e) => {
+                    eprintln!("  Wallet creation failed: {e}");
+                    eprintln!(
+                        "  You can create one later with: bitrouter wallet create --name <name>"
+                    );
+                }
+            }
+        }
+    }
+
     println!();
     println!("  Start the server:");
     println!("    bitrouter serve     # foreground");

@@ -98,6 +98,15 @@ mpp = { package = "mpp-br", version = "0.8.1", default-features = false, feature
 ], optional = true }
 bs58 = { version = "0.5", optional = true }
 
+# OWS wallet integration
+ows-lib = { version = "1.1" }
+ows-core = { version = "1.1" }
+ows-signer = { version = "1.1" }
+alloy = { version = "1", default-features = false, features = [
+    "signers",
+] }
+async-trait = { version = "0.1" }
+
 [dev-dependencies]
 tempfile = { version = "3" }
 

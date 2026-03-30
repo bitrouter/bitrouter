@@ -9,7 +9,6 @@ mod tui;
 use std::path::PathBuf;
 
 use crate::runtime::{AppRuntime, PathOverrides, RuntimePaths, resolve_home};
-use bitrouter_core::auth::claims::{BudgetScope, TokenScope};
 use clap::{Parser, Subcommand};
 
 type DefaultRuntime = AppRuntime<
@@ -70,85 +69,22 @@ enum Command {
         action: RouteAction,
     },
 
-    /// Manage local web3 account keypairs
-    Account {
-        /// Generate a new web3 master key and set as active
-        #[arg(short, long)]
-        generate_key: bool,
-
-        /// List all local account keys
-        #[arg(short, long)]
-        list: bool,
-
-        /// Set active account by index or pubkey prefix
-        #[arg(long)]
-        set: Option<String>,
+    /// Manage OWS wallets
+    Wallet {
+        #[command(subcommand)]
+        action: WalletAction,
     },
 
-    /// Sign a JWT with the active master key
-    Keygen {
-        /// Chain to sign with: "solana" or "base"
-        #[arg(long, default_value = "solana")]
-        chain: String,
-
-        /// Token scope: admin or api
-        #[arg(long, default_value = "api")]
-        scope: String,
-
-        /// Expiration duration (e.g., "5m", "1h", "30d", "never")
-        #[arg(long)]
-        exp: Option<String>,
-
-        /// Comma-separated list of allowed model patterns
-        #[arg(long, value_delimiter = ',')]
-        models: Option<Vec<String>>,
-
-        /// Budget limit in micro USD
-        #[arg(long)]
-        budget: Option<u64>,
-
-        /// Budget scope: session or account
-        #[arg(long)]
-        budget_scope: Option<String>,
-
-        /// Budget range (e.g., "rounds:10", "duration:3600s")
-        #[arg(long)]
-        budget_range: Option<String>,
-
-        /// Comma-separated list of allowed tool patterns (e.g., "github/*,jira/search")
-        #[arg(long, value_delimiter = ',')]
-        tools: Option<Vec<String>>,
-
-        /// Optional label for saving the token locally
-        #[arg(long)]
-        name: Option<String>,
+    /// Manage OWS API keys for agent access
+    Key {
+        #[command(subcommand)]
+        action: KeyAction,
     },
 
     /// Inspect MCP tools on a running daemon
     Tools {
         #[command(subcommand)]
         action: ToolsAction,
-    },
-
-    /// Manage locally-stored JWTs for the active account
-    Keys {
-        /// List saved tokens
-        #[arg(short, long)]
-        list: bool,
-
-        /// Show decoded claims of a token (by name or index)
-        #[arg(long)]
-        show: Option<String>,
-
-        /// Remove a saved token (by name or index)
-        #[arg(long)]
-        rm: Option<String>,
-    },
-
-    /// Wallet status and diagnostics
-    Sudo {
-        #[command(subcommand)]
-        action: SudoAction,
     },
 }
 
@@ -185,9 +121,103 @@ enum ToolsAction {
 }
 
 #[derive(Debug, Subcommand)]
-enum SudoAction {
-    /// Display wallet info and status
-    ShowWallet,
+enum WalletAction {
+    /// Create a new wallet with a fresh BIP-39 mnemonic
+    Create {
+        /// Wallet name
+        #[arg(long)]
+        name: String,
+
+        /// Mnemonic word count (12 or 24)
+        #[arg(long, default_value = "12")]
+        words: u32,
+
+        /// Display the mnemonic phrase after creation
+        #[arg(long)]
+        show_mnemonic: bool,
+    },
+    /// Import a wallet from a mnemonic phrase
+    Import {
+        /// Wallet name
+        #[arg(long)]
+        name: String,
+
+        /// Import from mnemonic phrase (prompted interactively)
+        #[arg(long)]
+        mnemonic: bool,
+
+        /// Import from a hex private key (prompted interactively)
+        #[arg(long)]
+        private_key: bool,
+
+        /// Chain hint for private-key import (e.g. "evm", "solana")
+        #[arg(long)]
+        chain: Option<String>,
+
+        /// HD derivation index (mnemonic import only)
+        #[arg(long)]
+        index: Option<u32>,
+    },
+    /// List all wallets
+    List,
+    /// Show detailed wallet info
+    Info {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Export a wallet's mnemonic phrase
+    Export {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Delete a wallet
+    Delete {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Rename a wallet
+    Rename {
+        /// Current wallet name or ID
+        #[arg(long)]
+        wallet: String,
+
+        /// New wallet name
+        #[arg(long)]
+        new_name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum KeyAction {
+    /// Create a new API key for agent access
+    Create {
+        /// Key name (e.g. "claude-agent")
+        #[arg(long)]
+        name: String,
+
+        /// Wallet name(s) this key can access
+        #[arg(long, required = true, num_args = 1..)]
+        wallet: Vec<String>,
+
+        /// Policy ID(s) to attach
+        #[arg(long)]
+        policy: Vec<String>,
+
+        /// Expiration timestamp (ISO 8601)
+        #[arg(long)]
+        expires_at: Option<String>,
+    },
+    /// List all API keys
+    List,
+    /// Revoke an API key
+    Revoke {
+        /// Key ID to revoke
+        #[arg(long)]
+        id: String,
+    },
 }
 
 #[tokio::main]
@@ -239,96 +269,73 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Handle key management commands — these only need paths, not a full runtime.
-    let keys_dir = paths.home_dir.join(".keys");
+    // Handle wallet and key management — these only need the OWS vault, not a runtime.
     match cli.command {
-        Some(Command::Account {
-            generate_key,
-            list,
-            set,
-        }) => {
-            cli::account::run(&keys_dir, generate_key, list, set)?;
+        Some(Command::Wallet { action }) => {
+            match action {
+                WalletAction::Create {
+                    name,
+                    words,
+                    show_mnemonic,
+                } => cli::wallet::create(&name, Some(words), show_mnemonic)?,
+                WalletAction::Import {
+                    name,
+                    mnemonic,
+                    private_key,
+                    chain,
+                    index,
+                } => {
+                    if mnemonic {
+                        cli::wallet::import_mnemonic(&name, index)?;
+                    } else if private_key {
+                        cli::wallet::import_private_key(&name, chain.as_deref())?;
+                    } else {
+                        return Err("specify --mnemonic or --private-key for wallet import".into());
+                    }
+                }
+                WalletAction::List => cli::wallet::list(None)?,
+                WalletAction::Info { wallet } => cli::wallet::info(&wallet, None)?,
+                WalletAction::Export { wallet } => cli::wallet::export(&wallet)?,
+                WalletAction::Delete { wallet } => cli::wallet::delete(&wallet)?,
+                WalletAction::Rename { wallet, new_name } => {
+                    cli::wallet::rename(&wallet, &new_name)?
+                }
+            }
             return Ok(());
         }
-        Some(Command::Keygen {
-            chain,
-            scope,
-            exp,
-            models,
-            tools,
-            budget,
-            budget_scope,
-            budget_range,
-            name,
-        }) => {
-            let scope = match scope.as_str() {
-                "admin" => TokenScope::Admin,
-                "api" => TokenScope::Api,
-                other => {
-                    return Err(
-                        format!("invalid scope \"{other}\" — use \"admin\" or \"api\"").into(),
-                    );
-                }
-            };
-            let budget_scope = budget_scope
-                .as_deref()
-                .map(|s| match s {
-                    "session" => Ok(BudgetScope::Session),
-                    "account" => Ok(BudgetScope::Account),
-                    other => Err(format!(
-                        "invalid budget scope \"{other}\" — use \"session\" or \"account\""
-                    )),
-                })
-                .transpose()?;
-            let opts = cli::keygen::KeygenOpts {
-                chain,
-                scope,
-                exp,
-                models,
-                tools,
-                budget,
-                budget_scope,
-                budget_range,
-                name,
-            };
-            cli::keygen::run(&keys_dir, opts)?;
+        Some(Command::Key { action }) => {
+            match action {
+                KeyAction::Create {
+                    name,
+                    wallet,
+                    policy,
+                    expires_at,
+                } => cli::key::create(&name, &wallet, &policy, expires_at.as_deref())?,
+                KeyAction::List => cli::key::list()?,
+                KeyAction::Revoke { id } => cli::key::revoke(&id)?,
+            }
             return Ok(());
         }
         Some(Command::Tools { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
-                ToolsAction::List => cli::tools::run_list(&keys_dir, addr)?,
-                ToolsAction::Status => cli::tools::run_status(&keys_dir, addr)?,
-            }
-            return Ok(());
-        }
-        Some(Command::Keys { list, show, rm }) => {
-            cli::keys::run(&keys_dir, list, show, rm)?;
-            return Ok(());
-        }
-        Some(Command::Sudo { action }) => {
-            let home = &paths.home_dir;
-            match action {
-                SudoAction::ShowWallet => {
-                    cli::sudo::run_show_wallet(home)?;
-                }
+                ToolsAction::List => cli::tools::run_list(&runtime.config, addr)?,
+                ToolsAction::Status => cli::tools::run_status(&runtime.config, addr)?,
             }
             return Ok(());
         }
         Some(Command::Route { action }) => {
-            // Route commands talk to a running daemon, so we only need the
-            // config to know the listen address.
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
-                RouteAction::List => cli::route::run_list(&keys_dir, addr)?,
+                RouteAction::List => cli::route::run_list(&runtime.config, addr)?,
                 RouteAction::Add {
                     model,
                     endpoints,
                     strategy,
                 } => cli::route::run_add(
-                    &keys_dir,
+                    &runtime.config,
                     addr,
                     cli::route::RouteAddOpts {
                         model,
@@ -336,7 +343,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         strategy: Some(strategy),
                     },
                 )?,
-                RouteAction::Rm { model } => cli::route::run_remove(&keys_dir, addr, &model)?,
+                RouteAction::Rm { model } => cli::route::run_remove(&runtime.config, addr, &model)?,
             }
             return Ok(());
         }
@@ -375,6 +382,15 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // When an OWS wallet is configured and OWS_PASSPHRASE is not already set,
+    // prompt interactively (if a TTY is attached) or warn the user.
+    let starts_server =
+        cli.command.is_none() || matches!(cli.command, Some(Command::Serve | Command::Start));
+    if starts_server && let Err(e) = ensure_ows_passphrase(&runtime.config) {
+        eprintln!("wallet passphrase error: {e}");
+        std::process::exit(1);
+    }
+
     match cli.command {
         None => run_default(runtime).await?,
         Some(Command::Serve) => {
@@ -406,8 +422,8 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Restart) => runtime.restart().await?,
         Some(Command::Reload) => runtime.reload()?,
         _ => {
-            // All other commands (Init, Account, Keygen, Keys, Route,
-            // Sudo, Tools) are handled above and return early.
+            // All other commands (Init, Route, Wallet, Key, Tools)
+            // are handled above and return early.
             unreachable!()
         }
     }
@@ -491,6 +507,43 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
         let _ = status;
         runtime.serve_with_reload(model_router).await?;
     }
+
+    Ok(())
+}
+
+/// Ensure `OWS_PASSPHRASE` is available when the config includes an OWS wallet.
+///
+/// Resolution order:
+/// 1. `OWS_PASSPHRASE` env var already set → use as-is (non-interactive).
+/// 2. Interactive TTY available → prompt with `dialoguer::Password`.
+/// 3. Neither → return an error so the caller can exit gracefully.
+fn ensure_ows_passphrase(
+    config: &bitrouter_config::BitrouterConfig,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let wallet = match config.wallet.as_ref() {
+        Some(w) => w,
+        None => return Ok(()),
+    };
+
+    if std::env::var("OWS_PASSPHRASE").is_ok() {
+        return Ok(());
+    }
+
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(format!(
+            "wallet '{}' configured but OWS_PASSPHRASE is not set and stdin is not a terminal",
+            wallet.name,
+        )
+        .into());
+    }
+
+    let passphrase = dialoguer::Password::with_theme(&dialoguer::theme::ColorfulTheme::default())
+        .with_prompt(format!("OWS passphrase for wallet '{}'", wallet.name))
+        .allow_empty_password(true)
+        .interact()?;
+
+    // SAFETY: single-threaded at this point (before tokio runtime enters serve).
+    unsafe { std::env::set_var("OWS_PASSPHRASE", passphrase) };
 
     Ok(())
 }

@@ -1,7 +1,6 @@
-pub mod account;
-pub mod keygen;
-pub mod keys;
+pub mod admin_auth;
+pub mod key;
 pub mod route;
-pub mod sudo;
 pub mod tools;
 pub mod update_check;
+pub mod wallet;
