@@ -399,6 +399,15 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // When an OWS wallet is configured and OWS_PASSPHRASE is not already set,
+    // prompt interactively (if a TTY is attached) or warn the user.
+    let starts_server =
+        cli.command.is_none() || matches!(cli.command, Some(Command::Serve | Command::Start));
+    if starts_server && let Err(e) = ensure_ows_passphrase(&runtime.config) {
+        eprintln!("wallet passphrase error: {e}");
+        std::process::exit(1);
+    }
+
     match cli.command {
         None => run_default(runtime).await?,
         Some(Command::Serve) => {
@@ -515,6 +524,43 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
         let _ = status;
         runtime.serve_with_reload(model_router).await?;
     }
+
+    Ok(())
+}
+
+/// Ensure `OWS_PASSPHRASE` is available when the config includes an OWS wallet.
+///
+/// Resolution order:
+/// 1. `OWS_PASSPHRASE` env var already set → use as-is (non-interactive).
+/// 2. Interactive TTY available → prompt with `dialoguer::Password`.
+/// 3. Neither → return an error so the caller can exit gracefully.
+fn ensure_ows_passphrase(
+    config: &bitrouter_config::BitrouterConfig,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let wallet = match config.wallet.as_ref() {
+        Some(w) => w,
+        None => return Ok(()),
+    };
+
+    if std::env::var("OWS_PASSPHRASE").is_ok() {
+        return Ok(());
+    }
+
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(format!(
+            "wallet '{}' configured but OWS_PASSPHRASE is not set and stdin is not a terminal",
+            wallet.name,
+        )
+        .into());
+    }
+
+    let passphrase = dialoguer::Password::with_theme(&dialoguer::theme::ColorfulTheme::default())
+        .with_prompt(format!("OWS passphrase for wallet '{}'", wallet.name))
+        .allow_empty_password(true)
+        .interact()?;
+
+    // SAFETY: single-threaded at this point (before tokio runtime enters serve).
+    unsafe { std::env::set_var("OWS_PASSPHRASE", passphrase) };
 
     Ok(())
 }

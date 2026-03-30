@@ -41,6 +41,13 @@ pub struct BitrouterConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mpp: Option<MppConfig>,
 
+    /// OWS (Open Wallet Standard) wallet configuration.
+    ///
+    /// When set, the OWS wallet is used for policy-gated signing in place
+    /// of raw private keys. Requires the `wallet-ows` feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<WalletConfig>,
+
     /// When `true` (the default), built-in provider definitions are merged
     /// into the provider set before user overrides are applied.  Set to
     /// `false` to use *only* the providers declared in the config file.
@@ -524,6 +531,32 @@ fn default_solana_asset_decimals() -> u8 {
 #[cfg(feature = "mpp-solana")]
 fn default_solana_network() -> String {
     "mainnet-beta".into()
+}
+
+// ── Wallet configuration ─────────────────────────────────────────────
+
+/// OWS (Open Wallet Standard) wallet configuration.
+///
+/// When present, BitRouter uses the named OWS wallet for signing
+/// operations (e.g. MPP close transactions) instead of raw private keys.
+///
+/// The passphrase (or API key) is **not** stored in the config file.
+/// At server startup the runtime reads `OWS_PASSPHRASE` from the
+/// environment, or prompts interactively if a TTY is available.
+///
+/// ```yaml
+/// wallet:
+///   name: treasury
+///   vault_path: ~/.ows  # optional, defaults to OWS standard path
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletConfig {
+    /// OWS wallet name (or UUID).
+    pub name: String,
+
+    /// Custom OWS vault directory. Defaults to `~/.ows`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_path: Option<String>,
 }
 
 /// Authentication configuration.
