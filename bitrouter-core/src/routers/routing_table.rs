@@ -10,7 +10,7 @@ use crate::errors::Result;
 ///
 /// Model protocols determine how LLM requests are serialized (OpenAI chat
 /// completions, Anthropic messages, Google generative AI). Tool protocols
-/// determine how tool discovery and invocation work (MCP, A2A, REST, Skill).
+/// determine how tool discovery and invocation work (MCP, REST).
 ///
 /// A provider may default to one protocol but individual endpoints can
 /// override it.
@@ -23,9 +23,7 @@ pub enum ApiProtocol {
     Google,
     // Tool protocols
     Mcp,
-    A2a,
     Rest,
-    Skill,
 }
 
 impl fmt::Display for ApiProtocol {
@@ -35,29 +33,29 @@ impl fmt::Display for ApiProtocol {
             Self::Anthropic => "anthropic",
             Self::Google => "google",
             Self::Mcp => "mcp",
-            Self::A2a => "a2a",
             Self::Rest => "rest",
-            Self::Skill => "skill",
         })
     }
 }
 
-// ── Model routing ─────────────────────────────────────────────────
+// ── Routing ──────────────────────────────────────────────────────
 
-/// The target to route a request to.
+/// The resolved target for a routed request (model or tool).
 pub struct RoutingTarget {
     /// The provider name to route to.
     pub provider_name: String,
-    /// The actual upstream provider's model ID to route to.
-    pub model_id: String,
+    /// Upstream service identifier: model ID for language models, tool ID for tools.
+    pub service_id: String,
+    /// The resolved API protocol for this endpoint.
+    pub api_protocol: ApiProtocol,
 }
 
-/// A single entry in the route listing, describing a configured model route.
+/// A single entry in the route listing, describing a configured route.
 #[derive(Debug, Clone)]
 pub struct RouteEntry {
-    /// The virtual model name (e.g. "default", "my-gpt4").
-    pub model: String,
-    /// The provider name this model routes to.
+    /// The virtual service name (e.g. "default", "gpt-4o", "create_issue").
+    pub name: String,
+    /// The provider name this route resolves to.
     pub provider: String,
     /// The API protocol the provider uses.
     pub protocol: ApiProtocol,
@@ -116,51 +114,15 @@ impl ModelPricing {
     }
 }
 
-/// A routing table that maps incoming model names to routing targets (provider + model ID).
+/// A routing table that maps incoming names to routing targets.
+///
+/// Used for both model routing and tool routing with separate instances.
 pub trait RoutingTable {
-    /// Routes an incoming model name to a routing target.
-    fn route(
-        &self,
-        incoming_model_name: &str,
-    ) -> impl Future<Output = Result<RoutingTarget>> + Send;
+    /// Routes an incoming name to a routing target.
+    fn route(&self, incoming_name: &str) -> impl Future<Output = Result<RoutingTarget>> + Send;
 
-    /// Lists all configured model routes.
+    /// Lists all configured routes.
     fn list_routes(&self) -> Vec<RouteEntry> {
-        Vec::new()
-    }
-}
-
-// ── Tool routing ──────────────────────────────────────────────────
-
-/// The target to route a tool invocation to.
-pub struct ToolRoutingTarget {
-    /// The provider name to route to.
-    pub provider_name: String,
-    /// The upstream tool identifier.
-    pub tool_id: String,
-    /// The resolved API protocol for this tool endpoint.
-    pub api_protocol: ApiProtocol,
-}
-
-/// A single entry in the tool route listing.
-#[derive(Debug, Clone)]
-pub struct ToolRouteEntry {
-    /// The virtual tool name.
-    pub tool: String,
-    /// The provider name this tool routes to.
-    pub provider: String,
-    /// The API protocol the endpoint uses.
-    pub protocol: ApiProtocol,
-}
-
-/// A routing table that maps incoming tool names to routing targets.
-pub trait ToolRoutingTable {
-    /// Routes an incoming tool name to a routing target.
-    fn route_tool(&self, tool_name: &str)
-    -> impl Future<Output = Result<ToolRoutingTarget>> + Send;
-
-    /// Lists all configured tool routes.
-    fn list_tool_routes(&self) -> Vec<ToolRouteEntry> {
         Vec::new()
     }
 }

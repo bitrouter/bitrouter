@@ -9,8 +9,7 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["openai", "anthropic", "google", "a2a", "mcp"]
-a2a = []
+default = ["openai", "anthropic", "google", "mcp"]
 mcp = []
 openai = []
 anthropic = []

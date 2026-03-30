@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use bitrouter_core::tools::registry::ToolRegistry;
+use bitrouter_core::routers::registry::ToolRegistry;
 use serde::Serialize;
 use warp::Filter;
 

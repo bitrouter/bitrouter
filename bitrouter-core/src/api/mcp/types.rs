@@ -705,7 +705,7 @@ pub struct ElicitationCreateResult {
 // ── JSON-RPC 2.0 envelope types ───────────────────────────────────
 
 /// A JSON-RPC 2.0 request ID -- may be a number or a string.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum JsonRpcId {
     Number(i64),
@@ -782,6 +782,51 @@ impl<'de> Deserialize<'de> for JsonRpcMessage {
             let notif: JsonRpcNotification =
                 serde_json::from_value(raw).map_err(serde::de::Error::custom)?;
             Ok(JsonRpcMessage::Notification(notif))
+        }
+    }
+}
+
+/// Any JSON-RPC 2.0 message that can appear on an SSE stream.
+///
+/// SSE streams may carry responses (to pending client requests), server→client
+/// requests (sampling, elicitation), or notifications. Discrimination:
+/// - Has `id` + has `method` → [`Request`](Self::Request)
+/// - Has `id` + no `method` → [`Response`](Self::Response)
+/// - No `id` → [`Notification`](Self::Notification)
+#[derive(Debug, Clone)]
+pub enum SseJsonRpcMessage {
+    Response(JsonRpcResponse),
+    Request(JsonRpcRequest),
+    Notification(JsonRpcNotification),
+}
+
+impl<'de> Deserialize<'de> for SseJsonRpcMessage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
+
+        let Some(obj) = raw.as_object() else {
+            return Err(serde::de::Error::custom("expected a JSON object"));
+        };
+
+        if obj.contains_key("id") {
+            if obj.contains_key("method") {
+                // Has both id and method → request from server to client.
+                let req: JsonRpcRequest =
+                    serde_json::from_value(raw).map_err(serde::de::Error::custom)?;
+                Ok(SseJsonRpcMessage::Request(req))
+            } else {
+                // Has id but no method → response to a pending client request.
+                let resp: JsonRpcResponse =
+                    serde_json::from_value(raw).map_err(serde::de::Error::custom)?;
+                Ok(SseJsonRpcMessage::Response(resp))
+            }
+        } else {
+            let notif: JsonRpcNotification =
+                serde_json::from_value(raw).map_err(serde::de::Error::custom)?;
+            Ok(SseJsonRpcMessage::Notification(notif))
         }
     }
 }

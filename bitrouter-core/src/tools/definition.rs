@@ -1,12 +1,12 @@
+use crate::models::language::tool::{LanguageModelFunctionToolInputExample, LanguageModelTool};
 use crate::models::shared::types::JsonSchema;
 
 /// Protocol-neutral tool definition.
 ///
 /// Canonical representation of "what a tool is" — independent of how an
 /// LLM sees it ([`LanguageModelTool`]) or how it gets executed
-/// ([`ToolProvider`]). MCP tools and A2A skills both convert into this type.
+/// ([`ToolProvider`]). MCP tools and skills both convert into this type.
 ///
-/// [`LanguageModelTool`]: crate::models::language::tool::LanguageModelTool
 /// [`ToolProvider`]: super::provider::ToolProvider
 #[derive(Debug, Clone)]
 pub struct ToolDefinition {
@@ -16,19 +16,38 @@ pub struct ToolDefinition {
     pub description: Option<String>,
     /// JSON Schema for input parameters.
     ///
-    /// Present for MCP tools; `None` for A2A skills (which describe
-    /// capabilities in natural language rather than typed schemas).
+    /// Present for MCP tools and config-enriched REST tools; `None` for
+    /// skills that describe capabilities in natural language only.
     pub input_schema: Option<JsonSchema>,
     /// Behavioral annotations (from MCP spec).
     pub annotations: Option<ToolAnnotations>,
-    /// Supported input content types (from A2A, e.g. `"text/plain"`, `"image/png"`).
-    pub input_modes: Vec<String>,
-    /// Supported output content types (from A2A).
-    pub output_modes: Vec<String>,
-    /// Example prompts or scenarios (from A2A).
-    pub examples: Vec<String>,
-    /// Keyword tags for discovery (from A2A).
-    pub tags: Vec<String>,
+    /// Example inputs demonstrating how to call this tool.
+    pub input_examples: Vec<ToolInputExample>,
+}
+
+/// An example input for a tool, used for discovery and LLM prompting.
+#[derive(Debug, Clone)]
+pub struct ToolInputExample {
+    pub input: serde_json::Value,
+}
+
+/// Converts a [`ToolDefinition`] into a [`LanguageModelTool::Function`] for
+/// injection into LLM prompts.
+impl From<ToolDefinition> for LanguageModelTool {
+    fn from(def: ToolDefinition) -> Self {
+        LanguageModelTool::Function {
+            name: def.name,
+            description: def.description,
+            input_schema: def.input_schema.unwrap_or_default(),
+            input_examples: def
+                .input_examples
+                .into_iter()
+                .map(|e| LanguageModelFunctionToolInputExample { input: e.input })
+                .collect(),
+            strict: None,
+            provider_options: None,
+        }
+    }
 }
 
 /// MCP tool annotations — behavioral hints about a tool.

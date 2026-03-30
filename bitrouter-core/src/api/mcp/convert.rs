@@ -3,8 +3,8 @@
 //! Mirrors the model-side pattern where each API protocol has a `convert.rs`
 //! that translates provider-specific types into protocol-neutral core types.
 
+use crate::routers::registry::ToolEntry;
 use crate::tools::definition::{ToolAnnotations, ToolDefinition};
-use crate::tools::registry::ToolEntry;
 use crate::tools::result::{ToolCallResult, ToolContent};
 
 use super::types::{McpContent, McpTool, McpToolCallResult};
@@ -20,10 +20,7 @@ impl From<McpTool> for ToolDefinition {
             description: mcp.description,
             input_schema,
             annotations: None, // TODO: populate when McpTool gains annotations field
-            input_modes: Vec::new(),
-            output_modes: Vec::new(),
-            examples: Vec::new(),
-            tags: Vec::new(),
+            input_examples: Vec::new(),
         }
     }
 }
@@ -182,7 +179,7 @@ mod tests {
         assert_eq!(def.name, "search");
         assert_eq!(def.description.as_deref(), Some("Search things"));
         assert!(def.input_schema.is_some());
-        assert!(def.tags.is_empty());
+        assert!(def.input_examples.is_empty());
 
         let back = McpTool::from(def);
         assert_eq!(back.name, "search");

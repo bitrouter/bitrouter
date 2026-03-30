@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_config::routing::ConfigToolRoutingTable;
-use bitrouter_config::{ApiProtocol, ProviderConfig};
+use bitrouter_core::routers::registry::ToolRegistry;
 use bitrouter_providers::agentskills::registry::FilesystemSkillRegistry;
 use warp::Filter;
 
@@ -16,6 +16,8 @@ pub struct AgentSkillsRoutes {
     pub registry: Arc<FilesystemSkillRegistry>,
     /// `GET /v1/skills` CRUD endpoint.
     pub skills_list: RouteFilter,
+    /// Whether any skill tools were found in config or on disk.
+    pub has_skills: bool,
 }
 
 /// Builder for the filesystem-backed agent skills registry.
@@ -25,30 +27,14 @@ pub struct AgentSkillsClient {
 }
 
 impl AgentSkillsClient {
-    pub fn new(
-        providers_by_protocol: &std::collections::HashMap<
-            ApiProtocol,
-            Vec<(String, ProviderConfig)>,
-        >,
-        tool_table: &ConfigToolRoutingTable,
-        skills_dir: PathBuf,
-    ) -> Self {
-        let tool_configs = providers_by_protocol
-            .get(&ApiProtocol::Skill)
-            .map(|providers| {
-                providers
-                    .iter()
-                    .flat_map(|(name, _)| {
-                        tool_table
-                            .tools()
-                            .iter()
-                            .filter(|(_, tc)| tc.endpoints.iter().any(|ep| ep.provider == *name))
-                            .map(|(tn, tc)| (tn.clone(), tc.clone()))
-                            .collect::<Vec<_>>()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+    pub fn new(tool_table: &ConfigToolRoutingTable, skills_dir: PathBuf) -> Self {
+        // Select tools that have an associated skill annotation.
+        let tool_configs: Vec<_> = tool_table
+            .tools()
+            .iter()
+            .filter(|(_, tc)| tc.skill.is_some())
+            .map(|(tn, tc)| (tn.clone(), tc.clone()))
+            .collect();
 
         Self {
             tool_configs,
@@ -57,6 +43,8 @@ impl AgentSkillsClient {
     }
 
     pub async fn build(self) -> AgentSkillsRoutes {
+        let has_skills = !self.tool_configs.is_empty();
+
         let registry = match FilesystemSkillRegistry::from_config_and_dir(
             self.tool_configs,
             self.skills_dir.clone(),
@@ -75,6 +63,9 @@ impl AgentSkillsClient {
             }
         };
 
+        // Re-check: filesystem scan may have found skills even if config had none.
+        let has_skills = has_skills || !registry.list_tools().await.is_empty();
+
         let skills_list = bitrouter_api::router::agentskills::skills_filter(registry.clone())
             .map(|r| Box::new(r) as Box<dyn warp::Reply>)
             .boxed();
@@ -82,6 +73,7 @@ impl AgentSkillsClient {
         AgentSkillsRoutes {
             registry,
             skills_list,
+            has_skills,
         }
     }
 }

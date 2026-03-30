@@ -124,12 +124,6 @@ enum Command {
         name: Option<String>,
     },
 
-    /// Inspect upstream agents on a running daemon
-    Agents {
-        #[command(subcommand)]
-        action: AgentsAction,
-    },
-
     /// Inspect MCP tools on a running daemon
     Tools {
         #[command(subcommand)]
@@ -167,7 +161,7 @@ enum RouteAction {
         /// Virtual model name (e.g., "research", "fast")
         model: String,
 
-        /// Endpoints in "provider:model_id" format (at least one required)
+        /// Endpoints in "provider:service_id" format (at least one required)
         #[arg(required = true, num_args = 1..)]
         endpoints: Vec<String>,
 
@@ -180,14 +174,6 @@ enum RouteAction {
         /// Model name to remove
         model: String,
     },
-}
-
-#[derive(Debug, Subcommand)]
-enum AgentsAction {
-    /// List configured upstream agents
-    List,
-    /// Show upstream agent connection health
-    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -308,15 +294,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli::keygen::run(&keys_dir, opts)?;
             return Ok(());
         }
-        Some(Command::Agents { action }) => {
-            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
-            let addr = runtime.config.server.listen;
-            match action {
-                AgentsAction::List => cli::agents::run_list(&keys_dir, addr)?,
-                AgentsAction::Status => cli::agents::run_status(&keys_dir, addr)?,
-            }
-            return Ok(());
-        }
         Some(Command::Tools { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
@@ -429,7 +406,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Restart) => runtime.restart().await?,
         Some(Command::Reload) => runtime.reload()?,
         _ => {
-            // All other commands (Init, A2a, Account, Keygen, Keys, Route,
+            // All other commands (Init, Account, Keygen, Keys, Route,
             // Sudo, Tools) are handled above and return early.
             unreachable!()
         }

@@ -61,14 +61,13 @@ pub struct UpstreamConnection {
 }
 
 impl UpstreamConnection {
-    /// Connect to an upstream MCP server.
+    /// Connect to an upstream MCP server via streamable HTTP.
     ///
     /// If a `handler` is provided, the connection will handle server→client
     /// requests (sampling, elicitation) by dispatching to it.
     pub async fn connect(
         config: McpServerConfig,
-        #[cfg(feature = "mcp-stdio")] handler: Option<Arc<dyn McpClientRequestHandler>>,
-        #[cfg(not(feature = "mcp-stdio"))] _handler: Option<Arc<dyn McpClientRequestHandler>>,
+        handler: Option<Arc<dyn McpClientRequestHandler>>,
     ) -> Result<Self, McpGatewayError> {
         config
             .validate()
@@ -95,10 +94,20 @@ impl UpstreamConnection {
                 ref url,
                 ref headers,
             } => {
+                use crate::mcp::transports::http::NotifyHandles;
+
+                let notify = NotifyHandles {
+                    tool: Arc::clone(&tool_notify),
+                    resource: Arc::clone(&resource_notify),
+                    prompt: Arc::clone(&prompt_notify),
+                };
+
                 let client = crate::mcp::transports::http::McpHttpClient::new(
                     name.clone(),
                     url.clone(),
                     headers,
+                    handler,
+                    Some(notify),
                 )?;
                 client
                     .initialize()
@@ -134,55 +143,6 @@ impl UpstreamConnection {
                     prompt_notify,
                 })
             }
-            #[cfg(feature = "mcp-stdio")]
-            McpServerTransport::Stdio {
-                ref command,
-                ref args,
-                ref env,
-            } => {
-                let conn = crate::mcp::transports::stdio::StdioConnection::connect(
-                    name.clone(),
-                    command.clone(),
-                    args.clone(),
-                    env.clone(),
-                    handler,
-                )
-                .await?;
-
-                let initial_tools =
-                    conn.list_tools()
-                        .await
-                        .map_err(|e| McpGatewayError::UpstreamConnect {
-                            name: name.clone(),
-                            reason: format!("failed to list tools: {e}"),
-                        })?;
-
-                let initial_resources = conn.list_resources().await.unwrap_or_default();
-                let initial_templates = conn.list_resource_templates().await.unwrap_or_default();
-                let initial_prompts = conn.list_prompts().await.unwrap_or_default();
-
-                let tn = conn.tool_change_notify();
-                let rn = conn.resource_change_notify();
-                let pn = conn.prompt_change_notify();
-
-                Ok(Self {
-                    name: config.name,
-                    transport: TransportKind::Stdio(conn),
-                    tools: Arc::new(RwLock::new(initial_tools)),
-                    resources: Arc::new(RwLock::new(initial_resources)),
-                    resource_templates: Arc::new(RwLock::new(initial_templates)),
-                    prompts: Arc::new(RwLock::new(initial_prompts)),
-                    tool_notify: tn,
-                    resource_notify: rn,
-                    prompt_notify: pn,
-                })
-            }
-            #[cfg(not(feature = "mcp-stdio"))]
-            McpServerTransport::Stdio { .. } => Err(McpGatewayError::InvalidConfig {
-                reason: format!(
-                    "server '{name}': stdio transport requires the 'mcp-stdio' feature"
-                ),
-            }),
         }
     }
 

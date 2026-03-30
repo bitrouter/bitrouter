@@ -1,12 +1,12 @@
-//! Discovery registry types and traits for models and skills.
+//! Discovery registry types and traits for models, tools, and skills.
 //!
 //! These are the core abstractions powering public discovery endpoints
-//! (`GET /v1/models`). Each entry type is protocol-agnostic — conversion
-//! from protocol-specific types happens in the respective crates.
-//!
-//! Tool registry types live in [`crate::tools::registry`].
+//! (`GET /v1/models`, `GET /v1/tools`). Each entry type is protocol-agnostic —
+//! conversion from protocol-specific types happens in the respective crates.
 
 use std::future::Future;
+
+use crate::tools::definition::ToolDefinition;
 
 use super::routing_table::ModelPricing;
 
@@ -47,6 +47,39 @@ pub trait ModelRegistry {
     }
 }
 
+// ── Tool ──────────────────────────────────────────────────────────
+
+/// A single tool available through the router, with its full definition.
+///
+/// Unifies MCP tools (structured, schema-driven) and A2A skills
+/// (unstructured, tag-driven) into a common discovery type.
+#[derive(Debug, Clone)]
+pub struct ToolEntry {
+    /// Namespaced tool identifier (e.g. `"github/search"`).
+    pub id: String,
+    /// The server or agent that provides this tool.
+    pub provider: String,
+    /// Protocol-neutral tool definition.
+    pub definition: ToolDefinition,
+}
+
+/// Read-only registry for discovering tools available across all configured
+/// providers.
+///
+/// Parallel to [`ModelRegistry`] — this trait handles tool discovery, not
+/// execution. Tool execution goes through [`ToolRouter`](super::router::ToolRouter)
+/// → [`ToolProvider`](crate::tools::provider::ToolProvider).
+pub trait ToolRegistry: Send + Sync {
+    /// Lists all tools available through the router.
+    fn list_tools(&self) -> impl Future<Output = Vec<ToolEntry>> + Send;
+}
+
+impl<T: ToolRegistry> ToolRegistry for std::sync::Arc<T> {
+    async fn list_tools(&self) -> Vec<ToolEntry> {
+        (**self).list_tools().await
+    }
+}
+
 // ── Skill ─────────────────────────────────────────────────────────
 
 /// A skill tracked in the bitrouter skills registry.
@@ -82,16 +115,19 @@ pub trait SkillService: Send + Sync {
         description: String,
         source: Option<String>,
         required_apis: Vec<String>,
-    ) -> impl Future<Output = Result<SkillEntry, String>> + Send;
+    ) -> impl Future<Output = std::result::Result<SkillEntry, String>> + Send;
 
     /// List all registered skills.
-    fn list(&self) -> impl Future<Output = Result<Vec<SkillEntry>, String>> + Send;
+    fn list(&self) -> impl Future<Output = std::result::Result<Vec<SkillEntry>, String>> + Send;
 
     /// Retrieve a single skill by name.
-    fn get(&self, name: &str) -> impl Future<Output = Result<Option<SkillEntry>, String>> + Send;
+    fn get(
+        &self,
+        name: &str,
+    ) -> impl Future<Output = std::result::Result<Option<SkillEntry>, String>> + Send;
 
     /// Delete a skill by name. Returns true if it existed.
-    fn delete(&self, name: &str) -> impl Future<Output = Result<bool, String>> + Send;
+    fn delete(&self, name: &str) -> impl Future<Output = std::result::Result<bool, String>> + Send;
 }
 
 impl<T: SkillService> SkillService for std::sync::Arc<T> {
@@ -101,21 +137,21 @@ impl<T: SkillService> SkillService for std::sync::Arc<T> {
         description: String,
         source: Option<String>,
         required_apis: Vec<String>,
-    ) -> Result<SkillEntry, String> {
+    ) -> std::result::Result<SkillEntry, String> {
         (**self)
             .create(name, description, source, required_apis)
             .await
     }
 
-    async fn list(&self) -> Result<Vec<SkillEntry>, String> {
+    async fn list(&self) -> std::result::Result<Vec<SkillEntry>, String> {
         (**self).list().await
     }
 
-    async fn get(&self, name: &str) -> Result<Option<SkillEntry>, String> {
+    async fn get(&self, name: &str) -> std::result::Result<Option<SkillEntry>, String> {
         (**self).get(name).await
     }
 
-    async fn delete(&self, name: &str) -> Result<bool, String> {
+    async fn delete(&self, name: &str) -> std::result::Result<bool, String> {
         (**self).delete(name).await
     }
 }

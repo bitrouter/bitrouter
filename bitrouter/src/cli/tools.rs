@@ -1,4 +1,4 @@
-//! `bitrouter tools` subcommand — inspect MCP tools on a running daemon.
+//! `bitrouter tools` subcommand — inspect MCP tools and servers on a running daemon.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -9,7 +9,7 @@ use crate::cli::keygen::generate_local_admin_jwt;
 
 /// Run the `tools list` subcommand — prints all tools from the running daemon.
 pub fn run_list(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let url = format!("http://{addr}/admin/tools");
+    let url = format!("http://{addr}/admin/mcp/tools");
     let client = Client::new();
     let resp = request_with_admin_auth(keys_dir, client.get(&url))?.send()?;
 
@@ -43,7 +43,7 @@ pub fn run_list(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::er
 
 /// Run the `tools status` subcommand — shows upstream server health.
 pub fn run_status(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let url = format!("http://{addr}/admin/tools/upstreams");
+    let url = format!("http://{addr}/admin/mcp/servers");
     let client = Client::new();
     let resp = request_with_admin_auth(keys_dir, client.get(&url))?.send()?;
 
@@ -53,19 +53,19 @@ pub fn run_status(keys_dir: &Path, addr: SocketAddr) -> Result<(), Box<dyn std::
     }
 
     let body: serde_json::Value = resp.json()?;
-    let upstreams = body["upstreams"].as_array();
-    match upstreams {
-        Some(upstreams) if !upstreams.is_empty() => {
-            for upstream in upstreams {
-                let name = upstream["name"].as_str().unwrap_or("?");
-                let tool_count = upstream["tool_count"].as_u64().unwrap_or(0);
-                let has_filter = upstream["filter"].is_object();
+    let servers = body["servers"].as_array();
+    match servers {
+        Some(servers) if !servers.is_empty() => {
+            for server in servers {
+                let name = server["name"].as_str().unwrap_or("?");
+                let tool_count = server["tool_count"].as_u64().unwrap_or(0);
+                let has_filter = server["filter"].is_object();
                 let filter_info = if has_filter { " (filtered)" } else { "" };
                 println!("  {name}    {tool_count} tools{filter_info}");
             }
         }
         _ => {
-            println!("  (no upstreams configured)");
+            println!("  (no MCP servers configured)");
         }
     }
     Ok(())

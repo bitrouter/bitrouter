@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use bitrouter_core::api::mcp::gateway::{
     McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer, McpServer,
-    McpSubscriptionServer, McpToolServer,
+    McpSubscriptionServer, McpToolServer, ToolCallHandler,
 };
 use bitrouter_core::api::mcp::types::McpGatewayError;
 use bitrouter_core::api::mcp::types::{
@@ -59,15 +59,21 @@ pub fn mcp_server_filter<T>(
 where
     T: McpServer + 'static,
 {
-    mcp_jsonrpc_filter(server.clone(), None).or(mcp_sse_filter(server))
+    mcp_jsonrpc_filter(server.clone(), None, None).or(mcp_sse_filter(server))
 }
 
 /// Combined MCP server filter with tool call observation.
 ///
 /// The `account_filter` extracts a [`CallerContext`] per-request (e.g. from
 /// JWT claims) so that observation events carry account information.
+///
+/// When `tool_call_handler` is provided, `tools/call` requests are dispatched
+/// through it instead of through `McpToolServer::call_tool`. This allows
+/// tool execution to be routed through the [`ToolRouter`] dispatch chain
+/// independently of the MCP server capabilities.
 pub fn mcp_server_filter_with_observe<T, A>(
     server: Option<Arc<T>>,
+    tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
     observer: Arc<dyn ToolObserveCallback>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -75,7 +81,7 @@ where
     T: McpServer + 'static,
     A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
-    mcp_jsonrpc_filter_with_observe(server.clone(), observer, account_filter)
+    mcp_jsonrpc_filter_with_observe(server.clone(), tool_call_handler, observer, account_filter)
         .or(mcp_sse_filter(server))
 }
 
@@ -100,6 +106,7 @@ where
 
 fn mcp_jsonrpc_filter<T>(
     server: Option<Arc<T>>,
+    tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
     observe_ctx: Option<McpObserveContext>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
@@ -110,12 +117,14 @@ where
         .and(warp::post())
         .and(warp::body::json::<serde_json::Value>())
         .and(warp::any().map(move || server.clone()))
+        .and(warp::any().map(move || tool_call_handler.clone()))
         .and(warp::any().map(move || observe_ctx.clone()))
         .then(handle_jsonrpc_value::<T>)
 }
 
 fn mcp_jsonrpc_filter_with_observe<T, A>(
     server: Option<Arc<T>>,
+    tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
     observer: Arc<dyn ToolObserveCallback>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
@@ -123,20 +132,23 @@ where
     T: McpServer + 'static,
     A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
+    let tch = tool_call_handler;
     warp::path("mcp")
         .and(warp::path::end())
         .and(warp::post())
         .and(warp::body::json::<serde_json::Value>())
         .and(warp::any().map(move || server.clone()))
+        .and(warp::any().map(move || tch.clone()))
         .and(warp::any().map(move || observer.clone()))
         .and(account_filter)
         .then(
             |body: serde_json::Value,
              server: Option<Arc<T>>,
+             tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
              observer: Arc<dyn ToolObserveCallback>,
              caller: CallerContext| async move {
                 let ctx = Some(McpObserveContext { observer, caller });
-                handle_jsonrpc_value::<T>(body, server, ctx).await
+                handle_jsonrpc_value::<T>(body, server, tool_call_handler, ctx).await
             },
         )
 }
@@ -144,6 +156,7 @@ where
 async fn handle_jsonrpc_value<T: McpServer>(
     body: serde_json::Value,
     server: Option<Arc<T>>,
+    tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
     observe_ctx: Option<McpObserveContext>,
 ) -> Box<dyn warp::Reply> {
     let Some(server) = server else {
@@ -176,6 +189,7 @@ async fn handle_jsonrpc_value<T: McpServer>(
                 &req.method,
                 req.params,
                 &*server,
+                tool_call_handler.as_deref(),
                 &observe_ctx,
                 None,
             )
@@ -207,6 +221,7 @@ async fn dispatch_request<T: McpServer>(
     method: &str,
     params: Option<serde_json::Value>,
     server: &T,
+    tool_call_handler: Option<&dyn ToolCallHandler>,
     observe_ctx: &Option<McpObserveContext>,
     server_name: Option<&str>,
 ) -> JsonRpcResponse {
@@ -214,7 +229,7 @@ async fn dispatch_request<T: McpServer>(
         "initialize" => handle_initialize(id, server_name),
         "ping" => handle_ping(id),
         "tools/list" => handle_tools_list(id, server).await,
-        "tools/call" => handle_tools_call(id, params, server, observe_ctx).await,
+        "tools/call" => handle_tools_call(id, params, server, tool_call_handler, observe_ctx).await,
         "resources/list" => handle_resources_list(id, server).await,
         "resources/read" => handle_resources_read(id, params, server).await,
         "resources/templates/list" => handle_resource_templates_list(id, server).await,
@@ -450,6 +465,7 @@ async fn handle_jsonrpc_value_bridge<T: McpServer>(
                 &req.method,
                 req.params,
                 &*server,
+                None,
                 &None,
                 Some(&server_name),
             )
@@ -497,6 +513,7 @@ async fn handle_tools_call<T: McpToolServer>(
     id: &JsonRpcId,
     params: Option<serde_json::Value>,
     server: &T,
+    tool_call_handler: Option<&dyn ToolCallHandler>,
     observe_ctx: &Option<McpObserveContext>,
 ) -> JsonRpcResponse {
     let call_params: CallToolParams = match extract_params(id, params, "tools/call") {
@@ -510,10 +527,19 @@ async fn handle_tools_call<T: McpToolServer>(
         .unwrap_or(("unknown", &internal_name));
     let start = Instant::now();
 
-    match server
-        .call_tool(&internal_name, call_params.arguments)
-        .await
-    {
+    // When a ToolCallHandler is provided, dispatch through the protocol-neutral
+    // ToolRouter chain. Otherwise fall back to the McpToolServer (bridge mode).
+    let result = if let Some(handler) = tool_call_handler {
+        handler
+            .call_tool(&internal_name, call_params.arguments)
+            .await
+    } else {
+        server
+            .call_tool(&internal_name, call_params.arguments)
+            .await
+    };
+
+    match result {
         Ok(result) => {
             emit_tool_success(observe_ctx, server_name, tool_name, start);
             serialize_success(id, &result)

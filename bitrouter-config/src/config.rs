@@ -132,10 +132,20 @@ impl BitrouterConfig {
             std::mem::take(&mut config.providers)
         };
 
-        // Merge built-in tool provider definitions (providers + tool routes)
+        // Merge built-in tool provider definitions (providers + tool routes).
+        // Uses the same merge_provider pattern as model providers so that
+        // a user declaring `exa: api_key: "..."` inherits the builtin
+        // api_protocol, api_base, auth, etc.
         if config.inherit_defaults {
             for (name, builtin) in builtin_tool_provider_defs() {
-                providers.entry(name).or_insert(builtin.config);
+                if let Some(existing) = providers.get_mut(&name) {
+                    // User declared this provider — merge builtin as base.
+                    let mut base = builtin.config;
+                    merge_provider(&mut base, std::mem::take(existing));
+                    *existing = base;
+                } else {
+                    providers.insert(name, builtin.config);
+                }
                 for (tool_name, tool_config) in builtin.tool_configs {
                     config.tools.entry(tool_name).or_insert(tool_config);
                 }
@@ -526,14 +536,15 @@ pub enum RoutingStrategy {
     LoadBalance,
 }
 
-/// A single endpoint that a model can be routed to.
+/// A single endpoint that a model or tool can be routed to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelEndpoint {
+pub struct Endpoint {
     /// Provider name (must exist in the providers section or built-ins).
     pub provider: String,
 
-    /// The upstream model ID to send to this provider.
-    pub model_id: String,
+    /// Upstream service identifier: model ID for language models, tool ID for tools.
+    #[serde(alias = "model_id", alias = "tool_id")]
+    pub service_id: String,
 
     /// Optional per-endpoint API protocol override.
     ///
@@ -557,7 +568,7 @@ pub struct ModelConfig {
     #[serde(default)]
     pub strategy: RoutingStrategy,
 
-    pub endpoints: Vec<ModelEndpoint>,
+    pub endpoints: Vec<Endpoint>,
 
     /// Human-readable display name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -586,28 +597,6 @@ pub struct ModelConfig {
 
 // ── Tool routing configuration ──────────────────────────────────────
 
-/// A single endpoint that a tool can be routed to.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolEndpoint {
-    /// Provider name (must exist in the providers section or built-ins).
-    pub provider: String,
-
-    /// The upstream tool identifier.
-    pub tool_id: String,
-
-    /// Optional per-endpoint API protocol override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_protocol: Option<ApiProtocol>,
-
-    /// Optional per-endpoint API key override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-
-    /// Optional per-endpoint API base override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_base: Option<String>,
-}
-
 /// Routing configuration for a virtual tool name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolConfig {
@@ -616,11 +605,27 @@ pub struct ToolConfig {
     pub strategy: RoutingStrategy,
 
     /// One or more upstream endpoints to route this tool to.
-    pub endpoints: Vec<ToolEndpoint>,
+    pub endpoints: Vec<Endpoint>,
 
     /// Optional per-tool invocation pricing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<bitrouter_core::pricing::FlatPricing>,
+
+    /// Human-readable description for REST tool discoverability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// JSON Schema for input parameters (REST tool discoverability).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
+
+    /// Associated skill name (references a SKILL.md on disk).
+    ///
+    /// When set, the tool is enriched with skill metadata from the
+    /// filesystem skill registry. Skills are a metadata layer — they
+    /// do not affect the execution protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<String>,
 }
 
 #[cfg(test)]
@@ -837,7 +842,7 @@ tools:
         assert_eq!(tool.strategy, RoutingStrategy::Priority);
         assert_eq!(tool.endpoints.len(), 1);
         assert_eq!(tool.endpoints[0].provider, "github-mcp");
-        assert_eq!(tool.endpoints[0].tool_id, "create_issue");
+        assert_eq!(tool.endpoints[0].service_id, "create_issue");
         assert!(tool.endpoints[0].api_protocol.is_none());
 
         let search = &config.tools["search_code"];

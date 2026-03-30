@@ -9,10 +9,9 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["tui", "sqlite", "postgres", "mpp-tempo", "mcp", "mcp-stdio", "a2a"]
+default = ["tui", "sqlite", "postgres", "mpp-tempo", "mcp", "rest"]
+rest = ["bitrouter-providers/rest"]
 mcp = ["bitrouter-api/mcp", "bitrouter-providers/mcp"]
-mcp-stdio = ["mcp", "bitrouter-providers/mcp-stdio"]
-a2a = ["bitrouter-api/a2a", "bitrouter-providers/a2a"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
 sqlite = [
     "bitrouter-accounts/sqlite",

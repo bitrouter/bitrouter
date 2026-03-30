@@ -1,11 +1,11 @@
-//! Warp filters for the admin tool management API.
+//! Warp filters for MCP server management.
 //!
-//! Provides HTTP endpoints for managing tools at runtime:
+//! Provides HTTP endpoints for managing upstream MCP servers at runtime:
 //!
-//! - `GET /admin/tools` — list all aggregated tools
-//! - `GET /admin/tools/upstreams` — list upstream servers with status
-//! - `PUT /admin/tools/:server/filter` — update allow/deny for a server
-//! - `PUT /admin/tools/:server/params` — update parameter restrictions
+//! - `GET /admin/mcp/tools` — list all aggregated tools
+//! - `GET /admin/mcp/servers` — list upstream servers with status
+//! - `PUT /admin/mcp/servers/:name/filter` — update allow/deny for a server
+//! - `PUT /admin/mcp/servers/:name/params` — update parameter restrictions
 //!
 //! Generic over [`AdminToolRegistry`] — no protocol-crate dependency.
 
@@ -14,23 +14,23 @@ use std::sync::Arc;
 use bitrouter_core::routers::admin::{AdminToolRegistry, ParamRestrictions, ToolFilter};
 use warp::Filter;
 
-/// Mount all admin tool management endpoints under `/admin/tools`.
+/// Mount all MCP admin endpoints under `/admin/mcp`.
 ///
-/// Accepts `Option<Arc<T>>` — when `None` (no tool source configured), all
+/// Accepts `Option<Arc<T>>` — when `None` (no MCP configured), all
 /// endpoints return 404. The caller is responsible for auth gating.
-pub fn admin_tools_filter<T>(
+pub fn mcp_admin_filter<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
     T: AdminToolRegistry + 'static,
 {
     list_tools(registry.clone())
-        .or(list_upstreams(registry.clone()))
+        .or(list_servers(registry.clone()))
         .or(update_filter(registry.clone()))
         .or(update_params(registry))
 }
 
-// ── GET /admin/tools ────────────────────────────────────────────────
+// ── GET /admin/mcp/tools ───────────────────────────────────────────
 
 fn list_tools<T>(
     registry: Option<Arc<T>>,
@@ -38,7 +38,7 @@ fn list_tools<T>(
 where
     T: AdminToolRegistry + 'static,
 {
-    warp::path!("admin" / "tools")
+    warp::path!("admin" / "mcp" / "tools")
         .and(warp::get())
         .and(warp::any().map(move || registry.clone()))
         .and_then(handle_list_tools)
@@ -72,33 +72,33 @@ async fn handle_list_tools<T: AdminToolRegistry>(
     Ok(warp::reply::json(&serde_json::json!({ "tools": items })))
 }
 
-// ── GET /admin/tools/upstreams ──────────────────────────────────────
+// ── GET /admin/mcp/servers ─────────────────────────────────────────
 
-fn list_upstreams<T>(
+fn list_servers<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
     T: AdminToolRegistry + 'static,
 {
-    warp::path!("admin" / "tools" / "upstreams")
+    warp::path!("admin" / "mcp" / "servers")
         .and(warp::get())
         .and(warp::any().map(move || registry.clone()))
-        .and_then(handle_list_upstreams)
+        .and_then(handle_list_servers)
 }
 
-async fn handle_list_upstreams<T: AdminToolRegistry>(
+async fn handle_list_servers<T: AdminToolRegistry>(
     registry: Option<Arc<T>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let Some(registry) = registry else {
         return Err(warp::reject::not_found());
     };
-    let upstreams = registry.list_upstreams().await;
+    let servers = registry.list_upstreams().await;
     Ok(warp::reply::json(
-        &serde_json::json!({ "upstreams": upstreams }),
+        &serde_json::json!({ "servers": servers }),
     ))
 }
 
-// ── PUT /admin/tools/:server/filter ─────────────────────────────────
+// ── PUT /admin/mcp/servers/:name/filter ────────────────────────────
 
 fn update_filter<T>(
     registry: Option<Arc<T>>,
@@ -106,7 +106,7 @@ fn update_filter<T>(
 where
     T: AdminToolRegistry + 'static,
 {
-    warp::path!("admin" / "tools" / String / "filter")
+    warp::path!("admin" / "mcp" / "servers" / String / "filter")
         .and(warp::put())
         .and(warp::body::json::<FilterUpdateBody>())
         .and(warp::any().map(move || registry.clone()))
@@ -129,7 +129,7 @@ async fn handle_update_filter<T: AdminToolRegistry>(
     let Some(registry) = registry else {
         return Ok(warp::reply::with_status(
             warp::reply::json(&serde_json::json!({
-                "error": { "message": "tool registry not configured" }
+                "error": { "message": "MCP registry not configured" }
             })),
             warp::http::StatusCode::NOT_FOUND,
         ));
@@ -161,7 +161,7 @@ async fn handle_update_filter<T: AdminToolRegistry>(
     }
 }
 
-// ── PUT /admin/tools/:server/params ─────────────────────────────────
+// ── PUT /admin/mcp/servers/:name/params ────────────────────────────
 
 fn update_params<T>(
     registry: Option<Arc<T>>,
@@ -169,7 +169,7 @@ fn update_params<T>(
 where
     T: AdminToolRegistry + 'static,
 {
-    warp::path!("admin" / "tools" / String / "params")
+    warp::path!("admin" / "mcp" / "servers" / String / "params")
         .and(warp::put())
         .and(warp::body::json::<ParamRestrictions>())
         .and(warp::any().map(move || registry.clone()))
@@ -184,7 +184,7 @@ async fn handle_update_params<T: AdminToolRegistry>(
     let Some(registry) = registry else {
         return Ok(warp::reply::with_status(
             warp::reply::json(&serde_json::json!({
-                "error": { "message": "tool registry not configured" }
+                "error": { "message": "MCP registry not configured" }
             })),
             warp::http::StatusCode::NOT_FOUND,
         ));

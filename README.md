@@ -19,7 +19,6 @@ As LLM agents grow more autonomous, humans can no longer hand-pick the best mode
 - **Streaming & non-streaming** — first-class support for both modes across all providers
 - **Agent firewall** — inspect, warn, redact, or block risky content at the proxy layer ([`guardrails`](bitrouter-guardrails/))
 - **MCP gateway** — proxy for MCP servers, agents discover and call tools across hosts ([`mcp`](bitrouter-mcp/))
-- **A2A gateway** — agent identity, discovery, and task dispatch via A2A v0.3.0 ([`a2a`](bitrouter-a2a/))
 - **Skills registry** — track and expose agent skills following the [agentskills.io](https://agentskills.io) standard ([`skills`](bitrouter-skills/))
 - **Agentic payment** — 402/MPP payment handling for LLMs, tools, and APIs ([`api`](bitrouter-api/) · [`accounts`](bitrouter-accounts/))
 - **Observability** — per-request spend tracking, metrics, and cost calculation ([`observe`](bitrouter-observe/))
@@ -109,7 +108,7 @@ Any agent runtime that can target a custom OpenAI or Anthropic base URL works wi
 | **Language** | Rust | Closed-source | Python |
 | **Self-hosted** | Yes | No | Yes |
 | **Agent-native** | Yes — built for autonomous agent runtimes | No — human-facing API gateway | Partial — SDK-oriented |
-| **Agent protocols** | MCP + A2A + Skills | No | MCP + A2A |
+| **Agent protocols** | MCP + Skills | No | MCP + A2A |
 | **Agent firewall** | Built-in guardrails (inspect, redact, block) | Yes | Yes |
 | **Cross-protocol routing** | Yes (e.g. OpenAI format → Anthropic provider) | Provider-specific | Yes (unified interface) |
 | **Agentic payments** | Stablecoin (402/MPP) + Fiat| Credit-based billing | No |
@@ -118,7 +117,7 @@ Any agent runtime that can target a custom OpenAI or Anthropic base URL works wi
 | **Performance** | ~10ms | ~30ms (cloud) | ~500ms |
 | **License** | Apache 2.0 | Proprietary | Apache 2.0 |
 
-**TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM is a Python proxy for unifying provider SDKs. BitRouter is a Rust-native proxy purpose-built for autonomous agents — with agent protocols (MCP, A2A, Skills), guardrails, and agentic payments out of the box.
+**TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM is a Python proxy for unifying provider SDKs. BitRouter is a Rust-native proxy purpose-built for autonomous agents — with agent protocols (MCP, Skills), guardrails, and agentic payments out of the box.
 
 ## Roadmap
 
@@ -127,7 +126,7 @@ Any agent runtime that can target a custom OpenAI or Anthropic base URL works wi
 - [x] Interactive setup wizard (`bitrouter init`) with auto-detection
 - [x] Custom provider support (OpenAI-compatible / Anthropic-compatible)
 - [x] Cross-protocol routing (e.g. OpenAI format → Anthropic provider)
-- [x] MCP & A2A & Skills protocol support
+- [x] MCP & Skills protocol support
 - [ ] TUI observability dashboard
 - [ ] Telemetry and usage analytics
 - [ ] Provider & model routing policy customization

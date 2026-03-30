@@ -3,9 +3,7 @@ use std::sync::Arc;
 use bitrouter_api::router::{admin, models, routes};
 use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
-#[cfg(any(feature = "mcp", feature = "a2a"))]
-use bitrouter_core::observe::ToolObserveCallback;
-use bitrouter_core::observe::{CallerContext, ObserveCallback};
+use bitrouter_core::observe::{CallerContext, ObserveCallback, ToolObserveCallback};
 use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::registry::ModelRegistry;
 use bitrouter_core::routers::router::LanguageModelRouter;
@@ -348,11 +346,19 @@ where
             );
 
         // ── Tool routing table ────────────────────────────────────────
-        let tool_table = bitrouter_config::ConfigToolRoutingTable::new(
+        let tool_table = Arc::new(bitrouter_config::ConfigToolRoutingTable::new(
             self.config.providers.clone(),
             self.config.tools.clone(),
-        );
+        ));
         let providers_by_protocol = tool_table.providers_by_protocol();
+
+        // ── REST tool providers ──────────────────────────────────────
+        #[cfg(feature = "rest")]
+        let crate::runtime::rest_client::RestRoutes {
+            tool_providers: rest_tool_providers,
+            tool_entries: rest_tool_entries,
+        } = crate::runtime::rest_client::RestClient::new(&providers_by_protocol, &tool_table)
+            .build();
 
         // ── Skills registry (filesystem-backed, no DB) ──────────────
         let skills_dir = self
@@ -361,64 +367,256 @@ where
             .map(|p| p.home_dir.join("skills"))
             .unwrap_or_else(|| std::path::PathBuf::from("skills"));
 
-        let skills = crate::runtime::agentskills_client::AgentSkillsClient::new(
-            &providers_by_protocol,
-            &tool_table,
-            skills_dir,
-        )
-        .build()
-        .await;
+        let skills =
+            crate::runtime::agentskills_client::AgentSkillsClient::new(&tool_table, skills_dir)
+                .build()
+                .await;
+        let has_skill_tools = skills.has_skills;
+
+        // ── Build ToolRouter with REST providers ───────────────────
+        let tool_router = Arc::new(crate::runtime::router::ToolRouterImpl::new());
+        #[cfg(feature = "rest")]
+        for (name, provider) in rest_tool_providers {
+            tool_router
+                .register(name, bitrouter_config::ApiProtocol::Rest, provider)
+                .await;
+        }
 
         // ── MCP registry ─────────────────────────────────────────────
         #[cfg(feature = "mcp")]
         let mcp = {
-            let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
             crate::runtime::mcp_client::McpClient::new(
                 &providers_by_protocol,
                 self.table.clone(),
                 raw_router,
             )
-            .with_auth(auth_ctx.clone())
-            .with_observe(tool_observer)
-            .with_account_filter(account_filter.clone())
-            .with_skill_registry(skills.registry.clone())
             .build()
             .await
         };
         #[cfg(not(feature = "mcp"))]
         let mcp = crate::runtime::mcp_client::McpRoutes::noop();
 
-        // ── A2A protocol ─────────────────────────────────────────────
-        #[cfg(feature = "a2a")]
-        let a2a = {
-            let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
-            crate::runtime::a2a_client::A2aClient::new(
-                &providers_by_protocol,
-                self.config.server.listen,
-            )
-            .with_observe(tool_observer)
-            .with_account_filter(account_filter.clone())
-            .build()
-            .await
-        };
-        #[cfg(not(feature = "a2a"))]
-        let a2a = crate::runtime::a2a_client::A2aRoutes::noop();
-
-        // ── Unified tool router ─────────────────────────────────────
-        let mut tool_router = crate::runtime::router::ToolRouterImpl::new();
+        // ── Register MCP providers into tool router ────────────────
         for (name, provider) in mcp.tool_providers {
-            tool_router.register(name, provider);
+            tool_router
+                .register(name, bitrouter_config::ApiProtocol::Mcp, provider)
+                .await;
         }
-        for (name, provider) in a2a.tool_providers {
-            tool_router.register(name, provider);
-        }
-        if tool_router.has_providers() {
+        if tool_router.has_providers().await {
             tracing::info!(
                 "tool router initialized with {} providers",
-                tool_router.provider_count()
+                tool_router.provider_count().await
             );
         }
-        let _tool_router = std::sync::Arc::new(tool_router);
+
+        // ── Build per-tool protocol map for tool dispatch ───────────
+        // Keyed by namespaced tool ID ("provider/tool_id") so that a
+        // single provider can serve tools across multiple protocols
+        // (e.g. exa has both REST and MCP tools).
+        let mut tool_protocols = std::collections::HashMap::new();
+
+        // 1. Config-declared tools: resolve protocol from endpoint config.
+        for (tool_name, tool_config) in tool_table.tools() {
+            for ep in &tool_config.endpoints {
+                let provider = tool_table.providers().get(&ep.provider);
+                let protocol = ep.api_protocol.or(provider.and_then(|p| p.api_protocol));
+                if let Some(protocol) = protocol {
+                    let tool_id = format!("{}/{}", ep.provider, ep.service_id);
+                    tool_protocols.entry(tool_id).or_insert(protocol);
+                    // Also register by virtual tool name for direct lookups.
+                    let virtual_id = format!("{}/{}", ep.provider, tool_name);
+                    tool_protocols.entry(virtual_id).or_insert(protocol);
+                }
+            }
+        }
+
+        // 2. MCP-discovered tools: all MCP, keyed by "server/tool_name".
+        #[cfg(feature = "mcp")]
+        if let Some(ref reg) = mcp.registry {
+            for tool in reg.aggregated_tools().await {
+                tool_protocols
+                    .entry(tool.name)
+                    .or_insert(bitrouter_config::ApiProtocol::Mcp);
+            }
+        }
+
+        // ── MCP server registry (discovery + MCP capabilities) ─────
+        // DynamicToolRegistry wraps ConfigMcpRegistry for filtered list_tools
+        // and AdminToolRegistry CRUD. Tool execution goes through
+        // ToolCallHandler, not through the registry.
+        #[cfg(feature = "mcp")]
+        let (mcp_server_registry, restrictions_ref) = {
+            let (initial_filters, initial_restrictions) =
+                (mcp.initial_filters, mcp.initial_restrictions);
+            if let Some(mcp_reg) = mcp.registry.clone() {
+                let dynamic = Arc::new(
+                    bitrouter_core::routers::dynamic_tool::DynamicToolRegistry::new(
+                        mcp_reg,
+                        initial_filters,
+                        initial_restrictions,
+                    ),
+                );
+                // Share the same restrictions lock so admin updates are enforced
+                // at call time by RouterToolCallHandler.
+                let restrictions_ref = dynamic.restrictions_ref();
+                (Some(dynamic), restrictions_ref)
+            } else {
+                let restrictions_ref =
+                    std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+                (None, restrictions_ref)
+            }
+        };
+        #[cfg(not(feature = "mcp"))]
+        let (mcp_server_registry, restrictions_ref): (
+            Option<
+                Arc<
+                    bitrouter_core::routers::dynamic_tool::DynamicToolRegistry<
+                        bitrouter_providers::mcp::client::registry::ConfigMcpRegistry,
+                    >,
+                >,
+            >,
+            _,
+        ) = {
+            let restrictions_ref =
+                std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+            (None, restrictions_ref)
+        };
+
+        // ── Tool call handler (protocol-neutral dispatch) ──────────
+        let tool_call_handler: Option<Arc<dyn bitrouter_core::api::mcp::gateway::ToolCallHandler>> =
+            if tool_router.has_providers().await {
+                Some(Arc::new(
+                    crate::runtime::router::RouterToolCallHandler::new(
+                        tool_router,
+                        tool_protocols,
+                        restrictions_ref,
+                    ),
+                ))
+            } else {
+                None
+            };
+
+        // ── MCP admin routes ───────────────────────────────────────
+        let admin_mcp_routes = {
+            use bitrouter_api::router::mcp as mcp_api;
+            if self.db.is_some() {
+                auth::auth_gate(auth::management_auth(auth_ctx.clone()))
+                    .and(mcp_api::mcp_admin_filter(mcp_server_registry.clone()))
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            } else {
+                mcp_api::mcp_admin_filter(mcp_server_registry.clone())
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            }
+        };
+
+        // ── MCP server endpoint ────────────────────────────────────
+        let mcp_server = {
+            use bitrouter_api::router::mcp as mcp_api;
+            let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
+            mcp_api::mcp_server_filter_with_observe(
+                mcp_server_registry.clone(),
+                tool_call_handler,
+                tool_observer,
+                account_filter.clone(),
+            )
+            .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+            .boxed()
+        };
+
+        // ── Tool listing (GET /v1/tools) ────────────────────────────
+        // Merge tool lists from MCP registry + skill registry.
+        let tool_list = {
+            use bitrouter_api::router::tools;
+            use bitrouter_core::routers::registry::{ToolEntry, ToolRegistry};
+            type RouteFilter = warp::filters::BoxedFilter<(Box<dyn warp::Reply>,)>;
+
+            // Collect static REST tool entries for discovery.
+            #[cfg(feature = "rest")]
+            let rest_entries = rest_tool_entries;
+            #[cfg(not(feature = "rest"))]
+            let rest_entries: Vec<ToolEntry> = Vec::new();
+            let has_rest_tools = !rest_entries.is_empty();
+
+            // Merges two ToolRegistry sources into a single listing.
+            struct MergedToolRegistry<A, B> {
+                primary: A,
+                secondary: B,
+            }
+            impl<A: ToolRegistry, B: ToolRegistry> ToolRegistry for MergedToolRegistry<A, B> {
+                async fn list_tools(&self) -> Vec<ToolEntry> {
+                    let mut tools = self.primary.list_tools().await;
+                    tools.extend(self.secondary.list_tools().await);
+                    tools
+                }
+            }
+
+            // A ToolRegistry backed by a static Vec<ToolEntry>.
+            struct StaticToolRegistry(Vec<ToolEntry>);
+            impl ToolRegistry for StaticToolRegistry {
+                async fn list_tools(&self) -> Vec<ToolEntry> {
+                    self.0.clone()
+                }
+            }
+
+            // Build composite registry from available sources (MCP + skills + REST).
+            let filter: RouteFilter = if let Some(ref mcp_reg) = mcp_server_registry {
+                if has_skill_tools && has_rest_tools {
+                    let merged = Arc::new(MergedToolRegistry {
+                        primary: MergedToolRegistry {
+                            primary: mcp_reg.clone(),
+                            secondary: skills.registry.clone(),
+                        },
+                        secondary: StaticToolRegistry(rest_entries),
+                    });
+                    tools::tools_filter(Some(merged))
+                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                        .boxed()
+                } else if has_skill_tools {
+                    let merged = Arc::new(MergedToolRegistry {
+                        primary: mcp_reg.clone(),
+                        secondary: skills.registry.clone(),
+                    });
+                    tools::tools_filter(Some(merged))
+                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                        .boxed()
+                } else if has_rest_tools {
+                    let merged = Arc::new(MergedToolRegistry {
+                        primary: mcp_reg.clone(),
+                        secondary: StaticToolRegistry(rest_entries),
+                    });
+                    tools::tools_filter(Some(merged))
+                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                        .boxed()
+                } else {
+                    tools::tools_filter(Some(mcp_reg.clone()))
+                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                        .boxed()
+                }
+            } else if has_skill_tools && has_rest_tools {
+                let merged = Arc::new(MergedToolRegistry {
+                    primary: skills.registry.clone(),
+                    secondary: StaticToolRegistry(rest_entries),
+                });
+                tools::tools_filter(Some(merged))
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            } else if has_skill_tools {
+                tools::tools_filter(Some(skills.registry.clone()))
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            } else if has_rest_tools {
+                tools::tools_filter(Some(Arc::new(StaticToolRegistry(rest_entries))))
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            } else {
+                tools::tools_filter::<StaticToolRegistry>(None)
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            };
+            filter
+        };
 
         // ── Base route tree (always present) ─────────────────────────
         let base = health
@@ -433,11 +631,10 @@ where
 
         // ── Compose all routes ─────────────────────────────────────────
         let all_routes = base
-            .or(a2a.gateway)
-            .or(mcp.admin_tool_routes)
-            .or(mcp.tool_list)
+            .or(admin_mcp_routes)
+            .or(tool_list)
             .or(skills.skills_list)
-            .or(mcp.server)
+            .or(mcp_server)
             // Bridge routes come after the aggregated MCP filter so that the static
             // paths POST /mcp and GET /mcp/sse are matched first.
             .or(mcp.bridge_routes);

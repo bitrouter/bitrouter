@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use crate::routers::dynamic_tool::DynamicToolRegistry;
-use crate::tools::registry::{ToolGateway, ToolRegistry};
+use crate::routers::registry::ToolRegistry;
 
 use super::types::McpGatewayError;
 use super::types::{
@@ -140,6 +140,39 @@ impl<
 {
 }
 
+// ── Tool call dispatch ─────────────────────────────────────────────
+
+/// Dyn-safe handler for dispatching `tools/call` requests.
+///
+/// Decouples tool execution from the `McpToolServer` trait so that
+/// `tools/call` can be routed through the [`ToolRouter`](crate::routers::router::ToolRouter)
+/// dispatch chain — independent of MCP server capabilities like resources
+/// and prompts.
+///
+/// Uses `Pin<Box<dyn Future>>` for dyn-compatibility, since concrete
+/// implementations live in downstream crates.
+pub trait ToolCallHandler: Send + Sync {
+    /// Dispatch a `tools/call` request by namespaced tool name.
+    ///
+    /// `name` is the internal namespaced name (e.g. `"github/search"`),
+    /// already translated from wire format.
+    fn call_tool(
+        &self,
+        name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Pin<Box<dyn Future<Output = Result<McpToolCallResult, McpGatewayError>> + Send + '_>>;
+}
+
+impl<T: ToolCallHandler> ToolCallHandler for Arc<T> {
+    fn call_tool(
+        &self,
+        name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Pin<Box<dyn Future<Output = Result<McpToolCallResult, McpGatewayError>> + Send + '_>> {
+        (**self).call_tool(name, arguments)
+    }
+}
+
 // ── Client-side handler for server→client requests ──────────────────
 
 /// Handler for server→client requests (sampling, elicitation).
@@ -254,7 +287,7 @@ impl<T: McpCompletionServer> McpCompletionServer for Arc<T> {
 // These impls live here (where the traits are defined) to satisfy orphan
 // rules.  The `DynamicToolRegistry` type is defined in `bitrouter-core`.
 
-impl<T: McpToolServer + ToolGateway + Send + Sync> McpToolServer for DynamicToolRegistry<T> {
+impl<T: McpToolServer + ToolRegistry + Send + Sync> McpToolServer for DynamicToolRegistry<T> {
     async fn list_tools(&self) -> Vec<McpTool> {
         let core_tools = <Self as ToolRegistry>::list_tools(self).await;
         core_tools.into_iter().map(McpTool::from).collect()
@@ -265,14 +298,9 @@ impl<T: McpToolServer + ToolGateway + Send + Sync> McpToolServer for DynamicTool
         name: &str,
         arguments: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<McpToolCallResult, McpGatewayError> {
-        let args = super::convert::args_to_value(arguments);
-        let result = <Self as ToolGateway>::call_tool(self, name, args)
-            .await
-            .map_err(|e| McpGatewayError::UpstreamCall {
-                name: name.to_owned(),
-                reason: e.to_string(),
-            })?;
-        Ok(McpToolCallResult::from(result))
+        // Delegate to the inner McpToolServer — restriction enforcement
+        // is handled at the MCP filter level via ToolCallHandler.
+        self.inner().call_tool(name, arguments).await
     }
 
     fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
@@ -280,7 +308,7 @@ impl<T: McpToolServer + ToolGateway + Send + Sync> McpToolServer for DynamicTool
     }
 }
 
-impl<T: McpResourceServer + ToolGateway + Send + Sync> McpResourceServer
+impl<T: McpResourceServer + ToolRegistry + Send + Sync> McpResourceServer
     for DynamicToolRegistry<T>
 {
     async fn list_resources(&self) -> Vec<McpResource> {
@@ -300,7 +328,7 @@ impl<T: McpResourceServer + ToolGateway + Send + Sync> McpResourceServer
     }
 }
 
-impl<T: McpPromptServer + ToolGateway + Send + Sync> McpPromptServer for DynamicToolRegistry<T> {
+impl<T: McpPromptServer + ToolRegistry + Send + Sync> McpPromptServer for DynamicToolRegistry<T> {
     async fn list_prompts(&self) -> Vec<McpPrompt> {
         self.inner().list_prompts().await
     }
@@ -318,7 +346,7 @@ impl<T: McpPromptServer + ToolGateway + Send + Sync> McpPromptServer for Dynamic
     }
 }
 
-impl<T: McpSubscriptionServer + ToolGateway + Send + Sync> McpSubscriptionServer
+impl<T: McpSubscriptionServer + ToolRegistry + Send + Sync> McpSubscriptionServer
     for DynamicToolRegistry<T>
 {
     async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
@@ -330,13 +358,13 @@ impl<T: McpSubscriptionServer + ToolGateway + Send + Sync> McpSubscriptionServer
     }
 }
 
-impl<T: McpLoggingServer + ToolGateway + Send + Sync> McpLoggingServer for DynamicToolRegistry<T> {
+impl<T: McpLoggingServer + ToolRegistry + Send + Sync> McpLoggingServer for DynamicToolRegistry<T> {
     async fn set_logging_level(&self, level: LoggingLevel) -> Result<(), McpGatewayError> {
         self.inner().set_logging_level(level).await
     }
 }
 
-impl<T: McpCompletionServer + ToolGateway + Send + Sync> McpCompletionServer
+impl<T: McpCompletionServer + ToolRegistry + Send + Sync> McpCompletionServer
     for DynamicToolRegistry<T>
 {
     async fn complete(&self, params: CompleteParams) -> Result<CompleteResult, McpGatewayError> {

@@ -5,10 +5,7 @@ use bitrouter_config::{ApiProtocol, ProviderConfig};
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::language::language_model::DynLanguageModel,
-    routers::{
-        router::LanguageModelRouter,
-        routing_table::{RoutingTarget, ToolRoutingTarget},
-    },
+    routers::{router::LanguageModelRouter, routing_table::RoutingTarget},
     tools::provider::DynToolProvider,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -88,22 +85,11 @@ impl LanguageModelRouter for Router {
             )
         })?;
 
-        let protocol = provider.api_protocol.as_ref().ok_or_else(|| {
-            BitrouterError::invalid_request(
-                Some(&target.provider_name),
-                format!(
-                    "provider '{}' has no api_protocol configured",
-                    target.provider_name
-                ),
-                None,
-            )
-        })?;
-
-        match protocol {
+        match target.api_protocol {
             ApiProtocol::Openai => {
                 let config = self.build_openai_config(provider)?;
                 let model = OpenAiChatCompletionsModel::with_client(
-                    target.model_id,
+                    target.service_id,
                     self.client.clone(),
                     config,
                 );
@@ -112,7 +98,7 @@ impl LanguageModelRouter for Router {
             ApiProtocol::Anthropic => {
                 let config = self.build_anthropic_config(provider)?;
                 let model = AnthropicMessagesModel::with_client(
-                    target.model_id,
+                    target.service_id,
                     self.client.clone(),
                     config,
                 );
@@ -121,22 +107,20 @@ impl LanguageModelRouter for Router {
             ApiProtocol::Google => {
                 let config = self.build_google_config(provider)?;
                 let model = GoogleGenerativeAiModel::with_client(
-                    target.model_id,
+                    target.service_id,
                     self.client.clone(),
                     config,
                 );
                 Ok(DynLanguageModel::new_box(model))
             }
-            ApiProtocol::Mcp | ApiProtocol::A2a | ApiProtocol::Rest | ApiProtocol::Skill => {
-                Err(BitrouterError::invalid_request(
-                    Some(&target.provider_name),
-                    format!(
-                        "provider '{}' uses tool protocol '{}' which cannot serve models",
-                        target.provider_name, protocol
-                    ),
-                    None,
-                ))
-            }
+            ApiProtocol::Mcp | ApiProtocol::Rest => Err(BitrouterError::invalid_request(
+                Some(&target.provider_name),
+                format!(
+                    "provider '{}' uses tool protocol '{}' which cannot serve models",
+                    target.provider_name, target.api_protocol
+                ),
+                None,
+            )),
         }
     }
 }
@@ -180,35 +164,49 @@ use bitrouter_providers::openai::chat::provider::{OpenAiChatCompletionsModel, Op
 /// name, constructed at server startup from upstream MCP connections and
 /// A2A agent connections.
 pub struct ToolRouterImpl {
-    providers: HashMap<String, Arc<DynToolProvider<'static>>>,
+    providers: tokio::sync::RwLock<HashMap<String, Arc<DynToolProvider<'static>>>>,
 }
 
 impl ToolRouterImpl {
     pub fn new() -> Self {
         Self {
-            providers: HashMap::new(),
+            providers: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
 
-    /// Register a tool provider under the given name.
-    pub fn register(&mut self, name: String, provider: Arc<DynToolProvider<'static>>) {
-        self.providers.insert(name, provider);
+    /// Register a tool provider under the given name and protocol.
+    ///
+    /// Uses interior mutability (`RwLock`) so that providers can be added
+    /// after the router is wrapped in an `Arc` and shared with the gateway.
+    ///
+    /// Providers are keyed by `"{name}:{protocol}"` to support multiple
+    /// protocols for the same logical provider (e.g. `exa:rest`, `exa:mcp`).
+    pub async fn register(
+        &self,
+        name: String,
+        protocol: bitrouter_config::ApiProtocol,
+        provider: Arc<DynToolProvider<'static>>,
+    ) {
+        let key = format!("{name}:{protocol}");
+        self.providers.write().await.insert(key, provider);
     }
 
     /// Returns `true` if any providers are registered.
-    pub fn has_providers(&self) -> bool {
-        !self.providers.is_empty()
+    pub async fn has_providers(&self) -> bool {
+        !self.providers.read().await.is_empty()
     }
 
     /// Returns the number of registered providers.
-    pub fn provider_count(&self) -> usize {
-        self.providers.len()
+    pub async fn provider_count(&self) -> usize {
+        self.providers.read().await.len()
     }
 }
 
 impl bitrouter_core::routers::router::ToolRouter for ToolRouterImpl {
-    async fn route_tool(&self, target: ToolRoutingTarget) -> Result<Box<DynToolProvider<'static>>> {
-        let provider = self.providers.get(&target.provider_name).ok_or_else(|| {
+    async fn route_tool(&self, target: RoutingTarget) -> Result<Box<DynToolProvider<'static>>> {
+        let key = format!("{}:{}", target.provider_name, target.api_protocol);
+        let providers = self.providers.read().await;
+        let provider = providers.get(&key).ok_or_else(|| {
             BitrouterError::invalid_request(
                 None,
                 format!(
@@ -250,6 +248,122 @@ impl bitrouter_core::tools::provider::ToolProvider for ArcToolProvider {
     }
 }
 
+// ── Tool call handler ────────────────────────────────────────────
+
+/// [`ToolCallHandler`] implementation that dispatches `tools/call` through
+/// the [`ToolRouterImpl`] dispatch chain.
+///
+/// Extracts provider name and protocol from the namespaced tool name
+/// (e.g. `"github/search"` → provider `"github"`, tool `"search"`),
+/// resolves the provider via `ToolRouterImpl`, and forwards the call.
+///
+/// Parameter restrictions are enforced before dispatch.
+pub struct RouterToolCallHandler {
+    tool_router: Arc<ToolRouterImpl>,
+    /// Maps namespaced tool ID ("provider/tool") → API protocol.
+    ///
+    /// Keyed per-tool (not per-provider) so that a single provider can
+    /// serve tools across multiple protocols (e.g. `exa/search` → REST,
+    /// `exa/web_search_exa` → MCP).
+    tool_protocols: HashMap<String, bitrouter_config::ApiProtocol>,
+    /// Per-server parameter restrictions (read from `DynamicToolRegistry`).
+    restrictions: std::sync::Arc<
+        std::sync::RwLock<HashMap<String, bitrouter_core::routers::admin::ParamRestrictions>>,
+    >,
+}
+
+impl RouterToolCallHandler {
+    pub fn new(
+        tool_router: Arc<ToolRouterImpl>,
+        tool_protocols: HashMap<String, bitrouter_config::ApiProtocol>,
+        restrictions: std::sync::Arc<
+            std::sync::RwLock<HashMap<String, bitrouter_core::routers::admin::ParamRestrictions>>,
+        >,
+    ) -> Self {
+        Self {
+            tool_router,
+            tool_protocols,
+            restrictions,
+        }
+    }
+}
+
+impl bitrouter_core::api::mcp::gateway::ToolCallHandler for RouterToolCallHandler {
+    fn call_tool(
+        &self,
+        name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = std::result::Result<
+                        bitrouter_core::api::mcp::types::McpToolCallResult,
+                        bitrouter_core::api::mcp::types::McpGatewayError,
+                    >,
+                > + Send
+                + '_,
+        >,
+    > {
+        let name = name.to_owned();
+        Box::pin(async move {
+            let (provider_name, tool_id) = name
+                .split_once('/')
+                .map(|(p, t)| (p.to_owned(), t.to_owned()))
+                .unwrap_or_else(|| (name.clone(), name.clone()));
+
+            use bitrouter_core::api::mcp::types::McpGatewayError;
+            use bitrouter_core::routers::router::ToolRouter;
+            use bitrouter_core::tools::provider::ToolProvider;
+
+            // Enforce parameter restrictions before dispatch.
+            let mut args_map = arguments;
+            if let Ok(restrictions) = self.restrictions.read()
+                && let Some(restriction) = restrictions.get(&provider_name)
+            {
+                restriction.check(&tool_id, &mut args_map).map_err(|e| {
+                    McpGatewayError::UpstreamCall {
+                        name: name.clone(),
+                        reason: e.to_string(),
+                    }
+                })?;
+            }
+
+            // Look up protocol by full tool ID (e.g. "exa/search"),
+            // supporting providers that serve tools across multiple protocols.
+            let protocol = self
+                .tool_protocols
+                .get(&name)
+                .ok_or_else(|| McpGatewayError::ToolNotFound { name: name.clone() })?;
+
+            let target = RoutingTarget {
+                provider_name,
+                service_id: tool_id.clone(),
+                api_protocol: *protocol,
+            };
+
+            let provider_impl = self.tool_router.route_tool(target).await.map_err(|e| {
+                McpGatewayError::UpstreamCall {
+                    name: name.clone(),
+                    reason: e.to_string(),
+                }
+            })?;
+
+            let args_value = bitrouter_core::api::mcp::convert::args_to_value(args_map);
+            let result = provider_impl
+                .call_tool(&tool_id, args_value)
+                .await
+                .map_err(|e| McpGatewayError::UpstreamCall {
+                    name,
+                    reason: e.to_string(),
+                })?;
+
+            Ok(bitrouter_core::api::mcp::types::McpToolCallResult::from(
+                result,
+            ))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,15 +372,17 @@ mod tests {
 
     #[tokio::test]
     async fn route_to_registered_provider() {
-        let mut router = ToolRouterImpl::new();
+        let router = ToolRouterImpl::new();
 
         // Register a dummy MCP provider.
         let dummy = DynToolProvider::new_box(DummyProvider("test-mcp".into()));
-        router.register("test-mcp".into(), Arc::from(dummy));
+        router
+            .register("test-mcp".into(), ApiProtocol::Mcp, Arc::from(dummy))
+            .await;
 
-        let target = ToolRoutingTarget {
+        let target = RoutingTarget {
             provider_name: "test-mcp".into(),
-            tool_id: "search".into(),
+            service_id: "search".into(),
             api_protocol: ApiProtocol::Mcp,
         };
 
@@ -278,9 +394,9 @@ mod tests {
     #[tokio::test]
     async fn route_to_unknown_provider_errors() {
         let router = ToolRouterImpl::new();
-        let target = ToolRoutingTarget {
+        let target = RoutingTarget {
             provider_name: "missing".into(),
-            tool_id: "foo".into(),
+            service_id: "foo".into(),
             api_protocol: ApiProtocol::Mcp,
         };
         assert!(router.route_tool(target).await.is_err());

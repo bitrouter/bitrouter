@@ -1,4 +1,3 @@
-pub mod a2a_client;
 pub mod agentskills_client;
 pub mod app;
 pub mod auth;
@@ -7,6 +6,8 @@ pub mod error;
 pub mod mcp_client;
 pub mod migration;
 pub mod paths;
+#[cfg(feature = "rest")]
+pub mod rest_client;
 pub mod router;
 pub mod server;
 

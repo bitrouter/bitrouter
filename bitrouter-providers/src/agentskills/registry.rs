@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_core::routers::registry::{SkillEntry, SkillService};
-use bitrouter_core::tools::registry::{ToolEntry, ToolRegistry};
+use bitrouter_core::routers::registry::{ToolEntry, ToolRegistry};
 use tokio::sync::RwLock;
 
 use super::catalog::SkillCatalogEntry;
@@ -48,11 +48,7 @@ impl FilesystemSkillRegistry {
         })
     }
 
-    /// Create a registry from config-declared skills merged with filesystem scan.
-    ///
-    /// Config skills that don't have a `SKILL.md` on disk get a minimal one
-    /// generated and written. Filesystem skills not in config are also included.
-    /// Create a registry from config-declared tools (with `ApiProtocol::Skill`)
+    /// Create a registry from config-declared tools (those with a `skill` field)
     /// merged with a filesystem scan.
     ///
     /// Config tools that don't have a `SKILL.md` on disk get a minimal one
@@ -406,11 +402,7 @@ mod tests {
         // Config-declared tool not yet on disk.
         let configs = vec![(
             "cfg-skill".to_string(),
-            bitrouter_config::ToolConfig {
-                strategy: Default::default(),
-                endpoints: vec![],
-                pricing: None,
-            },
+            bitrouter_config::ToolConfig::default(),
         )];
 
         let reg = FilesystemSkillRegistry::from_config_and_dir(configs, tmp.path().to_path_buf())

@@ -30,14 +30,6 @@ impl McpServerConfig {
             return Err("server name 'sse' is reserved".into());
         }
         match &self.transport {
-            McpServerTransport::Stdio { command, .. } => {
-                if command.is_empty() {
-                    return Err(format!(
-                        "server '{}': stdio command must not be empty",
-                        self.name
-                    ));
-                }
-            }
             McpServerTransport::Http { url, .. } => {
                 if url.is_empty() {
                     return Err(format!(
@@ -52,16 +44,13 @@ impl McpServerConfig {
 }
 
 /// Transport type for connecting to an upstream MCP server.
+///
+/// Only streamable HTTP is supported. Stdio transport was removed —
+/// use an MCP-over-HTTP bridge (e.g. `mcp-proxy`) if your server only
+/// speaks stdio.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum McpServerTransport {
-    Stdio {
-        command: String,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        env: HashMap<String, String>,
-    },
     Http {
         url: String,
         #[serde(default)]
@@ -80,19 +69,6 @@ mod tests {
             transport: McpServerTransport::Http {
                 url: "https://example.com".into(),
                 headers: HashMap::new(),
-            },
-        };
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn valid_stdio_config() {
-        let config = McpServerConfig {
-            name: "test".into(),
-            transport: McpServerTransport::Stdio {
-                command: "npx".into(),
-                args: vec!["-y".into(), "server".into()],
-                env: HashMap::new(),
             },
         };
         assert!(config.validate().is_ok());
@@ -129,19 +105,6 @@ mod tests {
             transport: McpServerTransport::Http {
                 url: String::new(),
                 headers: HashMap::new(),
-            },
-        };
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn empty_command_rejected() {
-        let config = McpServerConfig {
-            name: "test".into(),
-            transport: McpServerTransport::Stdio {
-                command: String::new(),
-                args: Vec::new(),
-                env: HashMap::new(),
             },
         };
         assert!(config.validate().is_err());

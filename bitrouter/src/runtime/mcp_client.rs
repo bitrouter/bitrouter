@@ -7,21 +7,28 @@ use warp::Filter;
 
 type RouteFilter = warp::filters::BoxedFilter<(Box<dyn warp::Reply>,)>;
 
-/// Warp route filters produced by MCP client initialization.
+/// Outputs produced by MCP client initialization.
 pub struct McpRoutes {
-    /// Admin tool management endpoints (gated by management auth).
-    pub admin_tool_routes: RouteFilter,
-    /// MCP JSON-RPC server endpoint (`POST /mcp`, `GET /mcp/sse`).
-    pub server: RouteFilter,
-    /// `GET /v1/tools` composite tool listing (MCP + skills).
-    pub tool_list: RouteFilter,
     /// Per-server bridge endpoints (`POST /mcp/:server`, `GET /mcp/:server/sse`).
     pub bridge_routes: RouteFilter,
+    /// The raw MCP registry, if any upstreams were connected.
+    ///
+    /// Composed into `CompositeToolRegistry` at the server assembly layer.
+    #[cfg(feature = "mcp")]
+    pub registry: Option<Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>>,
     /// Type-erased per-server tool providers for [`ToolRouterImpl`].
     pub tool_providers: Vec<(
         String,
         Arc<bitrouter_core::tools::provider::DynToolProvider<'static>>,
     )>,
+    /// Per-server tool filters from config, for `DynamicToolRegistry`.
+    #[cfg(feature = "mcp")]
+    pub initial_filters:
+        std::collections::HashMap<String, bitrouter_core::routers::admin::ToolFilter>,
+    /// Per-server parameter restrictions from config, for `DynamicToolRegistry`.
+    #[cfg(feature = "mcp")]
+    pub initial_restrictions:
+        std::collections::HashMap<String, bitrouter_core::routers::admin::ParamRestrictions>,
     /// Background task guards — dropped when routes are dropped.
     _guards: Vec<Box<dyn std::any::Any + Send>>,
 }
@@ -35,9 +42,6 @@ impl McpRoutes {
             .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
             .boxed();
         Self {
-            admin_tool_routes: noop.clone(),
-            server: noop.clone(),
-            tool_list: noop.clone(),
             bridge_routes: noop,
             tool_providers: Vec::new(),
             _guards: Vec::new(),
@@ -48,12 +52,10 @@ impl McpRoutes {
 // ── Feature-gated builder ────────────────────────────────────────
 
 #[cfg(feature = "mcp")]
-use std::collections::HashMap;
-#[cfg(feature = "mcp")]
 use std::pin::Pin;
 
 #[cfg(feature = "mcp")]
-use bitrouter_api::router::{admin_tools, mcp as mcp_admin, tools};
+use bitrouter_api::router::mcp as mcp_api;
 #[cfg(feature = "mcp")]
 use bitrouter_config::{ApiProtocol, ProviderConfig};
 #[cfg(feature = "mcp")]
@@ -87,40 +89,28 @@ use bitrouter_core::models::language::tool_choice::LanguageModelToolChoice;
 #[cfg(feature = "mcp")]
 use bitrouter_core::models::shared::types::JsonSchema;
 #[cfg(feature = "mcp")]
-use bitrouter_core::observe::{CallerContext, ToolObserveCallback};
-#[cfg(feature = "mcp")]
 use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
-#[cfg(feature = "mcp")]
-use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
 #[cfg(feature = "mcp")]
 use bitrouter_core::routers::router::LanguageModelRouter;
 #[cfg(feature = "mcp")]
 use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
-#[cfg(feature = "mcp")]
-use bitrouter_providers::agentskills::registry::FilesystemSkillRegistry;
 #[cfg(feature = "mcp")]
 use bitrouter_providers::mcp::client::bridge::SingleServerBridge;
 #[cfg(feature = "mcp")]
 use bitrouter_providers::mcp::client::registry::ConfigMcpRegistry;
 #[cfg(feature = "mcp")]
 use bitrouter_providers::mcp::client::upstream::UpstreamConnection;
-
 #[cfg(feature = "mcp")]
-use crate::runtime::auth::{self, JwtAuthContext};
+use std::collections::HashMap;
 
 // ── McpClient builder ────────────────────────────────────────────
 
-/// Builder for MCP upstream connections, registries, and route filters.
+/// Builder for MCP upstream connections and registry.
 #[cfg(feature = "mcp")]
 pub struct McpClient<T, R> {
     providers: Vec<(String, ProviderConfig)>,
-    has_skill_providers: bool,
     table: Arc<T>,
     router: Arc<R>,
-    auth_ctx: Option<Arc<JwtAuthContext>>,
-    observer: Option<Arc<dyn ToolObserveCallback>>,
-    account_filter: Option<warp::filters::BoxedFilter<(CallerContext,)>>,
-    skill_registry: Option<Arc<FilesystemSkillRegistry>>,
 }
 
 #[cfg(feature = "mcp")]
@@ -138,45 +128,12 @@ where
             .get(&ApiProtocol::Mcp)
             .cloned()
             .unwrap_or_default();
-        let has_skill_providers = providers_by_protocol.contains_key(&ApiProtocol::Skill);
 
         Self {
             providers,
-            has_skill_providers,
             table,
             router,
-            auth_ctx: None,
-            observer: None,
-            account_filter: None,
-            skill_registry: None,
         }
-    }
-
-    pub fn with_auth(mut self, auth_ctx: Arc<JwtAuthContext>) -> Self {
-        self.auth_ctx = Some(auth_ctx);
-        self
-    }
-
-    pub fn with_observe(mut self, observer: Arc<dyn ToolObserveCallback>) -> Self {
-        self.observer = Some(observer);
-        self
-    }
-
-    pub fn with_account_filter(
-        mut self,
-        filter: impl Filter<Extract = (CallerContext,), Error = warp::Rejection>
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self {
-        self.account_filter = Some(filter.boxed());
-        self
-    }
-
-    pub fn with_skill_registry(mut self, registry: Arc<FilesystemSkillRegistry>) -> Self {
-        self.skill_registry = Some(registry);
-        self
     }
 
     pub async fn build(self) -> McpRoutes {
@@ -254,12 +211,7 @@ where
             let inner = Arc::new(reg);
             let guard = inner.spawn_refresh_listeners().await;
             guards.push(Box::new(guard));
-            let wrapped = Arc::new(DynamicToolRegistry::new(
-                Arc::clone(&inner),
-                initial_filters,
-                initial_restrictions,
-            ));
-            (Some(inner), Some(wrapped))
+            (Some(Arc::clone(&inner)), Some(inner))
         } else {
             (None, None)
         };
@@ -282,61 +234,9 @@ where
                 guards.push(Box::new(guard));
             }
         }
-        let bridge_routes = mcp_admin::mcp_bridge_filter(Arc::new(bridge_map))
+        let bridge_routes = mcp_api::mcp_bridge_filter(Arc::new(bridge_map))
             .map(|r| Box::new(r) as Box<dyn warp::Reply>)
             .boxed();
-
-        // Build admin tool routes (gated by management auth when configured).
-        let admin_tool_routes = if let Some(ref auth_ctx) = self.auth_ctx {
-            auth::auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(admin_tools::admin_tools_filter(registry.clone()))
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        } else {
-            admin_tools::admin_tools_filter(registry.clone())
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        };
-
-        // Build MCP server filter with tool-call observation.
-        let server = if let (Some(observer), Some(account_filter)) =
-            (self.observer, self.account_filter)
-        {
-            mcp_admin::mcp_server_filter_with_observe(registry.clone(), observer, account_filter)
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        } else {
-            mcp_admin::mcp_server_filter(registry.clone())
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        };
-
-        // Compose MCP tools + agentskills into a single ToolRegistry
-        // for the unified GET /v1/tools endpoint.
-        let tool_list = if let Some(ref mcp_reg) = registry {
-            if let Some(ref skill_reg) = self.skill_registry {
-                let composite =
-                    Arc::new(bitrouter_core::tools::registry::CompositeToolRegistry::new(
-                        mcp_reg.clone(),
-                        skill_reg.clone(),
-                    ));
-                tools::tools_filter(Some(composite))
-                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                    .boxed()
-            } else {
-                tools::tools_filter(Some(mcp_reg.clone()))
-                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                    .boxed()
-            }
-        } else if self.has_skill_providers {
-            tools::tools_filter(self.skill_registry)
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        } else {
-            tools::tools_filter(registry)
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        };
 
         // Collect type-erased tool providers for ToolRouterImpl.
         let tool_providers: Vec<(
@@ -354,11 +254,11 @@ where
             .collect();
 
         McpRoutes {
-            admin_tool_routes,
-            server,
-            tool_list,
             bridge_routes,
+            registry,
             tool_providers,
+            initial_filters,
+            initial_restrictions,
             _guards: guards,
         }
     }
@@ -373,7 +273,6 @@ struct McpToolProviderAdapter(Arc<UpstreamConnection>);
 #[cfg(feature = "mcp")]
 impl bitrouter_core::tools::provider::ToolProvider for McpToolProviderAdapter {
     fn provider_name(&self) -> &str {
-        // UpstreamConnection doesn't expose name() publicly, use the trait method
         bitrouter_core::tools::provider::ToolProvider::provider_name(self.0.as_ref())
     }
 
@@ -474,7 +373,7 @@ where
 
             // 1. Resolve model from hints.
             let target = self.resolve_model(&params).await?;
-            let model_id = target.model_id.clone();
+            let model_id = target.service_id.clone();
 
             // 2. Instantiate the model.
             let model = self
@@ -607,12 +506,12 @@ fn json_value_to_schema(value: serde_json::Value) -> JsonSchema {
 /// Try substring matching a hint against available routes.
 #[cfg(feature = "mcp")]
 fn match_hint(hint: &str, routes: &[RouteEntry]) -> Option<RoutingTarget> {
-    // Try matching against model names first.
     for route in routes {
-        if route.model.contains(hint) || hint.contains(&route.model) {
+        if route.name.contains(hint) || hint.contains(&route.name) {
             return Some(RoutingTarget {
                 provider_name: route.provider.clone(),
-                model_id: route.model.clone(),
+                service_id: route.name.clone(),
+                api_protocol: route.protocol,
             });
         }
     }

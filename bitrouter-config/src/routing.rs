@@ -4,10 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     routers::registry::{ModelEntry, ModelRegistry},
-    routers::routing_table::{
-        ApiProtocol, ModelPricing, RouteEntry, RoutingTable, RoutingTarget, ToolRouteEntry,
-        ToolRoutingTable, ToolRoutingTarget,
-    },
+    routers::routing_table::{ApiProtocol, ModelPricing, RouteEntry, RoutingTable, RoutingTarget},
 };
 
 use crate::config::{ModelConfig, ModelInfo, ProviderConfig, RoutingStrategy, ToolConfig};
@@ -20,15 +17,38 @@ const DEFAULT_PROVIDER: &str = "bitrouter";
 #[derive(Debug, Clone)]
 pub struct ResolvedTarget {
     pub provider_name: String,
-    pub model_id: String,
+    /// Upstream service identifier: model ID for language models, tool ID for tools.
+    pub service_id: String,
     /// The resolved API protocol for this endpoint.
     ///
     /// Resolution order: endpoint override > provider default.
     pub api_protocol: ApiProtocol,
-    /// Per-endpoint API key override (from the model endpoint config).
+    /// Per-endpoint API key override.
     pub api_key_override: Option<String>,
     /// Per-endpoint API base override.
     pub api_base_override: Option<String>,
+}
+
+/// Resolves the API protocol for a given provider, with an optional
+/// per-endpoint override.
+fn resolve_protocol(
+    providers: &HashMap<String, ProviderConfig>,
+    provider_name: &str,
+    endpoint_override: Option<ApiProtocol>,
+) -> Result<ApiProtocol> {
+    if let Some(proto) = endpoint_override {
+        return Ok(proto);
+    }
+    providers
+        .get(provider_name)
+        .and_then(|p| p.api_protocol)
+        .ok_or_else(|| {
+            BitrouterError::invalid_request(
+                Some(provider_name),
+                format!("provider '{provider_name}' has no api_protocol configured"),
+                None,
+            )
+        })
 }
 
 /// Configuration-driven routing table.
@@ -92,38 +112,16 @@ impl ConfigRoutingTable {
         self.model_info(provider_name, model_id).pricing
     }
 
-    /// Resolves the API protocol for a given provider, with an optional
-    /// per-endpoint override.
-    fn resolve_protocol(
-        &self,
-        provider_name: &str,
-        endpoint_override: Option<ApiProtocol>,
-    ) -> Result<ApiProtocol> {
-        if let Some(proto) = endpoint_override {
-            return Ok(proto);
-        }
-        self.providers
-            .get(provider_name)
-            .and_then(|p| p.api_protocol)
-            .ok_or_else(|| {
-                BitrouterError::invalid_request(
-                    Some(provider_name),
-                    format!("provider '{provider_name}' has no api_protocol configured"),
-                    None,
-                )
-            })
-    }
-
     /// Resolves an incoming model name to a full target with any per-endpoint overrides.
     pub fn resolve(&self, incoming: &str) -> Result<ResolvedTarget> {
         // Strategy 1: "provider:model_id" → direct route if provider is known
         if let Some((prefix, suffix)) = incoming.split_once(':')
             && self.providers.contains_key(prefix)
         {
-            let api_protocol = self.resolve_protocol(prefix, None)?;
+            let api_protocol = resolve_protocol(&self.providers, prefix, None)?;
             return Ok(ResolvedTarget {
                 provider_name: prefix.to_owned(),
-                model_id: suffix.to_owned(),
+                service_id: suffix.to_owned(),
                 api_protocol,
                 api_key_override: None,
                 api_base_override: None,
@@ -138,10 +136,10 @@ impl ConfigRoutingTable {
         // Strategy 3: when no explicit models section is configured, fall back
         // to the default provider (if it exists in the provider set).
         if self.models.is_empty() && self.providers.contains_key(DEFAULT_PROVIDER) {
-            let api_protocol = self.resolve_protocol(DEFAULT_PROVIDER, None)?;
+            let api_protocol = resolve_protocol(&self.providers, DEFAULT_PROVIDER, None)?;
             return Ok(ResolvedTarget {
                 provider_name: DEFAULT_PROVIDER.to_owned(),
-                model_id: incoming.to_owned(),
+                service_id: incoming.to_owned(),
                 api_protocol,
                 api_key_override: None,
                 api_base_override: None,
@@ -179,11 +177,12 @@ impl ConfigRoutingTable {
             }
         };
 
-        let api_protocol = self.resolve_protocol(&endpoint.provider, endpoint.api_protocol)?;
+        let api_protocol =
+            resolve_protocol(&self.providers, &endpoint.provider, endpoint.api_protocol)?;
 
         Ok(ResolvedTarget {
             provider_name: endpoint.provider.clone(),
-            model_id: endpoint.model_id.clone(),
+            service_id: endpoint.service_id.clone(),
             api_protocol,
             api_key_override: endpoint.api_key.clone(),
             api_base_override: endpoint.api_base.clone(),
@@ -192,11 +191,12 @@ impl ConfigRoutingTable {
 }
 
 impl RoutingTable for ConfigRoutingTable {
-    async fn route(&self, incoming_model_name: &str) -> Result<RoutingTarget> {
-        let resolved = self.resolve(incoming_model_name)?;
+    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
+        let resolved = self.resolve(incoming_name)?;
         Ok(RoutingTarget {
             provider_name: resolved.provider_name,
-            model_id: resolved.model_id,
+            service_id: resolved.service_id,
+            api_protocol: resolved.api_protocol,
         })
     }
 
@@ -210,7 +210,7 @@ impl RoutingTable for ConfigRoutingTable {
                 if let Some(models) = &provider.models {
                     for model_id in models.keys() {
                         entries.push(RouteEntry {
-                            model: model_id.clone(),
+                            name: model_id.clone(),
                             provider: DEFAULT_PROVIDER.to_owned(),
                             protocol,
                         });
@@ -220,13 +220,16 @@ impl RoutingTable for ConfigRoutingTable {
         } else {
             for (model_name, model_config) in &self.models {
                 if let Some(endpoint) = model_config.endpoints.first() {
-                    let protocol = self
-                        .providers
-                        .get(&endpoint.provider)
-                        .and_then(|p| p.api_protocol)
+                    let protocol = endpoint
+                        .api_protocol
+                        .or_else(|| {
+                            self.providers
+                                .get(&endpoint.provider)
+                                .and_then(|p| p.api_protocol)
+                        })
                         .unwrap_or(ApiProtocol::Openai);
                     entries.push(RouteEntry {
-                        model: model_name.clone(),
+                        name: model_name.clone(),
                         provider: endpoint.provider.clone(),
                         protocol,
                     });
@@ -234,7 +237,7 @@ impl RoutingTable for ConfigRoutingTable {
             }
         }
 
-        entries.sort_by(|a, b| a.model.cmp(&b.model));
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
         entries
     }
 }
@@ -321,19 +324,6 @@ impl ModelRegistry for ConfigRoutingTable {
 
 // ── Tool routing table ──────────────────────────────────────────────
 
-/// A routing target with full resolution context for tool invocations.
-#[derive(Debug, Clone)]
-pub struct ResolvedToolTarget {
-    pub provider_name: String,
-    pub tool_id: String,
-    /// The resolved API protocol for this endpoint.
-    pub api_protocol: ApiProtocol,
-    /// Per-endpoint API key override.
-    pub api_key_override: Option<String>,
-    /// Per-endpoint API base override.
-    pub api_base_override: Option<String>,
-}
-
 /// Configuration-driven tool routing table.
 ///
 /// Routes incoming tool names to concrete provider targets using two strategies:
@@ -382,27 +372,50 @@ impl ConfigToolRoutingTable {
     /// Providers without a resolvable `api_protocol` are skipped with a
     /// warning log.
     pub fn providers_by_protocol(&self) -> HashMap<ApiProtocol, Vec<(String, ProviderConfig)>> {
-        // Collect the set of provider names actually referenced by tool endpoints.
-        let mut referenced: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        // Track which (provider_name, protocol) pairs have already been added
+        // so we don't insert duplicates.
+        let mut seen: std::collections::HashSet<(String, ApiProtocol)> =
+            std::collections::HashSet::new();
+        let mut map: HashMap<ApiProtocol, Vec<(String, ProviderConfig)>> = HashMap::new();
+
         for tool_config in self.tools.values() {
             for endpoint in &tool_config.endpoints {
-                referenced.insert(&endpoint.provider);
-            }
-        }
+                let Some(provider) = self.providers.get(&endpoint.provider) else {
+                    eprintln!(
+                        "warning: tool endpoint references unknown provider '{}' — skipping",
+                        endpoint.provider
+                    );
+                    continue;
+                };
 
-        let mut map: HashMap<ApiProtocol, Vec<(String, ProviderConfig)>> = HashMap::new();
-        for name in referenced {
-            let Some(provider) = self.providers.get(name) else {
-                eprintln!("warning: tool endpoint references unknown provider '{name}' — skipping");
-                continue;
-            };
-            let Some(protocol) = provider.api_protocol else {
-                eprintln!("warning: provider '{name}' has no api_protocol configured — skipping");
-                continue;
-            };
-            map.entry(protocol)
-                .or_default()
-                .push((name.to_owned(), provider.clone()));
+                // Resolve the effective protocol: per-endpoint override or provider default.
+                let protocol = endpoint.api_protocol.or(provider.api_protocol);
+                let Some(protocol) = protocol else {
+                    eprintln!(
+                        "warning: provider '{}' has no api_protocol configured — skipping",
+                        endpoint.provider
+                    );
+                    continue;
+                };
+
+                if !seen.insert((endpoint.provider.clone(), protocol)) {
+                    continue;
+                }
+
+                // Build a provider config with per-endpoint overrides applied.
+                let mut config = provider.clone();
+                if let Some(ref base) = endpoint.api_base {
+                    config.api_base = Some(base.clone());
+                }
+                if let Some(ref key) = endpoint.api_key {
+                    config.api_key = Some(key.clone());
+                }
+                config.api_protocol = Some(protocol);
+
+                map.entry(protocol)
+                    .or_default()
+                    .push((endpoint.provider.clone(), config));
+            }
         }
         map
     }
@@ -412,38 +425,16 @@ impl ConfigToolRoutingTable {
         self.tools.get(tool_name)?.pricing.as_ref()
     }
 
-    /// Resolves the API protocol for a given provider, with an optional
-    /// per-endpoint override.
-    fn resolve_protocol(
-        &self,
-        provider_name: &str,
-        endpoint_override: Option<ApiProtocol>,
-    ) -> Result<ApiProtocol> {
-        if let Some(proto) = endpoint_override {
-            return Ok(proto);
-        }
-        self.providers
-            .get(provider_name)
-            .and_then(|p| p.api_protocol)
-            .ok_or_else(|| {
-                BitrouterError::invalid_request(
-                    Some(provider_name),
-                    format!("provider '{provider_name}' has no api_protocol configured"),
-                    None,
-                )
-            })
-    }
-
     /// Resolves an incoming tool name to a full target with any per-endpoint overrides.
-    pub fn resolve(&self, incoming: &str) -> Result<ResolvedToolTarget> {
+    pub fn resolve(&self, incoming: &str) -> Result<ResolvedTarget> {
         // Strategy 1: "provider:tool_id" → direct route if provider is known
         if let Some((prefix, suffix)) = incoming.split_once(':')
             && self.providers.contains_key(prefix)
         {
-            let api_protocol = self.resolve_protocol(prefix, None)?;
-            return Ok(ResolvedToolTarget {
+            let api_protocol = resolve_protocol(&self.providers, prefix, None)?;
+            return Ok(ResolvedTarget {
                 provider_name: prefix.to_owned(),
-                tool_id: suffix.to_owned(),
+                service_id: suffix.to_owned(),
                 api_protocol,
                 api_key_override: None,
                 api_base_override: None,
@@ -462,7 +453,7 @@ impl ConfigToolRoutingTable {
         ))
     }
 
-    fn select_endpoint(&self, tool_name: &str, config: &ToolConfig) -> Result<ResolvedToolTarget> {
+    fn select_endpoint(&self, tool_name: &str, config: &ToolConfig) -> Result<ResolvedTarget> {
         if config.endpoints.is_empty() {
             return Err(BitrouterError::invalid_request(
                 None,
@@ -486,11 +477,12 @@ impl ConfigToolRoutingTable {
             }
         };
 
-        let api_protocol = self.resolve_protocol(&endpoint.provider, endpoint.api_protocol)?;
+        let api_protocol =
+            resolve_protocol(&self.providers, &endpoint.provider, endpoint.api_protocol)?;
 
-        Ok(ResolvedToolTarget {
+        Ok(ResolvedTarget {
             provider_name: endpoint.provider.clone(),
-            tool_id: endpoint.tool_id.clone(),
+            service_id: endpoint.service_id.clone(),
             api_protocol,
             api_key_override: endpoint.api_key.clone(),
             api_base_override: endpoint.api_base.clone(),
@@ -498,18 +490,18 @@ impl ConfigToolRoutingTable {
     }
 }
 
-impl ToolRoutingTable for ConfigToolRoutingTable {
-    async fn route_tool(&self, tool_name: &str) -> Result<ToolRoutingTarget> {
-        let resolved = self.resolve(tool_name)?;
-        Ok(ToolRoutingTarget {
+impl RoutingTable for ConfigToolRoutingTable {
+    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
+        let resolved = self.resolve(incoming_name)?;
+        Ok(RoutingTarget {
             provider_name: resolved.provider_name,
-            tool_id: resolved.tool_id,
+            service_id: resolved.service_id,
             api_protocol: resolved.api_protocol,
         })
     }
 
-    fn list_tool_routes(&self) -> Vec<ToolRouteEntry> {
-        let mut entries: Vec<ToolRouteEntry> = self
+    fn list_routes(&self) -> Vec<RouteEntry> {
+        let mut entries: Vec<RouteEntry> = self
             .tools
             .iter()
             .filter_map(|(tool_name, tool_config)| {
@@ -522,14 +514,14 @@ impl ToolRoutingTable for ConfigToolRoutingTable {
                             .and_then(|p| p.api_protocol)
                     })
                     .unwrap_or(ApiProtocol::Mcp);
-                Some(ToolRouteEntry {
-                    tool: tool_name.clone(),
+                Some(RouteEntry {
+                    name: tool_name.clone(),
                     provider: endpoint.provider.clone(),
                     protocol,
                 })
             })
             .collect();
-        entries.sort_by(|a, b| a.tool.cmp(&b.tool));
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
         entries
     }
 }
@@ -539,7 +531,7 @@ mod tests {
     use super::*;
     use bitrouter_core::routers::routing_table::ApiProtocol;
 
-    use crate::config::{InputTokenPricing, Modality, ModelEndpoint, OutputTokenPricing};
+    use crate::config::{Endpoint, InputTokenPricing, Modality, OutputTokenPricing};
 
     fn test_providers() -> HashMap<String, ProviderConfig> {
         let mut p = HashMap::new();
@@ -567,7 +559,7 @@ mod tests {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         let target = table.resolve("openai:gpt-4o").unwrap();
         assert_eq!(target.provider_name, "openai");
-        assert_eq!(target.model_id, "gpt-4o");
+        assert_eq!(target.service_id, "gpt-4o");
     }
 
     #[test]
@@ -575,7 +567,7 @@ mod tests {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         let target = table.resolve("openai:deepseek/deepseek-v3").unwrap();
         assert_eq!(target.provider_name, "openai");
-        assert_eq!(target.model_id, "deepseek/deepseek-v3");
+        assert_eq!(target.service_id, "deepseek/deepseek-v3");
     }
 
     #[test]
@@ -583,7 +575,7 @@ mod tests {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         let target = table.resolve("anthropic:claude-opus-4-6").unwrap();
         assert_eq!(target.provider_name, "anthropic");
-        assert_eq!(target.model_id, "claude-opus-4-6");
+        assert_eq!(target.service_id, "claude-opus-4-6");
     }
 
     #[test]
@@ -593,9 +585,9 @@ mod tests {
             "unknown:custom-model".into(),
             ModelConfig {
                 strategy: RoutingStrategy::Priority,
-                endpoints: vec![ModelEndpoint {
+                endpoints: vec![Endpoint {
                     provider: "openai".into(),
-                    model_id: "custom-model".into(),
+                    service_id: "custom-model".into(),
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
@@ -606,7 +598,7 @@ mod tests {
         let table = ConfigRoutingTable::new(test_providers(), models);
         let target = table.resolve("unknown:custom-model").unwrap();
         assert_eq!(target.provider_name, "openai");
-        assert_eq!(target.model_id, "custom-model");
+        assert_eq!(target.service_id, "custom-model");
     }
 
     #[test]
@@ -616,9 +608,9 @@ mod tests {
             "my-gpt4".into(),
             ModelConfig {
                 strategy: RoutingStrategy::Priority,
-                endpoints: vec![ModelEndpoint {
+                endpoints: vec![Endpoint {
                     provider: "openai".into(),
-                    model_id: "gpt-4o".into(),
+                    service_id: "gpt-4o".into(),
                     api_protocol: None,
                     api_key: Some("sk-override".into()),
                     api_base: None,
@@ -629,7 +621,7 @@ mod tests {
         let table = ConfigRoutingTable::new(test_providers(), models);
         let target = table.resolve("my-gpt4").unwrap();
         assert_eq!(target.provider_name, "openai");
-        assert_eq!(target.model_id, "gpt-4o");
+        assert_eq!(target.service_id, "gpt-4o");
         assert_eq!(target.api_key_override.as_deref(), Some("sk-override"));
     }
 
@@ -649,16 +641,16 @@ mod tests {
             ModelConfig {
                 strategy: RoutingStrategy::LoadBalance,
                 endpoints: vec![
-                    ModelEndpoint {
+                    Endpoint {
                         provider: "openai".into(),
-                        model_id: "gpt-4o".into(),
+                        service_id: "gpt-4o".into(),
                         api_protocol: None,
                         api_key: Some("key-a".into()),
                         api_base: None,
                     },
-                    ModelEndpoint {
+                    Endpoint {
                         provider: "openai".into(),
-                        model_id: "gpt-4o".into(),
+                        service_id: "gpt-4o".into(),
                         api_protocol: None,
                         api_key: Some("key-b".into()),
                         api_base: None,
@@ -686,16 +678,16 @@ mod tests {
             ModelConfig {
                 strategy: RoutingStrategy::Priority,
                 endpoints: vec![
-                    ModelEndpoint {
+                    Endpoint {
                         provider: "openai".into(),
-                        model_id: "gpt-4o".into(),
+                        service_id: "gpt-4o".into(),
                         api_protocol: None,
                         api_key: Some("primary-key".into()),
                         api_base: None,
                     },
-                    ModelEndpoint {
+                    Endpoint {
                         provider: "openai".into(),
-                        model_id: "gpt-4o".into(),
+                        service_id: "gpt-4o".into(),
                         api_protocol: None,
                         api_key: Some("fallback-key".into()),
                         api_base: None,
@@ -849,7 +841,7 @@ mod tests {
         let table = ConfigRoutingTable::new(providers_with_bitrouter(), HashMap::new());
         let target = table.resolve("openai/gpt-4o").unwrap();
         assert_eq!(target.provider_name, "bitrouter");
-        assert_eq!(target.model_id, "openai/gpt-4o");
+        assert_eq!(target.service_id, "openai/gpt-4o");
     }
 
     #[test]
@@ -857,7 +849,7 @@ mod tests {
         let table = ConfigRoutingTable::new(providers_with_bitrouter(), HashMap::new());
         let target = table.resolve("some-unknown-model").unwrap();
         assert_eq!(target.provider_name, "bitrouter");
-        assert_eq!(target.model_id, "some-unknown-model");
+        assert_eq!(target.service_id, "some-unknown-model");
     }
 
     #[test]
@@ -867,9 +859,9 @@ mod tests {
             "my-gpt4".into(),
             ModelConfig {
                 strategy: RoutingStrategy::Priority,
-                endpoints: vec![ModelEndpoint {
+                endpoints: vec![Endpoint {
                     provider: "openai".into(),
-                    model_id: "gpt-4o".into(),
+                    service_id: "gpt-4o".into(),
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
@@ -897,7 +889,7 @@ mod tests {
         // With colon syntax, should route to openai directly, not bitrouter
         let target = table.resolve("openai:gpt-4o").unwrap();
         assert_eq!(target.provider_name, "openai");
-        assert_eq!(target.model_id, "gpt-4o");
+        assert_eq!(target.service_id, "gpt-4o");
     }
 
     #[test]
@@ -905,7 +897,7 @@ mod tests {
         let table = ConfigRoutingTable::new(providers_with_bitrouter(), HashMap::new());
         let target = table.resolve("bitrouter:openai/gpt-4o").unwrap();
         assert_eq!(target.provider_name, "bitrouter");
-        assert_eq!(target.model_id, "openai/gpt-4o");
+        assert_eq!(target.service_id, "openai/gpt-4o");
     }
 
     #[test]
@@ -914,12 +906,8 @@ mod tests {
         let routes = table.list_routes();
         assert_eq!(routes.len(), 2);
         assert!(routes.iter().all(|r| r.provider == "bitrouter"));
-        assert!(routes.iter().any(|r| r.model == "openai/gpt-4o"));
-        assert!(
-            routes
-                .iter()
-                .any(|r| r.model == "anthropic/claude-sonnet-4")
-        );
+        assert!(routes.iter().any(|r| r.name == "openai/gpt-4o"));
+        assert!(routes.iter().any(|r| r.name == "anthropic/claude-sonnet-4"));
     }
 
     #[test]
@@ -950,8 +938,6 @@ mod tests {
 
     // ── ConfigToolRoutingTable tests ────────────────────────────────
 
-    use crate::config::ToolEndpoint;
-
     fn tool_providers() -> HashMap<String, ProviderConfig> {
         let mut p = HashMap::new();
         p.insert(
@@ -978,7 +964,7 @@ mod tests {
         let table = ConfigToolRoutingTable::new(tool_providers(), HashMap::new());
         let target = table.resolve("github-mcp:create_issue").unwrap();
         assert_eq!(target.provider_name, "github-mcp");
-        assert_eq!(target.tool_id, "create_issue");
+        assert_eq!(target.service_id, "create_issue");
         assert_eq!(target.api_protocol, ApiProtocol::Mcp);
     }
 
@@ -989,9 +975,9 @@ mod tests {
             "create_issue".into(),
             ToolConfig {
                 strategy: RoutingStrategy::Priority,
-                endpoints: vec![ToolEndpoint {
+                endpoints: vec![Endpoint {
                     provider: "github-mcp".into(),
-                    tool_id: "create_issue".into(),
+                    service_id: "create_issue".into(),
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
@@ -1002,7 +988,7 @@ mod tests {
         let table = ConfigToolRoutingTable::new(tool_providers(), tools);
         let target = table.resolve("create_issue").unwrap();
         assert_eq!(target.provider_name, "github-mcp");
-        assert_eq!(target.tool_id, "create_issue");
+        assert_eq!(target.service_id, "create_issue");
         assert_eq!(target.api_protocol, ApiProtocol::Mcp);
     }
 
@@ -1012,9 +998,9 @@ mod tests {
         tools.insert(
             "web_search".into(),
             ToolConfig {
-                endpoints: vec![ToolEndpoint {
+                endpoints: vec![Endpoint {
                     provider: "anthropic".into(),
-                    tool_id: "web_search".into(),
+                    service_id: "web_search".into(),
                     api_protocol: Some(ApiProtocol::Mcp),
                     api_key: None,
                     api_base: Some("https://mcp.anthropic.com".into()),
@@ -1055,16 +1041,16 @@ mod tests {
             ToolConfig {
                 strategy: RoutingStrategy::LoadBalance,
                 endpoints: vec![
-                    ToolEndpoint {
+                    Endpoint {
                         provider: "github-mcp".into(),
-                        tool_id: "search".into(),
+                        service_id: "search".into(),
                         api_protocol: None,
                         api_key: Some("key-a".into()),
                         api_base: None,
                     },
-                    ToolEndpoint {
+                    Endpoint {
                         provider: "github-mcp".into(),
-                        tool_id: "search".into(),
+                        service_id: "search".into(),
                         api_protocol: None,
                         api_key: Some("key-b".into()),
                         api_base: None,
@@ -1090,9 +1076,9 @@ mod tests {
         tools.insert(
             "create_issue".into(),
             ToolConfig {
-                endpoints: vec![ToolEndpoint {
+                endpoints: vec![Endpoint {
                     provider: "github-mcp".into(),
-                    tool_id: "create_issue".into(),
+                    service_id: "create_issue".into(),
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
@@ -1101,9 +1087,9 @@ mod tests {
             },
         );
         let table = ConfigToolRoutingTable::new(tool_providers(), tools);
-        let routes = table.list_tool_routes();
+        let routes = table.list_routes();
         assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].tool, "create_issue");
+        assert_eq!(routes[0].name, "create_issue");
         assert_eq!(routes[0].provider, "github-mcp");
         assert_eq!(routes[0].protocol, ApiProtocol::Mcp);
     }

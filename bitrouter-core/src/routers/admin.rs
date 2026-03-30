@@ -15,16 +15,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::Result;
 
-use super::routing_table::RoutingTable;
-use crate::tools::registry::ToolGateway;
+use super::registry::ToolRegistry;
+use super::routing_table::{ApiProtocol, RoutingTable};
 
 /// A single endpoint in a dynamic route.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteEndpoint {
     /// Provider name (must exist in the providers section or built-ins).
     pub provider: String,
-    /// The upstream model ID to send to this provider.
-    pub model_id: String,
+    /// Upstream service identifier (model ID or tool ID).
+    #[serde(alias = "model_id")]
+    pub service_id: String,
+    /// API protocol for this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_protocol: Option<ApiProtocol>,
+}
+
+/// Whether a route targets a model or a tool.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteKind {
+    /// Route resolves to a language model endpoint.
+    #[default]
+    Model,
+    /// Route resolves to a tool endpoint.
+    Tool,
 }
 
 /// Strategy for distributing requests across multiple endpoints.
@@ -41,8 +56,12 @@ pub enum RouteStrategy {
 /// A dynamically-configured route definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicRoute {
-    /// The virtual model name (e.g. "research", "fast").
-    pub model: String,
+    /// The virtual service name (e.g. "research", "fast").
+    #[serde(alias = "model")]
+    pub name: String,
+    /// Whether this route targets a model or a tool.
+    #[serde(default)]
+    pub kind: RouteKind,
     /// Routing strategy across endpoints.
     #[serde(default)]
     pub strategy: RouteStrategy,
@@ -61,7 +80,7 @@ pub trait AdminRoutingTable: RoutingTable {
     /// Remove a dynamically-added route. Returns `true` if the route existed.
     ///
     /// Config-defined routes cannot be removed.
-    fn remove_route(&self, model: &str) -> Result<bool>;
+    fn remove_route(&self, name: &str) -> Result<bool>;
 
     /// List all dynamically-added routes.
     fn list_dynamic_routes(&self) -> Vec<DynamicRoute>;
@@ -214,10 +233,10 @@ pub struct ToolUpstreamEntry {
 
 /// Admin interface for managing tool registries at runtime.
 ///
-/// Parallel to [`AdminRoutingTable`] for models. Extends [`ToolGateway`]
+/// Parallel to [`AdminRoutingTable`] for models. Extends [`ToolRegistry`]
 /// with methods for inspecting upstreams and updating filters and parameter
 /// restrictions without requiring config rewrites or daemon restarts.
-pub trait AdminToolRegistry: ToolGateway {
+pub trait AdminToolRegistry: ToolRegistry {
     /// List all upstream tool servers with their current state.
     fn list_upstreams(&self) -> impl Future<Output = Vec<ToolUpstreamEntry>> + Send;
     /// Update the tool filter for a specific upstream server.
