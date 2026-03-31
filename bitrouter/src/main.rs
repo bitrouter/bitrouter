@@ -223,6 +223,32 @@ enum KeyAction {
         #[arg(long)]
         id: String,
     },
+    /// Sign a JWT for agent access (operator mints tokens for agents)
+    Sign {
+        /// OWS wallet name to sign with (operator wallet)
+        #[arg(long)]
+        wallet: String,
+
+        /// Model name patterns the agent may access (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        models: Option<Vec<String>>,
+
+        /// Budget limit in micro USD (1 USD = 1,000,000 μUSD)
+        #[arg(long)]
+        budget: Option<u64>,
+
+        /// Budget scope: "session" or "account"
+        #[arg(long)]
+        budget_scope: Option<String>,
+
+        /// Expiration duration (e.g. "30d", "12h", "3600s", or raw seconds)
+        #[arg(long)]
+        exp: Option<String>,
+
+        /// OWS agent key ID to bind to this token
+        #[arg(long)]
+        ows_key: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -318,6 +344,21 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 } => cli::key::create(&name, &wallet, &policy, expires_at.as_deref())?,
                 KeyAction::List => cli::key::list()?,
                 KeyAction::Revoke { id } => cli::key::revoke(&id)?,
+                KeyAction::Sign {
+                    wallet,
+                    models,
+                    budget,
+                    budget_scope,
+                    exp,
+                    ows_key,
+                } => cli::key::sign(
+                    &wallet,
+                    models.as_deref(),
+                    budget,
+                    budget_scope.as_deref(),
+                    exp.as_deref(),
+                    ows_key.as_deref(),
+                )?,
             }
             return Ok(());
         }

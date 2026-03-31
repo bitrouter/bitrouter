@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use bitrouter_core::auth::claims::{BudgetRange, BudgetScope};
+use bitrouter_core::auth::claims::BudgetScope;
 use uuid::Uuid;
 
 /// Opaque account identifier.
@@ -50,18 +50,15 @@ pub struct Identity {
     pub account_id: AccountId,
     /// What this caller is permitted to do.
     pub scope: Scope,
-    /// CAIP-2 chain identifier from the JWT `chain` claim (e.g.
-    /// `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"`, `"eip155:4217"`).
+    /// CAIP-2 chain identifier derived from the operator's `iss` CAIP-10.
     /// Used to select the payment network backend for MPP.
     pub chain: Option<String>,
     /// Optional model-name patterns this caller may access.
     pub models: Option<Vec<String>>,
-    /// Optional tool-name patterns this caller may access.
-    pub tools: Option<Vec<String>>,
     /// Budget limit in micro USD (1 USD = 1,000,000 μUSD).
     pub budget: Option<u64>,
     /// Whether the budget applies per-session or per-account.
     pub budget_scope: Option<BudgetScope>,
-    /// The range over which the budget is measured.
-    pub budget_range: Option<BudgetRange>,
+    /// OWS agent key for payment authorization (from JWT `key` claim).
+    pub key: Option<String>,
 }

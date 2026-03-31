@@ -1,9 +1,11 @@
 //! JWT authentication filters for the bitrouter gateway.
 //!
-//! Implements self-signed EdDSA (Ed25519) JWT authentication:
+//! Implements operator-signed JWT authentication:
 //!
-//! - **JWT path**: The JWT `iss` claim carries the signer's CAIP-10 identity.
-//!   The server verifies the Ed25519/EIP-191 signature before any DB interaction.
+//! - **JWT path**: The operator's OWS wallet signs all JWTs. The `iss`
+//!   claim carries the operator's CAIP-10 identity. The server verifies
+//!   the signature and checks that `iss` matches the configured operator
+//!   wallet — this is the single trust root.
 //!
 //! Credentials are extracted from the protocol-appropriate header:
 //!
@@ -23,6 +25,7 @@ use warp::Filter;
 
 use bitrouter_accounts::identity::{AccountId, Identity, Scope};
 use bitrouter_accounts::service::AccountService;
+use bitrouter_core::auth::chain::Caip10;
 use bitrouter_core::auth::claims::TokenScope;
 use bitrouter_core::auth::token as jwt_token;
 
@@ -31,11 +34,17 @@ use bitrouter_core::auth::token as jwt_token;
 pub struct JwtAuthContext {
     /// Database connection for account lookups (auto-creation).
     db: Option<DatabaseConnection>,
+    /// The operator's CAIP-10 identity resolved from wallet config at startup.
+    /// When set, JWTs must have `iss` matching this identity.
+    operator_caip10: Option<String>,
 }
 
 impl JwtAuthContext {
-    pub fn new(db: Option<DatabaseConnection>) -> Self {
-        Self { db }
+    pub fn new(db: Option<DatabaseConnection>, operator_caip10: Option<String>) -> Self {
+        Self {
+            db,
+            operator_caip10,
+        }
     }
 
     /// Returns `true` when no database is configured (open proxy mode).
@@ -136,7 +145,19 @@ async fn resolve_jwt_identity(
     jwt_token::check_expiration(&claims)
         .map_err(|_| warp::reject::custom(Unauthorized("JWT expired")))?;
 
-    // 3. Resolve account from DB using CAIP-10 iss.
+    // 3. Verify iss matches the configured operator wallet (single trust root).
+    if let Some(ref expected) = ctx.operator_caip10
+        && claims.iss != *expected
+    {
+        return Err(warp::reject::custom(Unauthorized(
+            "JWT issuer does not match configured operator wallet",
+        )));
+    }
+
+    // 4. Derive chain from iss (CAIP-10 → CAIP-2).
+    let chain = Caip10::parse(&claims.iss).ok().map(|c| c.chain.caip2());
+
+    // 5. Resolve account from DB using CAIP-10 iss.
     let Some(ref db) = ctx.db else {
         return Err(warp::reject::custom(Unauthorized(
             "authentication requires a database",
@@ -155,8 +176,8 @@ async fn resolve_jwt_identity(
         )));
     };
 
-    // 4. Build identity with account-relative scope.
-    let scope = match claims.scope {
+    // 6. Build identity with resolved scope and permissions.
+    let scope = match claims.scope() {
         TokenScope::Admin => Scope::Admin,
         TokenScope::Api => Scope::Api,
     };
@@ -164,12 +185,11 @@ async fn resolve_jwt_identity(
     Ok(Identity {
         account_id: AccountId(account.id),
         scope,
-        chain: Some(claims.chain),
-        models: claims.models,
-        tools: claims.tools,
-        budget: claims.budget,
-        budget_scope: claims.budget_scope,
-        budget_range: claims.budget_range,
+        chain,
+        models: claims.mdl,
+        budget: claims.bgt,
+        budget_scope: claims.bsc,
+        key: claims.key,
     })
 }
 
@@ -240,10 +260,9 @@ fn open_identity() -> impl Filter<Extract = (Identity,), Error = warp::Rejection
             scope: Scope::Admin,
             chain: None,
             models: None,
-            tools: None,
             budget: None,
             budget_scope: None,
-            budget_range: None,
+            key: None,
         })
     })
 }

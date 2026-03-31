@@ -88,3 +88,181 @@ pub fn revoke(id: &str) -> Result {
 
     Ok(())
 }
+
+/// Sign a JWT for agent access — the operator mints tokens that agents
+/// present as bearer auth to the running BitRouter server.
+pub fn sign(
+    wallet_name: &str,
+    models: Option<&[String]>,
+    budget: Option<u64>,
+    budget_scope: Option<&str>,
+    exp: Option<&str>,
+    ows_key: Option<&str>,
+) -> Result {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use bitrouter_core::auth::chain::{Caip10, Chain};
+    use bitrouter_core::auth::claims::{BitrouterClaims, BudgetScope, TokenScope};
+    use bitrouter_core::auth::token;
+    use dialoguer::Password;
+
+    // 1. Load wallet and resolve Solana address for CAIP-10 iss.
+    let info = ows_lib::get_wallet(wallet_name, None)
+        .map_err(|e| format!("failed to load wallet '{wallet_name}': {e}"))?;
+
+    let sol_account = info
+        .accounts
+        .iter()
+        .find(|a| a.chain_id.starts_with("solana:"))
+        .ok_or_else(|| format!("wallet '{wallet_name}' has no Solana account — cannot sign JWT"))?;
+
+    let caip10 = Caip10 {
+        chain: Chain::solana_mainnet(),
+        address: sol_account.address.clone(),
+    };
+
+    // 2. Parse optional budget scope.
+    let bsc = match budget_scope {
+        Some("session" | "ses") => Some(BudgetScope::Session),
+        Some("account" | "act") => Some(BudgetScope::Account),
+        Some(other) => {
+            return Err(
+                format!("invalid budget scope '{other}': use 'session' or 'account'").into(),
+            );
+        }
+        None => None,
+    };
+
+    // 3. Parse expiration duration and compute absolute timestamp.
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+
+    let exp_ts = match exp {
+        Some(raw) => Some(now + parse_duration_secs(raw)?),
+        None => None,
+    };
+
+    // 4. Construct claims.
+    let claims = BitrouterClaims {
+        iss: caip10.format(),
+        iat: Some(now),
+        exp: exp_ts,
+        scp: Some(TokenScope::Api),
+        mdl: models.map(|m| m.to_vec()),
+        bgt: budget,
+        bsc,
+        key: ows_key.map(String::from),
+    };
+
+    // 5. Prompt passphrase and sign.
+    let theme = ColorfulTheme::default();
+    let passphrase = Password::with_theme(&theme)
+        .with_prompt("Wallet owner passphrase")
+        .allow_empty_password(true)
+        .interact()?;
+
+    let signer = OwsJwtSigner {
+        wallet_name: wallet_name.to_owned(),
+        passphrase,
+        vault_path: None,
+    };
+
+    let jwt = token::sign(&claims, &signer).map_err(|e| format!("failed to sign JWT: {e}"))?;
+
+    println!("{jwt}");
+
+    Ok(())
+}
+
+/// Parse a human-readable duration string into seconds.
+///
+/// Accepts raw seconds (e.g. `"3600"`) or suffixed durations:
+/// `"30s"`, `"12h"`, `"7d"`, `"1m"` (m = minutes).
+fn parse_duration_secs(input: &str) -> Result<u64> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("empty duration".into());
+    }
+
+    let last = input.as_bytes()[input.len() - 1];
+    if last.is_ascii_digit() {
+        return input
+            .parse::<u64>()
+            .map_err(|_| format!("invalid duration '{input}'").into());
+    }
+
+    let (num_str, multiplier) = match last {
+        b's' => (&input[..input.len() - 1], 1u64),
+        b'm' => (&input[..input.len() - 1], 60),
+        b'h' => (&input[..input.len() - 1], 3_600),
+        b'd' => (&input[..input.len() - 1], 86_400),
+        _ => return Err(format!("unknown duration suffix '{}'", last as char).into()),
+    };
+
+    let n: u64 = num_str
+        .parse()
+        .map_err(|_| format!("invalid duration number '{num_str}'"))?;
+
+    Ok(n * multiplier)
+}
+
+/// OWS-backed JWT signer for the `key sign` command.
+///
+/// Decrypts the wallet key on each signing call. Key material is zeroized
+/// on drop by the OWS SDK.
+struct OwsJwtSigner {
+    wallet_name: String,
+    passphrase: String,
+    vault_path: Option<String>,
+}
+
+impl bitrouter_core::auth::keys::JwtSigner for OwsJwtSigner {
+    fn sign_ed25519(
+        &self,
+        message: &[u8],
+    ) -> std::result::Result<Vec<u8>, bitrouter_core::auth::JwtError> {
+        let vault = self.vault_path.as_deref().map(std::path::Path::new);
+        let key = ows_lib::decrypt_signing_key(
+            &self.wallet_name,
+            ows_core::ChainType::Solana,
+            &self.passphrase,
+            None,
+            vault,
+        )
+        .map_err(|e| bitrouter_core::auth::JwtError::Signing(e.to_string()))?;
+
+        let signer = ows_signer::signer_for_chain(ows_core::ChainType::Solana);
+        let output = signer
+            .sign(key.expose(), message)
+            .map_err(|e| bitrouter_core::auth::JwtError::Signing(e.to_string()))?;
+
+        Ok(output.signature)
+    }
+
+    fn sign_eip191(
+        &self,
+        message: &[u8],
+    ) -> std::result::Result<Vec<u8>, bitrouter_core::auth::JwtError> {
+        let vault = self.vault_path.as_deref().map(std::path::Path::new);
+        let key = ows_lib::decrypt_signing_key(
+            &self.wallet_name,
+            ows_core::ChainType::Evm,
+            &self.passphrase,
+            None,
+            vault,
+        )
+        .map_err(|e| bitrouter_core::auth::JwtError::Signing(e.to_string()))?;
+
+        let prefix = format!("\x19Ethereum Signed Message:\n{}", message.len());
+        let mut data = Vec::with_capacity(prefix.len() + message.len());
+        data.extend_from_slice(prefix.as_bytes());
+        data.extend_from_slice(message);
+        let hash = alloy::primitives::keccak256(&data);
+
+        let signer = ows_signer::signer_for_chain(ows_core::ChainType::Evm);
+        let output = signer
+            .sign(key.expose(), hash.as_ref())
+            .map_err(|e| bitrouter_core::auth::JwtError::Signing(e.to_string()))?;
+
+        Ok(output.signature)
+    }
+}
