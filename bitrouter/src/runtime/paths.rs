@@ -157,7 +157,10 @@ run/
 
     let readme_path = home.join("README.md");
     if !readme_path.exists() {
-        std::fs::write(&readme_path, include_str!("../../templates/home_readme.md"))?;
+        std::fs::write(
+            &readme_path,
+            include_str!("../../../templates/home_readme.md"),
+        )?;
     }
 
     Ok(())

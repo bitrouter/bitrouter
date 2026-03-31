@@ -13,22 +13,17 @@ pub struct McpRoutes {
     pub bridge_routes: RouteFilter,
     /// The raw MCP registry, if any upstreams were connected.
     ///
-    /// Composed into `CompositeToolRegistry` at the server assembly layer.
+    /// Used by the MCP server endpoint for live `tools/list`, resources, and prompts.
     #[cfg(feature = "mcp")]
     pub registry: Option<Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>>,
-    /// Type-erased per-server tool providers for [`ToolRouterImpl`].
-    pub tool_providers: Vec<(
+    /// Pre-built MCP connections keyed by provider name.
+    ///
+    /// Used by [`LazyToolRouter`] to dispatch `tools/call` requests.
+    #[cfg(feature = "mcp")]
+    pub connections: std::collections::HashMap<
         String,
-        Arc<bitrouter_core::tools::provider::DynToolProvider<'static>>,
-    )>,
-    /// Per-server tool filters from config, for `DynamicToolRegistry`.
-    #[cfg(feature = "mcp")]
-    pub initial_filters:
-        std::collections::HashMap<String, bitrouter_core::routers::admin::ToolFilter>,
-    /// Per-server parameter restrictions from config, for `DynamicToolRegistry`.
-    #[cfg(feature = "mcp")]
-    pub initial_restrictions:
-        std::collections::HashMap<String, bitrouter_core::routers::admin::ParamRestrictions>,
+        Arc<bitrouter_providers::mcp::client::upstream::UpstreamConnection>,
+    >,
     /// Background task guards — dropped when routes are dropped.
     _guards: Vec<Box<dyn std::any::Any + Send>>,
 }
@@ -43,7 +38,6 @@ impl McpRoutes {
             .boxed();
         Self {
             bridge_routes: noop,
-            tool_providers: Vec::new(),
             _guards: Vec::new(),
         }
     }
@@ -88,8 +82,6 @@ use bitrouter_core::models::language::tool::LanguageModelTool;
 use bitrouter_core::models::language::tool_choice::LanguageModelToolChoice;
 #[cfg(feature = "mcp")]
 use bitrouter_core::models::shared::types::JsonSchema;
-#[cfg(feature = "mcp")]
-use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
 #[cfg(feature = "mcp")]
 use bitrouter_core::routers::router::LanguageModelRouter;
 #[cfg(feature = "mcp")]
@@ -142,8 +134,6 @@ where
         // Build MCP server configs from provider configs.
         let mut mcp_configs: Vec<McpServerConfig> = Vec::new();
         let mut bridge_names: HashMap<String, bool> = HashMap::new();
-        let mut initial_filters: HashMap<String, ToolFilter> = HashMap::new();
-        let mut initial_restrictions: HashMap<String, ParamRestrictions> = HashMap::new();
 
         for (name, provider) in &self.providers {
             let url = match provider.api_base.as_deref() {
@@ -168,14 +158,6 @@ where
 
             if provider.bridge.unwrap_or(false) {
                 bridge_names.insert(name.clone(), true);
-            }
-            if let Some(ref filter) = provider.tool_filter {
-                initial_filters.insert(name.clone(), filter.clone());
-            }
-            if let Some(ref restrictions) = provider.param_restrictions
-                && !restrictions.rules.is_empty()
-            {
-                initial_restrictions.insert(name.clone(), restrictions.clone());
             }
         }
 
@@ -238,55 +220,12 @@ where
             .map(|r| Box::new(r) as Box<dyn warp::Reply>)
             .boxed();
 
-        // Collect type-erased tool providers for ToolRouterImpl.
-        let tool_providers: Vec<(
-            String,
-            Arc<bitrouter_core::tools::provider::DynToolProvider<'static>>,
-        )> = connections
-            .into_iter()
-            .map(|(name, conn)| {
-                let provider: Arc<bitrouter_core::tools::provider::DynToolProvider<'static>> =
-                    Arc::from(bitrouter_core::tools::provider::DynToolProvider::new_box(
-                        McpToolProviderAdapter(conn),
-                    ));
-                (name, provider)
-            })
-            .collect();
-
         McpRoutes {
             bridge_routes,
             registry,
-            tool_providers,
-            initial_filters,
-            initial_restrictions,
+            connections,
             _guards: guards,
         }
-    }
-}
-
-// ── MCP → ToolProvider adapter ───────────────────────────────────
-
-/// Thin wrapper that delegates [`ToolProvider`] to an `Arc<UpstreamConnection>`.
-#[cfg(feature = "mcp")]
-struct McpToolProviderAdapter(Arc<UpstreamConnection>);
-
-#[cfg(feature = "mcp")]
-impl bitrouter_core::tools::provider::ToolProvider for McpToolProviderAdapter {
-    fn provider_name(&self) -> &str {
-        bitrouter_core::tools::provider::ToolProvider::provider_name(self.0.as_ref())
-    }
-
-    async fn call_tool(
-        &self,
-        tool_id: &str,
-        arguments: serde_json::Value,
-    ) -> bitrouter_core::errors::Result<bitrouter_core::tools::result::ToolCallResult> {
-        bitrouter_core::tools::provider::ToolProvider::call_tool(
-            self.0.as_ref(),
-            tool_id,
-            arguments,
-        )
-        .await
     }
 }
 

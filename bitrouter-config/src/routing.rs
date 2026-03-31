@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitrouter_core::{
     errors::{BitrouterError, Result},
-    routers::registry::{ModelEntry, ModelRegistry},
+    routers::registry::{ModelEntry, ModelRegistry, ToolEntry, ToolRegistry},
     routers::routing_table::{ApiProtocol, ModelPricing, RouteEntry, RoutingTable, RoutingTarget},
+    tools::definition::ToolDefinition,
 };
 
 use crate::config::{ModelConfig, ModelInfo, ProviderConfig, RoutingStrategy, ToolConfig};
@@ -441,9 +442,31 @@ impl ConfigToolRoutingTable {
             });
         }
 
-        // Strategy 2: lookup in tools section
+        // Strategy 2: lookup in tools section by bare name
         if let Some(tool_config) = self.tools.get(incoming) {
             return self.select_endpoint(incoming, tool_config);
+        }
+
+        // Strategy 3: "provider/service_id" → namespaced format from MCP wire.
+        // Searches config tools for a matching endpoint.
+        if let Some((provider, service_id)) = incoming.split_once('/') {
+            for tool_config in self.tools.values() {
+                if let Some(ep) = tool_config
+                    .endpoints
+                    .iter()
+                    .find(|ep| ep.provider == provider && ep.service_id == service_id)
+                {
+                    let api_protocol =
+                        resolve_protocol(&self.providers, &ep.provider, ep.api_protocol)?;
+                    return Ok(ResolvedTarget {
+                        provider_name: ep.provider.clone(),
+                        service_id: ep.service_id.clone(),
+                        api_protocol,
+                        api_key_override: ep.api_key.clone(),
+                        api_base_override: ep.api_base.clone(),
+                    });
+                }
+            }
         }
 
         Err(BitrouterError::invalid_request(
@@ -522,6 +545,35 @@ impl RoutingTable for ConfigToolRoutingTable {
             })
             .collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
+        entries
+    }
+}
+
+impl ToolRegistry for ConfigToolRoutingTable {
+    async fn list_tools(&self) -> Vec<ToolEntry> {
+        let mut entries: Vec<ToolEntry> = self
+            .tools
+            .iter()
+            .filter_map(|(tool_name, config)| {
+                let ep = config.endpoints.first()?;
+                let input_schema = config
+                    .input_schema
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                Some(ToolEntry {
+                    id: format!("{}/{}", ep.provider, ep.service_id),
+                    provider: ep.provider.clone(),
+                    definition: ToolDefinition {
+                        name: tool_name.clone(),
+                        description: config.description.clone(),
+                        input_schema,
+                        annotations: None,
+                        input_examples: Vec::new(),
+                    },
+                })
+            })
+            .collect();
+        entries.sort_by(|a, b| a.id.cmp(&b.id));
         entries
     }
 }
@@ -969,6 +1021,40 @@ mod tests {
     }
 
     #[test]
+    fn tool_slash_namespaced_routing() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "create_issue".into(),
+            ToolConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "github-mcp".into(),
+                    service_id: "create_issue".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigToolRoutingTable::new(tool_providers(), tools);
+        // Slash-namespaced format used by MCP wire protocol.
+        let target = table.resolve("github-mcp/create_issue").ok();
+        assert!(target.is_some());
+        let target = target.as_ref();
+        assert_eq!(target.map(|t| t.provider_name.as_str()), Some("github-mcp"));
+        assert_eq!(target.map(|t| t.service_id.as_str()), Some("create_issue"));
+        assert_eq!(target.map(|t| t.api_protocol), Some(ApiProtocol::Mcp));
+    }
+
+    #[test]
+    fn tool_slash_no_match_when_no_config() {
+        // "github-mcp/unknown" should fail when no matching endpoint exists.
+        let table = ConfigToolRoutingTable::new(tool_providers(), HashMap::new());
+        assert!(table.resolve("github-mcp/unknown").is_err());
+    }
+
+    #[test]
     fn tool_lookup() {
         let mut tools = HashMap::new();
         tools.insert(
@@ -1068,6 +1154,68 @@ mod tests {
         assert_eq!(t1.api_key_override.as_deref(), Some("key-a"));
         assert_eq!(t2.api_key_override.as_deref(), Some("key-b"));
         assert_eq!(t3.api_key_override.as_deref(), Some("key-a"));
+    }
+
+    #[tokio::test]
+    async fn tool_list_tools_from_config() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "search".into(),
+            ToolConfig {
+                endpoints: vec![Endpoint {
+                    provider: "github-mcp".into(),
+                    service_id: "search_code".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                description: Some("Search GitHub code".into()),
+                ..Default::default()
+            },
+        );
+        tools.insert(
+            "web_search".into(),
+            ToolConfig {
+                endpoints: vec![Endpoint {
+                    provider: "github-mcp".into(),
+                    service_id: "web_search".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigToolRoutingTable::new(tool_providers(), tools);
+        let entries = table.list_tools().await;
+        assert_eq!(entries.len(), 2);
+
+        // Sorted by id
+        assert_eq!(entries[0].id, "github-mcp/search_code");
+        assert_eq!(entries[0].provider, "github-mcp");
+        assert_eq!(entries[0].definition.name, "search");
+        assert_eq!(
+            entries[0].definition.description.as_deref(),
+            Some("Search GitHub code")
+        );
+
+        assert_eq!(entries[1].id, "github-mcp/web_search");
+        assert!(entries[1].definition.description.is_none());
+    }
+
+    #[tokio::test]
+    async fn tool_list_tools_empty_endpoints_skipped() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "empty".into(),
+            ToolConfig {
+                endpoints: vec![],
+                ..Default::default()
+            },
+        );
+        let table = ConfigToolRoutingTable::new(tool_providers(), tools);
+        let entries = table.list_tools().await;
+        assert!(entries.is_empty());
     }
 
     #[test]

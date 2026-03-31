@@ -8,8 +8,6 @@ pub mod migration;
 #[cfg(feature = "mpp-tempo")]
 pub mod ows_signer;
 pub mod paths;
-#[cfg(feature = "rest")]
-pub mod rest_client;
 pub mod router;
 pub mod server;
 

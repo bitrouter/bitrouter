@@ -11,6 +11,9 @@ use bitrouter_core::{
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest_middleware::ClientWithMiddleware;
 
+#[cfg(feature = "mcp")]
+use bitrouter_providers::mcp::client::upstream::UpstreamConnection;
+
 /// A model router backed by `reqwest` that instantiates concrete provider
 /// model objects on demand from [`ProviderConfig`] entries.
 pub struct Router {
@@ -158,137 +161,210 @@ use bitrouter_providers::openai::chat::provider::{OpenAiChatCompletionsModel, Op
 
 // ── Tool router ──────────────────────────────────────────────────
 
-/// A tool router backed by a pre-built pool of tool providers.
+/// A lazy tool router that constructs providers on-demand from config,
+/// mirroring how [`Router`] constructs language models on-demand.
 ///
-/// Each provider is an `Arc`-wrapped [`DynToolProvider`] keyed by provider
-/// name, constructed at server startup from upstream MCP connections and
-/// A2A agent connections.
-pub struct ToolRouterImpl {
-    providers: tokio::sync::RwLock<HashMap<String, Arc<DynToolProvider<'static>>>>,
+/// REST providers are stateless and constructed per-call.
+/// MCP providers are looked up from a pre-built connection pool.
+pub struct LazyToolRouter {
+    providers: HashMap<String, ProviderConfig>,
+    #[cfg(feature = "mcp")]
+    mcp_pool: Arc<HashMap<String, Arc<UpstreamConnection>>>,
+    client: Arc<reqwest::Client>,
 }
 
-impl ToolRouterImpl {
-    pub fn new() -> Self {
+impl LazyToolRouter {
+    pub fn new(
+        providers: HashMap<String, ProviderConfig>,
+        #[cfg(feature = "mcp")] mcp_pool: Arc<HashMap<String, Arc<UpstreamConnection>>>,
+        client: Arc<reqwest::Client>,
+    ) -> Self {
         Self {
-            providers: tokio::sync::RwLock::new(HashMap::new()),
+            providers,
+            #[cfg(feature = "mcp")]
+            mcp_pool,
+            client,
         }
     }
 
-    /// Register a tool provider under the given name and protocol.
-    ///
-    /// Uses interior mutability (`RwLock`) so that providers can be added
-    /// after the router is wrapped in an `Arc` and shared with the gateway.
-    ///
-    /// Providers are keyed by `"{name}:{protocol}"` to support multiple
-    /// protocols for the same logical provider (e.g. `exa:rest`, `exa:mcp`).
-    pub async fn register(
-        &self,
-        name: String,
-        protocol: bitrouter_config::ApiProtocol,
-        provider: Arc<DynToolProvider<'static>>,
-    ) {
-        let key = format!("{name}:{protocol}");
-        self.providers.write().await.insert(key, provider);
-    }
+    /// Returns `true` if there are any tool-capable providers.
+    pub fn has_providers(&self) -> bool {
+        #[cfg(feature = "mcp")]
+        let has_mcp = !self.mcp_pool.is_empty();
+        #[cfg(not(feature = "mcp"))]
+        let has_mcp = false;
 
-    /// Returns `true` if any providers are registered.
-    pub async fn has_providers(&self) -> bool {
-        !self.providers.read().await.is_empty()
-    }
-
-    /// Returns the number of registered providers.
-    pub async fn provider_count(&self) -> usize {
-        self.providers.read().await.len()
+        has_mcp
+            || self
+                .providers
+                .values()
+                .any(|p| p.api_protocol == Some(ApiProtocol::Rest))
     }
 }
 
-impl bitrouter_core::routers::router::ToolRouter for ToolRouterImpl {
+impl bitrouter_core::routers::router::ToolRouter for LazyToolRouter {
     async fn route_tool(&self, target: RoutingTarget) -> Result<Box<DynToolProvider<'static>>> {
-        let key = format!("{}:{}", target.provider_name, target.api_protocol);
-        let providers = self.providers.read().await;
-        let provider = providers.get(&key).ok_or_else(|| {
-            BitrouterError::invalid_request(
+        match target.api_protocol {
+            ApiProtocol::Rest => {
+                let provider = self.providers.get(&target.provider_name).ok_or_else(|| {
+                    BitrouterError::invalid_request(
+                        None,
+                        format!("unknown REST provider: {}", target.provider_name),
+                        None,
+                    )
+                })?;
+                let api_base = provider.api_base.clone().ok_or_else(|| {
+                    BitrouterError::invalid_request(
+                        None,
+                        format!("REST provider '{}' has no api_base", target.provider_name),
+                        None,
+                    )
+                })?;
+                let auth_header = resolve_auth_header(provider);
+                let p = bitrouter_providers::rest::provider::RestToolProvider::new(
+                    target.provider_name,
+                    api_base,
+                    auth_header,
+                    self.client.clone(),
+                );
+                Ok(DynToolProvider::new_box(p))
+            }
+            #[cfg(feature = "mcp")]
+            ApiProtocol::Mcp => {
+                let conn = self.mcp_pool.get(&target.provider_name).ok_or_else(|| {
+                    BitrouterError::invalid_request(
+                        None,
+                        format!("no MCP connection for provider '{}'", target.provider_name),
+                        None,
+                    )
+                })?;
+                Ok(DynToolProvider::new_box(McpToolProviderAdapter(
+                    Arc::clone(conn),
+                )))
+            }
+            #[cfg(not(feature = "mcp"))]
+            ApiProtocol::Mcp => Err(BitrouterError::invalid_request(
                 None,
                 format!(
-                    "no tool provider '{}' registered (protocol: {})",
-                    target.provider_name, target.api_protocol
+                    "MCP protocol not available (feature disabled) for provider '{}'",
+                    target.provider_name
                 ),
                 None,
-            )
-        })?;
-
-        // Return a boxed clone of the Arc-backed provider.
-        // DynToolProvider is created from Arc, so this is cheap.
-        Ok(DynToolProvider::new_box(ArcToolProvider {
-            inner: Arc::clone(provider),
-            name: target.provider_name,
-        }))
+            )),
+            other => Err(BitrouterError::invalid_request(
+                None,
+                format!(
+                    "protocol '{}' cannot serve tools for provider '{}'",
+                    other, target.provider_name
+                ),
+                None,
+            )),
+        }
     }
 }
 
-/// Thin wrapper that implements `ToolProvider` by delegating to an
-/// `Arc<DynToolProvider>`, allowing `route_tool` to return a fresh
-/// `Box<DynToolProvider>` without cloning the underlying connection.
-struct ArcToolProvider {
-    inner: Arc<DynToolProvider<'static>>,
-    name: String,
-}
+// ── MCP → ToolProvider adapter ───────────────────────────────────
 
-impl bitrouter_core::tools::provider::ToolProvider for ArcToolProvider {
+/// Thin wrapper that delegates [`ToolProvider`] to an `Arc<UpstreamConnection>`.
+#[cfg(feature = "mcp")]
+struct McpToolProviderAdapter(Arc<UpstreamConnection>);
+
+#[cfg(feature = "mcp")]
+impl bitrouter_core::tools::provider::ToolProvider for McpToolProviderAdapter {
     fn provider_name(&self) -> &str {
-        &self.name
+        bitrouter_core::tools::provider::ToolProvider::provider_name(self.0.as_ref())
     }
 
     async fn call_tool(
         &self,
         tool_id: &str,
         arguments: serde_json::Value,
-    ) -> Result<bitrouter_core::tools::result::ToolCallResult> {
-        self.inner.call_tool(tool_id, arguments).await
+    ) -> bitrouter_core::errors::Result<bitrouter_core::tools::result::ToolCallResult> {
+        bitrouter_core::tools::provider::ToolProvider::call_tool(
+            self.0.as_ref(),
+            tool_id,
+            arguments,
+        )
+        .await
+    }
+}
+
+// ── REST auth helpers ────────────────────────────────────────────
+
+/// Resolve the auth header from a provider config.
+///
+/// Priority: `auth` config (with resolved api_key) > `api_key` field (default
+/// to Bearer). When the `auth.api_key` is an unsubstituted env var placeholder,
+/// falls back to the provider-level `api_key` (which is resolved by
+/// `env_prefix` during config loading).
+pub(crate) fn resolve_auth_header(config: &ProviderConfig) -> Option<(String, String)> {
+    use bitrouter_config::AuthConfig;
+    match config.auth.as_ref() {
+        Some(AuthConfig::Bearer { api_key }) => {
+            let key = resolve_key(api_key, config);
+            Some(("Authorization".to_owned(), format!("Bearer {key}")))
+        }
+        Some(AuthConfig::Header {
+            header_name,
+            api_key,
+        }) => {
+            let key = resolve_key(api_key, config);
+            Some((header_name.clone(), key))
+        }
+        Some(AuthConfig::X402 | AuthConfig::Mpp | AuthConfig::Custom { .. }) => None,
+        None => {
+            // Fall back to api_key field as Bearer token.
+            config
+                .api_key
+                .as_ref()
+                .map(|key| ("Authorization".to_owned(), format!("Bearer {key}")))
+        }
+    }
+}
+
+/// If the key is an unsubstituted env var placeholder (e.g. `"${EXA_API_KEY}"`),
+/// fall back to the provider-level resolved `api_key`.
+fn resolve_key(auth_key: &str, config: &ProviderConfig) -> String {
+    if auth_key.starts_with("${") && auth_key.ends_with('}') {
+        config
+            .api_key
+            .clone()
+            .unwrap_or_else(|| auth_key.to_owned())
+    } else {
+        auth_key.to_owned()
     }
 }
 
 // ── Tool call handler ────────────────────────────────────────────
 
 /// [`ToolCallHandler`] implementation that dispatches `tools/call` through
-/// the [`ToolRouterImpl`] dispatch chain.
+/// the [`LazyToolRouter`] dispatch chain.
 ///
-/// Extracts provider name and protocol from the namespaced tool name
-/// (e.g. `"github/search"` → provider `"github"`, tool `"search"`),
-/// resolves the provider via `ToolRouterImpl`, and forwards the call.
-///
-/// Parameter restrictions are enforced before dispatch.
-pub struct RouterToolCallHandler {
-    tool_router: Arc<ToolRouterImpl>,
-    /// Maps namespaced tool ID ("provider/tool") → API protocol.
-    ///
-    /// Keyed per-tool (not per-provider) so that a single provider can
-    /// serve tools across multiple protocols (e.g. `exa/search` → REST,
-    /// `exa/web_search_exa` → MCP).
-    tool_protocols: HashMap<String, bitrouter_config::ApiProtocol>,
-    /// Per-server parameter restrictions (read from `DynamicToolRegistry`).
-    restrictions: std::sync::Arc<
-        std::sync::RwLock<HashMap<String, bitrouter_core::routers::admin::ParamRestrictions>>,
-    >,
+/// Routes tool calls using the config-authoritative
+/// `DynamicToolRegistry<ConfigToolRoutingTable>` for routing and restriction
+/// enforcement, then dispatches to [`LazyToolRouter`] for provider construction.
+pub struct RouterToolCallHandler<T> {
+    tool_router: Arc<LazyToolRouter>,
+    tool_table: Arc<T>,
 }
 
-impl RouterToolCallHandler {
-    pub fn new(
-        tool_router: Arc<ToolRouterImpl>,
-        tool_protocols: HashMap<String, bitrouter_config::ApiProtocol>,
-        restrictions: std::sync::Arc<
-            std::sync::RwLock<HashMap<String, bitrouter_core::routers::admin::ParamRestrictions>>,
-        >,
-    ) -> Self {
+impl<T> RouterToolCallHandler<T> {
+    pub fn new(tool_router: Arc<LazyToolRouter>, tool_table: Arc<T>) -> Self {
         Self {
             tool_router,
-            tool_protocols,
-            restrictions,
+            tool_table,
         }
     }
 }
 
-impl bitrouter_core::api::mcp::gateway::ToolCallHandler for RouterToolCallHandler {
+impl<T> bitrouter_core::api::mcp::gateway::ToolCallHandler for RouterToolCallHandler<T>
+where
+    T: bitrouter_core::routers::routing_table::RoutingTable
+        + bitrouter_core::routers::dynamic_tool::HasParamRestrictions
+        + Send
+        + Sync
+        + 'static,
+{
     fn call_tool(
         &self,
         name: &str,
@@ -306,20 +382,18 @@ impl bitrouter_core::api::mcp::gateway::ToolCallHandler for RouterToolCallHandle
     > {
         let name = name.to_owned();
         Box::pin(async move {
+            use bitrouter_core::api::mcp::types::McpGatewayError;
+            use bitrouter_core::routers::router::ToolRouter;
+            use bitrouter_core::tools::provider::ToolProvider;
+
             let (provider_name, tool_id) = name
                 .split_once('/')
                 .map(|(p, t)| (p.to_owned(), t.to_owned()))
                 .unwrap_or_else(|| (name.clone(), name.clone()));
 
-            use bitrouter_core::api::mcp::types::McpGatewayError;
-            use bitrouter_core::routers::router::ToolRouter;
-            use bitrouter_core::tools::provider::ToolProvider;
-
             // Enforce parameter restrictions before dispatch.
             let mut args_map = arguments;
-            if let Ok(restrictions) = self.restrictions.read()
-                && let Some(restriction) = restrictions.get(&provider_name)
-            {
+            if let Some(restriction) = self.tool_table.get_param_restrictions(&provider_name) {
                 restriction.check(&tool_id, &mut args_map).map_err(|e| {
                     McpGatewayError::UpstreamCall {
                         name: name.clone(),
@@ -328,18 +402,14 @@ impl bitrouter_core::api::mcp::gateway::ToolCallHandler for RouterToolCallHandle
                 })?;
             }
 
-            // Look up protocol by full tool ID (e.g. "exa/search"),
-            // supporting providers that serve tools across multiple protocols.
-            let protocol = self
-                .tool_protocols
-                .get(&name)
-                .ok_or_else(|| McpGatewayError::ToolNotFound { name: name.clone() })?;
-
-            let target = RoutingTarget {
-                provider_name,
-                service_id: tool_id.clone(),
-                api_protocol: *protocol,
-            };
+            // Route through config-authoritative table.
+            let target =
+                self.tool_table
+                    .route(&name)
+                    .await
+                    .map_err(|e| McpGatewayError::ToolNotFound {
+                        name: format!("{name}: {e}"),
+                    })?;
 
             let provider_impl = self.tool_router.route_tool(target).await.map_err(|e| {
                 McpGatewayError::UpstreamCall {
@@ -370,55 +440,77 @@ mod tests {
     use bitrouter_core::routers::router::ToolRouter;
     use bitrouter_core::tools::provider::ToolProvider;
 
-    #[tokio::test]
-    async fn route_to_registered_provider() {
-        let router = ToolRouterImpl::new();
+    fn test_providers() -> HashMap<String, ProviderConfig> {
+        let mut p = HashMap::new();
+        p.insert(
+            "test-rest".into(),
+            ProviderConfig {
+                api_protocol: Some(ApiProtocol::Rest),
+                api_base: Some("https://example.com/api".into()),
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+        );
+        p
+    }
 
-        // Register a dummy MCP provider.
-        let dummy = DynToolProvider::new_box(DummyProvider("test-mcp".into()));
-        router
-            .register("test-mcp".into(), ApiProtocol::Mcp, Arc::from(dummy))
-            .await;
+    #[tokio::test]
+    async fn route_to_rest_provider() {
+        let router = LazyToolRouter::new(
+            test_providers(),
+            #[cfg(feature = "mcp")]
+            Arc::new(HashMap::new()),
+            Arc::new(reqwest::Client::new()),
+        );
 
         let target = RoutingTarget {
-            provider_name: "test-mcp".into(),
+            provider_name: "test-rest".into(),
             service_id: "search".into(),
-            api_protocol: ApiProtocol::Mcp,
+            api_protocol: ApiProtocol::Rest,
         };
 
         let provider = router.route_tool(target).await;
         assert!(provider.is_ok());
-        assert_eq!(provider.unwrap().provider_name(), "test-mcp");
+        let p = provider.as_ref().ok();
+        assert_eq!(p.map(|p| p.provider_name()), Some("test-rest"));
     }
 
     #[tokio::test]
     async fn route_to_unknown_provider_errors() {
-        let router = ToolRouterImpl::new();
+        let router = LazyToolRouter::new(
+            HashMap::new(),
+            #[cfg(feature = "mcp")]
+            Arc::new(HashMap::new()),
+            Arc::new(reqwest::Client::new()),
+        );
+
         let target = RoutingTarget {
             provider_name: "missing".into(),
             service_id: "foo".into(),
-            api_protocol: ApiProtocol::Mcp,
+            api_protocol: ApiProtocol::Rest,
         };
         assert!(router.route_tool(target).await.is_err());
     }
 
-    struct DummyProvider(String);
+    #[tokio::test]
+    async fn has_providers_rest() {
+        let router = LazyToolRouter::new(
+            test_providers(),
+            #[cfg(feature = "mcp")]
+            Arc::new(HashMap::new()),
+            Arc::new(reqwest::Client::new()),
+        );
+        assert!(router.has_providers());
+    }
 
-    impl ToolProvider for DummyProvider {
-        fn provider_name(&self) -> &str {
-            &self.0
-        }
-
-        async fn call_tool(
-            &self,
-            _tool_id: &str,
-            _arguments: serde_json::Value,
-        ) -> Result<bitrouter_core::tools::result::ToolCallResult> {
-            Ok(bitrouter_core::tools::result::ToolCallResult {
-                content: vec![],
-                is_error: false,
-                metadata: None,
-            })
-        }
+    #[tokio::test]
+    async fn has_providers_empty() {
+        let router = LazyToolRouter::new(
+            HashMap::new(),
+            #[cfg(feature = "mcp")]
+            Arc::new(HashMap::new()),
+            Arc::new(reqwest::Client::new()),
+        );
+        assert!(!router.has_providers());
     }
 }

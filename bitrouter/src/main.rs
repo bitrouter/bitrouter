@@ -118,6 +118,11 @@ enum ToolsAction {
     List,
     /// Show upstream MCP server health
     Status,
+    /// Discover tools from an MCP upstream and output config YAML
+    Discover {
+        /// Provider name (must exist in config with api_protocol: mcp)
+        provider: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -322,6 +327,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             match action {
                 ToolsAction::List => cli::tools::run_list(&runtime.config, addr)?,
                 ToolsAction::Status => cli::tools::run_status(&runtime.config, addr)?,
+                ToolsAction::Discover { provider } => {
+                    cli::tools::run_discover(&runtime.config, &provider).await?
+                }
             }
             return Ok(());
         }

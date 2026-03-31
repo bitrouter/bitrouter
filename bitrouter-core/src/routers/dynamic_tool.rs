@@ -8,12 +8,14 @@
 //! for models.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use crate::errors::{BitrouterError, Result};
 
 use super::admin::{AdminToolRegistry, ParamRestrictions, ToolFilter, ToolUpstreamEntry};
 use super::registry::{ToolEntry, ToolRegistry};
+use super::reload::ReloadableRoutingTable;
+use super::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
 
 /// A tool registry wrapper that adds runtime filter and restriction management.
 ///
@@ -22,9 +24,9 @@ use super::registry::{ToolEntry, ToolRegistry};
 /// - **Restrictions** are stored here and exposed for protocol crates to
 ///   read at call time via [`get_param_restrictions`](Self::get_param_restrictions).
 pub struct DynamicToolRegistry<T> {
-    inner: T,
+    inner: RwLock<Arc<T>>,
     filters: RwLock<HashMap<String, ToolFilter>>,
-    restrictions: std::sync::Arc<RwLock<HashMap<String, ParamRestrictions>>>,
+    restrictions: Arc<RwLock<HashMap<String, ParamRestrictions>>>,
 }
 
 impl<T> DynamicToolRegistry<T> {
@@ -35,23 +37,34 @@ impl<T> DynamicToolRegistry<T> {
         restrictions: HashMap<String, ParamRestrictions>,
     ) -> Self {
         Self {
-            inner,
+            inner: RwLock::new(Arc::new(inner)),
             filters: RwLock::new(filters),
-            restrictions: std::sync::Arc::new(RwLock::new(restrictions)),
+            restrictions: Arc::new(RwLock::new(restrictions)),
         }
+    }
+
+    /// Returns an `Arc` snapshot of the current inner registry.
+    ///
+    /// The returned `Arc` is cheaply cloned and does not hold any lock,
+    /// so callers may keep it for as long as needed.
+    pub fn read_inner(&self) -> Arc<T> {
+        self.inner
+            .read()
+            .map(|guard| Arc::clone(&guard))
+            .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()))
     }
 
     /// Returns a shared reference to the restrictions lock.
     ///
     /// Used by the tool call dispatch layer to enforce restrictions at
     /// call time while staying in sync with admin updates.
-    pub fn restrictions_ref(&self) -> std::sync::Arc<RwLock<HashMap<String, ParamRestrictions>>> {
-        std::sync::Arc::clone(&self.restrictions)
+    pub fn restrictions_ref(&self) -> Arc<RwLock<HashMap<String, ParamRestrictions>>> {
+        Arc::clone(&self.restrictions)
     }
 
     /// Access the inner registry for protocol-specific operations.
-    pub fn inner(&self) -> &T {
-        &self.inner
+    pub fn inner(&self) -> Arc<T> {
+        self.read_inner()
     }
 
     /// Read the current parameter restrictions for a server.
@@ -90,6 +103,24 @@ impl<T> DynamicToolRegistry<T> {
     }
 }
 
+/// Trait for types that can provide parameter restriction lookups.
+///
+/// Used by the tool call handler to enforce restrictions without coupling
+/// to the concrete `DynamicToolRegistry` type.
+pub trait HasParamRestrictions: Send + Sync {
+    /// Read the current parameter restrictions for a server.
+    fn get_param_restrictions(&self, server: &str) -> Option<ParamRestrictions>;
+}
+
+impl<T: Send + Sync> HasParamRestrictions for DynamicToolRegistry<T> {
+    fn get_param_restrictions(&self, server: &str) -> Option<ParamRestrictions> {
+        self.restrictions
+            .read()
+            .ok()
+            .and_then(|r| r.get(server).cloned())
+    }
+}
+
 /// Extract the server (provider) name from a tool ID.
 ///
 /// Tool IDs are namespaced as `"server/tool_name"`. Returns the portion
@@ -105,7 +136,8 @@ fn tool_name_of(tool_id: &str) -> &str {
 
 impl<T: ToolRegistry> ToolRegistry for DynamicToolRegistry<T> {
     async fn list_tools(&self) -> Vec<ToolEntry> {
-        let all = self.inner.list_tools().await;
+        let inner = self.read_inner();
+        let all = inner.list_tools().await;
         let filters = match self.filters.read() {
             Ok(f) => f,
             Err(_) => return all,
@@ -120,6 +152,30 @@ impl<T: ToolRegistry> ToolRegistry for DynamicToolRegistry<T> {
                 }
             })
             .collect()
+    }
+}
+
+impl<T: RoutingTable + Send + Sync> RoutingTable for DynamicToolRegistry<T> {
+    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
+        let inner = self.read_inner();
+        inner.route(incoming_name).await
+    }
+
+    fn list_routes(&self) -> Vec<RouteEntry> {
+        self.read_inner().list_routes()
+    }
+}
+
+impl<T> ReloadableRoutingTable for DynamicToolRegistry<T> {
+    type Inner = T;
+
+    fn reload(&self, new_inner: T) -> Result<()> {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| BitrouterError::transport(None, "tool registry lock poisoned"))?;
+        *inner = Arc::new(new_inner);
+        Ok(())
     }
 }
 

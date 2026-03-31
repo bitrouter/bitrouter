@@ -110,7 +110,8 @@ impl
     ///
     /// When the server receives a reload signal (SIGHUP on Unix, flag file on
     /// Windows), it re-reads the configuration file from disk and replaces the
-    /// inner routing table without dropping in-flight requests or dynamic routes.
+    /// inner routing and tool tables without dropping in-flight requests or
+    /// dynamic routes.
     pub async fn serve_with_reload<M>(self, model_router: M) -> Result<()>
     where
         M: bitrouter_core::routers::router::LanguageModelRouter + Send + Sync + 'static,
@@ -120,9 +121,38 @@ impl
         let paths = self.paths.clone();
         let table = Arc::new(self.routing_table);
 
-        // Build the reload callback — captures `Arc<DynamicRoutingTable>` and
-        // `RuntimePaths` so it can re-read config and swap the inner table.
+        // Build config-authoritative tool registry.
+        let tool_table = bitrouter_config::ConfigToolRoutingTable::new(
+            self.config.providers.clone(),
+            self.config.tools.clone(),
+        );
+        let (initial_filters, initial_restrictions) = {
+            let mut filters = std::collections::HashMap::new();
+            let mut restrictions = std::collections::HashMap::new();
+            for (name, provider) in &self.config.providers {
+                if let Some(ref f) = provider.tool_filter {
+                    filters.insert(name.clone(), f.clone());
+                }
+                if let Some(ref r) = provider.param_restrictions
+                    && !r.rules.is_empty()
+                {
+                    restrictions.insert(name.clone(), r.clone());
+                }
+            }
+            (filters, restrictions)
+        };
+        let tool_registry = Arc::new(
+            bitrouter_core::routers::dynamic_tool::DynamicToolRegistry::new(
+                tool_table,
+                initial_filters,
+                initial_restrictions,
+            ),
+        );
+
+        // Build the reload callback — captures both routing table and tool
+        // registry so it can re-read config and swap both inner tables.
         let reload_table = Arc::clone(&table);
+        let reload_tool_registry = Arc::clone(&tool_registry);
         let reload_paths = paths.clone();
         let reload_fn = move || {
             let env_file = reload_paths
@@ -131,16 +161,31 @@ impl
                 .then_some(reload_paths.env_file.as_path());
             let config = BitrouterConfig::load_from_file(&reload_paths.config_file, env_file)
                 .map_err(|e| e.to_string())?;
+
+            // Reload model routing table.
             let new_table = bitrouter_config::ConfigRoutingTable::new(
                 config.providers.clone(),
                 config.models.clone(),
             );
-            reload_table.reload(new_table).map_err(|e| e.to_string())
+            reload_table.reload(new_table).map_err(|e| e.to_string())?;
+
+            // Reload tool routing table.
+            let new_tool_table = bitrouter_config::ConfigToolRoutingTable::new(
+                config.providers.clone(),
+                config.tools.clone(),
+            );
+            reload_tool_registry
+                .reload(new_tool_table)
+                .map_err(|e| e.to_string())?;
+
+            tracing::info!("model and tool routing tables reloaded");
+            Ok(())
         };
 
         let mut plan =
             crate::runtime::server::ServerPlan::new(self.config, table, Arc::new(model_router))
                 .with_paths(paths)
+                .with_tool_registry(tool_registry)
                 .with_reload(reload_fn);
 
         if let Some(db) = self.db {
