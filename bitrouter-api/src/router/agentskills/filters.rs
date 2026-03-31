@@ -35,6 +35,8 @@ struct SkillResponse {
     required_apis: Vec<String>,
     created_at: String,
     updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bound_tool: Option<String>,
 }
 
 impl From<SkillEntry> for SkillResponse {
@@ -48,6 +50,7 @@ impl From<SkillEntry> for SkillResponse {
             required_apis: e.required_apis,
             created_at: e.created_at,
             updated_at: e.updated_at,
+            bound_tool: e.bound_tool,
         }
     }
 }

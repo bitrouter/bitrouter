@@ -43,10 +43,12 @@ impl AgentSkillsClient {
     }
 
     pub async fn build(self) -> AgentSkillsRoutes {
+        use bitrouter_core::routers::registry::SkillService;
+
         let has_skills = !self.tool_configs.is_empty();
 
         let registry = match FilesystemSkillRegistry::from_config_and_dir(
-            self.tool_configs,
+            self.tool_configs.clone(),
             self.skills_dir.clone(),
         )
         .await
@@ -62,6 +64,26 @@ impl AgentSkillsClient {
                 )
             }
         };
+
+        // Warn for bare-name skill references missing from the registry.
+        // Remote refs (github:) and local paths are handled by from_config_and_dir.
+        if let Ok(listed) = registry.list().await {
+            for (tool_name, tool_config) in &self.tool_configs {
+                if let Some(skill_ref) = &tool_config.skill
+                    && !skill_ref.starts_with("github:")
+                    && !skill_ref.starts_with("./")
+                    && !skill_ref.starts_with("../")
+                    && !skill_ref.starts_with('/')
+                    && !listed.iter().any(|e| e.name == *skill_ref)
+                {
+                    tracing::warn!(
+                        tool = %tool_name,
+                        skill = %skill_ref,
+                        "tool references skill not found in registry"
+                    );
+                }
+            }
+        }
 
         // Re-check: filesystem scan may have found skills even if config had none.
         let has_skills = has_skills || !registry.list_tools().await.is_empty();

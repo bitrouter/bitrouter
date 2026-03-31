@@ -102,6 +102,8 @@ pub struct SkillEntry {
     pub created_at: String,
     /// ISO 8601 timestamp.
     pub updated_at: String,
+    /// Tool routing name this skill is bound to, when declared via `tools:` config.
+    pub bound_tool: Option<String>,
 }
 
 /// CRUD service for the skills registry.

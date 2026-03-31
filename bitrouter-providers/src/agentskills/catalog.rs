@@ -28,6 +28,8 @@ pub(crate) struct SkillCatalogEntry {
     pub created_at: String,
     /// ISO 8601 timestamp.
     pub updated_at: String,
+    /// Tool routing name this skill is bound to (from config).
+    pub bound_tool: Option<String>,
 }
 
 impl SkillCatalogEntry {
@@ -41,6 +43,7 @@ impl SkillCatalogEntry {
             required_apis: self.required_apis.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
+            bound_tool: self.bound_tool.clone(),
         }
     }
 

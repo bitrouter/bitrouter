@@ -60,53 +60,129 @@ impl FilesystemSkillRegistry {
         // Scan existing filesystem skills first.
         let mut entries = scanner::scan_skills_dir(&skills_dir).await?;
 
-        // Merge config-declared tools: write SKILL.md for any not yet on disk.
+        // Merge config-declared tools: resolve each skill reference and bind.
+        //
+        // The `skill` string uses a prefix convention:
+        //   - `github:owner/repo/skill-name` → remote ref (not fetched, recorded as-is)
+        //   - `./path` or `../path` or `/abs/path` → local path to a skill directory
+        //   - `bare-name` → resolved against `skills_dir`
         for (tool_name, tool_config) in tool_configs {
-            let already_exists = entries.iter().any(|e| e.name == tool_name);
-            if already_exists {
+            let skill_ref = match tool_config.skill.as_deref() {
+                Some(s) => s,
+                None => continue,
+            };
+
+            if skill_ref.starts_with("github:") {
+                // Remote ref — don't fetch, create an in-memory entry.
+                let skill_name = skill_ref
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(skill_ref)
+                    .to_string();
+                let now = chrono::Utc::now().to_rfc3339();
+                entries.push(SkillCatalogEntry {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: skill_name,
+                    description: tool_config.description.clone().unwrap_or_default(),
+                    source: skill_ref.to_string(),
+                    required_apis: tool_config
+                        .endpoints
+                        .iter()
+                        .map(|ep| ep.provider.clone())
+                        .collect(),
+                    path: PathBuf::new(),
+                    created_at: now.clone(),
+                    updated_at: now,
+                    bound_tool: Some(tool_name),
+                });
                 continue;
             }
 
-            let skill_dir = skills_dir.join(&tool_name);
-            let skill_md = skill_dir.join("SKILL.md");
+            if skill_ref.starts_with("./")
+                || skill_ref.starts_with("../")
+                || skill_ref.starts_with('/')
+            {
+                // Local path — read SKILL.md from the specified directory.
+                let local_dir = PathBuf::from(skill_ref);
+                let local_md = local_dir.join("SKILL.md");
+                match scanner::parse_skill_md(&local_md, &local_dir).await {
+                    Ok(mut entry) => {
+                        entry.bound_tool = Some(tool_name);
+                        entries.push(entry);
+                    }
+                    Err(reason) => {
+                        tracing::warn!(
+                            tool = %tool_name,
+                            path = %local_dir.display(),
+                            "failed to load skill from local path: {reason}"
+                        );
+                    }
+                }
+                continue;
+            }
 
-            // Derive required APIs from the tool's endpoint providers.
+            // Bare name — resolve against skills_dir.
+            let skill_name = skill_ref;
+
+            // Match by frontmatter name or by directory name.
+            let existing = entries.iter_mut().find(|e| {
+                e.name == skill_name
+                    || e.path
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .is_some_and(|d| d == skill_name)
+            });
+
+            if let Some(entry) = existing {
+                entry.bound_tool = Some(tool_name);
+                continue;
+            }
+
+            // Not on disk — create a stub entry (write SKILL.md only with a description).
             let required_apis: Vec<String> = tool_config
                 .endpoints
                 .iter()
                 .map(|ep| ep.provider.clone())
                 .collect();
 
-            let mut yaml_parts = vec![
-                format!("name: \"{tool_name}\""),
-                "description: \"\"".to_string(),
-            ];
-            if !required_apis.is_empty() {
-                yaml_parts.push("required_apis:".to_string());
-                for api in &required_apis {
-                    yaml_parts.push(format!("  - \"{api}\""));
+            let description = tool_config.description.clone().unwrap_or_default();
+
+            let skill_dir_path = skills_dir.join(skill_name);
+            let skill_md = skill_dir_path.join("SKILL.md");
+            if !description.is_empty() {
+                let escaped_desc = description.replace('"', "\\\"");
+                let mut yaml_parts = vec![
+                    format!("name: \"{skill_name}\""),
+                    format!("description: \"{escaped_desc}\""),
+                ];
+                if !required_apis.is_empty() {
+                    yaml_parts.push("required_apis:".to_string());
+                    for api in &required_apis {
+                        yaml_parts.push(format!("  - \"{api}\""));
+                    }
                 }
+
+                let content = format!("---\n{}\n---\n", yaml_parts.join("\n"));
+
+                tokio::fs::create_dir_all(&skill_dir_path)
+                    .await
+                    .map_err(|e| format!("failed to create {}: {e}", skill_dir_path.display()))?;
+                tokio::fs::write(&skill_md, &content)
+                    .await
+                    .map_err(|e| format!("failed to write {}: {e}", skill_md.display()))?;
             }
-
-            let content = format!("---\n{}\n---\n", yaml_parts.join("\n"));
-
-            tokio::fs::create_dir_all(&skill_dir)
-                .await
-                .map_err(|e| format!("failed to create {}: {e}", skill_dir.display()))?;
-            tokio::fs::write(&skill_md, &content)
-                .await
-                .map_err(|e| format!("failed to write {}: {e}", skill_md.display()))?;
 
             let now = chrono::Utc::now().to_rfc3339();
             entries.push(SkillCatalogEntry {
                 id: uuid::Uuid::new_v4().to_string(),
-                name: tool_name,
-                description: String::new(),
+                name: skill_name.to_string(),
+                description,
                 source: "config".to_string(),
                 required_apis,
                 path: skill_md,
                 created_at: now.clone(),
                 updated_at: now,
+                bound_tool: Some(tool_name),
             });
         }
 
@@ -179,6 +255,7 @@ impl SkillService for FilesystemSkillRegistry {
             path: skill_md,
             created_at: now.clone(),
             updated_at: now,
+            bound_tool: None,
         };
 
         let skill_entry = entry.to_skill_entry();
@@ -387,7 +464,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn from_config_and_dir_merges() {
+    async fn from_config_and_dir_bare_name() {
         let tmp = TempDir::new().expect("tempdir");
 
         // Pre-create a filesystem skill.
@@ -399,10 +476,14 @@ mod tests {
         )
         .expect("write");
 
-        // Config-declared tool not yet on disk.
+        // Bare name: tool references a skill not yet on disk.
         let configs = vec![(
-            "cfg-skill".to_string(),
-            bitrouter_config::ToolConfig::default(),
+            "cfg-tool".to_string(),
+            bitrouter_config::ToolConfig {
+                skill: Some("cfg-skill".to_string()),
+                description: Some("A config skill".to_string()),
+                ..Default::default()
+            },
         )];
 
         let reg = FilesystemSkillRegistry::from_config_and_dir(configs, tmp.path().to_path_buf())
@@ -418,5 +499,73 @@ mod tests {
 
         // Config skill should have been written to disk.
         assert!(tmp.path().join("cfg-skill").join("SKILL.md").exists());
+
+        // Config skill should have bound_tool set; filesystem skill should not.
+        let cfg = list.iter().find(|e| e.name == "cfg-skill");
+        assert_eq!(cfg.map(|e| e.bound_tool.as_deref()), Some(Some("cfg-tool")));
+        let fs = list.iter().find(|e| e.name == "fs-skill");
+        assert_eq!(fs.map(|e| e.bound_tool.as_deref()), Some(None));
+    }
+
+    #[tokio::test]
+    async fn from_config_and_dir_local_path() {
+        let tmp = TempDir::new().expect("tempdir");
+
+        // Create a skill at a custom local path (outside skills_dir).
+        let custom_dir = tmp.path().join("custom").join("my-local-skill");
+        std::fs::create_dir_all(&custom_dir).expect("mkdir");
+        std::fs::write(
+            custom_dir.join("SKILL.md"),
+            "---\nname: my-local-skill\ndescription: A local path skill\n---\n",
+        )
+        .expect("write");
+
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir(&skills_dir).expect("mkdir skills");
+
+        let configs = vec![(
+            "local-tool".to_string(),
+            bitrouter_config::ToolConfig {
+                skill: Some(custom_dir.to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        )];
+
+        let reg = FilesystemSkillRegistry::from_config_and_dir(configs, skills_dir)
+            .await
+            .expect("from_config_and_dir");
+
+        let list = reg.list().await.expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "my-local-skill");
+        assert_eq!(list[0].bound_tool.as_deref(), Some("local-tool"));
+    }
+
+    #[tokio::test]
+    async fn from_config_and_dir_github_remote() {
+        let tmp = TempDir::new().expect("tempdir");
+
+        let configs = vec![(
+            "remote-tool".to_string(),
+            bitrouter_config::ToolConfig {
+                skill: Some("github:vercel-labs/agent-skills/react-best-practices".to_string()),
+                description: Some("React best practices".to_string()),
+                ..Default::default()
+            },
+        )];
+
+        let reg = FilesystemSkillRegistry::from_config_and_dir(configs, tmp.path().to_path_buf())
+            .await
+            .expect("from_config_and_dir");
+
+        let list = reg.list().await.expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "react-best-practices");
+        assert_eq!(list[0].description, "React best practices");
+        assert_eq!(
+            list[0].source,
+            "github:vercel-labs/agent-skills/react-best-practices"
+        );
+        assert_eq!(list[0].bound_tool.as_deref(), Some("remote-tool"));
     }
 }

@@ -67,7 +67,10 @@ pub(crate) async fn scan_skills_dir(dir: &Path) -> Result<Vec<SkillCatalogEntry>
 }
 
 /// Parse a single `SKILL.md` file into a catalog entry.
-async fn parse_skill_md(skill_md: &Path, skill_dir: &Path) -> Result<SkillCatalogEntry, String> {
+pub(crate) async fn parse_skill_md(
+    skill_md: &Path,
+    skill_dir: &Path,
+) -> Result<SkillCatalogEntry, String> {
     let content = tokio::fs::read_to_string(skill_md)
         .await
         .map_err(|e| format!("read error: {e}"))?;
@@ -128,6 +131,7 @@ async fn parse_skill_md(skill_md: &Path, skill_dir: &Path) -> Result<SkillCatalo
         path: skill_md.to_path_buf(),
         created_at,
         updated_at,
+        bound_tool: None,
     })
 }
 
