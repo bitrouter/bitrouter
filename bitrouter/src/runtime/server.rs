@@ -157,9 +157,15 @@ where
             tracing::info!("guardrails enabled");
         }
 
-        // Build JWT auth context.
+        // Build JWT auth context with operator identity from wallet config.
+        let operator_caip10 = self.config.wallet.as_ref().and_then(|wallet| {
+            resolve_operator_caip10(wallet)
+                .map_err(|e| tracing::warn!("could not resolve operator CAIP-10: {e}"))
+                .ok()
+        });
         let auth_ctx = Arc::new(JwtAuthContext::new(
             self.db.as_ref().map(|db| db.as_ref().clone()),
+            operator_caip10,
         ));
 
         // Build spend store: SeaORM-backed if DB is available, otherwise in-memory.
@@ -709,10 +715,9 @@ fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> Cal
     CallerContext {
         account_id: Some(id.account_id.0.to_string()),
         models: id.models,
-        tools: id.tools,
         budget: id.budget,
         budget_scope: id.budget_scope,
-        budget_range: id.budget_range,
+        key: id.key,
         chain: id.chain,
     }
 }
@@ -724,6 +729,35 @@ fn auth_gate(
     + Clone,
 ) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
     auth.map(|_| ()).untuple_one()
+}
+
+/// Resolve the operator's CAIP-10 identity from wallet config.
+///
+/// Loads the OWS wallet metadata and finds the Solana account address to
+/// construct the full CAIP-10 identity. This identity is used as the single
+/// trust root for JWT verification — only JWTs with `iss` matching this
+/// identity are accepted.
+fn resolve_operator_caip10(
+    wallet: &bitrouter_config::config::WalletConfig,
+) -> std::result::Result<String, String> {
+    use bitrouter_core::auth::chain::{Caip10, Chain};
+
+    let vault = wallet.vault_path.as_deref().map(std::path::Path::new);
+    let info = ows_lib::get_wallet(&wallet.name, vault)
+        .map_err(|e| format!("failed to load wallet '{}': {e}", wallet.name))?;
+
+    let sol_account = info
+        .accounts
+        .iter()
+        .find(|a| a.chain_id.starts_with("solana:"))
+        .ok_or_else(|| format!("wallet '{}' has no Solana account", wallet.name))?;
+
+    let caip10 = Caip10 {
+        chain: Chain::solana_mainnet(),
+        address: sol_account.address.clone(),
+    };
+
+    Ok(caip10.format())
 }
 
 /// Rejection handler that turns [`Unauthorized`] into a JSON 401 response

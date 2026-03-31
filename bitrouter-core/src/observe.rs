@@ -8,7 +8,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::auth::claims::{BudgetRange, BudgetScope};
+use crate::auth::claims::BudgetScope;
 use crate::errors::BitrouterError;
 use crate::models::language::usage::LanguageModelUsage;
 
@@ -23,15 +23,14 @@ pub struct CallerContext {
     pub account_id: Option<String>,
     /// Optional model-name patterns this caller may access.
     pub models: Option<Vec<String>>,
-    /// Optional tool-name patterns this caller may access.
-    pub tools: Option<Vec<String>>,
     /// Budget limit in micro USD.
     pub budget: Option<u64>,
     /// Whether the budget applies per-session or per-account.
     pub budget_scope: Option<BudgetScope>,
-    /// The range over which the budget is measured.
-    pub budget_range: Option<BudgetRange>,
-    /// CAIP-2 chain identifier from JWT claims (e.g. `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"`).
+    /// OWS agent key for payment authorization (from JWT `key` claim).
+    pub key: Option<String>,
+    /// CAIP-2 chain identifier derived from the operator's `iss` CAIP-10.
+    /// Used for MPP payment network selection.
     pub chain: Option<String>,
 }
 

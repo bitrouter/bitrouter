@@ -2,9 +2,9 @@
 //!
 //! Defines the open JWT claims standard shared between the bitrouter CLI,
 //! self-hosted servers, and the BitRouter cloud service. JWTs are signed
-//! with web3 wallet keys — Ed25519 for Solana (`SOL_EDDSA`) or EIP-191
-//! secp256k1 for EVM chains (`EIP191K`). Users hold the private seed,
-//! servers verify signatures and resolve accounts by CAIP-10 identity.
+//! by the operator's OWS wallet — Ed25519 for Solana (`SOL_EDDSA`) or
+//! EIP-191 secp256k1 for EVM chains (`EIP191K`). The server verifies
+//! signatures against the configured operator wallet identity.
 
 pub mod access;
 pub mod chain;

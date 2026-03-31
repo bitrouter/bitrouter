@@ -6,6 +6,9 @@
 //! - **EIP191K** — EVM-style EIP-191 prefixed secp256k1 ECDSA.
 //!
 //! Token format: `base64url(header).base64url(claims).base64url(signature)`
+//!
+//! The signing chain is derived from the CAIP-10 `iss` claim (which encodes
+//! CAIP-2 chain info), so no separate `chain` field is needed in the payload.
 
 use alloy_primitives::Signature as EvmSignature;
 use base64::Engine;
@@ -19,21 +22,12 @@ use crate::auth::keys::JwtSigner;
 
 /// Sign a set of claims into a JWT string using any [`JwtSigner`].
 ///
-/// The algorithm and signing method are determined by the chain in the claims:
+/// The algorithm is derived from the chain encoded in `claims.iss` (CAIP-10):
 /// - Solana → SOL_EDDSA (Ed25519 over raw message)
 /// - EVM → EIP191K (EIP-191 prefixed secp256k1 ECDSA)
 pub fn sign(claims: &BitrouterClaims, signer: &dyn JwtSigner) -> Result<String, JwtError> {
     let caip10 = Caip10::parse(&claims.iss)?;
     let alg = caip10.chain.jwt_algorithm();
-
-    // Reject tokens where the explicit `chain` field contradicts `iss`.
-    let expected_chain = caip10.chain.caip2();
-    if claims.chain != expected_chain {
-        return Err(JwtError::Verification(format!(
-            "chain mismatch: claims.chain is {}, iss implies {}",
-            claims.chain, expected_chain
-        )));
-    }
 
     let header_b64 = URL_SAFE_NO_PAD.encode(alg.header_json().as_bytes());
     let payload = serde_json::to_vec(claims).map_err(|e| JwtError::Signing(e.to_string()))?;
@@ -65,7 +59,7 @@ pub fn verify(token: &str) -> Result<BitrouterClaims, JwtError> {
         .decode(sig_b64)
         .map_err(|e| JwtError::MalformedToken(format!("bad signature encoding: {e}")))?;
 
-    // Decode claims (unverified) to determine chain.
+    // Decode claims (unverified) to determine chain from iss.
     let (_, payload_b64) = message
         .split_once('.')
         .ok_or_else(|| JwtError::MalformedToken("expected header.payload".into()))?;
@@ -78,23 +72,14 @@ pub fn verify(token: &str) -> Result<BitrouterClaims, JwtError> {
     // Parse algorithm from header.
     let alg = decode_algorithm(message)?;
 
-    // Parse CAIP-10 identity from iss.
+    // Parse CAIP-10 identity from iss — chain is derived from this.
     let caip10 = Caip10::parse(&claims.iss)?;
 
-    // Verify the algorithm matches the chain.
+    // Verify the algorithm matches the chain derived from iss.
     let expected_alg = caip10.chain.jwt_algorithm();
     if alg != expected_alg {
         return Err(JwtError::Verification(format!(
             "algorithm mismatch: header says {alg}, chain expects {expected_alg}"
-        )));
-    }
-
-    // Ensure the CAIP-2 chain in the claims matches the chain implied by iss.
-    let expected_chain = caip10.chain.caip2();
-    if claims.chain != expected_chain {
-        return Err(JwtError::Verification(format!(
-            "chain mismatch: claims.chain is {}, iss implies {}",
-            claims.chain, expected_chain
         )));
     }
 
@@ -224,15 +209,13 @@ mod tests {
         let caip10 = kp.caip10(&chain).expect("caip10");
         BitrouterClaims {
             iss: caip10.format(),
-            chain: chain.caip2(),
             iat: Some(1_700_000_000),
             exp: None,
-            scope: TokenScope::Api,
-            models: None,
-            tools: None,
-            budget: None,
-            budget_scope: None,
-            budget_range: None,
+            scp: Some(TokenScope::Api),
+            mdl: None,
+            bgt: None,
+            bsc: None,
+            key: None,
         }
     }
 
@@ -241,15 +224,13 @@ mod tests {
         let caip10 = kp.caip10(&chain).expect("caip10");
         BitrouterClaims {
             iss: caip10.format(),
-            chain: chain.caip2(),
             iat: Some(1_700_000_000),
             exp: None,
-            scope: TokenScope::Api,
-            models: None,
-            tools: None,
-            budget: None,
-            budget_scope: None,
-            budget_range: None,
+            scp: Some(TokenScope::Api),
+            mdl: None,
+            bgt: None,
+            bsc: None,
+            key: None,
         }
     }
 
@@ -260,7 +241,7 @@ mod tests {
         let token = sign(&claims, &kp).expect("sign");
         let decoded = verify(&token).expect("verify");
         assert_eq!(decoded.iss, claims.iss);
-        assert_eq!(decoded.scope, TokenScope::Api);
+        assert_eq!(decoded.scope(), TokenScope::Api);
     }
 
     #[test]
@@ -270,7 +251,7 @@ mod tests {
         let token = sign(&claims, &kp).expect("sign");
         let decoded = verify(&token).expect("verify");
         assert_eq!(decoded.iss, claims.iss);
-        assert_eq!(decoded.scope, TokenScope::Api);
+        assert_eq!(decoded.scope(), TokenScope::Api);
     }
 
     #[test]
@@ -312,22 +293,19 @@ mod tests {
         let token = sign(&claims, &kp).expect("sign");
         let decoded = decode_unverified(&token).expect("decode");
         assert_eq!(decoded.iss, claims.iss);
-        assert_eq!(decoded.chain, claims.chain);
     }
 
     #[test]
     fn check_expiration_passes_for_future() {
         let claims = BitrouterClaims {
             iss: String::new(),
-            chain: String::new(),
             iat: None,
             exp: Some(u64::MAX),
-            scope: TokenScope::Api,
-            models: None,
-            tools: None,
-            budget: None,
-            budget_scope: None,
-            budget_range: None,
+            scp: Some(TokenScope::Api),
+            mdl: None,
+            bgt: None,
+            bsc: None,
+            key: None,
         };
         check_expiration(&claims).expect("not expired");
     }
@@ -336,15 +314,13 @@ mod tests {
     fn check_expiration_fails_for_past() {
         let claims = BitrouterClaims {
             iss: String::new(),
-            chain: String::new(),
             iat: None,
             exp: Some(1),
-            scope: TokenScope::Api,
-            models: None,
-            tools: None,
-            budget: None,
-            budget_scope: None,
-            budget_range: None,
+            scp: Some(TokenScope::Api),
+            mdl: None,
+            bgt: None,
+            bsc: None,
+            key: None,
         };
         assert!(check_expiration(&claims).is_err());
     }
@@ -353,15 +329,13 @@ mod tests {
     fn check_expiration_passes_for_none() {
         let claims = BitrouterClaims {
             iss: String::new(),
-            chain: String::new(),
             iat: None,
             exp: None,
-            scope: TokenScope::Api,
-            models: None,
-            tools: None,
-            budget: None,
-            budget_scope: None,
-            budget_range: None,
+            scp: Some(TokenScope::Api),
+            mdl: None,
+            bgt: None,
+            bsc: None,
+            key: None,
         };
         check_expiration(&claims).expect("no exp means valid");
     }
@@ -404,43 +378,45 @@ mod tests {
     }
 
     #[test]
-    fn sign_rejects_chain_mismatch() {
+    fn scope_defaults_to_api_when_absent() {
         let kp = MasterKeypair::generate();
-        let sol_chain = Chain::solana_mainnet();
-        let caip10 = kp.caip10(&sol_chain).expect("caip10");
-        // iss is Solana but chain field claims EVM.
-        let bad_claims = BitrouterClaims {
+        let chain = Chain::solana_mainnet();
+        let caip10 = kp.caip10(&chain).expect("caip10");
+        let claims = BitrouterClaims {
             iss: caip10.format(),
-            chain: Chain::base().caip2(),
             iat: None,
             exp: None,
-            scope: TokenScope::Api,
-            models: None,
-            tools: None,
-            budget: None,
-            budget_scope: None,
-            budget_range: None,
+            scp: None, // absent
+            mdl: None,
+            bgt: None,
+            bsc: None,
+            key: None,
         };
-        assert!(sign(&bad_claims, &kp).is_err());
+        let token = sign(&claims, &kp).expect("sign");
+        let decoded = verify(&token).expect("verify");
+        assert_eq!(decoded.scope(), TokenScope::Api);
+        assert!(decoded.scp.is_none());
     }
 
     #[test]
-    fn verify_rejects_chain_mismatch_in_payload() {
+    fn key_claim_roundtrips() {
         let kp = MasterKeypair::generate();
-        // Sign a valid Solana token, then tamper the chain field in the payload.
-        let claims = test_claims_solana(&kp);
+        let chain = Chain::solana_mainnet();
+        let caip10 = kp.caip10(&chain).expect("caip10");
+        let claims = BitrouterClaims {
+            iss: caip10.format(),
+            iat: None,
+            exp: None,
+            scp: Some(TokenScope::Api),
+            mdl: Some(vec!["gpt-4o".to_string()]),
+            bgt: Some(50_000_000),
+            bsc: Some(crate::auth::claims::BudgetScope::Session),
+            key: Some("ows_key_abc123".to_string()),
+        };
         let token = sign(&claims, &kp).expect("sign");
-
-        let parts: Vec<&str> = token.split('.').collect();
-        // Replace chain with EVM chain while keeping Solana iss.
-        let mut tampered_claims = claims.clone();
-        tampered_claims.chain = Chain::base().caip2();
-        let new_payload_b64 = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&tampered_claims)
-                .expect("ser")
-                .as_slice(),
-        );
-        let tampered = format!("{}.{}.{}", parts[0], new_payload_b64, parts[2]);
-        assert!(verify(&tampered).is_err());
+        let decoded = verify(&token).expect("verify");
+        assert_eq!(decoded.key.as_deref(), Some("ows_key_abc123"));
+        assert_eq!(decoded.mdl, Some(vec!["gpt-4o".to_string()]));
+        assert_eq!(decoded.bgt, Some(50_000_000));
     }
 }
