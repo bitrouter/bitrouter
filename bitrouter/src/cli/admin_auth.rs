@@ -98,7 +98,7 @@ fn ows_sign_admin_jwt(wallet: &bitrouter_config::config::WalletConfig) -> Result
 
     let chain = Chain::solana_mainnet();
     let caip10 = Caip10 {
-        chain: chain.clone(),
+        chain,
         address: sol_account.address.clone(),
     };
 
@@ -109,15 +109,13 @@ fn ows_sign_admin_jwt(wallet: &bitrouter_config::config::WalletConfig) -> Result
 
     let claims = BitrouterClaims {
         iss: caip10.format(),
-        chain: chain.caip2(),
         iat: Some(now),
         exp: Some(now + 300), // 5 minutes
-        scope: TokenScope::Admin,
-        models: None,
-        tools: None,
-        budget: None,
-        budget_scope: None,
-        budget_range: None,
+        scp: Some(TokenScope::Admin),
+        mdl: None,
+        bgt: None,
+        bsc: None,
+        key: None,
     };
 
     let signer = OwsJwtSigner::new(wallet)?;
