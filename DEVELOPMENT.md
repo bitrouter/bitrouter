@@ -17,6 +17,7 @@ BitRouter is organized as a set of focused crates:
 | `bitrouter-observe`    | Spend tracking, metrics collection, and request observation for model and tool invocations                                                        |
 | `bitrouter-blob`       | Concrete `BlobStore` implementations (filesystem backend)                                                                                         |
 | `bitrouter-guardrails` | Local firewall for AI agent traffic — pattern-based content inspection with warn, redact, and block actions                                       |
+| `bitrouter-tui`        | Terminal UI with ACP (Agent Client Protocol) integration for managing coding agent sessions in real time                                              |
 
 ## Request Flow
 

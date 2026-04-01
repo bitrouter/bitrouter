@@ -22,7 +22,8 @@ The layering follows a strict bottom-up principle — each crate depends only on
 6. **bitrouter-observe** — Depends on `bitrouter-core` for observation callback traits. Provides spend tracking, metrics collection, and request observation for both model and tool invocations.
 7. **bitrouter-blob** — Depends on `bitrouter-core` for the `BlobStore` trait. Provides concrete blob storage backends (filesystem via the `fs` feature).
 8. **bitrouter-guardrails** — Depends on `bitrouter-core`. Local firewall for AI agent traffic — pattern-based content inspection with warn, redact, and block actions for both model and tool requests.
-9. **bitrouter** (binary) — The CLI product. Depends on all workspace crates. Assembles everything: resolves paths, loads config, and provides the user-facing commands (`serve`, `start`, `stop`, `status`, `restart`) and optional TUI.
+9. **bitrouter-tui** — Standalone TUI crate. Depends on `agent-client-protocol` for ACP integration and `ratatui`/`crossterm` for rendering. Provides the terminal UI for managing coding agent sessions via the Agent Client Protocol (JSON-RPC over stdio). Auto-discovers ACP-compatible agents on PATH and communicates with them on a dedicated thread using `LocalSet` (ACP types are `!Send`).
+10. **bitrouter** (binary) — The CLI product. Depends on all workspace crates. Assembles everything: resolves paths, loads config, and provides the user-facing commands (`serve`, `start`, `stop`, `status`, `restart`) and optional TUI.
 
 ---
 

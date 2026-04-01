@@ -18,6 +18,12 @@ new configuration.
 
 If the user cancels the wizard, the TUI launches in its empty state.
 
+The TUI integrates with the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/)
+to manage coding agent sessions. It auto-discovers ACP-compatible agents on
+PATH (e.g. `claude-agent-acp`, `openclaw`) and connects via JSON-RPC over stdio.
+See [`bitrouter-tui`](../bitrouter-tui/) for details on supported agents and
+adapter installation.
+
 ## CLI Overview
 
 `bitrouter` has two ways to run:
