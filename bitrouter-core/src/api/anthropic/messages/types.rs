@@ -4,13 +4,43 @@ use serde::{Deserialize, Serialize};
 
 // ── Request ─────────────────────────────────────────────────────────────────
 
+/// The `system` field accepts either a plain string or an array of content
+/// blocks (as sent by Claude Code and the current Anthropic SDK).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SystemPrompt {
+    Text(String),
+    Blocks(Vec<SystemContentBlock>),
+}
+
+impl SystemPrompt {
+    /// Flatten any variant into a single string for internal use.
+    pub fn into_text(self) -> String {
+        match self {
+            Self::Text(s) => s,
+            Self::Blocks(blocks) => blocks
+                .into_iter()
+                .map(|b| b.text)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemContentBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessagesRequest {
     pub model: String,
     pub messages: Vec<AnthropicMessage>,
     pub max_tokens: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
+    pub system: Option<SystemPrompt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
