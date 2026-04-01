@@ -1,4 +1,4 @@
-//! Admin types and traits for runtime management of routes, tools, and agents.
+//! Admin types and traits for runtime management of routes and tools.
 //!
 //! Provides extension traits that layer admin (mutation / inspection) capabilities
 //! on top of the read-only discovery traits in [`registry`](super::registry):
@@ -7,7 +7,6 @@
 //! |---------|--------------------|------------------------|
 //! | Models  | `RoutingTable`     | `AdminRoutingTable`    |
 //! | Tools   | `ToolRegistry`     | `AdminToolRegistry`    |
-//! | Agents  | `AgentRegistry`    | `AdminAgentRegistry`   |
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -16,16 +15,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::Result;
 
-use super::registry::{AgentRegistry, ToolRegistry};
-use super::routing_table::RoutingTable;
+use super::registry::ToolRegistry;
+use super::routing_table::{ApiProtocol, RoutingTable};
 
 /// A single endpoint in a dynamic route.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteEndpoint {
     /// Provider name (must exist in the providers section or built-ins).
     pub provider: String,
-    /// The upstream model ID to send to this provider.
-    pub model_id: String,
+    /// Upstream service identifier (model ID or tool ID).
+    #[serde(alias = "model_id")]
+    pub service_id: String,
+    /// API protocol for this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_protocol: Option<ApiProtocol>,
+}
+
+/// Whether a route targets a model or a tool.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteKind {
+    /// Route resolves to a language model endpoint.
+    #[default]
+    Model,
+    /// Route resolves to a tool endpoint.
+    Tool,
 }
 
 /// Strategy for distributing requests across multiple endpoints.
@@ -42,8 +56,12 @@ pub enum RouteStrategy {
 /// A dynamically-configured route definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicRoute {
-    /// The virtual model name (e.g. "research", "fast").
-    pub model: String,
+    /// The virtual service name (e.g. "research", "fast").
+    #[serde(alias = "model")]
+    pub name: String,
+    /// Whether this route targets a model or a tool.
+    #[serde(default)]
+    pub kind: RouteKind,
     /// Routing strategy across endpoints.
     #[serde(default)]
     pub strategy: RouteStrategy,
@@ -62,7 +80,7 @@ pub trait AdminRoutingTable: RoutingTable {
     /// Remove a dynamically-added route. Returns `true` if the route existed.
     ///
     /// Config-defined routes cannot be removed.
-    fn remove_route(&self, model: &str) -> Result<bool>;
+    fn remove_route(&self, name: &str) -> Result<bool>;
 
     /// List all dynamically-added routes.
     fn list_dynamic_routes(&self) -> Vec<DynamicRoute>;
@@ -213,16 +231,22 @@ pub struct ToolUpstreamEntry {
     pub param_restrictions: Option<ParamRestrictions>,
 }
 
-/// Admin interface for managing tool registries at runtime.
+/// Admin interface for inspecting tool registries at runtime.
 ///
 /// Parallel to [`AdminRoutingTable`] for models. Extends [`ToolRegistry`]
-/// with methods for inspecting upstreams and updating filters and parameter
-/// restrictions without requiring config rewrites or daemon restarts.
+/// with methods for inspecting upstream servers. Policy mutations (filters,
+/// parameter restrictions) live in [`ToolPolicyAdmin`].
 pub trait AdminToolRegistry: ToolRegistry {
     /// List all upstream tool servers with their current state.
     fn list_upstreams(&self) -> impl Future<Output = Vec<ToolUpstreamEntry>> + Send;
-    /// List all configured access groups.
-    fn list_groups(&self) -> impl Future<Output = HashMap<String, Vec<String>>> + Send;
+}
+
+/// Admin interface for mutating tool visibility policy at runtime.
+///
+/// Separate from [`AdminToolRegistry`] (which manages routing topology)
+/// because policy mutations are the responsibility of the policy wrapper
+/// layer, not the routing layer.
+pub trait ToolPolicyAdmin: ToolRegistry {
     /// Update the tool filter for a specific upstream server.
     fn update_filter(
         &self,
@@ -237,39 +261,39 @@ pub trait AdminToolRegistry: ToolRegistry {
     ) -> impl Future<Output = Result<()>> + Send;
 }
 
-// ── Agent admin ─────────────────────────────────────────────────────
-
-/// Metadata about a connected upstream agent.
-#[derive(Debug, Clone, Serialize)]
-pub struct AgentUpstreamEntry {
-    /// Agent name.
-    pub name: String,
-    /// Upstream agent URL.
-    pub url: String,
-    /// Whether the upstream connection is active.
-    pub connected: bool,
-}
-
-/// Trait for providing upstream agent metadata.
-///
-/// Implemented by protocol-specific registries (e.g. A2A) that can report
-/// connection-level details not captured in the generic [`AgentEntry`].
-pub trait AgentUpstreamSource: Send + Sync {
-    /// List upstream agents with connection status.
-    fn list_upstreams(&self) -> impl Future<Output = Vec<AgentUpstreamEntry>> + Send;
-}
-
-impl<T: AgentUpstreamSource> AgentUpstreamSource for std::sync::Arc<T> {
-    async fn list_upstreams(&self) -> Vec<AgentUpstreamEntry> {
+impl<T: AdminToolRegistry> AdminToolRegistry for std::sync::Arc<T> {
+    async fn list_upstreams(&self) -> Vec<ToolUpstreamEntry> {
         (**self).list_upstreams().await
     }
 }
 
-/// Admin interface for inspecting agent registries at runtime.
+impl<T: ToolPolicyAdmin> ToolPolicyAdmin for std::sync::Arc<T> {
+    async fn update_filter(&self, server: &str, filter: Option<ToolFilter>) -> Result<()> {
+        (**self).update_filter(server, filter).await
+    }
+
+    async fn update_param_restrictions(
+        &self,
+        server: &str,
+        restrictions: ParamRestrictions,
+    ) -> Result<()> {
+        (**self)
+            .update_param_restrictions(server, restrictions)
+            .await
+    }
+}
+
+/// Trait for types that can provide parameter restriction lookups.
 ///
-/// Parallel to [`AdminRoutingTable`] for models. Extends [`AgentRegistry`]
-/// with methods for inspecting upstream agent connections.
-pub trait AdminAgentRegistry: AgentRegistry {
-    /// List all upstream agents with connection status.
-    fn list_upstreams(&self) -> impl Future<Output = Vec<AgentUpstreamEntry>> + Send;
+/// Used by the tool call handler to enforce restrictions without coupling
+/// to a concrete policy implementation.
+pub trait HasParamRestrictions: Send + Sync {
+    /// Read the current parameter restrictions for a server.
+    fn get_param_restrictions(&self, server: &str) -> Option<ParamRestrictions>;
+}
+
+impl<T: HasParamRestrictions> HasParamRestrictions for std::sync::Arc<T> {
+    fn get_param_restrictions(&self, server: &str) -> Option<ParamRestrictions> {
+        (**self).get_param_restrictions(server)
+    }
 }

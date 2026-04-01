@@ -2,21 +2,38 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::config::{ApiProtocol, ModelInfo, ProviderConfig};
+use bitrouter_core::routers::routing_table::ApiProtocol;
+
+use crate::config::{AuthConfig, Endpoint, ModelInfo, ProviderConfig, ToolConfig};
 
 // ── Compile-time embedded provider definitions ──────────────────────
 
 const PROVIDER_DEFS: &[(&str, &str)] = &[
-    ("openai", include_str!("../providers/openai.yaml")),
-    ("anthropic", include_str!("../providers/anthropic.yaml")),
-    ("google", include_str!("../providers/google.yaml")),
-    ("bitrouter", include_str!("../providers/bitrouter.yaml")),
-    ("openrouter", include_str!("../providers/openrouter.yaml")),
-    ("deepseek", include_str!("../providers/deepseek.yaml")),
-    ("minimax", include_str!("../providers/minimax.yaml")),
-    ("zai", include_str!("../providers/zai.yaml")),
-    ("moonshot", include_str!("../providers/moonshot.yaml")),
-    ("qwen", include_str!("../providers/qwen.yaml")),
+    ("openai", include_str!("../providers/models/openai.yaml")),
+    (
+        "anthropic",
+        include_str!("../providers/models/anthropic.yaml"),
+    ),
+    ("google", include_str!("../providers/models/google.yaml")),
+    (
+        "bitrouter",
+        include_str!("../providers/models/bitrouter.yaml"),
+    ),
+    (
+        "openrouter",
+        include_str!("../providers/models/openrouter.yaml"),
+    ),
+    (
+        "deepseek",
+        include_str!("../providers/models/deepseek.yaml"),
+    ),
+    ("minimax", include_str!("../providers/models/minimax.yaml")),
+    ("zai", include_str!("../providers/models/zai.yaml")),
+    (
+        "moonshot",
+        include_str!("../providers/models/moonshot.yaml"),
+    ),
+    ("qwen", include_str!("../providers/models/qwen.yaml")),
 ];
 
 /// Raw YAML shape for built-in provider files.
@@ -64,6 +81,106 @@ pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
                         ..Default::default()
                     },
                     models,
+                },
+            ))
+        })
+        .collect()
+}
+
+// ── Compile-time embedded tool provider definitions ──────────────────
+
+const TOOL_PROVIDER_DEFS: &[(&str, &str)] = &[("exa", include_str!("../providers/tools/exa.yaml"))];
+
+/// Raw YAML shape for built-in tool provider files.
+///
+/// Mirrors [`ProviderDef`] but with a `tools` catalog instead of `models`.
+/// Each file defines a single provider with per-tool protocol/base overrides.
+#[derive(Debug, Deserialize)]
+struct ToolProviderDef {
+    api_protocol: ApiProtocol,
+    api_base: String,
+    env_prefix: String,
+    #[serde(default)]
+    auth: Option<AuthConfig>,
+    #[serde(default)]
+    tools: HashMap<String, ToolDef>,
+}
+
+/// A single tool entry in the provider's catalog.
+#[derive(Debug, Deserialize)]
+struct ToolDef {
+    tool_id: String,
+    #[serde(default)]
+    api_protocol: Option<ApiProtocol>,
+    #[serde(default)]
+    api_base: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    input_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    skill: Option<String>,
+}
+
+/// A built-in tool provider with its configuration and tool routes.
+#[derive(Debug, Clone)]
+pub struct BuiltinToolProvider {
+    pub config: ProviderConfig,
+    pub tools: Vec<String>,
+    pub tool_configs: HashMap<String, ToolConfig>,
+}
+
+/// Returns the full built-in tool provider definitions keyed by provider name.
+pub fn builtin_tool_provider_defs() -> HashMap<String, BuiltinToolProvider> {
+    TOOL_PROVIDER_DEFS
+        .iter()
+        .filter_map(|(name, yaml)| {
+            let def: ToolProviderDef = match serde_saphyr::from_str(yaml) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("warning: invalid built-in tool provider YAML '{name}': {e}");
+                    return None;
+                }
+            };
+
+            let tools: Vec<String> = def.tools.keys().cloned().collect();
+
+            let tool_configs = def
+                .tools
+                .into_iter()
+                .map(|(tool_name, tool_def)| {
+                    let endpoint = Endpoint {
+                        provider: (*name).to_owned(),
+                        service_id: tool_def.tool_id,
+                        api_protocol: tool_def.api_protocol,
+                        api_key: None,
+                        api_base: tool_def.api_base,
+                    };
+                    (
+                        tool_name,
+                        ToolConfig {
+                            endpoints: vec![endpoint],
+                            description: tool_def.description,
+                            input_schema: tool_def.input_schema,
+                            skill: tool_def.skill,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect();
+
+            Some((
+                (*name).to_owned(),
+                BuiltinToolProvider {
+                    config: ProviderConfig {
+                        api_protocol: Some(def.api_protocol),
+                        api_base: Some(def.api_base),
+                        env_prefix: Some(def.env_prefix),
+                        auth: def.auth,
+                        ..Default::default()
+                    },
+                    tools,
+                    tool_configs,
                 },
             ))
         })
@@ -492,5 +609,160 @@ mod tests {
         // Child's own models take precedence, parent models not inherited
         assert!(models.contains_key("child-model"));
         assert!(!models.contains_key("model-a"));
+    }
+
+    #[test]
+    fn builtin_tool_providers_contain_exa() {
+        let defs = builtin_tool_provider_defs();
+        assert!(defs.contains_key("exa"));
+
+        let exa = &defs["exa"];
+
+        // Single provider entry
+        assert_eq!(exa.config.api_protocol, Some(ApiProtocol::Rest));
+        assert_eq!(exa.config.api_base.as_deref(), Some("https://api.exa.ai"));
+        assert_eq!(exa.config.env_prefix.as_deref(), Some("EXA"));
+        assert!(exa.config.auth.is_some());
+
+        // All 6 tools present
+        assert_eq!(exa.tools.len(), 6);
+        assert_eq!(exa.tool_configs.len(), 6);
+
+        // REST tools — inherit provider defaults (no overrides)
+        let search = &exa.tool_configs["exa_search"];
+        assert_eq!(search.endpoints[0].provider, "exa");
+        assert_eq!(search.endpoints[0].service_id, "search");
+        assert!(search.endpoints[0].api_protocol.is_none());
+        assert!(search.endpoints[0].api_base.is_none());
+
+        // MCP tools — per-endpoint protocol + base overrides
+        let web_search = &exa.tool_configs["exa_web_search"];
+        assert_eq!(web_search.endpoints[0].provider, "exa");
+        assert_eq!(web_search.endpoints[0].service_id, "web_search_exa");
+        assert_eq!(web_search.endpoints[0].api_protocol, Some(ApiProtocol::Mcp));
+        assert!(
+            web_search.endpoints[0]
+                .api_base
+                .as_deref()
+                .is_some_and(|u| u.starts_with("https://mcp.exa.ai/mcp"))
+        );
+
+        // Skill-enriched MCP tool — wraps an MCP tool with skill metadata
+        let research = &exa.tool_configs["exa_company_research"];
+        assert_eq!(research.endpoints[0].provider, "exa");
+        assert_eq!(research.endpoints[0].service_id, "web_search_advanced_exa");
+        assert_eq!(research.endpoints[0].api_protocol, Some(ApiProtocol::Mcp));
+        assert_eq!(research.skill.as_deref(), Some("exa_company_research"));
+    }
+
+    #[test]
+    fn exa_rest_tools_have_description_and_schema() {
+        let defs = builtin_tool_provider_defs();
+        let exa = &defs["exa"];
+
+        // exa_search has description and input_schema from YAML
+        let search = &exa.tool_configs["exa_search"];
+        assert_eq!(
+            search.description.as_deref(),
+            Some("Search the web using Exa's neural search engine")
+        );
+        let schema = search.input_schema.as_ref().expect("input_schema");
+        assert_eq!(schema["type"], "object");
+        let props = schema["properties"].as_object().expect("properties");
+        assert!(props.contains_key("query"));
+        assert!(props.contains_key("numResults"));
+        assert!(props.contains_key("type"));
+        assert!(props.contains_key("category"));
+        assert!(props.contains_key("contents"));
+        let required = schema["required"].as_array().expect("required");
+        assert_eq!(required.len(), 1);
+        assert_eq!(required[0], "query");
+        assert!(search.skill.is_none());
+
+        // exa_get_contents has description and input_schema
+        let contents = &exa.tool_configs["exa_get_contents"];
+        assert_eq!(
+            contents.description.as_deref(),
+            Some("Get the full content of web pages by URL")
+        );
+        let schema = contents.input_schema.as_ref().expect("input_schema");
+        assert_eq!(schema["type"], "object");
+        let props = schema["properties"].as_object().expect("properties");
+        assert!(props.contains_key("urls"));
+        assert!(props.contains_key("text"));
+        assert!(props.contains_key("highlights"));
+        assert!(props.contains_key("summary"));
+
+        // MCP tools have no config-level description/schema (discovered at runtime)
+        let web_search = &exa.tool_configs["exa_web_search"];
+        assert!(web_search.description.is_none());
+        assert!(web_search.input_schema.is_none());
+        assert!(web_search.skill.is_none());
+    }
+
+    #[test]
+    fn exa_skill_enriched_tool_has_description_and_skill() {
+        let defs = builtin_tool_provider_defs();
+        let exa = &defs["exa"];
+
+        let research = &exa.tool_configs["exa_company_research"];
+        assert_eq!(
+            research.description.as_deref(),
+            Some("Research a company using Exa's advanced web search with curated strategies")
+        );
+        assert_eq!(research.skill.as_deref(), Some("exa_company_research"));
+        // Skill wraps an MCP tool — skill is metadata, protocol is MCP
+        assert_eq!(research.endpoints[0].api_protocol, Some(ApiProtocol::Mcp));
+        assert!(
+            research.endpoints[0]
+                .api_base
+                .as_deref()
+                .is_some_and(|u| u.starts_with("https://mcp.exa.ai/mcp"))
+        );
+    }
+
+    #[test]
+    fn exa_providers_by_protocol_groups_correctly() {
+        let defs = builtin_tool_provider_defs();
+        let exa = &defs["exa"];
+
+        // Build a ConfigToolRoutingTable to test providers_by_protocol
+        let mut providers = std::collections::HashMap::new();
+        providers.insert("exa".to_string(), exa.config.clone());
+
+        let table =
+            crate::routing::ConfigToolRoutingTable::new(providers, exa.tool_configs.clone());
+        let by_protocol = table.providers_by_protocol();
+
+        // REST bucket: exa provider (from exa_search, exa_get_contents)
+        assert!(by_protocol.contains_key(&ApiProtocol::Rest));
+        let rest_providers = &by_protocol[&ApiProtocol::Rest];
+        assert!(rest_providers.iter().any(|(n, _)| n == "exa"));
+
+        // MCP bucket: exa provider (from exa_web_search, exa_code_context, exa_crawl)
+        assert!(by_protocol.contains_key(&ApiProtocol::Mcp));
+        let mcp_providers = &by_protocol[&ApiProtocol::Mcp];
+        assert!(mcp_providers.iter().any(|(n, _)| n == "exa"));
+
+        // No Skill bucket — skill is now a metadata annotation, not a protocol
+        // (ApiProtocol::Skill no longer exists)
+    }
+
+    #[test]
+    fn exa_skill_tools_selected_by_skill_field() {
+        let defs = builtin_tool_provider_defs();
+        let exa = &defs["exa"];
+
+        // Simulate what AgentSkillsClient::new does: filter by skill.is_some()
+        let skill_tools: Vec<_> = exa
+            .tool_configs
+            .iter()
+            .filter(|(_, tc)| tc.skill.is_some())
+            .collect();
+
+        assert_eq!(skill_tools.len(), 1);
+        let (name, config) = skill_tools[0];
+        assert_eq!(name, "exa_company_research");
+        assert_eq!(config.skill.as_deref(), Some("exa_company_research"));
     }
 }

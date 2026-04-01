@@ -1,8 +1,8 @@
-//! Handler-level observation callback for request lifecycle events.
+//! Handler-level observation callbacks for request lifecycle events.
 //!
-//! [`ObserveCallback`] fires from the API handler layer with full request
-//! context (route, provider, model, account, latency, usage/error).
-//! This is complementary to [`GenerationHook`](crate::hooks::GenerationHook)
+//! [`ObserveCallback`] fires from the API handler layer for model requests,
+//! [`ToolObserveCallback`] fires for tool invocations (MCP and A2A).
+//! Both are complementary to [`GenerationHook`](crate::hooks::GenerationHook)
 //! which fires at the model layer with no request context.
 
 use std::future::Future;
@@ -93,12 +93,15 @@ pub trait ObserveCallback: Send + Sync {
 // ── MCP tool call observation ────────────────────────────────────────
 
 /// Context about a tool call request available to observation callbacks.
+///
+/// Used for both MCP tool calls and A2A agent invocations, since agents
+/// are treated as tool providers.
 #[derive(Debug, Clone)]
 pub struct ToolRequestContext {
-    /// The upstream MCP server name.
-    pub server: String,
-    /// The un-namespaced tool name.
-    pub tool: String,
+    /// The upstream tool provider name (MCP server or A2A agent).
+    pub provider: String,
+    /// The operation invoked (tool name or A2A method).
+    pub operation: String,
     /// Authenticated caller context (account ID, tool allowlist, budget claims).
     pub caller: CallerContext,
     /// End-to-end tool call latency in milliseconds.
@@ -121,7 +124,7 @@ pub struct ToolCallFailureEvent {
     pub error: String,
 }
 
-/// Callback trait for observing completed MCP tool calls.
+/// Callback trait for observing completed tool calls (MCP and A2A).
 ///
 /// Parallel to [`ObserveCallback`] but for tool invocations rather than
 /// LLM requests. Implementations persist tool spend logs or emit metrics.
@@ -136,54 +139,5 @@ pub trait ToolObserveCallback: Send + Sync {
     fn on_tool_call_failure(
         &self,
         event: ToolCallFailureEvent,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
-}
-
-// ── A2A agent call observation ───────────────────────────────────────
-
-/// Context about an agent call request available to observation callbacks.
-#[derive(Debug, Clone)]
-pub struct AgentRequestContext {
-    /// The upstream agent name.
-    pub agent: String,
-    /// The A2A method dispatched (e.g. `"message/send"`, `"tasks/get"`).
-    pub method: String,
-    /// Authenticated caller context.
-    pub caller: CallerContext,
-    /// End-to-end agent call latency in milliseconds.
-    pub latency_ms: u64,
-}
-
-/// Event emitted when an A2A agent call completes successfully.
-#[derive(Debug, Clone)]
-pub struct AgentCallSuccessEvent {
-    /// Agent call context.
-    pub ctx: AgentRequestContext,
-}
-
-/// Event emitted when an A2A agent call fails.
-#[derive(Debug, Clone)]
-pub struct AgentCallFailureEvent {
-    /// Agent call context.
-    pub ctx: AgentRequestContext,
-    /// Error description.
-    pub error: String,
-}
-
-/// Callback trait for observing completed A2A agent calls.
-///
-/// Parallel to [`ToolObserveCallback`] but for agent invocations.
-/// Implementations persist agent spend logs or emit metrics.
-pub trait AgentObserveCallback: Send + Sync {
-    /// Called after an agent call completes successfully.
-    fn on_agent_call_success(
-        &self,
-        event: AgentCallSuccessEvent,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
-
-    /// Called after an agent call fails.
-    fn on_agent_call_failure(
-        &self,
-        event: AgentCallFailureEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }

@@ -27,7 +27,7 @@ fn handle_list_routes<T: RoutingTable>(table: Arc<T>) -> impl warp::Reply {
         .into_iter()
         .map(|e| {
             serde_json::json!({
-                "model": e.model,
+                "name": e.name,
                 "provider": e.provider,
                 "protocol": e.protocol,
             })

@@ -1,7 +1,9 @@
+pub mod agentskills_client;
 pub mod app;
 pub mod auth;
 pub mod daemon;
 pub mod error;
+pub mod mcp_client;
 pub mod migration;
 #[cfg(feature = "mpp-tempo")]
 pub mod ows_signer;

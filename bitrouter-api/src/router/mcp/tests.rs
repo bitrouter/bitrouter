@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use bitrouter_mcp::types::{
+use bitrouter_core::api::mcp::types::{
     McpContent, McpGetPromptResult, McpPrompt, McpPromptArgument, McpPromptContent,
     McpPromptMessage, McpResource, McpResourceContent, McpResourceTemplate, McpRole, McpTool,
     McpToolCallResult,
@@ -10,12 +10,14 @@ use warp::Filter;
 
 use super::filters::mcp_server_filter;
 
-use bitrouter_mcp::types::{CompleteParams, CompleteResult, Completion, LoggingLevel};
+use bitrouter_core::api::mcp::types::{CompleteParams, CompleteResult, Completion, LoggingLevel};
 
-use super::types::{
-    McpCompletionServer, McpGatewayError, McpLoggingServer, McpPromptServer, McpResourceServer,
-    McpSubscriptionServer, McpToolServer, error_codes,
+use bitrouter_core::api::mcp::gateway::{
+    McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
+    McpSubscriptionServer, McpToolServer,
 };
+use bitrouter_core::api::mcp::types::McpGatewayError;
+use bitrouter_core::api::mcp::types::error_codes;
 
 // ── Mock server ─────────────────────────────────────────────────────
 
@@ -726,7 +728,7 @@ async fn initialize_protocol_version_is_2025_11_25() {
 }
 
 #[tokio::test]
-async fn initialize_advertises_logging_and_completions() {
+async fn initialize_advertises_logging_but_not_unimplemented() {
     let filter = make_filter();
     let json = jsonrpc_request(
         &filter,
@@ -744,8 +746,9 @@ async fn initialize_advertises_logging_and_completions() {
     .await;
     let caps = &json["result"]["capabilities"];
     assert!(caps["logging"].is_object());
-    assert!(caps["completions"].is_object());
-    assert!(caps["resources"]["subscribe"].as_bool().unwrap_or(false));
+    // Completions and resource subscriptions are not advertised until implemented.
+    assert!(caps["completions"].is_null());
+    assert!(caps["resources"]["subscribe"].is_null());
 }
 
 // ── Notification tests ──────────────────────────────────────────────

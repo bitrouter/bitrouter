@@ -1,0 +1,93 @@
+# Exa — search, content retrieval, and company research tools.
+#
+# Default protocol is REST (https://api.exa.ai). MCP tools override
+# the protocol and base URL per-endpoint. Skill-enriched tools use
+# REST for execution with an associated SKILL.md for agent guidance.
+#
+# All tools share a single API key (EXA_API_KEY).
+
+api_protocol: rest
+api_base: https://api.exa.ai
+env_prefix: EXA
+auth:
+  type: header
+  header_name: x-api-key
+  api_key: "${EXA_API_KEY}"
+
+tools:
+  # ── REST tools ────────────────────────────────────────────────────
+  exa_search:
+    tool_id: search
+    description: "Search the web using Exa's neural search engine"
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: "The search query"
+        numResults:
+          type: integer
+          description: "Number of results to return (1-100)"
+        type:
+          type: string
+          enum: ["auto", "fast", "instant", "deep", "deep-reasoning"]
+          description: "Search type controlling speed/quality trade-off"
+        category:
+          type: string
+          enum: ["company", "people", "research paper", "news", "personal site", "financial report"]
+          description: "Filter results by category"
+        contents:
+          type: object
+          description: "Content extraction options (text, highlights, summary)"
+      required:
+        - query
+
+  exa_get_contents:
+    tool_id: contents
+    description: "Get the full content of web pages by URL"
+    input_schema:
+      type: object
+      properties:
+        urls:
+          type: array
+          items:
+            type: string
+          description: "Array of URLs to crawl"
+        text:
+          description: "Text extraction options (boolean or object with maxCharacters)"
+        highlights:
+          description: "Key excerpt extraction options"
+        summary:
+          type: object
+          description: "LLM-generated summary options"
+      required:
+        - urls
+
+  # ── MCP tools ─────────────────────────────────────────────────────
+  # All MCP tools share one connection URL. The `?tools=` param enables
+  # specific tools on the Exa MCP server (web_search_advanced_exa is
+  # disabled by default).
+  exa_web_search:
+    tool_id: web_search_exa
+    api_protocol: mcp
+    api_base: "https://mcp.exa.ai/mcp?tools=web_search_exa,get_code_context_exa,crawling_exa,web_search_advanced_exa"
+
+  exa_code_context:
+    tool_id: get_code_context_exa
+    api_protocol: mcp
+    api_base: "https://mcp.exa.ai/mcp?tools=web_search_exa,get_code_context_exa,crawling_exa,web_search_advanced_exa"
+
+  exa_crawl:
+    tool_id: crawling_exa
+    api_protocol: mcp
+    api_base: "https://mcp.exa.ai/mcp?tools=web_search_exa,get_code_context_exa,crawling_exa,web_search_advanced_exa"
+
+  # ── Skill-enriched tools ────────────────────────────────────────
+  # Skills can wrap either REST or MCP tools. This one wraps the MCP
+  # `web_search_advanced_exa` tool with company-research strategies.
+  exa_company_research:
+    tool_id: web_search_advanced_exa
+    api_protocol: mcp
+    api_base: "https://mcp.exa.ai/mcp?tools=web_search_exa,get_code_context_exa,crawling_exa,web_search_advanced_exa"
+    skill: exa_company_research
+    description: "Research a company using Exa's advanced web search with curated strategies"

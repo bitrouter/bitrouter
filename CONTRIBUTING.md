@@ -61,14 +61,14 @@ We prefer contributions that are:
 
 ## Updating Built-In Provider Support
 
-Built-in providers are defined in YAML files under [`bitrouter-config/providers`](bitrouter-config/providers) and loaded by `bitrouter-config/src/registry.rs`.
+Built-in providers are defined in YAML files under [`bitrouter-config/providers`](bitrouter-config/providers) and loaded by `bitrouter-config/src/registry.rs`. Model providers live under `providers/models/` and tool providers live under `providers/tools/`.
 
-### Updating models or defaults for an existing built-in provider
+### Updating models or defaults for an existing built-in model provider
 
-1. Edit the matching YAML file:
-   - `bitrouter-config/providers/openai.yaml`
-   - `bitrouter-config/providers/anthropic.yaml`
-   - `bitrouter-config/providers/google.yaml`
+1. Edit the matching YAML file under `bitrouter-config/providers/models/`:
+   - `openai.yaml`
+   - `anthropic.yaml`
+   - `google.yaml`
 2. Update fields such as:
    - `api_protocol`
    - `api_base`
@@ -77,11 +77,20 @@ Built-in providers are defined in YAML files under [`bitrouter-config/providers`
 3. Run the config and workspace tests.
 4. Update docs if the public provider list or onboarding guidance changes.
 
-### Adding a new built-in provider definition
+### Updating tools for an existing built-in tool provider
+
+1. Edit the matching YAML file under `bitrouter-config/providers/tools/` (e.g. `exa.yaml`).
+2. Update fields such as:
+   - `api_protocol` (REST or MCP)
+   - `api_base`
+   - `tools` entries with `tool_id`, `description`, `input_schema`
+3. Run the config and workspace tests.
+
+### Adding a new built-in model provider definition
 
 If the provider uses an already-supported protocol, you usually need to:
 
-1. Add a new YAML file under `bitrouter-config/providers`.
+1. Add a new YAML file under `bitrouter-config/providers/models/`.
 2. Register it in `bitrouter-config/src/registry.rs`.
 3. Add or update tests that cover the built-in registry and config loading behavior.
 4. Update user-facing docs that mention supported providers.
@@ -89,10 +98,19 @@ If the provider uses an already-supported protocol, you usually need to:
 If the provider introduces a new protocol or transport surface, the work is broader. In that case, plan to update:
 
 - `bitrouter-config` for config schema and registry wiring
-- `bitrouter-runtime/src/router.rs` so the runtime can instantiate the provider
+- `bitrouter-providers` for a new provider adapter (feature-gated)
+- `bitrouter/src/runtime/router.rs` so the runtime can instantiate the provider
 - `bitrouter-api` if you need public provider-compatible endpoints
 - workspace manifests and feature flags where the provider needs to be compiled conditionally
 - tests and docs across the affected crates
+
+### Adding a new built-in tool provider definition
+
+1. Add a new YAML file under `bitrouter-config/providers/tools/`.
+2. Register it in `bitrouter-config/src/registry.rs`.
+3. If the tool provider uses a new protocol (not REST or MCP), add a `ToolProvider` implementation in `bitrouter-providers`.
+4. Add or update tests that cover tool routing and discovery.
+5. Update user-facing docs that mention supported tool providers.
 
 ## Questions and Discussion
 

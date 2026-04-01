@@ -81,12 +81,6 @@ enum Command {
         action: KeyAction,
     },
 
-    /// Inspect upstream agents on a running daemon
-    Agents {
-        #[command(subcommand)]
-        action: AgentsAction,
-    },
-
     /// Inspect MCP tools on a running daemon
     Tools {
         #[command(subcommand)]
@@ -103,7 +97,7 @@ enum RouteAction {
         /// Virtual model name (e.g., "research", "fast")
         model: String,
 
-        /// Endpoints in "provider:model_id" format (at least one required)
+        /// Endpoints in "provider:service_id" format (at least one required)
         #[arg(required = true, num_args = 1..)]
         endpoints: Vec<String>,
 
@@ -119,19 +113,16 @@ enum RouteAction {
 }
 
 #[derive(Debug, Subcommand)]
-enum AgentsAction {
-    /// List configured upstream agents
-    List,
-    /// Show upstream agent connection health
-    Status,
-}
-
-#[derive(Debug, Subcommand)]
 enum ToolsAction {
     /// List all tools from the running daemon
     List,
     /// Show upstream MCP server health
     Status,
+    /// Discover tools from an MCP upstream and output config YAML
+    Discover {
+        /// Provider name (must exist in config with api_protocol: mcp)
+        provider: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -371,21 +362,15 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             return Ok(());
         }
-        Some(Command::Agents { action }) => {
-            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
-            let addr = runtime.config.server.listen;
-            match action {
-                AgentsAction::List => cli::agents::run_list(&runtime.config, addr)?,
-                AgentsAction::Status => cli::agents::run_status(&runtime.config, addr)?,
-            }
-            return Ok(());
-        }
         Some(Command::Tools { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
                 ToolsAction::List => cli::tools::run_list(&runtime.config, addr)?,
                 ToolsAction::Status => cli::tools::run_status(&runtime.config, addr)?,
+                ToolsAction::Discover { provider } => {
+                    cli::tools::run_discover(&runtime.config, &provider).await?
+                }
             }
             return Ok(());
         }
@@ -486,7 +471,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Restart) => runtime.restart().await?,
         Some(Command::Reload) => runtime.reload()?,
         _ => {
-            // All other commands (Init, Route, Wallet, Key, Tools, Agents)
+            // All other commands (Init, Route, Wallet, Key, Tools)
             // are handled above and return early.
             unreachable!()
         }

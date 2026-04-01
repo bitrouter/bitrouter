@@ -7,11 +7,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::AgentPricing;
+use bitrouter_core::routers::routing_table::ApiProtocol;
+
 use crate::env::{load_env, substitute_in_value};
-use crate::registry::{builtin_providers, merge_provider, resolve_providers};
-use crate::skill::SkillConfig;
-use crate::tool::ToolPricing;
+use crate::registry::{
+    builtin_providers, builtin_tool_provider_defs, merge_provider, resolve_providers,
+};
 
 fn default_true() -> bool {
     true
@@ -62,29 +63,9 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub models: HashMap<String, ModelConfig>,
 
-    /// MCP upstream server configurations.
+    /// Tool routing definitions.
     #[serde(default)]
-    pub mcp_servers: Vec<bitrouter_core::routers::upstream::ToolServerConfig>,
-
-    /// Named groups of tool servers for access control convenience.
-    #[serde(default)]
-    pub mcp_groups: bitrouter_core::routers::upstream::ToolServerAccessGroups,
-
-    /// Upstream A2A agents to proxy through the gateway.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub a2a_agents: Vec<bitrouter_core::routers::upstream::AgentConfig>,
-
-    /// Per-server tool invocation pricing. Keys are MCP server names.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub mcp_server_pricing: HashMap<String, ToolPricing>,
-
-    /// Per-agent invocation pricing. Keys are agent names.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub a2a_agent_pricing: HashMap<String, AgentPricing>,
-
-    /// Skill definitions for the skills registry.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<SkillConfig>,
+    pub tools: HashMap<String, ToolConfig>,
 }
 
 impl BitrouterConfig {
@@ -144,7 +125,7 @@ impl BitrouterConfig {
             .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
 
         // Merge built-in providers with user overrides (unless opted out)
-        let providers = if config.inherit_defaults {
+        let mut providers = if config.inherit_defaults {
             let mut base = builtin_providers();
             for (name, user_provider) in config.providers.drain() {
                 if let Some(existing) = base.get_mut(&name) {
@@ -157,6 +138,26 @@ impl BitrouterConfig {
         } else {
             std::mem::take(&mut config.providers)
         };
+
+        // Merge built-in tool provider definitions (providers + tool routes).
+        // Uses the same merge_provider pattern as model providers so that
+        // a user declaring `exa: api_key: "..."` inherits the builtin
+        // api_protocol, api_base, auth, etc.
+        if config.inherit_defaults {
+            for (name, builtin) in builtin_tool_provider_defs() {
+                if let Some(existing) = providers.get_mut(&name) {
+                    // User declared this provider — merge builtin as base.
+                    let mut base = builtin.config;
+                    merge_provider(&mut base, std::mem::take(existing));
+                    *existing = base;
+                } else {
+                    providers.insert(name, builtin.config);
+                }
+                for (tool_name, tool_config) in builtin.tool_configs {
+                    config.tools.entry(tool_name).or_insert(tool_config);
+                }
+            }
+        }
 
         // Resolve derives + env_prefix
         config.providers = resolve_providers(providers, &env);
@@ -230,15 +231,6 @@ fn default_socket_path() -> PathBuf {
 
 // ── Provider configuration ───────────────────────────────────────────
 
-/// The API protocol / adapter that a provider uses.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ApiProtocol {
-    Openai,
-    Anthropic,
-    Google,
-}
-
 /// Configuration for a single provider.
 ///
 /// All fields are `Option` so that partial overlays via `derives` work correctly:
@@ -281,6 +273,12 @@ pub struct ProviderConfig {
     /// token pricing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub models: Option<HashMap<String, ModelInfo>>,
+
+    // ── MCP-specific provider fields ────────────────────────────────
+    /// When `true`, this MCP provider is also exposed as a standalone
+    /// Streamable HTTP endpoint at `POST /mcp/{name}` and `GET /mcp/{name}/sse`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge: Option<bool>,
 }
 
 // ── Model metadata & pricing ─────────────────────────────────────────
@@ -347,43 +345,11 @@ pub struct ModelInfo {
     pub pricing: ModelPricing,
 }
 
-/// Token pricing per million tokens for a model.
-///
-/// Field names mirror the sub-category fields of `LanguageModelInputTokens`
-/// and `LanguageModelOutputTokens` from `bitrouter-core` for cross-provider
-/// compatibility. Fields are `None` when not configured.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ModelPricing {
-    #[serde(default)]
-    pub input_tokens: InputTokenPricing,
-    #[serde(default)]
-    pub output_tokens: OutputTokenPricing,
-}
-
-/// Input token pricing per million tokens.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct InputTokenPricing {
-    /// Cost per million non-cached input tokens.
-    #[serde(default)]
-    pub no_cache: Option<f64>,
-    /// Cost per million cache-read input tokens.
-    #[serde(default)]
-    pub cache_read: Option<f64>,
-    /// Cost per million cache-write input tokens.
-    #[serde(default)]
-    pub cache_write: Option<f64>,
-}
-
-/// Output token pricing per million tokens.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct OutputTokenPricing {
-    /// Cost per million text output tokens.
-    #[serde(default)]
-    pub text: Option<f64>,
-    /// Cost per million reasoning output tokens.
-    #[serde(default)]
-    pub reasoning: Option<f64>,
-}
+// Model pricing types are defined in `bitrouter-core::routers::routing_table`
+// and re-exported from this crate's `lib.rs` for backward compatibility.
+pub use bitrouter_core::routers::routing_table::{
+    InputTokenPricing, ModelPricing, OutputTokenPricing,
+};
 
 // ── MPP (Machine Payment Protocol) configuration ─────────────────────
 
@@ -595,14 +561,22 @@ pub enum RoutingStrategy {
     LoadBalance,
 }
 
-/// A single endpoint that a model can be routed to.
+/// A single endpoint that a model or tool can be routed to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelEndpoint {
+pub struct Endpoint {
     /// Provider name (must exist in the providers section or built-ins).
     pub provider: String,
 
-    /// The upstream model ID to send to this provider.
-    pub model_id: String,
+    /// Upstream service identifier: model ID for language models, tool ID for tools.
+    #[serde(alias = "model_id", alias = "tool_id")]
+    pub service_id: String,
+
+    /// Optional per-endpoint API protocol override.
+    ///
+    /// When set, overrides the provider's default `api_protocol` for this
+    /// endpoint only. Useful when a provider speaks multiple protocols.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_protocol: Option<ApiProtocol>,
 
     /// Optional per-endpoint API key override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -619,7 +593,7 @@ pub struct ModelConfig {
     #[serde(default)]
     pub strategy: RoutingStrategy,
 
-    pub endpoints: Vec<ModelEndpoint>,
+    pub endpoints: Vec<Endpoint>,
 
     /// Human-readable display name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -645,6 +619,40 @@ pub struct ModelConfig {
     #[serde(default)]
     pub pricing: ModelPricing,
 }
+
+// ── Tool routing configuration ──────────────────────────────────────
+
+/// Routing configuration for a virtual tool name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolConfig {
+    /// Strategy for selecting among multiple endpoints.
+    #[serde(default)]
+    pub strategy: RoutingStrategy,
+
+    /// One or more upstream endpoints to route this tool to.
+    pub endpoints: Vec<Endpoint>,
+
+    /// Optional per-tool invocation pricing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<bitrouter_core::pricing::FlatPricing>,
+
+    /// Human-readable description for REST tool discoverability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// JSON Schema for input parameters (REST tool discoverability).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
+
+    /// Associated skill name (references a SKILL.md on disk).
+    ///
+    /// When set, the tool is enriched with skill metadata from the
+    /// filesystem skill registry. Skills are a metadata layer — they
+    /// do not affect the execution protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,83 +797,6 @@ providers:
     }
 
     #[test]
-    fn load_with_a2a_agents_config() {
-        let yaml = r#"
-a2a_agents:
-  - name: "upstream-agent"
-    url: "https://agent.example.com"
-    headers:
-      Authorization: "Bearer tok123"
-  - name: "search-agent"
-    url: "https://search.example.com"
-"#;
-        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
-        assert_eq!(config.a2a_agents.len(), 2);
-        let agent = &config.a2a_agents[0];
-        assert_eq!(agent.name, "upstream-agent");
-        assert_eq!(agent.url, "https://agent.example.com");
-        assert_eq!(
-            agent.headers.get("Authorization").map(String::as_str),
-            Some("Bearer tok123")
-        );
-        assert!(agent.card_path.is_none());
-        assert_eq!(config.a2a_agents[1].name, "search-agent");
-    }
-
-    #[test]
-    fn load_with_flat_mcp_servers_config() {
-        let yaml = r#"
-mcp_servers:
-  - name: "filesystem"
-    command: "npx"
-    args:
-      - "-y"
-      - "@modelcontextprotocol/server-filesystem"
-      - "/tmp/workspace"
-  - name: "remote"
-    url: "http://localhost:3000/mcp"
-"#;
-        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
-        assert_eq!(config.mcp_servers.len(), 2);
-
-        let fs = &config.mcp_servers[0];
-        assert_eq!(fs.name, "filesystem");
-        match &fs.transport {
-            bitrouter_core::routers::upstream::ToolServerTransport::Stdio {
-                command, args, ..
-            } => {
-                assert_eq!(command, "npx");
-                assert_eq!(args.len(), 3);
-            }
-            _ => panic!("expected Stdio transport"),
-        }
-
-        let remote = &config.mcp_servers[1];
-        assert_eq!(remote.name, "remote");
-        match &remote.transport {
-            bitrouter_core::routers::upstream::ToolServerTransport::Http { url, .. } => {
-                assert_eq!(url, "http://localhost:3000/mcp");
-            }
-            _ => panic!("expected Http transport"),
-        }
-    }
-
-    #[test]
-    fn load_with_nested_mcp_servers_config() {
-        let yaml = r#"
-mcp_servers:
-  - name: "filesystem"
-    transport:
-      type: stdio
-      command: "npx"
-      args: ["-y", "server"]
-"#;
-        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
-        assert_eq!(config.mcp_servers.len(), 1);
-        assert_eq!(config.mcp_servers[0].name, "filesystem");
-    }
-
-    #[test]
     fn derives_inherits_model_catalog() {
         let yaml = r#"
 providers:
@@ -904,5 +835,42 @@ providers:
         assert!(!config.providers.contains_key("openai"));
         assert!(!config.providers.contains_key("bitrouter"));
         assert_eq!(config.providers.len(), 1);
+    }
+
+    #[test]
+    fn load_with_tool_routing() {
+        let yaml = r#"
+providers:
+  github-mcp:
+    api_protocol: mcp
+    api_base: "https://api.githubcopilot.com/mcp"
+    api_key: "ghp-test"
+tools:
+  create_issue:
+    strategy: priority
+    endpoints:
+      - provider: github-mcp
+        tool_id: create_issue
+  search_code:
+    endpoints:
+      - provider: github-mcp
+        tool_id: search_code
+        api_protocol: mcp
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        // 2 user-defined + 6 built-in exa tools
+        assert!(config.tools.len() >= 2);
+        assert!(config.tools.contains_key("create_issue"));
+        assert!(config.tools.contains_key("search_code"));
+
+        let tool = &config.tools["create_issue"];
+        assert_eq!(tool.strategy, RoutingStrategy::Priority);
+        assert_eq!(tool.endpoints.len(), 1);
+        assert_eq!(tool.endpoints[0].provider, "github-mcp");
+        assert_eq!(tool.endpoints[0].service_id, "create_issue");
+        assert!(tool.endpoints[0].api_protocol.is_none());
+
+        let search = &config.tools["search_code"];
+        assert_eq!(search.endpoints[0].api_protocol, Some(ApiProtocol::Mcp));
     }
 }

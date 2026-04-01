@@ -13,13 +13,17 @@ use std::sync::{Arc, RwLock};
 
 use crate::errors::{BitrouterError, Result};
 
-use super::admin::{AdminRoutingTable, DynamicRoute, RouteEndpoint, RouteStrategy};
-use super::registry::{ModelEntry, ModelRegistry};
+use super::admin::{
+    AdminRoutingTable, AdminToolRegistry, DynamicRoute, RouteEndpoint, RouteKind, RouteStrategy,
+    ToolUpstreamEntry,
+};
+use super::registry::{ModelEntry, ModelRegistry, ToolEntry, ToolRegistry};
 use super::reload::ReloadableRoutingTable;
-use super::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
+use super::routing_table::{ApiProtocol, RouteEntry, RoutingTable, RoutingTarget};
 
 /// Internal representation of a dynamic route with its round-robin counter.
 struct DynamicRouteData {
+    kind: RouteKind,
     strategy: RouteStrategy,
     endpoints: Vec<RouteEndpoint>,
     counter: AtomicUsize,
@@ -58,12 +62,12 @@ impl<T> DynamicRoutingTable<T> {
             .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()))
     }
 
-    /// Resolve a model name against dynamic routes only.
+    /// Resolve a name against dynamic routes only.
     ///
     /// Returns `None` if no dynamic route matches.
-    fn resolve_dynamic(&self, model: &str) -> Option<RoutingTarget> {
+    fn resolve_dynamic(&self, name: &str) -> Option<RoutingTarget> {
         let routes = self.routes.read().ok()?;
-        let data = routes.get(model)?;
+        let data = routes.get(name)?;
 
         if data.endpoints.is_empty() {
             return None;
@@ -79,20 +83,21 @@ impl<T> DynamicRoutingTable<T> {
 
         Some(RoutingTarget {
             provider_name: endpoint.provider.clone(),
-            model_id: endpoint.model_id.clone(),
+            service_id: endpoint.service_id.clone(),
+            api_protocol: endpoint.api_protocol.unwrap_or(ApiProtocol::Openai),
         })
     }
 }
 
 impl<T: RoutingTable + Send + Sync> RoutingTable for DynamicRoutingTable<T> {
-    async fn route(&self, incoming_model_name: &str) -> Result<RoutingTarget> {
+    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
         // Dynamic routes take precedence.
-        if let Some(target) = self.resolve_dynamic(incoming_model_name) {
+        if let Some(target) = self.resolve_dynamic(incoming_name) {
             return Ok(target);
         }
         // Clone the Arc and drop the lock before the async call.
         let inner = self.read_inner();
-        inner.route(incoming_model_name).await
+        inner.route(incoming_name).await
     }
 
     fn list_routes(&self) -> Vec<RouteEntry> {
@@ -104,22 +109,21 @@ impl<T: RoutingTable + Send + Sync> RoutingTable for DynamicRoutingTable<T> {
 
         if let Ok(routes) = self.routes.read() {
             // Remove config entries that are shadowed by dynamic routes.
-            entries.retain(|e| !routes.contains_key(&e.model));
+            entries.retain(|e| !routes.contains_key(&e.name));
 
             // Append dynamic route entries.
-            for (model, data) in routes.iter() {
+            for (name, data) in routes.iter() {
                 if let Some(ep) = data.endpoints.first() {
                     entries.push(RouteEntry {
-                        model: model.clone(),
+                        name: name.clone(),
                         provider: ep.provider.clone(),
-                        // Dynamic routes don't track protocol; default to provider name.
-                        protocol: ep.provider.clone(),
+                        protocol: ep.api_protocol.unwrap_or(ApiProtocol::Openai),
                     });
                 }
             }
         }
 
-        entries.sort_by(|a, b| a.model.cmp(&b.model));
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
         entries
     }
 }
@@ -130,6 +134,34 @@ impl<T: ModelRegistry> ModelRegistry for DynamicRoutingTable<T> {
             .read()
             .map(|inner| inner.list_models())
             .unwrap_or_default()
+    }
+}
+
+impl<T: ToolRegistry> ToolRegistry for DynamicRoutingTable<T> {
+    async fn list_tools(&self) -> Vec<ToolEntry> {
+        self.read_inner().list_tools().await
+    }
+}
+
+impl<T: ToolRegistry + Send + Sync> AdminToolRegistry for DynamicRoutingTable<T> {
+    async fn list_upstreams(&self) -> Vec<ToolUpstreamEntry> {
+        let tools = self.read_inner().list_tools().await;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for tool in &tools {
+            *counts.entry(tool.server().to_owned()).or_default() += 1;
+        }
+
+        let mut entries: Vec<ToolUpstreamEntry> = counts
+            .into_iter()
+            .map(|(name, tool_count)| ToolUpstreamEntry {
+                name,
+                tool_count,
+                filter: None,
+                param_restrictions: None,
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        entries
     }
 }
 
@@ -144,6 +176,7 @@ impl<T: RoutingTable + Send + Sync> AdminRoutingTable for DynamicRoutingTable<T>
         }
 
         let data = DynamicRouteData {
+            kind: route.kind,
             strategy: route.strategy,
             endpoints: route.endpoints,
             counter: AtomicUsize::new(0),
@@ -153,16 +186,16 @@ impl<T: RoutingTable + Send + Sync> AdminRoutingTable for DynamicRoutingTable<T>
             .routes
             .write()
             .map_err(|_| BitrouterError::transport(None, "routing table lock poisoned"))?;
-        routes.insert(route.model, data);
+        routes.insert(route.name, data);
         Ok(())
     }
 
-    fn remove_route(&self, model: &str) -> Result<bool> {
+    fn remove_route(&self, name: &str) -> Result<bool> {
         let mut routes = self
             .routes
             .write()
             .map_err(|_| BitrouterError::transport(None, "routing table lock poisoned"))?;
-        Ok(routes.remove(model).is_some())
+        Ok(routes.remove(name).is_some())
     }
 
     fn list_dynamic_routes(&self) -> Vec<DynamicRoute> {
@@ -172,13 +205,14 @@ impl<T: RoutingTable + Send + Sync> AdminRoutingTable for DynamicRoutingTable<T>
         };
         let mut result: Vec<DynamicRoute> = routes
             .iter()
-            .map(|(model, data)| DynamicRoute {
-                model: model.clone(),
+            .map(|(name, data)| DynamicRoute {
+                name: name.clone(),
+                kind: data.kind.clone(),
                 strategy: data.strategy.clone(),
                 endpoints: data.endpoints.clone(),
             })
             .collect();
-        result.sort_by(|a, b| a.model.cmp(&b.model));
+        result.sort_by(|a, b| a.name.cmp(&b.name));
         result
     }
 }
@@ -199,6 +233,7 @@ impl<T> ReloadableRoutingTable for DynamicRoutingTable<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routers::admin::RouteKind;
 
     struct StaticTable;
 
@@ -207,7 +242,8 @@ mod tests {
             if incoming == "default" {
                 Ok(RoutingTarget {
                     provider_name: "openai".to_owned(),
-                    model_id: "gpt-4o".to_owned(),
+                    service_id: "gpt-4o".to_owned(),
+                    api_protocol: ApiProtocol::Openai,
                 })
             } else {
                 Err(BitrouterError::invalid_request(
@@ -220,16 +256,16 @@ mod tests {
 
         fn list_routes(&self) -> Vec<RouteEntry> {
             vec![RouteEntry {
-                model: "default".to_owned(),
+                name: "default".to_owned(),
                 provider: "openai".to_owned(),
-                protocol: "openai".to_owned(),
+                protocol: ApiProtocol::Openai,
             }]
         }
     }
 
     /// Helper to call the trait method with explicit type annotation.
-    async fn route(table: &DynamicRoutingTable<StaticTable>, model: &str) -> Result<RoutingTarget> {
-        <DynamicRoutingTable<StaticTable> as RoutingTable>::route(table, model).await
+    async fn route(table: &DynamicRoutingTable<StaticTable>, name: &str) -> Result<RoutingTarget> {
+        <DynamicRoutingTable<StaticTable> as RoutingTable>::route(table, name).await
     }
 
     #[tokio::test]
@@ -237,11 +273,13 @@ mod tests {
         let table = DynamicRoutingTable::new(StaticTable);
         table
             .add_route(DynamicRoute {
-                model: "default".to_owned(),
+                name: "default".to_owned(),
+                kind: RouteKind::Model,
                 strategy: RouteStrategy::Priority,
                 endpoints: vec![RouteEndpoint {
                     provider: "anthropic".to_owned(),
-                    model_id: "claude-sonnet-4-20250514".to_owned(),
+                    service_id: "claude-sonnet-4-20250514".to_owned(),
+                    api_protocol: Some(ApiProtocol::Anthropic),
                 }],
             })
             .ok();
@@ -250,7 +288,8 @@ mod tests {
         assert!(target.is_some());
         let target = target.unwrap();
         assert_eq!(target.provider_name, "anthropic");
-        assert_eq!(target.model_id, "claude-sonnet-4-20250514");
+        assert_eq!(target.service_id, "claude-sonnet-4-20250514");
+        assert_eq!(target.api_protocol, ApiProtocol::Anthropic);
     }
 
     #[tokio::test]
@@ -261,7 +300,7 @@ mod tests {
         assert!(target.is_some());
         let target = target.unwrap();
         assert_eq!(target.provider_name, "openai");
-        assert_eq!(target.model_id, "gpt-4o");
+        assert_eq!(target.service_id, "gpt-4o");
     }
 
     #[tokio::test]
@@ -270,11 +309,13 @@ mod tests {
 
         table
             .add_route(DynamicRoute {
-                model: "research".to_owned(),
+                name: "research".to_owned(),
+                kind: RouteKind::Model,
                 strategy: RouteStrategy::Priority,
                 endpoints: vec![RouteEndpoint {
                     provider: "openai".to_owned(),
-                    model_id: "o1".to_owned(),
+                    service_id: "o1".to_owned(),
+                    api_protocol: None,
                 }],
             })
             .ok();
@@ -299,7 +340,8 @@ mod tests {
     fn add_route_with_no_endpoints_fails() {
         let table = DynamicRoutingTable::new(StaticTable);
         let result = table.add_route(DynamicRoute {
-            model: "empty".to_owned(),
+            name: "empty".to_owned(),
+            kind: RouteKind::Model,
             strategy: RouteStrategy::Priority,
             endpoints: vec![],
         });
@@ -311,16 +353,19 @@ mod tests {
         let table = DynamicRoutingTable::new(StaticTable);
         table
             .add_route(DynamicRoute {
-                model: "balanced".to_owned(),
+                name: "balanced".to_owned(),
+                kind: RouteKind::Model,
                 strategy: RouteStrategy::LoadBalance,
                 endpoints: vec![
                     RouteEndpoint {
                         provider: "openai".to_owned(),
-                        model_id: "gpt-4o".to_owned(),
+                        service_id: "gpt-4o".to_owned(),
+                        api_protocol: None,
                     },
                     RouteEndpoint {
                         provider: "anthropic".to_owned(),
-                        model_id: "claude-sonnet-4-20250514".to_owned(),
+                        service_id: "claude-sonnet-4-20250514".to_owned(),
+                        api_protocol: None,
                     },
                 ],
             })
@@ -340,18 +385,20 @@ mod tests {
         let table = DynamicRoutingTable::new(StaticTable);
         table
             .add_route(DynamicRoute {
-                model: "custom".to_owned(),
+                name: "custom".to_owned(),
+                kind: RouteKind::Model,
                 strategy: RouteStrategy::Priority,
                 endpoints: vec![RouteEndpoint {
                     provider: "anthropic".to_owned(),
-                    model_id: "claude-sonnet-4-20250514".to_owned(),
+                    service_id: "claude-sonnet-4-20250514".to_owned(),
+                    api_protocol: None,
                 }],
             })
             .ok();
 
         let routes = table.list_routes();
-        assert!(routes.iter().any(|r| r.model == "custom"));
-        assert!(routes.iter().any(|r| r.model == "default"));
+        assert!(routes.iter().any(|r| r.name == "custom"));
+        assert!(routes.iter().any(|r| r.name == "default"));
     }
 
     #[test]
@@ -359,17 +406,19 @@ mod tests {
         let table = DynamicRoutingTable::new(StaticTable);
         table
             .add_route(DynamicRoute {
-                model: "default".to_owned(),
+                name: "default".to_owned(),
+                kind: RouteKind::Model,
                 strategy: RouteStrategy::Priority,
                 endpoints: vec![RouteEndpoint {
                     provider: "anthropic".to_owned(),
-                    model_id: "claude-sonnet-4-20250514".to_owned(),
+                    service_id: "claude-sonnet-4-20250514".to_owned(),
+                    api_protocol: None,
                 }],
             })
             .ok();
 
         let routes = table.list_routes();
-        let defaults: Vec<_> = routes.iter().filter(|r| r.model == "default").collect();
+        let defaults: Vec<_> = routes.iter().filter(|r| r.name == "default").collect();
         assert_eq!(defaults.len(), 1);
         assert_eq!(defaults[0].provider, "anthropic");
     }
@@ -386,12 +435,14 @@ mod tests {
                     if self.use_anthropic {
                         Ok(RoutingTarget {
                             provider_name: "anthropic".to_owned(),
-                            model_id: "claude-sonnet-4-20250514".to_owned(),
+                            service_id: "claude-sonnet-4-20250514".to_owned(),
+                            api_protocol: ApiProtocol::Anthropic,
                         })
                     } else {
                         Ok(RoutingTarget {
                             provider_name: "openai".to_owned(),
-                            model_id: "gpt-4o".to_owned(),
+                            service_id: "gpt-4o".to_owned(),
+                            api_protocol: ApiProtocol::Openai,
                         })
                     }
                 } else {
@@ -440,12 +491,14 @@ mod tests {
                     if self.use_anthropic {
                         Ok(RoutingTarget {
                             provider_name: "anthropic".to_owned(),
-                            model_id: "claude-sonnet-4-20250514".to_owned(),
+                            service_id: "claude-sonnet-4-20250514".to_owned(),
+                            api_protocol: ApiProtocol::Anthropic,
                         })
                     } else {
                         Ok(RoutingTarget {
                             provider_name: "openai".to_owned(),
-                            model_id: "gpt-4o".to_owned(),
+                            service_id: "gpt-4o".to_owned(),
+                            api_protocol: ApiProtocol::Openai,
                         })
                     }
                 } else {
@@ -469,11 +522,13 @@ mod tests {
         // Add a dynamic route
         table
             .add_route(DynamicRoute {
-                model: "research".to_owned(),
+                name: "research".to_owned(),
+                kind: RouteKind::Model,
                 strategy: RouteStrategy::Priority,
                 endpoints: vec![RouteEndpoint {
                     provider: "openai".to_owned(),
-                    model_id: "o1".to_owned(),
+                    service_id: "o1".to_owned(),
+                    api_protocol: None,
                 }],
             })
             .unwrap();
@@ -488,7 +543,7 @@ mod tests {
         // Dynamic route is still intact
         let target = flex_route(&table, "research").await.unwrap();
         assert_eq!(target.provider_name, "openai");
-        assert_eq!(target.model_id, "o1");
+        assert_eq!(target.service_id, "o1");
 
         // Inner table was reloaded
         let target = flex_route(&table, "default").await.unwrap();

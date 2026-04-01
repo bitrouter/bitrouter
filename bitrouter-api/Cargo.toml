@@ -9,9 +9,8 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["openai", "anthropic", "google", "a2a", "mcp"]
-a2a = ["dep:bitrouter-a2a"]
-mcp = ["dep:bitrouter-mcp"]
+default = ["openai", "anthropic", "google", "mcp"]
+mcp = []
 openai = []
 anthropic = []
 google = []
@@ -37,8 +36,6 @@ mpp-solana = [
 [dependencies]
 bitrouter-core = { path = "../bitrouter-core", version = "0.17" }
 bitrouter-config = { path = "../bitrouter-config", version = "0.17", optional = true }
-bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.17", optional = true }
-bitrouter-mcp = { path = "../bitrouter-mcp", version = "0.17", optional = true }
 async-trait = { version = "0.1" }
 futures-core = { version = "0.3" }
 mpp = { package = "mpp-br", version = "0.8.1", default-features = false, features = [
@@ -68,7 +65,6 @@ tracing = { version = "0.1" }
 warp = { version = "0.4" }
 
 [dev-dependencies]
-bitrouter-a2a = { path = "../bitrouter-a2a", version = "0.17" }
 regex = { version = "1.12" }
 tempfile = { version = "3" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

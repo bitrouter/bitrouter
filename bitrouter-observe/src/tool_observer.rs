@@ -13,7 +13,7 @@ use bitrouter_core::observe::{ToolCallFailureEvent, ToolCallSuccessEvent, ToolOb
 
 use crate::spend::store::{ServiceType, SpendLog, SpendStore};
 
-/// Cost lookup function: `(server_name, tool_name) -> cost_usd`.
+/// Cost lookup function: `(provider_name, operation) -> cost_usd`.
 pub type ToolCostFn = Arc<dyn Fn(&str, &str) -> f64 + Send + Sync>;
 
 /// Observes completed tool calls and writes spend logs.
@@ -34,14 +34,14 @@ impl ToolObserveCallback for ToolSpendObserver {
         event: ToolCallSuccessEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            let cost = (self.cost_fn)(&event.ctx.server, &event.ctx.tool);
+            let cost = (self.cost_fn)(&event.ctx.provider, &event.ctx.operation);
             let log = SpendLog {
                 id: Uuid::new_v4(),
                 service_type: ServiceType::Tool,
                 account_id: event.ctx.caller.account_id,
                 session_id: None,
-                service_name: event.ctx.server,
-                operation: event.ctx.tool,
+                service_name: event.ctx.provider,
+                operation: event.ctx.operation,
                 input_tokens: 0,
                 output_tokens: 0,
                 cost,
@@ -60,14 +60,14 @@ impl ToolObserveCallback for ToolSpendObserver {
         event: ToolCallFailureEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            let cost = (self.cost_fn)(&event.ctx.server, &event.ctx.tool);
+            let cost = (self.cost_fn)(&event.ctx.provider, &event.ctx.operation);
             let log = SpendLog {
                 id: Uuid::new_v4(),
                 service_type: ServiceType::Tool,
                 account_id: event.ctx.caller.account_id,
                 session_id: None,
-                service_name: event.ctx.server,
-                operation: event.ctx.tool,
+                service_name: event.ctx.provider,
+                operation: event.ctx.operation,
                 input_tokens: 0,
                 output_tokens: 0,
                 cost,
@@ -110,8 +110,8 @@ mod tests {
 
         let event = ToolCallSuccessEvent {
             ctx: ToolRequestContext {
-                server: "github".into(),
-                tool: "search".into(),
+                provider: "github".into(),
+                operation: "search".into(),
                 caller: CallerContext {
                     account_id: Some("acct-1".into()),
                     ..CallerContext::default()
@@ -138,8 +138,8 @@ mod tests {
 
         let event = ToolCallFailureEvent {
             ctx: ToolRequestContext {
-                server: "github".into(),
-                tool: "search".into(),
+                provider: "github".into(),
+                operation: "search".into(),
                 caller: CallerContext::default(),
                 latency_ms: 50,
             },

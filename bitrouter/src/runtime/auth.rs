@@ -279,3 +279,11 @@ impl std::fmt::Display for Unauthorized {
 }
 
 impl warp::reject::Reject for Unauthorized {}
+
+/// Convert an auth filter into a gate that rejects unauthorized requests
+/// but does not add anything to the extract tuple.
+pub(crate) fn auth_gate(
+    auth: impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone,
+) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
+    auth.map(|_| ()).untuple_one()
+}

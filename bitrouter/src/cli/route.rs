@@ -28,7 +28,7 @@ pub fn run_list(
     match routes {
         Some(routes) if !routes.is_empty() => {
             for route in routes {
-                let model = route["model"].as_str().unwrap_or("?");
+                let model = route["name"].as_str().unwrap_or("?");
                 let source = route["source"].as_str().unwrap_or("?");
                 let endpoints = route["endpoints"].as_array();
 
@@ -37,11 +37,11 @@ pub fn run_list(
                         eps.iter()
                             .map(|ep| {
                                 let provider = ep["provider"].as_str().unwrap_or("?");
-                                let model_id = ep["model_id"].as_str().unwrap_or("?");
-                                if model_id.is_empty() {
+                                let service_id = ep["service_id"].as_str().unwrap_or("?");
+                                if service_id.is_empty() {
                                     provider.to_owned()
                                 } else {
-                                    format!("{provider}:{model_id}")
+                                    format!("{provider}:{service_id}")
                                 }
                             })
                             .collect()
@@ -78,16 +78,16 @@ pub fn run_add(
         .endpoints
         .iter()
         .map(|ep| {
-            let (provider, model_id) = ep.split_once(':').unwrap_or((ep, ""));
+            let (provider, service_id) = ep.split_once(':').unwrap_or((ep, ""));
             serde_json::json!({
                 "provider": provider,
-                "model_id": model_id,
+                "service_id": service_id,
             })
         })
         .collect();
 
     let body = serde_json::json!({
-        "model": opts.model,
+        "name": opts.model,
         "strategy": opts.strategy.unwrap_or_else(|| "priority".to_owned()),
         "endpoints": endpoints,
     });

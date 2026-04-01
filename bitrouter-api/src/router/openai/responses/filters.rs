@@ -11,7 +11,7 @@ use bitrouter_core::{
     observe::{
         CallerContext, ObserveCallback, RequestContext, RequestFailureEvent, RequestSuccessEvent,
     },
-    routers::{model_router::LanguageModelRouter, routing_table::RoutingTable},
+    routers::{router::LanguageModelRouter, routing_table::RoutingTable},
 };
 use warp::Filter;
 
@@ -286,7 +286,7 @@ where
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
     let provider_name = target.provider_name.clone();
-    let target_model_id = target.model_id.clone();
+    let target_model_id = target.service_id.clone();
 
     let model = router
         .route_model(target)
@@ -499,7 +499,7 @@ where
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
     let provider_name = target.provider_name.clone();
-    let target_model_id = target.model_id.clone();
+    let target_model_id = target.service_id.clone();
 
     let model = router
         .route_model(target)

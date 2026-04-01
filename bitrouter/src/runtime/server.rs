@@ -1,28 +1,16 @@
 use std::sync::Arc;
 
-use bitrouter_api::router::{admin, admin_agents, admin_tools, models, routes};
+use bitrouter_api::router::{admin, models, routes};
 use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
-use bitrouter_core::observe::{
-    AgentObserveCallback, CallerContext, ObserveCallback, ToolObserveCallback,
-};
+use bitrouter_core::observe::{CallerContext, ObserveCallback, ToolObserveCallback};
 use bitrouter_core::routers::admin::AdminRoutingTable;
-use bitrouter_core::routers::model_router::LanguageModelRouter;
 use bitrouter_core::routers::registry::ModelRegistry;
+use bitrouter_core::routers::router::LanguageModelRouter;
 use bitrouter_guardrails::{GuardedRouter, Guardrail};
-use bitrouter_observe::agent_observer::AgentSpendObserver;
-use bitrouter_observe::composite::CompositeObserver;
-use bitrouter_observe::cost::Pricing;
-use bitrouter_observe::metrics::MetricsCollector;
-use bitrouter_observe::observer::SpendObserver;
-use bitrouter_observe::spend::memory::InMemorySpendStore;
-use bitrouter_observe::spend::sea_orm_store::SeaOrmSpendStore;
-use bitrouter_observe::spend::store;
-use bitrouter_observe::tool_observer::ToolSpendObserver;
+use bitrouter_observe::builder::ObserveStack;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
-
-use bitrouter_api::router::mcp as mcp_admin;
 
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
 use crate::runtime::error::Result;
@@ -54,6 +42,27 @@ pub struct ServerPlan<T, R> {
     db: Option<Arc<DatabaseConnection>>,
     paths: Option<crate::runtime::paths::RuntimePaths>,
     reload_fn: Option<Arc<dyn Fn() -> std::result::Result<(), String> + Send + Sync>>,
+    /// Pre-built config-authoritative tool registry with policy enforcement.
+    ///
+    /// When provided, `serve()` uses this instead of building one internally.
+    /// This allows the reload closure (built in `app.rs`) to share the same
+    /// inner `DynamicRoutingTable` `Arc` and swap it on SIGHUP.
+    tool_registry: Option<
+        Arc<
+            bitrouter_guardrails::tool::GuardedToolRegistry<
+                Arc<
+                    bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                        bitrouter_config::ConfigToolRoutingTable,
+                    >,
+                >,
+            >,
+        >,
+    >,
+    /// Shared tool guardrail for hot-reload support.
+    ///
+    /// When set, `serve()` reads the current `Arc<ToolGuardrail>` from this
+    /// lock and the reload closure can swap it atomically.
+    tool_guardrail: Option<Arc<std::sync::RwLock<Arc<bitrouter_guardrails::ToolGuardrail>>>>,
 }
 
 impl<T, R> ServerPlan<T, R>
@@ -69,6 +78,8 @@ where
             db: None,
             paths: None,
             reload_fn: None,
+            tool_registry: None,
+            tool_guardrail: None,
         }
     }
 
@@ -92,6 +103,32 @@ where
         f: impl Fn() -> std::result::Result<(), String> + Send + Sync + 'static,
     ) -> Self {
         self.reload_fn = Some(Arc::new(f));
+        self
+    }
+
+    /// Provide a pre-built tool registry with policy for hot-reload support.
+    pub fn with_tool_registry(
+        mut self,
+        registry: Arc<
+            bitrouter_guardrails::tool::GuardedToolRegistry<
+                Arc<
+                    bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                        bitrouter_config::ConfigToolRoutingTable,
+                    >,
+                >,
+            >,
+        >,
+    ) -> Self {
+        self.tool_registry = Some(registry);
+        self
+    }
+
+    /// Provide a shared tool guardrail for hot-reload support.
+    pub fn with_tool_guardrail(
+        mut self,
+        guardrail: Arc<std::sync::RwLock<Arc<bitrouter_guardrails::ToolGuardrail>>>,
+    ) -> Self {
+        self.tool_guardrail = Some(guardrail);
         self
     }
 
@@ -148,6 +185,7 @@ where
         let addr = self.config.server.listen;
 
         // Build guardrail engine from config and wrap the model router.
+        let raw_router = Arc::clone(&self.router);
         let guardrail = Arc::new(Guardrail::new(self.config.guardrails.clone()));
         let guarded_router = Arc::new(GuardedRouter::new(self.router, guardrail.clone()));
 
@@ -168,66 +206,34 @@ where
             operator_caip10,
         ));
 
-        // Build spend store: SeaORM-backed if DB is available, otherwise in-memory.
-        let spend_store: Arc<dyn store::SpendStore> = match &self.db {
-            Some(db) => Arc::new(SeaOrmSpendStore::new(db.as_ref().clone())),
-            None => Arc::new(InMemorySpendStore::new()),
-        };
+        // Build the observation stack: spend tracking + metrics for all service types.
+        let mut observe_builder = ObserveStack::builder();
 
-        // Build pricing lookup from the config's provider definitions.
+        if let Some(ref db) = self.db {
+            observe_builder = observe_builder.with_db(db.as_ref());
+        }
+
         let providers = self.config.providers.clone();
-        let pricing_fn = move |provider: &str, model: &str| {
-            let mp = providers
+        observe_builder = observe_builder.model_pricing(move |provider, model| {
+            providers
                 .get(provider)
                 .and_then(|p| p.models.as_ref())
                 .and_then(|models| models.get(model))
-                .map(|info| &info.pricing)
-                .cloned()
-                .unwrap_or_default();
-            Pricing {
-                input_no_cache: mp.input_tokens.no_cache.unwrap_or(0.0),
-                input_cache_read: mp.input_tokens.cache_read.unwrap_or(0.0),
-                input_cache_write: mp.input_tokens.cache_write.unwrap_or(0.0),
-                output_text: mp.output_tokens.text.unwrap_or(0.0),
-                output_reasoning: mp.output_tokens.reasoning.unwrap_or(0.0),
-            }
-        };
+                .map(|info| info.pricing.clone())
+                .unwrap_or_default()
+        });
 
-        // Compose observers: spend tracking + metrics aggregation for all service types.
-        let spend_observer = Arc::new(SpendObserver::new(
-            spend_store.clone(),
-            Arc::new(pricing_fn),
-        ));
-        let tool_pricing = self.config.mcp_server_pricing.clone();
-        let tool_cost_fn: bitrouter_observe::tool_observer::ToolCostFn =
-            Arc::new(move |server: &str, tool: &str| {
-                tool_pricing.get(server).map_or(0.0, |p| p.cost_for(tool))
-            });
-        let tool_spend_observer =
-            Arc::new(ToolSpendObserver::new(spend_store.clone(), tool_cost_fn));
+        let tool_configs = self.config.tools.clone();
+        observe_builder = observe_builder.tool_cost(move |provider, operation| {
+            tool_configs
+                .get(provider)
+                .and_then(|tc| tc.pricing.as_ref())
+                .map_or(0.0, |p| p.cost_for(operation))
+        });
 
-        let agent_pricing = self.config.a2a_agent_pricing.clone();
-        let agent_cost_fn: bitrouter_observe::agent_observer::AgentCostFn =
-            Arc::new(move |agent: &str, method: &str| {
-                agent_pricing.get(agent).map_or(0.0, |p| p.cost_for(method))
-            });
-        let agent_spend_observer = Arc::new(AgentSpendObserver::new(spend_store, agent_cost_fn));
-        let metrics_collector = Arc::new(MetricsCollector::new());
-        let composite = Arc::new(CompositeObserver::new(
-            vec![
-                spend_observer as Arc<dyn ObserveCallback>,
-                metrics_collector.clone() as Arc<dyn ObserveCallback>,
-            ],
-            vec![
-                tool_spend_observer as Arc<dyn ToolObserveCallback>,
-                metrics_collector.clone() as Arc<dyn ToolObserveCallback>,
-            ],
-            vec![
-                agent_spend_observer as Arc<dyn AgentObserveCallback>,
-                metrics_collector.clone() as Arc<dyn AgentObserveCallback>,
-            ],
-        ));
-        let observer: Arc<dyn ObserveCallback> = composite.clone();
+        let observe = observe_builder.build();
+        let observer: Arc<dyn ObserveCallback> = observe.observer.clone();
+        let metrics_collector = observe.metrics.clone();
 
         let health = warp::path("health")
             .and(warp::get())
@@ -248,7 +254,7 @@ where
         let model_list = models::models_filter(self.table.clone());
 
         // Admin route management — gated by management auth.
-        let admin_routes = auth_gate(auth::management_auth(auth_ctx.clone()))
+        let admin_routes = auth::auth_gate(auth::management_auth(auth_ctx.clone()))
             .and(admin::admin_routes_filter(self.table.clone()));
 
         // Build account filter that extracts caller context when auth is enabled,
@@ -434,210 +440,219 @@ where
                 account_filter.clone(),
             );
 
-        // ── MCP registry ─────────────────────────────────────────────
-        let (
-            admin_tool_routes,
-            mcp_server,
-            tool_list,
-            bridge_routes,
-            _refresh_guard,
-            _bridge_guards,
-        ) = {
-            use bitrouter_core::routers::admin::{ParamRestrictions, ToolFilter};
-            use bitrouter_core::routers::dynamic_tool::DynamicToolRegistry;
-            use bitrouter_mcp::bridge::SingleServerBridge;
-            use bitrouter_mcp::client::registry::ConfigMcpRegistry;
-            use bitrouter_mcp::client::upstream::UpstreamConnection;
-            use bitrouter_mcp::server::{McpPromptServer, McpResourceServer, McpToolServer};
+        // ── Tool routing table (config-authoritative) ─────────────────
+        // Use pre-built registry from app.rs (enables hot-reload), or build one.
+        let tool_table_ref = Arc::new(bitrouter_config::ConfigToolRoutingTable::new(
+            self.config.providers.clone(),
+            self.config.tools.clone(),
+        ));
+        let providers_by_protocol = tool_table_ref.providers_by_protocol();
 
-            let mcp_configs = self.config.mcp_servers.clone();
-            let mcp_groups = self.config.mcp_groups.clone();
-
-            // Extract initial filters and restrictions from config for the wrapper.
-            let initial_filters: std::collections::HashMap<String, ToolFilter> = self
-                .config
-                .mcp_servers
-                .iter()
-                .filter_map(|cfg| cfg.tool_filter.clone().map(|f| (cfg.name.clone(), f)))
-                .collect();
-            let initial_restrictions: std::collections::HashMap<String, ParamRestrictions> = self
-                .config
-                .mcp_servers
-                .iter()
-                .filter(|cfg| !cfg.param_restrictions.rules.is_empty())
-                .map(|cfg| (cfg.name.clone(), cfg.param_restrictions.clone()))
-                .collect();
-            let groups = self.config.mcp_groups.as_map().clone();
-
-            // Build all upstream connections upfront so bridges can share them.
-            let mut connections: std::collections::HashMap<String, Arc<UpstreamConnection>> =
-                std::collections::HashMap::with_capacity(mcp_configs.len());
-            for config in &mcp_configs {
-                let name = config.name.clone();
-                match UpstreamConnection::connect(config.clone()).await {
-                    Ok(conn) => {
-                        connections.insert(name, Arc::new(conn));
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            upstream = %name,
-                            error = %e,
-                            "failed to connect to MCP upstream"
-                        );
-                    }
-                }
-            }
-
-            let (inner, registry, refresh_guard) = if !connections.is_empty() {
-                let reg = ConfigMcpRegistry::from_connections(connections.clone(), mcp_groups);
-                tracing::info!("MCP registry started with {} upstreams", connections.len());
-                let inner = Arc::new(reg);
-                let guard = inner.spawn_refresh_listeners().await;
-                let wrapped = Arc::new(DynamicToolRegistry::new(
-                    Arc::clone(&inner),
-                    initial_filters,
-                    initial_restrictions,
-                    groups,
+        let dynamic_tool_registry = if let Some(registry) = self.tool_registry {
+            registry
+        } else {
+            let inner_tool_table =
+                Arc::new(bitrouter_core::routers::dynamic::DynamicRoutingTable::new(
+                    bitrouter_config::ConfigToolRoutingTable::new(
+                        self.config.providers.clone(),
+                        self.config.tools.clone(),
+                    ),
                 ));
-                (Some(inner), Some(wrapped), Some(guard))
+            Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
+                inner_tool_table,
+                self.config.guardrails.tools.filters_map(),
+            ))
+        };
+
+        // ── Skills registry (filesystem-backed, no DB) ──────────────
+        let skills_dir = self
+            .paths
+            .as_ref()
+            .map(|p| p.home_dir.join("skills"))
+            .unwrap_or_else(|| std::path::PathBuf::from("skills"));
+
+        let skills =
+            crate::runtime::agentskills_client::AgentSkillsClient::new(&tool_table_ref, skills_dir)
+                .build()
+                .await;
+        let has_skill_tools = skills.has_skills;
+
+        // ── MCP connections ─────────────────────────────────────────
+        #[cfg(feature = "mcp")]
+        let mcp = {
+            crate::runtime::mcp_client::McpClient::new(
+                &providers_by_protocol,
+                self.table.clone(),
+                raw_router,
+            )
+            .build()
+            .await
+        };
+        #[cfg(not(feature = "mcp"))]
+        let mcp = crate::runtime::mcp_client::McpRoutes::noop();
+
+        // Destructure MCP outputs so fields can be consumed independently.
+        #[cfg(feature = "mcp")]
+        let (mcp_connections, mcp_registry, mcp_bridge_routes) =
+            (mcp.connections, mcp.registry, mcp.bridge_routes);
+        #[cfg(not(feature = "mcp"))]
+        let mcp_bridge_routes = mcp.bridge_routes;
+
+        // ── Lazy tool router ────────────────────────────────────────
+        let lazy_tool_router = Arc::new(crate::runtime::router::LazyToolRouter::new(
+            self.config.providers.clone(),
+            #[cfg(feature = "mcp")]
+            Arc::new(mcp_connections),
+            Arc::new(reqwest::Client::new()),
+        ));
+
+        if lazy_tool_router.has_providers() {
+            tracing::info!("tool router initialized");
+        }
+
+        // Wrap with tool guardrail for parameter restriction enforcement.
+        // Use the shared guardrail lock from app.rs if provided (enables
+        // hot-reload), otherwise build a static one from config.
+        let tool_router = if let Some(shared) = self.tool_guardrail {
+            Arc::new(
+                bitrouter_guardrails::GuardedToolRouter::with_shared_guardrail(
+                    lazy_tool_router.clone(),
+                    shared,
+                ),
+            )
+        } else {
+            let guardrail = Arc::new(bitrouter_guardrails::ToolGuardrail::new(
+                self.config.guardrails.tools.clone(),
+            ));
+            Arc::new(bitrouter_guardrails::GuardedToolRouter::new(
+                lazy_tool_router.clone(),
+                guardrail,
+            ))
+        };
+
+        // ── Tool call handler (protocol-neutral dispatch) ──────────
+        let tool_call_handler: Option<Arc<dyn bitrouter_core::api::mcp::gateway::ToolCallHandler>> =
+            if lazy_tool_router.has_providers() {
+                Some(Arc::new(
+                    crate::runtime::router::RouterToolCallHandler::new(
+                        tool_router,
+                        dynamic_tool_registry.clone(),
+                    ),
+                ))
             } else {
-                (None, None, None)
+                None
             };
 
-            // Build bridge endpoints for servers with `bridge: true`.
-            let mut bridge_map: std::collections::HashMap<String, Arc<SingleServerBridge>> =
-                std::collections::HashMap::new();
-            let mut bridge_guards: Vec<bitrouter_mcp::client::registry::RefreshGuard> = Vec::new();
-            if let Some(ref reg) = inner {
-                for config in mcp_configs.iter().filter(|c| c.bridge) {
-                    if let Some(conn) = connections.get(&config.name) {
-                        let (bridge, guard) = SingleServerBridge::new(
-                            Arc::clone(conn),
-                            McpToolServer::subscribe_tool_changes(reg.as_ref()),
-                            McpResourceServer::subscribe_resource_changes(reg.as_ref()),
-                            McpPromptServer::subscribe_prompt_changes(reg.as_ref()),
-                        );
-                        tracing::info!(server = %config.name, "MCP bridge enabled");
-                        bridge_map.insert(config.name.clone(), bridge);
-                        bridge_guards.push(guard);
-                    }
+        // ── MCP registries ─────────────────────────────────────────
+        //
+        // The MCP server endpoint (POST /mcp) needs `McpServer`, satisfied
+        // by `DynamicRoutingTable<ConfigMcpRegistry>` via blanket impls.
+        // The MCP admin endpoint needs `AdminToolRegistry + ToolPolicyAdmin`,
+        // satisfied by `GuardedToolRegistry` which layers discovery filtering.
+        #[cfg(feature = "mcp")]
+        let (mcp_server_inner, mcp_admin_registry) = {
+            type DynMcpTable = Arc<
+                bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                    Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
+                >,
+            >;
+            match mcp_registry.clone() {
+                Some(mcp_reg) => {
+                    let inner: DynMcpTable = Arc::new(
+                        bitrouter_core::routers::dynamic::DynamicRoutingTable::new(mcp_reg),
+                    );
+                    let admin = Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
+                        Arc::clone(&inner),
+                        std::collections::HashMap::new(),
+                    ));
+                    (Some(inner), Some(admin))
                 }
+                None => (None, None),
             }
-            let bridges = mcp_admin::mcp_bridge_filter(Arc::new(bridge_map));
+        };
+        #[cfg(not(feature = "mcp"))]
+        let mcp_server_inner: Option<
+            Arc<
+                bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                    Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
+                >,
+            >,
+        > = None;
+        #[cfg(not(feature = "mcp"))]
+        let mcp_admin_registry: Option<
+            Arc<
+                bitrouter_guardrails::tool::GuardedToolRegistry<
+                    Arc<
+                        bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                            Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
+                        >,
+                    >,
+                >,
+            >,
+        > = None;
 
-            let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(admin_tools::admin_tools_filter(registry.clone()));
+        // ── MCP admin routes ───────────────────────────────────────
+        let admin_mcp_routes = {
+            use bitrouter_api::router::mcp as mcp_api;
+            if self.db.is_some() {
+                auth::auth_gate(auth::management_auth(auth_ctx.clone()))
+                    .and(mcp_api::mcp_admin_filter(mcp_admin_registry))
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            } else {
+                mcp_api::mcp_admin_filter(mcp_admin_registry)
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
+            }
+        };
 
-            // Build MCP server filter with tool call observation.
-            let tool_observer: Arc<dyn ToolObserveCallback> = composite.clone();
-            let server = mcp_admin::mcp_server_filter_with_observe(
-                registry.clone(),
+        // ── MCP server endpoint ────────────────────────────────────
+        let mcp_server = {
+            use bitrouter_api::router::mcp as mcp_api;
+            let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
+            mcp_api::mcp_server_filter_with_observe(
+                mcp_server_inner,
+                tool_call_handler,
                 tool_observer,
                 account_filter.clone(),
-            );
-            // Compose MCP tools + config skills into a single ToolRegistry
-            // for the unified GET /v1/tools endpoint.
-            let skill_entries: Vec<bitrouter_core::routers::registry::ToolEntry> = self
-                .config
-                .skills
-                .iter()
-                .map(|cfg| bitrouter_core::routers::registry::ToolEntry {
-                    id: format!("skill/{}", cfg.name),
-                    name: Some(cfg.name.clone()),
-                    provider: "skill".to_string(),
-                    description: Some(cfg.description.clone()),
-                    input_schema: None,
-                })
-                .collect();
+            )
+            .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+            .boxed()
+        };
 
-            let tools = if !skill_entries.is_empty() {
-                let skill_reg = bitrouter_skills::registry::ConfigSkillRegistry::new(skill_entries);
-                if let Some(ref mcp_reg) = registry {
-                    let composite = Arc::new(
-                        bitrouter_core::routers::registry::CompositeToolRegistry::new(
-                            mcp_reg.clone(),
-                            skill_reg,
-                        ),
-                    );
-                    bitrouter_api::router::tools::tools_filter(Some(composite))
-                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                        .boxed()
-                } else {
-                    bitrouter_api::router::tools::tools_filter(Some(Arc::new(skill_reg)))
-                        .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                        .boxed()
+        // ── Tool listing (GET /v1/tools) ────────────────────────────
+        // Config is authoritative — DynamicToolRegistry<ConfigToolRoutingTable>
+        // is the primary source. Skills are additive when present.
+        let tool_list = {
+            use bitrouter_api::router::tools;
+            use bitrouter_core::routers::registry::{ToolEntry, ToolRegistry};
+            type RouteFilter = warp::filters::BoxedFilter<(Box<dyn warp::Reply>,)>;
+
+            let filter: RouteFilter = if has_skill_tools {
+                struct MergedToolRegistry<A, B> {
+                    primary: A,
+                    secondary: B,
                 }
+                impl<A: ToolRegistry, B: ToolRegistry> ToolRegistry for MergedToolRegistry<A, B> {
+                    async fn list_tools(&self) -> Vec<ToolEntry> {
+                        let mut tools = self.primary.list_tools().await;
+                        tools.extend(self.secondary.list_tools().await);
+                        tools
+                    }
+                }
+                let merged = Arc::new(MergedToolRegistry {
+                    primary: dynamic_tool_registry.clone(),
+                    secondary: skills.registry.clone(),
+                });
+                tools::tools_filter(Some(merged))
+                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                    .boxed()
             } else {
-                bitrouter_api::router::tools::tools_filter(registry)
+                tools::tools_filter(Some(dynamic_tool_registry.clone()))
                     .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                     .boxed()
             };
-
-            (admin, server, tools, bridges, refresh_guard, bridge_guards)
-        };
-
-        // ── Skills registry ───────────────────────────────────────────
-        let skills_list = if let Some(ref db) = self.db {
-            let skill_registry =
-                Arc::new(bitrouter_skills::registry::SkillRegistry::new(db.clone()));
-            bitrouter_api::router::skills::skills_filter(skill_registry)
-                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        } else {
-            // No DB — return 404 for all skills endpoints.
-            warp::path!("v1" / "skills" / ..)
-                .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
-                .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
-                .boxed()
-        };
-
-        // ── A2A protocol ─────────────────────────────────────────────
-        let (a2a_routes, admin_agent_routes, agent_list, _a2a_refresh_guard) = {
-            use bitrouter_a2a::client::registry::UpstreamAgentRegistry;
-            use bitrouter_core::routers::dynamic_agent::DynamicAgentRegistry;
-
-            let external_base_url = format!("http://{}/a2a", self.config.server.listen);
-            let a2a_configs = self.config.a2a_agents.clone();
-
-            let reg = UpstreamAgentRegistry::from_configs(a2a_configs, external_base_url).await;
-
-            let (gateway_reg, discovery_reg, refresh_guard) = if reg.has_agents() {
-                tracing::info!("A2A gateway started");
-                let inner = Arc::new(reg);
-                let guard = inner.spawn_refresh_listeners();
-                let wrapped = Arc::new(DynamicAgentRegistry::new(Arc::clone(&inner)));
-                (Some(inner), Some(wrapped), Some(guard))
-            } else {
-                (None, None, None)
-            };
-
-            let agent_observer: Option<Arc<dyn AgentObserveCallback>> =
-                Some(composite.clone() as Arc<dyn AgentObserveCallback>);
-
-            let a2a_account_filter = if self.db.is_some() {
-                let auth_filter = auth::openai_auth(auth_ctx.clone());
-                warp::any()
-                    .and(auth_filter)
-                    .map(identity_to_caller_context)
-                    .boxed()
-            } else {
-                warp::any().map(CallerContext::default).boxed()
-            };
-
-            let admin = auth_gate(auth::management_auth(auth_ctx.clone()))
-                .and(admin_agents::admin_agents_filter(discovery_reg.clone()));
-            let agents = bitrouter_api::router::agents::agents_filter(discovery_reg);
-
-            (
-                bitrouter_api::router::a2a::a2a_gateway_filter(
-                    gateway_reg,
-                    agent_observer,
-                    a2a_account_filter,
-                ),
-                admin,
-                agents,
-                refresh_guard,
-            )
+            filter
         };
 
         // ── Base route tree (always present) ─────────────────────────
@@ -653,16 +668,13 @@ where
 
         // ── Compose all routes ─────────────────────────────────────────
         let all_routes = base
-            .or(a2a_routes)
-            .or(admin_agent_routes)
-            .or(agent_list)
-            .or(admin_tool_routes)
+            .or(admin_mcp_routes)
             .or(tool_list)
-            .or(skills_list)
+            .or(skills.skills_list)
             .or(mcp_server)
             // Bridge routes come after the aggregated MCP filter so that the static
             // paths POST /mcp and GET /mcp/sse are matched first.
-            .or(bridge_routes);
+            .or(mcp_bridge_routes);
 
         // ── Reload listener ────────────────────────────────────────
         let _reload_guard = if let Some(reload_fn) = self.reload_fn {
@@ -720,15 +732,6 @@ fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> Cal
         key: id.key,
         chain: id.chain,
     }
-}
-
-/// Convert an auth filter into a gate that rejects unauthorized requests
-/// but does not add anything to the extract tuple.
-fn auth_gate(
-    auth: impl Filter<Extract = (bitrouter_accounts::identity::Identity,), Error = warp::Rejection>
-    + Clone,
-) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
-    auth.map(|_| ()).untuple_one()
 }
 
 /// Resolve the operator's CAIP-10 identity from wallet config.

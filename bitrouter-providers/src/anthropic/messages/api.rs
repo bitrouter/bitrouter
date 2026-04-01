@@ -254,7 +254,7 @@ pub(super) fn build_messages_request(
         model,
         messages,
         max_tokens: options.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
-        system,
+        system: system.map(bitrouter_core::api::anthropic::messages::types::SystemPrompt::Text),
         stream: Some(stream),
         temperature: options.temperature,
         top_p: options.top_p,

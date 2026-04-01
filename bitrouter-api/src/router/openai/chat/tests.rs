@@ -14,8 +14,8 @@ use bitrouter_core::{
     },
     observe::{CallerContext, ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
     routers::{
-        model_router::LanguageModelRouter,
-        routing_table::{RoutingTable, RoutingTarget},
+        router::LanguageModelRouter,
+        routing_table::{ApiProtocol, RoutingTable, RoutingTarget},
     },
 };
 use regex::Regex;
@@ -49,7 +49,8 @@ impl RoutingTable for MockTable {
     async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
         Ok(RoutingTarget {
             provider_name: "mock".to_owned(),
-            model_id: incoming.to_owned(),
+            service_id: incoming.to_owned(),
+            api_protocol: ApiProtocol::Openai,
         })
     }
 }
@@ -58,7 +59,7 @@ struct MockRouter;
 impl LanguageModelRouter for MockRouter {
     async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
         Ok(DynLanguageModel::new_box(MockModel {
-            model_id: target.model_id,
+            model_id: target.service_id,
         }))
     }
 }
@@ -67,7 +68,7 @@ struct MockToolRouter;
 impl LanguageModelRouter for MockToolRouter {
     async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
         Ok(DynLanguageModel::new_box(MockToolModel {
-            model_id: target.model_id,
+            model_id: target.service_id,
         }))
     }
 }
@@ -76,7 +77,7 @@ struct MockToolStreamRouter;
 impl LanguageModelRouter for MockToolStreamRouter {
     async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
         Ok(DynLanguageModel::new_box(MockToolStreamModel {
-            model_id: target.model_id,
+            model_id: target.service_id,
         }))
     }
 }

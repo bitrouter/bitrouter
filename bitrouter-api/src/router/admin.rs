@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use bitrouter_core::routers::admin::{AdminRoutingTable, DynamicRoute};
+use bitrouter_core::routers::admin::{AdminRoutingTable, DynamicRoute, RouteKind};
 use serde::Serialize;
 use warp::Filter;
 
@@ -49,7 +49,8 @@ where
 
 #[derive(Serialize)]
 struct AdminRouteListEntry {
-    model: String,
+    name: String,
+    kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     strategy: Option<String>,
     endpoints: Vec<AdminRouteEndpoint>,
@@ -59,7 +60,7 @@ struct AdminRouteListEntry {
 #[derive(Serialize)]
 struct AdminRouteEndpoint {
     provider: String,
-    model_id: String,
+    service_id: String,
 }
 
 fn handle_list_routes<T: AdminRoutingTable>(table: Arc<T>) -> impl warp::Reply {
@@ -68,11 +69,12 @@ fn handle_list_routes<T: AdminRoutingTable>(table: Arc<T>) -> impl warp::Reply {
     // Config-defined routes (from the inner table).
     for entry in table.list_routes() {
         entries.push(AdminRouteListEntry {
-            model: entry.model,
+            name: entry.name,
+            kind: "model",
             strategy: None,
             endpoints: vec![AdminRouteEndpoint {
                 provider: entry.provider,
-                model_id: String::new(),
+                service_id: String::new(),
             }],
             source: "config",
         });
@@ -81,28 +83,33 @@ fn handle_list_routes<T: AdminRoutingTable>(table: Arc<T>) -> impl warp::Reply {
     // Dynamic routes.
     for route in table.list_dynamic_routes() {
         // Remove any config entry that is shadowed by a dynamic route.
-        entries.retain(|e| e.model != route.model);
+        entries.retain(|e| e.name != route.name);
 
+        let kind = match route.kind {
+            RouteKind::Model => "model",
+            RouteKind::Tool => "tool",
+        };
         let strategy = match route.strategy {
             bitrouter_core::routers::admin::RouteStrategy::Priority => "priority",
             bitrouter_core::routers::admin::RouteStrategy::LoadBalance => "load_balance",
         };
         entries.push(AdminRouteListEntry {
-            model: route.model,
+            name: route.name,
+            kind,
             strategy: Some(strategy.to_owned()),
             endpoints: route
                 .endpoints
                 .into_iter()
                 .map(|ep| AdminRouteEndpoint {
                     provider: ep.provider,
-                    model_id: ep.model_id,
+                    service_id: ep.service_id,
                 })
                 .collect(),
             source: "dynamic",
         });
     }
 
-    entries.sort_by(|a, b| a.model.cmp(&b.model));
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
     warp::reply::json(&serde_json::json!({ "routes": entries }))
 }
 
@@ -125,12 +132,12 @@ fn handle_create_route<T: AdminRoutingTable>(
     route: DynamicRoute,
     table: Arc<T>,
 ) -> impl warp::Reply {
-    let model = route.model.clone();
+    let name = route.name.clone();
     match table.add_route(route) {
         Ok(()) => warp::reply::with_status(
             warp::reply::json(&serde_json::json!({
                 "status": "ok",
-                "model": model,
+                "name": name,
             })),
             warp::http::StatusCode::OK,
         ),
@@ -162,7 +169,7 @@ fn handle_delete_route<T: AdminRoutingTable>(name: String, table: Arc<T>) -> imp
         Ok(true) => warp::reply::with_status(
             warp::reply::json(&serde_json::json!({
                 "status": "ok",
-                "model": name,
+                "name": name,
                 "removed": true,
             })),
             warp::http::StatusCode::OK,
@@ -188,10 +195,12 @@ mod tests {
 
     use bitrouter_core::errors::{BitrouterError, Result};
     use bitrouter_core::routers::admin::{
-        AdminRoutingTable, DynamicRoute, RouteEndpoint, RouteStrategy,
+        AdminRoutingTable, DynamicRoute, RouteEndpoint, RouteKind, RouteStrategy,
     };
     use bitrouter_core::routers::dynamic::DynamicRoutingTable;
-    use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
+    use bitrouter_core::routers::routing_table::{
+        ApiProtocol, RouteEntry, RoutingTable, RoutingTarget,
+    };
 
     use super::admin_routes_filter;
 
@@ -202,7 +211,8 @@ mod tests {
             if incoming == "default" {
                 Ok(RoutingTarget {
                     provider_name: "openai".to_owned(),
-                    model_id: "gpt-4o".to_owned(),
+                    service_id: "gpt-4o".to_owned(),
+                    api_protocol: ApiProtocol::Openai,
                 })
             } else {
                 Err(BitrouterError::invalid_request(
@@ -215,9 +225,9 @@ mod tests {
 
         fn list_routes(&self) -> Vec<RouteEntry> {
             vec![RouteEntry {
-                model: "default".to_owned(),
+                name: "default".to_owned(),
                 provider: "openai".to_owned(),
-                protocol: "openai".to_owned(),
+                protocol: ApiProtocol::Openai,
             }]
         }
     }
@@ -241,7 +251,8 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
         let routes = body["routes"].as_array().unwrap();
         assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0]["model"], "default");
+        assert_eq!(routes[0]["name"], "default");
+        assert_eq!(routes[0]["kind"], "model");
         assert_eq!(routes[0]["source"], "config");
     }
 
@@ -251,11 +262,11 @@ mod tests {
         let filter = admin_routes_filter(table.clone());
 
         let body = serde_json::json!({
-            "model": "research",
+            "name": "research",
             "strategy": "load_balance",
             "endpoints": [
-                { "provider": "openai", "model_id": "gpt-4o" },
-                { "provider": "anthropic", "model_id": "claude-sonnet-4-20250514" }
+                { "provider": "openai", "service_id": "gpt-4o" },
+                { "provider": "anthropic", "service_id": "claude-sonnet-4-20250514" }
             ]
         });
 
@@ -269,7 +280,7 @@ mod tests {
         assert_eq!(res.status(), 200);
         let resp: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
         assert_eq!(resp["status"], "ok");
-        assert_eq!(resp["model"], "research");
+        assert_eq!(resp["name"], "research");
 
         // Verify the route was added.
         assert_eq!(table.list_dynamic_routes().len(), 1);
@@ -281,7 +292,7 @@ mod tests {
         let filter = admin_routes_filter(table);
 
         let body = serde_json::json!({
-            "model": "empty",
+            "name": "empty",
             "endpoints": []
         });
 
@@ -302,11 +313,13 @@ mod tests {
         // First add a dynamic route.
         table
             .add_route(DynamicRoute {
-                model: "temp".to_owned(),
+                name: "temp".to_owned(),
+                kind: RouteKind::Model,
                 strategy: RouteStrategy::Priority,
                 endpoints: vec![RouteEndpoint {
                     provider: "openai".to_owned(),
-                    model_id: "gpt-4o".to_owned(),
+                    service_id: "gpt-4o".to_owned(),
+                    api_protocol: None,
                 }],
             })
             .ok();
@@ -346,11 +359,13 @@ mod tests {
         // Add a dynamic route that shadows "default".
         table
             .add_route(DynamicRoute {
-                model: "default".to_owned(),
+                name: "default".to_owned(),
+                kind: RouteKind::Model,
                 strategy: RouteStrategy::Priority,
                 endpoints: vec![RouteEndpoint {
                     provider: "anthropic".to_owned(),
-                    model_id: "claude-sonnet-4-20250514".to_owned(),
+                    service_id: "claude-sonnet-4-20250514".to_owned(),
+                    api_protocol: None,
                 }],
             })
             .ok();
@@ -368,8 +383,49 @@ mod tests {
         let routes = body["routes"].as_array().unwrap();
 
         // Should have only 1 entry for "default" (the dynamic one).
-        let default_routes: Vec<_> = routes.iter().filter(|r| r["model"] == "default").collect();
+        let default_routes: Vec<_> = routes.iter().filter(|r| r["name"] == "default").collect();
         assert_eq!(default_routes.len(), 1);
         assert_eq!(default_routes[0]["source"], "dynamic");
+    }
+
+    #[tokio::test]
+    async fn create_tool_route_success() {
+        let table = test_table();
+        let filter = admin_routes_filter(table.clone());
+
+        let body = serde_json::json!({
+            "name": "web_search",
+            "kind": "tool",
+            "strategy": "priority",
+            "endpoints": [
+                { "provider": "exa", "service_id": "search" }
+            ]
+        });
+
+        let res = warp::test::request()
+            .method("POST")
+            .path("/admin/routes")
+            .json(&body)
+            .reply(&filter)
+            .await;
+
+        assert_eq!(res.status(), 200);
+
+        // Verify kind is preserved in listing.
+        let list_res = warp::test::request()
+            .method("GET")
+            .path("/admin/routes")
+            .reply(&filter)
+            .await;
+
+        let list_body: serde_json::Value = serde_json::from_slice(list_res.body()).unwrap();
+        let routes = list_body["routes"].as_array().unwrap();
+        let tool_route: Vec<_> = routes
+            .iter()
+            .filter(|r| r["name"] == "web_search")
+            .collect();
+        assert_eq!(tool_route.len(), 1);
+        assert_eq!(tool_route[0]["kind"], "tool");
+        assert_eq!(tool_route[0]["source"], "dynamic");
     }
 }
