@@ -38,16 +38,20 @@ impl McpServerConfig {
                     ));
                 }
             }
+            McpServerTransport::Stdio { command, .. } => {
+                if command.is_empty() {
+                    return Err(format!(
+                        "server '{}': stdio command must not be empty",
+                        self.name
+                    ));
+                }
+            }
         }
         Ok(())
     }
 }
 
 /// Transport type for connecting to an upstream MCP server.
-///
-/// Only streamable HTTP is supported. Stdio transport was removed —
-/// use an MCP-over-HTTP bridge (e.g. `mcp-proxy`) if your server only
-/// speaks stdio.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum McpServerTransport {
@@ -55,6 +59,11 @@ pub enum McpServerTransport {
         url: String,
         #[serde(default)]
         headers: HashMap<String, String>,
+    },
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
     },
 }
 
@@ -105,6 +114,30 @@ mod tests {
             transport: McpServerTransport::Http {
                 url: String::new(),
                 headers: HashMap::new(),
+            },
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn valid_stdio_config() {
+        let config = McpServerConfig {
+            name: "local".into(),
+            transport: McpServerTransport::Stdio {
+                command: "uvx".into(),
+                args: vec!["mcp-server-git".into()],
+            },
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn empty_stdio_command_rejected() {
+        let config = McpServerConfig {
+            name: "local".into(),
+            transport: McpServerTransport::Stdio {
+                command: String::new(),
+                args: vec![],
             },
         };
         assert!(config.validate().is_err());

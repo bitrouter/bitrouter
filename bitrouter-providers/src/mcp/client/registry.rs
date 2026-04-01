@@ -16,8 +16,7 @@ use bitrouter_core::api::mcp::types::{
 };
 
 use super::upstream::UpstreamConnection;
-
-pub use crate::util::RefreshGuard;
+use crate::util::RefreshGuard;
 
 /// Aggregates multiple upstream MCP connections and routes tool calls.
 ///

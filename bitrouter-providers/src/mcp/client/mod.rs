@@ -4,3 +4,6 @@ pub mod bridge;
 pub mod config;
 pub mod registry;
 pub mod upstream;
+
+pub(crate) mod convert;
+pub(crate) mod transport;

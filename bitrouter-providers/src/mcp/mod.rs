@@ -5,4 +5,3 @@
 //! and error definitions live in [`bitrouter_mcp`].
 
 pub mod client;
-pub mod transports;
