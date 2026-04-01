@@ -570,28 +570,9 @@ where
                 None => (None, None),
             }
         };
-        #[cfg(not(feature = "mcp"))]
-        let mcp_server_inner: Option<
-            Arc<
-                bitrouter_core::routers::dynamic::DynamicRoutingTable<
-                    Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
-                >,
-            >,
-        > = None;
-        #[cfg(not(feature = "mcp"))]
-        let mcp_admin_registry: Option<
-            Arc<
-                bitrouter_guardrails::tool::GuardedToolRegistry<
-                    Arc<
-                        bitrouter_core::routers::dynamic::DynamicRoutingTable<
-                            Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
-                        >,
-                    >,
-                >,
-            >,
-        > = None;
 
         // ── MCP admin routes ───────────────────────────────────────
+        #[cfg(feature = "mcp")]
         let admin_mcp_routes = {
             use bitrouter_api::router::mcp as mcp_api;
             if self.db.is_some() {
@@ -605,8 +586,14 @@ where
                     .boxed()
             }
         };
+        #[cfg(not(feature = "mcp"))]
+        let admin_mcp_routes = warp::path!("admin" / "mcp" / ..)
+            .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
+            .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
+            .boxed();
 
         // ── MCP server endpoint ────────────────────────────────────
+        #[cfg(feature = "mcp")]
         let mcp_server = {
             use bitrouter_api::router::mcp as mcp_api;
             let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
@@ -618,6 +605,14 @@ where
             )
             .map(|r| Box::new(r) as Box<dyn warp::Reply>)
             .boxed()
+        };
+        #[cfg(not(feature = "mcp"))]
+        let mcp_server = {
+            let _ = &tool_call_handler;
+            warp::path!("mcp" / ..)
+                .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
+                .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed()
         };
 
         // ── Tool listing (GET /v1/tools) ────────────────────────────

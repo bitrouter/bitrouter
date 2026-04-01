@@ -100,7 +100,7 @@ impl FilesystemSkillRegistry {
 
             if skill_ref.starts_with("./")
                 || skill_ref.starts_with("../")
-                || skill_ref.starts_with('/')
+                || std::path::Path::new(skill_ref).is_absolute()
             {
                 // Local path — read SKILL.md from the specified directory.
                 let local_dir = PathBuf::from(skill_ref);

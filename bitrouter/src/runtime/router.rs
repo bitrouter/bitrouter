@@ -205,6 +205,7 @@ impl LazyToolRouter {
 impl bitrouter_core::routers::router::ToolRouter for LazyToolRouter {
     async fn route_tool(&self, target: RoutingTarget) -> Result<Box<DynToolProvider<'static>>> {
         match target.api_protocol {
+            #[cfg(feature = "rest")]
             ApiProtocol::Rest => {
                 let provider = self.providers.get(&target.provider_name).ok_or_else(|| {
                     BitrouterError::invalid_request(
@@ -229,6 +230,15 @@ impl bitrouter_core::routers::router::ToolRouter for LazyToolRouter {
                 );
                 Ok(DynToolProvider::new_box(p))
             }
+            #[cfg(not(feature = "rest"))]
+            ApiProtocol::Rest => Err(BitrouterError::invalid_request(
+                None,
+                format!(
+                    "REST protocol not available (feature disabled) for provider '{}'",
+                    target.provider_name
+                ),
+                None,
+            )),
             #[cfg(feature = "mcp")]
             ApiProtocol::Mcp => {
                 let conn = self.mcp_pool.get(&target.provider_name).ok_or_else(|| {
@@ -297,6 +307,7 @@ impl bitrouter_core::tools::provider::ToolProvider for McpToolProviderAdapter {
 /// to Bearer). When the `auth.api_key` is an unsubstituted env var placeholder,
 /// falls back to the provider-level `api_key` (which is resolved by
 /// `env_prefix` during config loading).
+#[cfg(feature = "rest")]
 pub(crate) fn resolve_auth_header(config: &ProviderConfig) -> Option<(String, String)> {
     use bitrouter_config::AuthConfig;
     match config.auth.as_ref() {
@@ -324,6 +335,7 @@ pub(crate) fn resolve_auth_header(config: &ProviderConfig) -> Option<(String, St
 
 /// If the key is an unsubstituted env var placeholder (e.g. `"${EXA_API_KEY}"`),
 /// fall back to the provider-level resolved `api_key`.
+#[cfg(feature = "rest")]
 fn resolve_key(auth_key: &str, config: &ProviderConfig) -> String {
     if auth_key.starts_with("${") && auth_key.ends_with('}') {
         config

@@ -1,6 +1,7 @@
 //! MCP client — upstream connection management, registry, route construction,
 //! and sampling request handler.
 
+#[cfg(feature = "mcp")]
 use std::sync::Arc;
 
 use warp::Filter;
