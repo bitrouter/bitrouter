@@ -3,8 +3,6 @@
 mod cli;
 mod init;
 mod runtime;
-#[cfg(feature = "tui")]
-mod tui;
 
 use std::path::PathBuf;
 
@@ -551,7 +549,7 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
         crate::runtime::Router::new(client_builder.build(), runtime.config.providers.clone());
     #[cfg(feature = "tui")]
     {
-        let tui_config = crate::tui::TuiConfig {
+        let tui_config = bitrouter_tui::TuiConfig {
             listen_addr: status.listen_addr,
             providers: vec![], // TODO: populate from config
             route_count: 0,    // TODO: populate from routing table
@@ -564,7 +562,7 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
                     tracing::error!("server error: {e}");
                 }
             }
-            result = crate::tui::run(tui_config) => {
+            result = bitrouter_tui::run(tui_config) => {
                 result?;
             }
         }
