@@ -22,6 +22,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
         .map(|agent| {
             let (indicator, color) = match &agent.status {
                 AgentStatus::Idle => ("● ", Color::Green),
+                AgentStatus::Connecting => ("◌ ", Color::Cyan),
                 AgentStatus::Running => ("◎ ", Color::Yellow),
                 AgentStatus::Error(_) => ("✗ ", Color::Red),
             };

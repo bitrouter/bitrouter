@@ -1,10 +1,9 @@
+use agent_client_protocol as acp;
 use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
 /// All events the app loop consumes.
-///
-/// Phase 2 will add ACP variants (e.g. `AgentStatusChanged`, `MessageChunk`).
 #[derive(Debug)]
 pub enum AppEvent {
     /// Terminal key press.
@@ -13,14 +12,24 @@ pub enum AppEvent {
     Resize { _width: u16, _height: u16 },
     /// Tick / ignored terminal event.
     Tick,
+    /// Agent subprocess connected and ACP session created.
+    AgentConnected { name: String },
+    /// Agent-side error (spawn failure, protocol error, unexpected exit).
+    AgentError { name: String, message: String },
+    /// Streaming session update from the agent.
+    SessionUpdate(acp::SessionNotification),
+    /// Agent requests user permission for a tool call.
+    PermissionRequest {
+        request: acp::RequestPermissionRequest,
+        response_tx: tokio::sync::oneshot::Sender<acp::RequestPermissionResponse>,
+    },
+    /// The prompt turn completed (agent returned PromptResponse).
+    PromptDone { _stop_reason: acp::StopReason },
 }
 
-/// Multiplexes terminal events (and future ACP events) into a single channel.
-///
-/// Holds the sender half so the channel stays alive. Phase 2 will expose
-/// `sender()` for ACP workers to emit events.
+/// Multiplexes terminal events and ACP events into a single channel.
 pub struct EventHandler {
-    _tx: mpsc::Sender<AppEvent>,
+    tx: mpsc::Sender<AppEvent>,
     rx: mpsc::Receiver<AppEvent>,
 }
 
@@ -30,7 +39,12 @@ impl EventHandler {
         let (tx, rx) = mpsc::channel(256);
         let pump_tx = tx.clone();
         tokio::spawn(terminal_event_pump(pump_tx));
-        Self { _tx: tx, rx }
+        Self { tx, rx }
+    }
+
+    /// Clone the sender so ACP workers can emit events into the same channel.
+    pub fn sender(&self) -> mpsc::Sender<AppEvent> {
+        self.tx.clone()
     }
 
     /// Wait for the next event.

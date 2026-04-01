@@ -1,3 +1,4 @@
+mod acp;
 mod app;
 mod config;
 mod error;
@@ -32,7 +33,7 @@ async fn run_inner(config: TuiConfig) -> Result<(), TuiError> {
     stdout().execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
-    app::run_loop(&mut terminal, app::App::new(config)).await
+    app::run_loop(&mut terminal, config).await
 }
 
 fn restore_terminal() {

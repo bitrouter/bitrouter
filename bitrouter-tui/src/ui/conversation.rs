@@ -1,3 +1,4 @@
+use agent_client_protocol as acp;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -7,7 +8,7 @@ use ratatui::widgets::{
 };
 
 use crate::app::{AppState, Focus};
-use crate::model::{ContentBlock, Role, ToolCallStatus};
+use crate::model::{RenderedBlock, RenderedRole};
 
 pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let focused = state.focus == Focus::Conversation;
@@ -20,34 +21,38 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let inner_width = area.width.saturating_sub(4) as usize;
     let mut lines: Vec<Line> = Vec::new();
 
-    let title = if let Some(session) = &state.conversation.session {
-        format!("Conversation — {} ({})", session.agent_id, session.id)
-    } else {
-        "Conversation".to_string()
+    let title = match &state.conversation.agent_name {
+        Some(name) => format!("Conversation — {name}"),
+        None => "Conversation".to_string(),
     };
 
-    if let Some(session) = &state.conversation.session {
-        for msg in &session.messages {
+    if state.conversation.messages.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No active session — type a message to connect to an agent",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for msg in &state.conversation.messages {
             let (prefix, prefix_style) = match msg.role {
-                Role::User => (
+                RenderedRole::User => (
                     "You  ",
                     Style::default()
                         .fg(Color::Blue)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Role::Agent => (
+                RenderedRole::Agent => (
                     "Agent",
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Role::System => ("Sys  ", Style::default().fg(Color::DarkGray)),
+                RenderedRole::System => ("Sys  ", Style::default().fg(Color::DarkGray)),
             };
 
             let mut first = true;
             for block in &msg.blocks {
                 match block {
-                    ContentBlock::Text(text) => {
+                    RenderedBlock::Text(text) => {
                         for raw_line in text.lines() {
                             let wrapped = wrap_line(raw_line, inner_width);
                             for segment in wrapped {
@@ -66,15 +71,17 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
                             }
                         }
                     }
-                    ContentBlock::ToolCall {
-                        tool_name,
+                    RenderedBlock::ToolCall {
+                        title: tool_title,
                         status,
-                        summary,
+                        ..
                     } => {
                         let (icon, color) = match status {
-                            ToolCallStatus::Running => ("⟳", Color::Yellow),
-                            ToolCallStatus::Done => ("✓", Color::Green),
-                            ToolCallStatus::Failed => ("✗", Color::Red),
+                            acp::ToolCallStatus::Pending => ("○", Color::DarkGray),
+                            acp::ToolCallStatus::InProgress => ("⟳", Color::Yellow),
+                            acp::ToolCallStatus::Completed => ("✓", Color::Green),
+                            acp::ToolCallStatus::Failed => ("✗", Color::Red),
+                            _ => ("?", Color::DarkGray),
                         };
                         let prefix_span = if first {
                             first = false;
@@ -85,19 +92,62 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
                         lines.push(Line::from(vec![
                             prefix_span,
                             Span::styled(
-                                format!("{icon} {tool_name}: "),
+                                format!("{icon} {tool_title}"),
                                 Style::default().fg(color),
                             ),
-                            Span::raw(summary.clone()),
                         ]));
                     }
                 }
             }
+
+            // Streaming indicator
+            if msg.is_streaming {
+                lines.push(Line::from(vec![
+                    Span::raw("      │ "),
+                    Span::styled("▍", Style::default().fg(Color::Cyan)),
+                ]));
+            }
+
             lines.push(Line::raw("")); // message separator
         }
-    } else {
+    }
+
+    // Permission prompt — rendered inline at the bottom of the conversation
+    if let Some(perm) = &state.conversation.pending_permission {
         lines.push(Line::from(Span::styled(
-            "No active session",
+            "─── Permission Required ───",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+
+        // Show the tool call title
+        if let Some(title_text) = &perm.request.tool_call.fields.title {
+            lines.push(Line::from(vec![
+                Span::styled("  Tool: ", Style::default().fg(Color::Yellow)),
+                Span::raw(title_text.clone()),
+            ]));
+        }
+
+        // Show options
+        for (i, opt) in perm.request.options.iter().enumerate() {
+            let selected = i == perm.selected;
+            let marker = if selected { "▸ " } else { "  " };
+            let style = if selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {marker}{}", opt.name),
+                style,
+            )));
+        }
+
+        lines.push(Line::from(Span::styled(
+            "  Enter: select │ Esc: cancel",
             Style::default().fg(Color::DarkGray),
         )));
     }

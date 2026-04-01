@@ -7,13 +7,19 @@ use crate::app::{AppState, Focus};
 
 pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let focused = state.focus == Focus::Input;
-    let border_style = if focused {
+    let has_permission = state.conversation.pending_permission.is_some();
+
+    let border_style = if has_permission {
+        Style::default().fg(Color::Yellow)
+    } else if focused {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
     };
 
-    let title = if focused {
+    let title = if has_permission {
+        "Permission required — j/k: select, Enter: confirm, Esc: cancel"
+    } else if focused {
         "Input (Enter: send, Esc: back)"
     } else {
         "Input"
@@ -27,7 +33,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
     );
     state.input.set_cursor_line_style(Style::default());
 
-    if focused {
+    if focused && !has_permission {
         state
             .input
             .set_cursor_style(Style::default().bg(Color::White).fg(Color::Black));
