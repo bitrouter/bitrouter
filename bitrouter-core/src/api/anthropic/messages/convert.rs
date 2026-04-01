@@ -36,9 +36,10 @@ pub fn to_call_options(request: MessagesRequest) -> LanguageModelCallOptions {
     let mut prompt: Vec<LanguageModelMessage> = Vec::new();
 
     // Anthropic system message is a top-level field, not part of messages.
+    // Accept both plain string and array-of-content-blocks formats.
     if let Some(system) = request.system {
         prompt.push(LanguageModelMessage::System {
-            content: system,
+            content: system.into_text(),
             provider_options: None,
         });
     }
