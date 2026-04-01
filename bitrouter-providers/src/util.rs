@@ -2,7 +2,7 @@
 
 /// Guard that aborts background refresh tasks on drop.
 ///
-/// Used by both MCP and A2A registries to manage background listeners
+/// Used by provider registries to manage background listeners
 /// that watch for upstream capability changes.
 pub struct RefreshGuard {
     handles: Vec<tokio::task::JoinHandle<()>>,
