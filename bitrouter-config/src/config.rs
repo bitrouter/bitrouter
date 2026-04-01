@@ -279,14 +279,6 @@ pub struct ProviderConfig {
     /// Streamable HTTP endpoint at `POST /mcp/{name}` and `GET /mcp/{name}/sse`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<bool>,
-
-    /// Tool allow/deny filter applied to this provider's tools.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_filter: Option<bitrouter_core::routers::admin::ToolFilter>,
-
-    /// Parameter restriction rules applied to this provider's tool calls.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub param_restrictions: Option<bitrouter_core::routers::admin::ParamRestrictions>,
 }
 
 // ── Model metadata & pricing ─────────────────────────────────────────

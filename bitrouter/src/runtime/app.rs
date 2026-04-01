@@ -126,34 +126,29 @@ impl
             self.config.providers.clone(),
             self.config.tools.clone(),
         );
-        let (initial_filters, initial_restrictions) = {
-            let mut filters = std::collections::HashMap::new();
-            let mut restrictions = std::collections::HashMap::new();
-            for (name, provider) in &self.config.providers {
-                if let Some(ref f) = provider.tool_filter {
-                    filters.insert(name.clone(), f.clone());
-                }
-                if let Some(ref r) = provider.param_restrictions
-                    && !r.rules.is_empty()
-                {
-                    restrictions.insert(name.clone(), r.clone());
-                }
-            }
-            (filters, restrictions)
-        };
         let inner_tool_table = Arc::new(
             bitrouter_core::routers::dynamic::DynamicRoutingTable::new(tool_table),
         );
-        let tool_registry = Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
-            Arc::clone(&inner_tool_table),
-            initial_filters,
-            initial_restrictions,
-        ));
+        // Shared tool guardrail for hot-reload. The reload closure swaps the
+        // inner Arc; server.rs reads it when building the GuardedToolRouter.
+        let shared_tool_guardrail = Arc::new(std::sync::RwLock::new(Arc::new(
+            bitrouter_guardrails::ToolGuardrail::new(self.config.guardrails.tools.clone()),
+        )));
 
-        // Build the reload callback — captures both routing table and tool
-        // registry so it can re-read config and swap both inner tables.
+        let tool_registry = Arc::new(
+            bitrouter_guardrails::tool::GuardedToolRegistry::new(
+                Arc::clone(&inner_tool_table),
+                self.config.guardrails.tools.filters_map(),
+            )
+            .with_guardrail(Arc::clone(&shared_tool_guardrail)),
+        );
+
+        // Build the reload callback — captures routing table, tool registry,
+        // and tool guardrail so it can re-read config and swap everything.
         let reload_table = Arc::clone(&table);
         let reload_tool_inner = Arc::clone(&inner_tool_table);
+        let reload_tool_registry = Arc::clone(&tool_registry);
+        let reload_tool_guardrail = Arc::clone(&shared_tool_guardrail);
         let reload_paths = paths.clone();
         let reload_fn = move || {
             let env_file = reload_paths
@@ -170,7 +165,7 @@ impl
             );
             reload_table.reload(new_table).map_err(|e| e.to_string())?;
 
-            // Reload tool routing table (policy layer preserves filters/restrictions).
+            // Reload tool routing table.
             let new_tool_table = bitrouter_config::ConfigToolRoutingTable::new(
                 config.providers.clone(),
                 config.tools.clone(),
@@ -178,6 +173,17 @@ impl
             reload_tool_inner
                 .reload(new_tool_table)
                 .map_err(|e| e.to_string())?;
+
+            // Reload tool guardrail filters and restrictions from new config.
+            reload_tool_registry
+                .sync_filters(config.guardrails.tools.filters_map())
+                .map_err(|e| e.to_string())?;
+
+            if let Ok(mut guard) = reload_tool_guardrail.write() {
+                *guard = Arc::new(bitrouter_guardrails::ToolGuardrail::new(
+                    config.guardrails.tools.clone(),
+                ));
+            }
 
             tracing::info!("model and tool routing tables reloaded");
             Ok(())
@@ -187,6 +193,7 @@ impl
             crate::runtime::server::ServerPlan::new(self.config, table, Arc::new(model_router))
                 .with_paths(paths)
                 .with_tool_registry(tool_registry)
+                .with_tool_guardrail(shared_tool_guardrail)
                 .with_reload(reload_fn);
 
         if let Some(db) = self.db {

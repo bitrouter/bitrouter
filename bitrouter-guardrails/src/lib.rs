@@ -1,13 +1,20 @@
 pub mod config;
 pub mod engine;
 mod guarded_model;
+mod guarded_tool_provider;
 pub mod pattern;
 pub mod router;
 pub mod rule;
 pub mod tool;
+mod tool_config;
+mod tool_engine;
+mod tool_router;
 
 pub use config::{BlockMessageConfig, CustomPatternDef, GuardrailConfig, PatternDirection};
 pub use engine::Guardrail;
 pub use pattern::PatternId;
 pub use router::GuardedRouter;
 pub use rule::Action;
+pub use tool_config::ToolGuardrailConfig;
+pub use tool_engine::ToolGuardrail;
+pub use tool_router::GuardedToolRouter;

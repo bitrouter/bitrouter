@@ -58,6 +58,11 @@ pub struct ServerPlan<T, R> {
             >,
         >,
     >,
+    /// Shared tool guardrail for hot-reload support.
+    ///
+    /// When set, `serve()` reads the current `Arc<ToolGuardrail>` from this
+    /// lock and the reload closure can swap it atomically.
+    tool_guardrail: Option<Arc<std::sync::RwLock<Arc<bitrouter_guardrails::ToolGuardrail>>>>,
 }
 
 impl<T, R> ServerPlan<T, R>
@@ -74,6 +79,7 @@ where
             paths: None,
             reload_fn: None,
             tool_registry: None,
+            tool_guardrail: None,
         }
     }
 
@@ -114,6 +120,15 @@ where
         >,
     ) -> Self {
         self.tool_registry = Some(registry);
+        self
+    }
+
+    /// Provide a shared tool guardrail for hot-reload support.
+    pub fn with_tool_guardrail(
+        mut self,
+        guardrail: Arc<std::sync::RwLock<Arc<bitrouter_guardrails::ToolGuardrail>>>,
+    ) -> Self {
+        self.tool_guardrail = Some(guardrail);
         self
     }
 
@@ -436,21 +451,6 @@ where
         let dynamic_tool_registry = if let Some(registry) = self.tool_registry {
             registry
         } else {
-            let (initial_filters, initial_restrictions) = {
-                let mut filters = std::collections::HashMap::new();
-                let mut restrictions = std::collections::HashMap::new();
-                for (name, provider) in &self.config.providers {
-                    if let Some(ref f) = provider.tool_filter {
-                        filters.insert(name.clone(), f.clone());
-                    }
-                    if let Some(ref r) = provider.param_restrictions
-                        && !r.rules.is_empty()
-                    {
-                        restrictions.insert(name.clone(), r.clone());
-                    }
-                }
-                (filters, restrictions)
-            };
             let inner_tool_table =
                 Arc::new(bitrouter_core::routers::dynamic::DynamicRoutingTable::new(
                     bitrouter_config::ConfigToolRoutingTable::new(
@@ -460,8 +460,7 @@ where
                 ));
             Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
                 inner_tool_table,
-                initial_filters,
-                initial_restrictions,
+                self.config.guardrails.tools.filters_map(),
             ))
         };
 
@@ -500,20 +499,40 @@ where
         let mcp_bridge_routes = mcp.bridge_routes;
 
         // ── Lazy tool router ────────────────────────────────────────
-        let tool_router = Arc::new(crate::runtime::router::LazyToolRouter::new(
+        let lazy_tool_router = Arc::new(crate::runtime::router::LazyToolRouter::new(
             self.config.providers.clone(),
             #[cfg(feature = "mcp")]
             Arc::new(mcp_connections),
             Arc::new(reqwest::Client::new()),
         ));
 
-        if tool_router.has_providers() {
+        if lazy_tool_router.has_providers() {
             tracing::info!("tool router initialized");
         }
 
+        // Wrap with tool guardrail for parameter restriction enforcement.
+        // Use the shared guardrail lock from app.rs if provided (enables
+        // hot-reload), otherwise build a static one from config.
+        let tool_router = if let Some(shared) = self.tool_guardrail {
+            Arc::new(
+                bitrouter_guardrails::GuardedToolRouter::with_shared_guardrail(
+                    lazy_tool_router.clone(),
+                    shared,
+                ),
+            )
+        } else {
+            let guardrail = Arc::new(bitrouter_guardrails::ToolGuardrail::new(
+                self.config.guardrails.tools.clone(),
+            ));
+            Arc::new(bitrouter_guardrails::GuardedToolRouter::new(
+                lazy_tool_router.clone(),
+                guardrail,
+            ))
+        };
+
         // ── Tool call handler (protocol-neutral dispatch) ──────────
         let tool_call_handler: Option<Arc<dyn bitrouter_core::api::mcp::gateway::ToolCallHandler>> =
-            if tool_router.has_providers() {
+            if lazy_tool_router.has_providers() {
                 Some(Arc::new(
                     crate::runtime::router::RouterToolCallHandler::new(
                         tool_router,
@@ -524,25 +543,48 @@ where
                 None
             };
 
-        // ── MCP server registry (for POST /mcp tools/list, resources, prompts) ──
+        // ── MCP registries ─────────────────────────────────────────
+        //
+        // The MCP server endpoint (POST /mcp) needs `McpServer`, satisfied
+        // by `DynamicRoutingTable<ConfigMcpRegistry>` via blanket impls.
+        // The MCP admin endpoint needs `AdminToolRegistry + ToolPolicyAdmin`,
+        // satisfied by `GuardedToolRegistry` which layers discovery filtering.
         #[cfg(feature = "mcp")]
-        let mcp_server_registry = mcp_registry.clone().map(|mcp_reg| {
-            let inner = Arc::new(bitrouter_core::routers::dynamic::DynamicRoutingTable::new(
-                mcp_reg,
-            ));
-            Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
-                inner,
-                std::collections::HashMap::new(),
-                std::collections::HashMap::new(),
-            ))
-        });
+        let (mcp_server_inner, mcp_admin_registry) = {
+            type DynMcpTable = Arc<
+                bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                    Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
+                >,
+            >;
+            match mcp_registry.clone() {
+                Some(mcp_reg) => {
+                    let inner: DynMcpTable = Arc::new(
+                        bitrouter_core::routers::dynamic::DynamicRoutingTable::new(mcp_reg),
+                    );
+                    let admin = Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
+                        Arc::clone(&inner),
+                        std::collections::HashMap::new(),
+                    ));
+                    (Some(inner), Some(admin))
+                }
+                None => (None, None),
+            }
+        };
         #[cfg(not(feature = "mcp"))]
-        let mcp_server_registry: Option<
+        let mcp_server_inner: Option<
+            Arc<
+                bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                    Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
+                >,
+            >,
+        > = None;
+        #[cfg(not(feature = "mcp"))]
+        let mcp_admin_registry: Option<
             Arc<
                 bitrouter_guardrails::tool::GuardedToolRegistry<
                     Arc<
                         bitrouter_core::routers::dynamic::DynamicRoutingTable<
-                            bitrouter_providers::mcp::client::registry::ConfigMcpRegistry,
+                            Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
                         >,
                     >,
                 >,
@@ -554,11 +596,11 @@ where
             use bitrouter_api::router::mcp as mcp_api;
             if self.db.is_some() {
                 auth::auth_gate(auth::management_auth(auth_ctx.clone()))
-                    .and(mcp_api::mcp_admin_filter(mcp_server_registry.clone()))
+                    .and(mcp_api::mcp_admin_filter(mcp_admin_registry))
                     .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                     .boxed()
             } else {
-                mcp_api::mcp_admin_filter(mcp_server_registry.clone())
+                mcp_api::mcp_admin_filter(mcp_admin_registry)
                     .map(|r| Box::new(r) as Box<dyn warp::Reply>)
                     .boxed()
             }
@@ -569,7 +611,7 @@ where
             use bitrouter_api::router::mcp as mcp_api;
             let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
             mcp_api::mcp_server_filter_with_observe(
-                mcp_server_registry,
+                mcp_server_inner,
                 tool_call_handler,
                 tool_observer,
                 account_filter.clone(),

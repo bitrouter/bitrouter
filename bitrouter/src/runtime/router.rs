@@ -338,18 +338,18 @@ fn resolve_key(auth_key: &str, config: &ProviderConfig) -> String {
 // ── Tool call handler ────────────────────────────────────────────
 
 /// [`ToolCallHandler`] implementation that dispatches `tools/call` through
-/// the [`LazyToolRouter`] dispatch chain.
+/// a [`ToolRouter`] dispatch chain.
 ///
-/// Routes tool calls using the config-authoritative
-/// `DynamicToolRegistry<ConfigToolRoutingTable>` for routing and restriction
-/// enforcement, then dispatches to [`LazyToolRouter`] for provider construction.
-pub struct RouterToolCallHandler<T> {
-    tool_router: Arc<LazyToolRouter>,
+/// Routes tool calls using the config-authoritative routing table for
+/// name resolution, then dispatches through the tool router (which may
+/// wrap providers with guardrail enforcement via [`GuardedToolRouter`]).
+pub struct RouterToolCallHandler<R, T> {
+    tool_router: Arc<R>,
     tool_table: Arc<T>,
 }
 
-impl<T> RouterToolCallHandler<T> {
-    pub fn new(tool_router: Arc<LazyToolRouter>, tool_table: Arc<T>) -> Self {
+impl<R, T> RouterToolCallHandler<R, T> {
+    pub fn new(tool_router: Arc<R>, tool_table: Arc<T>) -> Self {
         Self {
             tool_router,
             tool_table,
@@ -357,13 +357,10 @@ impl<T> RouterToolCallHandler<T> {
     }
 }
 
-impl<T> bitrouter_core::api::mcp::gateway::ToolCallHandler for RouterToolCallHandler<T>
+impl<R, T> bitrouter_core::api::mcp::gateway::ToolCallHandler for RouterToolCallHandler<R, T>
 where
-    T: bitrouter_core::routers::routing_table::RoutingTable
-        + bitrouter_core::routers::admin::HasParamRestrictions
-        + Send
-        + Sync
-        + 'static,
+    R: bitrouter_core::routers::router::ToolRouter + Send + Sync + 'static,
+    T: bitrouter_core::routers::routing_table::RoutingTable + Send + Sync + 'static,
 {
     fn call_tool(
         &self,
@@ -383,24 +380,12 @@ where
         let name = name.to_owned();
         Box::pin(async move {
             use bitrouter_core::api::mcp::types::McpGatewayError;
-            use bitrouter_core::routers::router::ToolRouter;
             use bitrouter_core::tools::provider::ToolProvider;
 
-            let (provider_name, tool_id) = name
+            let (_provider_name, tool_id) = name
                 .split_once('/')
                 .map(|(p, t)| (p.to_owned(), t.to_owned()))
                 .unwrap_or_else(|| (name.clone(), name.clone()));
-
-            // Enforce parameter restrictions before dispatch.
-            let mut args_map = arguments;
-            if let Some(restriction) = self.tool_table.get_param_restrictions(&provider_name) {
-                restriction.check(&tool_id, &mut args_map).map_err(|e| {
-                    McpGatewayError::UpstreamCall {
-                        name: name.clone(),
-                        reason: e.to_string(),
-                    }
-                })?;
-            }
 
             // Route through config-authoritative table.
             let target =
@@ -411,6 +396,8 @@ where
                         name: format!("{name}: {e}"),
                     })?;
 
+            // Dispatch through the tool router (GuardedToolRouter enforces
+            // parameter restrictions on the returned provider).
             let provider_impl = self.tool_router.route_tool(target).await.map_err(|e| {
                 McpGatewayError::UpstreamCall {
                     name: name.clone(),
@@ -418,7 +405,7 @@ where
                 }
             })?;
 
-            let args_value = bitrouter_core::api::mcp::convert::args_to_value(args_map);
+            let args_value = bitrouter_core::api::mcp::convert::args_to_value(arguments);
             let result = provider_impl
                 .call_tool(&tool_id, args_value)
                 .await

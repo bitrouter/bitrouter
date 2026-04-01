@@ -1,53 +1,75 @@
-//! Tool policy wrapper that layers visibility filters and parameter
-//! restrictions on top of any [`ToolRegistry`].
+//! Tool registry wrapper that layers visibility filters on top of any
+//! [`ToolRegistry`].
 //!
 //! [`GuardedToolRegistry`] mirrors [`GuardedRouter`](crate::router::GuardedRouter)
-//! for models — it is a composable decorator that enforces policy without
-//! coupling to the routing layer.
+//! for models at the discovery layer — it is a composable decorator that
+//! controls which tools are visible without coupling to routing or
+//! call-time enforcement.
+//!
+//! Call-time parameter enforcement lives in
+//! [`GuardedToolProvider`](crate::guarded_tool_provider::GuardedToolProvider),
+//! created by [`GuardedToolRouter`](crate::tool_router::GuardedToolRouter).
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use bitrouter_core::errors::{BitrouterError, Result};
 use bitrouter_core::routers::admin::{
-    AdminToolRegistry, HasParamRestrictions, ParamRestrictions, ToolFilter, ToolPolicyAdmin,
-    ToolUpstreamEntry,
+    AdminToolRegistry, ToolFilter, ToolPolicyAdmin, ToolUpstreamEntry,
 };
 use bitrouter_core::routers::registry::{ToolEntry, ToolRegistry};
 use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
 
-/// A tool registry wrapper that applies visibility filters and parameter
-/// restrictions.
+/// A tool registry wrapper that applies visibility filters at discovery time.
 ///
-/// Wraps any `T: ToolRegistry` and layers per-server policy on top:
-/// - **Filters** control which tools are visible in `list_tools()`.
-/// - **Restrictions** are stored here and exposed for protocol crates to
-///   read at call time via [`HasParamRestrictions`].
+/// Wraps any `T: ToolRegistry` and layers per-server filter policy on top.
+/// Filters control which tools are visible in `list_tools()`.
 ///
-/// Parallel to [`GuardedRouter`](crate::router::GuardedRouter) for models.
+/// Call-time enforcement (parameter restrictions) is handled separately by
+/// [`GuardedToolProvider`](crate::guarded_tool_provider::GuardedToolProvider)
+/// via the [`ToolGuardrail`](crate::tool_engine::ToolGuardrail) engine.
+///
+/// An optional shared `ToolGuardrail` reference allows `list_upstreams()`
+/// to include parameter restriction info in admin responses.
 pub struct GuardedToolRegistry<T> {
     inner: T,
     filters: RwLock<HashMap<String, ToolFilter>>,
-    restrictions: RwLock<HashMap<String, ParamRestrictions>>,
+    guardrail: Option<Arc<std::sync::RwLock<Arc<crate::tool_engine::ToolGuardrail>>>>,
 }
 
 impl<T> GuardedToolRegistry<T> {
     /// Create a new guarded tool registry wrapping the given inner registry.
-    pub fn new(
-        inner: T,
-        filters: HashMap<String, ToolFilter>,
-        restrictions: HashMap<String, ParamRestrictions>,
-    ) -> Self {
+    pub fn new(inner: T, filters: HashMap<String, ToolFilter>) -> Self {
         Self {
             inner,
             filters: RwLock::new(filters),
-            restrictions: RwLock::new(restrictions),
+            guardrail: None,
         }
+    }
+
+    /// Attach a shared tool guardrail for admin inspection.
+    pub fn with_guardrail(
+        mut self,
+        guardrail: Arc<std::sync::RwLock<Arc<crate::tool_engine::ToolGuardrail>>>,
+    ) -> Self {
+        self.guardrail = Some(guardrail);
+        self
     }
 
     /// Access the inner registry.
     pub fn inner(&self) -> &T {
         &self.inner
+    }
+
+    /// Replace the entire filter set atomically. Used during hot-reload
+    /// to synchronize filters with the reloaded configuration.
+    pub fn sync_filters(&self, filters: HashMap<String, ToolFilter>) -> Result<()> {
+        let mut current = self
+            .filters
+            .write()
+            .map_err(|_| BitrouterError::transport(None, "tool policy lock poisoned"))?;
+        *current = filters;
+        Ok(())
     }
 }
 
@@ -70,15 +92,6 @@ impl<T: ToolRegistry> ToolRegistry for GuardedToolRegistry<T> {
     }
 }
 
-impl<T: Send + Sync> HasParamRestrictions for GuardedToolRegistry<T> {
-    fn get_param_restrictions(&self, server: &str) -> Option<ParamRestrictions> {
-        self.restrictions
-            .read()
-            .ok()
-            .and_then(|r| r.get(server).cloned())
-    }
-}
-
 impl<T: ToolRegistry> ToolPolicyAdmin for GuardedToolRegistry<T> {
     async fn update_filter(&self, server: &str, filter: Option<ToolFilter>) -> Result<()> {
         let mut filters = self
@@ -98,31 +111,26 @@ impl<T: ToolRegistry> ToolPolicyAdmin for GuardedToolRegistry<T> {
 
     async fn update_param_restrictions(
         &self,
-        server: &str,
-        restrictions: ParamRestrictions,
+        _server: &str,
+        _restrictions: bitrouter_core::routers::admin::ParamRestrictions,
     ) -> Result<()> {
-        let mut r = self
-            .restrictions
-            .write()
-            .map_err(|_| BitrouterError::transport(None, "tool policy lock poisoned"))?;
-        if restrictions.rules.is_empty() {
-            r.remove(server);
-        } else {
-            r.insert(server.to_owned(), restrictions);
-        }
+        tracing::warn!(
+            "runtime parameter restriction updates are managed by ToolGuardrail config — \
+             this operation is a no-op"
+        );
         Ok(())
     }
 }
 
-impl<T: AdminToolRegistry> AdminToolRegistry for GuardedToolRegistry<T> {
+impl<T: ToolRegistry> AdminToolRegistry for GuardedToolRegistry<T> {
     async fn list_upstreams(&self) -> Vec<ToolUpstreamEntry> {
-        // Get all tools from the inner (unfiltered) registry for a complete
-        // server list, then compute filtered counts per server.
         let all_tools = self.inner.list_tools().await;
         let filters = self.filters.read().ok();
-        let restrictions = self.restrictions.read().ok();
+        let guardrail_snapshot = self
+            .guardrail
+            .as_ref()
+            .and_then(|g| g.read().ok().map(|guard| Arc::clone(&guard)));
 
-        // Build full server set: tools + filter keys + restriction keys.
         let mut counts: HashMap<String, usize> = HashMap::new();
         for tool in &all_tools {
             let visible = match filters.as_ref().and_then(|f| f.get(tool.server())) {
@@ -136,14 +144,9 @@ impl<T: AdminToolRegistry> AdminToolRegistry for GuardedToolRegistry<T> {
             }
         }
 
-        // Include servers known only from policy (no tools).
+        // Include servers known only from filters (no tools).
         if let Some(ref f) = filters {
             for key in f.keys() {
-                counts.entry(key.clone()).or_default();
-            }
-        }
-        if let Some(ref r) = restrictions {
-            for key in r.keys() {
                 counts.entry(key.clone()).or_default();
             }
         }
@@ -152,9 +155,9 @@ impl<T: AdminToolRegistry> AdminToolRegistry for GuardedToolRegistry<T> {
             .into_iter()
             .map(|(name, tool_count)| {
                 let filter = filters.as_ref().and_then(|f| f.get(&name).cloned());
-                let param_restrictions = restrictions
+                let param_restrictions = guardrail_snapshot
                     .as_ref()
-                    .and_then(|r| r.get(&name).cloned())
+                    .and_then(|g| g.param_restrictions_for(&name).cloned())
                     .filter(|r| !r.rules.is_empty());
                 ToolUpstreamEntry {
                     name,
@@ -179,112 +182,9 @@ impl<T: RoutingTable + Send + Sync> RoutingTable for GuardedToolRegistry<T> {
     }
 }
 
-// ── MCP trait delegation ──────────────────────────────────────────────
-//
-// These impls delegate all MCP server traits to the inner registry so
-// that `GuardedToolRegistry<Arc<DynamicRoutingTable<ConfigMcpRegistry>>>`
-// can satisfy the `McpServer` bound required by MCP filters.
-
-use bitrouter_core::api::mcp::gateway::{
-    McpCompletionServer, McpLoggingServer, McpPromptServer, McpResourceServer,
-    McpSubscriptionServer, McpToolServer,
-};
-use bitrouter_core::api::mcp::types::{
-    CompleteParams, CompleteResult, LoggingLevel, McpGatewayError, McpGetPromptResult, McpPrompt,
-    McpResource, McpResourceContent, McpResourceTemplate, McpTool, McpToolCallResult,
-};
-use tokio::sync::broadcast;
-
-impl<T: McpToolServer + ToolRegistry + Send + Sync> McpToolServer for GuardedToolRegistry<T> {
-    async fn list_tools(&self) -> Vec<McpTool> {
-        let core_tools = <Self as ToolRegistry>::list_tools(self).await;
-        core_tools.into_iter().map(McpTool::from).collect()
-    }
-
-    async fn call_tool(
-        &self,
-        name: &str,
-        arguments: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> std::result::Result<McpToolCallResult, McpGatewayError> {
-        self.inner.call_tool(name, arguments).await
-    }
-
-    fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
-        self.inner.subscribe_tool_changes()
-    }
-}
-
-impl<T: McpResourceServer + Send + Sync> McpResourceServer for GuardedToolRegistry<T> {
-    async fn list_resources(&self) -> Vec<McpResource> {
-        self.inner.list_resources().await
-    }
-
-    async fn read_resource(
-        &self,
-        uri: &str,
-    ) -> std::result::Result<Vec<McpResourceContent>, McpGatewayError> {
-        self.inner.read_resource(uri).await
-    }
-
-    async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
-        self.inner.list_resource_templates().await
-    }
-
-    fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
-        self.inner.subscribe_resource_changes()
-    }
-}
-
-impl<T: McpPromptServer + Send + Sync> McpPromptServer for GuardedToolRegistry<T> {
-    async fn list_prompts(&self) -> Vec<McpPrompt> {
-        self.inner.list_prompts().await
-    }
-
-    async fn get_prompt(
-        &self,
-        name: &str,
-        arguments: Option<std::collections::HashMap<String, String>>,
-    ) -> std::result::Result<McpGetPromptResult, McpGatewayError> {
-        self.inner.get_prompt(name, arguments).await
-    }
-
-    fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
-        self.inner.subscribe_prompt_changes()
-    }
-}
-
-impl<T: McpSubscriptionServer + Send + Sync> McpSubscriptionServer for GuardedToolRegistry<T> {
-    async fn subscribe_resource(&self, uri: &str) -> std::result::Result<(), McpGatewayError> {
-        self.inner.subscribe_resource(uri).await
-    }
-
-    async fn unsubscribe_resource(&self, uri: &str) -> std::result::Result<(), McpGatewayError> {
-        self.inner.unsubscribe_resource(uri).await
-    }
-}
-
-impl<T: McpLoggingServer + Send + Sync> McpLoggingServer for GuardedToolRegistry<T> {
-    async fn set_logging_level(
-        &self,
-        level: LoggingLevel,
-    ) -> std::result::Result<(), McpGatewayError> {
-        self.inner.set_logging_level(level).await
-    }
-}
-
-impl<T: McpCompletionServer + Send + Sync> McpCompletionServer for GuardedToolRegistry<T> {
-    async fn complete(
-        &self,
-        params: CompleteParams,
-    ) -> std::result::Result<CompleteResult, McpGatewayError> {
-        self.inner.complete(params).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_core::routers::admin::ParamRule;
     use bitrouter_core::tools::definition::ToolDefinition;
 
     struct StaticToolSource {
@@ -340,7 +240,6 @@ mod tests {
             StaticToolSource {
                 tools: test_tools(),
             },
-            HashMap::new(),
             HashMap::new(),
         )
     }
@@ -405,34 +304,6 @@ mod tests {
 
         reg.update_filter("github", None).await.ok();
         assert_eq!(reg.list_tools().await.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn param_restrictions_roundtrip() {
-        let reg = test_registry();
-        assert!(reg.get_param_restrictions("github").is_none());
-
-        let restrictions = ParamRestrictions {
-            rules: HashMap::from([(
-                "search".to_owned(),
-                ParamRule {
-                    deny: Some(vec!["force".to_owned()]),
-                    allow: None,
-                    action: bitrouter_core::routers::admin::ParamViolationAction::Reject,
-                },
-            )]),
-        };
-        reg.update_param_restrictions("github", restrictions)
-            .await
-            .ok();
-
-        let stored = reg.get_param_restrictions("github");
-        assert!(stored.is_some());
-        assert!(
-            stored
-                .as_ref()
-                .is_some_and(|s| s.rules.contains_key("search"))
-        );
     }
 
     #[test]

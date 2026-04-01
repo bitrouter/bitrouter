@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::pattern::PatternId;
 use crate::rule::Action;
+use crate::tool_config::ToolGuardrailConfig;
 
 /// The repository URL included in block messages when `include_help_link` is
 /// enabled.
@@ -68,6 +69,10 @@ pub struct GuardrailConfig {
     /// Controls the content of error messages produced when content is blocked.
     #[serde(default)]
     pub block_message: BlockMessageConfig,
+
+    /// Tool access policy configuration.
+    #[serde(default)]
+    pub tools: ToolGuardrailConfig,
 }
 
 /// Configuration for a user-defined custom pattern.
@@ -139,6 +144,7 @@ impl Default for GuardrailConfig {
             custom_upgoing: HashMap::new(),
             custom_downgoing: HashMap::new(),
             block_message: BlockMessageConfig::default(),
+            tools: ToolGuardrailConfig::default(),
         }
     }
 }
