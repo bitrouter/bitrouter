@@ -11,7 +11,9 @@
 
 use std::sync::Arc;
 
-use bitrouter_core::routers::admin::{AdminToolRegistry, ParamRestrictions, ToolFilter};
+use bitrouter_core::routers::admin::{
+    AdminToolRegistry, ParamRestrictions, ToolFilter, ToolPolicyAdmin,
+};
 use warp::Filter;
 
 /// Mount all MCP admin endpoints under `/admin/mcp`.
@@ -22,7 +24,7 @@ pub fn mcp_admin_filter<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminToolRegistry + ToolPolicyAdmin + 'static,
 {
     list_tools(registry.clone())
         .or(list_servers(registry.clone()))
@@ -36,7 +38,7 @@ fn list_tools<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminToolRegistry + ToolPolicyAdmin + 'static,
 {
     warp::path!("admin" / "mcp" / "tools")
         .and(warp::get())
@@ -44,7 +46,7 @@ where
         .and_then(handle_list_tools)
 }
 
-async fn handle_list_tools<T: AdminToolRegistry>(
+async fn handle_list_tools<T: AdminToolRegistry + ToolPolicyAdmin>(
     registry: Option<Arc<T>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let Some(registry) = registry else {
@@ -78,7 +80,7 @@ fn list_servers<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminToolRegistry + ToolPolicyAdmin + 'static,
 {
     warp::path!("admin" / "mcp" / "servers")
         .and(warp::get())
@@ -86,7 +88,7 @@ where
         .and_then(handle_list_servers)
 }
 
-async fn handle_list_servers<T: AdminToolRegistry>(
+async fn handle_list_servers<T: AdminToolRegistry + ToolPolicyAdmin>(
     registry: Option<Arc<T>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let Some(registry) = registry else {
@@ -104,7 +106,7 @@ fn update_filter<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminToolRegistry + ToolPolicyAdmin + 'static,
 {
     warp::path!("admin" / "mcp" / "servers" / String / "filter")
         .and(warp::put())
@@ -121,7 +123,7 @@ struct FilterUpdateBody {
     deny: Option<Vec<String>>,
 }
 
-async fn handle_update_filter<T: AdminToolRegistry>(
+async fn handle_update_filter<T: AdminToolRegistry + ToolPolicyAdmin>(
     server: String,
     body: FilterUpdateBody,
     registry: Option<Arc<T>>,
@@ -167,7 +169,7 @@ fn update_params<T>(
     registry: Option<Arc<T>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
-    T: AdminToolRegistry + 'static,
+    T: AdminToolRegistry + ToolPolicyAdmin + 'static,
 {
     warp::path!("admin" / "mcp" / "servers" / String / "params")
         .and(warp::put())
@@ -176,7 +178,7 @@ where
         .and_then(handle_update_params)
 }
 
-async fn handle_update_params<T: AdminToolRegistry>(
+async fn handle_update_params<T: AdminToolRegistry + ToolPolicyAdmin>(
     server: String,
     restrictions: ParamRestrictions,
     registry: Option<Arc<T>>,

@@ -1,4 +1,6 @@
 use std::fmt;
+use std::future::Future;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -117,12 +119,22 @@ impl ModelPricing {
 /// A routing table that maps incoming names to routing targets.
 ///
 /// Used for both model routing and tool routing with separate instances.
-pub trait RoutingTable {
+pub trait RoutingTable: Send + Sync {
     /// Routes an incoming name to a routing target.
     fn route(&self, incoming_name: &str) -> impl Future<Output = Result<RoutingTarget>> + Send;
 
     /// Lists all configured routes.
     fn list_routes(&self) -> Vec<RouteEntry> {
         Vec::new()
+    }
+}
+
+impl<T: RoutingTable> RoutingTable for Arc<T> {
+    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
+        (**self).route(incoming_name).await
+    }
+
+    fn list_routes(&self) -> Vec<RouteEntry> {
+        (**self).list_routes()
     }
 }

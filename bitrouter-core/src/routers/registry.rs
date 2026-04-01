@@ -63,6 +63,24 @@ pub struct ToolEntry {
     pub definition: ToolDefinition,
 }
 
+impl ToolEntry {
+    /// Extract the server (provider) name from this tool's namespaced ID.
+    ///
+    /// Tool IDs are formatted as `"server/tool_name"`. Returns the portion
+    /// before the first `/`, or the entire ID if no `/` is present.
+    pub fn server(&self) -> &str {
+        self.id.split_once('/').map(|(s, _)| s).unwrap_or(&self.id)
+    }
+
+    /// Extract the un-namespaced tool name from this tool's ID.
+    ///
+    /// Returns the portion after the first `/`, or the entire ID if no
+    /// `/` is present.
+    pub fn tool_name(&self) -> &str {
+        self.id.split_once('/').map(|(_, t)| t).unwrap_or(&self.id)
+    }
+}
+
 /// Read-only registry for discovering tools available across all configured
 /// providers.
 ///

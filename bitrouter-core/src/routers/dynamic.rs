@@ -13,8 +13,11 @@ use std::sync::{Arc, RwLock};
 
 use crate::errors::{BitrouterError, Result};
 
-use super::admin::{AdminRoutingTable, DynamicRoute, RouteEndpoint, RouteKind, RouteStrategy};
-use super::registry::{ModelEntry, ModelRegistry};
+use super::admin::{
+    AdminRoutingTable, AdminToolRegistry, DynamicRoute, RouteEndpoint, RouteKind, RouteStrategy,
+    ToolUpstreamEntry,
+};
+use super::registry::{ModelEntry, ModelRegistry, ToolEntry, ToolRegistry};
 use super::reload::ReloadableRoutingTable;
 use super::routing_table::{ApiProtocol, RouteEntry, RoutingTable, RoutingTarget};
 
@@ -131,6 +134,34 @@ impl<T: ModelRegistry> ModelRegistry for DynamicRoutingTable<T> {
             .read()
             .map(|inner| inner.list_models())
             .unwrap_or_default()
+    }
+}
+
+impl<T: ToolRegistry> ToolRegistry for DynamicRoutingTable<T> {
+    async fn list_tools(&self) -> Vec<ToolEntry> {
+        self.read_inner().list_tools().await
+    }
+}
+
+impl<T: ToolRegistry + Send + Sync> AdminToolRegistry for DynamicRoutingTable<T> {
+    async fn list_upstreams(&self) -> Vec<ToolUpstreamEntry> {
+        let tools = self.read_inner().list_tools().await;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for tool in &tools {
+            *counts.entry(tool.server().to_owned()).or_default() += 1;
+        }
+
+        let mut entries: Vec<ToolUpstreamEntry> = counts
+            .into_iter()
+            .map(|(name, tool_count)| ToolUpstreamEntry {
+                name,
+                tool_count,
+                filter: None,
+                param_restrictions: None,
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        entries
     }
 }
 

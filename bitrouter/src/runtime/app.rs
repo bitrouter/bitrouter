@@ -121,7 +121,7 @@ impl
         let paths = self.paths.clone();
         let table = Arc::new(self.routing_table);
 
-        // Build config-authoritative tool registry.
+        // Build config-authoritative tool registry with policy layer.
         let tool_table = bitrouter_config::ConfigToolRoutingTable::new(
             self.config.providers.clone(),
             self.config.tools.clone(),
@@ -141,18 +141,19 @@ impl
             }
             (filters, restrictions)
         };
-        let tool_registry = Arc::new(
-            bitrouter_core::routers::dynamic_tool::DynamicToolRegistry::new(
-                tool_table,
-                initial_filters,
-                initial_restrictions,
-            ),
+        let inner_tool_table = Arc::new(
+            bitrouter_core::routers::dynamic::DynamicRoutingTable::new(tool_table),
         );
+        let tool_registry = Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
+            Arc::clone(&inner_tool_table),
+            initial_filters,
+            initial_restrictions,
+        ));
 
         // Build the reload callback — captures both routing table and tool
         // registry so it can re-read config and swap both inner tables.
         let reload_table = Arc::clone(&table);
-        let reload_tool_registry = Arc::clone(&tool_registry);
+        let reload_tool_inner = Arc::clone(&inner_tool_table);
         let reload_paths = paths.clone();
         let reload_fn = move || {
             let env_file = reload_paths
@@ -169,12 +170,12 @@ impl
             );
             reload_table.reload(new_table).map_err(|e| e.to_string())?;
 
-            // Reload tool routing table.
+            // Reload tool routing table (policy layer preserves filters/restrictions).
             let new_tool_table = bitrouter_config::ConfigToolRoutingTable::new(
                 config.providers.clone(),
                 config.tools.clone(),
             );
-            reload_tool_registry
+            reload_tool_inner
                 .reload(new_tool_table)
                 .map_err(|e| e.to_string())?;
 

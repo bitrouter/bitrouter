@@ -42,15 +42,19 @@ pub struct ServerPlan<T, R> {
     db: Option<Arc<DatabaseConnection>>,
     paths: Option<crate::runtime::paths::RuntimePaths>,
     reload_fn: Option<Arc<dyn Fn() -> std::result::Result<(), String> + Send + Sync>>,
-    /// Pre-built config-authoritative tool registry.
+    /// Pre-built config-authoritative tool registry with policy enforcement.
     ///
     /// When provided, `serve()` uses this instead of building one internally.
     /// This allows the reload closure (built in `app.rs`) to share the same
-    /// `Arc` and swap the inner table on SIGHUP.
+    /// inner `DynamicRoutingTable` `Arc` and swap it on SIGHUP.
     tool_registry: Option<
         Arc<
-            bitrouter_core::routers::dynamic_tool::DynamicToolRegistry<
-                bitrouter_config::ConfigToolRoutingTable,
+            bitrouter_guardrails::tool::GuardedToolRegistry<
+                Arc<
+                    bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                        bitrouter_config::ConfigToolRoutingTable,
+                    >,
+                >,
             >,
         >,
     >,
@@ -96,12 +100,16 @@ where
         self
     }
 
-    /// Provide a pre-built tool registry for hot-reload support.
+    /// Provide a pre-built tool registry with policy for hot-reload support.
     pub fn with_tool_registry(
         mut self,
         registry: Arc<
-            bitrouter_core::routers::dynamic_tool::DynamicToolRegistry<
-                bitrouter_config::ConfigToolRoutingTable,
+            bitrouter_guardrails::tool::GuardedToolRegistry<
+                Arc<
+                    bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                        bitrouter_config::ConfigToolRoutingTable,
+                    >,
+                >,
             >,
         >,
     ) -> Self {
@@ -443,16 +451,18 @@ where
                 }
                 (filters, restrictions)
             };
-            Arc::new(
-                bitrouter_core::routers::dynamic_tool::DynamicToolRegistry::new(
+            let inner_tool_table =
+                Arc::new(bitrouter_core::routers::dynamic::DynamicRoutingTable::new(
                     bitrouter_config::ConfigToolRoutingTable::new(
                         self.config.providers.clone(),
                         self.config.tools.clone(),
                     ),
-                    initial_filters,
-                    initial_restrictions,
-                ),
-            )
+                ));
+            Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
+                inner_tool_table,
+                initial_filters,
+                initial_restrictions,
+            ))
         };
 
         // ── Skills registry (filesystem-backed, no DB) ──────────────
@@ -517,19 +527,24 @@ where
         // ── MCP server registry (for POST /mcp tools/list, resources, prompts) ──
         #[cfg(feature = "mcp")]
         let mcp_server_registry = mcp_registry.clone().map(|mcp_reg| {
-            Arc::new(
-                bitrouter_core::routers::dynamic_tool::DynamicToolRegistry::new(
-                    mcp_reg,
-                    std::collections::HashMap::new(),
-                    std::collections::HashMap::new(),
-                ),
-            )
+            let inner = Arc::new(bitrouter_core::routers::dynamic::DynamicRoutingTable::new(
+                mcp_reg,
+            ));
+            Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
+                inner,
+                std::collections::HashMap::new(),
+                std::collections::HashMap::new(),
+            ))
         });
         #[cfg(not(feature = "mcp"))]
         let mcp_server_registry: Option<
             Arc<
-                bitrouter_core::routers::dynamic_tool::DynamicToolRegistry<
-                    bitrouter_providers::mcp::client::registry::ConfigMcpRegistry,
+                bitrouter_guardrails::tool::GuardedToolRegistry<
+                    Arc<
+                        bitrouter_core::routers::dynamic::DynamicRoutingTable<
+                            bitrouter_providers::mcp::client::registry::ConfigMcpRegistry,
+                        >,
+                    >,
                 >,
             >,
         > = None;

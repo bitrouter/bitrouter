@@ -231,14 +231,22 @@ pub struct ToolUpstreamEntry {
     pub param_restrictions: Option<ParamRestrictions>,
 }
 
-/// Admin interface for managing tool registries at runtime.
+/// Admin interface for inspecting tool registries at runtime.
 ///
 /// Parallel to [`AdminRoutingTable`] for models. Extends [`ToolRegistry`]
-/// with methods for inspecting upstreams and updating filters and parameter
-/// restrictions without requiring config rewrites or daemon restarts.
+/// with methods for inspecting upstream servers. Policy mutations (filters,
+/// parameter restrictions) live in [`ToolPolicyAdmin`].
 pub trait AdminToolRegistry: ToolRegistry {
     /// List all upstream tool servers with their current state.
     fn list_upstreams(&self) -> impl Future<Output = Vec<ToolUpstreamEntry>> + Send;
+}
+
+/// Admin interface for mutating tool visibility policy at runtime.
+///
+/// Separate from [`AdminToolRegistry`] (which manages routing topology)
+/// because policy mutations are the responsibility of the policy wrapper
+/// layer, not the routing layer.
+pub trait ToolPolicyAdmin: ToolRegistry {
     /// Update the tool filter for a specific upstream server.
     fn update_filter(
         &self,
@@ -251,4 +259,41 @@ pub trait AdminToolRegistry: ToolRegistry {
         server: &str,
         restrictions: ParamRestrictions,
     ) -> impl Future<Output = Result<()>> + Send;
+}
+
+impl<T: AdminToolRegistry> AdminToolRegistry for std::sync::Arc<T> {
+    async fn list_upstreams(&self) -> Vec<ToolUpstreamEntry> {
+        (**self).list_upstreams().await
+    }
+}
+
+impl<T: ToolPolicyAdmin> ToolPolicyAdmin for std::sync::Arc<T> {
+    async fn update_filter(&self, server: &str, filter: Option<ToolFilter>) -> Result<()> {
+        (**self).update_filter(server, filter).await
+    }
+
+    async fn update_param_restrictions(
+        &self,
+        server: &str,
+        restrictions: ParamRestrictions,
+    ) -> Result<()> {
+        (**self)
+            .update_param_restrictions(server, restrictions)
+            .await
+    }
+}
+
+/// Trait for types that can provide parameter restriction lookups.
+///
+/// Used by the tool call handler to enforce restrictions without coupling
+/// to a concrete policy implementation.
+pub trait HasParamRestrictions: Send + Sync {
+    /// Read the current parameter restrictions for a server.
+    fn get_param_restrictions(&self, server: &str) -> Option<ParamRestrictions>;
+}
+
+impl<T: HasParamRestrictions> HasParamRestrictions for std::sync::Arc<T> {
+    fn get_param_restrictions(&self, server: &str) -> Option<ParamRestrictions> {
+        (**self).get_param_restrictions(server)
+    }
 }

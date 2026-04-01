@@ -360,7 +360,7 @@ impl<T> RouterToolCallHandler<T> {
 impl<T> bitrouter_core::api::mcp::gateway::ToolCallHandler for RouterToolCallHandler<T>
 where
     T: bitrouter_core::routers::routing_table::RoutingTable
-        + bitrouter_core::routers::dynamic_tool::HasParamRestrictions
+        + bitrouter_core::routers::admin::HasParamRestrictions
         + Send
         + Sync
         + 'static,

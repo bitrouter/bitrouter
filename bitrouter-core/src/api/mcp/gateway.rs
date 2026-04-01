@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
-use crate::routers::dynamic_tool::DynamicToolRegistry;
+use crate::routers::dynamic::DynamicRoutingTable;
 use crate::routers::registry::ToolRegistry;
 
 use super::types::McpGatewayError;
@@ -282,12 +282,12 @@ impl<T: McpCompletionServer> McpCompletionServer for Arc<T> {
     }
 }
 
-// ── Blanket impls for DynamicToolRegistry<T> ────────────────────────
+// ── Blanket impls for DynamicRoutingTable<T> ────────────────────────
 //
 // These impls live here (where the traits are defined) to satisfy orphan
-// rules.  The `DynamicToolRegistry` type is defined in `bitrouter-core`.
+// rules.  The `DynamicRoutingTable` type is defined in `bitrouter-core`.
 
-impl<T: McpToolServer + ToolRegistry + Send + Sync> McpToolServer for DynamicToolRegistry<T> {
+impl<T: McpToolServer + ToolRegistry + Send + Sync> McpToolServer for DynamicRoutingTable<T> {
     async fn list_tools(&self) -> Vec<McpTool> {
         let core_tools = <Self as ToolRegistry>::list_tools(self).await;
         core_tools.into_iter().map(McpTool::from).collect()
@@ -300,37 +300,37 @@ impl<T: McpToolServer + ToolRegistry + Send + Sync> McpToolServer for DynamicToo
     ) -> Result<McpToolCallResult, McpGatewayError> {
         // Delegate to the inner McpToolServer — restriction enforcement
         // is handled at the MCP filter level via ToolCallHandler.
-        self.inner().call_tool(name, arguments).await
+        self.read_inner().call_tool(name, arguments).await
     }
 
     fn subscribe_tool_changes(&self) -> broadcast::Receiver<()> {
-        self.inner().subscribe_tool_changes()
+        self.read_inner().subscribe_tool_changes()
     }
 }
 
 impl<T: McpResourceServer + ToolRegistry + Send + Sync> McpResourceServer
-    for DynamicToolRegistry<T>
+    for DynamicRoutingTable<T>
 {
     async fn list_resources(&self) -> Vec<McpResource> {
-        self.inner().list_resources().await
+        self.read_inner().list_resources().await
     }
 
     async fn read_resource(&self, uri: &str) -> Result<Vec<McpResourceContent>, McpGatewayError> {
-        self.inner().read_resource(uri).await
+        self.read_inner().read_resource(uri).await
     }
 
     async fn list_resource_templates(&self) -> Vec<McpResourceTemplate> {
-        self.inner().list_resource_templates().await
+        self.read_inner().list_resource_templates().await
     }
 
     fn subscribe_resource_changes(&self) -> broadcast::Receiver<()> {
-        self.inner().subscribe_resource_changes()
+        self.read_inner().subscribe_resource_changes()
     }
 }
 
-impl<T: McpPromptServer + ToolRegistry + Send + Sync> McpPromptServer for DynamicToolRegistry<T> {
+impl<T: McpPromptServer + ToolRegistry + Send + Sync> McpPromptServer for DynamicRoutingTable<T> {
     async fn list_prompts(&self) -> Vec<McpPrompt> {
-        self.inner().list_prompts().await
+        self.read_inner().list_prompts().await
     }
 
     async fn get_prompt(
@@ -338,36 +338,36 @@ impl<T: McpPromptServer + ToolRegistry + Send + Sync> McpPromptServer for Dynami
         name: &str,
         arguments: Option<std::collections::HashMap<String, String>>,
     ) -> Result<McpGetPromptResult, McpGatewayError> {
-        self.inner().get_prompt(name, arguments).await
+        self.read_inner().get_prompt(name, arguments).await
     }
 
     fn subscribe_prompt_changes(&self) -> broadcast::Receiver<()> {
-        self.inner().subscribe_prompt_changes()
+        self.read_inner().subscribe_prompt_changes()
     }
 }
 
 impl<T: McpSubscriptionServer + ToolRegistry + Send + Sync> McpSubscriptionServer
-    for DynamicToolRegistry<T>
+    for DynamicRoutingTable<T>
 {
     async fn subscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
-        self.inner().subscribe_resource(uri).await
+        self.read_inner().subscribe_resource(uri).await
     }
 
     async fn unsubscribe_resource(&self, uri: &str) -> Result<(), McpGatewayError> {
-        self.inner().unsubscribe_resource(uri).await
+        self.read_inner().unsubscribe_resource(uri).await
     }
 }
 
-impl<T: McpLoggingServer + ToolRegistry + Send + Sync> McpLoggingServer for DynamicToolRegistry<T> {
+impl<T: McpLoggingServer + ToolRegistry + Send + Sync> McpLoggingServer for DynamicRoutingTable<T> {
     async fn set_logging_level(&self, level: LoggingLevel) -> Result<(), McpGatewayError> {
-        self.inner().set_logging_level(level).await
+        self.read_inner().set_logging_level(level).await
     }
 }
 
 impl<T: McpCompletionServer + ToolRegistry + Send + Sync> McpCompletionServer
-    for DynamicToolRegistry<T>
+    for DynamicRoutingTable<T>
 {
     async fn complete(&self, params: CompleteParams) -> Result<CompleteResult, McpGatewayError> {
-        self.inner().complete(params).await
+        self.read_inner().complete(params).await
     }
 }
