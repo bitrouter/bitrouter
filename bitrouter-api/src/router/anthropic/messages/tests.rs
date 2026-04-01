@@ -679,6 +679,35 @@ async fn messages_stream_tool_input_deltas() {
 }
 
 #[tokio::test]
+async fn messages_with_system_blocks() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let filter = messages_filter(table, router);
+
+    // Claude Code sends system as an array of content blocks
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 512,
+        "system": [{"type": "text", "text": "You are a helpful assistant."}],
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/messages")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    let json: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+    assert_eq!(json["type"], "message");
+    assert_eq!(json["role"], "assistant");
+}
+
+#[tokio::test]
 async fn messages_missing_max_tokens() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
