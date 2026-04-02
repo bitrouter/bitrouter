@@ -6,6 +6,7 @@ description = "BitRouter"
 authors = ["Archer <archer@bitrouter.ai>"]
 license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
+homepage = "https://bitrouter.ai"
 readme = "README.md"
 
 [features]
