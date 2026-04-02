@@ -159,7 +159,7 @@ run/
     if !readme_path.exists() {
         std::fs::write(
             &readme_path,
-            include_str!("../../../templates/home_readme.md"),
+            include_str!("../../templates/home_readme.md"),
         )?;
     }
 
