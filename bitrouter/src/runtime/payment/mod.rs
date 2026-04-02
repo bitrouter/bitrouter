@@ -24,6 +24,10 @@ use crate::runtime::ows_signer::OwsSigner;
 /// Default Tempo RPC URL (Moderato testnet).
 const DEFAULT_TEMPO_RPC_URL: &str = "https://rpc.moderato.tempo.xyz";
 
+/// Default Solana RPC URL (mainnet-beta).
+#[cfg(feature = "mpp-solana")]
+const DEFAULT_SOLANA_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
+
 /// reqwest-middleware 0.5 adapter that wraps an `mpp::client::MultiProvider`.
 ///
 /// `mpp-br` targets reqwest-middleware 0.4, so we implement the 0.5 trait
@@ -169,15 +173,14 @@ pub fn build_payment_middleware(
         let solana_rpc = payment_config
             .solana_rpc_url
             .as_deref()
-            .or(config.solana_rpc_url.as_deref());
+            .or(config.solana_rpc_url.as_deref())
+            .unwrap_or(DEFAULT_SOLANA_RPC_URL);
 
-        if let Some(rpc_url) = solana_rpc {
-            let solana_provider =
-                solana_charge::SolanaChargeProvider::new(wallet, &credential, rpc_url)
-                    .map_err(|e| PaymentSetupError::Provider(e.to_string()))?;
-            tracing::info!("payment client: Solana charge enabled");
-            multi.add(solana_provider);
-        }
+        let solana_provider =
+            solana_charge::SolanaChargeProvider::new(wallet, &credential, solana_rpc)
+                .map_err(|e| PaymentSetupError::Provider(e.to_string()))?;
+        tracing::info!("payment client: Solana charge enabled");
+        multi.add(solana_provider);
     }
 
     tracing::info!(

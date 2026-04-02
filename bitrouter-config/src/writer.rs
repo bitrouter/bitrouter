@@ -18,6 +18,9 @@ pub struct InitOptions {
     pub listen_addr: Option<SocketAddr>,
     /// Home directory to write into.
     pub home_dir: PathBuf,
+    /// OWS wallet name. When set, generates a `wallet:` section with
+    /// payment client configuration enabled.
+    pub wallet_name: Option<String>,
 }
 
 /// A custom (user-defined) provider that derives from a builtin.
@@ -165,6 +168,11 @@ fn generate_config_yaml(options: &InitOptions) -> String {
         }
     }
 
+    // Wallet section (enables payment client middleware)
+    if let Some(name) = &options.wallet_name {
+        yaml.push_str(&format!("wallet:\n  name: {name}\n  payment: {{}}\n\n",));
+    }
+
     yaml
 }
 
@@ -288,6 +296,7 @@ mod tests {
             listen_addr: None,
             custom_providers: vec![],
             home_dir: PathBuf::from("/tmp"),
+            wallet_name: None,
         };
         let yaml = generate_config_yaml(&options);
         assert!(yaml.contains("providers:"));
@@ -308,6 +317,7 @@ mod tests {
             listen_addr: None,
             custom_providers: vec![],
             home_dir: PathBuf::from("/tmp"),
+            wallet_name: None,
         };
         let env = generate_env_content(&options);
         assert!(env.contains("OPENAI_API_KEY=sk-test"));
@@ -322,6 +332,7 @@ mod tests {
             listen_addr: Some("127.0.0.1:9090".parse().unwrap()),
             custom_providers: vec![],
             home_dir: PathBuf::from("/tmp"),
+            wallet_name: None,
         };
         let yaml = generate_config_yaml(&options);
         // Should parse as valid BitrouterConfig
