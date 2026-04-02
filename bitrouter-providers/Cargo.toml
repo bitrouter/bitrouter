@@ -18,7 +18,7 @@ mcp = ["dep:tracing"]
 agentskills = ["dep:tracing", "dep:serde-saphyr", "dep:chrono", "dep:uuid", "dep:bitrouter-config", "tokio/fs"]
 
 [dependencies]
-bitrouter-core = { path = "../bitrouter-core", version = "0.17" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.18" }
 tracing = { version = "0.1", optional = true }
 
 base64 = "0.22"
@@ -40,7 +40,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7"
 
 # agentskills
-bitrouter-config = { path = "../bitrouter-config", version = "0.17", optional = true }
+bitrouter-config = { path = "../bitrouter-config", version = "0.18", optional = true }
 chrono = { version = "0.4", optional = true }
 serde-saphyr = { version = "0.0", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
