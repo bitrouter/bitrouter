@@ -33,15 +33,15 @@ pub fn render(frame: &mut Frame, state: &AppState, modal: &ObservabilityState) {
             AgentStatus::Busy => ("busy", Color::Yellow),
             AgentStatus::Error(_) => ("error", Color::Red),
         };
-        let is_default = state.default_agent.as_deref() == Some(&agent.name);
-        let default_mark = if is_default { " *" } else { "" };
+        let has_tab = state.tabs.iter().any(|t| t.agent_name == agent.name);
+        let tab_mark = if has_tab { " ●" } else { "" };
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {:<14}", agent.name),
                 Style::default().fg(agent.color),
             ),
             Span::styled(
-                format!("{status_str}{default_mark}"),
+                format!("{status_str}{tab_mark}"),
                 Style::default().fg(color),
             ),
         ]));

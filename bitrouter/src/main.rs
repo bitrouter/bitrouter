@@ -557,13 +557,22 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
         };
         let bitrouter_config = runtime.config.clone();
 
+        // The TUI is the authority on when to exit. If the server
+        // finishes first (e.g. AddrInUse), the TUI keeps running.
+        let tui_fut = bitrouter_tui::run(tui_config, &bitrouter_config);
+        let server_fut = runtime.serve_with_reload(model_router);
+        tokio::pin!(tui_fut);
+        tokio::pin!(server_fut);
+
         tokio::select! {
-            result = runtime.serve_with_reload(model_router) => {
+            result = &mut server_fut => {
                 if let Err(e) = result {
                     tracing::error!("server error: {e}");
                 }
+                // Server stopped — keep the TUI alive.
+                tui_fut.await?;
             }
-            result = bitrouter_tui::run(tui_config, &bitrouter_config) => {
+            result = &mut tui_fut => {
                 result?;
             }
         }

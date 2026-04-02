@@ -17,35 +17,76 @@ use crate::error::TuiError;
 use crate::event::{AppEvent, EventHandler};
 use crate::input;
 use crate::model::{
-    ActivityEntry, AgentManagerState, AgentResponse, AgentStatus, AutocompleteState, CommandAction,
+    ActivityEntry, AgentResponse, AgentStatus, AutocompleteState, CommandAction,
     CommandPaletteState, ContentBlock, EntryKind, InlineInput, InputTarget, Modal, ObsEvent,
     ObsEventKind, ObsLog, ObservabilityState, PaletteCommand, PermissionEntry, ScrollbackState,
-    SystemNotice, ThinkingEntry, ToolCallEntry, UserPrompt, agent_color,
+    SearchState, SystemNotice, Tab, TabBadge, ThinkingEntry, ToolCallEntry, UserPrompt,
+    agent_color,
 };
 use crate::ui;
 
+// ── Input mode (Zellij-style) ──────────────────────────────────────────
+
 /// Which mode the TUI is in.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Focus {
+pub enum InputMode {
     /// Normal mode: inline prompt has focus, scrollback auto-follows.
-    Input,
+    Normal,
     /// Scroll mode: user is browsing scrollback history.
     Scroll,
+    /// Tab mode: switching/managing tabs.
+    Tab,
+    /// Agent mode: inline agent list for connect/disconnect.
+    Agent,
+    /// Search mode: incremental scrollback search.
+    Search,
+    /// Permission mode: awaiting y/n/a for a permission request.
+    Permission,
 }
 
 /// All mutable TUI state, separated from `App` so the borrow checker allows
 /// passing `&mut state` into the draw closure while checking `app.running`.
 pub struct AppState {
-    pub focus: Focus,
+    pub mode: InputMode,
+    /// Agent registry: all known/discovered agents (not necessarily connected).
     pub agents: Vec<crate::model::Agent>,
-    pub default_agent: Option<String>,
-    pub scrollback: ScrollbackState,
+    /// Tabs: one per active agent session.
+    pub tabs: Vec<Tab>,
+    /// Index of the currently focused tab.
+    pub active_tab: usize,
+    /// Global input bar.
     pub input: InlineInput,
     pub input_target: InputTarget,
     pub autocomplete: Option<AutocompleteState>,
+    /// Modal overlays (Help, Observability, CommandPalette).
     pub modal: Option<Modal>,
     pub obs_log: ObsLog,
     pub config: TuiConfig,
+    /// Cursor position in Agent mode's inline list.
+    pub agent_list_selected: usize,
+    /// Incremental search state.
+    pub search: Option<SearchState>,
+}
+
+impl AppState {
+    /// Get the active tab's scrollback, if any tab exists.
+    pub fn active_scrollback(&self) -> Option<&ScrollbackState> {
+        self.tabs.get(self.active_tab).map(|t| &t.scrollback)
+    }
+
+    /// Get the active tab's scrollback mutably, if any tab exists.
+    pub fn active_scrollback_mut(&mut self) -> Option<&mut ScrollbackState> {
+        self.tabs
+            .get_mut(self.active_tab)
+            .map(|t| &mut t.scrollback)
+    }
+
+    /// Get the active tab's agent name, if any tab exists.
+    pub fn active_agent_name(&self) -> Option<&str> {
+        self.tabs
+            .get(self.active_tab)
+            .map(|t| t.agent_name.as_str())
+    }
 }
 
 pub struct App {
@@ -102,16 +143,18 @@ impl App {
         Self {
             running: true,
             state: AppState {
-                focus: Focus::Input,
+                mode: InputMode::Normal,
                 agents,
-                default_agent: None,
-                scrollback: ScrollbackState::new(),
+                tabs: Vec::new(),
+                active_tab: 0,
                 input: InlineInput::new(),
                 input_target: InputTarget::Default,
                 autocomplete: None,
                 modal: None,
                 obs_log: ObsLog::new(),
                 config,
+                agent_list_selected: 0,
+                search: None,
             },
             agent_providers: HashMap::new(),
             event_tx,
@@ -123,6 +166,67 @@ impl App {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Resize { .. } | AppEvent::Tick => {}
             AppEvent::Agent(agent_event) => self.handle_agent_event(agent_event),
+        }
+    }
+
+    // ── Tab helpers ────────────────────────────────────────────────────
+
+    /// Find the tab index for a given agent name.
+    fn tab_for_agent(&self, agent_name: &str) -> Option<usize> {
+        self.state
+            .tabs
+            .iter()
+            .position(|t| t.agent_name == agent_name)
+    }
+
+    /// Get a mutable reference to an agent's tab scrollback.
+    fn scrollback_for_agent(&mut self, agent_name: &str) -> Option<&mut ScrollbackState> {
+        self.state
+            .tabs
+            .iter_mut()
+            .find(|t| t.agent_name == agent_name)
+            .map(|t| &mut t.scrollback)
+    }
+
+    /// Switch to a tab by index, clearing its badge and resetting search.
+    fn switch_tab(&mut self, idx: usize) {
+        if idx < self.state.tabs.len() {
+            self.state.active_tab = idx;
+            self.state.tabs[idx].badge = TabBadge::None;
+            // Search state references entries from the old tab — invalidate it.
+            if self.state.search.is_some() {
+                self.state.search = None;
+                if self.state.mode == InputMode::Search {
+                    self.state.mode = InputMode::Normal;
+                }
+            }
+        }
+    }
+
+    /// Create a tab for an agent if one doesn't already exist. Returns the tab index.
+    fn ensure_tab(&mut self, agent_name: &str) -> usize {
+        if let Some(idx) = self.tab_for_agent(agent_name) {
+            return idx;
+        }
+        self.state.tabs.push(Tab {
+            agent_name: agent_name.to_string(),
+            scrollback: ScrollbackState::new(),
+            badge: TabBadge::None,
+        });
+        self.state.tabs.len() - 1
+    }
+
+    /// Increment unread badge on a background tab.
+    fn badge_background_tab(&mut self, agent_name: &str) {
+        if let Some(idx) = self.tab_for_agent(agent_name)
+            && idx != self.state.active_tab
+        {
+            let tab = &mut self.state.tabs[idx];
+            tab.badge = match &tab.badge {
+                TabBadge::None => TabBadge::Unread(1),
+                TabBadge::Unread(n) => TabBadge::Unread(n + 1),
+                TabBadge::Permission => TabBadge::Permission, // Don't downgrade
+            };
         }
     }
 
@@ -186,11 +290,8 @@ impl App {
             agent.status = AgentStatus::Connected;
             agent.session_id = Some(session_id);
         }
-        // Auto-set default if none exists.
-        if self.state.default_agent.is_none() {
-            self.state.default_agent = Some(agent_id.clone());
-        }
-        self.push_system_msg(&format!("Connected to {agent_id}"));
+        let tab_idx = self.ensure_tab(&agent_id);
+        self.push_system_msg_to_tab(tab_idx, &format!("Connected to {agent_id}"));
         self.state.obs_log.push(ObsEvent {
             agent_id,
             kind: ObsEventKind::Connected,
@@ -208,29 +309,14 @@ impl App {
             }
             agent.session_id = None;
         }
-        // Reassign default if this was the default agent.
-        if self.state.default_agent.as_deref() == Some(&agent_id) {
-            self.state.default_agent = self
-                .state
-                .agents
-                .iter()
-                .find(|a| matches!(a.status, AgentStatus::Connected | AgentStatus::Busy))
-                .map(|a| a.name.clone());
-        }
         // Clear streaming cursor for this agent.
-        self.state.scrollback.streaming_entry.remove(&agent_id);
-        // Remove from active focus.
-        self.state
-            .scrollback
-            .agent_focus
-            .active
-            .retain(|a| a != &agent_id);
-        if self.state.scrollback.agent_focus.focused.as_deref() == Some(&agent_id) {
-            self.state.scrollback.agent_focus.focused =
-                self.state.scrollback.agent_focus.active.first().cloned();
+        if let Some(sb) = self.scrollback_for_agent(&agent_id) {
+            sb.streaming_entry.remove(&agent_id);
         }
 
-        self.push_system_msg(&format!("Disconnected from {agent_id}"));
+        if let Some(tab_idx) = self.tab_for_agent(&agent_id) {
+            self.push_system_msg_to_tab(tab_idx, &format!("Disconnected from {agent_id}"));
+        }
         self.state.obs_log.push(ObsEvent {
             agent_id,
             kind: ObsEventKind::Disconnected,
@@ -242,8 +328,11 @@ impl App {
         if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
             agent.status = AgentStatus::Error(message.clone());
         }
-        self.state.scrollback.streaming_entry.remove(&agent_id);
-        self.push_system_msg(&format!("[{agent_id}] Error: {message}"));
+        if let Some(sb) = self.scrollback_for_agent(&agent_id) {
+            sb.streaming_entry.remove(&agent_id);
+        }
+        let tab_idx = self.ensure_tab(&agent_id);
+        self.push_system_msg_to_tab(tab_idx, &format!("[{agent_id}] Error: {message}"));
         self.state.obs_log.push(ObsEvent {
             agent_id,
             kind: ObsEventKind::Error { message },
@@ -253,23 +342,15 @@ impl App {
 
     // ── Agent content handlers ────────────────────────────────────────
 
-    fn ensure_agent_active(&mut self, agent_id: &str) {
-        let focus = &mut self.state.scrollback.agent_focus;
-        if !focus.active.iter().any(|a| a == agent_id) {
-            focus.active.push(agent_id.to_string());
-        }
-        if focus.focused.is_none() {
-            focus.focused = Some(agent_id.to_string());
-        }
-    }
-
     fn apply_agent_message_chunk(&mut self, agent_id: &str, text: String) {
-        self.ensure_agent_active(agent_id);
+        self.badge_background_tab(agent_id);
+        let tab_idx = self.ensure_tab(agent_id);
+        let sb = &mut self.state.tabs[tab_idx].scrollback;
 
         // Try to extend existing streaming entry for this agent.
-        if let Some(&entry_id) = self.state.scrollback.streaming_entry.get(agent_id)
-            && let Some(idx) = self.state.scrollback.index_of(entry_id)
-            && let EntryKind::AgentResponse(resp) = &mut self.state.scrollback.entries[idx].kind
+        if let Some(&entry_id) = sb.streaming_entry.get(agent_id)
+            && let Some(idx) = sb.index_of(entry_id)
+            && let EntryKind::AgentResponse(resp) = &mut sb.entries[idx].kind
         {
             // Extend last text block or push new one.
             if let Some(ContentBlock::Text(existing)) = resp.blocks.last_mut() {
@@ -281,62 +362,58 @@ impl App {
         }
 
         // Finalize any previous streaming entry before starting new.
-        self.finalize_streaming_entry(agent_id);
+        Self::finalize_streaming_in(sb, agent_id);
 
         // Start a new agent message entry.
-        let id = self.state.scrollback.next_id();
-        self.state.scrollback.entries.push(ActivityEntry {
+        let id = sb.next_id();
+        sb.entries.push(ActivityEntry {
             id,
             kind: EntryKind::AgentResponse(AgentResponse {
                 agent_id: agent_id.to_string(),
                 blocks: vec![ContentBlock::Text(text)],
                 is_streaming: true,
             }),
-            timestamp: Instant::now(),
             collapsed: false,
         });
-        self.state
-            .scrollback
-            .streaming_entry
-            .insert(agent_id.to_string(), id);
+        sb.streaming_entry.insert(agent_id.to_string(), id);
     }
 
     fn apply_non_text_content(&mut self, agent_id: &str, desc: String) {
-        self.ensure_agent_active(agent_id);
+        self.badge_background_tab(agent_id);
+        let tab_idx = self.ensure_tab(agent_id);
+        let sb = &mut self.state.tabs[tab_idx].scrollback;
 
         // Append as an Other block to the current streaming entry, or create new.
-        if let Some(&entry_id) = self.state.scrollback.streaming_entry.get(agent_id)
-            && let Some(idx) = self.state.scrollback.index_of(entry_id)
-            && let EntryKind::AgentResponse(resp) = &mut self.state.scrollback.entries[idx].kind
+        if let Some(&entry_id) = sb.streaming_entry.get(agent_id)
+            && let Some(idx) = sb.index_of(entry_id)
+            && let EntryKind::AgentResponse(resp) = &mut sb.entries[idx].kind
         {
             resp.blocks.push(ContentBlock::Other(desc));
             return;
         }
 
-        let id = self.state.scrollback.next_id();
-        self.state.scrollback.entries.push(ActivityEntry {
+        let id = sb.next_id();
+        sb.entries.push(ActivityEntry {
             id,
             kind: EntryKind::AgentResponse(AgentResponse {
                 agent_id: agent_id.to_string(),
                 blocks: vec![ContentBlock::Other(desc)],
                 is_streaming: true,
             }),
-            timestamp: Instant::now(),
             collapsed: false,
         });
-        self.state
-            .scrollback
-            .streaming_entry
-            .insert(agent_id.to_string(), id);
+        sb.streaming_entry.insert(agent_id.to_string(), id);
     }
 
     fn apply_thought_chunk(&mut self, agent_id: &str, text: String) {
-        self.ensure_agent_active(agent_id);
+        self.badge_background_tab(agent_id);
+        let tab_idx = self.ensure_tab(agent_id);
+        let sb = &mut self.state.tabs[tab_idx].scrollback;
 
         // Try to extend existing streaming thinking entry.
-        if let Some(&entry_id) = self.state.scrollback.streaming_entry.get(agent_id)
-            && let Some(idx) = self.state.scrollback.index_of(entry_id)
-            && let EntryKind::Thinking(th) = &mut self.state.scrollback.entries[idx].kind
+        if let Some(&entry_id) = sb.streaming_entry.get(agent_id)
+            && let Some(idx) = sb.index_of(entry_id)
+            && let EntryKind::Thinking(th) = &mut sb.entries[idx].kind
             && th.is_streaming
         {
             th.text.push_str(&text);
@@ -344,23 +421,19 @@ impl App {
         }
 
         // Finalize any previous streaming entry before starting new.
-        self.finalize_streaming_entry(agent_id);
+        Self::finalize_streaming_in(sb, agent_id);
 
-        let id = self.state.scrollback.next_id();
-        self.state.scrollback.entries.push(ActivityEntry {
+        let id = sb.next_id();
+        sb.entries.push(ActivityEntry {
             id,
             kind: EntryKind::Thinking(ThinkingEntry {
                 agent_id: agent_id.to_string(),
                 text,
                 is_streaming: true,
             }),
-            timestamp: Instant::now(),
             collapsed: false,
         });
-        self.state
-            .scrollback
-            .streaming_entry
-            .insert(agent_id.to_string(), id);
+        sb.streaming_entry.insert(agent_id.to_string(), id);
     }
 
     fn apply_tool_call(
@@ -370,10 +443,12 @@ impl App {
         title: String,
         status: ToolCallStatus,
     ) {
-        self.ensure_agent_active(agent_id);
+        self.badge_background_tab(agent_id);
+        let tab_idx = self.ensure_tab(agent_id);
+        let sb = &mut self.state.tabs[tab_idx].scrollback;
 
-        let id = self.state.scrollback.next_id();
-        self.state.scrollback.entries.push(ActivityEntry {
+        let id = sb.next_id();
+        sb.entries.push(ActivityEntry {
             id,
             kind: EntryKind::ToolCall(ToolCallEntry {
                 agent_id: agent_id.to_string(),
@@ -381,16 +456,16 @@ impl App {
                 title: title.clone(),
                 status,
             }),
-            timestamp: Instant::now(),
             collapsed: false,
         });
+        // Tool calls break the streaming cursor — next message chunk starts fresh.
+        sb.streaming_entry.remove(agent_id);
+
         self.state.obs_log.push(ObsEvent {
             agent_id: agent_id.to_string(),
             kind: ObsEventKind::ToolCall { title },
             timestamp: Instant::now(),
         });
-        // Tool calls break the streaming cursor — next message chunk starts fresh.
-        self.state.scrollback.streaming_entry.remove(agent_id);
     }
 
     fn apply_tool_call_update(
@@ -400,8 +475,11 @@ impl App {
         new_title: Option<String>,
         new_status: Option<ToolCallStatus>,
     ) {
+        let tab_idx = self.ensure_tab(agent_id);
+        let sb = &mut self.state.tabs[tab_idx].scrollback;
+
         // Find the tool call entry by ID and update it.
-        for entry in self.state.scrollback.entries.iter_mut().rev() {
+        for entry in sb.entries.iter_mut().rev() {
             if let EntryKind::ToolCall(tc) = &mut entry.kind
                 && tc.agent_id == agent_id
                 && tc.tool_call_id == tool_call_id
@@ -421,6 +499,7 @@ impl App {
         }
 
         // If not found, create from update (fallback).
+        // Need to drop the borrow first, then re-call through self.
         self.apply_tool_call(
             agent_id,
             tool_call_id,
@@ -435,31 +514,49 @@ impl App {
         request: bitrouter_providers::acp::types::PermissionRequest,
         response_tx: tokio::sync::oneshot::Sender<PermissionResponse>,
     ) {
-        let id = self.state.scrollback.next_id();
-        self.state.scrollback.entries.push(ActivityEntry {
+        let tab_idx = self.ensure_tab(&agent_id);
+        let sb = &mut self.state.tabs[tab_idx].scrollback;
+
+        let id = sb.next_id();
+        sb.entries.push(ActivityEntry {
             id,
             kind: EntryKind::Permission(PermissionEntry {
-                agent_id,
+                agent_id: agent_id.clone(),
                 request: Box::new(request),
                 response_tx: Some(response_tx),
                 resolved: false,
             }),
-            timestamp: Instant::now(),
             collapsed: false,
         });
         // Re-pin to bottom so user sees the permission prompt.
-        self.state.scrollback.follow = true;
+        sb.follow = true;
+
+        // Auto-switch only if we're not already resolving a permission on another tab.
+        if self.state.mode == InputMode::Permission {
+            // Already handling a permission — just badge this tab, don't switch.
+            if tab_idx != self.state.active_tab {
+                self.state.tabs[tab_idx].badge = TabBadge::Permission;
+            }
+        } else {
+            if tab_idx != self.state.active_tab {
+                self.state.tabs[tab_idx].badge = TabBadge::Permission;
+                self.switch_tab(tab_idx);
+            }
+            self.state.mode = InputMode::Permission;
+        }
     }
 
     fn handle_prompt_done(&mut self, agent_id: String) {
-        // Mark the streaming entry as complete.
-        if let Some(entry_id) = self.state.scrollback.streaming_entry.remove(&agent_id)
-            && let Some(idx) = self.state.scrollback.index_of(entry_id)
-        {
-            match &mut self.state.scrollback.entries[idx].kind {
-                EntryKind::AgentResponse(resp) => resp.is_streaming = false,
-                EntryKind::Thinking(th) => th.is_streaming = false,
-                _ => {}
+        if let Some(sb) = self.scrollback_for_agent(&agent_id) {
+            // Mark the streaming entry as complete.
+            if let Some(entry_id) = sb.streaming_entry.remove(&agent_id)
+                && let Some(idx) = sb.index_of(entry_id)
+            {
+                match &mut sb.entries[idx].kind {
+                    EntryKind::AgentResponse(resp) => resp.is_streaming = false,
+                    EntryKind::Thinking(th) => th.is_streaming = false,
+                    _ => {}
+                }
             }
         }
         // Update agent status.
@@ -469,47 +566,10 @@ impl App {
             agent.status = AgentStatus::Connected;
         }
         self.state.obs_log.push(ObsEvent {
-            agent_id: agent_id.clone(),
+            agent_id,
             kind: ObsEventKind::PromptDone,
             timestamp: Instant::now(),
         });
-
-        // Multi-agent focus: if focused agent is done, auto-focus next active.
-        let focus = &mut self.state.scrollback.agent_focus;
-        if focus.focused.as_deref() == Some(&agent_id) {
-            // Check if any other agent is still streaming.
-            let still_active: Vec<String> = focus
-                .active
-                .iter()
-                .filter(|a| {
-                    *a != &agent_id
-                        && self
-                            .state
-                            .agents
-                            .iter()
-                            .any(|ag| ag.name == **a && matches!(ag.status, AgentStatus::Busy))
-                })
-                .cloned()
-                .collect();
-
-            if !still_active.is_empty() {
-                focus.focused = still_active.into_iter().next();
-            } else {
-                // All done — clear focus so all blocks are visible in stacked view.
-                focus.focused = None;
-                focus.active.clear();
-            }
-        }
-        // If no agents are busy anymore, clear the active list entirely.
-        let any_busy = self
-            .state
-            .agents
-            .iter()
-            .any(|a| matches!(a.status, AgentStatus::Busy));
-        if !any_busy {
-            self.state.scrollback.agent_focus.focused = None;
-            self.state.scrollback.agent_focus.active.clear();
-        }
     }
 
     // ── Key handlers ────────────────────────────────────────────────
@@ -527,19 +587,10 @@ impl App {
             return;
         }
 
-        // Check for pending permission request — it takes priority.
-        if self.has_pending_permission() {
-            self.handle_permission_key(key);
-            return;
-        }
-
-        // Global shortcuts (work in any focus).
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
+        // Global shortcuts (work in any mode except Permission).
+        if self.state.mode != InputMode::Permission && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
             match key.code {
-                KeyCode::Char('g') => {
-                    self.open_agent_manager();
-                    return;
-                }
                 KeyCode::Char('p') => {
                     self.open_command_palette();
                     return;
@@ -552,66 +603,53 @@ impl App {
             }
         }
 
-        // '?' opens help (only when not typing).
-        if key.code == KeyCode::Char('?') && self.state.focus != Focus::Input {
+        // Alt+1..Alt+9: direct tab switch from any mode (except Permission).
+        if self.state.mode != InputMode::Permission
+            && key.modifiers.contains(KeyModifiers::ALT)
+            && let KeyCode::Char(c @ '1'..='9') = key.code
+        {
+            let idx = (c as usize) - ('1' as usize);
+            self.switch_tab(idx);
+            if self.state.mode == InputMode::Tab {
+                self.state.mode = InputMode::Normal;
+            }
+            return;
+        }
+
+        // '?' opens help (only in non-typing modes).
+        if key.code == KeyCode::Char('?')
+            && !matches!(
+                self.state.mode,
+                InputMode::Normal | InputMode::Search | InputMode::Permission
+            )
+        {
             self.state.modal = Some(Modal::Help);
             return;
         }
 
-        // Dispatch to focused mode.
-        match self.state.focus {
-            Focus::Scroll => self.handle_scroll_key(key),
-            Focus::Input => self.handle_input_key(key),
+        // Dispatch to current mode.
+        match self.state.mode {
+            InputMode::Normal => self.handle_normal_key(key),
+            InputMode::Scroll => self.handle_scroll_key(key),
+            InputMode::Tab => self.handle_tab_mode_key(key),
+            InputMode::Agent => self.handle_agent_mode_key(key),
+            InputMode::Search => self.handle_search_mode_key(key),
+            InputMode::Permission => self.handle_permission_key(key),
         }
     }
 
-    fn handle_scroll_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.state.scrollback.scroll_offset =
-                    self.state.scrollback.scroll_offset.saturating_add(1);
-                self.state.scrollback.follow = false;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.state.scrollback.scroll_offset =
-                    self.state.scrollback.scroll_offset.saturating_sub(1);
-                self.state.scrollback.follow = false;
-            }
-            KeyCode::PageDown => {
-                self.state.scrollback.scroll_offset =
-                    self.state.scrollback.scroll_offset.saturating_add(20);
-                self.state.scrollback.follow = false;
-            }
-            KeyCode::PageUp => {
-                self.state.scrollback.scroll_offset =
-                    self.state.scrollback.scroll_offset.saturating_sub(20);
-                self.state.scrollback.follow = false;
-            }
-            KeyCode::Char('G') => {
-                // Jump to bottom, re-enter Input mode.
-                self.state.scrollback.follow = true;
-                self.state.focus = Focus::Input;
-            }
-            KeyCode::Char('i') => {
-                self.state.scrollback.follow = true;
-                self.state.focus = Focus::Input;
-            }
-            KeyCode::Tab => {
-                self.state.scrollback.agent_focus.cycle();
-            }
-            _ => {
-                // Any printable char returns to input mode.
-                if let KeyCode::Char(c) = key.code {
-                    self.state.scrollback.follow = true;
-                    self.state.focus = Focus::Input;
-                    self.state.input.insert_char(c);
-                    self.after_input_char();
-                }
-            }
+    fn handle_normal_key(&mut self, key: KeyEvent) {
+        // Alt+T enters Tab mode.
+        if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('t') {
+            self.state.mode = InputMode::Tab;
+            return;
         }
-    }
+        // Alt+A enters Agent mode.
+        if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('a') {
+            self.state.mode = InputMode::Agent;
+            return;
+        }
 
-    fn handle_input_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Enter => {
                 // Check for autocomplete first.
@@ -631,16 +669,17 @@ impl App {
             KeyCode::Tab => {
                 if self.state.autocomplete.is_some() {
                     self.accept_autocomplete();
-                } else if self.state.scrollback.agent_focus.active.len() > 1 {
-                    self.state.scrollback.agent_focus.cycle();
                 }
             }
             KeyCode::Esc => {
                 if self.state.autocomplete.is_some() {
                     self.close_autocomplete();
                 } else {
-                    self.state.scrollback.follow = false;
-                    self.state.focus = Focus::Scroll;
+                    // Enter scroll mode on the active tab.
+                    if let Some(sb) = self.state.active_scrollback_mut() {
+                        sb.follow = false;
+                    }
+                    self.state.mode = InputMode::Scroll;
                 }
             }
             KeyCode::Backspace => {
@@ -665,28 +704,254 @@ impl App {
         }
     }
 
-    // ── Permission handling ─────────────────────────────────────────
-
-    fn has_pending_permission(&self) -> bool {
-        self.state.scrollback.entries.iter().any(|e| {
-            matches!(
-                &e.kind,
-                EntryKind::Permission(p) if !p.resolved
-            )
-        })
+    fn handle_scroll_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(sb) = self.state.active_scrollback_mut() {
+                    sb.scroll_offset = sb.scroll_offset.saturating_add(1);
+                    sb.follow = false;
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(sb) = self.state.active_scrollback_mut() {
+                    sb.scroll_offset = sb.scroll_offset.saturating_sub(1);
+                    sb.follow = false;
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(sb) = self.state.active_scrollback_mut() {
+                    sb.scroll_offset = sb.scroll_offset.saturating_add(20);
+                    sb.follow = false;
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(sb) = self.state.active_scrollback_mut() {
+                    sb.scroll_offset = sb.scroll_offset.saturating_sub(20);
+                    sb.follow = false;
+                }
+            }
+            KeyCode::Char('G') => {
+                if let Some(sb) = self.state.active_scrollback_mut() {
+                    sb.follow = true;
+                }
+                self.state.mode = InputMode::Normal;
+            }
+            KeyCode::Char('i') => {
+                if let Some(sb) = self.state.active_scrollback_mut() {
+                    sb.follow = true;
+                }
+                self.state.mode = InputMode::Normal;
+            }
+            KeyCode::Char('/') => {
+                self.state.search = Some(SearchState {
+                    query: String::new(),
+                    matches: Vec::new(),
+                    current_match: 0,
+                });
+                self.state.mode = InputMode::Search;
+            }
+            KeyCode::Esc => {
+                if let Some(sb) = self.state.active_scrollback_mut() {
+                    sb.follow = true;
+                }
+                self.state.mode = InputMode::Normal;
+            }
+            _ => {
+                // Any printable char returns to Normal mode.
+                if let KeyCode::Char(c) = key.code {
+                    if let Some(sb) = self.state.active_scrollback_mut() {
+                        sb.follow = true;
+                    }
+                    self.state.mode = InputMode::Normal;
+                    self.state.input.insert_char(c);
+                    self.after_input_char();
+                }
+            }
+        }
     }
 
+    fn handle_tab_mode_key(&mut self, key: KeyEvent) {
+        let tab_count = self.state.tabs.len();
+        match key.code {
+            KeyCode::Char('h') | KeyCode::Left => {
+                if tab_count > 0 && self.state.active_tab > 0 {
+                    let idx = self.state.active_tab - 1;
+                    self.switch_tab(idx);
+                }
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                if tab_count > 0 && self.state.active_tab + 1 < tab_count {
+                    let idx = self.state.active_tab + 1;
+                    self.switch_tab(idx);
+                }
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as usize) - ('1' as usize);
+                self.switch_tab(idx);
+                self.state.mode = InputMode::Normal;
+            }
+            KeyCode::Char('n') => {
+                // New tab → enter Agent mode to pick agent.
+                self.state.mode = InputMode::Agent;
+            }
+            KeyCode::Char('x') => {
+                if tab_count > 0 {
+                    self.close_current_tab();
+                }
+                self.state.mode = InputMode::Normal;
+            }
+            KeyCode::Esc => {
+                self.state.mode = InputMode::Normal;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_agent_mode_key(&mut self, key: KeyEvent) {
+        let agent_count = self.state.agents.len();
+        if agent_count == 0 {
+            if key.code == KeyCode::Esc {
+                self.state.mode = InputMode::Normal;
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.state.agent_list_selected = (self.state.agent_list_selected + 1) % agent_count;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.state.agent_list_selected > 0 {
+                    self.state.agent_list_selected -= 1;
+                } else {
+                    self.state.agent_list_selected = agent_count - 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('c') => {
+                let selected = self.state.agent_list_selected;
+                if let Some(agent) = self.state.agents.get(selected) {
+                    let name = agent.name.clone();
+                    if !self.agent_providers.contains_key(&name) {
+                        self.connect_agent(&name);
+                    }
+                    // Switch to the agent's tab.
+                    let tab_idx = self.ensure_tab(&name);
+                    self.switch_tab(tab_idx);
+                    self.state.mode = InputMode::Normal;
+                }
+            }
+            KeyCode::Char('d') => {
+                let selected = self.state.agent_list_selected;
+                if let Some(agent) = self.state.agents.get(selected) {
+                    let name = agent.name.clone();
+                    self.disconnect_agent(&name);
+                }
+            }
+            KeyCode::Char('r') => {
+                self.rediscover_agents();
+            }
+            KeyCode::Esc => {
+                self.state.mode = InputMode::Normal;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_search_mode_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                // Jump to next match.
+                if let Some(search) = &mut self.state.search
+                    && !search.matches.is_empty()
+                {
+                    search.current_match = (search.current_match + 1) % search.matches.len();
+                }
+                self.scroll_to_search_match();
+            }
+            KeyCode::Backspace => {
+                if let Some(search) = &mut self.state.search {
+                    search.query.pop();
+                }
+                self.recompute_search();
+            }
+            KeyCode::Char(c) => {
+                if let Some(search) = &mut self.state.search {
+                    search.query.push(c);
+                }
+                self.recompute_search();
+            }
+            KeyCode::Esc => {
+                self.state.search = None;
+                self.state.mode = InputMode::Scroll;
+            }
+            _ => {}
+        }
+    }
+
+    fn recompute_search(&mut self) {
+        let query = match &self.state.search {
+            Some(s) if !s.query.is_empty() => s.query.to_lowercase(),
+            _ => {
+                if let Some(search) = &mut self.state.search {
+                    search.matches.clear();
+                    search.current_match = 0;
+                }
+                return;
+            }
+        };
+
+        let matches: Vec<u64> = if let Some(sb) = self.state.active_scrollback() {
+            sb.entries
+                .iter()
+                .filter(|e| entry_contains_text(&e.kind, &query))
+                .map(|e| e.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if let Some(search) = &mut self.state.search {
+            search.matches = matches;
+            search.current_match = 0;
+        }
+    }
+
+    fn scroll_to_search_match(&mut self) {
+        let target_id = match &self.state.search {
+            Some(s) => s.matches.get(s.current_match).copied(),
+            None => None,
+        };
+        let Some(target_id) = target_id else { return };
+
+        if let Some(sb) = self.state.active_scrollback_mut() {
+            // Find approximate line position of the entry.
+            let mut line_pos = 0usize;
+            for entry in &sb.entries {
+                if entry.id == target_id {
+                    sb.scroll_offset = line_pos.saturating_sub(3);
+                    sb.follow = false;
+                    break;
+                }
+                // Rough estimate: each entry ~3 lines.
+                line_pos += 3;
+            }
+        }
+    }
+
+    // ── Permission handling ─────────────────────────────────────────
+
     fn handle_permission_key(&mut self, key: KeyEvent) {
-        // Find the unresolved permission entry.
-        let perm_idx = match self
-            .state
-            .scrollback
-            .entries
-            .iter()
-            .position(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved))
-        {
-            Some(idx) => idx,
-            None => return,
+        // Find the unresolved permission entry in the active tab.
+        let perm_idx = self.state.active_scrollback().and_then(|sb| {
+            sb.entries
+                .iter()
+                .position(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved))
+        });
+
+        let Some(perm_idx) = perm_idx else {
+            // No pending permission in active tab — return to Normal.
+            self.state.mode = InputMode::Normal;
+            return;
         };
 
         match key.code {
@@ -698,7 +963,12 @@ impl App {
     }
 
     fn resolve_permission(&mut self, entry_idx: usize, choice: PermissionChoice) {
-        if let EntryKind::Permission(perm) = &mut self.state.scrollback.entries[entry_idx].kind {
+        let sb = match self.state.active_scrollback_mut() {
+            Some(sb) => sb,
+            None => return,
+        };
+
+        if let EntryKind::Permission(perm) = &mut sb.entries[entry_idx].kind {
             let outcome = match choice {
                 PermissionChoice::Yes => {
                     if let Some(opt) = perm.request.options.first() {
@@ -732,86 +1002,39 @@ impl App {
             }
             perm.resolved = true;
         }
+
+        // Check if any other tab has a pending permission — auto-switch to it.
+        let next_perm_tab = self.state.tabs.iter().enumerate().find(|(_, tab)| {
+            tab.scrollback
+                .entries
+                .iter()
+                .any(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved))
+        });
+        if let Some((idx, _)) = next_perm_tab {
+            self.switch_tab(idx);
+            self.state.mode = InputMode::Permission;
+        } else {
+            self.state.mode = InputMode::Normal;
+        }
     }
 
     // ── Modal handlers ──────────────────────────────────────────────
 
     fn handle_modal_key(&mut self, key: KeyEvent) {
-        // Clone the modal enum discriminant to avoid borrow issues.
         let modal_kind = match &self.state.modal {
-            Some(Modal::AgentManager(_)) => 0,
-            Some(Modal::Observability(_)) => 1,
-            Some(Modal::CommandPalette(_)) => 2,
-            Some(Modal::Help) => 3,
+            Some(Modal::Observability(_)) => 0,
+            Some(Modal::CommandPalette(_)) => 1,
+            Some(Modal::Help) => 2,
             None => return,
         };
 
         match modal_kind {
-            0 => self.handle_agent_manager_key(key),
-            1 => self.handle_observability_key(key),
-            2 => self.handle_command_palette_key(key),
-            3 => {
+            0 => self.handle_observability_key(key),
+            1 => self.handle_command_palette_key(key),
+            2 => {
                 if key.code == KeyCode::Esc || key.code == KeyCode::Char('?') {
                     self.state.modal = None;
                 }
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_agent_manager_key(&mut self, key: KeyEvent) {
-        let agent_count = self.state.agents.len();
-        if agent_count == 0 {
-            if key.code == KeyCode::Esc {
-                self.state.modal = None;
-            }
-            return;
-        }
-
-        let selected = match &self.state.modal {
-            Some(Modal::AgentManager(s)) => s.selected,
-            _ => return,
-        };
-
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(Modal::AgentManager(s)) = &mut self.state.modal {
-                    s.selected = (s.selected + 1) % agent_count;
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if let Some(Modal::AgentManager(s)) = &mut self.state.modal {
-                    if s.selected > 0 {
-                        s.selected -= 1;
-                    } else {
-                        s.selected = agent_count - 1;
-                    }
-                }
-            }
-            KeyCode::Char('c') => {
-                if let Some(agent) = self.state.agents.get(selected) {
-                    let name = agent.name.clone();
-                    self.connect_agent(&name);
-                }
-            }
-            KeyCode::Char('d') => {
-                if let Some(agent) = self.state.agents.get(selected) {
-                    let name = agent.name.clone();
-                    self.disconnect_agent(&name);
-                }
-            }
-            KeyCode::Char('s') => {
-                if let Some(agent) = self.state.agents.get(selected)
-                    && matches!(agent.status, AgentStatus::Connected | AgentStatus::Busy)
-                {
-                    self.state.default_agent = Some(agent.name.clone());
-                }
-            }
-            KeyCode::Char('r') => {
-                self.rediscover_agents();
-            }
-            KeyCode::Esc => {
-                self.state.modal = None;
             }
             _ => {}
         }
@@ -881,10 +1104,6 @@ impl App {
 
     // ── Modal openers ───────────────────────────────────────────────
 
-    fn open_agent_manager(&mut self) {
-        self.state.modal = Some(Modal::AgentManager(AgentManagerState { selected: 0 }));
-    }
-
     fn open_command_palette(&mut self) {
         let commands = self.build_palette_commands();
         let filtered: Vec<usize> = (0..commands.len()).collect();
@@ -920,13 +1139,27 @@ impl App {
                         label: format!("Disconnect {}", agent.name),
                         action: CommandAction::DisconnectAgent(agent.name.clone()),
                     });
-                    cmds.push(PaletteCommand {
-                        label: format!("Set {} as default", agent.name),
-                        action: CommandAction::SetDefaultAgent(agent.name.clone()),
-                    });
                 }
                 AgentStatus::Connecting => {}
             }
+        }
+
+        // Tab commands.
+        for tab in &self.state.tabs {
+            cmds.push(PaletteCommand {
+                label: format!("Switch to tab: {}", tab.agent_name),
+                action: CommandAction::SwitchTab(tab.agent_name.clone()),
+            });
+        }
+        cmds.push(PaletteCommand {
+            label: "New tab...".to_string(),
+            action: CommandAction::NewTab,
+        });
+        if !self.state.tabs.is_empty() {
+            cmds.push(PaletteCommand {
+                label: "Close current tab".to_string(),
+                action: CommandAction::CloseTab,
+            });
         }
 
         cmds.push(PaletteCommand {
@@ -959,9 +1192,6 @@ impl App {
         }
     }
 
-    /// Execute the selected palette command. Returns `true` if the palette
-    /// modal should be closed afterwards, `false` if the action replaced it
-    /// with a different modal.
     fn execute_palette_command(&mut self) -> bool {
         let action = if let Some(Modal::CommandPalette(s)) = &self.state.modal {
             s.filtered
@@ -976,30 +1206,66 @@ impl App {
             Some(CommandAction::ToggleObservability) => {
                 self.state.modal = None;
                 self.open_observability();
-                false // Observability modal is now open.
+                false
             }
             Some(CommandAction::ShowHelp) => {
                 self.state.modal = Some(Modal::Help);
-                false // Help modal is now open.
+                false
             }
             Some(CommandAction::ConnectAgent(name)) => {
                 self.connect_agent(&name);
+                let tab_idx = self.ensure_tab(&name);
+                self.switch_tab(tab_idx);
                 true
             }
             Some(CommandAction::DisconnectAgent(name)) => {
                 self.disconnect_agent(&name);
                 true
             }
-            Some(CommandAction::SetDefaultAgent(name)) => {
-                self.state.default_agent = Some(name);
+            Some(CommandAction::ClearConversation) => {
+                if let Some(sb) = self.state.active_scrollback_mut() {
+                    *sb = ScrollbackState::new();
+                }
                 true
             }
-            Some(CommandAction::ClearConversation) => {
-                self.state.scrollback = ScrollbackState::new();
+            Some(CommandAction::NewTab) => {
+                self.state.modal = None;
+                self.state.mode = InputMode::Agent;
+                false
+            }
+            Some(CommandAction::CloseTab) => {
+                self.close_current_tab();
+                true
+            }
+            Some(CommandAction::SwitchTab(name)) => {
+                if let Some(idx) = self.tab_for_agent(&name) {
+                    self.switch_tab(idx);
+                }
                 true
             }
             None => true,
         }
+    }
+
+    // ── Tab lifecycle ──────────────────────────────────────────────
+
+    fn close_current_tab(&mut self) {
+        if self.state.tabs.is_empty() {
+            return;
+        }
+        let idx = self.state.active_tab;
+        let agent_name = self.state.tabs[idx].agent_name.clone();
+
+        // Disconnect the agent if connected.
+        self.disconnect_agent(&agent_name);
+
+        self.state.tabs.remove(idx);
+        // Immediately clamp active_tab to valid range.
+        self.state.active_tab = if self.state.tabs.is_empty() {
+            0
+        } else {
+            idx.min(self.state.tabs.len() - 1)
+        };
     }
 
     // ── Input / autocomplete ────────────────────────────────────────
@@ -1055,9 +1321,7 @@ impl App {
             .map_or(0, |ac| ac.prefix.len());
 
         if let Some(name) = chosen {
-            // Delete the prefix characters that were typed after '@'.
             self.state.input.delete_before(prefix_len);
-            // Insert the full name + trailing space.
             self.state.input.insert_str(&name);
             self.state.input.insert_char(' ');
         }
@@ -1087,10 +1351,11 @@ impl App {
         // Resolve target agent(s).
         let targets: Vec<String> = match &target {
             InputTarget::Default => {
-                if let Some(default) = &self.state.default_agent {
-                    vec![default.clone()]
+                // Route to active tab's agent, or find first available.
+                if let Some(name) = self.state.active_agent_name() {
+                    vec![name.to_string()]
                 } else {
-                    // Try first connected agent.
+                    // No active tab — try first connected agent.
                     match self
                         .state
                         .agents
@@ -1131,27 +1396,35 @@ impl App {
             return;
         }
 
-        // Push user prompt to scrollback.
-        let id = self.state.scrollback.next_id();
-        self.state.scrollback.entries.push(ActivityEntry {
-            id,
-            kind: EntryKind::UserPrompt(UserPrompt {
-                text: raw_text,
-                targets: targets.clone(),
-            }),
-            timestamp: Instant::now(),
-            collapsed: false,
-        });
+        // Push user prompt to each target tab's scrollback.
+        for agent_name in &targets {
+            let tab_idx = self.ensure_tab(agent_name);
+            let sb = &mut self.state.tabs[tab_idx].scrollback;
+            let id = sb.next_id();
+            sb.entries.push(ActivityEntry {
+                id,
+                kind: EntryKind::UserPrompt(UserPrompt {
+                    text: raw_text.clone(),
+                    targets: targets.clone(),
+                }),
+                collapsed: false,
+            });
+        }
 
         // Clear input.
         self.state.input.clear();
         self.state.input_target = InputTarget::Default;
         self.close_autocomplete();
-        self.state.scrollback.follow = true;
 
-        // Reset agent focus for new prompt round.
-        self.state.scrollback.agent_focus.focused = None;
-        self.state.scrollback.agent_focus.active.clear();
+        // Switch to the first target's tab.
+        if let Some(first_target) = targets.first()
+            && let Some(tab_idx) = self.tab_for_agent(first_target)
+        {
+            self.switch_tab(tab_idx);
+            if let Some(sb) = self.state.active_scrollback_mut() {
+                sb.follow = true;
+            }
+        }
 
         // Send to each target agent.
         for agent_name in &targets {
@@ -1160,7 +1433,9 @@ impl App {
                 self.connect_agent(agent_name);
             }
             // Reset streaming cursor for fresh response.
-            self.state.scrollback.streaming_entry.remove(agent_name);
+            if let Some(sb) = self.scrollback_for_agent(agent_name) {
+                sb.streaming_entry.remove(agent_name);
+            }
 
             // Mark as busy.
             if let Some(agent) = self.state.agents.iter_mut().find(|a| &a.name == agent_name)
@@ -1169,7 +1444,7 @@ impl App {
                 agent.status = AgentStatus::Busy;
             }
 
-            // Send prompt via provider (try_send avoids needing .await).
+            // Send prompt via provider.
             if let Some(provider) = self.agent_providers.get(agent_name) {
                 provider.try_prompt(clean_text.clone());
             }
@@ -1178,11 +1453,6 @@ impl App {
                 kind: ObsEventKind::PromptSent,
                 timestamp: Instant::now(),
             });
-        }
-
-        // Auto-set default if not set.
-        if self.state.default_agent.is_none() {
-            self.state.default_agent = targets.into_iter().next();
         }
     }
 
@@ -1201,14 +1471,18 @@ impl App {
         let config = match &agent.config {
             Some(c) => c.clone(),
             None => {
-                self.push_system_msg(&format!(
+                let msg = format!(
                     "No ACP adapter found for {agent_id}. Install the adapter and ensure it's on PATH."
-                ));
+                );
+                self.push_system_msg(&msg);
                 return;
             }
         };
 
         agent.status = AgentStatus::Connecting;
+
+        // Ensure a tab exists for this agent.
+        self.ensure_tab(agent_id);
 
         // Create event channel for this agent and forward to the main event loop.
         let (agent_event_tx, mut agent_event_rx) = mpsc::channel::<AgentEvent>(256);
@@ -1254,12 +1528,11 @@ impl App {
     }
 
     /// Mark the current streaming entry for an agent as no longer streaming.
-    /// Call this before switching to a different entry kind (e.g. thought → message).
-    fn finalize_streaming_entry(&mut self, agent_id: &str) {
-        if let Some(&old_id) = self.state.scrollback.streaming_entry.get(agent_id)
-            && let Some(idx) = self.state.scrollback.index_of(old_id)
+    fn finalize_streaming_in(sb: &mut ScrollbackState, agent_id: &str) {
+        if let Some(&old_id) = sb.streaming_entry.get(agent_id)
+            && let Some(idx) = sb.index_of(old_id)
         {
-            match &mut self.state.scrollback.entries[idx].kind {
+            match &mut sb.entries[idx].kind {
                 EntryKind::AgentResponse(resp) => resp.is_streaming = false,
                 EntryKind::Thinking(th) => th.is_streaming = false,
                 _ => {}
@@ -1269,16 +1542,24 @@ impl App {
 
     // ── Helpers ─────────────────────────────────────────────────────
 
+    /// Push a system message to a specific tab.
+    fn push_system_msg_to_tab(&mut self, tab_idx: usize, text: &str) {
+        if let Some(tab) = self.state.tabs.get_mut(tab_idx) {
+            let id = tab.scrollback.next_id();
+            tab.scrollback.entries.push(ActivityEntry {
+                id,
+                kind: EntryKind::System(SystemNotice {
+                    text: text.to_string(),
+                }),
+                collapsed: false,
+            });
+        }
+    }
+
+    /// Push a system message to the active tab (no-op if no tabs).
     fn push_system_msg(&mut self, text: &str) {
-        let id = self.state.scrollback.next_id();
-        self.state.scrollback.entries.push(ActivityEntry {
-            id,
-            kind: EntryKind::System(SystemNotice {
-                text: text.to_string(),
-            }),
-            timestamp: Instant::now(),
-            collapsed: false,
-        });
+        let idx = self.state.active_tab;
+        self.push_system_msg_to_tab(idx, text);
     }
 }
 
@@ -1287,6 +1568,21 @@ enum PermissionChoice {
     Yes,
     No,
     Always,
+}
+
+/// Check if an entry's text content contains the query string.
+fn entry_contains_text(kind: &EntryKind, query: &str) -> bool {
+    match kind {
+        EntryKind::UserPrompt(p) => p.text.to_lowercase().contains(query),
+        EntryKind::AgentResponse(r) => r.blocks.iter().any(|b| match b {
+            ContentBlock::Text(t) => t.to_lowercase().contains(query),
+            ContentBlock::Other(d) => d.to_lowercase().contains(query),
+        }),
+        EntryKind::ToolCall(tc) => tc.title.to_lowercase().contains(query),
+        EntryKind::Thinking(th) => th.text.to_lowercase().contains(query),
+        EntryKind::Permission(p) => p.request.title.to_lowercase().contains(query),
+        EntryKind::System(s) => s.text.to_lowercase().contains(query),
+    }
 }
 
 pub async fn run_loop(

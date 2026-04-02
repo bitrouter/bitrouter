@@ -62,16 +62,38 @@ pub enum AgentStatus {
     Error(String),
 }
 
+// ── Tab ─────────────────────────────────────────────────────────────────
+
+/// Badge indicator shown on a tab label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TabBadge {
+    /// No badge.
+    None,
+    /// Unread activity count.
+    Unread(usize),
+    /// Permission request pending.
+    Permission,
+}
+
+/// A single tab in the TUI, bound to one agent session.
+pub struct Tab {
+    /// The agent name this tab is bound to.
+    pub agent_name: String,
+    /// Per-tab scrollback history.
+    pub scrollback: ScrollbackState,
+    /// Badge shown on the tab label for background activity.
+    pub badge: TabBadge,
+}
+
 // ── Entry types ────────────────────────────────────────────────────────
 
 /// Monotonic entry identifier.
 pub type EntryId = u64;
 
-/// A single entry in the unified scrollback.
+/// A single entry in the scrollback.
 pub struct ActivityEntry {
     pub id: EntryId,
     pub kind: EntryKind,
-    pub timestamp: Instant,
     /// Whether this entry is visually collapsed.
     pub collapsed: bool,
 }
@@ -389,51 +411,6 @@ impl Renderable for SystemNotice {
     }
 }
 
-// ── BackgroundAgentSummary (rendered inline, not stored as entry) ──────
-
-pub struct BackgroundAgentSummary {
-    pub agent_id: String,
-    pub tool_call_count: usize,
-    pub elapsed_secs: u64,
-}
-
-impl Renderable for BackgroundAgentSummary {
-    fn render_lines(
-        &self,
-        width: u16,
-        _collapsed: bool,
-        ctx: &RenderContext,
-    ) -> Vec<Line<'static>> {
-        let color = ctx
-            .agent_colors
-            .get(&self.agent_id)
-            .copied()
-            .unwrap_or(Color::White);
-
-        let info = format!(
-            "◎ working · {} tool calls · {}s",
-            self.tool_call_count, self.elapsed_secs
-        );
-
-        // Fill with dots between agent name and info.
-        let prefix = format!("  ┄ {} ", self.agent_id);
-        let suffix_len = info.len() + 1; // +1 for trailing space
-        let fill_len = (width as usize)
-            .saturating_sub(prefix.len())
-            .saturating_sub(suffix_len);
-        let dots: String = std::iter::repeat_n('·', fill_len).collect();
-
-        vec![
-            Line::from(vec![
-                Span::styled(prefix, Style::default().fg(color)),
-                Span::styled(format!("{dots} "), Style::default().fg(Color::DarkGray)),
-                Span::styled(info, Style::default().fg(Color::DarkGray)),
-            ]),
-            Line::raw(""),
-        ]
-    }
-}
-
 // ── Content block ──────────────────────────────────────────────────────
 
 /// A content block inside an agent message.
@@ -445,46 +422,7 @@ pub enum ContentBlock {
 
 // ── Scrollback state ───────────────────────────────────────────────────
 
-/// Multi-agent focus: which agent is expanded vs. collapsed to a summary.
-pub struct AgentFocus {
-    /// The agent whose output is fully expanded. `None` = no concurrent agents.
-    pub focused: Option<String>,
-    /// All agents currently streaming or just finished for the current prompt.
-    pub active: Vec<String>,
-}
-
-impl AgentFocus {
-    pub fn new() -> Self {
-        Self {
-            focused: None,
-            active: Vec::new(),
-        }
-    }
-
-    /// Cycle focus to the next active agent. Returns the newly focused agent id.
-    pub fn cycle(&mut self) -> Option<&str> {
-        if self.active.len() <= 1 {
-            return self.focused.as_deref();
-        }
-        let current_idx = self
-            .focused
-            .as_ref()
-            .and_then(|f| self.active.iter().position(|a| a == f))
-            .unwrap_or(0);
-        let next_idx = (current_idx + 1) % self.active.len();
-        self.focused = self.active.get(next_idx).cloned();
-        self.focused.as_deref()
-    }
-
-    /// Returns true if this agent is a background agent (active but not focused).
-    pub fn is_background(&self, agent_id: &str) -> bool {
-        self.active.len() > 1
-            && self.focused.as_deref() != Some(agent_id)
-            && self.active.iter().any(|a| a == agent_id)
-    }
-}
-
-/// State of the unified scrollback.
+/// State of the per-tab scrollback.
 pub struct ScrollbackState {
     pub entries: Vec<ActivityEntry>,
     pub scroll_offset: usize,
@@ -495,8 +433,6 @@ pub struct ScrollbackState {
     /// Per-agent streaming cursor: maps agent_id → EntryId of the entry
     /// currently being streamed into.
     pub streaming_entry: HashMap<String, EntryId>,
-    /// Multi-agent focus state.
-    pub agent_focus: AgentFocus,
     /// Whether the viewport is pinned to the bottom (auto-scroll).
     pub follow: bool,
 }
@@ -509,7 +445,6 @@ impl ScrollbackState {
             total_rendered_lines: 0,
             next_entry_id: 0,
             streaming_entry: HashMap::new(),
-            agent_focus: AgentFocus::new(),
             follow: true,
         }
     }
@@ -688,7 +623,7 @@ fn char_to_byte_idx(s: &str, char_idx: usize) -> usize {
 /// Resolved target(s) for the current input message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputTarget {
-    /// No @-mention — route to default agent.
+    /// No @-mention — route to active tab's agent.
     Default,
     /// One or more specific agents.
     Specific(Vec<String>),
@@ -706,18 +641,22 @@ pub struct AutocompleteState {
     pub selected: usize,
 }
 
+// ── Search state ───────────────────────────────────────────────────────
+
+/// State for incremental scrollback search.
+pub struct SearchState {
+    pub query: String,
+    pub matches: Vec<EntryId>,
+    pub current_match: usize,
+}
+
 // ── Modals ──────────────────────────────────────────────────────────────
 
 /// At most one modal overlay is open at a time.
 pub enum Modal {
-    AgentManager(AgentManagerState),
     Observability(ObservabilityState),
     CommandPalette(CommandPaletteState),
     Help,
-}
-
-pub struct AgentManagerState {
-    pub selected: usize,
 }
 
 pub struct ObservabilityState {
@@ -781,10 +720,12 @@ pub struct PaletteCommand {
 pub enum CommandAction {
     ConnectAgent(String),
     DisconnectAgent(String),
-    SetDefaultAgent(String),
     ToggleObservability,
     ClearConversation,
     ShowHelp,
+    NewTab,
+    CloseTab,
+    SwitchTab(String),
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -812,7 +753,7 @@ pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
     for word in line.split_whitespace() {
         if current.is_empty() {
             current.push_str(word);
-        } else if current.len() + 1 + word.len() <= width {
+        } else if current.chars().count() + 1 + word.chars().count() <= width {
             current.push(' ');
             current.push_str(word);
         } else {

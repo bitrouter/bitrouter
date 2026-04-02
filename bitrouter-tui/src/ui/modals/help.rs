@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use crate::ui::layout::centered_rect;
 
 pub fn render(frame: &mut Frame) {
-    let area = centered_rect(60, 70, frame.area());
+    let area = centered_rect(60, 75, frame.area());
     frame.render_widget(Clear, area);
 
     let header_style = Style::default()
@@ -19,14 +19,14 @@ pub fn render(frame: &mut Frame) {
 
     let lines = vec![
         Line::raw(""),
-        Line::from(Span::styled("  Input", header_style)),
+        Line::from(Span::styled("  Normal Mode", header_style)),
         Line::from(vec![
             Span::styled("  Enter         ", key_style),
             Span::styled("Send message", desc_style),
         ]),
         Line::from(vec![
             Span::styled("  Shift+Enter   ", key_style),
-            Span::styled("New line (Alt+Enter also works)", desc_style),
+            Span::styled("New line", desc_style),
         ]),
         Line::from(vec![
             Span::styled("  @agent        ", key_style),
@@ -34,11 +34,11 @@ pub fn render(frame: &mut Frame) {
         ]),
         Line::from(vec![
             Span::styled("  @all          ", key_style),
-            Span::styled("Broadcast to all connected agents", desc_style),
+            Span::styled("Broadcast to all agents", desc_style),
         ]),
         Line::from(vec![
             Span::styled("  Tab           ", key_style),
-            Span::styled("Accept autocomplete / switch agent", desc_style),
+            Span::styled("Accept autocomplete", desc_style),
         ]),
         Line::from(vec![
             Span::styled("  Esc           ", key_style),
@@ -59,8 +59,44 @@ pub fn render(frame: &mut Frame) {
             Span::styled("Return to input", desc_style),
         ]),
         Line::from(vec![
-            Span::styled("  Tab           ", key_style),
-            Span::styled("Switch focused agent", desc_style),
+            Span::styled("  /             ", key_style),
+            Span::styled("Search scrollback", desc_style),
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled("  Tab Mode (Alt+T)", header_style)),
+        Line::from(vec![
+            Span::styled("  h / l         ", key_style),
+            Span::styled("Switch tab left/right", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  1-9           ", key_style),
+            Span::styled("Jump to tab by number", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  n             ", key_style),
+            Span::styled("New tab (opens agent list)", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  x             ", key_style),
+            Span::styled("Close current tab", desc_style),
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled("  Agent Mode (Alt+A)", header_style)),
+        Line::from(vec![
+            Span::styled("  j / k         ", key_style),
+            Span::styled("Navigate agent list", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Enter / c     ", key_style),
+            Span::styled("Connect and switch to tab", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  d             ", key_style),
+            Span::styled("Disconnect agent", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  r             ", key_style),
+            Span::styled("Rediscover agents", desc_style),
         ]),
         Line::raw(""),
         Line::from(Span::styled("  Permissions", header_style)),
@@ -79,8 +115,8 @@ pub fn render(frame: &mut Frame) {
         Line::raw(""),
         Line::from(Span::styled("  Global", header_style)),
         Line::from(vec![
-            Span::styled("  Ctrl+G        ", key_style),
-            Span::styled("Agent manager", desc_style),
+            Span::styled("  Alt+1..9      ", key_style),
+            Span::styled("Quick switch tab", desc_style),
         ]),
         Line::from(vec![
             Span::styled("  Ctrl+O        ", key_style),

@@ -57,30 +57,44 @@ pub fn strip_mentions(text: &str) -> String {
 ///
 /// Returns `None` if the cursor isn't in an @-mention position.
 pub fn autocomplete_prefix(line: &str, cursor_col: usize) -> Option<String> {
-    let bytes = line.as_bytes();
-    if cursor_col == 0 || cursor_col > bytes.len() {
+    let char_count = line.chars().count();
+    if cursor_col == 0 || cursor_col > char_count {
         return None;
     }
 
-    // Walk backwards from cursor to find '@'.
-    let end = cursor_col;
-    let mut pos = cursor_col;
-    while pos > 0 {
-        pos -= 1;
-        let ch = bytes[pos];
-        if ch == b'@' {
+    // Convert char index to byte index for slicing.
+    let end_byte = char_to_byte(line, cursor_col);
+
+    // Walk backwards from cursor (in chars) to find '@'.
+    let chars: Vec<(usize, char)> = line.char_indices().take(cursor_col).collect();
+    let mut i = chars.len();
+    while i > 0 {
+        i -= 1;
+        let (byte_pos, ch) = chars[i];
+        if ch == '@' {
             // The '@' must be at the start of a word (preceded by whitespace or BOL).
-            if pos == 0 || bytes[pos - 1].is_ascii_whitespace() {
-                let prefix = &line[pos + 1..end];
+            if byte_pos == 0
+                || chars
+                    .get(i.wrapping_sub(1))
+                    .is_some_and(|(_, c)| c.is_whitespace())
+            {
+                let prefix = &line[byte_pos + 1..end_byte];
                 return Some(prefix.to_string());
             }
             return None;
         }
-        if ch.is_ascii_whitespace() {
+        if ch.is_whitespace() {
             return None;
         }
     }
     None
+}
+
+/// Convert a char index to a byte index within a string.
+fn char_to_byte(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map_or(s.len(), |(byte_idx, _)| byte_idx)
 }
 
 /// Filter agent names by prefix (case-insensitive). Also includes `"all"`

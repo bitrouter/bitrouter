@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time::Instant;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -10,17 +9,27 @@ use ratatui::widgets::{
     ScrollbarState,
 };
 
-use crate::app::{AppState, Focus};
-use crate::model::{BackgroundAgentSummary, EntryKind, RenderContext, Renderable};
+use crate::app::{AppState, InputMode};
+use crate::model::{AgentStatus, RenderContext, Renderable};
 
 const PROMPT_PREFIX: &str = "› ";
 
 pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
+    // Agent mode: render inline agent list instead of scrollback.
+    if state.mode == InputMode::Agent {
+        render_agent_list(frame, state, area);
+        return;
+    }
+
     let width = area.width;
     let ctx = build_render_context(state);
     let mut lines: Vec<Line> = Vec::new();
 
-    if state.scrollback.entries.is_empty() && state.input.is_empty() {
+    let has_scrollback = state
+        .active_scrollback()
+        .is_some_and(|sb| !sb.entries.is_empty());
+
+    if !has_scrollback && state.input.is_empty() && state.tabs.is_empty() {
         // Empty state hint — vertically centered.
         let half = area.height / 2;
         for _ in 0..half {
@@ -30,22 +39,28 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
             "  Type a message to start — use @agent to address a specific agent",
             Style::default().fg(Color::DarkGray),
         )));
+        lines.push(Line::from(Span::styled(
+            "  Press Alt+A to connect an agent",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if !has_scrollback && state.input.is_empty() {
+        // Tab exists but no messages yet.
+        let half = area.height / 2;
+        for _ in 0..half {
+            lines.push(Line::raw(""));
+        }
+        let agent_name = state.active_agent_name().unwrap_or("agent");
+        lines.push(Line::from(Span::styled(
+            format!("  Connected to {agent_name} — type a message to start"),
+            Style::default().fg(Color::DarkGray),
+        )));
     }
 
-    // Render entries.
-    for entry in &state.scrollback.entries {
-        let agent_id = entry_agent_id(&entry.kind);
-
-        // Background agent: render as summary line instead of full output.
-        if let Some(aid) = agent_id
-            && state.scrollback.agent_focus.is_background(aid)
-        {
-            let summary = build_background_summary(aid, &state.scrollback.entries);
-            lines.extend(summary.render_lines(width, false, &ctx));
-            continue;
+    // Render entries from active tab's scrollback.
+    if let Some(sb) = state.active_scrollback() {
+        for entry in &sb.entries {
+            lines.extend(entry.kind.render_lines(width, entry.collapsed, &ctx));
         }
-
-        lines.extend(entry.kind.render_lines(width, entry.collapsed, &ctx));
     }
 
     // Render inline prompt.
@@ -53,24 +68,31 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
 
     // Compute scroll.
     let total = lines.len();
-    state.scrollback.total_rendered_lines = total;
-
     let visible = area.height as usize;
-    let max_scroll = total.saturating_sub(visible);
 
-    if state.scrollback.follow {
-        state.scrollback.scroll_offset = max_scroll;
-    } else {
-        state.scrollback.scroll_offset = state.scrollback.scroll_offset.min(max_scroll);
+    // Update total_rendered_lines on the active tab.
+    if let Some(sb) = state.active_scrollback_mut() {
+        sb.total_rendered_lines = total;
+
+        let max_scroll = total.saturating_sub(visible);
+
+        if sb.follow {
+            sb.scroll_offset = max_scroll;
+        } else {
+            sb.scroll_offset = sb.scroll_offset.min(max_scroll);
+        }
     }
 
-    let offset = state.scrollback.scroll_offset as u16;
+    let offset = state
+        .active_scrollback()
+        .map(|sb| sb.scroll_offset as u16)
+        .unwrap_or(0);
 
     let para = Paragraph::new(lines).scroll((offset, 0));
     frame.render_widget(para, area);
 
     // Cursor positioning for inline input.
-    if state.focus == Focus::Input {
+    if state.mode == InputMode::Normal {
         let prompt_start_line = total.saturating_sub(prompt_line_count(state));
         let cursor_line = prompt_start_line + state.input.cursor.0;
         let cursor_col = if state.input.cursor.0 == 0 {
@@ -80,7 +102,11 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
             2 + state.input.cursor.1
         };
 
-        let screen_line = cursor_line.saturating_sub(state.scrollback.scroll_offset);
+        let scroll_offset = state
+            .active_scrollback()
+            .map(|sb| sb.scroll_offset)
+            .unwrap_or(0);
+        let screen_line = cursor_line.saturating_sub(scroll_offset);
         if screen_line < visible {
             frame.set_cursor_position((
                 area.x + (cursor_col as u16).min(area.width.saturating_sub(1)),
@@ -90,9 +116,13 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
     }
 
     // Scrollbar.
+    let max_scroll = total.saturating_sub(visible);
     if max_scroll > 0 {
-        let mut scroll_state =
-            ScrollbarState::new(max_scroll).position(state.scrollback.scroll_offset);
+        let scroll_offset = state
+            .active_scrollback()
+            .map(|sb| sb.scroll_offset)
+            .unwrap_or(0);
+        let mut scroll_state = ScrollbarState::new(max_scroll).position(scroll_offset);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         let sb_area = Rect::new(
             area.x + area.width.saturating_sub(1),
@@ -109,7 +139,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
 
 fn render_inline_prompt(state: &AppState, lines: &mut Vec<Line<'static>>) {
     let input_lines = &state.input.lines;
-    let focused = state.focus == Focus::Input;
+    let focused = state.mode == InputMode::Normal;
 
     let prompt_style = if focused {
         Style::default()
@@ -129,9 +159,6 @@ fn render_inline_prompt(state: &AppState, lines: &mut Vec<Line<'static>>) {
             lines.push(Line::from(vec![Span::raw("  "), Span::raw(line.clone())]));
         }
     }
-
-    // If input is empty and focused, show a blank prompt line (cursor will appear).
-    // The line is already rendered above with empty text.
 }
 
 fn prompt_line_count(state: &AppState) -> usize {
@@ -140,7 +167,7 @@ fn prompt_line_count(state: &AppState) -> usize {
 
 fn render_autocomplete(frame: &mut Frame, state: &AppState, area: Rect) {
     let ac = match &state.autocomplete {
-        Some(ac) if state.focus == Focus::Input && !ac.candidates.is_empty() => ac,
+        Some(ac) if state.mode == InputMode::Normal && !ac.candidates.is_empty() => ac,
         _ => return,
     };
 
@@ -182,56 +209,78 @@ fn render_autocomplete(frame: &mut Frame, state: &AppState, area: Rect) {
     frame.render_widget(list, popup_area);
 }
 
+fn render_agent_list(frame: &mut Frame, state: &AppState, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "  Available Agents",
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  ─────────────────────────────────────────────",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    for (i, agent) in state.agents.iter().enumerate() {
+        let is_selected = i == state.agent_list_selected;
+        let marker = if is_selected { "▸" } else { " " };
+
+        let (status_str, status_color) = match &agent.status {
+            AgentStatus::Idle => ("disconnected", Color::DarkGray),
+            AgentStatus::Connecting => ("connecting", Color::Cyan),
+            AgentStatus::Connected => ("connected", Color::Green),
+            AgentStatus::Busy => ("busy", Color::Yellow),
+            AgentStatus::Error(_) => ("error", Color::Red),
+        };
+
+        let session_str = agent
+            .session_id
+            .as_ref()
+            .map(|s| {
+                if s.len() > 12 {
+                    format!("session: {}…", &s[..12])
+                } else {
+                    format!("session: {s}")
+                }
+            })
+            .unwrap_or_default();
+
+        let has_tab = state.tabs.iter().any(|t| t.agent_name == agent.name);
+        let tab_indicator = if has_tab { " [tab]" } else { "" };
+
+        let row_style = if is_selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {marker} "), row_style),
+            Span::styled(format!("{:<14}", agent.name), row_style.fg(agent.color)),
+            Span::styled(format!(" {:<12}", status_str), row_style.fg(status_color)),
+            Span::styled(format!(" {session_str}"), row_style.fg(Color::DarkGray)),
+            Span::styled(tab_indicator, row_style.fg(Color::Cyan)),
+        ]));
+    }
+
+    if state.agents.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No agents discovered. Ensure an ACP agent is on PATH.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, area);
+}
+
 fn build_render_context(state: &AppState) -> RenderContext {
     let mut agent_colors = HashMap::new();
     for agent in &state.agents {
         agent_colors.insert(agent.name.clone(), agent.color);
     }
     RenderContext { agent_colors }
-}
-
-fn entry_agent_id(kind: &EntryKind) -> Option<&str> {
-    match kind {
-        EntryKind::AgentResponse(e) => Some(&e.agent_id),
-        EntryKind::ToolCall(e) => Some(&e.agent_id),
-        EntryKind::Thinking(e) => Some(&e.agent_id),
-        EntryKind::Permission(e) => Some(&e.agent_id),
-        EntryKind::UserPrompt(_) | EntryKind::System(_) => None,
-    }
-}
-
-fn build_background_summary(
-    agent_id: &str,
-    entries: &[crate::model::ActivityEntry],
-) -> BackgroundAgentSummary {
-    let mut tool_call_count = 0usize;
-    let mut earliest = Instant::now();
-
-    for entry in entries {
-        match &entry.kind {
-            EntryKind::ToolCall(tc) if tc.agent_id == agent_id => {
-                tool_call_count += 1;
-                if entry.timestamp < earliest {
-                    earliest = entry.timestamp;
-                }
-            }
-            EntryKind::AgentResponse(ar) if ar.agent_id == agent_id => {
-                if entry.timestamp < earliest {
-                    earliest = entry.timestamp;
-                }
-            }
-            EntryKind::Thinking(th) if th.agent_id == agent_id => {
-                if entry.timestamp < earliest {
-                    earliest = entry.timestamp;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    BackgroundAgentSummary {
-        agent_id: agent_id.to_string(),
-        tool_call_count,
-        elapsed_secs: earliest.elapsed().as_secs(),
-    }
 }

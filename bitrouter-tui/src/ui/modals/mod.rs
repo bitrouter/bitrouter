@@ -1,4 +1,3 @@
-mod agent_manager;
 mod command_palette;
 mod help;
 mod observability;
@@ -16,7 +15,6 @@ pub fn render_modal(frame: &mut Frame, state: &AppState) {
     };
 
     match modal {
-        Modal::AgentManager(s) => agent_manager::render(frame, state, s),
         Modal::Observability(s) => observability::render(frame, state, s),
         Modal::CommandPalette(s) => command_palette::render(frame, state, s),
         Modal::Help => help::render(frame),
