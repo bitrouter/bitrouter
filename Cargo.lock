@@ -951,7 +951,7 @@ dependencies = [
  "ark-std 0.5.0",
  "educe",
  "fnv",
- "hashbrown 0.15.5",
+ "hashbrown 0.15.2",
  "itertools 0.13.0",
  "num-bigint",
  "num-integer",
@@ -1097,7 +1097,7 @@ dependencies = [
  "ark-std 0.5.0",
  "educe",
  "fnv",
- "hashbrown 0.15.5",
+ "hashbrown 0.15.2",
 ]
 
 [[package]]
@@ -1520,6 +1520,7 @@ dependencies = [
  "bs58",
  "clap",
  "crossterm",
+ "curve25519-dalek",
  "dialoguer",
  "dirs",
  "futures",
@@ -1530,12 +1531,13 @@ dependencies = [
  "ows-signer",
  "ratatui",
  "reqwest 0.13.2",
- "reqwest-middleware",
+ "reqwest-middleware 0.5.1",
  "sea-orm",
  "sea-orm-migration",
  "serde",
  "serde-saphyr",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1674,7 +1676,7 @@ dependencies = [
  "futures-core",
  "regex",
  "reqwest 0.13.2",
- "reqwest-middleware",
+ "reqwest-middleware 0.5.1",
  "schemars 1.2.1",
  "serde",
  "serde-saphyr",
@@ -3102,9 +3104,9 @@ checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"
-version = "0.15.5"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
+checksum = "bf151400ff0baff5465007dd2f3e717f3fe502074ca563069ce3a6629d07b289"
 dependencies = [
  "allocator-api2",
  "equivalent",
@@ -3130,7 +3132,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
- "hashbrown 0.15.5",
+ "hashbrown 0.15.2",
 ]
 
 [[package]]
@@ -3963,13 +3965,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a9b3eabc02320d1fbdb9343dda2c3929e01cddf35ea147c70621f7dc3bc346e"
 dependencies = [
  "alloy",
+ "anyhow",
  "async-stream",
+ "async-trait",
  "base64 0.22.1",
  "futures-core",
  "hex",
  "hmac",
+ "http",
  "rand 0.9.2",
  "reqwest 0.12.28",
+ "reqwest-middleware 0.4.2",
  "serde",
  "serde_json",
  "serde_json_canonicalizer",
@@ -5249,6 +5255,21 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+]
+
+[[package]]
+name = "reqwest-middleware"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57f17d28a6e6acfe1733fe24bcd30774d13bffa4b8a22535b4c8c98423088d4e"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "http",
+ "reqwest 0.12.28",
+ "serde",
+ "thiserror 1.0.69",
+ "tower-service",
 ]
 
 [[package]]
@@ -6570,7 +6591,7 @@ dependencies = [
  "futures-intrusive",
  "futures-io",
  "futures-util",
- "hashbrown 0.15.5",
+ "hashbrown 0.15.2",
  "hashlink",
  "indexmap 2.13.0",
  "log",
@@ -7776,7 +7797,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47b807c72e1bac69382b3a6fb3dbe8ea4c0ed87ff5629b8685ae6b9a611028fe"
 dependencies = [
  "bitflags 2.11.0",
- "hashbrown 0.15.5",
+ "hashbrown 0.15.2",
  "indexmap 2.13.0",
  "semver 1.0.27",
 ]

@@ -8,6 +8,8 @@ pub mod migration;
 #[cfg(feature = "mpp-tempo")]
 pub mod ows_signer;
 pub mod paths;
+#[cfg(feature = "mpp-tempo")]
+pub mod payment;
 pub mod router;
 pub mod server;
 

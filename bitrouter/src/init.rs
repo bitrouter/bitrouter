@@ -212,6 +212,36 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
     println!("  Env file:  {}", paths.env_file.display());
     println!();
 
+    // ── OWS wallet (before write so it's included in the config) ────
+    let mut wallet_name: Option<String> = None;
+    {
+        let create_wallet = Confirm::with_theme(&theme)
+            .with_prompt("Create an OWS wallet for payment signing?")
+            .default(false)
+            .interact()?;
+
+        if create_wallet {
+            let name: String = Input::with_theme(&theme)
+                .with_prompt("  Wallet name")
+                .default("default".into())
+                .interact_text()?;
+
+            match crate::cli::wallet::create(&name, None, false) {
+                Ok(()) => {
+                    println!("  ✓ Wallet '{name}' created");
+                    wallet_name = Some(name);
+                }
+                Err(e) => {
+                    eprintln!("  Wallet creation failed: {e}");
+                    eprintln!(
+                        "  You can create one later with: bitrouter wallet create --name <name>"
+                    );
+                }
+            }
+        }
+    }
+
+    println!();
     let confirm = Confirm::with_theme(&theme)
         .with_prompt("Write configuration?")
         .default(true)
@@ -229,6 +259,7 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         custom_providers,
         listen_addr,
         home_dir: paths.home_dir.clone(),
+        wallet_name,
     };
 
     let result = bitrouter_config::write_init_config(&options, overwrite)?;
@@ -246,37 +277,6 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         },
         all_provider_names.join(", ")
     );
-
-    // Offer OWS wallet creation.
-    {
-        println!();
-        let create_wallet = Confirm::with_theme(&theme)
-            .with_prompt("Create an OWS wallet for payment signing?")
-            .default(false)
-            .interact()?;
-
-        if create_wallet {
-            let wallet_name: String = Input::with_theme(&theme)
-                .with_prompt("  Wallet name")
-                .default("default".into())
-                .interact_text()?;
-
-            match crate::cli::wallet::create(&wallet_name, None, false) {
-                Ok(()) => {
-                    println!();
-                    println!("  Add this to bitrouter.yaml to enable the wallet:");
-                    println!("    wallet:");
-                    println!("      name: {wallet_name}");
-                }
-                Err(e) => {
-                    eprintln!("  Wallet creation failed: {e}");
-                    eprintln!(
-                        "  You can create one later with: bitrouter wallet create --name <name>"
-                    );
-                }
-            }
-        }
-    }
 
     println!();
     println!("  Start the server:");
