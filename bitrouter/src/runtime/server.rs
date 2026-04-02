@@ -3,7 +3,9 @@ use std::sync::Arc;
 use bitrouter_api::router::{admin, models, routes};
 use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
-use bitrouter_core::observe::{CallerContext, ObserveCallback, ToolObserveCallback};
+#[cfg(feature = "mcp")]
+use bitrouter_core::observe::ToolObserveCallback;
+use bitrouter_core::observe::{CallerContext, ObserveCallback};
 use bitrouter_core::routers::admin::AdminRoutingTable;
 use bitrouter_core::routers::registry::ModelRegistry;
 use bitrouter_core::routers::router::LanguageModelRouter;
@@ -185,6 +187,9 @@ where
         let addr = self.config.server.listen;
 
         // Build guardrail engine from config and wrap the model router.
+        // Clone the raw router before it is moved into the guarded wrapper —
+        // MCP sampling needs the unwrapped router when the feature is enabled.
+        #[cfg(feature = "mcp")]
         let raw_router = Arc::clone(&self.router);
         let guardrail = Arc::new(Guardrail::new(self.config.guardrails.clone()));
         let guarded_router = Arc::new(GuardedRouter::new(self.router, guardrail.clone()));
@@ -446,6 +451,7 @@ where
             self.config.providers.clone(),
             self.config.tools.clone(),
         ));
+        #[cfg(feature = "mcp")]
         let providers_by_protocol = tool_table_ref.providers_by_protocol();
 
         let dynamic_tool_registry = if let Some(registry) = self.tool_registry {
@@ -513,25 +519,30 @@ where
         // Wrap with tool guardrail for parameter restriction enforcement.
         // Use the shared guardrail lock from app.rs if provided (enables
         // hot-reload), otherwise build a static one from config.
-        let tool_router = if let Some(shared) = self.tool_guardrail {
-            Arc::new(
-                bitrouter_guardrails::GuardedToolRouter::with_shared_guardrail(
+        //
+        // The guarded tool router + tool call handler are only consumed by the
+        // MCP server endpoint, so they are built only when the `mcp` feature
+        // is enabled.
+        #[cfg(feature = "mcp")]
+        let tool_call_handler: Option<
+            Arc<dyn bitrouter_core::api::mcp::gateway::ToolCallHandler>,
+        > = {
+            let tool_router = if let Some(shared) = self.tool_guardrail {
+                Arc::new(
+                    bitrouter_guardrails::GuardedToolRouter::with_shared_guardrail(
+                        lazy_tool_router.clone(),
+                        shared,
+                    ),
+                )
+            } else {
+                let guardrail = Arc::new(bitrouter_guardrails::ToolGuardrail::new(
+                    self.config.guardrails.tools.clone(),
+                ));
+                Arc::new(bitrouter_guardrails::GuardedToolRouter::new(
                     lazy_tool_router.clone(),
-                    shared,
-                ),
-            )
-        } else {
-            let guardrail = Arc::new(bitrouter_guardrails::ToolGuardrail::new(
-                self.config.guardrails.tools.clone(),
-            ));
-            Arc::new(bitrouter_guardrails::GuardedToolRouter::new(
-                lazy_tool_router.clone(),
-                guardrail,
-            ))
-        };
-
-        // ── Tool call handler (protocol-neutral dispatch) ──────────
-        let tool_call_handler: Option<Arc<dyn bitrouter_core::api::mcp::gateway::ToolCallHandler>> =
+                    guardrail,
+                ))
+            };
             if lazy_tool_router.has_providers() {
                 Some(Arc::new(
                     crate::runtime::router::RouterToolCallHandler::new(
@@ -541,7 +552,8 @@ where
                 ))
             } else {
                 None
-            };
+            }
+        };
 
         // ── MCP registries ─────────────────────────────────────────
         //
@@ -570,28 +582,8 @@ where
                 None => (None, None),
             }
         };
-        #[cfg(not(feature = "mcp"))]
-        let mcp_server_inner: Option<
-            Arc<
-                bitrouter_core::routers::dynamic::DynamicRoutingTable<
-                    Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
-                >,
-            >,
-        > = None;
-        #[cfg(not(feature = "mcp"))]
-        let mcp_admin_registry: Option<
-            Arc<
-                bitrouter_guardrails::tool::GuardedToolRegistry<
-                    Arc<
-                        bitrouter_core::routers::dynamic::DynamicRoutingTable<
-                            Arc<bitrouter_providers::mcp::client::registry::ConfigMcpRegistry>,
-                        >,
-                    >,
-                >,
-            >,
-        > = None;
-
         // ── MCP admin routes ───────────────────────────────────────
+        #[cfg(feature = "mcp")]
         let admin_mcp_routes = {
             use bitrouter_api::router::mcp as mcp_api;
             if self.db.is_some() {
@@ -605,8 +597,14 @@ where
                     .boxed()
             }
         };
+        #[cfg(not(feature = "mcp"))]
+        let admin_mcp_routes = warp::path!("mcp" / "admin" / ..)
+            .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
+            .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
+            .boxed();
 
         // ── MCP server endpoint ────────────────────────────────────
+        #[cfg(feature = "mcp")]
         let mcp_server = {
             use bitrouter_api::router::mcp as mcp_api;
             let tool_observer: Arc<dyn ToolObserveCallback> = observe.observer.clone();
@@ -619,6 +617,11 @@ where
             .map(|r| Box::new(r) as Box<dyn warp::Reply>)
             .boxed()
         };
+        #[cfg(not(feature = "mcp"))]
+        let mcp_server = warp::path!("mcp" / ..)
+            .and_then(|| async { Err::<String, _>(warp::reject::not_found()) })
+            .map(|r: String| Box::new(r) as Box<dyn warp::Reply>)
+            .boxed();
 
         // ── Tool listing (GET /v1/tools) ────────────────────────────
         // Config is authoritative — DynamicToolRegistry<ConfigToolRoutingTable>

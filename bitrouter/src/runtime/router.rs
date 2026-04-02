@@ -170,6 +170,7 @@ pub struct LazyToolRouter {
     providers: HashMap<String, ProviderConfig>,
     #[cfg(feature = "mcp")]
     mcp_pool: Arc<HashMap<String, Arc<UpstreamConnection>>>,
+    #[cfg(feature = "rest")]
     client: Arc<reqwest::Client>,
 }
 
@@ -177,12 +178,14 @@ impl LazyToolRouter {
     pub fn new(
         providers: HashMap<String, ProviderConfig>,
         #[cfg(feature = "mcp")] mcp_pool: Arc<HashMap<String, Arc<UpstreamConnection>>>,
-        client: Arc<reqwest::Client>,
+        #[cfg(feature = "rest")] client: Arc<reqwest::Client>,
+        #[cfg(not(feature = "rest"))] _client: Arc<reqwest::Client>,
     ) -> Self {
         Self {
             providers,
             #[cfg(feature = "mcp")]
             mcp_pool,
+            #[cfg(feature = "rest")]
             client,
         }
     }
@@ -205,6 +208,7 @@ impl LazyToolRouter {
 impl bitrouter_core::routers::router::ToolRouter for LazyToolRouter {
     async fn route_tool(&self, target: RoutingTarget) -> Result<Box<DynToolProvider<'static>>> {
         match target.api_protocol {
+            #[cfg(feature = "rest")]
             ApiProtocol::Rest => {
                 let provider = self.providers.get(&target.provider_name).ok_or_else(|| {
                     BitrouterError::invalid_request(
@@ -229,6 +233,15 @@ impl bitrouter_core::routers::router::ToolRouter for LazyToolRouter {
                 );
                 Ok(DynToolProvider::new_box(p))
             }
+            #[cfg(not(feature = "rest"))]
+            ApiProtocol::Rest => Err(BitrouterError::invalid_request(
+                None,
+                format!(
+                    "REST protocol not available (feature disabled) for provider '{}'",
+                    target.provider_name
+                ),
+                None,
+            )),
             #[cfg(feature = "mcp")]
             ApiProtocol::Mcp => {
                 let conn = self.mcp_pool.get(&target.provider_name).ok_or_else(|| {
@@ -297,6 +310,7 @@ impl bitrouter_core::tools::provider::ToolProvider for McpToolProviderAdapter {
 /// to Bearer). When the `auth.api_key` is an unsubstituted env var placeholder,
 /// falls back to the provider-level `api_key` (which is resolved by
 /// `env_prefix` during config loading).
+#[cfg(feature = "rest")]
 pub(crate) fn resolve_auth_header(config: &ProviderConfig) -> Option<(String, String)> {
     use bitrouter_config::AuthConfig;
     match config.auth.as_ref() {
@@ -324,6 +338,7 @@ pub(crate) fn resolve_auth_header(config: &ProviderConfig) -> Option<(String, St
 
 /// If the key is an unsubstituted env var placeholder (e.g. `"${EXA_API_KEY}"`),
 /// fall back to the provider-level resolved `api_key`.
+#[cfg(feature = "rest")]
 fn resolve_key(auth_key: &str, config: &ProviderConfig) -> String {
     if auth_key.starts_with("${") && auth_key.ends_with('}') {
         config
@@ -343,11 +358,13 @@ fn resolve_key(auth_key: &str, config: &ProviderConfig) -> String {
 /// Routes tool calls using the config-authoritative routing table for
 /// name resolution, then dispatches through the tool router (which may
 /// wrap providers with guardrail enforcement via [`GuardedToolRouter`]).
+#[cfg(feature = "mcp")]
 pub struct RouterToolCallHandler<R, T> {
     tool_router: Arc<R>,
     tool_table: Arc<T>,
 }
 
+#[cfg(feature = "mcp")]
 impl<R, T> RouterToolCallHandler<R, T> {
     pub fn new(tool_router: Arc<R>, tool_table: Arc<T>) -> Self {
         Self {
@@ -357,6 +374,7 @@ impl<R, T> RouterToolCallHandler<R, T> {
     }
 }
 
+#[cfg(feature = "mcp")]
 impl<R, T> bitrouter_core::api::mcp::gateway::ToolCallHandler for RouterToolCallHandler<R, T>
 where
     R: bitrouter_core::routers::router::ToolRouter + Send + Sync + 'static,
