@@ -5,25 +5,21 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{AppState, Focus};
-use crate::model::AgentStatus;
+use crate::model::{AgentStatus, EntryKind};
 
 pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
-    let has_permission = state.feed.entries.iter().any(|e| {
-        matches!(
-            &e.kind,
-            crate::model::EntryKind::PermissionRequest {
-                resolved: false,
-                ..
-            }
-        )
-    });
+    let has_permission = state
+        .scrollback
+        .entries
+        .iter()
+        .any(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved));
 
     let focus_hint = if has_permission {
-        " j/k: select option │ Enter: confirm │ Esc: cancel "
+        " y: allow │ n: deny │ a: always "
     } else {
         match state.focus {
-            Focus::Feed => " i/Tab: input │ j/k: scroll │ Enter: expand/collapse │ ?: help ",
-            Focus::Input => " Enter: send │ Alt+Enter: newline │ @agent: mention │ Esc: feed ",
+            Focus::Input => " Enter: send │ Shift+Enter: newline │ @agent: mention │ Esc: scroll ",
+            Focus::Scroll => " j/k: scroll │ i: input │ Tab: switch agent │ ?: help ",
         }
     };
 

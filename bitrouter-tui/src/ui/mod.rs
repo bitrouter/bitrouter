@@ -1,7 +1,6 @@
-mod feed;
-mod input_bar;
 pub mod layout;
 mod modals;
+mod scrollback;
 mod status_bar;
 mod top_bar;
 
@@ -14,8 +13,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let layout = layout::AppLayout::compute(frame.area());
 
     top_bar::render(frame, state, layout.top_bar);
-    feed::render(frame, state, layout.feed);
-    input_bar::render(frame, state, layout.input_bar);
+    scrollback::render(frame, state, layout.scrollback);
     status_bar::render(frame, state, layout.status_bar);
 
     // Modals render last (on top of everything).

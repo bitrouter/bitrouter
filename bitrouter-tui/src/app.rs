@@ -10,7 +10,6 @@ use bitrouter_providers::acp::types::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui_textarea::TextArea;
 use tokio::sync::mpsc;
 
 use crate::TuiConfig;
@@ -18,17 +17,20 @@ use crate::error::TuiError;
 use crate::event::{AppEvent, EventHandler};
 use crate::input;
 use crate::model::{
-    ActivityEntry, AgentManagerState, AgentStatus, AutocompleteState, CommandAction,
-    CommandPaletteState, ContentBlock, EntryKind, FeedState, InputTarget, Modal, ObsEvent,
-    ObsEventKind, ObsLog, ObservabilityState, PaletteCommand, agent_color,
+    ActivityEntry, AgentManagerState, AgentResponse, AgentStatus, AutocompleteState, CommandAction,
+    CommandPaletteState, ContentBlock, EntryKind, InlineInput, InputTarget, Modal, ObsEvent,
+    ObsEventKind, ObsLog, ObservabilityState, PaletteCommand, PermissionEntry, ScrollbackState,
+    SystemNotice, ThinkingEntry, ToolCallEntry, UserPrompt, agent_color,
 };
 use crate::ui;
 
-/// Which panel owns keyboard focus.
+/// Which mode the TUI is in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Focus {
-    Feed,
+    /// Normal mode: inline prompt has focus, scrollback auto-follows.
     Input,
+    /// Scroll mode: user is browsing scrollback history.
+    Scroll,
 }
 
 /// All mutable TUI state, separated from `App` so the borrow checker allows
@@ -37,8 +39,8 @@ pub struct AppState {
     pub focus: Focus,
     pub agents: Vec<crate::model::Agent>,
     pub default_agent: Option<String>,
-    pub feed: FeedState,
-    pub input: TextArea<'static>,
+    pub scrollback: ScrollbackState,
+    pub input: InlineInput,
     pub input_target: InputTarget,
     pub autocomplete: Option<AutocompleteState>,
     pub modal: Option<Modal>,
@@ -103,8 +105,8 @@ impl App {
                 focus: Focus::Input,
                 agents,
                 default_agent: None,
-                feed: FeedState::new(),
-                input: TextArea::default(),
+                scrollback: ScrollbackState::new(),
+                input: InlineInput::new(),
                 input_target: InputTarget::Default,
                 autocomplete: None,
                 modal: None,
@@ -216,7 +218,18 @@ impl App {
                 .map(|a| a.name.clone());
         }
         // Clear streaming cursor for this agent.
-        self.state.feed.streaming_entry.remove(&agent_id);
+        self.state.scrollback.streaming_entry.remove(&agent_id);
+        // Remove from active focus.
+        self.state
+            .scrollback
+            .agent_focus
+            .active
+            .retain(|a| a != &agent_id);
+        if self.state.scrollback.agent_focus.focused.as_deref() == Some(&agent_id) {
+            self.state.scrollback.agent_focus.focused =
+                self.state.scrollback.agent_focus.active.first().cloned();
+        }
+
         self.push_system_msg(&format!("Disconnected from {agent_id}"));
         self.state.obs_log.push(ObsEvent {
             agent_id,
@@ -229,7 +242,7 @@ impl App {
         if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
             agent.status = AgentStatus::Error(message.clone());
         }
-        self.state.feed.streaming_entry.remove(&agent_id);
+        self.state.scrollback.streaming_entry.remove(&agent_id);
         self.push_system_msg(&format!("[{agent_id}] Error: {message}"));
         self.state.obs_log.push(ObsEvent {
             agent_id,
@@ -240,17 +253,29 @@ impl App {
 
     // ── Agent content handlers ────────────────────────────────────────
 
+    fn ensure_agent_active(&mut self, agent_id: &str) {
+        let focus = &mut self.state.scrollback.agent_focus;
+        if !focus.active.iter().any(|a| a == agent_id) {
+            focus.active.push(agent_id.to_string());
+        }
+        if focus.focused.is_none() {
+            focus.focused = Some(agent_id.to_string());
+        }
+    }
+
     fn apply_agent_message_chunk(&mut self, agent_id: &str, text: String) {
+        self.ensure_agent_active(agent_id);
+
         // Try to extend existing streaming entry for this agent.
-        if let Some(&entry_id) = self.state.feed.streaming_entry.get(agent_id)
-            && let Some(idx) = self.state.feed.index_of(entry_id)
-            && let EntryKind::AgentMessage { blocks, .. } = &mut self.state.feed.entries[idx].kind
+        if let Some(&entry_id) = self.state.scrollback.streaming_entry.get(agent_id)
+            && let Some(idx) = self.state.scrollback.index_of(entry_id)
+            && let EntryKind::AgentResponse(resp) = &mut self.state.scrollback.entries[idx].kind
         {
             // Extend last text block or push new one.
-            if let Some(ContentBlock::Text(existing)) = blocks.last_mut() {
+            if let Some(ContentBlock::Text(existing)) = resp.blocks.last_mut() {
                 existing.push_str(&text);
             } else {
-                blocks.push(ContentBlock::Text(text));
+                resp.blocks.push(ContentBlock::Text(text));
             }
             return;
         }
@@ -259,80 +284,81 @@ impl App {
         self.finalize_streaming_entry(agent_id);
 
         // Start a new agent message entry.
-        let id = self.state.feed.next_id();
-        self.state.feed.entries.push(ActivityEntry {
+        let id = self.state.scrollback.next_id();
+        self.state.scrollback.entries.push(ActivityEntry {
             id,
-            kind: EntryKind::AgentMessage {
+            kind: EntryKind::AgentResponse(AgentResponse {
                 agent_id: agent_id.to_string(),
                 blocks: vec![ContentBlock::Text(text)],
                 is_streaming: true,
-            },
+            }),
             timestamp: Instant::now(),
             collapsed: false,
         });
         self.state
-            .feed
+            .scrollback
             .streaming_entry
             .insert(agent_id.to_string(), id);
     }
 
     fn apply_non_text_content(&mut self, agent_id: &str, desc: String) {
+        self.ensure_agent_active(agent_id);
+
         // Append as an Other block to the current streaming entry, or create new.
-        if let Some(&entry_id) = self.state.feed.streaming_entry.get(agent_id)
-            && let Some(idx) = self.state.feed.index_of(entry_id)
-            && let EntryKind::AgentMessage { blocks, .. } = &mut self.state.feed.entries[idx].kind
+        if let Some(&entry_id) = self.state.scrollback.streaming_entry.get(agent_id)
+            && let Some(idx) = self.state.scrollback.index_of(entry_id)
+            && let EntryKind::AgentResponse(resp) = &mut self.state.scrollback.entries[idx].kind
         {
-            blocks.push(ContentBlock::Other(desc));
+            resp.blocks.push(ContentBlock::Other(desc));
             return;
         }
 
-        let id = self.state.feed.next_id();
-        self.state.feed.entries.push(ActivityEntry {
+        let id = self.state.scrollback.next_id();
+        self.state.scrollback.entries.push(ActivityEntry {
             id,
-            kind: EntryKind::AgentMessage {
+            kind: EntryKind::AgentResponse(AgentResponse {
                 agent_id: agent_id.to_string(),
                 blocks: vec![ContentBlock::Other(desc)],
                 is_streaming: true,
-            },
+            }),
             timestamp: Instant::now(),
             collapsed: false,
         });
         self.state
-            .feed
+            .scrollback
             .streaming_entry
             .insert(agent_id.to_string(), id);
     }
 
     fn apply_thought_chunk(&mut self, agent_id: &str, text: String) {
+        self.ensure_agent_active(agent_id);
+
         // Try to extend existing streaming thinking entry.
-        if let Some(&entry_id) = self.state.feed.streaming_entry.get(agent_id)
-            && let Some(idx) = self.state.feed.index_of(entry_id)
-            && let EntryKind::Thinking {
-                text: existing,
-                is_streaming: true,
-                ..
-            } = &mut self.state.feed.entries[idx].kind
+        if let Some(&entry_id) = self.state.scrollback.streaming_entry.get(agent_id)
+            && let Some(idx) = self.state.scrollback.index_of(entry_id)
+            && let EntryKind::Thinking(th) = &mut self.state.scrollback.entries[idx].kind
+            && th.is_streaming
         {
-            existing.push_str(&text);
+            th.text.push_str(&text);
             return;
         }
 
         // Finalize any previous streaming entry before starting new.
         self.finalize_streaming_entry(agent_id);
 
-        let id = self.state.feed.next_id();
-        self.state.feed.entries.push(ActivityEntry {
+        let id = self.state.scrollback.next_id();
+        self.state.scrollback.entries.push(ActivityEntry {
             id,
-            kind: EntryKind::Thinking {
+            kind: EntryKind::Thinking(ThinkingEntry {
                 agent_id: agent_id.to_string(),
                 text,
                 is_streaming: true,
-            },
+            }),
             timestamp: Instant::now(),
             collapsed: false,
         });
         self.state
-            .feed
+            .scrollback
             .streaming_entry
             .insert(agent_id.to_string(), id);
     }
@@ -344,15 +370,17 @@ impl App {
         title: String,
         status: ToolCallStatus,
     ) {
-        let id = self.state.feed.next_id();
-        self.state.feed.entries.push(ActivityEntry {
+        self.ensure_agent_active(agent_id);
+
+        let id = self.state.scrollback.next_id();
+        self.state.scrollback.entries.push(ActivityEntry {
             id,
-            kind: EntryKind::ToolCall {
+            kind: EntryKind::ToolCall(ToolCallEntry {
                 agent_id: agent_id.to_string(),
                 tool_call_id,
                 title: title.clone(),
                 status,
-            },
+            }),
             timestamp: Instant::now(),
             collapsed: false,
         });
@@ -362,7 +390,7 @@ impl App {
             timestamp: Instant::now(),
         });
         // Tool calls break the streaming cursor — next message chunk starts fresh.
-        self.state.feed.streaming_entry.remove(agent_id);
+        self.state.scrollback.streaming_entry.remove(agent_id);
     }
 
     fn apply_tool_call_update(
@@ -373,21 +401,16 @@ impl App {
         new_status: Option<ToolCallStatus>,
     ) {
         // Find the tool call entry by ID and update it.
-        for entry in self.state.feed.entries.iter_mut().rev() {
-            if let EntryKind::ToolCall {
-                tool_call_id: existing_id,
-                title,
-                status,
-                agent_id: entry_agent,
-            } = &mut entry.kind
-                && entry_agent == agent_id
-                && *existing_id == tool_call_id
+        for entry in self.state.scrollback.entries.iter_mut().rev() {
+            if let EntryKind::ToolCall(tc) = &mut entry.kind
+                && tc.agent_id == agent_id
+                && tc.tool_call_id == tool_call_id
             {
                 if let Some(t) = &new_title {
-                    *title = t.clone();
+                    tc.title = t.clone();
                 }
                 if let Some(s) = new_status {
-                    *status = s;
+                    tc.status = s;
                     // Auto-collapse completed/failed tool calls.
                     if matches!(s, ToolCallStatus::Completed | ToolCallStatus::Failed) {
                         entry.collapsed = true;
@@ -412,33 +435,30 @@ impl App {
         request: bitrouter_providers::acp::types::PermissionRequest,
         response_tx: tokio::sync::oneshot::Sender<PermissionResponse>,
     ) {
-        let id = self.state.feed.next_id();
-        self.state.feed.entries.push(ActivityEntry {
+        let id = self.state.scrollback.next_id();
+        self.state.scrollback.entries.push(ActivityEntry {
             id,
-            kind: EntryKind::PermissionRequest {
+            kind: EntryKind::Permission(PermissionEntry {
                 agent_id,
                 request: Box::new(request),
                 response_tx: Some(response_tx),
-                selected: 0,
                 resolved: false,
-            },
+            }),
             timestamp: Instant::now(),
             collapsed: false,
         });
-        // Switch focus to feed so user can respond.
-        self.state.focus = Focus::Feed;
-        // Set cursor to the permission entry.
-        self.state.feed.cursor = Some(self.state.feed.entries.len() - 1);
+        // Re-pin to bottom so user sees the permission prompt.
+        self.state.scrollback.follow = true;
     }
 
     fn handle_prompt_done(&mut self, agent_id: String) {
         // Mark the streaming entry as complete.
-        if let Some(entry_id) = self.state.feed.streaming_entry.remove(&agent_id)
-            && let Some(idx) = self.state.feed.index_of(entry_id)
+        if let Some(entry_id) = self.state.scrollback.streaming_entry.remove(&agent_id)
+            && let Some(idx) = self.state.scrollback.index_of(entry_id)
         {
-            match &mut self.state.feed.entries[idx].kind {
-                EntryKind::AgentMessage { is_streaming, .. } => *is_streaming = false,
-                EntryKind::Thinking { is_streaming, .. } => *is_streaming = false,
+            match &mut self.state.scrollback.entries[idx].kind {
+                EntryKind::AgentResponse(resp) => resp.is_streaming = false,
+                EntryKind::Thinking(th) => th.is_streaming = false,
                 _ => {}
             }
         }
@@ -449,10 +469,47 @@ impl App {
             agent.status = AgentStatus::Connected;
         }
         self.state.obs_log.push(ObsEvent {
-            agent_id,
+            agent_id: agent_id.clone(),
             kind: ObsEventKind::PromptDone,
             timestamp: Instant::now(),
         });
+
+        // Multi-agent focus: if focused agent is done, auto-focus next active.
+        let focus = &mut self.state.scrollback.agent_focus;
+        if focus.focused.as_deref() == Some(&agent_id) {
+            // Check if any other agent is still streaming.
+            let still_active: Vec<String> = focus
+                .active
+                .iter()
+                .filter(|a| {
+                    *a != &agent_id
+                        && self
+                            .state
+                            .agents
+                            .iter()
+                            .any(|ag| ag.name == **a && matches!(ag.status, AgentStatus::Busy))
+                })
+                .cloned()
+                .collect();
+
+            if !still_active.is_empty() {
+                focus.focused = still_active.into_iter().next();
+            } else {
+                // All done — clear focus so all blocks are visible in stacked view.
+                focus.focused = None;
+                focus.active.clear();
+            }
+        }
+        // If no agents are busy anymore, clear the active list entirely.
+        let any_busy = self
+            .state
+            .agents
+            .iter()
+            .any(|a| matches!(a.status, AgentStatus::Busy));
+        if !any_busy {
+            self.state.scrollback.agent_focus.focused = None;
+            self.state.scrollback.agent_focus.active.clear();
+        }
     }
 
     // ── Key handlers ────────────────────────────────────────────────
@@ -501,52 +558,56 @@ impl App {
             return;
         }
 
-        // Focus switching.
-        match key.code {
-            KeyCode::Char('i') if self.state.focus == Focus::Feed => {
-                self.state.focus = Focus::Input;
-                return;
-            }
-            KeyCode::Tab if self.state.focus == Focus::Feed => {
-                self.state.focus = Focus::Input;
-                return;
-            }
-            KeyCode::Esc if self.state.focus == Focus::Input => {
-                self.close_autocomplete();
-                self.state.focus = Focus::Feed;
-                return;
-            }
-            _ => {}
-        }
-
-        // Dispatch to focused panel.
+        // Dispatch to focused mode.
         match self.state.focus {
-            Focus::Feed => self.handle_feed_key(key),
+            Focus::Scroll => self.handle_scroll_key(key),
             Focus::Input => self.handle_input_key(key),
         }
     }
 
-    fn handle_feed_key(&mut self, key: KeyEvent) {
-        let entry_count = self.state.feed.entries.len();
-        if entry_count == 0 {
-            return;
-        }
-
+    fn handle_scroll_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                let cursor = self.state.feed.cursor.unwrap_or(0);
-                if cursor + 1 < entry_count {
-                    self.state.feed.cursor = Some(cursor + 1);
-                }
+                self.state.scrollback.scroll_offset =
+                    self.state.scrollback.scroll_offset.saturating_add(1);
+                self.state.scrollback.follow = false;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                let cursor = self.state.feed.cursor.unwrap_or(0);
-                self.state.feed.cursor = Some(cursor.saturating_sub(1));
+                self.state.scrollback.scroll_offset =
+                    self.state.scrollback.scroll_offset.saturating_sub(1);
+                self.state.scrollback.follow = false;
             }
-            KeyCode::Enter => {
-                self.toggle_collapse_at_cursor();
+            KeyCode::PageDown => {
+                self.state.scrollback.scroll_offset =
+                    self.state.scrollback.scroll_offset.saturating_add(20);
+                self.state.scrollback.follow = false;
             }
-            _ => {}
+            KeyCode::PageUp => {
+                self.state.scrollback.scroll_offset =
+                    self.state.scrollback.scroll_offset.saturating_sub(20);
+                self.state.scrollback.follow = false;
+            }
+            KeyCode::Char('G') => {
+                // Jump to bottom, re-enter Input mode.
+                self.state.scrollback.follow = true;
+                self.state.focus = Focus::Input;
+            }
+            KeyCode::Char('i') => {
+                self.state.scrollback.follow = true;
+                self.state.focus = Focus::Input;
+            }
+            KeyCode::Tab => {
+                self.state.scrollback.agent_focus.cycle();
+            }
+            _ => {
+                // Any printable char returns to input mode.
+                if let KeyCode::Char(c) = key.code {
+                    self.state.scrollback.follow = true;
+                    self.state.focus = Focus::Input;
+                    self.state.input.insert_char(c);
+                    self.after_input_char();
+                }
+            }
         }
     }
 
@@ -558,9 +619,11 @@ impl App {
                     self.accept_autocomplete();
                     return;
                 }
-                // Alt+Enter is handled below as a newline.
-                if key.modifiers.contains(KeyModifiers::ALT) {
-                    self.state.input.input(key);
+                // Shift+Enter or Alt+Enter inserts a newline.
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                    || key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    self.state.input.newline();
                     return;
                 }
                 self.submit_input();
@@ -568,115 +631,106 @@ impl App {
             KeyCode::Tab => {
                 if self.state.autocomplete.is_some() {
                     self.accept_autocomplete();
-                } else {
-                    self.state.input.input(key);
-                    self.update_autocomplete();
+                } else if self.state.scrollback.agent_focus.active.len() > 1 {
+                    self.state.scrollback.agent_focus.cycle();
                 }
             }
             KeyCode::Esc => {
                 if self.state.autocomplete.is_some() {
                     self.close_autocomplete();
                 } else {
-                    self.state.focus = Focus::Feed;
+                    self.state.scrollback.follow = false;
+                    self.state.focus = Focus::Scroll;
                 }
             }
-            _ => {
-                self.state.input.input(key);
+            KeyCode::Backspace => {
+                self.state.input.backspace();
                 self.after_input_char();
             }
+            KeyCode::Delete => {
+                self.state.input.delete_char();
+                self.after_input_char();
+            }
+            KeyCode::Left => self.state.input.move_left(),
+            KeyCode::Right => self.state.input.move_right(),
+            KeyCode::Up => self.state.input.move_up(),
+            KeyCode::Down => self.state.input.move_down(),
+            KeyCode::Home => self.state.input.home(),
+            KeyCode::End => self.state.input.end(),
+            KeyCode::Char(c) => {
+                self.state.input.insert_char(c);
+                self.after_input_char();
+            }
+            _ => {}
         }
     }
 
     // ── Permission handling ─────────────────────────────────────────
 
     fn has_pending_permission(&self) -> bool {
-        self.state.feed.entries.iter().any(|e| {
+        self.state.scrollback.entries.iter().any(|e| {
             matches!(
                 &e.kind,
-                EntryKind::PermissionRequest {
-                    resolved: false,
-                    ..
-                }
+                EntryKind::Permission(p) if !p.resolved
             )
         })
     }
 
     fn handle_permission_key(&mut self, key: KeyEvent) {
         // Find the unresolved permission entry.
-        let perm_idx = match self.state.feed.entries.iter().position(|e| {
-            matches!(
-                &e.kind,
-                EntryKind::PermissionRequest {
-                    resolved: false,
-                    ..
-                }
-            )
-        }) {
+        let perm_idx = match self
+            .state
+            .scrollback
+            .entries
+            .iter()
+            .position(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved))
+        {
             Some(idx) => idx,
             None => return,
         };
 
-        let option_count = if let EntryKind::PermissionRequest { request, .. } =
-            &self.state.feed.entries[perm_idx].kind
-        {
-            request.options.len()
-        } else {
-            return;
-        };
-
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                if let EntryKind::PermissionRequest { selected, .. } =
-                    &mut self.state.feed.entries[perm_idx].kind
-                    && option_count > 0
-                {
-                    *selected = (*selected + 1) % option_count;
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if let EntryKind::PermissionRequest { selected, .. } =
-                    &mut self.state.feed.entries[perm_idx].kind
-                {
-                    if option_count > 0 && *selected > 0 {
-                        *selected -= 1;
-                    } else if option_count > 0 {
-                        *selected = option_count - 1;
-                    }
-                }
-            }
-            KeyCode::Enter => {
-                self.resolve_permission(perm_idx, false);
-            }
-            KeyCode::Esc => {
-                self.resolve_permission(perm_idx, true);
-            }
-            _ => {}
+            KeyCode::Char('y') => self.resolve_permission(perm_idx, PermissionChoice::Yes),
+            KeyCode::Char('n') => self.resolve_permission(perm_idx, PermissionChoice::No),
+            KeyCode::Char('a') => self.resolve_permission(perm_idx, PermissionChoice::Always),
+            _ => {} // Ignore all other keys during permission.
         }
     }
 
-    fn resolve_permission(&mut self, entry_idx: usize, cancelled: bool) {
-        if let EntryKind::PermissionRequest {
-            request,
-            response_tx,
-            selected,
-            resolved,
-            ..
-        } = &mut self.state.feed.entries[entry_idx].kind
-        {
-            let outcome = if cancelled {
-                PermissionOutcome::Denied
-            } else if let Some(opt) = request.options.get(*selected) {
-                PermissionOutcome::Allowed {
-                    selected_option: opt.id.clone(),
+    fn resolve_permission(&mut self, entry_idx: usize, choice: PermissionChoice) {
+        if let EntryKind::Permission(perm) = &mut self.state.scrollback.entries[entry_idx].kind {
+            let outcome = match choice {
+                PermissionChoice::Yes => {
+                    if let Some(opt) = perm.request.options.first() {
+                        PermissionOutcome::Allowed {
+                            selected_option: opt.id.clone(),
+                        }
+                    } else {
+                        PermissionOutcome::Denied
+                    }
                 }
-            } else {
-                PermissionOutcome::Denied
+                PermissionChoice::Always => {
+                    // Pick the "always" option if it exists, else first option.
+                    let always_opt = perm
+                        .request
+                        .options
+                        .iter()
+                        .find(|o| o.id.to_lowercase().contains("always"));
+                    if let Some(opt) = always_opt.or(perm.request.options.first()) {
+                        PermissionOutcome::Allowed {
+                            selected_option: opt.id.clone(),
+                        }
+                    } else {
+                        PermissionOutcome::Denied
+                    }
+                }
+                PermissionChoice::No => PermissionOutcome::Denied,
             };
 
-            if let Some(tx) = response_tx.take() {
+            if let Some(tx) = perm.response_tx.take() {
                 let _ = tx.send(PermissionResponse { outcome });
             }
-            *resolved = true;
+            perm.resolved = true;
         }
     }
 
@@ -941,7 +995,7 @@ impl App {
                 true
             }
             Some(CommandAction::ClearConversation) => {
-                self.state.feed = FeedState::new();
+                self.state.scrollback = ScrollbackState::new();
                 true
             }
             None => true,
@@ -952,16 +1006,15 @@ impl App {
 
     fn after_input_char(&mut self) {
         // Re-parse @-mentions to update the target indicator.
-        let text: String = self.state.input.lines().join("\n");
+        let text = self.state.input.text();
         let agent_names: Vec<String> = self.state.agents.iter().map(|a| a.name.clone()).collect();
         self.state.input_target = input::parse_mentions(&text, &agent_names);
         self.update_autocomplete();
     }
 
     fn update_autocomplete(&mut self) {
-        let lines = self.state.input.lines();
-        let (row, col) = self.state.input.cursor();
-        let line = match lines.get(row) {
+        let (row, col) = self.state.input.cursor;
+        let line = match self.state.input.lines.get(row) {
             Some(l) => l.as_str(),
             None => {
                 self.state.autocomplete = None;
@@ -1003,20 +1056,10 @@ impl App {
 
         if let Some(name) = chosen {
             // Delete the prefix characters that were typed after '@'.
-            for _ in 0..prefix_len {
-                self.state
-                    .input
-                    .input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-            }
+            self.state.input.delete_before(prefix_len);
             // Insert the full name + trailing space.
-            for ch in name.chars() {
-                self.state
-                    .input
-                    .input(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
-            }
-            self.state
-                .input
-                .input(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+            self.state.input.insert_str(&name);
+            self.state.input.insert_char(' ');
         }
 
         self.close_autocomplete();
@@ -1028,7 +1071,7 @@ impl App {
     }
 
     fn submit_input(&mut self) {
-        let raw_text: String = self.state.input.lines().join("\n");
+        let raw_text = self.state.input.text();
         if raw_text.trim().is_empty() {
             return;
         }
@@ -1088,22 +1131,27 @@ impl App {
             return;
         }
 
-        // Push user message to feed.
-        let id = self.state.feed.next_id();
-        self.state.feed.entries.push(ActivityEntry {
+        // Push user prompt to scrollback.
+        let id = self.state.scrollback.next_id();
+        self.state.scrollback.entries.push(ActivityEntry {
             id,
-            kind: EntryKind::UserMessage {
+            kind: EntryKind::UserPrompt(UserPrompt {
                 text: raw_text,
                 targets: targets.clone(),
-            },
+            }),
             timestamp: Instant::now(),
             collapsed: false,
         });
 
         // Clear input.
-        self.state.input = TextArea::default();
+        self.state.input.clear();
         self.state.input_target = InputTarget::Default;
         self.close_autocomplete();
+        self.state.scrollback.follow = true;
+
+        // Reset agent focus for new prompt round.
+        self.state.scrollback.agent_focus.focused = None;
+        self.state.scrollback.agent_focus.active.clear();
 
         // Send to each target agent.
         for agent_name in &targets {
@@ -1112,7 +1160,7 @@ impl App {
                 self.connect_agent(agent_name);
             }
             // Reset streaming cursor for fresh response.
-            self.state.feed.streaming_entry.remove(agent_name);
+            self.state.scrollback.streaming_entry.remove(agent_name);
 
             // Mark as busy.
             if let Some(agent) = self.state.agents.iter_mut().find(|a| &a.name == agent_name)
@@ -1208,53 +1256,37 @@ impl App {
     /// Mark the current streaming entry for an agent as no longer streaming.
     /// Call this before switching to a different entry kind (e.g. thought → message).
     fn finalize_streaming_entry(&mut self, agent_id: &str) {
-        if let Some(&old_id) = self.state.feed.streaming_entry.get(agent_id)
-            && let Some(idx) = self.state.feed.index_of(old_id)
+        if let Some(&old_id) = self.state.scrollback.streaming_entry.get(agent_id)
+            && let Some(idx) = self.state.scrollback.index_of(old_id)
         {
-            match &mut self.state.feed.entries[idx].kind {
-                EntryKind::AgentMessage { is_streaming, .. }
-                | EntryKind::Thinking { is_streaming, .. } => *is_streaming = false,
+            match &mut self.state.scrollback.entries[idx].kind {
+                EntryKind::AgentResponse(resp) => resp.is_streaming = false,
+                EntryKind::Thinking(th) => th.is_streaming = false,
                 _ => {}
             }
         }
     }
 
-    // ── Feed helpers ────────────────────────────────────────────────
-
-    fn toggle_collapse_at_cursor(&mut self) {
-        let cursor = match self.state.feed.cursor {
-            Some(c) => c,
-            None => return,
-        };
-        let entry = match self.state.feed.entries.get_mut(cursor) {
-            Some(e) => e,
-            None => return,
-        };
-
-        // Don't allow collapsing certain entry types.
-        match &entry.kind {
-            EntryKind::PermissionRequest { .. } | EntryKind::SystemMessage(_) => return,
-            EntryKind::ToolCall { status, .. } => {
-                // Only collapse completed/failed tool calls.
-                if !matches!(status, ToolCallStatus::Completed | ToolCallStatus::Failed) {
-                    return;
-                }
-            }
-            _ => {}
-        }
-
-        entry.collapsed = !entry.collapsed;
-    }
+    // ── Helpers ─────────────────────────────────────────────────────
 
     fn push_system_msg(&mut self, text: &str) {
-        let id = self.state.feed.next_id();
-        self.state.feed.entries.push(ActivityEntry {
+        let id = self.state.scrollback.next_id();
+        self.state.scrollback.entries.push(ActivityEntry {
             id,
-            kind: EntryKind::SystemMessage(text.to_string()),
+            kind: EntryKind::System(SystemNotice {
+                text: text.to_string(),
+            }),
             timestamp: Instant::now(),
             collapsed: false,
         });
     }
+}
+
+/// Permission response choice (single key).
+enum PermissionChoice {
+    Yes,
+    No,
+    Always,
 }
 
 pub async fn run_loop(

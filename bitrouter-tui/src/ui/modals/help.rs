@@ -19,25 +19,15 @@ pub fn render(frame: &mut Frame) {
 
     let lines = vec![
         Line::raw(""),
-        Line::from(Span::styled("  Navigation", header_style)),
-        Line::from(vec![
-            Span::styled("  i / Tab       ", key_style),
-            Span::styled("Focus input", desc_style),
-        ]),
-        Line::from(vec![
-            Span::styled("  Esc           ", key_style),
-            Span::styled("Exit input / close modal", desc_style),
-        ]),
-        Line::from(vec![
-            Span::styled("  j / k         ", key_style),
-            Span::styled("Scroll up/down in feed", desc_style),
-        ]),
+        Line::from(Span::styled("  Input", header_style)),
         Line::from(vec![
             Span::styled("  Enter         ", key_style),
-            Span::styled("Expand/collapse block (feed) or send (input)", desc_style),
+            Span::styled("Send message", desc_style),
         ]),
-        Line::raw(""),
-        Line::from(Span::styled("  Input", header_style)),
+        Line::from(vec![
+            Span::styled("  Shift+Enter   ", key_style),
+            Span::styled("New line (Alt+Enter also works)", desc_style),
+        ]),
         Line::from(vec![
             Span::styled("  @agent        ", key_style),
             Span::styled("Address a specific agent", desc_style),
@@ -48,14 +38,46 @@ pub fn render(frame: &mut Frame) {
         ]),
         Line::from(vec![
             Span::styled("  Tab           ", key_style),
-            Span::styled("Accept autocomplete suggestion", desc_style),
+            Span::styled("Accept autocomplete / switch agent", desc_style),
         ]),
         Line::from(vec![
-            Span::styled("  Alt+Enter     ", key_style),
-            Span::styled("New line in input", desc_style),
+            Span::styled("  Esc           ", key_style),
+            Span::styled("Enter scroll mode", desc_style),
         ]),
         Line::raw(""),
-        Line::from(Span::styled("  Panels", header_style)),
+        Line::from(Span::styled("  Scroll Mode", header_style)),
+        Line::from(vec![
+            Span::styled("  j / k         ", key_style),
+            Span::styled("Scroll up/down", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  G             ", key_style),
+            Span::styled("Jump to bottom, return to input", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  i             ", key_style),
+            Span::styled("Return to input", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Tab           ", key_style),
+            Span::styled("Switch focused agent", desc_style),
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled("  Permissions", header_style)),
+        Line::from(vec![
+            Span::styled("  y             ", key_style),
+            Span::styled("Allow", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  n             ", key_style),
+            Span::styled("Deny", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  a             ", key_style),
+            Span::styled("Always allow", desc_style),
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled("  Global", header_style)),
         Line::from(vec![
             Span::styled("  Ctrl+G        ", key_style),
             Span::styled("Agent manager", desc_style),

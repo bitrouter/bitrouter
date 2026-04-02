@@ -3,8 +3,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 /// Pre-computed layout rectangles for the TUI.
 pub struct AppLayout {
     pub top_bar: Rect,
-    pub feed: Rect,
-    pub input_bar: Rect,
+    pub scrollback: Rect,
     pub status_bar: Rect,
 }
 
@@ -15,17 +14,15 @@ impl AppLayout {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1), // top bar (agent pills)
-                Constraint::Min(0),    // feed (fills remaining)
-                Constraint::Length(3), // input bar
+                Constraint::Min(0),    // scrollback (fills remaining)
                 Constraint::Length(1), // status bar
             ])
             .split(area);
 
         Self {
             top_bar: cols[0],
-            feed: cols[1],
-            input_bar: cols[2],
-            status_bar: cols[3],
+            scrollback: cols[1],
+            status_bar: cols[2],
         }
     }
 }
