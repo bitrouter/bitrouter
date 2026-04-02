@@ -2,9 +2,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 /// Pre-computed layout rectangles for the TUI.
 pub struct AppLayout {
-    pub sidebar: Rect,
-    pub tab_bar: Rect,
-    pub content: Rect,
+    pub top_bar: Rect,
+    pub feed: Rect,
     pub input_bar: Rect,
     pub status_bar: Rect,
 }
@@ -12,30 +11,30 @@ pub struct AppLayout {
 impl AppLayout {
     /// Compute the layout from the terminal area.
     pub fn compute(area: Rect) -> Self {
-        let outer = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(24), Constraint::Min(0)])
-            .split(area);
-
-        let sidebar = outer[0];
-        let main_area = outer[1];
-
-        let main_col = Layout::default()
+        let cols = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // tab bar
-                Constraint::Min(0),    // content
+                Constraint::Length(1), // top bar (agent pills)
+                Constraint::Min(0),    // feed (fills remaining)
                 Constraint::Length(3), // input bar
                 Constraint::Length(1), // status bar
             ])
-            .split(main_area);
+            .split(area);
 
         Self {
-            sidebar,
-            tab_bar: main_col[0],
-            content: main_col[1],
-            input_bar: main_col[2],
-            status_bar: main_col[3],
+            top_bar: cols[0],
+            feed: cols[1],
+            input_bar: cols[2],
+            status_bar: cols[3],
         }
     }
+}
+
+/// Compute a centered rectangle of the given percentage size within `area`.
+pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_width = area.width * percent_x / 100;
+    let popup_height = area.height * percent_y / 100;
+    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    Rect::new(x, y, popup_width, popup_height)
 }

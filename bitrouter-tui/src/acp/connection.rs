@@ -14,16 +14,17 @@ pub(crate) enum AgentCommand {
     Prompt(String),
 }
 
-/// Handle to a running agent connection. The main event loop holds this to send
-/// prompts and check liveness.
+/// Handle to a running agent connection. The main event loop holds this to
+/// send prompts and check liveness.
 pub(crate) struct AgentConnection {
     pub command_tx: mpsc::Sender<AgentCommand>,
 }
 
-/// Spawn an agent subprocess on a dedicated thread with its own single-threaded
-/// tokio runtime + `LocalSet` (required because ACP types are `!Send`).
+/// Spawn an agent subprocess on a dedicated thread with its own
+/// single-threaded tokio runtime + `LocalSet` (required because ACP types
+/// are `!Send`).
 ///
-/// Returns the command sender for sending prompts.
+/// Returns the thread handle and the command sender for sending prompts.
 pub(crate) fn spawn_agent(
     agent_name: String,
     launch: AgentLaunch,
@@ -40,7 +41,7 @@ pub(crate) fn spawn_agent(
             Ok(rt) => rt,
             Err(e) => {
                 let _ = event_tx.blocking_send(AppEvent::AgentError {
-                    name: agent_name,
+                    agent_id: agent_name,
                     message: format!("failed to create runtime: {e}"),
                 });
                 return;
@@ -63,11 +64,18 @@ async fn agent_task_local(
     if let Err(msg) = run_agent_connection(&agent_name, &launch, &event_tx, &mut command_rx).await {
         let _ = event_tx
             .send(AppEvent::AgentError {
-                name: agent_name,
+                agent_id: agent_name.clone(),
                 message: msg,
             })
             .await;
     }
+
+    // Notify TUI that agent connection is gone.
+    let _ = event_tx
+        .send(AppEvent::AgentDisconnected {
+            agent_id: agent_name,
+        })
+        .await;
 }
 
 async fn run_agent_connection(
@@ -98,7 +106,7 @@ async fn run_agent_connection(
         .compat();
 
     // 2. Set up ACP connection (uses spawn_local because ACP is !Send)
-    let client = TuiClient::new(event_tx.clone());
+    let client = TuiClient::new(agent_name.to_string(), event_tx.clone());
     let (conn, io_future) = acp::ClientSideConnection::new(client, stdin, stdout, |fut| {
         tokio::task::spawn_local(fut);
     });
@@ -127,10 +135,11 @@ async fn run_agent_connection(
 
     let session_id = session_resp.session_id;
 
-    // 5. Notify TUI that agent is connected
+    // 5. Notify TUI that agent is connected (with session_id)
     let _ = event_tx
         .send(AppEvent::AgentConnected {
-            name: agent_name.to_string(),
+            agent_id: agent_name.to_string(),
+            session_id: session_id.clone(),
         })
         .await;
 
@@ -148,6 +157,7 @@ async fn run_agent_connection(
                     Ok(resp) => {
                         let _ = event_tx
                             .send(AppEvent::PromptDone {
+                                agent_id: agent_name.to_string(),
                                 _stop_reason: resp.stop_reason,
                             })
                             .await;
@@ -155,7 +165,7 @@ async fn run_agent_connection(
                     Err(e) => {
                         let _ = event_tx
                             .send(AppEvent::AgentError {
-                                name: agent_name.to_string(),
+                                agent_id: agent_name.to_string(),
                                 message: format!("prompt failed: {e}"),
                             })
                             .await;

@@ -81,6 +81,8 @@ pub(crate) fn discover_agents() -> Vec<Agent> {
                     args: spec.args.iter().map(|s| (*s).to_string()).collect(),
                 }),
                 status: AgentStatus::Idle,
+                session_id: None,
+                color: ratatui::style::Color::White, // Re-assigned by App::new
             });
         }
     }

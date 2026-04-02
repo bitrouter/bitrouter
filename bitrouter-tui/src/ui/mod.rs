@@ -1,27 +1,23 @@
-mod conversation;
+mod feed;
 mod input_bar;
-mod layout;
-mod logs;
-mod sidebar;
+pub mod layout;
+mod modals;
 mod status_bar;
-mod tabs;
+mod top_bar;
 
 use ratatui::Frame;
 
-use crate::app::{AppState, Tab};
+use crate::app::AppState;
 
 /// Top-level render: computes the layout and delegates to each panel.
 pub fn render(frame: &mut Frame, state: &mut AppState) {
     let layout = layout::AppLayout::compute(frame.area());
 
-    sidebar::render(frame, state, layout.sidebar);
-    tabs::render(frame, state, layout.tab_bar);
-
-    match state.tab {
-        Tab::Conversation => conversation::render(frame, state, layout.content),
-        Tab::Logs => logs::render(frame, state, layout.content),
-    }
-
+    top_bar::render(frame, state, layout.top_bar);
+    feed::render(frame, state, layout.feed);
     input_bar::render(frame, state, layout.input_bar);
     status_bar::render(frame, state, layout.status_bar);
+
+    // Modals render last (on top of everything).
+    modals::render_modal(frame, state);
 }

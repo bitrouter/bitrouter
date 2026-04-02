@@ -3,6 +3,7 @@ mod app;
 mod config;
 mod error;
 mod event;
+mod input;
 mod model;
 mod ui;
 

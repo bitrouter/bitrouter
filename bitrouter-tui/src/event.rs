@@ -8,23 +8,39 @@ use tokio::sync::mpsc;
 pub enum AppEvent {
     /// Terminal key press.
     Key(KeyEvent),
-    /// Terminal resize (width, height). Redraw is handled by the main loop.
+    /// Terminal resize.
     Resize { _width: u16, _height: u16 },
     /// Tick / ignored terminal event.
     Tick,
+
+    // ── ACP lifecycle (all carry agent_id) ──────────────────────────
     /// Agent subprocess connected and ACP session created.
-    AgentConnected { name: String },
+    AgentConnected {
+        agent_id: String,
+        session_id: acp::SessionId,
+    },
+    /// Agent connection closed cleanly.
+    AgentDisconnected { agent_id: String },
     /// Agent-side error (spawn failure, protocol error, unexpected exit).
-    AgentError { name: String, message: String },
-    /// Streaming session update from the agent.
-    SessionUpdate(acp::SessionNotification),
+    AgentError { agent_id: String, message: String },
+
+    // ── ACP content ─────────────────────────────────────────────────
+    /// Streaming session update from an agent.
+    SessionUpdate {
+        agent_id: String,
+        notification: acp::SessionNotification,
+    },
     /// Agent requests user permission for a tool call.
     PermissionRequest {
+        agent_id: String,
         request: acp::RequestPermissionRequest,
         response_tx: tokio::sync::oneshot::Sender<acp::RequestPermissionResponse>,
     },
-    /// The prompt turn completed (agent returned PromptResponse).
-    PromptDone { _stop_reason: acp::StopReason },
+    /// The prompt turn completed.
+    PromptDone {
+        agent_id: String,
+        _stop_reason: acp::StopReason,
+    },
 }
 
 /// Multiplexes terminal events and ACP events into a single channel.
