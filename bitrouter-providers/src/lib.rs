@@ -15,5 +15,8 @@ pub mod mcp;
 #[cfg(feature = "rest")]
 pub mod rest;
 
+#[cfg(feature = "acp")]
+pub mod acp;
+
 #[cfg(feature = "agentskills")]
 pub mod agentskills;

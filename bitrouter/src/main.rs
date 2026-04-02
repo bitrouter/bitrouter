@@ -555,6 +555,7 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
             route_count: 0,    // TODO: populate from routing table
             daemon_pid: status.daemon_pid,
         };
+        let bitrouter_config = runtime.config.clone();
 
         tokio::select! {
             result = runtime.serve_with_reload(model_router) => {
@@ -562,7 +563,7 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
                     tracing::error!("server error: {e}");
                 }
             }
-            result = bitrouter_tui::run(tui_config) => {
+            result = bitrouter_tui::run(tui_config, &bitrouter_config) => {
                 result?;
             }
         }

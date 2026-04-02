@@ -1,4 +1,4 @@
-use agent_client_protocol as acp;
+use bitrouter_providers::acp::types::ToolCallStatus;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -143,7 +143,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
                         },
                     ]));
 
-                    if !entry.collapsed && matches!(status, acp::ToolCallStatus::InProgress) {
+                    if !entry.collapsed && matches!(status, ToolCallStatus::InProgress) {
                         lines.push(Line::from(vec![
                             Span::raw("  "),
                             Span::styled("▍", Style::default().fg(Color::Cyan)),
@@ -210,11 +210,11 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
                         ),
                     ]));
 
-                    if let Some(title_text) = &request.tool_call.fields.title {
+                    if !request.title.is_empty() {
                         lines.push(Line::from(vec![
                             Span::raw("  "),
                             Span::styled("Tool: ", Style::default().fg(Color::Yellow)),
-                            Span::raw(title_text.clone()),
+                            Span::raw(request.title.clone()),
                         ]));
                     }
 
@@ -235,7 +235,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
                                 Style::default().fg(Color::White)
                             };
                             lines.push(Line::from(Span::styled(
-                                format!("  {marker}{}", opt.name),
+                                format!("  {marker}{}", opt.title),
                                 style,
                             )));
                         }
@@ -307,13 +307,12 @@ fn agent_color_for(state: &AppState, agent_id: &str) -> Color {
         .map_or(Color::White, |a| a.color)
 }
 
-fn tool_status_icon(status: &acp::ToolCallStatus) -> (&'static str, Color) {
+fn tool_status_icon(status: &ToolCallStatus) -> (&'static str, Color) {
     match status {
-        acp::ToolCallStatus::Pending => ("○", Color::DarkGray),
-        acp::ToolCallStatus::InProgress => ("⟳", Color::Yellow),
-        acp::ToolCallStatus::Completed => ("✓", Color::Green),
-        acp::ToolCallStatus::Failed => ("✗", Color::Red),
-        _ => ("?", Color::DarkGray),
+        ToolCallStatus::Pending => ("○", Color::DarkGray),
+        ToolCallStatus::InProgress => ("⟳", Color::Yellow),
+        ToolCallStatus::Completed => ("✓", Color::Green),
+        ToolCallStatus::Failed => ("✗", Color::Red),
     }
 }
 

@@ -1,0 +1,3 @@
+protocol: acp
+binary: opencode-acp
+args: []

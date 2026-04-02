@@ -1,0 +1,5 @@
+protocol: acp
+binary: copilot
+args:
+  - "--acp"
+  - "--stdio"

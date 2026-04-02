@@ -1,0 +1,3 @@
+protocol: acp
+binary: codex-acp
+args: []

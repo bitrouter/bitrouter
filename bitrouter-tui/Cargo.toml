@@ -8,12 +8,11 @@ license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 
 [dependencies]
-agent-client-protocol = "0.10"
-async-trait = "0.1"
+bitrouter-config = { path = "../bitrouter-config" }
+bitrouter-providers = { path = "../bitrouter-providers", features = ["acp"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 ratatui = "0.30"
 thiserror = "2.0"
 tokio = { version = "1", features = ["rt", "sync", "time", "process"] }
-tokio-util = { version = "0.7", features = ["compat"] }
 ratatui-textarea = "0.8"

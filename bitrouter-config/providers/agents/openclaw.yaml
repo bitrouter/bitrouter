@@ -1,0 +1,4 @@
+protocol: acp
+binary: openclaw
+args:
+  - acp

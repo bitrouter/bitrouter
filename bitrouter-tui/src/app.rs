@@ -2,7 +2,11 @@ use std::collections::HashMap;
 use std::io::Stdout;
 use std::time::Instant;
 
-use agent_client_protocol as acp;
+use bitrouter_providers::acp::discovery::discover_agents;
+use bitrouter_providers::acp::provider::AcpAgentProvider;
+use bitrouter_providers::acp::types::{
+    AgentEvent, PermissionOutcome, PermissionResponse, ToolCallStatus,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -10,8 +14,6 @@ use ratatui_textarea::TextArea;
 use tokio::sync::mpsc;
 
 use crate::TuiConfig;
-use crate::acp::connection::{AgentCommand, AgentConnection, spawn_agent};
-use crate::acp::discovery::discover_agents;
 use crate::error::TuiError;
 use crate::event::{AppEvent, EventHandler};
 use crate::input;
@@ -47,28 +49,53 @@ pub struct AppState {
 pub struct App {
     pub running: bool,
     pub state: AppState,
-    /// Multi-agent connections, keyed by agent name.
-    agent_connections: HashMap<String, AgentConnection>,
-    /// Thread handles for agent subprocesses.
-    agent_handles: HashMap<String, std::thread::JoinHandle<()>>,
+    /// Active agent providers, keyed by agent name.
+    agent_providers: HashMap<String, AcpAgentProvider>,
     /// Cloned event sender for spawning agent connections.
     event_tx: mpsc::Sender<AppEvent>,
 }
 
 impl App {
-    pub fn new(config: TuiConfig, event_tx: mpsc::Sender<AppEvent>) -> Self {
-        let discovered = discover_agents();
-        let agents: Vec<crate::model::Agent> = discovered
-            .into_iter()
+    pub fn new(
+        config: TuiConfig,
+        bitrouter_config: &bitrouter_config::BitrouterConfig,
+        event_tx: mpsc::Sender<AppEvent>,
+    ) -> Self {
+        // Load configured agents (source of truth).
+        let mut agents: Vec<crate::model::Agent> = bitrouter_config
+            .agents
+            .iter()
+            .filter(|(_, ac)| ac.enabled)
             .enumerate()
-            .map(|(i, old)| crate::model::Agent {
-                name: old.name,
-                launch: old.launch,
+            .map(|(i, (name, ac))| crate::model::Agent {
+                name: name.clone(),
+                config: Some(ac.clone()),
                 status: AgentStatus::Idle,
                 session_id: None,
                 color: agent_color(i),
             })
             .collect();
+
+        // Run discovery for agents not yet in config.
+        let known = bitrouter_config::builtin_agent_defs();
+        let discovered = discover_agents(&known);
+        for da in &discovered {
+            if !agents.iter().any(|a| a.name == da.name) {
+                let idx = agents.len();
+                agents.push(crate::model::Agent {
+                    name: da.name.clone(),
+                    config: Some(bitrouter_config::AgentConfig {
+                        protocol: bitrouter_config::AgentProtocol::Acp,
+                        binary: da.binary.to_string_lossy().into_owned(),
+                        args: da.args.clone(),
+                        enabled: true,
+                    }),
+                    status: AgentStatus::Idle,
+                    session_id: None,
+                    color: agent_color(idx),
+                });
+            }
+        }
 
         Self {
             running: true,
@@ -84,8 +111,7 @@ impl App {
                 obs_log: ObsLog::new(),
                 config,
             },
-            agent_connections: HashMap::new(),
-            agent_handles: HashMap::new(),
+            agent_providers: HashMap::new(),
             event_tx,
         }
     }
@@ -94,33 +120,66 @@ impl App {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Resize { .. } | AppEvent::Tick => {}
-            AppEvent::AgentConnected {
-                agent_id,
-                session_id,
-            } => self.handle_agent_connected(agent_id, session_id),
-            AppEvent::AgentDisconnected { agent_id } => self.handle_agent_disconnected(agent_id),
-            AppEvent::AgentError { agent_id, message } => {
-                self.handle_agent_error(agent_id, message);
-            }
-            AppEvent::SessionUpdate {
-                agent_id,
-                notification,
-            } => self.handle_session_update(agent_id, notification),
-            AppEvent::PermissionRequest {
-                agent_id,
-                request,
-                response_tx,
-            } => self.handle_permission_request(agent_id, request, response_tx),
-            AppEvent::PromptDone {
-                agent_id,
-                _stop_reason: _,
-            } => self.handle_prompt_done(agent_id),
+            AppEvent::Agent(agent_event) => self.handle_agent_event(agent_event),
         }
     }
 
-    // ── ACP lifecycle handlers ──────────────────────────────────────
+    // ── Agent event dispatcher ─────────────────────────────────────
 
-    fn handle_agent_connected(&mut self, agent_id: String, session_id: acp::SessionId) {
+    fn handle_agent_event(&mut self, event: AgentEvent) {
+        match event {
+            AgentEvent::Connected {
+                agent_id,
+                session_id,
+            } => self.handle_agent_connected(agent_id, session_id),
+            AgentEvent::Disconnected { agent_id } => self.handle_agent_disconnected(agent_id),
+            AgentEvent::Error { agent_id, message } => {
+                self.handle_agent_error(agent_id, message);
+            }
+            AgentEvent::MessageChunk { agent_id, text } => {
+                self.apply_agent_message_chunk(&agent_id, text);
+            }
+            AgentEvent::NonTextContent {
+                agent_id,
+                description,
+            } => {
+                self.apply_non_text_content(&agent_id, description);
+            }
+            AgentEvent::ThoughtChunk { agent_id, text } => {
+                self.apply_thought_chunk(&agent_id, text);
+            }
+            AgentEvent::ToolCall {
+                agent_id,
+                tool_call_id,
+                title,
+                status,
+            } => {
+                self.apply_tool_call(&agent_id, tool_call_id, title, status);
+            }
+            AgentEvent::ToolCallUpdate {
+                agent_id,
+                tool_call_id,
+                title,
+                status,
+            } => {
+                self.apply_tool_call_update(&agent_id, tool_call_id, title, status);
+            }
+            AgentEvent::PermissionRequest {
+                agent_id,
+                request,
+                response_tx,
+            } => {
+                self.handle_permission_request(agent_id, request, response_tx);
+            }
+            AgentEvent::PromptDone { agent_id, .. } => {
+                self.handle_prompt_done(agent_id);
+            }
+        }
+    }
+
+    // ── Agent lifecycle handlers ──────────────────────────────────────
+
+    fn handle_agent_connected(&mut self, agent_id: String, session_id: String) {
         if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
             agent.status = AgentStatus::Connected;
             agent.session_id = Some(session_id);
@@ -138,11 +197,8 @@ impl App {
     }
 
     fn handle_agent_disconnected(&mut self, agent_id: String) {
-        // Clean up connection handle.
-        self.agent_connections.remove(&agent_id);
-        if let Some(handle) = self.agent_handles.remove(&agent_id) {
-            let _ = handle.join();
-        }
+        // Clean up provider handle.
+        self.agent_providers.remove(&agent_id);
         if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
             // Only reset to Idle if not already in Error state.
             if !matches!(agent.status, AgentStatus::Error(_)) {
@@ -182,36 +238,9 @@ impl App {
         });
     }
 
-    // ── ACP content handlers ────────────────────────────────────────
+    // ── Agent content handlers ────────────────────────────────────────
 
-    fn handle_session_update(&mut self, agent_id: String, notif: acp::SessionNotification) {
-        match notif.update {
-            acp::SessionUpdate::AgentMessageChunk(chunk) => {
-                self.apply_agent_message_chunk(&agent_id, chunk);
-            }
-            acp::SessionUpdate::AgentThoughtChunk(chunk) => {
-                self.apply_thought_chunk(&agent_id, chunk);
-            }
-            acp::SessionUpdate::ToolCall(tool_call) => {
-                self.apply_tool_call(&agent_id, tool_call);
-            }
-            acp::SessionUpdate::ToolCallUpdate(update) => {
-                self.apply_tool_call_update(&agent_id, update);
-            }
-            _ => {
-                // Plan, AvailableCommandsUpdate, CurrentModeUpdate, etc.
-            }
-        }
-    }
-
-    fn apply_agent_message_chunk(&mut self, agent_id: &str, chunk: acp::ContentChunk) {
-        let text = match chunk.content {
-            acp::ContentBlock::Text(tc) => tc.text,
-            other => {
-                return self.apply_non_text_content(agent_id, other);
-            }
-        };
-
+    fn apply_agent_message_chunk(&mut self, agent_id: &str, text: String) {
         // Try to extend existing streaming entry for this agent.
         if let Some(&entry_id) = self.state.feed.streaming_entry.get(agent_id)
             && let Some(idx) = self.state.feed.index_of(entry_id)
@@ -226,8 +255,7 @@ impl App {
             return;
         }
 
-        // Finalize any previous streaming entry (e.g. a Thinking entry)
-        // before starting a new AgentMessage.
+        // Finalize any previous streaming entry before starting new.
         self.finalize_streaming_entry(agent_id);
 
         // Start a new agent message entry.
@@ -248,15 +276,7 @@ impl App {
             .insert(agent_id.to_string(), id);
     }
 
-    fn apply_non_text_content(&mut self, agent_id: &str, block: acp::ContentBlock) {
-        let desc = match block {
-            acp::ContentBlock::Image(_) => "<image>".to_string(),
-            acp::ContentBlock::Audio(_) => "<audio>".to_string(),
-            acp::ContentBlock::ResourceLink(rl) => format!("[{}]({})", rl.name, rl.uri),
-            acp::ContentBlock::Resource(_) => "<resource>".to_string(),
-            _ => "<unknown>".to_string(),
-        };
-
+    fn apply_non_text_content(&mut self, agent_id: &str, desc: String) {
         // Append as an Other block to the current streaming entry, or create new.
         if let Some(&entry_id) = self.state.feed.streaming_entry.get(agent_id)
             && let Some(idx) = self.state.feed.index_of(entry_id)
@@ -283,12 +303,7 @@ impl App {
             .insert(agent_id.to_string(), id);
     }
 
-    fn apply_thought_chunk(&mut self, agent_id: &str, chunk: acp::ContentChunk) {
-        let text = match chunk.content {
-            acp::ContentBlock::Text(tc) => tc.text,
-            _ => return,
-        };
-
+    fn apply_thought_chunk(&mut self, agent_id: &str, text: String) {
         // Try to extend existing streaming thinking entry.
         if let Some(&entry_id) = self.state.feed.streaming_entry.get(agent_id)
             && let Some(idx) = self.state.feed.index_of(entry_id)
@@ -302,8 +317,7 @@ impl App {
             return;
         }
 
-        // Finalize any previous streaming entry (e.g. an AgentMessage)
-        // before starting a new Thinking entry.
+        // Finalize any previous streaming entry before starting new.
         self.finalize_streaming_entry(agent_id);
 
         let id = self.state.feed.next_id();
@@ -323,52 +337,59 @@ impl App {
             .insert(agent_id.to_string(), id);
     }
 
-    fn apply_tool_call(&mut self, agent_id: &str, tool_call: acp::ToolCall) {
+    fn apply_tool_call(
+        &mut self,
+        agent_id: &str,
+        tool_call_id: String,
+        title: String,
+        status: ToolCallStatus,
+    ) {
         let id = self.state.feed.next_id();
         self.state.feed.entries.push(ActivityEntry {
             id,
             kind: EntryKind::ToolCall {
                 agent_id: agent_id.to_string(),
-                tool_call_id: tool_call.tool_call_id,
-                title: tool_call.title,
-                status: tool_call.status,
+                tool_call_id,
+                title: title.clone(),
+                status,
             },
             timestamp: Instant::now(),
             collapsed: false,
         });
         self.state.obs_log.push(ObsEvent {
             agent_id: agent_id.to_string(),
-            kind: ObsEventKind::ToolCall {
-                title: String::new(),
-            },
+            kind: ObsEventKind::ToolCall { title },
             timestamp: Instant::now(),
         });
         // Tool calls break the streaming cursor — next message chunk starts fresh.
         self.state.feed.streaming_entry.remove(agent_id);
     }
 
-    fn apply_tool_call_update(&mut self, agent_id: &str, update: acp::ToolCallUpdate) {
+    fn apply_tool_call_update(
+        &mut self,
+        agent_id: &str,
+        tool_call_id: String,
+        new_title: Option<String>,
+        new_status: Option<ToolCallStatus>,
+    ) {
         // Find the tool call entry by ID and update it.
         for entry in self.state.feed.entries.iter_mut().rev() {
             if let EntryKind::ToolCall {
-                tool_call_id,
+                tool_call_id: existing_id,
                 title,
                 status,
                 agent_id: entry_agent,
             } = &mut entry.kind
                 && entry_agent == agent_id
-                && *tool_call_id == update.tool_call_id
+                && *existing_id == tool_call_id
             {
-                if let Some(new_title) = &update.fields.title {
-                    *title = new_title.clone();
+                if let Some(t) = &new_title {
+                    *title = t.clone();
                 }
-                if let Some(new_status) = update.fields.status {
-                    *status = new_status;
+                if let Some(s) = new_status {
+                    *status = s;
                     // Auto-collapse completed/failed tool calls.
-                    if matches!(
-                        new_status,
-                        acp::ToolCallStatus::Completed | acp::ToolCallStatus::Failed
-                    ) {
+                    if matches!(s, ToolCallStatus::Completed | ToolCallStatus::Failed) {
                         entry.collapsed = true;
                     }
                 }
@@ -376,17 +397,20 @@ impl App {
             }
         }
 
-        // If not found, create from update.
-        if let Ok(tool_call) = acp::ToolCall::try_from(update) {
-            self.apply_tool_call(agent_id, tool_call);
-        }
+        // If not found, create from update (fallback).
+        self.apply_tool_call(
+            agent_id,
+            tool_call_id,
+            new_title.unwrap_or_default(),
+            new_status.unwrap_or(ToolCallStatus::InProgress),
+        );
     }
 
     fn handle_permission_request(
         &mut self,
         agent_id: String,
-        request: acp::RequestPermissionRequest,
-        response_tx: tokio::sync::oneshot::Sender<acp::RequestPermissionResponse>,
+        request: bitrouter_providers::acp::types::PermissionRequest,
+        response_tx: tokio::sync::oneshot::Sender<PermissionResponse>,
     ) {
         let id = self.state.feed.next_id();
         self.state.feed.entries.push(ActivityEntry {
@@ -640,17 +664,17 @@ impl App {
         } = &mut self.state.feed.entries[entry_idx].kind
         {
             let outcome = if cancelled {
-                acp::RequestPermissionOutcome::Cancelled
+                PermissionOutcome::Denied
             } else if let Some(opt) = request.options.get(*selected) {
-                acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(
-                    opt.option_id.clone(),
-                ))
+                PermissionOutcome::Allowed {
+                    selected_option: opt.id.clone(),
+                }
             } else {
-                acp::RequestPermissionOutcome::Cancelled
+                PermissionOutcome::Denied
             };
 
             if let Some(tx) = response_tx.take() {
-                let _ = tx.send(acp::RequestPermissionResponse::new(outcome));
+                let _ = tx.send(PermissionResponse { outcome });
             }
             *resolved = true;
         }
@@ -830,7 +854,7 @@ impl App {
         for agent in &self.state.agents {
             match agent.status {
                 AgentStatus::Idle | AgentStatus::Error(_) => {
-                    if agent.launch.is_some() {
+                    if agent.config.is_some() {
                         cmds.push(PaletteCommand {
                             label: format!("Connect {}", agent.name),
                             action: CommandAction::ConnectAgent(agent.name.clone()),
@@ -1033,7 +1057,7 @@ impl App {
                         Some(a) => vec![a.name.clone()],
                         None => {
                             // Try first available agent (will lazy-connect).
-                            match self.state.agents.iter().find(|a| a.launch.is_some()) {
+                            match self.state.agents.iter().find(|a| a.config.is_some()) {
                                 Some(a) => vec![a.name.clone()],
                                 None => {
                                     self.push_system_msg("No agents available. Install an ACP agent and ensure it's on PATH.");
@@ -1053,7 +1077,7 @@ impl App {
                     matches!(
                         a.status,
                         AgentStatus::Connected | AgentStatus::Busy | AgentStatus::Idle
-                    ) && a.launch.is_some()
+                    ) && a.config.is_some()
                 })
                 .map(|a| a.name.clone())
                 .collect(),
@@ -1084,7 +1108,7 @@ impl App {
         // Send to each target agent.
         for agent_name in &targets {
             // Lazy-connect if needed.
-            if !self.agent_connections.contains_key(agent_name) {
+            if !self.agent_providers.contains_key(agent_name) {
                 self.connect_agent(agent_name);
             }
             // Reset streaming cursor for fresh response.
@@ -1097,11 +1121,9 @@ impl App {
                 agent.status = AgentStatus::Busy;
             }
 
-            // Send prompt.
-            if let Some(conn) = self.agent_connections.get(agent_name) {
-                let _ = conn
-                    .command_tx
-                    .try_send(AgentCommand::Prompt(clean_text.clone()));
+            // Send prompt via provider (try_send avoids needing .await).
+            if let Some(provider) = self.agent_providers.get(agent_name) {
+                provider.try_prompt(clean_text.clone());
             }
             self.state.obs_log.push(ObsEvent {
                 agent_id: agent_name.clone(),
@@ -1119,7 +1141,7 @@ impl App {
     // ── Agent lifecycle ─────────────────────────────────────────────
 
     fn connect_agent(&mut self, agent_id: &str) {
-        if self.agent_connections.contains_key(agent_id) {
+        if self.agent_providers.contains_key(agent_id) {
             return; // Already connected or connecting.
         }
 
@@ -1128,8 +1150,8 @@ impl App {
             None => return,
         };
 
-        let launch = match agent.launch.clone() {
-            Some(l) => l,
+        let config = match &agent.config {
+            Some(c) => c.clone(),
             None => {
                 self.push_system_msg(&format!(
                     "No ACP adapter found for {agent_id}. Install the adapter and ensure it's on PATH."
@@ -1139,26 +1161,42 @@ impl App {
         };
 
         agent.status = AgentStatus::Connecting;
-        let (handle, command_tx) = spawn_agent(agent_id.to_string(), launch, self.event_tx.clone());
-        self.agent_handles.insert(agent_id.to_string(), handle);
-        self.agent_connections
-            .insert(agent_id.to_string(), AgentConnection { command_tx });
+
+        // Create event channel for this agent and forward to the main event loop.
+        let (agent_event_tx, mut agent_event_rx) = mpsc::channel::<AgentEvent>(256);
+        let app_event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            while let Some(evt) = agent_event_rx.recv().await {
+                if app_event_tx.send(AppEvent::Agent(evt)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let provider = AcpAgentProvider::spawn(agent_id.to_string(), &config, agent_event_tx);
+        self.agent_providers.insert(agent_id.to_string(), provider);
     }
 
     fn disconnect_agent(&mut self, agent_id: &str) {
-        // Drop the connection (closes command channel → agent thread exits).
-        self.agent_connections.remove(agent_id);
+        // Drop the provider (closes command channel → agent thread exits).
+        self.agent_providers.remove(agent_id);
         // The agent thread will send AgentDisconnected, which handles the rest.
     }
 
     fn rediscover_agents(&mut self) {
-        let newly_discovered = discover_agents();
-        for new_agent in newly_discovered {
-            if !self.state.agents.iter().any(|a| a.name == new_agent.name) {
+        let known = bitrouter_config::builtin_agent_defs();
+        let discovered = discover_agents(&known);
+        for da in discovered {
+            if !self.state.agents.iter().any(|a| a.name == da.name) {
                 let idx = self.state.agents.len();
                 self.state.agents.push(crate::model::Agent {
-                    name: new_agent.name,
-                    launch: new_agent.launch,
+                    name: da.name,
+                    config: Some(bitrouter_config::AgentConfig {
+                        protocol: bitrouter_config::AgentProtocol::Acp,
+                        binary: da.binary.to_string_lossy().into_owned(),
+                        args: da.args,
+                        enabled: true,
+                    }),
                     status: AgentStatus::Idle,
                     session_id: None,
                     color: agent_color(idx),
@@ -1198,10 +1236,7 @@ impl App {
             EntryKind::PermissionRequest { .. } | EntryKind::SystemMessage(_) => return,
             EntryKind::ToolCall { status, .. } => {
                 // Only collapse completed/failed tool calls.
-                if !matches!(
-                    status,
-                    acp::ToolCallStatus::Completed | acp::ToolCallStatus::Failed
-                ) {
+                if !matches!(status, ToolCallStatus::Completed | ToolCallStatus::Failed) {
                     return;
                 }
             }
@@ -1225,9 +1260,10 @@ impl App {
 pub async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     config: TuiConfig,
+    bitrouter_config: &bitrouter_config::BitrouterConfig,
 ) -> Result<(), TuiError> {
     let mut events = EventHandler::new();
-    let mut app = App::new(config, events.sender());
+    let mut app = App::new(config, bitrouter_config, events.sender());
 
     while app.running {
         terminal.draw(|frame| ui::render(frame, &mut app.state))?;
@@ -1238,11 +1274,8 @@ pub async fn run_loop(
         }
     }
 
-    // Shutdown: drop all connections so agent threads exit cleanly.
-    app.agent_connections.clear();
-    for (_, handle) in app.agent_handles.drain() {
-        let _ = handle.join();
-    }
+    // Shutdown: drop all providers so agent threads exit cleanly.
+    app.agent_providers.clear();
 
     Ok(())
 }

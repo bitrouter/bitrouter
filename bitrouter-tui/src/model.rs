@@ -1,10 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
-use agent_client_protocol as acp;
+use bitrouter_providers::acp::types::{PermissionRequest, PermissionResponse, ToolCallStatus};
 use ratatui::style::Color;
-
-use crate::acp::discovery::AgentLaunch;
 
 // ── Agent color palette ─────────────────────────────────────────────────
 
@@ -30,9 +28,9 @@ pub fn agent_color(index: usize) -> Color {
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub name: String,
-    pub launch: Option<AgentLaunch>,
+    pub config: Option<bitrouter_config::AgentConfig>,
     pub status: AgentStatus,
-    pub session_id: Option<acp::SessionId>,
+    pub session_id: Option<String>,
     pub color: Color,
 }
 
@@ -78,9 +76,9 @@ pub enum EntryKind {
     /// A tool invocation by an agent.
     ToolCall {
         agent_id: String,
-        tool_call_id: acp::ToolCallId,
+        tool_call_id: String,
         title: String,
-        status: acp::ToolCallStatus,
+        status: ToolCallStatus,
     },
     /// Agent thinking / reasoning trace.
     Thinking {
@@ -91,8 +89,8 @@ pub enum EntryKind {
     /// Agent requesting user permission for a tool call.
     PermissionRequest {
         agent_id: String,
-        request: Box<acp::RequestPermissionRequest>,
-        response_tx: Option<tokio::sync::oneshot::Sender<acp::RequestPermissionResponse>>,
+        request: Box<PermissionRequest>,
+        response_tx: Option<tokio::sync::oneshot::Sender<PermissionResponse>>,
         selected: usize,
         resolved: bool,
     },

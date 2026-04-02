@@ -1,4 +1,3 @@
-mod acp;
 mod app;
 mod config;
 mod error;
@@ -20,21 +19,27 @@ pub use config::TuiConfig;
 pub use error::TuiError;
 
 /// Run the TUI. Blocks until the user quits.
-pub async fn run(config: TuiConfig) -> Result<(), TuiError> {
+pub async fn run(
+    config: TuiConfig,
+    bitrouter_config: &bitrouter_config::BitrouterConfig,
+) -> Result<(), TuiError> {
     enable_raw_mode()?;
 
     // From this point on, restore_terminal must always run — even if the
     // remaining setup steps fail.
-    let result = run_inner(config).await;
+    let result = run_inner(config, bitrouter_config).await;
     restore_terminal();
     result
 }
 
-async fn run_inner(config: TuiConfig) -> Result<(), TuiError> {
+async fn run_inner(
+    config: TuiConfig,
+    bitrouter_config: &bitrouter_config::BitrouterConfig,
+) -> Result<(), TuiError> {
     stdout().execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
-    app::run_loop(&mut terminal, config).await
+    app::run_loop(&mut terminal, config, bitrouter_config).await
 }
 
 fn restore_terminal() {

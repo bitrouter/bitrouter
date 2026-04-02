@@ -1709,6 +1709,8 @@ dependencies = [
 name = "bitrouter-providers"
 version = "0.17.0"
 dependencies = [
+ "agent-client-protocol",
+ "async-trait",
  "base64 0.22.1",
  "bitrouter-config",
  "bitrouter-core",
@@ -1735,15 +1737,14 @@ dependencies = [
 name = "bitrouter-tui"
 version = "0.17.0"
 dependencies = [
- "agent-client-protocol",
- "async-trait",
+ "bitrouter-config",
+ "bitrouter-providers",
  "crossterm",
  "futures",
  "ratatui",
  "ratatui-textarea",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-use agent_client_protocol as acp;
+use bitrouter_providers::acp::types::AgentEvent;
 use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent};
 use futures::StreamExt;
 use tokio::sync::mpsc;
@@ -12,38 +12,11 @@ pub enum AppEvent {
     Resize { _width: u16, _height: u16 },
     /// Tick / ignored terminal event.
     Tick,
-
-    // ── ACP lifecycle (all carry agent_id) ──────────────────────────
-    /// Agent subprocess connected and ACP session created.
-    AgentConnected {
-        agent_id: String,
-        session_id: acp::SessionId,
-    },
-    /// Agent connection closed cleanly.
-    AgentDisconnected { agent_id: String },
-    /// Agent-side error (spawn failure, protocol error, unexpected exit).
-    AgentError { agent_id: String, message: String },
-
-    // ── ACP content ─────────────────────────────────────────────────
-    /// Streaming session update from an agent.
-    SessionUpdate {
-        agent_id: String,
-        notification: acp::SessionNotification,
-    },
-    /// Agent requests user permission for a tool call.
-    PermissionRequest {
-        agent_id: String,
-        request: acp::RequestPermissionRequest,
-        response_tx: tokio::sync::oneshot::Sender<acp::RequestPermissionResponse>,
-    },
-    /// The prompt turn completed.
-    PromptDone {
-        agent_id: String,
-        _stop_reason: acp::StopReason,
-    },
+    /// An event from an ACP agent provider.
+    Agent(AgentEvent),
 }
 
-/// Multiplexes terminal events and ACP events into a single channel.
+/// Multiplexes terminal events and agent events into a single channel.
 pub struct EventHandler {
     tx: mpsc::Sender<AppEvent>,
     rx: mpsc::Receiver<AppEvent>,
@@ -58,7 +31,7 @@ impl EventHandler {
         Self { tx, rx }
     }
 
-    /// Clone the sender so ACP workers can emit events into the same channel.
+    /// Clone the sender so agent workers can emit events into the same channel.
     pub fn sender(&self) -> mpsc::Sender<AppEvent> {
         self.tx.clone()
     }

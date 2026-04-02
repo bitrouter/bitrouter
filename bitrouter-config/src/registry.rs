@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use bitrouter_core::routers::routing_table::ApiProtocol;
 
-use crate::config::{AuthConfig, Endpoint, ModelInfo, ProviderConfig, ToolConfig};
+use crate::config::{AgentConfig, AuthConfig, Endpoint, ModelInfo, ProviderConfig, ToolConfig};
 
 // ── Compile-time embedded provider definitions ──────────────────────
 
@@ -183,6 +183,40 @@ pub fn builtin_tool_provider_defs() -> HashMap<String, BuiltinToolProvider> {
                     tool_configs,
                 },
             ))
+        })
+        .collect()
+}
+
+// ── Compile-time embedded agent definitions ────────────────────────
+
+const AGENT_DEFS: &[(&str, &str)] = &[
+    (
+        "openclaw",
+        include_str!("../providers/agents/openclaw.yaml"),
+    ),
+    ("gemini", include_str!("../providers/agents/gemini.yaml")),
+    ("copilot", include_str!("../providers/agents/copilot.yaml")),
+    ("claude", include_str!("../providers/agents/claude.yaml")),
+    (
+        "opencode",
+        include_str!("../providers/agents/opencode.yaml"),
+    ),
+    ("codex", include_str!("../providers/agents/codex.yaml")),
+];
+
+/// Returns the built-in agent definitions keyed by agent name.
+pub fn builtin_agent_defs() -> HashMap<String, AgentConfig> {
+    AGENT_DEFS
+        .iter()
+        .filter_map(|(name, yaml)| {
+            let config: AgentConfig = match serde_saphyr::from_str(yaml) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("warning: invalid built-in agent YAML '{name}': {e}");
+                    return None;
+                }
+            };
+            Some(((*name).to_owned(), config))
         })
         .collect()
 }

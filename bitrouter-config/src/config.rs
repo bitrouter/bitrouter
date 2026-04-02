@@ -11,7 +11,8 @@ use bitrouter_core::routers::routing_table::ApiProtocol;
 
 use crate::env::{load_env, substitute_in_value};
 use crate::registry::{
-    builtin_providers, builtin_tool_provider_defs, merge_provider, resolve_providers,
+    builtin_agent_defs, builtin_providers, builtin_tool_provider_defs, merge_provider,
+    resolve_providers,
 };
 
 fn default_true() -> bool {
@@ -66,6 +67,10 @@ pub struct BitrouterConfig {
     /// Tool routing definitions.
     #[serde(default)]
     pub tools: HashMap<String, ToolConfig>,
+
+    /// Agent definitions (ACP-compatible coding agents).
+    #[serde(default)]
+    pub agents: HashMap<String, AgentConfig>,
 }
 
 impl BitrouterConfig {
@@ -159,11 +164,57 @@ impl BitrouterConfig {
             }
         }
 
+        // Merge built-in agent definitions.
+        // User-declared agents override built-ins by name.
+        if config.inherit_defaults {
+            for (name, builtin) in builtin_agent_defs() {
+                config.agents.entry(name).or_insert(builtin);
+            }
+        }
+
         // Resolve derives + env_prefix
         config.providers = resolve_providers(providers, &env);
 
         Ok(config)
     }
+}
+
+// ── Agent configuration ──────────────────────────────────────────────
+
+/// Communication protocol for an agent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentProtocol {
+    /// Agent Client Protocol (JSON-RPC over stdio).
+    #[default]
+    Acp,
+}
+
+impl fmt::Display for AgentProtocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Acp => write!(f, "acp"),
+        }
+    }
+}
+
+/// Configuration for a single agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// Communication protocol.
+    #[serde(default)]
+    pub protocol: AgentProtocol,
+
+    /// Binary name or path. Resolved from PATH if relative.
+    pub binary: String,
+
+    /// Arguments passed when spawning the agent subprocess.
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Whether this agent is enabled (available for connection).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 // ── Database configuration ────────────────────────────────────────────

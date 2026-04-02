@@ -3,6 +3,7 @@ use std::io::BufRead;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use crate::config::AgentConfig;
 use crate::registry::builtin_provider_defs;
 
 /// Options for generating config files.
@@ -282,6 +283,59 @@ fn merge_env_file(env_path: &Path, options: &InitOptions) -> String {
         result.push('\n');
     }
     result
+}
+
+/// Append an agent definition to an existing `bitrouter.yaml`.
+///
+/// Reads the file, deserializes it, inserts the agent, and writes back.
+/// This may reformat the YAML (comments are not preserved).
+pub fn write_agent(
+    config_path: &Path,
+    name: &str,
+    agent: &AgentConfig,
+) -> crate::error::Result<()> {
+    // Read and parse the existing config (or start from empty)
+    let raw = if config_path.exists() {
+        std::fs::read_to_string(config_path).map_err(|e| crate::error::ConfigError::ConfigRead {
+            path: config_path.to_path_buf(),
+            source: e,
+        })?
+    } else {
+        String::new()
+    };
+
+    let mut value: serde_json::Value = if raw.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_saphyr::from_str(&raw)
+            .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?
+    };
+
+    // Ensure `agents` key exists as an object
+    let root = value
+        .as_object_mut()
+        .ok_or_else(|| crate::error::ConfigError::ConfigParse("root is not an object".into()))?;
+    let agents = root
+        .entry("agents")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let agents_map = agents
+        .as_object_mut()
+        .ok_or_else(|| crate::error::ConfigError::ConfigParse("agents is not an object".into()))?;
+
+    // Insert the agent
+    let agent_value = serde_json::to_value(agent)
+        .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
+    agents_map.insert(name.to_owned(), agent_value);
+
+    // Write back as YAML
+    let yaml = serde_saphyr::to_string(&value)
+        .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
+    std::fs::write(config_path, yaml).map_err(|e| crate::error::ConfigError::ConfigRead {
+        path: config_path.to_path_buf(),
+        source: e,
+    })?;
+
+    Ok(())
 }
 
 #[cfg(test)]
