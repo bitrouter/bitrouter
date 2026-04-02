@@ -514,6 +514,9 @@ fn default_solana_network() -> String {
 /// wallet:
 ///   name: treasury
 ///   vault_path: ~/.ows  # optional, defaults to OWS standard path
+///   payment:
+///     tempo_rpc_url: https://rpc.moderato.tempo.xyz
+///     solana_rpc_url: https://api.mainnet-beta.solana.com
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
@@ -523,6 +526,47 @@ pub struct WalletConfig {
     /// Custom OWS vault directory. Defaults to `~/.ows`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_path: Option<String>,
+
+    /// Client-side payment configuration.
+    ///
+    /// When set, enables automatic 402 Payment Required handling for
+    /// providers configured with `auth: mpp`. The wallet signs payment
+    /// transactions using Tempo or Solana.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment: Option<PaymentClientConfig>,
+}
+
+/// Client-side payment configuration for the OWS wallet.
+///
+/// Controls how the wallet pays upstream providers when they return
+/// `402 Payment Required`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentClientConfig {
+    /// Tempo RPC URL for session channel operations.
+    ///
+    /// Required for Tempo session and charge payments.
+    /// Defaults to the Moderato testnet if omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo_rpc_url: Option<String>,
+
+    /// Solana RPC URL for broadcasting transactions.
+    ///
+    /// Required for Solana charge payments.
+    /// Falls back to `solana_rpc_url` at the top-level config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solana_rpc_url: Option<String>,
+
+    /// Maximum session channel deposit in base units.
+    ///
+    /// Caps the server's `suggestedDeposit` to prevent overspending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_max_deposit: Option<u128>,
+
+    /// Default session channel deposit in base units.
+    ///
+    /// Used when the server challenge does not include `suggestedDeposit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_default_deposit: Option<u128>,
 }
 
 /// Authentication configuration.

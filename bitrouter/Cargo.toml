@@ -13,18 +13,9 @@ default = ["tui", "sqlite", "postgres", "mpp-tempo", "mcp", "rest"]
 rest = ["bitrouter-providers/rest"]
 mcp = ["bitrouter-api/mcp", "bitrouter-providers/mcp"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
-sqlite = [
-    "bitrouter-accounts/sqlite",
-    "bitrouter-observe/sqlite",
-]
-postgres = [
-    "bitrouter-accounts/postgres",
-    "bitrouter-observe/postgres",
-]
-mysql = [
-    "bitrouter-accounts/mysql",
-    "bitrouter-observe/mysql",
-]
+sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
+postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
+mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
 mpp-tempo = [
     "bitrouter-api/mpp-tempo",
     "bitrouter-config/mpp-tempo",
@@ -37,17 +28,25 @@ mpp-solana = [
     "dep:mpp",
     "dep:anyhow",
     "dep:bs58",
+    "dep:sha2",
+    "dep:curve25519-dalek",
 ]
 
 [dependencies]
 # Internal crates
 bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.17" }
-bitrouter-api = { path = "../bitrouter-api", version = "0.17", default-features = false, features = ["openai", "anthropic", "google"] }
+bitrouter-api = { path = "../bitrouter-api", version = "0.17", default-features = false, features = [
+    "openai",
+    "anthropic",
+    "google",
+] }
 bitrouter-config = { path = "../bitrouter-config", version = "0.17" }
 bitrouter-core = { path = "../bitrouter-core", version = "0.17" }
 bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.17" }
 bitrouter-observe = { path = "../bitrouter-observe", version = "0.17" }
-bitrouter-providers = { path = "../bitrouter-providers", version = "0.17", features = ["agentskills"] }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.17", features = [
+    "agentskills",
+] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -89,22 +88,22 @@ futures = { version = "0.3", optional = true }
 anyhow = { version = "1", optional = true }
 
 
-
 # MPP payment middleware (optional)
 mpp = { package = "mpp-br", version = "0.8.1", default-features = false, features = [
     "client",
+    "middleware",
     "tempo",
     "reqwest-rustls-tls",
 ], optional = true }
 bs58 = { version = "0.5", optional = true }
+sha2 = { version = "0.10", optional = true }
+curve25519-dalek = { version = "4", default-features = false, optional = true }
 
 # OWS wallet integration
 ows-lib = { version = "1.1" }
 ows-core = { version = "1.1" }
 ows-signer = { version = "1.1" }
-alloy = { version = "1", default-features = false, features = [
-    "signers",
-] }
+alloy = { version = "1", default-features = false, features = ["signers"] }
 async-trait = { version = "0.1" }
 
 [dev-dependencies]
