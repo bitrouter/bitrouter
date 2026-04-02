@@ -445,15 +445,17 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Serve) => {
             print_first_run_guidance(&runtime);
             let base_client = reqwest::Client::new();
-            let mut client_builder = reqwest_middleware::ClientBuilder::new(base_client);
+            let client_builder = reqwest_middleware::ClientBuilder::new(base_client);
             #[cfg(feature = "mpp-tempo")]
-            {
+            let client_builder =
                 match crate::runtime::payment::build_payment_middleware(&runtime.config) {
-                    Ok(Some(mw)) => client_builder = client_builder.with(mw),
-                    Ok(None) => {}
-                    Err(e) => tracing::warn!("payment middleware disabled: {e}"),
-                }
-            }
+                    Ok(Some(mw)) => client_builder.with(mw),
+                    Ok(None) => client_builder,
+                    Err(e) => {
+                        tracing::warn!("payment middleware disabled: {e}");
+                        client_builder
+                    }
+                };
             let model_router = crate::runtime::Router::new(
                 client_builder.build(),
                 runtime.config.providers.clone(),
@@ -535,15 +537,16 @@ async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::
     let status = runtime.status();
 
     let base_client = reqwest::Client::new();
-    let mut client_builder = reqwest_middleware::ClientBuilder::new(base_client);
+    let client_builder = reqwest_middleware::ClientBuilder::new(base_client);
     #[cfg(feature = "mpp-tempo")]
-    {
-        match crate::runtime::payment::build_payment_middleware(&runtime.config) {
-            Ok(Some(mw)) => client_builder = client_builder.with(mw),
-            Ok(None) => {}
-            Err(e) => tracing::warn!("payment middleware disabled: {e}"),
+    let client_builder = match crate::runtime::payment::build_payment_middleware(&runtime.config) {
+        Ok(Some(mw)) => client_builder.with(mw),
+        Ok(None) => client_builder,
+        Err(e) => {
+            tracing::warn!("payment middleware disabled: {e}");
+            client_builder
         }
-    }
+    };
     let model_router =
         crate::runtime::Router::new(client_builder.build(), runtime.config.providers.clone());
     #[cfg(feature = "tui")]
