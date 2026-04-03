@@ -59,7 +59,7 @@ fn mode_hints(state: &AppState) -> (&'static str, Color, String) {
         InputMode::Normal => (
             "NORMAL",
             Color::Cyan,
-            "Enter: send │ @agent: mention │ Esc: scroll │ Alt+T: tabs".to_string(),
+            "Enter: send │ @agent: mention │ Esc: scroll │ ^T: tabs │ ^A: agents".to_string(),
         ),
         InputMode::Scroll => (
             "SCROLL",

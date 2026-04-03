@@ -2,3 +2,8 @@ protocol: acp
 binary: openclaw
 args:
   - acp
+distribution:
+  - npx:
+      package: openclaw
+      args:
+        - acp

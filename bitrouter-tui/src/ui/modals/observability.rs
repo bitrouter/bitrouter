@@ -28,6 +28,8 @@ pub fn render(frame: &mut Frame, state: &AppState, modal: &ObservabilityState) {
     for agent in &state.agents {
         let (status_str, color) = match &agent.status {
             AgentStatus::Idle => ("idle", Color::DarkGray),
+            AgentStatus::Available => ("available", Color::Blue),
+            AgentStatus::Installing { .. } => ("installing", Color::Cyan),
             AgentStatus::Connecting => ("connecting", Color::Cyan),
             AgentStatus::Connected => ("connected", Color::Green),
             AgentStatus::Busy => ("busy", Color::Yellow),

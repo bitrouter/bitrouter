@@ -5,7 +5,7 @@ use std::time::Instant;
 use bitrouter_providers::acp::discovery::discover_agents;
 use bitrouter_providers::acp::provider::AcpAgentProvider;
 use bitrouter_providers::acp::types::{
-    AgentEvent, PermissionOutcome, PermissionResponse, ToolCallStatus,
+    AgentAvailability, AgentEvent, PermissionOutcome, PermissionResponse, ToolCallStatus,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
@@ -104,27 +104,53 @@ impl App {
         bitrouter_config: &bitrouter_config::BitrouterConfig,
         event_tx: mpsc::Sender<AppEvent>,
     ) -> Self {
-        // Load configured agents (source of truth).
+        // Discover all agents (on PATH + distributable).
+        let discovered = discover_agents(&bitrouter_config.agents);
+
+        // Build agent list from config, using discovery to determine status.
         let mut agents: Vec<crate::model::Agent> = bitrouter_config
             .agents
             .iter()
             .filter(|(_, ac)| ac.enabled)
             .enumerate()
-            .map(|(i, (name, ac))| crate::model::Agent {
-                name: name.clone(),
-                config: Some(ac.clone()),
-                status: AgentStatus::Idle,
-                session_id: None,
-                color: agent_color(i),
+            .map(|(i, (name, ac))| {
+                let status = discovered
+                    .iter()
+                    .find(|da| da.name == *name)
+                    .map(|da| match &da.availability {
+                        AgentAvailability::OnPath(_) => AgentStatus::Idle,
+                        AgentAvailability::Distributable => AgentStatus::Available,
+                    })
+                    // Not discovered at all = no binary, no distribution.
+                    .unwrap_or_else(|| {
+                        if ac.distribution.is_empty() {
+                            AgentStatus::Idle // Legacy: assume user knows what they configured
+                        } else {
+                            AgentStatus::Available
+                        }
+                    });
+                crate::model::Agent {
+                    name: name.clone(),
+                    config: Some(ac.clone()),
+                    status,
+                    session_id: None,
+                    color: agent_color(i),
+                }
             })
             .collect();
 
-        // Run discovery for agents not yet in config.
-        let known = bitrouter_config::builtin_agent_defs();
-        let discovered = discover_agents(&known);
+        // Add any discovered agents not already in config.
         for da in &discovered {
             if !agents.iter().any(|a| a.name == da.name) {
                 let idx = agents.len();
+                let status = match &da.availability {
+                    AgentAvailability::OnPath(_) => AgentStatus::Idle,
+                    AgentAvailability::Distributable => AgentStatus::Available,
+                };
+                let known_config = bitrouter_config.agents.get(&da.name);
+                let distribution = known_config
+                    .map(|c| c.distribution.clone())
+                    .unwrap_or_default();
                 agents.push(crate::model::Agent {
                     name: da.name.clone(),
                     config: Some(bitrouter_config::AgentConfig {
@@ -132,8 +158,9 @@ impl App {
                         binary: da.binary.to_string_lossy().into_owned(),
                         args: da.args.clone(),
                         enabled: true,
+                        distribution,
                     }),
-                    status: AgentStatus::Idle,
+                    status,
                     session_id: None,
                     color: agent_color(idx),
                 });
@@ -166,6 +193,23 @@ impl App {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Resize { .. } | AppEvent::Tick => {}
             AppEvent::Agent(agent_event) => self.handle_agent_event(agent_event),
+            AppEvent::InstallProgress { agent_id, percent } => {
+                if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
+                    agent.status = AgentStatus::Installing { percent };
+                }
+            }
+            AppEvent::InstallComplete {
+                agent_id,
+                binary_path,
+            } => {
+                self.handle_install_complete(&agent_id, binary_path);
+            }
+            AppEvent::InstallFailed { agent_id, message } => {
+                if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
+                    agent.status = AgentStatus::Error(message.clone());
+                }
+                self.push_system_msg(&format!("[{agent_id}] Install failed: {message}"));
+            }
         }
     }
 
@@ -303,9 +347,27 @@ impl App {
         // Clean up provider handle.
         self.agent_providers.remove(&agent_id);
         if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
-            // Only reset to Idle if not already in Error state.
+            // Only reset status if not already in Error state.
             if !matches!(agent.status, AgentStatus::Error(_)) {
-                agent.status = AgentStatus::Idle;
+                // Agents without a binary on PATH go back to Available.
+                let on_path = agent
+                    .config
+                    .as_ref()
+                    .map(|c| {
+                        c.distribution.is_empty()
+                            || std::env::var_os("PATH")
+                                .and_then(|p| {
+                                    std::env::split_paths(&p)
+                                        .find(|dir| dir.join(&c.binary).is_file())
+                                })
+                                .is_some()
+                    })
+                    .unwrap_or(true);
+                agent.status = if on_path {
+                    AgentStatus::Idle
+                } else {
+                    AgentStatus::Available
+                };
             }
             agent.session_id = None;
         }
@@ -603,9 +665,10 @@ impl App {
             }
         }
 
-        // Alt+1..Alt+9: direct tab switch from any mode (except Permission).
+        // Ctrl+1..Ctrl+9: direct tab switch from any mode (except Permission).
         if self.state.mode != InputMode::Permission
-            && key.modifiers.contains(KeyModifiers::ALT)
+            && (key.modifiers.contains(KeyModifiers::ALT)
+                || key.modifiers.contains(KeyModifiers::CONTROL))
             && let KeyCode::Char(c @ '1'..='9') = key.code
         {
             let idx = (c as usize) - ('1' as usize);
@@ -639,13 +702,17 @@ impl App {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) {
-        // Alt+T enters Tab mode.
-        if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('t') {
+        // Alt+T or Ctrl+T enters Tab mode.
+        if (key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('t'))
+            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t'))
+        {
             self.state.mode = InputMode::Tab;
             return;
         }
-        // Alt+A enters Agent mode.
-        if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('a') {
+        // Alt+A or Ctrl+A enters Agent mode.
+        if (key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('a'))
+            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('a'))
+        {
             self.state.mode = InputMode::Agent;
             return;
         }
@@ -657,9 +724,10 @@ impl App {
                     self.accept_autocomplete();
                     return;
                 }
-                // Shift+Enter or Alt+Enter inserts a newline.
+                // Shift+Enter, Alt+Enter, or Ctrl+Enter inserts a newline.
                 if key.modifiers.contains(KeyModifiers::SHIFT)
                     || key.modifiers.contains(KeyModifiers::ALT)
+                    || key.modifiers.contains(KeyModifiers::CONTROL)
                 {
                     self.state.input.newline();
                     return;
@@ -1126,7 +1194,7 @@ impl App {
 
         for agent in &self.state.agents {
             match agent.status {
-                AgentStatus::Idle | AgentStatus::Error(_) => {
+                AgentStatus::Idle | AgentStatus::Available | AgentStatus::Error(_) => {
                     if agent.config.is_some() {
                         cmds.push(PaletteCommand {
                             label: format!("Connect {}", agent.name),
@@ -1140,7 +1208,7 @@ impl App {
                         action: CommandAction::DisconnectAgent(agent.name.clone()),
                     });
                 }
-                AgentStatus::Connecting => {}
+                AgentStatus::Connecting | AgentStatus::Installing { .. } => {}
             }
         }
 
@@ -1384,7 +1452,10 @@ impl App {
                 .filter(|a| {
                     matches!(
                         a.status,
-                        AgentStatus::Connected | AgentStatus::Busy | AgentStatus::Idle
+                        AgentStatus::Connected
+                            | AgentStatus::Busy
+                            | AgentStatus::Idle
+                            | AgentStatus::Available
                     ) && a.config.is_some()
                 })
                 .map(|a| a.name.clone())
@@ -1468,6 +1539,14 @@ impl App {
             None => return,
         };
 
+        // Don't interrupt an install or connection already in progress.
+        if matches!(
+            agent.status,
+            AgentStatus::Connecting | AgentStatus::Installing { .. }
+        ) {
+            return;
+        }
+
         let config = match &agent.config {
             Some(c) => c.clone(),
             None => {
@@ -1479,12 +1558,134 @@ impl App {
             }
         };
 
+        // Binary-only distribution: need to download first.
+        if agent.status == AgentStatus::Available && needs_binary_install(&config) {
+            agent.status = AgentStatus::Installing { percent: 0 };
+            self.ensure_tab(agent_id);
+            self.push_system_msg(&format!("Installing {agent_id}..."));
+            self.start_binary_install(agent_id, &config);
+            return;
+        }
+
         agent.status = AgentStatus::Connecting;
 
         // Ensure a tab exists for this agent.
         self.ensure_tab(agent_id);
 
-        // Create event channel for this agent and forward to the main event loop.
+        self.spawn_agent_provider(agent_id, &config);
+    }
+
+    /// Spawn the async binary download task.
+    fn start_binary_install(&self, agent_id: &str, config: &bitrouter_config::AgentConfig) {
+        use bitrouter_config::Distribution;
+        use bitrouter_providers::acp::install::install_binary_agent;
+
+        let platforms = config.distribution.iter().find_map(|d| match d {
+            Distribution::Binary { platforms } => Some(platforms.clone()),
+            _ => None,
+        });
+
+        let platforms = match platforms {
+            Some(p) => p,
+            None => return,
+        };
+
+        let agent_id_owned = agent_id.to_string();
+        let event_tx = self.event_tx.clone();
+
+        tokio::spawn(async move {
+            let (progress_tx, mut progress_rx) = mpsc::channel(32);
+
+            // Forward progress to app events.
+            let fwd_tx = event_tx.clone();
+            let fwd_id = agent_id_owned.clone();
+            tokio::spawn(async move {
+                while let Some(p) = progress_rx.recv().await {
+                    use bitrouter_providers::acp::types::InstallProgress;
+                    let evt = match &p {
+                        InstallProgress::Downloading {
+                            bytes_received,
+                            total,
+                        } => {
+                            let percent = total
+                                .filter(|&t| t > 0)
+                                .map(|t| ((*bytes_received * 100) / t) as u8)
+                                .unwrap_or(0);
+                            AppEvent::InstallProgress {
+                                agent_id: fwd_id.clone(),
+                                percent,
+                            }
+                        }
+                        InstallProgress::Extracting => AppEvent::InstallProgress {
+                            agent_id: fwd_id.clone(),
+                            percent: 95,
+                        },
+                        InstallProgress::Done(path) => AppEvent::InstallComplete {
+                            agent_id: fwd_id.clone(),
+                            binary_path: path.clone(),
+                        },
+                        InstallProgress::Failed(msg) => AppEvent::InstallFailed {
+                            agent_id: fwd_id.clone(),
+                            message: msg.clone(),
+                        },
+                    };
+                    if fwd_tx.send(evt).await.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            // The forwarding task handles Done/Failed via InstallProgress,
+            // so we only need to drive the install to completion here.
+            let _ = install_binary_agent(&agent_id_owned, &platforms, progress_tx).await;
+        });
+    }
+
+    /// Handle a completed binary install by spawning the agent connection.
+    fn handle_install_complete(&mut self, agent_id: &str, binary_path: std::path::PathBuf) {
+        let agent = match self.state.agents.iter_mut().find(|a| a.name == *agent_id) {
+            Some(a) => a,
+            None => return,
+        };
+
+        // Update config to use the installed binary path and archive args.
+        if let Some(config) = &mut agent.config {
+            config.binary = binary_path.to_string_lossy().into_owned();
+            // If the binary archive specifies args, use those.
+            if let Some(archive_args) = Self::binary_archive_args(config) {
+                config.args = archive_args;
+            }
+        }
+
+        let config = match &agent.config {
+            Some(c) => c.clone(),
+            None => return,
+        };
+
+        agent.status = AgentStatus::Connecting;
+        self.push_system_msg(&format!("{agent_id} installed, connecting..."));
+        self.spawn_agent_provider(agent_id, &config);
+    }
+
+    /// Extract args from the binary archive matching the current platform.
+    fn binary_archive_args(config: &bitrouter_config::AgentConfig) -> Option<Vec<String>> {
+        use bitrouter_config::Distribution;
+        use bitrouter_providers::acp::platform::current_platform;
+
+        let platform = current_platform()?;
+        for dist in &config.distribution {
+            if let Distribution::Binary { platforms } = dist
+                && let Some(archive) = platforms.get(platform)
+                && !archive.args.is_empty()
+            {
+                return Some(archive.args.clone());
+            }
+        }
+        None
+    }
+
+    /// Spawn an ACP agent provider and wire up event forwarding.
+    fn spawn_agent_provider(&mut self, agent_id: &str, config: &bitrouter_config::AgentConfig) {
         let (agent_event_tx, mut agent_event_rx) = mpsc::channel::<AgentEvent>(256);
         let app_event_tx = self.event_tx.clone();
         tokio::spawn(async move {
@@ -1495,7 +1696,7 @@ impl App {
             }
         });
 
-        let provider = AcpAgentProvider::spawn(agent_id.to_string(), &config, agent_event_tx);
+        let provider = AcpAgentProvider::spawn(agent_id.to_string(), config, agent_event_tx);
         self.agent_providers.insert(agent_id.to_string(), provider);
     }
 
@@ -1508,18 +1709,38 @@ impl App {
     fn rediscover_agents(&mut self) {
         let known = bitrouter_config::builtin_agent_defs();
         let discovered = discover_agents(&known);
-        for da in discovered {
-            if !self.state.agents.iter().any(|a| a.name == da.name) {
+
+        for da in &discovered {
+            let new_status = match &da.availability {
+                AgentAvailability::OnPath(_) => AgentStatus::Idle,
+                AgentAvailability::Distributable => AgentStatus::Available,
+            };
+
+            if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == da.name) {
+                // Update status for idle/available agents (don't touch connected ones).
+                if matches!(
+                    agent.status,
+                    AgentStatus::Idle | AgentStatus::Available | AgentStatus::Error(_)
+                ) {
+                    agent.status = new_status;
+                }
+            } else {
+                // New agent not yet in list.
                 let idx = self.state.agents.len();
+                let distribution = known
+                    .get(&da.name)
+                    .map(|c| c.distribution.clone())
+                    .unwrap_or_default();
                 self.state.agents.push(crate::model::Agent {
-                    name: da.name,
+                    name: da.name.clone(),
                     config: Some(bitrouter_config::AgentConfig {
                         protocol: bitrouter_config::AgentProtocol::Acp,
                         binary: da.binary.to_string_lossy().into_owned(),
-                        args: da.args,
+                        args: da.args.clone(),
                         enabled: true,
+                        distribution,
                     }),
-                    status: AgentStatus::Idle,
+                    status: new_status,
                     session_id: None,
                     color: agent_color(idx),
                 });
@@ -1583,6 +1804,25 @@ fn entry_contains_text(kind: &EntryKind, query: &str) -> bool {
         EntryKind::Permission(p) => p.request.title.to_lowercase().contains(query),
         EntryKind::System(s) => s.text.to_lowercase().contains(query),
     }
+}
+
+/// Check if an agent requires a binary download before it can be launched.
+///
+/// Returns true only when the agent has no npx/uvx distribution —
+/// i.e., the only fallback is a binary archive download.
+fn needs_binary_install(config: &bitrouter_config::AgentConfig) -> bool {
+    use bitrouter_config::Distribution;
+
+    for dist in &config.distribution {
+        match dist {
+            Distribution::Npx { .. } | Distribution::Uvx { .. } => return false,
+            Distribution::Binary { .. } => {}
+        }
+    }
+    config
+        .distribution
+        .iter()
+        .any(|d| matches!(d, Distribution::Binary { .. }))
 }
 
 pub async fn run_loop(

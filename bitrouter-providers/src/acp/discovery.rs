@@ -5,31 +5,45 @@ use std::path::PathBuf;
 
 use bitrouter_config::AgentConfig;
 
-use super::types::DiscoveredAgent;
+use super::types::{AgentAvailability, DiscoveredAgent};
 
 /// Scan PATH for agent binaries defined in `known`.
 ///
-/// Returns a `DiscoveredAgent` for each binary found on PATH.
+/// Returns a `DiscoveredAgent` for each agent that is either found on
+/// PATH or has distribution metadata for auto-install. Agents with
+/// neither are omitted.
+///
 /// This does **not** decide whether the agent is enabled — that's
-/// the caller's responsibility (typically: check if it's already
-/// in the user's config).
+/// the caller's responsibility.
 pub fn discover_agents(known: &HashMap<String, AgentConfig>) -> Vec<DiscoveredAgent> {
-    let path_var = match std::env::var_os("PATH") {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
+    let path_var = std::env::var_os("PATH");
+    let dirs: Vec<PathBuf> = path_var
+        .as_ref()
+        .map(|p| std::env::split_paths(p).collect())
+        .unwrap_or_default();
 
-    let dirs: Vec<PathBuf> = std::env::split_paths(&path_var).collect();
     let mut agents = Vec::new();
 
     for (name, config) in known {
-        if let Some(bin_path) = find_in_dirs(&config.binary, &dirs) {
-            agents.push(DiscoveredAgent {
-                name: name.clone(),
-                binary: bin_path,
-                args: config.args.clone(),
-            });
-        }
+        let availability = if let Some(bin_path) = find_in_dirs(&config.binary, &dirs) {
+            AgentAvailability::OnPath(bin_path)
+        } else if !config.distribution.is_empty() {
+            AgentAvailability::Distributable
+        } else {
+            continue; // Neither on PATH nor distributable — skip.
+        };
+
+        let binary = match &availability {
+            AgentAvailability::OnPath(p) => p.clone(),
+            AgentAvailability::Distributable => PathBuf::from(&config.binary),
+        };
+
+        agents.push(DiscoveredAgent {
+            name: name.clone(),
+            binary,
+            args: config.args.clone(),
+            availability,
+        });
     }
 
     agents

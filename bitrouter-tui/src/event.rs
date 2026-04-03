@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use bitrouter_providers::acp::types::AgentEvent;
 use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent};
 use futures::StreamExt;
@@ -14,6 +16,15 @@ pub enum AppEvent {
     Tick,
     /// An event from an ACP agent provider.
     Agent(AgentEvent),
+    /// Binary agent install progress update.
+    InstallProgress { agent_id: String, percent: u8 },
+    /// Binary agent install completed.
+    InstallComplete {
+        agent_id: String,
+        binary_path: PathBuf,
+    },
+    /// Binary agent install failed.
+    InstallFailed { agent_id: String, message: String },
 }
 
 /// Multiplexes terminal events and agent events into a single channel.

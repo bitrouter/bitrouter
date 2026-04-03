@@ -90,7 +90,7 @@ uuid = { version = "1", features = ["v4"] }
 warp = { version = "0.4.2", features = ["server"] }
 
 # TUI (optional)
-bitrouter-tui = { path = "../bitrouter-tui", version = "0.17", optional = true }
+bitrouter-tui = { path = "../bitrouter-tui", version = "0.18", optional = true }
 anyhow = { version = "1", optional = true }
 
 

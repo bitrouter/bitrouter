@@ -214,7 +214,7 @@ fn render_agent_list(frame: &mut Frame, state: &AppState, area: Rect) {
 
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
-        "  Available Agents",
+        "  Agents",
         Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
@@ -224,46 +224,78 @@ fn render_agent_list(frame: &mut Frame, state: &AppState, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    for (i, agent) in state.agents.iter().enumerate() {
-        let is_selected = i == state.agent_list_selected;
-        let marker = if is_selected { "▸" } else { " " };
+    // Partition agents into tiers for display (keeping original indices for selection).
+    let connected: Vec<usize> = state
+        .agents
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| {
+            matches!(
+                a.status,
+                AgentStatus::Connected | AgentStatus::Busy | AgentStatus::Connecting
+            )
+        })
+        .map(|(i, _)| i)
+        .collect();
 
-        let (status_str, status_color) = match &agent.status {
-            AgentStatus::Idle => ("disconnected", Color::DarkGray),
-            AgentStatus::Connecting => ("connecting", Color::Cyan),
-            AgentStatus::Connected => ("connected", Color::Green),
-            AgentStatus::Busy => ("busy", Color::Yellow),
-            AgentStatus::Error(_) => ("error", Color::Red),
-        };
+    let installed: Vec<usize> = state
+        .agents
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| matches!(a.status, AgentStatus::Idle | AgentStatus::Error(_)))
+        .map(|(i, _)| i)
+        .collect();
 
-        let session_str = agent
-            .session_id
-            .as_ref()
-            .map(|s| {
-                if s.len() > 12 {
-                    format!("session: {}…", &s[..12])
-                } else {
-                    format!("session: {s}")
-                }
-            })
-            .unwrap_or_default();
+    let available: Vec<usize> = state
+        .agents
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| {
+            matches!(
+                a.status,
+                AgentStatus::Available | AgentStatus::Installing { .. }
+            )
+        })
+        .map(|(i, _)| i)
+        .collect();
 
-        let has_tab = state.tabs.iter().any(|t| t.agent_name == agent.name);
-        let tab_indicator = if has_tab { " [tab]" } else { "" };
-
-        let row_style = if is_selected {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
+    if !connected.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "  CONNECTED",
             Style::default()
-        };
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for &i in &connected {
+            render_agent_row(&mut lines, state, i);
+        }
+    }
 
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {marker} "), row_style),
-            Span::styled(format!("{:<14}", agent.name), row_style.fg(agent.color)),
-            Span::styled(format!(" {:<12}", status_str), row_style.fg(status_color)),
-            Span::styled(format!(" {session_str}"), row_style.fg(Color::DarkGray)),
-            Span::styled(tab_indicator, row_style.fg(Color::Cyan)),
-        ]));
+    if !installed.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "  INSTALLED",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for &i in &installed {
+            render_agent_row(&mut lines, state, i);
+        }
+    }
+
+    if !available.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "  AVAILABLE",
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for &i in &available {
+            render_agent_row(&mut lines, state, i);
+        }
     }
 
     if state.agents.is_empty() {
@@ -275,6 +307,61 @@ fn render_agent_list(frame: &mut Frame, state: &AppState, area: Rect) {
 
     let para = Paragraph::new(lines);
     frame.render_widget(para, area);
+}
+
+fn render_agent_row(lines: &mut Vec<Line>, state: &AppState, i: usize) {
+    let agent = &state.agents[i];
+    let is_selected = i == state.agent_list_selected;
+    let marker = if is_selected { "▸" } else { " " };
+
+    let (status_str, status_color) = match &agent.status {
+        AgentStatus::Idle => ("disconnected", Color::DarkGray),
+        AgentStatus::Available => ("available", Color::Blue),
+        AgentStatus::Installing { .. } => ("installing", Color::Cyan),
+        AgentStatus::Connecting => ("connecting", Color::Cyan),
+        AgentStatus::Connected => ("connected", Color::Green),
+        AgentStatus::Busy => ("busy", Color::Yellow),
+        AgentStatus::Error(_) => ("error", Color::Red),
+    };
+
+    // Build a more descriptive status for Installing.
+    let status_display = if let AgentStatus::Installing { percent } = &agent.status {
+        format!("installing {percent}%")
+    } else {
+        status_str.to_string()
+    };
+
+    let session_str = agent
+        .session_id
+        .as_ref()
+        .map(|s| {
+            if s.len() > 12 {
+                format!("session: {}…", &s[..12])
+            } else {
+                format!("session: {s}")
+            }
+        })
+        .unwrap_or_default();
+
+    let has_tab = state.tabs.iter().any(|t| t.agent_name == agent.name);
+    let tab_indicator = if has_tab { " [tab]" } else { "" };
+
+    let row_style = if is_selected {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {marker} "), row_style),
+        Span::styled(format!("{:<14}", agent.name), row_style.fg(agent.color)),
+        Span::styled(
+            format!(" {:<16}", status_display),
+            row_style.fg(status_color),
+        ),
+        Span::styled(format!(" {session_str}"), row_style.fg(Color::DarkGray)),
+        Span::styled(tab_indicator, row_style.fg(Color::Cyan)),
+    ]));
 }
 
 fn build_render_context(state: &AppState) -> RenderContext {

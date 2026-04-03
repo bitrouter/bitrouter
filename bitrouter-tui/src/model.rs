@@ -52,6 +52,10 @@ pub struct Agent {
 pub enum AgentStatus {
     /// Discovered on PATH, not connected.
     Idle,
+    /// Has distribution metadata but not found on PATH.
+    Available,
+    /// Binary download in progress (percent 0–100).
+    Installing { percent: u8 },
     /// Thread spawned, awaiting `AgentConnected`.
     Connecting,
     /// Session active, ready for prompts.

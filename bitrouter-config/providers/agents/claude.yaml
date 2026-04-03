@@ -1,3 +1,6 @@
 protocol: acp
 binary: claude-agent-acp
 args: []
+distribution:
+  - npx:
+      package: "@agentclientprotocol/claude-agent-acp"

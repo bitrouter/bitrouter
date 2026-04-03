@@ -120,12 +120,38 @@ pub enum AgentCommand {
     Prompt(String),
 }
 
-/// An agent binary discovered on PATH (not yet confirmed in config).
+/// How an agent was discovered and how it should be launched.
+#[derive(Debug, Clone)]
+pub enum AgentAvailability {
+    /// Binary found on PATH at this location.
+    OnPath(PathBuf),
+    /// Not on PATH, but can be launched or installed via distribution metadata.
+    Distributable,
+}
+
+/// An agent discovered during startup (on PATH or via distribution metadata).
 #[derive(Debug, Clone)]
 pub struct DiscoveredAgent {
     pub name: String,
     pub binary: PathBuf,
     pub args: Vec<String>,
+    pub availability: AgentAvailability,
+}
+
+/// Progress of a binary agent installation.
+#[derive(Debug, Clone)]
+pub enum InstallProgress {
+    /// Downloading the archive.
+    Downloading {
+        bytes_received: u64,
+        total: Option<u64>,
+    },
+    /// Extracting the archive.
+    Extracting,
+    /// Installation completed successfully.
+    Done(PathBuf),
+    /// Installation failed.
+    Failed(String),
 }
 
 // Compile-time assertions: all public types must be Send.
@@ -134,6 +160,8 @@ const _: () = {
     _assert::<AgentEvent>();
     _assert::<AgentCommand>();
     _assert::<DiscoveredAgent>();
+    _assert::<AgentAvailability>();
+    _assert::<InstallProgress>();
     _assert::<PermissionRequest>();
     _assert::<PermissionResponse>();
 };

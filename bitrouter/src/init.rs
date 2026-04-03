@@ -110,7 +110,7 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
 
     if selected_providers.is_empty() && custom_providers.is_empty() {
         println!();
-        println!("No providers selected. Run `bitrouter init` again anytime.");
+        println!("No providers selected. Run `bitrouter` again anytime.");
         return Ok(InitOutcome::Cancelled);
     }
 
@@ -276,32 +276,6 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
             "s"
         },
         all_provider_names.join(", ")
-    );
-
-    println!();
-    println!("  Start the server:");
-    println!("    bitrouter serve     # foreground");
-    println!("    bitrouter start     # background daemon");
-    println!();
-
-    // Show example curl for the first provider
-    let (example_provider, example_model) = if let Some(&name) = selected_providers.first() {
-        let model = defs
-            .get(name)
-            .and_then(|bp| bp.models.first().map(|s| s.as_str()))
-            .unwrap_or("model-id");
-        (name.to_owned(), model.to_owned())
-    } else if let Some(cp) = result.providers_configured.first() {
-        (cp.clone(), "model-id".to_owned())
-    } else {
-        return Ok(InitOutcome::Configured);
-    };
-
-    println!("  Test with:");
-    println!("    curl http://{listen_str}/v1/chat/completions \\");
-    println!("      -H \"Content-Type: application/json\" \\");
-    println!(
-        "      -d '{{\"model\": \"{example_provider}:{example_model}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'"
     );
     println!();
 

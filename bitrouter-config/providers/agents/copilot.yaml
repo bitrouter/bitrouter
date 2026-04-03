@@ -3,3 +3,8 @@ binary: copilot
 args:
   - "--acp"
   - "--stdio"
+distribution:
+  - npx:
+      package: "@github/copilot"
+      args:
+        - "--acp"

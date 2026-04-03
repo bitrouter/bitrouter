@@ -6,10 +6,17 @@
 
 use std::path::PathBuf;
 
+use bitrouter_config::{AgentConfig, Distribution};
 use tokio::sync::mpsc;
 
 use super::connection::spawn_agent_thread;
 use super::types::{AgentCommand, AgentEvent};
+
+/// Resolved launch command for an agent subprocess.
+pub(crate) struct LaunchCommand {
+    pub binary: PathBuf,
+    pub args: Vec<String>,
+}
 
 /// Send-safe handle to a running ACP agent connection.
 ///
@@ -29,16 +36,17 @@ impl AcpAgentProvider {
     /// - `config`: agent configuration from bitrouter-config
     /// - `event_tx`: channel where the consumer receives `AgentEvent`s
     ///
-    /// The binary is resolved from PATH if `config.binary` is a bare name.
+    /// Resolution order: binary on PATH, then first viable distribution
+    /// method (npx/uvx), then bare binary name as fallback.
     pub fn spawn(
         agent_id: String,
-        config: &bitrouter_config::AgentConfig,
+        config: &AgentConfig,
         event_tx: mpsc::Sender<AgentEvent>,
     ) -> Self {
-        let bin_path = resolve_binary(&config.binary);
-        let args = config.args.clone();
+        let launch = resolve_launch(config);
 
-        let (handle, command_tx) = spawn_agent_thread(agent_id.clone(), bin_path, args, event_tx);
+        let (handle, command_tx) =
+            spawn_agent_thread(agent_id.clone(), launch.binary, launch.args, event_tx);
 
         Self {
             agent_id,
@@ -72,28 +80,72 @@ impl Drop for AcpAgentProvider {
     }
 }
 
-/// Resolve a binary name to a full path.
+/// Resolve how to launch an agent based on config and distribution metadata.
 ///
-/// If the name contains a path separator, treat it as an absolute or
-/// relative path. Otherwise, search PATH.
-fn resolve_binary(name: &str) -> PathBuf {
-    let path = PathBuf::from(name);
-    if path.components().count() > 1 {
-        return path;
+/// 1. Binary on PATH → use directly
+/// 2. First viable distribution (npx/uvx with runtime available)
+/// 3. Bare binary name fallback (will fail at spawn with a clear error)
+fn resolve_launch(config: &AgentConfig) -> LaunchCommand {
+    // 1. Try PATH first.
+    if let Some(path) = find_on_path(&config.binary) {
+        return LaunchCommand {
+            binary: path,
+            args: config.args.clone(),
+        };
     }
 
-    // Search PATH
-    if let Some(path_var) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return candidate;
+    // 2. Try distribution methods in order.
+    for dist in &config.distribution {
+        match dist {
+            Distribution::Npx { package, args } => {
+                if find_on_path("npx").is_some() {
+                    let mut full_args = vec![package.clone()];
+                    full_args.extend(args.iter().cloned());
+                    return LaunchCommand {
+                        binary: PathBuf::from("npx"),
+                        args: full_args,
+                    };
+                }
+            }
+            Distribution::Uvx { package, args } => {
+                if find_on_path("uvx").is_some() {
+                    let mut full_args = vec![package.clone()];
+                    full_args.extend(args.iter().cloned());
+                    return LaunchCommand {
+                        binary: PathBuf::from("uvx"),
+                        args: full_args,
+                    };
+                }
+            }
+            Distribution::Binary { .. } => {
+                // Binary distribution requires prior download — skip here.
+                continue;
             }
         }
     }
 
-    // Fall back to the bare name (will fail at spawn time with a clear error)
-    path
+    // 3. Fall back to bare name (will fail at spawn time with a clear error).
+    LaunchCommand {
+        binary: PathBuf::from(&config.binary),
+        args: config.args.clone(),
+    }
+}
+
+/// Search PATH for a binary name. Returns the full path if found.
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(name);
+    if path.components().count() > 1 {
+        return Some(path);
+    }
+
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 // Compile-time assertion: AcpAgentProvider must be Send + Sync.

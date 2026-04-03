@@ -29,6 +29,8 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
 
         let (dot, dot_color) = match agent_status {
             Some(AgentStatus::Idle) => ("○", Color::DarkGray),
+            Some(AgentStatus::Available) => ("◇", Color::Blue),
+            Some(AgentStatus::Installing { .. }) => ("⟳", Color::Cyan),
             Some(AgentStatus::Connecting) => ("◌", Color::Cyan),
             Some(AgentStatus::Connected) => ("●", Color::Green),
             Some(AgentStatus::Busy) => ("◎", Color::Yellow),

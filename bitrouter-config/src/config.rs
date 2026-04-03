@@ -198,6 +198,41 @@ impl fmt::Display for AgentProtocol {
     }
 }
 
+/// A downloadable binary archive for a specific platform.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryArchive {
+    /// URL to a `.tar.gz` or `.zip` archive.
+    pub archive: String,
+    /// Command to run within the extracted archive (relative path).
+    pub cmd: String,
+    /// Additional arguments passed when launching the binary.
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// How to obtain an agent if its binary is not on PATH.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Distribution {
+    /// Run via `npx <package> [args...]`.
+    Npx {
+        package: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    /// Run via `uvx <package> [args...]`.
+    Uvx {
+        package: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    /// Download a platform-specific binary archive.
+    Binary {
+        /// Map of platform target (e.g. `darwin-aarch64`) to archive info.
+        platforms: HashMap<String, BinaryArchive>,
+    },
+}
+
 /// Configuration for a single agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -215,6 +250,10 @@ pub struct AgentConfig {
     /// Whether this agent is enabled (available for connection).
     #[serde(default = "default_true")]
     pub enabled: bool,
+
+    /// Ordered list of distribution methods (tried in sequence as fallbacks).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub distribution: Vec<Distribution>,
 }
 
 // ── Database configuration ────────────────────────────────────────────
