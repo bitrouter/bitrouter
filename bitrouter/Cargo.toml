@@ -42,17 +42,17 @@ mpp-solana = [
 
 [dependencies]
 # Internal crates
-bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.17" }
-bitrouter-api = { path = "../bitrouter-api", version = "0.17", default-features = false, features = [
+bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.18" }
+bitrouter-api = { path = "../bitrouter-api", version = "0.18", default-features = false, features = [
     "openai",
     "anthropic",
     "google",
 ] }
-bitrouter-config = { path = "../bitrouter-config", version = "0.17" }
-bitrouter-core = { path = "../bitrouter-core", version = "0.17" }
-bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.17" }
-bitrouter-observe = { path = "../bitrouter-observe", version = "0.17" }
-bitrouter-providers = { path = "../bitrouter-providers", version = "0.17", features = [
+bitrouter-config = { path = "../bitrouter-config", version = "0.18" }
+bitrouter-core = { path = "../bitrouter-core", version = "0.18" }
+bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.18" }
+bitrouter-observe = { path = "../bitrouter-observe", version = "0.18" }
+bitrouter-providers = { path = "../bitrouter-providers", version = "0.18", features = [
     "agentskills",
 ] }
 

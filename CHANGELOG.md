@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/bitrouter/bitrouter/compare/v0.17.0...v0.18.0)
+
+
+### ⛰️ Features
+
+- *(auth)* Unified JWT auth with operator-signed delegation model ([#226](https://github.com/bitrouter/bitrouter/pull/226)) - ([a50f610](https://github.com/bitrouter/bitrouter/commit/a50f6100dbff5f020b9908e98eef0f2d8a923a61))
+- *(cli)* Migrate legacy commands to OWS wallet auth ([#224](https://github.com/bitrouter/bitrouter/pull/224)) - ([582a932](https://github.com/bitrouter/bitrouter/commit/582a9326f93e0dd5c038016ba0f6000319afd2f2))
+- *(cli)* Add wallet and key commands with onboarding ([#222](https://github.com/bitrouter/bitrouter/pull/222)) - ([5ab7fb2](https://github.com/bitrouter/bitrouter/commit/5ab7fb24d67bdcde2da272f2604ee1bea3edea71))
+- *(ows-signer)* OWS-backed signer for MPP close signing ([#221](https://github.com/bitrouter/bitrouter/pull/221)) - ([4885afc](https://github.com/bitrouter/bitrouter/commit/4885afca6779c82727b97b3a565a40b9d6e591e7))
+- *(payment)* Add client-side payment middleware for upstream 402 handling ([#234](https://github.com/bitrouter/bitrouter/pull/234)) - ([2a0c0a1](https://github.com/bitrouter/bitrouter/commit/2a0c0a11351bfd9c05771c8792fd6fadf93040df))
+
+### 🐛 Bug Fixes
+
+- *(anthropic)* Accept system field as both string and array of content blocks ([#228](https://github.com/bitrouter/bitrouter/pull/228)) - ([a761d6a](https://github.com/bitrouter/bitrouter/commit/a761d6a0ae155da5b9c9838ffb124cda5674deb5))
+- *(bitrouter)* Restore templates to crate directory ([#237](https://github.com/bitrouter/bitrouter/pull/237)) - ([4d98f61](https://github.com/bitrouter/bitrouter/commit/4d98f61f5d9bd51bfaa10cecdccd70f926d04aa1))
+- *(bitrouter)* Gate mcp/rest/mpp code behind feature flags ([#236](https://github.com/bitrouter/bitrouter/pull/236)) - ([e658232](https://github.com/bitrouter/bitrouter/commit/e6582325c419c243d7754f3dd7a5f295cbeed1f4))
+
+### 🚜 Refactor
+
+- *(core)* Remove A2A protocol, add REST providers, unify tool routing ([#225](https://github.com/bitrouter/bitrouter/pull/225)) - ([9a8d64c](https://github.com/bitrouter/bitrouter/commit/9a8d64cc5574a2aa5ad081c703219510942eb371))
+- *(mpp)* Upgrade mpp-br and remove legacy signer ([#215](https://github.com/bitrouter/bitrouter/pull/215)) - ([600693e](https://github.com/bitrouter/bitrouter/commit/600693efa737b2898b9306ebe90051464a2debc1))
+
+
 ## [0.17.0](https://github.com/bitrouter/bitrouter/compare/v0.16.0...v0.17.0)
 
 
