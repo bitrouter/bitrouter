@@ -40,14 +40,16 @@ struct Cli {
     #[arg(long = "db", global = true)]
     database_url: Option<String>,
 
+    /// Skip TUI auto-launch after setup
+    #[arg(long, global = true)]
+    no_tui: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Interactive setup wizard
-    Init,
     /// Start the API server (foreground)
     Serve,
     /// Start as background daemon
@@ -84,6 +86,21 @@ enum Command {
         #[command(subcommand)]
         action: ToolsAction,
     },
+
+    /// List routable models
+    Models {
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
+
+    /// List available ACP agents
+    Agents {
+        #[command(subcommand)]
+        action: AgentsAction,
+    },
+
+    /// Reset configuration and re-run setup
+    Reset,
 }
 
 #[derive(Debug, Subcommand)]
@@ -194,6 +211,18 @@ enum WalletAction {
 }
 
 #[derive(Debug, Subcommand)]
+enum ModelsAction {
+    /// List all routable models
+    List,
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentsAction {
+    /// List all available agents
+    List,
+}
+
+#[derive(Debug, Subcommand)]
 enum KeyAction {
     /// Create a new API key for agent access
     Create {
@@ -260,20 +289,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
-    // Skip update check in TUI mode — the alternate screen would hide it.
-    let use_tui = cli.command.is_none() && cfg!(feature = "tui");
-    let update_check = if use_tui {
-        None
-    } else {
-        Some(tokio::spawn(cli::update_check::check_for_update()))
-    };
+    let update_check = tokio::spawn(cli::update_check::check_for_update());
 
     let result = run_cli(cli).await;
 
     // Print update notice (if available) after the command finishes.
-    if let Some(handle) = update_check
-        && let Ok(Ok(Some(msg))) =
-            tokio::time::timeout(std::time::Duration::from_secs(2), handle).await
+    if let Ok(Ok(Some(msg))) =
+        tokio::time::timeout(std::time::Duration::from_secs(2), update_check).await
     {
         eprintln!("{msg}");
     }
@@ -292,10 +314,27 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
     let paths = overrides.apply(paths);
 
-    // Handle init before loading runtime
-    if matches!(cli.command, Some(Command::Init)) {
-        init::run_init(&paths)?;
-        return Ok(());
+    // Handle reset: confirm, wipe config, re-run onboarding, auto-launch TUI.
+    if matches!(cli.command, Some(Command::Reset)) {
+        return run_reset(&paths, cli.no_tui).await;
+    }
+
+    // Bare `bitrouter` (no subcommand): onboard if unconfigured, else show help/status.
+    if cli.command.is_none() {
+        let config_exists = paths.config_file.exists()
+            && std::fs::read_to_string(&paths.config_file)
+                .map(|s| !s.trim_start().starts_with('#'))
+                .unwrap_or(false);
+
+        if !config_exists {
+            let outcome = init::run_init(&paths)?;
+            if outcome == init::InitOutcome::Configured {
+                return launch_after_init(&paths, cli.no_tui).await;
+            }
+            return Ok(());
+        }
+
+        return run_help_status(&paths);
     }
 
     // Handle wallet and key management — these only need the OWS vault, not a runtime.
@@ -372,6 +411,25 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             return Ok(());
         }
+        Some(Command::Models { action }) => {
+            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
+            match action {
+                ModelsAction::List => cli::models::run_list(&runtime.config)?,
+            }
+            return Ok(());
+        }
+        #[cfg(feature = "tui")]
+        Some(Command::Agents { action }) => {
+            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
+            match action {
+                AgentsAction::List => cli::agents::run_list(&runtime.config)?,
+            }
+            return Ok(());
+        }
+        #[cfg(not(feature = "tui"))]
+        Some(Command::Agents { .. }) => {
+            return Err("agent management requires the `tui` feature".into());
+        }
         Some(Command::Route { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
@@ -397,18 +455,13 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    let use_tui = cli.command.is_none() && cfg!(feature = "tui");
-
-    // Skip tracing init when TUI owns the terminal — logs corrupt the alternate screen
-    if !use_tui {
-        init_tracing();
-    }
+    // All remaining commands need tracing and a loaded runtime.
+    init_tracing();
 
     let mut runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
 
     // Connect to database for commands that start the server.
-    let serves = cli.command.is_none() || matches!(cli.command, Some(Command::Serve));
-    if serves {
+    if matches!(cli.command, Some(Command::Serve)) {
         let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
         let db_url = crate::runtime::resolve_database_url(
             cli.database_url.as_deref(),
@@ -431,15 +484,14 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // When an OWS wallet is configured and OWS_PASSPHRASE is not already set,
     // prompt interactively (if a TTY is attached) or warn the user.
-    let starts_server =
-        cli.command.is_none() || matches!(cli.command, Some(Command::Serve | Command::Start));
-    if starts_server && let Err(e) = ensure_ows_passphrase(&runtime.config) {
+    if matches!(cli.command, Some(Command::Serve | Command::Start))
+        && let Err(e) = ensure_ows_passphrase(&runtime.config)
+    {
         eprintln!("wallet passphrase error: {e}");
         std::process::exit(1);
     }
 
     match cli.command {
-        None => run_default(runtime).await?,
         Some(Command::Serve) => {
             print_first_run_guidance(&runtime);
             let base_client = reqwest::Client::new();
@@ -480,7 +532,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Restart) => runtime.restart().await?,
         Some(Command::Reload) => runtime.reload()?,
         _ => {
-            // All other commands (Init, Route, Wallet, Key, Tools)
+            // All other commands (None, Reset, Route, Wallet, Key, Tools, Models, Agents)
             // are handled above and return early.
             unreachable!()
         }
@@ -516,7 +568,7 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
     let detected = bitrouter_config::detect_providers_from_env();
     if detected.is_empty() {
         eprintln!("No providers configured and no API keys found in environment.");
-        eprintln!("Run `bitrouter init` to set up providers interactively.");
+        eprintln!("Run `bitrouter` to set up providers interactively.");
         eprintln!();
     } else {
         let names: Vec<&str> = detected.iter().map(|d| d.name.as_str()).collect();
@@ -525,64 +577,119 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
             names.join(", ")
         );
         eprintln!("Direct routing is available (e.g., \"openai:gpt-4o\").");
-        eprintln!("Run `bitrouter init` to save a permanent configuration.");
+        eprintln!("Run `bitrouter` to save a permanent configuration.");
         eprintln!();
     }
 }
 
-async fn run_default(runtime: DefaultRuntime) -> Result<(), Box<dyn std::error::Error>> {
-    print_first_run_guidance(&runtime);
+/// Show help/status when config exists and no subcommand is given.
+fn run_help_status(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime: DefaultRuntime = load_or_warn_scaffold(paths);
     let status = runtime.status();
 
-    let base_client = reqwest::Client::new();
-    let client_builder = reqwest_middleware::ClientBuilder::new(base_client);
-    #[cfg(feature = "mpp-tempo")]
-    let client_builder = match crate::runtime::payment::build_payment_middleware(&runtime.config) {
-        Ok(Some(mw)) => client_builder.with(mw),
-        Ok(None) => client_builder,
-        Err(e) => {
-            tracing::warn!("payment middleware disabled: {e}");
-            client_builder
-        }
-    };
-    let model_router =
-        crate::runtime::Router::new(client_builder.build(), runtime.config.providers.clone());
+    let version = env!("CARGO_PKG_VERSION");
+    println!();
+    println!("  BitRouter v{version}");
+    println!("  ─────────────────");
+    println!();
+
+    match status.daemon_pid {
+        Some(pid) => println!("  daemon:    running (pid {pid})"),
+        None => println!("  daemon:    stopped"),
+    }
+    println!("  home:      {}", status.home_dir.display());
+    println!("  config:    {}", status.config_file.display());
+    println!("  listen:    {}", status.listen_addr);
+
+    if !status.providers.is_empty() {
+        println!("  providers: {}", status.providers.join(", "));
+    }
+    if !status.models.is_empty() {
+        println!("  models:    {}", status.models.join(", "));
+    }
+
+    println!();
+    println!("  Commands:");
+    println!("    bitrouter serve     Start the API server (foreground)");
+    println!("    bitrouter start     Start as background daemon");
+    println!("    bitrouter stop      Stop the daemon");
+    println!("    bitrouter status    Show runtime status");
+    println!("    bitrouter models    List routable models");
+    println!("    bitrouter agents    List available ACP agents");
+    println!("    bitrouter reset     Wipe config and re-run setup");
+    println!();
+
+    Ok(())
+}
+
+/// Reset configuration and re-run the setup wizard.
+async fn run_reset(paths: &RuntimePaths, no_tui: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err("`bitrouter reset` requires an interactive terminal.".into());
+    }
+
+    let theme = dialoguer::theme::ColorfulTheme::default();
+
+    let confirm = dialoguer::Confirm::with_theme(&theme)
+        .with_prompt("This will delete your configuration and re-run setup. Continue?")
+        .default(false)
+        .interact()?;
+
+    if !confirm {
+        println!("Reset cancelled.");
+        return Ok(());
+    }
+
+    // Remove config and env files.
+    if paths.config_file.exists() {
+        std::fs::remove_file(&paths.config_file)?;
+    }
+    if paths.env_file.exists() {
+        std::fs::remove_file(&paths.env_file)?;
+    }
+
+    println!("  Configuration removed.");
+    println!();
+
+    let outcome = init::run_init(paths)?;
+    if outcome == init::InitOutcome::Configured {
+        return launch_after_init(paths, no_tui).await;
+    }
+
+    Ok(())
+}
+
+/// After successful onboarding, launch the TUI (if enabled and not skipped).
+async fn launch_after_init(
+    paths: &RuntimePaths,
+    no_tui: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "tui")]
     {
-        let tui_config = bitrouter_tui::TuiConfig {
-            listen_addr: status.listen_addr,
-            providers: vec![], // TODO: populate from config
-            route_count: 0,    // TODO: populate from routing table
-            daemon_pid: status.daemon_pid,
-        };
-        let bitrouter_config = runtime.config.clone();
+        if !no_tui {
+            println!("  Launching TUI...");
+            println!();
 
-        // The TUI is the authority on when to exit. If the server
-        // finishes first (e.g. AddrInUse), the TUI keeps running.
-        let tui_fut = bitrouter_tui::run(tui_config, &bitrouter_config);
-        let server_fut = runtime.serve_with_reload(model_router);
-        tokio::pin!(tui_fut);
-        tokio::pin!(server_fut);
+            let runtime: DefaultRuntime = load_or_warn_scaffold(paths);
+            let status = runtime.status();
 
-        tokio::select! {
-            result = &mut server_fut => {
-                if let Err(e) = result {
-                    tracing::error!("server error: {e}");
-                }
-                // Server stopped — keep the TUI alive.
-                tui_fut.await?;
-            }
-            result = &mut tui_fut => {
-                result?;
-            }
+            let tui_config = bitrouter_tui::TuiConfig {
+                listen_addr: status.listen_addr,
+                providers: vec![],
+                route_count: 0,
+                daemon_pid: status.daemon_pid,
+            };
+            let bitrouter_config = runtime.config.clone();
+            bitrouter_tui::run(tui_config, &bitrouter_config).await?;
+            return Ok(());
         }
     }
 
-    #[cfg(not(feature = "tui"))]
-    {
-        let _ = status;
-        runtime.serve_with_reload(model_router).await?;
-    }
+    let _ = (paths, no_tui);
+    println!("  Start the server:");
+    println!("    bitrouter serve     foreground");
+    println!("    bitrouter start     background daemon");
+    println!();
 
     Ok(())
 }
