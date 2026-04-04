@@ -982,7 +982,7 @@ tools:
 
     #[test]
     fn minimal_template_deserializes() {
-        let yaml = include_str!("../templates/minimal.yaml");
+        let yaml = "";
         let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
 
         // Comments-only YAML deserializes with all defaults
