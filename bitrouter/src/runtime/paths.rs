@@ -100,10 +100,7 @@ fn scaffold_home(home: &Path) -> std::io::Result<()> {
 
     let config_path = home.join("bitrouter.yaml");
     if !config_path.exists() {
-        std::fs::write(
-            &config_path,
-            include_str!("../../../bitrouter-config/templates/minimal.yaml"),
-        )?;
+        std::fs::write(&config_path, include_str!("../../templates/minimal.yaml"))?;
     }
 
     let env_path = home.join(".env");

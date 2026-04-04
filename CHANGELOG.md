@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.2](https://github.com/bitrouter/bitrouter/compare/v0.18.1...v0.18.2)
+
+
+### 🐛 Bug Fixes
+
+- *(bitrouter)* Guard skill registry path handling ([#245](https://github.com/bitrouter/bitrouter/pull/245)) - ([4b273f3](https://github.com/bitrouter/bitrouter/commit/4b273f3bec6523215254a70d27e982bb0d992e8b))
+- *(bitrouter)* Config template file resolution ([#246](https://github.com/bitrouter/bitrouter/pull/246)) - ([c0ce9d3](https://github.com/bitrouter/bitrouter/commit/c0ce9d371be98618f5b7aaa276ee1e0a8aa221e2))
+
+
+## [0.18.1](https://github.com/bitrouter/bitrouter/compare/v0.18.0...v0.18.1)
+
+
+### ⛰️ Features
+
+- *(config)* Add config templates with tests ([#242](https://github.com/bitrouter/bitrouter/pull/242)) - ([cb59a2b](https://github.com/bitrouter/bitrouter/commit/cb59a2b623f6de7179d46c87cf0c961a898c781a))
+
+### ⚙️ Miscellaneous Tasks
+
+- Add cargo-dist with npm, Homebrew, and shell installers ([#241](https://github.com/bitrouter/bitrouter/pull/241)) - ([d76c8f5](https://github.com/bitrouter/bitrouter/commit/d76c8f5561a631c0e09b02044ddecb7c4fa8ecf3))
+
+
 ## [0.18.0](https://github.com/bitrouter/bitrouter/compare/v0.17.0...v0.18.0)
 
 
