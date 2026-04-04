@@ -38,6 +38,11 @@ impl Default for FilesystemSkillRegistry {
 }
 
 impl FilesystemSkillRegistry {
+    /// Validate a skill name is a single safe path component before joining it
+    /// under `skills_dir`.
+    ///
+    /// Rejects empty names, parent-directory references, and path separators to
+    /// prevent path traversal when skills are materialized on disk.
     fn is_safe_skill_name(name: &str) -> bool {
         !name.is_empty() && !name.contains("..") && !name.contains('/') && !name.contains('\\')
     }
@@ -329,10 +334,7 @@ impl SkillService for FilesystemSkillRegistry {
             .map_err(|e| format!("failed to access {}: {e}", entry.path.display()))?;
 
         if !skill_dir.starts_with(&skills_root) {
-            return Err(format!(
-                "refusing to delete skill outside skills dir: {}",
-                skill_dir.display()
-            ));
+            return Err("refusing to delete skill: invalid path".to_string());
         }
 
         tokio::fs::remove_dir_all(&skill_dir)
