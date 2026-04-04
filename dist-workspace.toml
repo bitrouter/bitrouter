@@ -19,3 +19,5 @@ install-path = "CARGO_HOME"
 publish-jobs = ["homebrew"]
 # Whether to install an updater program
 install-updater = false
+# Whether dist should create a Github Release or use an existing draft
+create-release = false
