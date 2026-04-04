@@ -22,4 +22,6 @@ pub use registry::{
     builtin_tool_provider_defs,
 };
 pub use routing::{ConfigRoutingTable, ConfigToolRoutingTable, ResolvedTarget};
-pub use writer::{CustomProviderInit, InitOptions, InitResult, write_agent, write_init_config};
+pub use writer::{
+    CustomProviderInit, InitOptions, InitResult, ToolProviderInit, write_agent, write_init_config,
+};

@@ -89,7 +89,13 @@ pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
 
 // ── Compile-time embedded tool provider definitions ──────────────────
 
-const TOOL_PROVIDER_DEFS: &[(&str, &str)] = &[("exa", include_str!("../providers/tools/exa.yaml"))];
+const TOOL_PROVIDER_DEFS: &[(&str, &str)] = &[
+    ("exa", include_str!("../providers/tools/exa.yaml")),
+    (
+        "bitrouter",
+        include_str!("../providers/tools/bitrouter.yaml"),
+    ),
+];
 
 /// Raw YAML shape for built-in tool provider files.
 ///
