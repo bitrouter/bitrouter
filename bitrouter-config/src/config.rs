@@ -1007,4 +1007,107 @@ tools:
         let search = &config.tools["search_code"];
         assert_eq!(search.endpoints[0].api_protocol, Some(ApiProtocol::Mcp));
     }
+
+    #[test]
+    fn full_template_deserializes() {
+        let yaml = include_str!("../templates/full.yaml");
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+
+        // Server
+        assert_eq!(config.server.listen, "127.0.0.1:8787".parse().unwrap());
+        assert_eq!(config.server.log_level, "info");
+
+        // Database
+        assert!(config.database.url.is_some());
+
+        // Providers: builtins + user-defined
+        assert!(config.providers.contains_key("openai"));
+        assert!(config.providers.contains_key("anthropic"));
+        assert!(config.providers.contains_key("google"));
+        assert!(config.providers.contains_key("my-proxy"));
+        assert!(config.providers.contains_key("custom-llm"));
+        assert!(config.providers.contains_key("github-mcp"));
+        assert!(config.providers.contains_key("header-auth-provider"));
+        assert!(config.providers.contains_key("paid-provider"));
+
+        // Derived provider inherits api_protocol
+        let my_proxy = &config.providers["my-proxy"];
+        assert_eq!(my_proxy.api_protocol, Some(ApiProtocol::Openai));
+        assert!(my_proxy.derives.is_none()); // resolved
+
+        // Custom provider
+        let custom = &config.providers["custom-llm"];
+        assert_eq!(custom.api_protocol, Some(ApiProtocol::Openai));
+        let models = custom.models.as_ref().unwrap();
+        assert!(models.contains_key("my-model-7b"));
+
+        // Model routing
+        assert_eq!(config.models.len(), 3);
+        assert!(config.models.contains_key("smart"));
+        assert!(config.models.contains_key("fast"));
+        assert!(config.models.contains_key("coding"));
+        assert_eq!(config.models["smart"].strategy, RoutingStrategy::Priority);
+        assert_eq!(config.models["fast"].strategy, RoutingStrategy::LoadBalance);
+
+        // Tool routing
+        assert!(config.tools.contains_key("create_issue"));
+        assert!(config.tools.contains_key("web_search"));
+
+        // Guardrails
+        assert!(config.guardrails.enabled);
+        assert!(!config.guardrails.disabled_patterns.is_empty());
+        assert!(!config.guardrails.custom_patterns.is_empty());
+        assert!(!config.guardrails.upgoing.is_empty());
+        assert!(!config.guardrails.downgoing.is_empty());
+
+        // Wallet
+        let wallet = config.wallet.as_ref().unwrap();
+        assert_eq!(wallet.name, "my-wallet");
+        assert!(wallet.payment.is_some());
+
+        // MPP
+        let mpp = config.mpp.as_ref().unwrap();
+        assert!(mpp.enabled);
+    }
+
+    #[test]
+    fn minimal_template_deserializes() {
+        let yaml = include_str!("../templates/minimal.yaml");
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+
+        // Comments-only YAML deserializes with all defaults
+        assert_eq!(config.server.listen, "127.0.0.1:8787".parse().unwrap());
+        assert_eq!(config.server.log_level, "info");
+
+        // Builtins merged (inherit_defaults defaults to true)
+        assert!(config.inherit_defaults);
+        assert!(config.providers.contains_key("openai"));
+        assert!(config.providers.contains_key("anthropic"));
+        assert!(config.providers.contains_key("google"));
+        assert!(config.providers.contains_key("bitrouter"));
+
+        // No custom models or tools defined
+        assert!(config.models.is_empty());
+
+        // No wallet or MPP
+        assert!(config.wallet.is_none());
+        assert!(config.mpp.is_none());
+
+        // Guardrails enabled by default
+        assert!(config.guardrails.enabled);
+    }
+
+    #[test]
+    fn empty_string_deserializes() {
+        let config = BitrouterConfig::load_from_str("", None).unwrap();
+
+        // All defaults applied
+        assert_eq!(config.server.listen, "127.0.0.1:8787".parse().unwrap());
+        assert!(config.inherit_defaults);
+        assert!(config.providers.contains_key("openai"));
+        assert!(config.providers.contains_key("anthropic"));
+        assert!(config.providers.contains_key("google"));
+        assert!(config.models.is_empty());
+        assert!(config.guardrails.enabled);
+    }
 }

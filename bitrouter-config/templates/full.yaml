@@ -1,0 +1,280 @@
+# ============================================================================
+# BitRouter — Full Configuration Reference
+# ============================================================================
+# Place this file at <home>/bitrouter.yaml (default: ~/.bitrouter/bitrouter.yaml)
+#
+# Environment variable substitution: use ${VAR_NAME} anywhere in this file.
+# Variables are resolved from the process environment and <home>/.env.
+# Unresolved variables become empty strings.
+# ============================================================================
+
+# ── Server ──────────────────────────────────────────────────────────────────
+
+server:
+  # Address and port for the HTTP API server.
+  listen: "127.0.0.1:8787"
+
+  # Tracing log level: trace, debug, info, warn, error
+  log_level: info
+
+  # Unix domain socket for daemon control (start/stop/reload).
+  # Relative paths are resolved from <home>/run/.
+  control:
+    socket: bitrouter.sock
+
+# ── Database ────────────────────────────────────────────────────────────────
+
+database:
+  # Connection URL. Supports sqlite://, postgres://, mysql://.
+  # Default: sqlite://<home>/bitrouter.db?mode=rwc
+  #
+  # Resolution priority:
+  #   1. --db CLI flag
+  #   2. BITROUTER_DATABASE_URL env var
+  #   3. This field
+  #   4. Default SQLite in home directory
+  url: "sqlite://bitrouter.db?mode=rwc"
+
+# ── Provider Inheritance ────────────────────────────────────────────────────
+
+# When true (default), built-in providers (openai, anthropic, google,
+# openrouter, deepseek, minimax, zai, moonshot, qwen, bitrouter) are
+# merged into the provider set. User overrides take precedence.
+# Set to false to use ONLY the providers declared below.
+inherit_defaults: true
+
+# ── Providers ───────────────────────────────────────────────────────────────
+#
+# Each provider represents an upstream LLM or tool API.
+# Built-in providers already define api_protocol, api_base, env_prefix,
+# and a full model catalog — you only need to supply api_key.
+
+providers:
+  # Override a built-in provider (only the fields you set are changed).
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+
+  google:
+    api_key: "${GOOGLE_API_KEY}"
+
+  # Custom provider inheriting from a built-in.
+  # `derives` copies api_protocol, api_base, model catalog, etc.
+  my-proxy:
+    derives: openai
+    api_base: "https://api.mycompany.com/v1"
+    api_key: "${MY_PROXY_API_KEY}"
+
+  # Fully custom provider (no inheritance).
+  custom-llm:
+    api_protocol: openai # openai | anthropic | google | mcp | rest
+    api_base: "https://llm.example.com/v1"
+    api_key: "${CUSTOM_LLM_KEY}"
+    env_prefix: CUSTOM_LLM # auto-reads CUSTOM_LLM_API_KEY, CUSTOM_LLM_BASE_URL
+    default_headers:
+      x-project-id: "my-project"
+    models:
+      my-model-7b:
+        name: "My Model 7B"
+        description: "Custom fine-tuned model"
+        max_input_tokens: 32768
+        max_output_tokens: 4096
+        input_modalities: [text]
+        output_modalities: [text]
+        pricing:
+          input_tokens:
+            no_cache: 0.50
+            cache_read: 0.25
+            cache_write: 0.75
+          output_tokens:
+            text: 1.50
+            reasoning: 3.00
+
+  # MCP tool provider with bridge mode.
+  github-mcp:
+    api_protocol: mcp
+    api_base: "https://api.githubcopilot.com/mcp"
+    api_key: "${GITHUB_TOKEN}"
+    bridge: true # expose as POST /mcp/github-mcp
+
+  # Provider with custom auth.
+  header-auth-provider:
+    derives: openai
+    api_base: "https://api.example.com/v1"
+    auth:
+      type: header
+      header_name: "x-api-key"
+      api_key: "${HEADER_AUTH_KEY}"
+
+  # Provider using MPP (Machine Payment Protocol) auth.
+  paid-provider:
+    derives: openai
+    api_base: "https://paid.example.com/v1"
+    auth:
+      type: mpp
+
+# ── Model Routing ───────────────────────────────────────────────────────────
+#
+# Virtual model names that route to one or more provider endpoints.
+# Without this section, bare model names route to the default `bitrouter`
+# provider (if it exists and has an api_key).
+
+models:
+  # Priority routing: try endpoints in order, failover on error.
+  smart:
+    strategy: priority
+    endpoints:
+      - provider: anthropic
+        service_id: claude-sonnet-4-20250514
+      - provider: openai
+        service_id: gpt-4o
+    name: "Smart"
+    max_input_tokens: 200000
+    max_output_tokens: 16384
+
+  # Load-balanced routing: round-robin across endpoints.
+  fast:
+    strategy: load_balance
+    endpoints:
+      - provider: openai
+        service_id: gpt-4o-mini
+        api_key: "${OPENAI_KEY_POOL_A}" # per-endpoint override
+      - provider: openai
+        service_id: gpt-4o-mini
+        api_key: "${OPENAI_KEY_POOL_B}"
+
+  # Cross-provider failover.
+  coding:
+    strategy: priority
+    endpoints:
+      - provider: anthropic
+        service_id: claude-sonnet-4-20250514
+      - provider: openai
+        service_id: gpt-4o
+      - provider: google
+        service_id: gemini-2.5-pro
+
+# ── Tool Routing ────────────────────────────────────────────────────────────
+#
+# Virtual tool names that route to upstream MCP or REST tool providers.
+
+tools:
+  create_issue:
+    strategy: priority
+    endpoints:
+      - provider: github-mcp
+        service_id: create_issue
+    description: "Create a GitHub issue"
+    input_schema:
+      type: object
+      properties:
+        repo:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+      required: [repo, title]
+    skill: "github-issues" # references a SKILL.md for agent guidance
+
+  web_search:
+    endpoints:
+      - provider: exa
+        service_id: search
+    pricing:
+      default: 0.001 # $0.001 per invocation
+      overrides:
+        search: 0.002
+
+# ── Guardrails ──────────────────────────────────────────────────────────────
+#
+# Local firewall for AI agent traffic. Inspects content flowing both
+# upgoing (user → LLM) and downgoing (LLM → user).
+#
+# Built-in patterns: api_keys, private_keys, credentials, pii_emails,
+#   pii_phone_numbers, ip_addresses, suspicious_commands
+# Actions: warn (default), redact, block
+
+guardrails:
+  enabled: true
+
+  # Disable specific built-in patterns.
+  disabled_patterns:
+    - ip_addresses
+    - pii_phone_numbers
+
+  # User-defined regex patterns.
+  custom_patterns:
+    - name: internal_token
+      regex: "myapp_[A-Za-z0-9]{32}"
+      direction: upgoing # upgoing | downgoing | both
+
+  # Per-pattern action overrides for outbound traffic (user → LLM).
+  upgoing:
+    api_keys: redact
+    private_keys: block
+    credentials: redact
+
+  # Per-pattern action overrides for inbound traffic (LLM → user).
+  downgoing:
+    suspicious_commands: block
+
+  # Per-custom-pattern action overrides.
+  custom_upgoing:
+    internal_token: block
+
+  # Block message configuration.
+  block_message:
+    include_details: true
+    include_help_link: true
+
+  # Tool access guardrails.
+  tools:
+    enabled: true
+    providers:
+      github-mcp:
+        filter:
+          deny: [delete_repo, delete_branch]
+        param_restrictions:
+          rules:
+            create_issue:
+              deny: [assignees]
+              action: strip # strip | reject
+
+# ── Wallet ──────────────────────────────────────────────────────────────────
+#
+# OWS (Open Wallet Standard) wallet for signing and payment operations.
+# The passphrase is read from OWS_PASSPHRASE env var at startup.
+
+wallet:
+  name: "my-wallet"
+  vault_path: "~/.ows" # optional, defaults to OWS standard path
+  payment:
+    tempo_rpc_url: "https://rpc.moderato.tempo.xyz"
+    solana_rpc_url: "https://api.mainnet-beta.solana.com"
+    session_max_deposit: 10000000 # cap server-suggested deposits (base units)
+    session_default_deposit: 1000000
+
+# ── MPP (Machine Payment Protocol) ─────────────────────────────────────────
+#
+# Server-side payment gating. Returns 402 Payment Required to clients
+# and validates payment proofs before forwarding requests.
+
+mpp:
+  enabled: true
+  realm: "bitrouter.example.com"
+  secret_key: "${MPP_SECRET_KEY}"
+  networks:
+    tempo:
+      recipient: "0x1234567890abcdef1234567890abcdef12345678"
+      escrow_contract: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+      rpc_url: "${TEMPO_RPC_URL}"
+      currency: "${TEMPO_TOKEN_ADDRESS}"
+      fee_payer: false
+      default_deposit: "5000000"
+
+# ── Solana RPC ──────────────────────────────────────────────────────────────
+
+solana_rpc_url: "https://api.mainnet-beta.solana.com"
