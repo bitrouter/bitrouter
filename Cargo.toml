@@ -4,3 +4,8 @@ members = ["bitrouter", "bitrouter-*"]
 
 [workspace.package]
 version = "0.18.0"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
