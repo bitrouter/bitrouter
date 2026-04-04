@@ -101,9 +101,8 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
             println!("  Detected API keys in environment:");
             for d in &detected {
                 println!(
-                    "    ✓ {} ({})",
+                    "    ✓ {}",
                     provider_display_name(&d.name),
-                    d.api_key_var
                 );
             }
             println!();
