@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1](https://github.com/bitrouter/bitrouter/compare/v0.18.0...v0.18.1)
+
+
+### ⛰️ Features
+
+- *(config)* Add config templates with tests ([#242](https://github.com/bitrouter/bitrouter/pull/242)) - ([cb59a2b](https://github.com/bitrouter/bitrouter/commit/cb59a2b623f6de7179d46c87cf0c961a898c781a))
+
+### ⚙️ Miscellaneous Tasks
+
+- Add cargo-dist with npm, Homebrew, and shell installers ([#241](https://github.com/bitrouter/bitrouter/pull/241)) - ([d76c8f5](https://github.com/bitrouter/bitrouter/commit/d76c8f5561a631c0e09b02044ddecb7c4fa8ecf3))
+
+
 ## [0.18.0](https://github.com/bitrouter/bitrouter/compare/v0.17.0...v0.18.0)
 
 
