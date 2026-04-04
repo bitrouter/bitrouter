@@ -208,6 +208,15 @@ impl SkillService for FilesystemSkillRegistry {
         source: Option<String>,
         required_apis: Vec<String>,
     ) -> Result<SkillEntry, String> {
+        // Basic validation to prevent directory traversal and invalid path components.
+        if name.is_empty()
+            || name.contains("..")
+            || name.contains('/')
+            || name.contains('\\')
+        {
+            return Err(format!("invalid skill name '{name}'"));
+        }
+
         // Check for duplicates.
         {
             let catalog = self.catalog.read().await;
