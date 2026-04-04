@@ -646,7 +646,7 @@ mod tests {
 
         let err = reg.delete("my-local-skill").await;
         assert!(err.is_err());
-        assert!(err.unwrap_err().contains("outside skills dir"));
+        assert!(err.unwrap_err().contains("invalid path"));
         assert!(custom_dir.exists());
     }
 
