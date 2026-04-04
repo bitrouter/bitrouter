@@ -4,12 +4,14 @@ mod error;
 mod event;
 mod input;
 mod model;
+mod render;
 mod ui;
 
 use std::io::{self, stdout};
 
 use crossterm::{
     ExecutableCommand,
+    event::{DisableMouseCapture, EnableMouseCapture},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::Terminal;
@@ -37,12 +39,14 @@ async fn run_inner(
     bitrouter_config: &bitrouter_config::BitrouterConfig,
 ) -> Result<(), TuiError> {
     stdout().execute(EnterAlternateScreen)?;
+    stdout().execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     app::run_loop(&mut terminal, config, bitrouter_config).await
 }
 
 fn restore_terminal() {
+    let _ = io::stdout().execute(DisableMouseCapture);
     let _ = disable_raw_mode();
     let _ = io::stdout().execute(LeaveAlternateScreen);
 }

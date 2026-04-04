@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use bitrouter_providers::acp::types::AgentEvent;
-use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent};
+use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent, MouseEvent};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
@@ -10,6 +10,8 @@ use tokio::sync::mpsc;
 pub enum AppEvent {
     /// Terminal key press.
     Key(KeyEvent),
+    /// Terminal mouse event.
+    Mouse(MouseEvent),
     /// Terminal resize.
     Resize { _width: u16, _height: u16 },
     /// Tick / ignored terminal event.
@@ -62,6 +64,7 @@ async fn terminal_event_pump(tx: mpsc::Sender<AppEvent>) {
                 _width: w,
                 _height: h,
             },
+            CrosstermEvent::Mouse(m) => AppEvent::Mouse(m),
             _ => AppEvent::Tick,
         };
         if tx.send(app_event).await.is_err() {

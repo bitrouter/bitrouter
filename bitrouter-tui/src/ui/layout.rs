@@ -1,6 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 /// Pre-computed layout rectangles for the TUI.
+#[derive(Clone, Copy)]
 pub struct AppLayout {
     pub top_bar: Rect,
     pub scrollback: Rect,

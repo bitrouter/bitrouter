@@ -64,7 +64,7 @@ fn mode_hints(state: &AppState) -> (&'static str, Color, String) {
         InputMode::Scroll => (
             "SCROLL",
             Color::Yellow,
-            "j/k: scroll │ G: bottom │ /: search │ i: input │ Esc: back".to_string(),
+            "j/k: scroll │ c: fold │ G: bottom │ /: search │ i: input │ Esc: back".to_string(),
         ),
         InputMode::Tab => (
             "TAB",

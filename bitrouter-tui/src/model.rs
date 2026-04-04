@@ -5,6 +5,8 @@ use bitrouter_providers::acp::types::{PermissionRequest, PermissionResponse, Too
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::render::{hard_wrap, render_markdown};
+
 // ── Agent color palette ─────────────────────────────────────────────────
 
 const AGENT_PALETTE: &[Color] = &[
@@ -154,7 +156,7 @@ impl Renderable for UserPrompt {
         };
 
         for (i, raw_line) in self.text.lines().enumerate() {
-            for (j, segment) in wrap_line(raw_line, text_width).into_iter().enumerate() {
+            for (j, segment) in hard_wrap(raw_line, text_width).into_iter().enumerate() {
                 let prefix = if i == 0 && j == 0 {
                     Span::styled(
                         PROMPT_PREFIX.to_string(),
@@ -219,12 +221,7 @@ impl Renderable for AgentResponse {
             for block in &self.blocks {
                 match block {
                     ContentBlock::Text(text) => {
-                        for raw_line in text.lines() {
-                            for segment in wrap_line(raw_line, text_width) {
-                                lines
-                                    .push(Line::from(vec![gutter_span(color), Span::raw(segment)]));
-                            }
-                        }
+                        lines.extend(render_markdown(text, text_width, || gutter_span(color)));
                     }
                     ContentBlock::Other(desc) => {
                         lines.push(Line::from(vec![
@@ -319,7 +316,7 @@ impl Renderable for ThinkingEntry {
                 ),
             ]));
             for raw_line in self.text.lines() {
-                for segment in wrap_line(raw_line, text_width) {
+                for segment in hard_wrap(raw_line, text_width) {
                     lines.push(Line::from(vec![
                         gutter_span(color),
                         Span::styled(segment, Style::default().fg(Color::DarkGray)),
@@ -439,6 +436,16 @@ pub struct ScrollbackState {
     pub streaming_entry: HashMap<String, EntryId>,
     /// Whether the viewport is pinned to the bottom (auto-scroll).
     pub follow: bool,
+    /// Per-entry line counts, indexed in parallel with `entries`.
+    /// `None` means uncached — must be recomputed before use.
+    pub line_counts: Vec<Option<usize>>,
+    /// The `area.width` at which `line_counts` was computed.
+    pub cached_width: u16,
+    /// Prefix-sum of line counts: `line_offsets[i]` is the first line of `entries[i]`.
+    /// Last element is total line count. Rebuilt lazily.
+    pub line_offsets: Vec<usize>,
+    /// Index of the scroll cursor entry (for folding in Scroll mode).
+    pub scroll_cursor: Option<usize>,
 }
 
 impl ScrollbackState {
@@ -450,6 +457,10 @@ impl ScrollbackState {
             next_entry_id: 0,
             streaming_entry: HashMap::new(),
             follow: true,
+            line_counts: Vec::new(),
+            cached_width: 0,
+            line_offsets: Vec::new(),
+            scroll_cursor: None,
         }
     }
 
@@ -463,6 +474,42 @@ impl ScrollbackState {
     /// Find the index of an entry by its `EntryId`.
     pub fn index_of(&self, id: EntryId) -> Option<usize> {
         self.entries.iter().position(|e| e.id == id)
+    }
+
+    /// Push a new entry and mark its line count as uncached.
+    pub fn push_entry(&mut self, entry: ActivityEntry) {
+        self.entries.push(entry);
+        self.line_counts.push(None);
+        self.line_offsets.clear();
+    }
+
+    /// Mark entry at `idx` as needing recount.
+    pub fn invalidate_entry(&mut self, idx: usize) {
+        if idx < self.line_counts.len() {
+            self.line_counts[idx] = None;
+        }
+        self.line_offsets.clear();
+    }
+
+    /// Invalidate all cached counts (e.g., on terminal resize).
+    pub fn invalidate_all(&mut self) {
+        for slot in &mut self.line_counts {
+            *slot = None;
+        }
+        self.line_offsets.clear();
+    }
+
+    /// Rebuild `line_offsets` prefix-sum from `line_counts`. Returns total line count.
+    pub fn rebuild_offsets(&mut self) -> usize {
+        self.line_offsets.clear();
+        self.line_offsets.reserve(self.line_counts.len() + 1);
+        let mut acc = 0usize;
+        for &count in &self.line_counts {
+            self.line_offsets.push(acc);
+            acc += count.unwrap_or(0);
+        }
+        self.line_offsets.push(acc);
+        acc
     }
 }
 
@@ -598,6 +645,95 @@ impl InlineInput {
 
     pub fn is_empty(&self) -> bool {
         self.lines.len() == 1 && self.lines[0].is_empty()
+    }
+
+    /// Delete the word before the cursor (Ctrl+W behavior).
+    pub fn delete_word_backward(&mut self) {
+        let (row, col) = self.cursor;
+        if col == 0 {
+            return;
+        }
+        if let Some(line) = self.lines.get_mut(row) {
+            let chars: Vec<char> = line.chars().collect();
+            let mut pos = col;
+            // Skip trailing whitespace.
+            while pos > 0 && chars[pos - 1].is_whitespace() {
+                pos -= 1;
+            }
+            // Skip non-whitespace word.
+            while pos > 0 && !chars[pos - 1].is_whitespace() {
+                pos -= 1;
+            }
+            let start_byte = char_to_byte_idx(line, pos);
+            let end_byte = char_to_byte_idx(line, col);
+            line.drain(start_byte..end_byte);
+            self.cursor.1 = pos;
+        }
+    }
+
+    /// Delete from cursor to line start (Ctrl+U).
+    pub fn delete_to_line_start(&mut self) {
+        let (row, col) = self.cursor;
+        if col == 0 {
+            return;
+        }
+        if let Some(line) = self.lines.get_mut(row) {
+            let byte_idx = char_to_byte_idx(line, col);
+            line.drain(..byte_idx);
+            self.cursor.1 = 0;
+        }
+    }
+
+    /// Delete from cursor to line end (Ctrl+K).
+    pub fn delete_to_line_end(&mut self) {
+        let (row, _col) = self.cursor;
+        if let Some(line) = self.lines.get_mut(row) {
+            let byte_idx = char_to_byte_idx(line, self.cursor.1);
+            line.truncate(byte_idx);
+        }
+    }
+
+    /// Move cursor one word to the left (Alt+Left).
+    pub fn word_left(&mut self) {
+        let (row, col) = self.cursor;
+        if col == 0 {
+            return;
+        }
+        if let Some(line) = self.lines.get(row) {
+            let chars: Vec<char> = line.chars().collect();
+            let mut pos = col;
+            // Skip whitespace leftward.
+            while pos > 0 && chars[pos - 1].is_whitespace() {
+                pos -= 1;
+            }
+            // Skip non-whitespace leftward.
+            while pos > 0 && !chars[pos - 1].is_whitespace() {
+                pos -= 1;
+            }
+            self.cursor.1 = pos;
+        }
+    }
+
+    /// Move cursor one word to the right (Alt+Right).
+    pub fn word_right(&mut self) {
+        let (row, col) = self.cursor;
+        if let Some(line) = self.lines.get(row) {
+            let char_count = line.chars().count();
+            if col >= char_count {
+                return;
+            }
+            let chars: Vec<char> = line.chars().collect();
+            let mut pos = col;
+            // Skip non-whitespace rightward.
+            while pos < char_count && !chars[pos].is_whitespace() {
+                pos += 1;
+            }
+            // Skip whitespace rightward.
+            while pos < char_count && chars[pos].is_whitespace() {
+                pos += 1;
+            }
+            self.cursor.1 = pos;
+        }
     }
 
     /// Delete n characters before the cursor (for autocomplete acceptance).
@@ -747,29 +883,68 @@ fn tool_status_icon(status: &ToolCallStatus) -> (&'static str, Color) {
     }
 }
 
-/// Simple word-wrap at the given width.
-pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
-    if width == 0 || line.is_empty() {
-        return vec![line.to_string()];
-    }
-    let mut result = Vec::new();
-    let mut current = String::new();
-    for word in line.split_whitespace() {
-        if current.is_empty() {
-            current.push_str(word);
-        } else if current.chars().count() + 1 + word.chars().count() <= width {
-            current.push(' ');
-            current.push_str(word);
-        } else {
-            result.push(std::mem::take(&mut current));
-            current.push_str(word);
+#[cfg(test)]
+mod tests {
+    use super::InlineInput;
+
+    fn input_with(text: &str, col: usize) -> InlineInput {
+        InlineInput {
+            lines: vec![text.to_string()],
+            cursor: (0, col),
         }
     }
-    if !current.is_empty() {
-        result.push(current);
+
+    #[test]
+    fn delete_word_backward_removes_last_word() {
+        let mut input = input_with("hello world", 11);
+        input.delete_word_backward();
+        assert_eq!(input.lines[0], "hello ");
+        assert_eq!(input.cursor.1, 6);
     }
-    if result.is_empty() {
-        result.push(String::new());
+
+    #[test]
+    fn delete_word_backward_skips_trailing_whitespace() {
+        let mut input = input_with("hello   ", 8);
+        input.delete_word_backward();
+        assert_eq!(input.lines[0], "");
+        assert_eq!(input.cursor.1, 0);
     }
-    result
+
+    #[test]
+    fn delete_word_backward_at_col_zero_is_noop() {
+        let mut input = input_with("hello", 0);
+        input.delete_word_backward();
+        assert_eq!(input.lines[0], "hello");
+        assert_eq!(input.cursor.1, 0);
+    }
+
+    #[test]
+    fn word_left_moves_to_word_start() {
+        let mut input = input_with("hello world", 11);
+        input.word_left();
+        assert_eq!(input.cursor.1, 6);
+    }
+
+    #[test]
+    fn word_right_moves_past_word() {
+        let mut input = input_with("hello world", 0);
+        input.word_right();
+        assert_eq!(input.cursor.1, 6);
+    }
+
+    #[test]
+    fn delete_to_line_start_clears_before_cursor() {
+        let mut input = input_with("hello world", 5);
+        input.delete_to_line_start();
+        assert_eq!(input.lines[0], " world");
+        assert_eq!(input.cursor.1, 0);
+    }
+
+    #[test]
+    fn delete_to_line_end_clears_after_cursor() {
+        let mut input = input_with("hello world", 5);
+        input.delete_to_line_end();
+        assert_eq!(input.lines[0], "hello");
+        assert_eq!(input.cursor.1, 5);
+    }
 }
