@@ -220,6 +220,8 @@ enum ModelsAction {
 enum AgentsAction {
     /// List all available agents
     List,
+    /// Check that agent routing through BitRouter is working
+    Check,
 }
 
 #[derive(Debug, Subcommand)]
@@ -423,6 +425,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             match action {
                 AgentsAction::List => cli::agents::run_list(&runtime.config)?,
+                AgentsAction::Check => cli::agents::run_check(&runtime.config)?,
             }
             return Ok(());
         }

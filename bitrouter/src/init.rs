@@ -7,6 +7,13 @@ use bitrouter_config::{
 };
 use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 
+#[cfg(feature = "tui")]
+use bitrouter_config::builtin_agent_defs;
+#[cfg(feature = "tui")]
+use bitrouter_providers::acp::discovery::discover_agents;
+#[cfg(feature = "tui")]
+use bitrouter_providers::acp::types::AgentAvailability;
+
 /// Outcome of the init wizard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitOutcome {
@@ -263,6 +270,13 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         .interact_text()?;
     let listen_addr = listen_str.parse().ok();
 
+    // ── Step 3: Agents (requires tui feature) ─────────────────────
+    #[cfg(feature = "tui")]
+    let (discovered_agent_names, agent_routing_configured) = run_agent_step(&theme, &listen_str)?;
+    #[cfg(not(feature = "tui"))]
+    let (discovered_agent_names, agent_routing_configured): (Vec<String>, bool) =
+        (Vec::new(), false);
+
     // ── Summary ────────────────────────────────────────────────────
     let model_summary = if use_default_models {
         "BitRouter Cloud".to_owned()
@@ -293,6 +307,20 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         format!("built-in defaults + {}", names.join(", "))
     };
 
+    let agent_summary = if discovered_agent_names.is_empty() {
+        "none detected".to_owned()
+    } else if agent_routing_configured {
+        format!(
+            "{} (routing via env vars)",
+            discovered_agent_names.join(", ")
+        )
+    } else {
+        format!(
+            "{} detected, routing not configured",
+            discovered_agent_names.len()
+        )
+    };
+
     println!();
     println!("  Configuration summary");
     println!("  ─────────────────────");
@@ -301,6 +329,7 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
     println!("  Listen:    {listen_str}");
     println!("  Models:    {model_summary}");
     println!("  Tools:     {tool_summary}");
+    println!("  Agents:    {agent_summary}");
     println!("  Config:    {}", paths.config_file.display());
     println!("  Env file:  {}", paths.env_file.display());
     println!();
@@ -530,4 +559,152 @@ fn mask_key(key: &str) -> String {
     let prefix = &key[..4];
     let suffix = &key[key.len() - 4..];
     format!("{prefix}...{suffix}")
+}
+
+/// Step 4: Discover ACP agents on PATH and optionally configure env vars
+/// so they route through BitRouter.
+///
+/// Returns `(discovered_names, routing_configured)`.
+#[cfg(feature = "tui")]
+fn run_agent_step(
+    theme: &ColorfulTheme,
+    listen_str: &str,
+) -> Result<(Vec<String>, bool), Box<dyn std::error::Error>> {
+    println!();
+    println!("  Step 4 · Agents");
+    println!("  Detect locally installed ACP-compatible coding agents");
+    println!("  and optionally route their LLM traffic through BitRouter.");
+    println!();
+
+    let known = builtin_agent_defs();
+    let discovered = discover_agents(&known);
+
+    let on_path: Vec<&str> = discovered
+        .iter()
+        .filter(|a| matches!(a.availability, AgentAvailability::OnPath(_)))
+        .map(|a| a.name.as_str())
+        .collect();
+
+    let installable: Vec<&str> = discovered
+        .iter()
+        .filter(|a| matches!(a.availability, AgentAvailability::Distributable))
+        .map(|a| a.name.as_str())
+        .collect();
+
+    if on_path.is_empty() && installable.is_empty() {
+        println!("  No ACP agents detected on PATH.");
+        println!("  Install agents and run `bitrouter reset` to configure.");
+        return Ok((Vec::new(), false));
+    }
+
+    if !on_path.is_empty() {
+        println!("  Installed: {}", on_path.join(", "));
+    }
+    if !installable.is_empty() {
+        println!("  Available: {} (auto-installable)", installable.join(", "));
+    }
+    println!();
+
+    let all_names: Vec<String> = on_path
+        .iter()
+        .chain(installable.iter())
+        .map(|s| s.to_string())
+        .collect();
+
+    let configure = Confirm::with_theme(theme)
+        .with_prompt("Configure agents to route through BitRouter? (sets env vars)")
+        .default(true)
+        .interact()?;
+
+    if !configure {
+        return Ok((all_names, false));
+    }
+
+    let env_vars = routing_env_vars(listen_str);
+
+    println!();
+    println!("  The following env vars route agent traffic through BitRouter:");
+    for (var, val) in &env_vars {
+        println!("    export {var}={val}");
+    }
+    println!();
+
+    let write_profile = Confirm::with_theme(theme)
+        .with_prompt("Add these to your shell profile?")
+        .default(false)
+        .interact()?;
+
+    if write_profile {
+        match append_to_shell_profile(&env_vars) {
+            Ok(path) => println!("  ✓ Appended to {path}"),
+            Err(e) => eprintln!("  Warning: could not write shell profile: {e}"),
+        }
+    } else {
+        println!("  Copy the exports above into your shell profile to activate.");
+    }
+
+    println!();
+    println!("  To verify agent routing:");
+    println!("    1. source ~/.zshrc   (or open a new terminal)");
+    println!("    2. bitrouter serve   (start the proxy)");
+    println!("    3. bitrouter agents check");
+
+    Ok((all_names, true))
+}
+
+/// Build the set of env vars that point agents at a BitRouter instance.
+#[cfg(feature = "tui")]
+fn routing_env_vars(listen_str: &str) -> Vec<(String, String)> {
+    let base = format!("http://{listen_str}");
+    vec![
+        ("OPENAI_BASE_URL".to_owned(), format!("{base}/v1")),
+        ("ANTHROPIC_BASE_URL".to_owned(), format!("{base}/v1")),
+        ("GOOGLE_AI_BASE_URL".to_owned(), format!("{base}/v1beta")),
+    ]
+}
+
+/// Detect the user's shell and append env var exports to the appropriate rc file.
+///
+/// Returns the path that was written to.
+#[cfg(feature = "tui")]
+fn append_to_shell_profile(
+    vars: &[(String, String)],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let home = dirs::home_dir().ok_or("could not determine home directory")?;
+
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let rc_file = if shell.ends_with("zsh") {
+        home.join(".zshrc")
+    } else if shell.ends_with("fish") {
+        // fish uses a different export syntax — fall back to .bashrc-style
+        // in a fish-compatible universal var file.
+        home.join(".config/fish/conf.d/bitrouter.fish")
+    } else {
+        home.join(".bashrc")
+    };
+
+    let is_fish = shell.ends_with("fish");
+
+    let mut snippet = String::from("\n# BitRouter agent routing\n");
+    for (var, val) in vars {
+        if is_fish {
+            snippet.push_str(&format!("set -gx {var} {val}\n"));
+        } else {
+            snippet.push_str(&format!("export {var}={val}\n"));
+        }
+    }
+
+    // Ensure parent directory exists (relevant for fish conf.d)
+    if let Some(parent) = rc_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&rc_file)?;
+    file.write_all(snippet.as_bytes())?;
+
+    Ok(rc_file.display().to_string())
 }
