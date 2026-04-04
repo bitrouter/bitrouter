@@ -1,0 +1,23 @@
+# BitRouter configuration
+# See https://docs.bitrouter.ai/docs/guide/configuration
+#
+# BitRouter works out of the box with an empty config.
+# All built-in providers (OpenAI, Anthropic, Google, etc.) are available
+# automatically — just set their API keys in .env or the environment.
+#
+# To add a custom provider, uncomment and adjust:
+#
+# providers:
+#   my-provider:
+#     derives: openai
+#     api_base: "https://api.example.com/v1"
+#     api_key: "${MY_PROVIDER_API_KEY}"
+#
+# To define model routes:
+#
+# models:
+#   my-model:
+#     strategy: priority
+#     endpoints:
+#       - provider: openai
+#         model_id: gpt-4o
