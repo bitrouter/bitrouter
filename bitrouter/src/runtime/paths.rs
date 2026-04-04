@@ -102,24 +102,7 @@ fn scaffold_home(home: &Path) -> std::io::Result<()> {
     if !config_path.exists() {
         std::fs::write(
             &config_path,
-            "\
-# BitRouter configuration
-# See https://github.com/bitrouter/bitrouter for documentation.
-#
-# server:
-#   listen: \"127.0.0.1:8787\"
-#
-# providers:
-#   openai:
-#     api_key: \"${OPENAI_API_KEY}\"
-#
-# models:
-#   my-model:
-#     strategy: priority
-#     endpoints:
-#       - provider: openai
-#         model_id: gpt-4o
-",
+            include_str!("../../../bitrouter-config/templates/minimal.yaml"),
         )?;
     }
 
