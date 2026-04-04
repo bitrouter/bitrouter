@@ -3,7 +3,7 @@ resolver = "3"
 members = ["bitrouter", "bitrouter-*"]
 
 [workspace.package]
-version = "0.18.1"
+version = "0.18.2"
 
 # The profile that 'dist' will build with
 [profile.dist]
