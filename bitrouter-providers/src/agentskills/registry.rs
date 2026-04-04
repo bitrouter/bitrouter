@@ -38,6 +38,10 @@ impl Default for FilesystemSkillRegistry {
 }
 
 impl FilesystemSkillRegistry {
+    fn is_safe_skill_name(name: &str) -> bool {
+        !name.is_empty() && !name.contains("..") && !name.contains('/') && !name.contains('\\')
+    }
+
     /// Create a registry by scanning an existing skills directory.
     pub async fn from_dir(skills_dir: PathBuf) -> Result<Self, String> {
         let entries = scanner::scan_skills_dir(&skills_dir).await?;
@@ -124,6 +128,14 @@ impl FilesystemSkillRegistry {
 
             // Bare name — resolve against skills_dir.
             let skill_name = skill_ref;
+            if !Self::is_safe_skill_name(skill_name) {
+                tracing::warn!(
+                    tool = %tool_name,
+                    skill = %skill_name,
+                    "ignoring invalid config skill name"
+                );
+                continue;
+            }
 
             // Match by frontmatter name or by directory name.
             let existing = entries.iter_mut().find(|e| {
@@ -209,11 +221,7 @@ impl SkillService for FilesystemSkillRegistry {
         required_apis: Vec<String>,
     ) -> Result<SkillEntry, String> {
         // Basic validation to prevent directory traversal and invalid path components.
-        if name.is_empty()
-            || name.contains("..")
-            || name.contains('/')
-            || name.contains('\\')
-        {
+        if !Self::is_safe_skill_name(&name) {
             return Err(format!("invalid skill name '{name}'"));
         }
 
@@ -309,11 +317,27 @@ impl SkillService for FilesystemSkillRegistry {
             .parent()
             .ok_or_else(|| format!("invalid skill path: {}", entry.path.display()))?;
 
-        if skill_dir.exists() {
-            tokio::fs::remove_dir_all(skill_dir)
-                .await
-                .map_err(|e| format!("failed to remove {}: {e}", skill_dir.display()))?;
+        if !skill_dir.exists() {
+            return Ok(true);
         }
+
+        let skills_root = tokio::fs::canonicalize(&self.skills_dir)
+            .await
+            .map_err(|e| format!("failed to access {}: {e}", self.skills_dir.display()))?;
+        let skill_dir = tokio::fs::canonicalize(skill_dir)
+            .await
+            .map_err(|e| format!("failed to access {}: {e}", entry.path.display()))?;
+
+        if !skill_dir.starts_with(&skills_root) {
+            return Err(format!(
+                "refusing to delete skill outside skills dir: {}",
+                skill_dir.display()
+            ));
+        }
+
+        tokio::fs::remove_dir_all(&skill_dir)
+            .await
+            .map_err(|e| format!("failed to remove {}: {e}", skill_dir.display()))?;
 
         Ok(true)
     }
@@ -456,6 +480,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_rejects_invalid_name() {
+        let tmp = TempDir::new().expect("tempdir");
+        let reg = FilesystemSkillRegistry::from_dir(tmp.path().to_path_buf())
+            .await
+            .expect("from_dir");
+
+        let err = reg
+            .create("../escape".to_string(), "bad".to_string(), None, vec![])
+            .await;
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("invalid skill name"));
+        assert!(!tmp.path().join("..").join("escape").exists());
+    }
+
+    #[tokio::test]
     async fn tool_registry_integration() {
         let tmp = TempDir::new().expect("tempdir");
         let reg = FilesystemSkillRegistry::from_dir(tmp.path().to_path_buf())
@@ -549,6 +588,64 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "my-local-skill");
         assert_eq!(list[0].bound_tool.as_deref(), Some("local-tool"));
+    }
+
+    #[tokio::test]
+    async fn from_config_and_dir_ignores_invalid_bare_name() {
+        let tmp = TempDir::new().expect("tempdir");
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir(&skills_dir).expect("mkdir skills");
+
+        let configs = vec![(
+            "bad-tool".to_string(),
+            bitrouter_config::ToolConfig {
+                skill: Some("../escape".to_string()),
+                description: Some("Should be ignored".to_string()),
+                ..Default::default()
+            },
+        )];
+
+        let reg = FilesystemSkillRegistry::from_config_and_dir(configs, skills_dir.clone())
+            .await
+            .expect("from_config_and_dir");
+
+        let list = reg.list().await.expect("list");
+        assert!(list.is_empty());
+        assert!(!tmp.path().join("escape").exists());
+        assert!(!skills_dir.join("../escape").exists());
+    }
+
+    #[tokio::test]
+    async fn delete_refuses_local_path_outside_skills_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+
+        let custom_dir = tmp.path().join("custom").join("my-local-skill");
+        std::fs::create_dir_all(&custom_dir).expect("mkdir");
+        std::fs::write(
+            custom_dir.join("SKILL.md"),
+            "---\nname: my-local-skill\ndescription: A local path skill\n---\n",
+        )
+        .expect("write");
+
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir(&skills_dir).expect("mkdir skills");
+
+        let configs = vec![(
+            "local-tool".to_string(),
+            bitrouter_config::ToolConfig {
+                skill: Some(custom_dir.to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        )];
+
+        let reg = FilesystemSkillRegistry::from_config_and_dir(configs, skills_dir)
+            .await
+            .expect("from_config_and_dir");
+
+        let err = reg.delete("my-local-skill").await;
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("outside skills dir"));
+        assert!(custom_dir.exists());
     }
 
     #[tokio::test]
