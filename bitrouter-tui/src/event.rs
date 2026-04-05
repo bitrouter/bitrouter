@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use bitrouter_providers::acp::types::AgentEvent;
+use bitrouter_core::agents::event::AgentEvent;
 use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent, MouseEvent};
 use futures::StreamExt;
 use tokio::sync::mpsc;
@@ -16,8 +16,13 @@ pub enum AppEvent {
     Resize { _width: u16, _height: u16 },
     /// Tick / ignored terminal event.
     Tick,
-    /// An event from an ACP agent provider.
-    Agent(AgentEvent),
+    /// An event from an ACP agent provider, tagged with the agent name.
+    Agent(String, AgentEvent),
+    /// Agent connection established (from the connect handshake).
+    AgentConnected {
+        agent_id: String,
+        session_id: String,
+    },
     /// Binary agent install progress update.
     InstallProgress { agent_id: String, percent: u8 },
     /// Binary agent install completed.

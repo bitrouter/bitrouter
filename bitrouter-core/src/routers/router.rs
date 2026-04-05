@@ -1,4 +1,5 @@
 use crate::{
+    agents::provider::DynAgentProvider,
     errors::Result,
     models::{image::image_model::DynImageModel, language::language_model::DynLanguageModel},
     routers::routing_table::RoutingTarget,
@@ -24,6 +25,20 @@ pub trait ImageModelRouter {
         &self,
         target: RoutingTarget,
     ) -> impl Future<Output = Result<Box<DynImageModel<'static>>>> + Send;
+}
+
+/// A router that resolves an agent name to the appropriate agent
+/// provider implementation.
+///
+/// Unlike model and tool routers (which take a [`RoutingTarget`]),
+/// agent routers take the agent name directly. Agents are long-lived
+/// named processes, not fungible routed services.
+pub trait AgentRouter {
+    /// Resolves the agent name to a concrete agent provider.
+    fn route_agent(
+        &self,
+        agent_name: &str,
+    ) -> impl Future<Output = Result<Box<DynAgentProvider<'static>>>> + Send;
 }
 
 /// A router that resolves a routing target to the appropriate tool

@@ -98,6 +98,62 @@ impl<T: ToolRegistry> ToolRegistry for std::sync::Arc<T> {
     }
 }
 
+// ── Agent ─────────────────────────────────────────────────────────
+
+/// Capability flags declared by an agent during connection or discovery.
+#[derive(Debug, Clone, Default)]
+pub struct AgentCapabilityFlags {
+    /// Whether the agent may send permission requests.
+    pub supports_permissions: bool,
+    /// Whether the agent emits thinking/reasoning trace chunks.
+    pub supports_thinking: bool,
+    /// Whether the agent reports tool call events.
+    pub supports_tool_calls: bool,
+}
+
+/// Runtime status of an agent known to the registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentEntryStatus {
+    /// Agent is available but not currently in a session.
+    Idle,
+    /// Agent has an active session.
+    Connected,
+    /// Agent binary not found or connection lost.
+    Unavailable,
+}
+
+/// A single agent available through the router, with its metadata.
+///
+/// Parallel to [`ModelEntry`] for models and [`ToolEntry`] for tools.
+#[derive(Debug, Clone)]
+pub struct AgentEntry {
+    /// Agent identifier (e.g. `"claude-code"`).
+    pub name: String,
+    /// Wire protocol (e.g. `"acp"`, `"a2a"`).
+    pub protocol: String,
+    /// Human-readable description of the agent.
+    pub description: Option<String>,
+    /// Capability flags advertised by the agent.
+    pub capabilities: AgentCapabilityFlags,
+    /// Current runtime status.
+    pub status: AgentEntryStatus,
+}
+
+/// Read-only registry for discovering agents available through the router.
+///
+/// Parallel to [`ModelRegistry`] and [`ToolRegistry`]. Powers the
+/// `GET /v1/agents` discovery endpoint.
+pub trait AgentRegistry: Send + Sync {
+    /// Lists all agents known to the router.
+    fn list_agents(&self) -> impl Future<Output = Vec<AgentEntry>> + Send;
+}
+
+impl<T: AgentRegistry> AgentRegistry for std::sync::Arc<T> {
+    async fn list_agents(&self) -> Vec<AgentEntry> {
+        (**self).list_agents().await
+    }
+}
+
 // ── Skill ─────────────────────────────────────────────────────────
 
 /// A skill tracked in the bitrouter skills registry.

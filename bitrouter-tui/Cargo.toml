@@ -8,6 +8,7 @@ license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 
 [dependencies]
+bitrouter-core = { path = "../bitrouter-core" }
 bitrouter-config = { path = "../bitrouter-config" }
 bitrouter-providers = { path = "../bitrouter-providers", features = ["acp"] }
 crossterm = { version = "0.29", features = ["event-stream"] }

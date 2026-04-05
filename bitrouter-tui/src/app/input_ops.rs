@@ -186,10 +186,8 @@ impl App {
                 agent.status = AgentStatus::Busy;
             }
 
-            // Send prompt via provider.
-            if let Some(provider) = self.agent_providers.get(agent_name) {
-                provider.try_prompt(clean_text.clone());
-            }
+            // Send prompt via provider (async via background task).
+            self.send_prompt_to_agent(agent_name, clean_text.clone());
             self.state.obs_log.push(ObsEvent {
                 agent_id: agent_name.clone(),
                 kind: ObsEventKind::PromptSent,

@@ -1,3 +1,4 @@
+pub mod acp;
 pub mod anthropic;
 pub mod google;
 pub mod mcp;

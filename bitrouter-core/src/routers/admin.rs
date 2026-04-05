@@ -40,6 +40,8 @@ pub enum RouteKind {
     Model,
     /// Route resolves to a tool endpoint.
     Tool,
+    /// Route resolves to an agent endpoint.
+    Agent,
 }
 
 /// Strategy for distributing requests across multiple endpoints.
