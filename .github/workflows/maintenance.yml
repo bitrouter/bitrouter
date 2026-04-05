@@ -2,7 +2,7 @@ name: Scheduled Maintenance
 
 on:
   schedule:
-    - cron: "0 8 * * 1-5" # Weekdays at 08:00 UTC
+    - cron: "0 0 * * *" # Every day at 00:00 UTC
   workflow_dispatch: # Allow manual trigger
 
 jobs:
