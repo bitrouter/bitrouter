@@ -1,0 +1,27 @@
+protocol: acp
+binary: opencode
+args:
+  - acp
+distribution:
+  - binary:
+      platforms:
+        darwin-aarch64:
+          archive: "https://github.com/anomalyco/opencode/releases/download/v1.3.9/opencode-darwin-arm64.zip"
+          cmd: "./opencode"
+          args:
+            - acp
+        darwin-x86_64:
+          archive: "https://github.com/anomalyco/opencode/releases/download/v1.3.9/opencode-darwin-x64.zip"
+          cmd: "./opencode"
+          args:
+            - acp
+        linux-x86_64:
+          archive: "https://github.com/anomalyco/opencode/releases/download/v1.3.9/opencode-linux-x64.tar.gz"
+          cmd: "./opencode"
+          args:
+            - acp
+        linux-aarch64:
+          archive: "https://github.com/anomalyco/opencode/releases/download/v1.3.9/opencode-linux-arm64.tar.gz"
+          cmd: "./opencode"
+          args:
+            - acp

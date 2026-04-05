@@ -1,0 +1,21 @@
+# BitRouter Cloud — managed tool providers.
+#
+# Tools are accessed via api.bitrouter.ai and authenticated through
+# your OWS wallet. No separate API keys required.
+#
+# This is a placeholder catalog. Tool definitions will be populated
+# as BitRouter Cloud tool services become available.
+
+api_protocol: mcp
+api_base: https://api.bitrouter.ai/mcp
+env_prefix: BITROUTER
+auth:
+  type: wallet
+
+tools:
+  bitrouter_web_search:
+    tool_id: web_search
+    description: "Search the web via BitRouter Cloud"
+  bitrouter_code_search:
+    tool_id: code_search
+    description: "Search code repositories via BitRouter Cloud"

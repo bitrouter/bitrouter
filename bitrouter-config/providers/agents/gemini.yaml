@@ -1,0 +1,9 @@
+protocol: acp
+binary: gemini
+args:
+  - "--acp"
+distribution:
+  - npx:
+      package: "@google/gemini-cli"
+      args:
+        - "--acp"

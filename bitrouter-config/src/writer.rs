@@ -3,6 +3,7 @@ use std::io::BufRead;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use crate::config::AgentConfig;
 use crate::registry::builtin_provider_defs;
 
 /// Options for generating config files.
@@ -18,9 +19,27 @@ pub struct InitOptions {
     pub listen_addr: Option<SocketAddr>,
     /// Home directory to write into.
     pub home_dir: PathBuf,
-    /// OWS wallet name. When set, generates a `wallet:` section with
-    /// payment client configuration enabled.
-    pub wallet_name: Option<String>,
+    /// OWS wallet name — the identity and trust root for auth, spend
+    /// tracking, and API key management.
+    pub wallet_name: String,
+    /// When `true`, the user chose BitRouter Cloud as their model
+    /// provider. No API keys are needed; the wallet handles billing.
+    pub use_default_models: bool,
+    /// Custom tool provider definitions added during onboarding
+    /// (e.g. user-supplied MCP server URLs).
+    pub tool_providers: Vec<ToolProviderInit>,
+    /// When `true`, the user chose BitRouter Cloud as their tool provider.
+    pub use_default_tools: bool,
+}
+
+/// A user-defined tool provider (MCP server).
+pub struct ToolProviderInit {
+    /// User-chosen name (e.g. "my-mcp-server").
+    pub name: String,
+    /// MCP server URL.
+    pub url: String,
+    /// Optional auth header value (e.g. "Bearer sk-...").
+    pub auth_header: Option<String>,
 }
 
 /// A custom (user-defined) provider that derives from a builtin.
@@ -142,35 +161,57 @@ fn generate_config_yaml(options: &InitOptions) -> String {
         .unwrap_or(SocketAddr::from(([127, 0, 0, 1], 8787)));
     yaml.push_str(&format!("server:\n  listen: \"{listen}\"\n\n"));
 
+    // Wallet section (always present — identity and trust root)
+    yaml.push_str(&format!(
+        "wallet:\n  name: {}\n  payment: {{}}\n\n",
+        options.wallet_name
+    ));
+
     // Providers section
-    let has_providers = !options.providers.is_empty() || !options.custom_providers.is_empty();
-    if has_providers {
+    let has_byok_providers = !options.providers.is_empty() || !options.custom_providers.is_empty();
+
+    if options.use_default_models || has_byok_providers || !options.tool_providers.is_empty() {
         yaml.push_str("providers:\n");
 
-        // Builtin providers
-        for name in &options.providers {
-            let fallback = name.to_uppercase();
-            let prefix = defs
-                .get(name)
-                .and_then(|bp| bp.config.env_prefix.as_deref())
-                .unwrap_or(&fallback);
-            yaml.push_str(&format!(
-                "  {name}:\n    api_key: \"${{{prefix}_API_KEY}}\"\n\n"
-            ));
+        if options.use_default_models {
+            // BitRouter Cloud for models — no api_key needed, wallet-authenticated.
+            yaml.push_str("  # BitRouter Cloud (wallet-authenticated)\n");
+            yaml.push_str("  bitrouter: {}\n\n");
+        } else {
+            // BYOK builtin providers
+            for name in &options.providers {
+                let fallback = name.to_uppercase();
+                let prefix = defs
+                    .get(name)
+                    .and_then(|bp| bp.config.env_prefix.as_deref())
+                    .unwrap_or(&fallback);
+                yaml.push_str(&format!(
+                    "  {name}:\n    api_key: \"${{{prefix}_API_KEY}}\"\n\n"
+                ));
+            }
+
+            // Custom providers
+            for cp in &options.custom_providers {
+                yaml.push_str(&format!(
+                    "  {}:\n    derives: {}\n    api_base: \"{}\"\n    api_key: \"${{{}}}\"\n\n",
+                    cp.name, cp.derives, cp.api_base, cp.env_key_var,
+                ));
+            }
         }
 
-        // Custom providers
-        for cp in &options.custom_providers {
+        // Custom MCP tool providers
+        for tp in &options.tool_providers {
             yaml.push_str(&format!(
-                "  {}:\n    derives: {}\n    api_base: \"{}\"\n    api_key: \"${{{}}}\"\n\n",
-                cp.name, cp.derives, cp.api_base, cp.env_key_var,
+                "  {}:\n    api_protocol: mcp\n    api_base: \"{}\"\n",
+                tp.name, tp.url,
             ));
+            if let Some(ref auth) = tp.auth_header {
+                yaml.push_str(&format!(
+                    "    auth:\n      type: header\n      header_name: Authorization\n      api_key: \"{auth}\"\n",
+                ));
+            }
+            yaml.push('\n');
         }
-    }
-
-    // Wallet section (enables payment client middleware)
-    if let Some(name) = &options.wallet_name {
-        yaml.push_str(&format!("wallet:\n  name: {name}\n  payment: {{}}\n\n",));
     }
 
     yaml
@@ -284,25 +325,102 @@ fn merge_env_file(env_path: &Path, options: &InitOptions) -> String {
     result
 }
 
+/// Append an agent definition to an existing `bitrouter.yaml`.
+///
+/// Reads the file, deserializes it, inserts the agent, and writes back.
+/// This may reformat the YAML (comments are not preserved).
+pub fn write_agent(
+    config_path: &Path,
+    name: &str,
+    agent: &AgentConfig,
+) -> crate::error::Result<()> {
+    // Read and parse the existing config (or start from empty)
+    let raw = if config_path.exists() {
+        std::fs::read_to_string(config_path).map_err(|e| crate::error::ConfigError::ConfigRead {
+            path: config_path.to_path_buf(),
+            source: e,
+        })?
+    } else {
+        String::new()
+    };
+
+    let mut value: serde_json::Value = if raw.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_saphyr::from_str(&raw)
+            .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?
+    };
+
+    // Ensure `agents` key exists as an object
+    let root = value
+        .as_object_mut()
+        .ok_or_else(|| crate::error::ConfigError::ConfigParse("root is not an object".into()))?;
+    let agents = root
+        .entry("agents")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let agents_map = agents
+        .as_object_mut()
+        .ok_or_else(|| crate::error::ConfigError::ConfigParse("agents is not an object".into()))?;
+
+    // Insert the agent
+    let agent_value = serde_json::to_value(agent)
+        .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
+    agents_map.insert(name.to_owned(), agent_value);
+
+    // Write back as YAML
+    let yaml = serde_saphyr::to_string(&value)
+        .map_err(|e| crate::error::ConfigError::ConfigParse(e.to_string()))?;
+    std::fs::write(config_path, yaml).map_err(|e| crate::error::ConfigError::ConfigRead {
+        path: config_path.to_path_buf(),
+        source: e,
+    })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn generates_valid_yaml() {
+    fn generates_valid_yaml_byok() {
         let options = InitOptions {
             providers: vec!["openai".into()],
             api_keys: HashMap::from([("openai".into(), "sk-test".into())]),
             listen_addr: None,
             custom_providers: vec![],
             home_dir: PathBuf::from("/tmp"),
-            wallet_name: None,
+            wallet_name: "default".into(),
+            use_default_models: false,
+            tool_providers: vec![],
+            use_default_tools: false,
         };
         let yaml = generate_config_yaml(&options);
         assert!(yaml.contains("providers:"));
         assert!(yaml.contains("openai:"));
         assert!(yaml.contains("${OPENAI_API_KEY}"));
+        assert!(yaml.contains("wallet:"));
         // Should be valid YAML
+        let _: serde_json::Value = serde_saphyr::from_str(&yaml).unwrap();
+    }
+
+    #[test]
+    fn generates_valid_yaml_default() {
+        let options = InitOptions {
+            providers: vec![],
+            api_keys: HashMap::new(),
+            listen_addr: None,
+            custom_providers: vec![],
+            home_dir: PathBuf::from("/tmp"),
+            wallet_name: "default".into(),
+            use_default_models: true,
+            tool_providers: vec![],
+            use_default_tools: false,
+        };
+        let yaml = generate_config_yaml(&options);
+        assert!(yaml.contains("bitrouter: {}"));
+        assert!(yaml.contains("wallet:"));
+        assert!(!yaml.contains("${"));
         let _: serde_json::Value = serde_saphyr::from_str(&yaml).unwrap();
     }
 
@@ -317,7 +435,10 @@ mod tests {
             listen_addr: None,
             custom_providers: vec![],
             home_dir: PathBuf::from("/tmp"),
-            wallet_name: None,
+            wallet_name: "default".into(),
+            use_default_models: false,
+            tool_providers: vec![],
+            use_default_tools: false,
         };
         let env = generate_env_content(&options);
         assert!(env.contains("OPENAI_API_KEY=sk-test"));
@@ -332,12 +453,39 @@ mod tests {
             listen_addr: Some("127.0.0.1:9090".parse().unwrap()),
             custom_providers: vec![],
             home_dir: PathBuf::from("/tmp"),
-            wallet_name: None,
+            wallet_name: "default".into(),
+            use_default_models: false,
+            tool_providers: vec![],
+            use_default_tools: false,
         };
         let yaml = generate_config_yaml(&options);
         // Should parse as valid BitrouterConfig
         let config = crate::config::BitrouterConfig::load_from_str(&yaml, None).unwrap();
         assert_eq!(config.server.listen, "127.0.0.1:9090".parse().unwrap());
         assert!(config.providers.contains_key("openai"));
+    }
+
+    #[test]
+    fn generates_yaml_with_tool_providers() {
+        let options = InitOptions {
+            providers: vec![],
+            api_keys: HashMap::new(),
+            listen_addr: None,
+            custom_providers: vec![],
+            home_dir: PathBuf::from("/tmp"),
+            wallet_name: "default".into(),
+            use_default_models: true,
+            tool_providers: vec![ToolProviderInit {
+                name: "my-mcp".into(),
+                url: "https://mcp.example.com".into(),
+                auth_header: Some("Bearer sk-test".into()),
+            }],
+            use_default_tools: false,
+        };
+        let yaml = generate_config_yaml(&options);
+        assert!(yaml.contains("my-mcp:"));
+        assert!(yaml.contains("api_protocol: mcp"));
+        assert!(yaml.contains("https://mcp.example.com"));
+        assert!(yaml.contains("Bearer sk-test"));
     }
 }

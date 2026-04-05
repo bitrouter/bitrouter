@@ -21,7 +21,7 @@ default = [
 ]
 rest = ["bitrouter-providers/rest"]
 mcp = ["bitrouter-api/mcp", "bitrouter-providers/mcp"]
-tui = ["dep:ratatui", "dep:crossterm", "dep:futures", "dep:anyhow"]
+tui = ["dep:bitrouter-tui", "bitrouter-providers/acp"]
 sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
 postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
 mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
@@ -91,9 +91,7 @@ uuid = { version = "1", features = ["v4"] }
 warp = { version = "0.4.2", features = ["server"] }
 
 # TUI (optional)
-ratatui = { version = "0.30", optional = true }
-crossterm = { version = "0.29", features = ["event-stream"], optional = true }
-futures = { version = "0.3", optional = true }
+bitrouter-tui = { path = "../bitrouter-tui", version = "0.18", optional = true }
 anyhow = { version = "1", optional = true }
 
 

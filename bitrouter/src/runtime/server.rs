@@ -701,6 +701,8 @@ where
                 .recover(handle_auth_rejection)
                 .with(warp::trace::request());
 
+            // Pre-check that the address is available (warp's bind panics on failure).
+            check_addr_available(addr)?;
             tracing::info!(%addr, "server listening (JWT auth enabled)");
             let server = warp::serve(all)
                 .bind(addr)
@@ -712,6 +714,8 @@ where
                 .recover(handle_auth_rejection)
                 .with(warp::trace::request());
 
+            // Pre-check that the address is available (warp's bind panics on failure).
+            check_addr_available(addr)?;
             tracing::info!(%addr, "server listening (auth disabled — no database configured)");
             let server = warp::serve(all)
                 .bind(addr)
@@ -723,6 +727,14 @@ where
         tracing::info!("server stopped");
         Ok(())
     }
+}
+
+/// Pre-check that a socket address is available before handing it to warp
+/// (whose `bind` panics on failure).
+fn check_addr_available(addr: std::net::SocketAddr) -> Result<()> {
+    let _listener = std::net::TcpListener::bind(addr)?;
+    // The listener drops here, freeing the port for warp to claim.
+    Ok(())
 }
 
 /// Map an authenticated [`Identity`] to the transport-neutral [`CallerContext`].

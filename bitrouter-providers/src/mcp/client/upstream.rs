@@ -1,10 +1,11 @@
 //! Transport-agnostic upstream MCP connection.
 //!
-//! Uses [`McpTransport`](crate::mcp::transports::McpTransport) implementations
-//! via [`TransportKind`](crate::mcp::transports::TransportKind) for static dispatch.
+//! Uses rmcp's client runtime for protocol handling. The [`ConnectedPeer`]
+//! wrapper provides a type-erased interface to the rmcp `Peer<RoleClient>`.
 
 use std::sync::Arc;
 
+use rmcp::service::ServiceExt;
 use tokio::sync::{Notify, RwLock};
 
 use super::config::{McpServerConfig, McpServerTransport};
@@ -12,13 +13,16 @@ use bitrouter_core::errors::{BitrouterError, Result as BResult};
 use bitrouter_core::tools::provider::ToolProvider;
 use bitrouter_core::tools::result::{ToolCallResult, ToolContent};
 
-use crate::mcp::transports::McpTransport;
-use crate::mcp::transports::TransportKind;
 use bitrouter_core::api::mcp::gateway::McpClientRequestHandler;
 use bitrouter_core::api::mcp::types::McpGatewayError;
 use bitrouter_core::api::mcp::types::{
     McpContent, McpGetPromptResult, McpPrompt, McpPromptArgument, McpResource, McpResourceContent,
     McpResourceTemplate, McpTool, McpToolCallResult,
+};
+
+use super::convert;
+use super::transport::{
+    BitrouterClientHandler, ConnectedPeer, NotifyHandles, build_http_transport,
 };
 
 /// A namespaced resource from an upstream, with its URI prefixed by server name.
@@ -50,7 +54,7 @@ pub struct NamespacedPrompt {
 /// restriction state is managed externally by [`DynamicToolRegistry`].
 pub struct UpstreamConnection {
     name: String,
-    transport: TransportKind,
+    peer: ConnectedPeer,
     tools: Arc<RwLock<Vec<McpTool>>>,
     resources: Arc<RwLock<Vec<McpResource>>>,
     resource_templates: Arc<RwLock<Vec<McpResourceTemplate>>>,
@@ -61,7 +65,7 @@ pub struct UpstreamConnection {
 }
 
 impl UpstreamConnection {
-    /// Connect to an upstream MCP server via streamable HTTP.
+    /// Connect to an upstream MCP server.
     ///
     /// If a `handler` is provided, the connection will handle server→client
     /// requests (sampling, elicitation) by dispatching to it.
@@ -89,61 +93,100 @@ impl UpstreamConnection {
         let resource_notify = Arc::new(Notify::new());
         let prompt_notify = Arc::new(Notify::new());
 
-        match config.transport {
+        let bridge = BitrouterClientHandler::new(
+            name.clone(),
+            NotifyHandles {
+                tool: Arc::clone(&tool_notify),
+                resource: Arc::clone(&resource_notify),
+                prompt: Arc::clone(&prompt_notify),
+            },
+            handler,
+        );
+
+        let peer = match config.transport {
             McpServerTransport::Http {
                 ref url,
                 ref headers,
             } => {
-                use crate::mcp::transports::http::NotifyHandles;
-
-                let notify = NotifyHandles {
-                    tool: Arc::clone(&tool_notify),
-                    resource: Arc::clone(&resource_notify),
-                    prompt: Arc::clone(&prompt_notify),
-                };
-
-                let client = crate::mcp::transports::http::McpHttpClient::new(
-                    name.clone(),
-                    url.clone(),
-                    headers,
-                    handler,
-                    Some(notify),
-                )?;
-                client
-                    .initialize()
-                    .await
-                    .map_err(|e| McpGatewayError::UpstreamConnect {
+                let transport = build_http_transport(url, headers, &name)?;
+                let service = bridge.serve(transport).await.map_err(
+                    |e: rmcp::service::ClientInitializeError| McpGatewayError::UpstreamConnect {
                         name: name.clone(),
                         reason: e.to_string(),
-                    })?;
-
-                let initial_tools =
-                    client
-                        .list_tools()
-                        .await
-                        .map_err(|e| McpGatewayError::UpstreamConnect {
-                            name: name.clone(),
-                            reason: format!("failed to list tools: {e}"),
-                        })?;
-
-                // Best-effort: fetch resources and prompts if the upstream supports them.
-                let initial_resources = client.list_resources().await.unwrap_or_default();
-                let initial_templates = client.list_resource_templates().await.unwrap_or_default();
-                let initial_prompts = client.list_prompts().await.unwrap_or_default();
-
-                Ok(Self {
-                    name: config.name,
-                    transport: TransportKind::Http(client),
-                    tools: Arc::new(RwLock::new(initial_tools)),
-                    resources: Arc::new(RwLock::new(initial_resources)),
-                    resource_templates: Arc::new(RwLock::new(initial_templates)),
-                    prompts: Arc::new(RwLock::new(initial_prompts)),
-                    tool_notify,
-                    resource_notify,
-                    prompt_notify,
-                })
+                    },
+                )?;
+                ConnectedPeer::from_service(service)
             }
-        }
+            McpServerTransport::Stdio {
+                ref command,
+                ref args,
+            } => {
+                let mut cmd = tokio::process::Command::new(command);
+                cmd.args(args);
+                let transport = rmcp::transport::TokioChildProcess::new(cmd).map_err(|e| {
+                    McpGatewayError::UpstreamConnect {
+                        name: name.clone(),
+                        reason: format!("failed to spawn stdio process: {e}"),
+                    }
+                })?;
+                let service = bridge.serve(transport).await.map_err(
+                    |e: rmcp::service::ClientInitializeError| McpGatewayError::UpstreamConnect {
+                        name: name.clone(),
+                        reason: e.to_string(),
+                    },
+                )?;
+                ConnectedPeer::from_service(service)
+            }
+        };
+
+        let initial_tools: Vec<McpTool> = peer
+            .peer()
+            .list_all_tools()
+            .await
+            .map_err(|e| McpGatewayError::UpstreamConnect {
+                name: name.clone(),
+                reason: format!("failed to list tools: {e}"),
+            })?
+            .into_iter()
+            .map(convert::tool)
+            .collect();
+
+        // Best-effort: fetch resources and prompts concurrently.
+        let (resources_result, templates_result, prompts_result) = tokio::join!(
+            peer.peer().list_all_resources(),
+            peer.peer().list_all_resource_templates(),
+            peer.peer().list_all_prompts(),
+        );
+
+        let initial_resources: Vec<McpResource> = resources_result
+            .unwrap_or_default()
+            .into_iter()
+            .map(convert::resource)
+            .collect();
+
+        let initial_templates: Vec<McpResourceTemplate> = templates_result
+            .unwrap_or_default()
+            .into_iter()
+            .map(convert::resource_template)
+            .collect();
+
+        let initial_prompts: Vec<McpPrompt> = prompts_result
+            .unwrap_or_default()
+            .into_iter()
+            .map(convert::prompt)
+            .collect();
+
+        Ok(Self {
+            name: config.name,
+            peer,
+            tools: Arc::new(RwLock::new(initial_tools)),
+            resources: Arc::new(RwLock::new(initial_resources)),
+            resource_templates: Arc::new(RwLock::new(initial_templates)),
+            prompts: Arc::new(RwLock::new(initial_prompts)),
+            tool_notify,
+            resource_notify,
+            prompt_notify,
+        })
     }
 
     /// Return all tools with their original names (no server prefix).
@@ -181,7 +224,15 @@ impl UpstreamConnection {
 
     /// Re-fetch the tool list from the upstream and update the cache.
     pub async fn refresh_tools(&self) -> Result<(), McpGatewayError> {
-        let fresh = self.transport.list_tools().await?;
+        let fresh: Vec<McpTool> = self
+            .peer
+            .peer()
+            .list_all_tools()
+            .await
+            .map_err(|e| convert::service_error(&self.name, e))?
+            .into_iter()
+            .map(convert::tool)
+            .collect();
         let mut cache = self.tools.write().await;
         *cache = fresh;
         Ok(())
@@ -193,7 +244,15 @@ impl UpstreamConnection {
         tool_name: &str,
         arguments: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<McpToolCallResult, McpGatewayError> {
-        self.transport.call_tool(tool_name, arguments).await
+        let params = rmcp::model::CallToolRequestParams::new(tool_name.to_owned())
+            .with_arguments(arguments.unwrap_or_default());
+        let result = self
+            .peer
+            .peer()
+            .call_tool(params)
+            .await
+            .map_err(|e| convert::service_error(&self.name, e))?;
+        Ok(convert::call_tool_result(result))
     }
 
     /// Return the total number of tools on this upstream (unfiltered).
@@ -251,13 +310,40 @@ impl UpstreamConnection {
         &self,
         uri: &str,
     ) -> Result<Vec<McpResourceContent>, McpGatewayError> {
-        self.transport.read_resource(uri).await
+        let params = rmcp::model::ReadResourceRequestParams::new(uri);
+        let result = self
+            .peer
+            .peer()
+            .read_resource(params)
+            .await
+            .map_err(|e| convert::service_error(&self.name, e))?;
+        Ok(result
+            .contents
+            .into_iter()
+            .map(convert::resource_contents)
+            .collect())
     }
 
     /// Re-fetch resources and templates from the upstream and update the caches.
     pub async fn refresh_resources(&self) -> Result<(), McpGatewayError> {
-        let fresh_resources = self.transport.list_resources().await?;
-        let fresh_templates = self.transport.list_resource_templates().await?;
+        let fresh_resources: Vec<McpResource> = self
+            .peer
+            .peer()
+            .list_all_resources()
+            .await
+            .map_err(|e| convert::service_error(&self.name, e))?
+            .into_iter()
+            .map(convert::resource)
+            .collect();
+        let fresh_templates: Vec<McpResourceTemplate> = self
+            .peer
+            .peer()
+            .list_all_resource_templates()
+            .await
+            .map_err(|e| convert::service_error(&self.name, e))?
+            .into_iter()
+            .map(convert::resource_template)
+            .collect();
         {
             let mut cache = self.resources.write().await;
             *cache = fresh_resources;
@@ -290,12 +376,34 @@ impl UpstreamConnection {
         name: &str,
         arguments: Option<std::collections::HashMap<String, String>>,
     ) -> Result<McpGetPromptResult, McpGatewayError> {
-        self.transport.get_prompt(name, arguments).await
+        let mut params = rmcp::model::GetPromptRequestParams::new(name);
+        if let Some(args) = arguments {
+            let json_obj: serde_json::Map<String, serde_json::Value> = args
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect();
+            params.arguments = Some(json_obj);
+        }
+        let result = self
+            .peer
+            .peer()
+            .get_prompt(params)
+            .await
+            .map_err(|e| convert::service_error(&self.name, e))?;
+        Ok(convert::get_prompt_result(result))
     }
 
     /// Re-fetch prompts from the upstream and update the cache.
     pub async fn refresh_prompts(&self) -> Result<(), McpGatewayError> {
-        let fresh = self.transport.list_prompts().await?;
+        let fresh: Vec<McpPrompt> = self
+            .peer
+            .peer()
+            .list_all_prompts()
+            .await
+            .map_err(|e| convert::service_error(&self.name, e))?
+            .into_iter()
+            .map(convert::prompt)
+            .collect();
         let mut cache = self.prompts.write().await;
         *cache = fresh;
         Ok(())
@@ -327,7 +435,6 @@ impl ToolProvider for UpstreamConnection {
         };
 
         let mcp_result = self
-            .transport
             .call_tool(tool_id, args)
             .await
             .map_err(|e| BitrouterError::transport(Some(&self.name), e.to_string()))?;

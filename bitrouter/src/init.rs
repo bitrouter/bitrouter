@@ -2,9 +2,17 @@ use std::collections::HashMap;
 
 use crate::runtime::RuntimePaths;
 use bitrouter_config::{
-    CustomProviderInit, InitOptions, builtin_provider_defs, detect_providers_from_env,
+    CustomProviderInit, InitOptions, ToolProviderInit, builtin_provider_defs,
+    detect_providers_from_env,
 };
-use dialoguer::{Confirm, Input, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
+
+#[cfg(feature = "tui")]
+use bitrouter_config::builtin_agent_defs;
+#[cfg(feature = "tui")]
+use bitrouter_providers::acp::discovery::discover_agents;
+#[cfg(feature = "tui")]
+use bitrouter_providers::acp::types::AgentAvailability;
 
 /// Outcome of the init wizard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,134 +64,201 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         println!("Setup cancelled. Existing configuration preserved.");
         return Ok(InitOutcome::Cancelled);
     }
-    let detected = detect_providers_from_env();
-    let detected_names: Vec<&str> = detected.iter().map(|d| d.name.as_str()).collect();
 
-    if !detected.is_empty() {
-        println!("  Detected API keys in environment:");
-        for d in &detected {
-            println!(
-                "    ✓ {} ({})",
-                provider_display_name(&d.name),
-                d.api_key_var
-            );
-        }
-        println!();
-    }
-
-    // ── Builtin provider selection ──────────────────────────────────
-    println!("  Built-in providers");
+    // ── Step 0: Wallet (non-skippable) ─────────────────────────────
+    println!("  Step 1 · Wallet");
+    println!("  Your wallet is your BitRouter identity — used for");
+    println!("  authentication, spend tracking, and API key management.");
     println!();
+
+    let wallet_name = create_or_reuse_wallet(&theme)?;
+
+    // ── Step 1: Models ─────────────────────────────────────────────
+    println!();
+    println!("  Step 2 · Models");
+    println!();
+
+    let model_choice = Select::with_theme(&theme)
+        .with_prompt("How do you want to connect to LLMs?")
+        .items([
+            "BitRouter Cloud (no API keys needed, billed through wallet)",
+            "Bring Your Own Keys (OpenAI, Anthropic, Google, custom)",
+        ])
+        .default(0)
+        .interact()?;
+
+    let use_default_models = model_choice == 0;
     let mut selected_providers: Vec<&str> = Vec::new();
-    for &(key, display) in PROVIDERS {
-        let is_detected = detected_names.contains(&key);
-        let enable = Confirm::with_theme(&theme)
-            .with_prompt(format!("Configure {display}?"))
-            .default(is_detected)
-            .interact()?;
-        if enable {
-            selected_providers.push(key);
-        }
-    }
-
-    // ── Custom provider setup ───────────────────────────────────────
-    println!();
-    println!("  Custom providers (OpenAI-compatible or Anthropic-compatible)");
-    println!();
-
     let mut custom_providers: Vec<CustomProviderInit> = Vec::new();
-    loop {
-        let add_custom = Confirm::with_theme(&theme)
-            .with_prompt("Add a custom provider?")
-            .default(false)
-            .interact()?;
+    let mut api_keys: HashMap<String, String> = HashMap::new();
 
-        if !add_custom {
-            break;
+    if !use_default_models {
+        let detected = detect_providers_from_env();
+        let detected_names: Vec<&str> = detected.iter().map(|d| d.name.as_str()).collect();
+
+        if !detected.is_empty() {
+            println!();
+            println!("  Detected API keys in environment:");
+            for d in &detected {
+                println!("    ✓ {}", provider_display_name(&d.name),);
+            }
+            println!();
         }
 
-        if let Some(cp) = prompt_custom_provider(&theme)? {
-            custom_providers.push(cp);
+        // Builtin provider selection
+        for &(key, display) in PROVIDERS {
+            let is_detected = detected_names.contains(&key);
+            let enable = Confirm::with_theme(&theme)
+                .with_prompt(format!("Configure {display}?"))
+                .default(is_detected)
+                .interact()?;
+            if enable {
+                selected_providers.push(key);
+            }
         }
+
+        // Custom provider setup
         println!();
-    }
-
-    if selected_providers.is_empty() && custom_providers.is_empty() {
+        println!("  Custom providers (OpenAI-compatible or Anthropic-compatible)");
         println!();
-        println!("No providers selected. Run `bitrouter init` again anytime.");
-        return Ok(InitOutcome::Cancelled);
-    }
 
-    // ── Collect API keys for builtin providers ──────────────────────
-    let mut api_keys = HashMap::new();
-    let defs = builtin_provider_defs();
-
-    if !selected_providers.is_empty() {
-        println!();
-    }
-
-    for &name in &selected_providers {
-        let fallback = name.to_uppercase();
-        let prefix = defs
-            .get(name)
-            .and_then(|bp| bp.config.env_prefix.as_deref())
-            .unwrap_or(&fallback);
-        let key_var = format!("{prefix}_API_KEY");
-
-        // Check if key exists in environment
-        let env_key = std::env::var(&key_var).ok().filter(|v| !v.is_empty());
-
-        let key = if let Some(existing) = &env_key {
-            let masked = mask_key(existing);
-            let use_existing = Confirm::with_theme(&theme)
-                .with_prompt(format!(
-                    "{} API key detected ({masked}). Use this?",
-                    provider_display_name(name)
-                ))
-                .default(true)
+        loop {
+            let add_custom = Confirm::with_theme(&theme)
+                .with_prompt("Add a custom provider?")
+                .default(false)
                 .interact()?;
 
-            if use_existing {
-                existing.clone()
+            if !add_custom {
+                break;
+            }
+
+            if let Some(cp) = prompt_custom_provider(&theme)? {
+                custom_providers.push(cp);
+            }
+            println!();
+        }
+
+        if selected_providers.is_empty() && custom_providers.is_empty() {
+            println!();
+            println!("No providers selected. Run `bitrouter` again anytime.");
+            return Ok(InitOutcome::Cancelled);
+        }
+
+        // Collect API keys
+        let defs = builtin_provider_defs();
+
+        if !selected_providers.is_empty() {
+            println!();
+        }
+
+        for &name in &selected_providers {
+            let fallback = name.to_uppercase();
+            let prefix = defs
+                .get(name)
+                .and_then(|bp| bp.config.env_prefix.as_deref())
+                .unwrap_or(&fallback);
+            let key_var = format!("{prefix}_API_KEY");
+
+            let env_key = std::env::var(&key_var).ok().filter(|v| !v.is_empty());
+
+            let key = if let Some(existing) = &env_key {
+                let masked = mask_key(existing);
+                let use_existing = Confirm::with_theme(&theme)
+                    .with_prompt(format!(
+                        "{} API key detected ({masked}). Use this?",
+                        provider_display_name(name)
+                    ))
+                    .default(true)
+                    .interact()?;
+
+                if use_existing {
+                    existing.clone()
+                } else {
+                    prompt_api_key(&theme, name)?
+                }
             } else {
                 prompt_api_key(&theme, name)?
-            }
-        } else {
-            prompt_api_key(&theme, name)?
-        };
+            };
 
-        api_keys.insert(name.to_owned(), key);
-    }
+            api_keys.insert(name.to_owned(), key);
+        }
 
-    // ── Collect API keys for custom providers ───────────────────────
-    for cp in &custom_providers {
-        let env_key = std::env::var(&cp.env_key_var)
-            .ok()
-            .filter(|v| !v.is_empty());
+        // Collect API keys for custom providers
+        for cp in &custom_providers {
+            let env_key = std::env::var(&cp.env_key_var)
+                .ok()
+                .filter(|v| !v.is_empty());
 
-        let key = if let Some(existing) = &env_key {
-            let masked = mask_key(existing);
-            let use_existing = Confirm::with_theme(&theme)
-                .with_prompt(format!(
-                    "{} API key detected ({masked}). Use this?",
-                    cp.name
-                ))
-                .default(true)
-                .interact()?;
+            let key = if let Some(existing) = &env_key {
+                let masked = mask_key(existing);
+                let use_existing = Confirm::with_theme(&theme)
+                    .with_prompt(format!(
+                        "{} API key detected ({masked}). Use this?",
+                        cp.name
+                    ))
+                    .default(true)
+                    .interact()?;
 
-            if use_existing {
-                existing.clone()
+                if use_existing {
+                    existing.clone()
+                } else {
+                    prompt_api_key(&theme, &cp.name)?
+                }
             } else {
                 prompt_api_key(&theme, &cp.name)?
-            }
-        } else {
-            prompt_api_key(&theme, &cp.name)?
-        };
+            };
 
-        api_keys.insert(cp.name.clone(), key);
+            api_keys.insert(cp.name.clone(), key);
+        }
     }
 
-    // ── Listen address ──────────────────────────────────────────────
+    // ── Step 2: Tools (skippable) ──────────────────────────────────
+    println!();
+    println!("  Step 3 · Tools");
+    println!();
+
+    let configure_tools = Confirm::with_theme(&theme)
+        .with_prompt("Configure tool providers? (skip to use built-in defaults)")
+        .default(false)
+        .interact()?;
+
+    let mut use_default_tools = false;
+    let mut tool_providers: Vec<ToolProviderInit> = Vec::new();
+
+    if configure_tools {
+        let tool_choice = Select::with_theme(&theme)
+            .with_prompt("How do you want to connect to tools?")
+            .items([
+                "BitRouter Cloud (wallet-authenticated, coming soon)",
+                "Add custom MCP servers",
+            ])
+            .default(0)
+            .interact()?;
+
+        if tool_choice == 0 {
+            use_default_tools = true;
+            println!("  BitRouter Cloud tools will be available when services launch.");
+        } else {
+            loop {
+                let add_mcp = Confirm::with_theme(&theme)
+                    .with_prompt("Add an MCP server?")
+                    .default(tool_providers.is_empty())
+                    .interact()?;
+
+                if !add_mcp {
+                    break;
+                }
+
+                if let Some(tp) = prompt_tool_provider(&theme)? {
+                    println!("  → {} ({})", tp.name, tp.url);
+                    tool_providers.push(tp);
+                }
+                println!();
+            }
+        }
+    }
+
+    // ── Listen address ─────────────────────────────────────────────
     println!();
     let listen_str: String = Input::with_theme(&theme)
         .with_prompt("Listen address")
@@ -191,57 +266,70 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         .interact_text()?;
     let listen_addr = listen_str.parse().ok();
 
-    // ── Summary ─────────────────────────────────────────────────────
-    let all_provider_names: Vec<String> = selected_providers
-        .iter()
-        .map(|n| provider_display_name(n).to_owned())
-        .chain(
-            custom_providers
-                .iter()
-                .map(|cp| format!("{} (derives: {})", cp.name, cp.derives)),
+    // ── Step 3: Agents (requires tui feature) ─────────────────────
+    #[cfg(feature = "tui")]
+    let (discovered_agent_names, agent_routing_configured) = run_agent_step(&theme, &listen_str)?;
+    #[cfg(not(feature = "tui"))]
+    let (discovered_agent_names, agent_routing_configured): (Vec<String>, bool) =
+        (Vec::new(), false);
+
+    // ── Summary ────────────────────────────────────────────────────
+    let model_summary = if use_default_models {
+        "BitRouter Cloud".to_owned()
+    } else {
+        let mut names: Vec<String> = selected_providers
+            .iter()
+            .map(|n| provider_display_name(n).to_owned())
+            .chain(
+                custom_providers
+                    .iter()
+                    .map(|cp| format!("{} (derives: {})", cp.name, cp.derives)),
+            )
+            .collect();
+        if names.is_empty() {
+            "(none)".to_owned()
+        } else {
+            names.sort();
+            names.join(", ")
+        }
+    };
+
+    let tool_summary = if use_default_tools {
+        "BitRouter Cloud + built-in defaults".to_owned()
+    } else if tool_providers.is_empty() {
+        "built-in defaults".to_owned()
+    } else {
+        let names: Vec<&str> = tool_providers.iter().map(|tp| tp.name.as_str()).collect();
+        format!("built-in defaults + {}", names.join(", "))
+    };
+
+    let agent_summary = if discovered_agent_names.is_empty() {
+        "none detected".to_owned()
+    } else if agent_routing_configured {
+        format!(
+            "{} (routing via env vars)",
+            discovered_agent_names.join(", ")
         )
-        .collect();
+    } else {
+        format!(
+            "{} detected, routing not configured",
+            discovered_agent_names.len()
+        )
+    };
 
     println!();
     println!("  Configuration summary");
     println!("  ─────────────────────");
+    println!("  Wallet:    {wallet_name}");
     println!("  Home:      {}", paths.home_dir.display());
     println!("  Listen:    {listen_str}");
-    println!("  Providers: {}", all_provider_names.join(", "));
+    println!("  Models:    {model_summary}");
+    println!("  Tools:     {tool_summary}");
+    println!("  Agents:    {agent_summary}");
     println!("  Config:    {}", paths.config_file.display());
     println!("  Env file:  {}", paths.env_file.display());
     println!();
 
-    // ── OWS wallet (before write so it's included in the config) ────
-    let mut wallet_name: Option<String> = None;
-    {
-        let create_wallet = Confirm::with_theme(&theme)
-            .with_prompt("Create an OWS wallet for payment signing?")
-            .default(false)
-            .interact()?;
-
-        if create_wallet {
-            let name: String = Input::with_theme(&theme)
-                .with_prompt("  Wallet name")
-                .default("default".into())
-                .interact_text()?;
-
-            match crate::cli::wallet::create(&name, None, false) {
-                Ok(()) => {
-                    println!("  ✓ Wallet '{name}' created");
-                    wallet_name = Some(name);
-                }
-                Err(e) => {
-                    eprintln!("  Wallet creation failed: {e}");
-                    eprintln!(
-                        "  You can create one later with: bitrouter wallet create --name <name>"
-                    );
-                }
-            }
-        }
-    }
-
-    println!();
     let confirm = Confirm::with_theme(&theme)
         .with_prompt("Write configuration?")
         .default(true)
@@ -260,6 +348,9 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         listen_addr,
         home_dir: paths.home_dir.clone(),
         wallet_name,
+        use_default_models,
+        tool_providers,
+        use_default_tools,
     };
 
     let result = bitrouter_config::write_init_config(&options, overwrite)?;
@@ -268,44 +359,70 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
     println!("  ✓ Configuration written!");
     println!();
     println!(
-        "  {} provider{} configured: {}",
-        result.providers_configured.len(),
-        if result.providers_configured.len() == 1 {
-            ""
+        "  Models: {}",
+        if use_default_models {
+            "BitRouter Cloud".to_owned()
         } else {
-            "s"
-        },
-        all_provider_names.join(", ")
-    );
-
-    println!();
-    println!("  Start the server:");
-    println!("    bitrouter serve     # foreground");
-    println!("    bitrouter start     # background daemon");
-    println!();
-
-    // Show example curl for the first provider
-    let (example_provider, example_model) = if let Some(&name) = selected_providers.first() {
-        let model = defs
-            .get(name)
-            .and_then(|bp| bp.models.first().map(|s| s.as_str()))
-            .unwrap_or("model-id");
-        (name.to_owned(), model.to_owned())
-    } else if let Some(cp) = result.providers_configured.first() {
-        (cp.clone(), "model-id".to_owned())
-    } else {
-        return Ok(InitOutcome::Configured);
-    };
-
-    println!("  Test with:");
-    println!("    curl http://{listen_str}/v1/chat/completions \\");
-    println!("      -H \"Content-Type: application/json\" \\");
-    println!(
-        "      -d '{{\"model\": \"{example_provider}:{example_model}\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}'"
+            format!(
+                "{} provider{} configured: {}",
+                result.providers_configured.len(),
+                if result.providers_configured.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                model_summary,
+            )
+        }
     );
     println!();
 
     Ok(InitOutcome::Configured)
+}
+
+/// Create a new wallet or reuse an existing one.
+///
+/// Returns the wallet name. Aborts the setup if wallet creation fails.
+fn create_or_reuse_wallet(theme: &ColorfulTheme) -> Result<String, Box<dyn std::error::Error>> {
+    // Check for existing wallets
+    let has_existing = ows_lib::list_wallets(None)
+        .map(|w| !w.is_empty())
+        .unwrap_or(false);
+
+    if has_existing {
+        let wallets = ows_lib::list_wallets(None).unwrap_or_default();
+        let first_name = wallets
+            .first()
+            .map(|w| w.name.clone())
+            .unwrap_or_else(|| "default".to_owned());
+
+        let use_existing = Confirm::with_theme(theme)
+            .with_prompt(format!("Use existing wallet '{first_name}'?"))
+            .default(true)
+            .interact()?;
+
+        if use_existing {
+            println!("  ✓ Using wallet '{first_name}'");
+            return Ok(first_name);
+        }
+    }
+
+    let name: String = Input::with_theme(theme)
+        .with_prompt("Wallet name")
+        .default("default".into())
+        .interact_text()?;
+
+    match crate::cli::wallet::create(&name, None, false) {
+        Ok(()) => {
+            println!("  ✓ Wallet '{name}' created");
+            Ok(name)
+        }
+        Err(e) => Err(format!(
+            "Wallet creation failed: {e}\n\
+             A wallet is required for BitRouter. Fix the issue and run setup again."
+        )
+        .into()),
+    }
 }
 
 /// Prompt the user to define a custom provider.
@@ -364,6 +481,48 @@ fn prompt_custom_provider(
     }))
 }
 
+/// Prompt the user to define a custom MCP tool provider.
+fn prompt_tool_provider(
+    theme: &ColorfulTheme,
+) -> Result<Option<ToolProviderInit>, Box<dyn std::error::Error>> {
+    let name: String = Input::with_theme(theme)
+        .with_prompt("MCP server name (e.g. my-tools, internal-mcp)")
+        .interact_text()?;
+
+    let name = name.trim().to_lowercase().replace(' ', "-");
+    if name.is_empty() {
+        return Ok(None);
+    }
+
+    let url: String = Input::with_theme(theme)
+        .with_prompt("MCP server URL")
+        .interact_text()?;
+
+    let has_auth = Confirm::with_theme(theme)
+        .with_prompt("Does this server require authentication?")
+        .default(false)
+        .interact()?;
+
+    let auth_header = if has_auth {
+        let header: String = dialoguer::Password::with_theme(theme)
+            .with_prompt("Authorization header value (e.g. Bearer sk-...)")
+            .interact()?;
+        if header.is_empty() {
+            None
+        } else {
+            Some(header)
+        }
+    } else {
+        None
+    };
+
+    Ok(Some(ToolProviderInit {
+        name,
+        url,
+        auth_header,
+    }))
+}
+
 fn prompt_api_key(
     theme: &ColorfulTheme,
     provider_name: &str,
@@ -396,4 +555,152 @@ fn mask_key(key: &str) -> String {
     let prefix = &key[..4];
     let suffix = &key[key.len() - 4..];
     format!("{prefix}...{suffix}")
+}
+
+/// Step 4: Discover ACP agents on PATH and optionally configure env vars
+/// so they route through BitRouter.
+///
+/// Returns `(discovered_names, routing_configured)`.
+#[cfg(feature = "tui")]
+fn run_agent_step(
+    theme: &ColorfulTheme,
+    listen_str: &str,
+) -> Result<(Vec<String>, bool), Box<dyn std::error::Error>> {
+    println!();
+    println!("  Step 4 · Agents");
+    println!("  Detect locally installed ACP-compatible coding agents");
+    println!("  and optionally route their LLM traffic through BitRouter.");
+    println!();
+
+    let known = builtin_agent_defs();
+    let discovered = discover_agents(&known);
+
+    let on_path: Vec<&str> = discovered
+        .iter()
+        .filter(|a| matches!(a.availability, AgentAvailability::OnPath(_)))
+        .map(|a| a.name.as_str())
+        .collect();
+
+    let installable: Vec<&str> = discovered
+        .iter()
+        .filter(|a| matches!(a.availability, AgentAvailability::Distributable))
+        .map(|a| a.name.as_str())
+        .collect();
+
+    if on_path.is_empty() && installable.is_empty() {
+        println!("  No ACP agents detected on PATH.");
+        println!("  Install agents and run `bitrouter reset` to configure.");
+        return Ok((Vec::new(), false));
+    }
+
+    if !on_path.is_empty() {
+        println!("  Installed: {}", on_path.join(", "));
+    }
+    if !installable.is_empty() {
+        println!("  Available: {} (auto-installable)", installable.join(", "));
+    }
+    println!();
+
+    let all_names: Vec<String> = on_path
+        .iter()
+        .chain(installable.iter())
+        .map(|s| s.to_string())
+        .collect();
+
+    let configure = Confirm::with_theme(theme)
+        .with_prompt("Configure agents to route through BitRouter? (sets env vars)")
+        .default(true)
+        .interact()?;
+
+    if !configure {
+        return Ok((all_names, false));
+    }
+
+    let env_vars = routing_env_vars(listen_str);
+
+    println!();
+    println!("  The following env vars route agent traffic through BitRouter:");
+    for (var, val) in &env_vars {
+        println!("    export {var}={val}");
+    }
+    println!();
+
+    let write_profile = Confirm::with_theme(theme)
+        .with_prompt("Add these to your shell profile?")
+        .default(false)
+        .interact()?;
+
+    if write_profile {
+        match append_to_shell_profile(&env_vars) {
+            Ok(path) => println!("  ✓ Appended to {path}"),
+            Err(e) => eprintln!("  Warning: could not write shell profile: {e}"),
+        }
+    } else {
+        println!("  Copy the exports above into your shell profile to activate.");
+    }
+
+    println!();
+    println!("  To verify agent routing:");
+    println!("    1. source ~/.zshrc   (or open a new terminal)");
+    println!("    2. bitrouter serve   (start the proxy)");
+    println!("    3. bitrouter agents check");
+
+    Ok((all_names, true))
+}
+
+/// Build the set of env vars that point agents at a BitRouter instance.
+#[cfg(feature = "tui")]
+fn routing_env_vars(listen_str: &str) -> Vec<(String, String)> {
+    let base = format!("http://{listen_str}");
+    vec![
+        ("OPENAI_BASE_URL".to_owned(), format!("{base}/v1")),
+        ("ANTHROPIC_BASE_URL".to_owned(), format!("{base}/v1")),
+        ("GOOGLE_AI_BASE_URL".to_owned(), format!("{base}/v1beta")),
+    ]
+}
+
+/// Detect the user's shell and append env var exports to the appropriate rc file.
+///
+/// Returns the path that was written to.
+#[cfg(feature = "tui")]
+fn append_to_shell_profile(
+    vars: &[(String, String)],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let home = dirs::home_dir().ok_or("could not determine home directory")?;
+
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let rc_file = if shell.ends_with("zsh") {
+        home.join(".zshrc")
+    } else if shell.ends_with("fish") {
+        // fish uses a different export syntax — fall back to .bashrc-style
+        // in a fish-compatible universal var file.
+        home.join(".config/fish/conf.d/bitrouter.fish")
+    } else {
+        home.join(".bashrc")
+    };
+
+    let is_fish = shell.ends_with("fish");
+
+    let mut snippet = String::from("\n# BitRouter agent routing\n");
+    for (var, val) in vars {
+        if is_fish {
+            snippet.push_str(&format!("set -gx {var} {val}\n"));
+        } else {
+            snippet.push_str(&format!("export {var}={val}\n"));
+        }
+    }
+
+    // Ensure parent directory exists (relevant for fish conf.d)
+    if let Some(parent) = rc_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&rc_file)?;
+    file.write_all(snippet.as_bytes())?;
+
+    Ok(rc_file.display().to_string())
 }

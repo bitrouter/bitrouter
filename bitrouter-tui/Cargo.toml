@@ -1,0 +1,17 @@
+[package]
+name = "bitrouter-tui"
+version = { workspace = true }
+edition = "2024"
+description = "Terminal UI for BitRouter — agent session manager"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+
+[dependencies]
+bitrouter-config = { path = "../bitrouter-config" }
+bitrouter-providers = { path = "../bitrouter-providers", features = ["acp"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3"
+ratatui = "0.30"
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt", "sync", "time", "process"] }

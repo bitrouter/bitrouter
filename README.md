@@ -23,7 +23,7 @@ As LLM agents grow more autonomous, humans can no longer hand-pick the best mode
 - **Skills registry** — track and expose agent skills following the [agentskills.io](https://agentskills.io) standard ([`providers`](bitrouter-providers/))
 - **Agentic payment** — 402/MPP payment handling for LLMs, tools, and APIs ([`api`](bitrouter-api/) · [`accounts`](bitrouter-accounts/))
 - **Observability** — per-request spend tracking, metrics, and cost calculation ([`observe`](bitrouter-observe/))
-- **CLI + TUI** — monitor and control agent sessions in real time ([`cli`](bitrouter/))
+- **CLI + TUI** — monitor and control agent sessions in real time, with live ACP (Agent Client Protocol) integration for managing coding agents ([`cli`](bitrouter/) · [`tui`](bitrouter-tui/))
 
 ## Documentation
 
@@ -109,7 +109,7 @@ Any agent runtime that can target a custom OpenAI or Anthropic base URL works wi
 | **Language** | Rust | Closed-source | Python |
 | **Self-hosted** | Yes | No | Yes |
 | **Agent-native** | Yes — built for autonomous agent runtimes | No — human-facing API gateway | Partial — SDK-oriented |
-| **Agent protocols** | MCP + Skills | No | MCP |
+| **Agent protocols** | MCP + Skills + ACP | No | MCP |
 | **Agent firewall** | Built-in guardrails (inspect, redact, block) | Yes | Yes |
 | **Cross-protocol routing** | Yes (e.g. OpenAI format → Anthropic provider) | Provider-specific | Yes (unified interface) |
 | **Agentic payments** | Stablecoin (402/MPP) + Fiat| Credit-based billing | No |
@@ -129,6 +129,7 @@ Any agent runtime that can target a custom OpenAI or Anthropic base URL works wi
 - [x] Cross-protocol routing (e.g. OpenAI format → Anthropic provider)
 - [x] MCP & Skills protocol support
 - [x] Tools as a service — config-driven tool routing across MCP and REST providers
+- [x] ACP (Agent Client Protocol) integration — manage coding agents (Claude Code, OpenCode, OpenClaw) via the TUI
 - [ ] TUI observability dashboard
 - [ ] Telemetry and usage analytics
 - [ ] Provider & model routing policy customization
