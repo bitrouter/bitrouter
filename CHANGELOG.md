@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/bitrouter/bitrouter/compare/v0.18.3...v0.19.0)
+
+
+### ⛰️ Features
+
+- *(accounts)* Database-backed key revocation table ([#259](https://github.com/bitrouter/bitrouter/pull/259)) - ([a682c13](https://github.com/bitrouter/bitrouter/commit/a682c13f71988673814cdb0bb6c944e167faf06a))
+- *(auth)* Add API key identity (`id` claim) for per-key tracking and revocation ([#256](https://github.com/bitrouter/bitrouter/pull/256)) - ([e7f0258](https://github.com/bitrouter/bitrouter/commit/e7f0258d4d2d338f715ab5e67baa039742be1a84))
+- *(core)* Add AgentProvider trait ([#250](https://github.com/bitrouter/bitrouter/pull/250)) - ([d8e8d9b](https://github.com/bitrouter/bitrouter/commit/d8e8d9bf036992b74a4d8dc970d51f81ccc636af))
+
+
 ## [0.18.2](https://github.com/bitrouter/bitrouter/compare/v0.18.1...v0.18.2)
 
 
