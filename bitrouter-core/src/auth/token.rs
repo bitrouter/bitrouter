@@ -215,6 +215,7 @@ mod tests {
             mdl: None,
             bgt: None,
             bsc: None,
+            id: None,
             key: None,
         }
     }
@@ -230,6 +231,7 @@ mod tests {
             mdl: None,
             bgt: None,
             bsc: None,
+            id: None,
             key: None,
         }
     }
@@ -305,6 +307,7 @@ mod tests {
             mdl: None,
             bgt: None,
             bsc: None,
+            id: None,
             key: None,
         };
         check_expiration(&claims).expect("not expired");
@@ -320,6 +323,7 @@ mod tests {
             mdl: None,
             bgt: None,
             bsc: None,
+            id: None,
             key: None,
         };
         assert!(check_expiration(&claims).is_err());
@@ -335,6 +339,7 @@ mod tests {
             mdl: None,
             bgt: None,
             bsc: None,
+            id: None,
             key: None,
         };
         check_expiration(&claims).expect("no exp means valid");
@@ -390,6 +395,7 @@ mod tests {
             mdl: None,
             bgt: None,
             bsc: None,
+            id: None,
             key: None,
         };
         let token = sign(&claims, &kp).expect("sign");
@@ -411,6 +417,7 @@ mod tests {
             mdl: Some(vec!["gpt-4o".to_string()]),
             bgt: Some(50_000_000),
             bsc: Some(crate::auth::claims::BudgetScope::Session),
+            id: Some("obsWNDRE4Mq8s2K7x9fGhJlPvTnYc1Ua0ZiDwXbR5eo".to_string()),
             key: Some("ows_key_abc123".to_string()),
         };
         let token = sign(&claims, &kp).expect("sign");
@@ -418,5 +425,31 @@ mod tests {
         assert_eq!(decoded.key.as_deref(), Some("ows_key_abc123"));
         assert_eq!(decoded.mdl, Some(vec!["gpt-4o".to_string()]));
         assert_eq!(decoded.bgt, Some(50_000_000));
+        assert_eq!(
+            decoded.id.as_deref(),
+            Some("obsWNDRE4Mq8s2K7x9fGhJlPvTnYc1Ua0ZiDwXbR5eo")
+        );
+    }
+
+    #[test]
+    fn id_claim_absent_for_admin_tokens() {
+        let kp = MasterKeypair::generate();
+        let chain = Chain::solana_mainnet();
+        let caip10 = kp.caip10(&chain).expect("caip10");
+        let claims = BitrouterClaims {
+            iss: caip10.format(),
+            iat: None,
+            exp: Some(u64::MAX),
+            scp: Some(TokenScope::Admin),
+            mdl: None,
+            bgt: None,
+            bsc: None,
+            id: None,
+            key: None,
+        };
+        let token = sign(&claims, &kp).expect("sign");
+        let decoded = verify(&token).expect("verify");
+        assert!(decoded.id.is_none());
+        assert_eq!(decoded.scope(), TokenScope::Admin);
     }
 }

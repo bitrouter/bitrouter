@@ -1,7 +1,7 @@
 //! `bitrouter key` subcommands — manage OWS API keys for agent access.
 
+use dialoguer::Password;
 use dialoguer::theme::ColorfulTheme;
-use dialoguer::{Confirm, Password};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -69,22 +69,28 @@ pub fn list() -> Result {
     Ok(())
 }
 
-/// Revoke (delete) an OWS API key by ID.
-pub fn revoke(id: &str) -> Result {
-    let theme = ColorfulTheme::default();
+/// Revoke an API key `id` on the running server by notifying its admin endpoint.
+///
+/// Sends `POST /admin/keys/revoke` with the key ID to add it to the
+/// server's deny-list. All JWTs bearing this `id` claim are immediately
+/// rejected regardless of their `exp`.
+pub fn revoke_on_server(
+    config: &bitrouter_config::BitrouterConfig,
+    addr: std::net::SocketAddr,
+    id: &str,
+) -> Result {
+    let url = format!("http://{addr}/admin/keys/revoke");
+    let client = reqwest::blocking::Client::new();
+    let resp = crate::cli::admin_auth::request_with_admin_auth(config, client.post(&url))?
+        .json(&serde_json::json!({ "id": id }))
+        .send()?;
 
-    let confirmed = Confirm::with_theme(&theme)
-        .with_prompt(format!("Revoke API key '{id}'? This cannot be undone"))
-        .default(false)
-        .interact()?;
-
-    if !confirmed {
-        println!("Cancelled.");
-        return Ok(());
+    if resp.status().is_success() {
+        println!("API key '{id}' revoked on server.");
+    } else {
+        let msg = crate::cli::admin_auth::parse_error_message(resp)?;
+        return Err(format!("failed to revoke key: {msg}").into());
     }
-
-    ows_lib::key_store::delete_api_key(id, None)?;
-    println!("API key '{id}' revoked.");
 
     Ok(())
 }
@@ -101,10 +107,13 @@ pub fn sign(
 ) -> Result {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use bitrouter_core::auth::chain::{Caip10, Chain};
     use bitrouter_core::auth::claims::{BitrouterClaims, BudgetScope, TokenScope};
     use bitrouter_core::auth::token;
     use dialoguer::Password;
+    use sha2::{Digest, Sha256};
 
     // 1. Load wallet and resolve Solana address for CAIP-10 iss.
     let info = ows_lib::get_wallet(wallet_name, None)
@@ -141,7 +150,21 @@ pub fn sign(
         None => None,
     };
 
-    // 4. Construct claims.
+    // 4. Generate API key identity (`id` claim).
+    //    - OWS-backed keys: deterministically derived via SHA-256 of the key string.
+    //    - Standalone keys: randomly generated 32-byte value.
+    let key_id = match ows_key {
+        Some(key_str) => {
+            let hash = Sha256::digest(key_str.as_bytes());
+            URL_SAFE_NO_PAD.encode(hash)
+        }
+        None => {
+            let bytes: [u8; 32] = rand::random();
+            URL_SAFE_NO_PAD.encode(bytes)
+        }
+    };
+
+    // 5. Construct claims.
     let claims = BitrouterClaims {
         iss: caip10.format(),
         iat: Some(now),
@@ -150,10 +173,11 @@ pub fn sign(
         mdl: models.map(|m| m.to_vec()),
         bgt: budget,
         bsc,
+        id: Some(key_id),
         key: ows_key.map(String::from),
     };
 
-    // 5. Prompt passphrase and sign.
+    // 6. Prompt passphrase and sign.
     let theme = ColorfulTheme::default();
     let passphrase = Password::with_theme(&theme)
         .with_prompt("Wallet owner passphrase")

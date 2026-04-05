@@ -11,6 +11,7 @@ pub struct Model {
     pub id: Uuid,
     pub service_type: String,
     pub account_id: Option<String>,
+    pub key_id: Option<String>,
     pub session_id: Option<Uuid>,
     pub service_name: String,
     pub operation: String,

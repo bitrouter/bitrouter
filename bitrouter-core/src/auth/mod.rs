@@ -10,6 +10,7 @@ pub mod access;
 pub mod chain;
 pub mod claims;
 pub mod keys;
+pub mod revocation;
 pub mod token;
 
 /// Errors arising from JWT operations.

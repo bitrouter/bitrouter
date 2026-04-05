@@ -36,6 +36,8 @@ pub struct SpendLog {
     /// Which service type produced this log entry.
     pub service_type: ServiceType,
     pub account_id: Option<String>,
+    /// API key identity from the JWT `id` claim, for per-key spend tracking.
+    pub key_id: Option<String>,
     pub session_id: Option<Uuid>,
     /// For Model: route name. For Tool: server name. For Agent: agent name.
     pub service_name: String,

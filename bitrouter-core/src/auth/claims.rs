@@ -58,6 +58,13 @@ pub struct BitrouterClaims {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bsc: Option<BudgetScope>,
 
+    /// API key identity for per-key tracking, revocation, and audit grouping.
+    ///
+    /// A 32-byte value encoded as base64url (no padding) — 43 characters.
+    /// Present in every non-admin JWT. Orthogonal to `key` (OWS agent key).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
     /// OWS agent key for payment authorization.
     /// When present, the server validates the key against the OWS vault
     /// and uses its associated policies for spending enforcement.

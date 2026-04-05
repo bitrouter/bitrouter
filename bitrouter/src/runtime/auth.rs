@@ -27,6 +27,7 @@ use bitrouter_accounts::identity::{AccountId, Identity, Scope};
 use bitrouter_accounts::service::AccountService;
 use bitrouter_core::auth::chain::Caip10;
 use bitrouter_core::auth::claims::TokenScope;
+use bitrouter_core::auth::revocation::KeyRevocationSet;
 use bitrouter_core::auth::token as jwt_token;
 
 /// Shared auth state passed into filters.
@@ -37,6 +38,9 @@ pub struct JwtAuthContext {
     /// The operator's CAIP-10 identity resolved from wallet config at startup.
     /// When set, JWTs must have `iss` matching this identity.
     operator_caip10: Option<String>,
+    /// Optional revocation set for per-key revocation. When present, JWTs
+    /// whose `id` claim appears in this set are rejected.
+    revocation_set: Option<Arc<dyn KeyRevocationSet>>,
 }
 
 impl JwtAuthContext {
@@ -44,7 +48,14 @@ impl JwtAuthContext {
         Self {
             db,
             operator_caip10,
+            revocation_set: None,
         }
+    }
+
+    /// Attach a revocation set for per-key JWT revocation.
+    pub fn with_revocation_set(mut self, set: Arc<dyn KeyRevocationSet>) -> Self {
+        self.revocation_set = Some(set);
+        self
     }
 
     /// Returns `true` when no database is configured (open proxy mode).
@@ -154,6 +165,16 @@ async fn resolve_jwt_identity(
         )));
     }
 
+    // 3b. Check per-key revocation (if a revocation set is configured).
+    if let Some(ref key_id) = claims.id
+        && let Some(ref revocation_set) = ctx.revocation_set
+        && revocation_set.is_revoked(key_id).await
+    {
+        return Err(warp::reject::custom(Unauthorized(
+            "API key has been revoked",
+        )));
+    }
+
     // 4. Derive chain from iss (CAIP-10 → CAIP-2).
     let chain = Caip10::parse(&claims.iss).ok().map(|c| c.chain.caip2());
 
@@ -185,6 +206,7 @@ async fn resolve_jwt_identity(
     Ok(Identity {
         account_id: AccountId(account.id),
         scope,
+        key_id: claims.id,
         chain,
         models: claims.mdl,
         budget: claims.bgt,
@@ -258,6 +280,7 @@ fn open_identity() -> impl Filter<Extract = (Identity,), Error = warp::Rejection
         Ok::<_, warp::Rejection>(Identity {
             account_id: AccountId(uuid::Uuid::nil()),
             scope: Scope::Admin,
+            key_id: None,
             chain: None,
             models: None,
             budget: None,

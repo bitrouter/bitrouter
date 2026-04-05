@@ -21,6 +21,8 @@ use crate::models::language::usage::LanguageModelUsage;
 pub struct CallerContext {
     /// The account that made the request, if authentication is enabled.
     pub account_id: Option<String>,
+    /// API key identity from the JWT `id` claim, for per-key spend tracking.
+    pub key_id: Option<String>,
     /// Optional model-name patterns this caller may access.
     pub models: Option<Vec<String>>,
     /// Budget limit in micro USD.
