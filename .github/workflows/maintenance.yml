@@ -32,19 +32,19 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
 
-            You are performing scheduled maintenance on a Rust workspace. The repo
-            contains a top-level `bitrouter` binary crate and several library
-            sub-crates (`bitrouter-core`, `bitrouter-config`, `bitrouter-api`,
-            `bitrouter-providers`, `bitrouter-accounts`, `bitrouter-observe`,
-            `bitrouter-blob`, `bitrouter-guardrails`, `bitrouter-tui`).
+            You are performing scheduled maintenance on a Rust Cargo workspace.
+            The workspace root is `Cargo.toml`. Discover all member crates
+            dynamically by reading `[workspace] members` from the root manifest
+            and globbing `*/Cargo.toml` — do not assume a fixed list of crates.
 
             Perform the following maintenance tasks and collect findings:
 
             ## 1. Verify README examples
-            Scan the workspace README.md and every sub-crate README.md for Rust
-            code examples (fenced ```rust blocks). For each example, attempt to
-            verify it compiles by running `cargo check` or `cargo test --doc` on
-            the relevant crate. Record any examples that fail to compile.
+            Find every README.md in the repo root and in each workspace member
+            directory (`*/README.md`). Scan them for Rust code examples (fenced
+            ```rust blocks). For each example, attempt to verify it compiles by
+            running `cargo check` or `cargo test --doc` on the relevant crate.
+            Record any examples that fail to compile.
 
             ## 2. Check for outdated dependencies
             Run `cargo outdated --workspace --root-deps-only` to identify direct
@@ -58,10 +58,19 @@ jobs:
             Record any findings with the commit SHA, file, and comment text.
 
             ## 4. Validate workspace builds
-            Run `cargo check --workspace --all-features` and `cargo check --workspace --no-default-features`.
+            Run `cargo check --workspace --all-features` and
+            `cargo check --workspace --no-default-features`.
             Record any compilation errors.
 
-            ## 5. Create a maintenance report issue
+            ## 5. Audit project structure descriptions
+            Compare the actual set of workspace member crates (from step 1) against
+            every document that describes the project structure — at minimum
+            README.md, CLAUDE.md, CONTRIBUTING.md, and DEVELOPMENT.md. Flag any
+            file that lists crates which no longer exist, or omits crates that do
+            exist. Record the file, the stale/missing reference, and what it
+            should say instead.
+
+            ## 6. Create a maintenance report issue
             After collecting all findings, create a single GitHub issue titled
             "[MAINTENANCE] Daily report — $(date -u +%Y-%m-%d)" with the label
             "maintenance". The issue body should include:
@@ -75,12 +84,13 @@ jobs:
             If ALL checks pass with zero findings, still create the issue but mark
             it as a clean report and close it immediately.
 
-            ## 6. (Optional) Create a linked PR for auto-fixable issues
+            ## 7. (Optional) Create a linked PR for auto-fixable issues
             If there are outdated dependencies where the update is a compatible
-            semver bump (patch or minor), or if README doc-test fixes are
-            straightforward, create a branch, apply the fixes, and open a PR
-            linking back to the maintenance issue. Use conventional commit format
-            for all commits (e.g., `chore(deps): update ...`). Title the PR using
+            semver bump (patch or minor), README doc-test fixes are
+            straightforward, or stale project structure descriptions can be
+            corrected, create a branch, apply the fixes, and open a PR linking
+            back to the maintenance issue. Use conventional commit format for all
+            commits (e.g., `chore(deps): update ...`). Title the PR using
             conventional commit format. Only do this if there are concrete,
             safe fixes to apply — do not create an empty PR.
 
