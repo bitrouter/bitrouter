@@ -159,8 +159,7 @@ pub fn sign(
             URL_SAFE_NO_PAD.encode(hash)
         }
         None => {
-            use rand::Rng;
-            let bytes: [u8; 32] = rand::rng().random();
+            let bytes: [u8; 32] = rand::random();
             URL_SAFE_NO_PAD.encode(bytes)
         }
     };
