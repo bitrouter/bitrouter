@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
-use bitrouter_providers::acp::types::{PermissionRequest, PermissionResponse, ToolCallStatus};
+use bitrouter_core::agents::event::{PermissionRequest, PermissionRequestId, ToolCallStatus};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -339,8 +339,8 @@ impl Renderable for ThinkingEntry {
 
 pub struct PermissionEntry {
     pub agent_id: String,
+    pub request_id: PermissionRequestId,
     pub request: Box<PermissionRequest>,
-    pub response_tx: Option<tokio::sync::oneshot::Sender<PermissionResponse>>,
     pub resolved: bool,
 }
 

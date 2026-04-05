@@ -3,12 +3,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitrouter_core::{
     errors::{BitrouterError, Result},
-    routers::registry::{ModelEntry, ModelRegistry, ToolEntry, ToolRegistry},
+    routers::registry::{
+        AgentCapabilityFlags, AgentEntry, AgentEntryStatus, AgentRegistry, ModelEntry,
+        ModelRegistry, ToolEntry, ToolRegistry,
+    },
     routers::routing_table::{ApiProtocol, ModelPricing, RouteEntry, RoutingTable, RoutingTarget},
     tools::definition::ToolDefinition,
 };
 
-use crate::config::{ModelConfig, ModelInfo, ProviderConfig, RoutingStrategy, ToolConfig};
+use crate::config::{
+    AgentConfig, ModelConfig, ModelInfo, ProviderConfig, RoutingStrategy, ToolConfig,
+};
 
 /// The provider name used as fallback when the user has no explicit `models:`
 /// section configured.
@@ -574,6 +579,50 @@ impl ToolRegistry for ConfigToolRoutingTable {
             })
             .collect();
         entries.sort_by(|a, b| a.id.cmp(&b.id));
+        entries
+    }
+}
+
+// ── Agent registry ──────────────────────────────────────────────
+
+/// Config-driven agent registry that implements [`AgentRegistry`] from
+/// the `agents:` configuration section.
+///
+/// Parallel to [`ConfigRoutingTable`] for models and
+/// [`ConfigToolRoutingTable`] for tools. This is a read-only discovery
+/// registry — agent sessions are managed by the runtime, not the config layer.
+pub struct ConfigAgentRegistry {
+    agents: HashMap<String, AgentConfig>,
+}
+
+impl ConfigAgentRegistry {
+    /// Create a new registry from the agents configuration map.
+    pub fn new(agents: HashMap<String, AgentConfig>) -> Self {
+        Self { agents }
+    }
+}
+
+impl AgentRegistry for ConfigAgentRegistry {
+    async fn list_agents(&self) -> Vec<AgentEntry> {
+        let mut entries: Vec<AgentEntry> = self
+            .agents
+            .iter()
+            .map(|(name, config)| {
+                let status = if config.enabled {
+                    AgentEntryStatus::Idle
+                } else {
+                    AgentEntryStatus::Unavailable
+                };
+                AgentEntry {
+                    name: name.clone(),
+                    protocol: config.protocol.to_string(),
+                    description: None,
+                    capabilities: AgentCapabilityFlags::default(),
+                    status,
+                }
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
         entries
     }
 }
@@ -1240,5 +1289,59 @@ mod tests {
         assert_eq!(routes[0].name, "create_issue");
         assert_eq!(routes[0].provider, "github-mcp");
         assert_eq!(routes[0].protocol, ApiProtocol::Mcp);
+    }
+
+    // ── ConfigAgentRegistry ──────────────────────────────────────
+
+    fn test_agent_config(enabled: bool) -> AgentConfig {
+        AgentConfig {
+            protocol: crate::config::AgentProtocol::Acp,
+            binary: "test-agent".to_owned(),
+            args: Vec::new(),
+            enabled,
+            distribution: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_registry_lists_enabled_as_idle() {
+        let mut agents = HashMap::new();
+        agents.insert("claude".to_owned(), test_agent_config(true));
+        let registry = ConfigAgentRegistry::new(agents);
+
+        let entries = registry.list_agents().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "claude");
+        assert_eq!(entries[0].protocol, "acp");
+        assert_eq!(entries[0].status, AgentEntryStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn agent_registry_lists_disabled_as_unavailable() {
+        let mut agents = HashMap::new();
+        agents.insert("disabled-agent".to_owned(), test_agent_config(false));
+        let registry = ConfigAgentRegistry::new(agents);
+
+        let entries = registry.list_agents().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, AgentEntryStatus::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn agent_registry_sorted_by_name() {
+        let mut agents = HashMap::new();
+        agents.insert("zeta".to_owned(), test_agent_config(true));
+        agents.insert("alpha".to_owned(), test_agent_config(true));
+        let registry = ConfigAgentRegistry::new(agents);
+
+        let entries = registry.list_agents().await;
+        assert_eq!(entries[0].name, "alpha");
+        assert_eq!(entries[1].name, "zeta");
+    }
+
+    #[tokio::test]
+    async fn agent_registry_empty() {
+        let registry = ConfigAgentRegistry::new(HashMap::new());
+        assert!(registry.list_agents().await.is_empty());
     }
 }

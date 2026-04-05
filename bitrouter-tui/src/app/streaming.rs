@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use bitrouter_providers::acp::types::ToolCallStatus;
+use bitrouter_core::agents::event::ToolCallStatus;
 
 use crate::model::{
     ActivityEntry, AgentResponse, ContentBlock, EntryKind, ObsEvent, ObsEventKind, ScrollbackState,

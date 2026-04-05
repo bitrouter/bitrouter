@@ -1756,6 +1756,7 @@ name = "bitrouter-tui"
 version = "0.18.3"
 dependencies = [
  "bitrouter-config",
+ "bitrouter-core",
  "bitrouter-providers",
  "crossterm",
  "futures",

@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod agents;
 pub mod agentskills;
 #[cfg(feature = "anthropic")]
 pub mod anthropic;

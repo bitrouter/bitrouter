@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use bitrouter_core::observe::{ObserveCallback, ToolObserveCallback};
+use bitrouter_core::observe::{AgentObserveCallback, ObserveCallback, ToolObserveCallback};
 use bitrouter_core::routers::routing_table::ModelPricing;
 use sea_orm::DatabaseConnection;
 
@@ -20,12 +20,13 @@ use crate::tool_observer::ToolSpendObserver;
 
 /// A fully assembled observation pipeline.
 ///
-/// Holds the composite observer (which implements [`ObserveCallback`] and
-/// [`ToolObserveCallback`]), the metrics collector (for the `/v1/metrics`
-/// endpoint), and the spend store (for budget queries).
+/// Holds the composite observer (which implements [`ObserveCallback`],
+/// [`ToolObserveCallback`], and [`AgentObserveCallback`]), the metrics
+/// collector (for the `/v1/metrics` endpoint), and the spend store (for
+/// budget queries).
 pub struct ObserveStack {
-    /// Composite observer implementing [`ObserveCallback`] and
-    /// [`ToolObserveCallback`].
+    /// Composite observer implementing [`ObserveCallback`],
+    /// [`ToolObserveCallback`], and [`AgentObserveCallback`].
     pub observer: Arc<CompositeObserver>,
     /// In-memory metrics collector for the `/v1/metrics` endpoint.
     pub metrics: Arc<MetricsCollector>,
@@ -116,6 +117,7 @@ impl ObserveStackBuilder {
                 tool_spend_observer as Arc<dyn ToolObserveCallback>,
                 metrics.clone() as Arc<dyn ToolObserveCallback>,
             ],
+            vec![metrics.clone() as Arc<dyn AgentObserveCallback>],
         ));
 
         ObserveStack {

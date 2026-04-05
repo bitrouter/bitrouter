@@ -5,8 +5,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bitrouter_core::observe::{
-    ObserveCallback, RequestFailureEvent, RequestSuccessEvent, ToolCallFailureEvent,
-    ToolCallSuccessEvent, ToolObserveCallback,
+    AgentObserveCallback, AgentTurnFailureEvent, AgentTurnSuccessEvent, ObserveCallback,
+    RequestFailureEvent, RequestSuccessEvent, ToolCallFailureEvent, ToolCallSuccessEvent,
+    ToolObserveCallback,
 };
 
 /// An observer that delegates to multiple inner callbacks for all service types.
@@ -17,16 +18,19 @@ use bitrouter_core::observe::{
 pub struct CompositeObserver {
     model_callbacks: Vec<Arc<dyn ObserveCallback>>,
     tool_callbacks: Vec<Arc<dyn ToolObserveCallback>>,
+    agent_callbacks: Vec<Arc<dyn AgentObserveCallback>>,
 }
 
 impl CompositeObserver {
     pub fn new(
         model_callbacks: Vec<Arc<dyn ObserveCallback>>,
         tool_callbacks: Vec<Arc<dyn ToolObserveCallback>>,
+        agent_callbacks: Vec<Arc<dyn AgentObserveCallback>>,
     ) -> Self {
         Self {
             model_callbacks,
             tool_callbacks,
+            agent_callbacks,
         }
     }
 }
@@ -74,6 +78,30 @@ impl ToolObserveCallback for CompositeObserver {
         Box::pin(async move {
             for cb in &self.tool_callbacks {
                 cb.on_tool_call_failure(event.clone()).await;
+            }
+        })
+    }
+}
+
+impl AgentObserveCallback for CompositeObserver {
+    fn on_agent_turn_success(
+        &self,
+        event: AgentTurnSuccessEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            for cb in &self.agent_callbacks {
+                cb.on_agent_turn_success(event.clone()).await;
+            }
+        })
+    }
+
+    fn on_agent_turn_failure(
+        &self,
+        event: AgentTurnFailureEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            for cb in &self.agent_callbacks {
+                cb.on_agent_turn_failure(event.clone()).await;
             }
         })
     }

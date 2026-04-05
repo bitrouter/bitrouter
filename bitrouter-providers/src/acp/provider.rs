@@ -1,16 +1,22 @@
 //! `Send`-safe facade over an ACP agent connection.
 //!
-//! `AcpAgentProvider` hides the `!Send` ACP internals behind an mpsc
+//! `AcpAgentProvider` implements the `AgentProvider` trait from
+//! `bitrouter-core`. It hides the `!Send` ACP internals behind an mpsc
 //! channel interface. The provider is `Send + Sync` and can be held
 //! anywhere in the application.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use bitrouter_config::{AgentConfig, Distribution};
+use bitrouter_core::agents::event::{AgentEvent, PermissionRequestId, PermissionResponse};
+use bitrouter_core::agents::provider::AgentProvider;
+use bitrouter_core::agents::session::AgentSessionInfo;
+use bitrouter_core::errors::{BitrouterError, Result};
 use tokio::sync::mpsc;
 
-use super::connection::spawn_agent_thread;
-use super::types::{AgentCommand, AgentEvent};
+use super::connection::{HandshakeResult, spawn_agent_thread};
+use super::types::AgentCommand;
 
 /// Resolved launch command for an agent subprocess.
 pub(crate) struct LaunchCommand {
@@ -18,71 +24,185 @@ pub(crate) struct LaunchCommand {
     pub args: Vec<String>,
 }
 
-/// Send-safe handle to a running ACP agent connection.
+/// Send-safe handle to an ACP agent connection.
 ///
 /// Internally manages a dedicated OS thread with a single-threaded
 /// tokio runtime and `LocalSet` (because ACP types are `!Send`).
 /// All communication crosses the thread boundary via mpsc channels.
 pub struct AcpAgentProvider {
-    agent_id: String,
-    command_tx: mpsc::Sender<AgentCommand>,
-    thread_handle: Option<std::thread::JoinHandle<()>>,
+    agent_name: String,
+    config: AgentConfig,
+    /// Command channel to the agent thread. Set after `connect`.
+    state: Mutex<ConnectionState>,
+}
+
+enum ConnectionState {
+    /// Not yet connected.
+    Idle,
+    /// Connected to the agent subprocess.
+    Connected {
+        command_tx: mpsc::Sender<AgentCommand>,
+        _thread_handle: std::thread::JoinHandle<()>,
+    },
 }
 
 impl AcpAgentProvider {
-    /// Spawn a new ACP agent connection.
+    /// Create a new provider for the given agent.
     ///
-    /// - `agent_id`: display name for this agent
-    /// - `config`: agent configuration from bitrouter-config
-    /// - `event_tx`: channel where the consumer receives `AgentEvent`s
-    ///
-    /// Resolution order: binary on PATH, then first viable distribution
-    /// method (npx/uvx), then bare binary name as fallback.
-    pub fn spawn(
-        agent_id: String,
-        config: &AgentConfig,
-        event_tx: mpsc::Sender<AgentEvent>,
-    ) -> Self {
-        let launch = resolve_launch(config);
-
-        let (handle, command_tx) =
-            spawn_agent_thread(agent_id.clone(), launch.binary, launch.args, event_tx);
-
+    /// This does **not** spawn the subprocess — call
+    /// [`connect`](AgentProvider::connect) to establish the session.
+    pub fn new(agent_name: String, config: AgentConfig) -> Self {
         Self {
-            agent_id,
-            command_tx,
-            thread_handle: Some(handle),
+            agent_name,
+            config,
+            state: Mutex::new(ConnectionState::Idle),
         }
     }
+}
 
-    /// Send a prompt to the agent (async).
-    pub async fn prompt(&self, text: String) -> Result<(), mpsc::error::SendError<AgentCommand>> {
-        self.command_tx.send(AgentCommand::Prompt(text)).await
+impl AgentProvider for AcpAgentProvider {
+    fn agent_name(&self) -> &str {
+        &self.agent_name
     }
 
-    /// Send a prompt to the agent (non-blocking, best effort).
-    pub fn try_prompt(&self, text: String) {
-        let _ = self.command_tx.try_send(AgentCommand::Prompt(text));
+    fn protocol_name(&self) -> &str {
+        "acp"
     }
 
-    /// Agent identifier.
-    pub fn agent_id(&self) -> &str {
-        &self.agent_id
+    async fn connect(&self) -> Result<AgentSessionInfo> {
+        let launch = resolve_launch(&self.config);
+        let (handshake_tx, handshake_rx) = tokio::sync::oneshot::channel();
+
+        let thread_handle = spawn_agent_thread(
+            self.agent_name.clone(),
+            launch.binary,
+            launch.args,
+            handshake_tx,
+        );
+
+        let handshake = handshake_rx.await.map_err(|_| {
+            BitrouterError::transport(
+                Some(&self.agent_name),
+                "agent thread exited before handshake",
+            )
+        })?;
+
+        let HandshakeResult {
+            session_info,
+            command_tx,
+        } = handshake.map_err(|msg| BitrouterError::transport(Some(&self.agent_name), msg))?;
+
+        let mut state = self.state.lock().map_err(|_| {
+            BitrouterError::transport(Some(&self.agent_name), "state lock poisoned")
+        })?;
+        *state = ConnectionState::Connected {
+            command_tx,
+            _thread_handle: thread_handle,
+        };
+
+        Ok(session_info)
+    }
+
+    async fn submit(&self, _session_id: &str, text: String) -> Result<mpsc::Receiver<AgentEvent>> {
+        let command_tx = {
+            let state = self.state.lock().map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "state lock poisoned")
+            })?;
+            match &*state {
+                ConnectionState::Connected { command_tx, .. } => command_tx.clone(),
+                ConnectionState::Idle => {
+                    return Err(BitrouterError::transport(
+                        Some(&self.agent_name),
+                        "agent not connected — call connect() first",
+                    ));
+                }
+            }
+        };
+
+        let (reply_tx, reply_rx) = mpsc::channel(64);
+
+        command_tx
+            .send(AgentCommand::Prompt { text, reply_tx })
+            .await
+            .map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "agent thread not running")
+            })?;
+
+        Ok(reply_rx)
+    }
+
+    async fn respond_permission(
+        &self,
+        _session_id: &str,
+        request_id: PermissionRequestId,
+        response: PermissionResponse,
+    ) -> Result<()> {
+        let command_tx = {
+            let state = self.state.lock().map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "state lock poisoned")
+            })?;
+            match &*state {
+                ConnectionState::Connected { command_tx, .. } => command_tx.clone(),
+                ConnectionState::Idle => {
+                    return Err(BitrouterError::transport(
+                        Some(&self.agent_name),
+                        "agent not connected",
+                    ));
+                }
+            }
+        };
+
+        command_tx
+            .send(AgentCommand::RespondPermission {
+                request_id,
+                response,
+            })
+            .await
+            .map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "agent thread not running")
+            })?;
+
+        Ok(())
+    }
+
+    async fn disconnect(&self, _session_id: &str) -> Result<()> {
+        let command_tx = {
+            let mut state = self.state.lock().map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "state lock poisoned")
+            })?;
+            match std::mem::replace(&mut *state, ConnectionState::Idle) {
+                ConnectionState::Connected {
+                    command_tx,
+                    _thread_handle,
+                } => {
+                    // Thread handle is dropped here, which is fine —
+                    // the thread will exit after receiving Disconnect
+                    // or when the command channel closes.
+                    Some(command_tx)
+                }
+                ConnectionState::Idle => None,
+            }
+        };
+
+        if let Some(tx) = command_tx {
+            let _ = tx.send(AgentCommand::Disconnect).await;
+        }
+
+        Ok(())
     }
 }
 
 impl Drop for AcpAgentProvider {
     fn drop(&mut self) {
-        // Dropping command_tx signals the agent thread to exit.
+        // Dropping the command_tx signals the agent thread to exit.
         // We intentionally do NOT join the thread here to avoid
-        // blocking the caller. The thread will clean up on its own.
-        drop(self.thread_handle.take());
+        // blocking the caller.
     }
 }
 
 /// Resolve how to launch an agent based on config and distribution metadata.
 ///
-/// 1. Binary on PATH → use directly
+/// 1. Binary on PATH -> use directly
 /// 2. First viable distribution (npx/uvx with runtime available)
 /// 3. Bare binary name fallback (will fail at spawn with a clear error)
 fn resolve_launch(config: &AgentConfig) -> LaunchCommand {
@@ -118,13 +238,12 @@ fn resolve_launch(config: &AgentConfig) -> LaunchCommand {
                 }
             }
             Distribution::Binary { .. } => {
-                // Binary distribution requires prior download — skip here.
                 continue;
             }
         }
     }
 
-    // 3. Fall back to bare name (will fail at spawn time with a clear error).
+    // 3. Fall back to bare name.
     LaunchCommand {
         binary: PathBuf::from(&config.binary),
         args: config.args.clone(),

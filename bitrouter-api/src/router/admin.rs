@@ -88,6 +88,7 @@ fn handle_list_routes<T: AdminRoutingTable>(table: Arc<T>) -> impl warp::Reply {
         let kind = match route.kind {
             RouteKind::Model => "model",
             RouteKind::Tool => "tool",
+            RouteKind::Agent => "agent",
         };
         let strategy = match route.strategy {
             bitrouter_core::routers::admin::RouteStrategy::Priority => "priority",

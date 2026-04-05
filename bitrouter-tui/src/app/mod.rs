@@ -11,6 +11,7 @@ mod tabs;
 
 use std::collections::HashMap;
 use std::io::Stdout;
+use std::sync::Arc;
 
 use bitrouter_providers::acp::discovery::discover_agents;
 use bitrouter_providers::acp::provider::AcpAgentProvider;
@@ -98,7 +99,7 @@ pub struct App {
     pub running: bool,
     pub state: AppState,
     /// Active agent providers, keyed by agent name.
-    agent_providers: HashMap<String, AcpAgentProvider>,
+    agent_providers: HashMap<String, Arc<AcpAgentProvider>>,
     /// Cloned event sender for spawning agent connections.
     event_tx: mpsc::Sender<AppEvent>,
 }
@@ -199,7 +200,15 @@ impl App {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Mouse(mouse_event) => self.handle_mouse(mouse_event),
             AppEvent::Resize { .. } | AppEvent::Tick => {}
-            AppEvent::Agent(agent_event) => self.handle_agent_event(agent_event),
+            AppEvent::Agent(agent_id, agent_event) => {
+                self.handle_agent_event(agent_id, agent_event);
+            }
+            AppEvent::AgentConnected {
+                agent_id,
+                session_id,
+            } => {
+                self.handle_agent_connected(agent_id, session_id);
+            }
             AppEvent::InstallProgress { agent_id, percent } => {
                 if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
                     agent.status = AgentStatus::Installing { percent };

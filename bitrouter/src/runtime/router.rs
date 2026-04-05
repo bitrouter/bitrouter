@@ -116,14 +116,16 @@ impl LanguageModelRouter for Router {
                 );
                 Ok(DynLanguageModel::new_box(model))
             }
-            ApiProtocol::Mcp | ApiProtocol::Rest => Err(BitrouterError::invalid_request(
-                Some(&target.provider_name),
-                format!(
-                    "provider '{}' uses tool protocol '{}' which cannot serve models",
-                    target.provider_name, target.api_protocol
-                ),
-                None,
-            )),
+            ApiProtocol::Mcp | ApiProtocol::Rest | ApiProtocol::Acp => {
+                Err(BitrouterError::invalid_request(
+                    Some(&target.provider_name),
+                    format!(
+                        "provider '{}' uses protocol '{}' which cannot serve models",
+                        target.provider_name, target.api_protocol
+                    ),
+                    None,
+                ))
+            }
         }
     }
 }

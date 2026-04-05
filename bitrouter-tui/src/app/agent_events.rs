@@ -1,36 +1,28 @@
 use std::time::Instant;
 
-use bitrouter_providers::acp::types::AgentEvent;
+use bitrouter_core::agents::event::AgentEvent;
 
 use crate::model::{AgentStatus, EntryKind, ObsEvent, ObsEventKind};
 
 use super::App;
 
 impl App {
-    pub(super) fn handle_agent_event(&mut self, event: AgentEvent) {
+    pub(super) fn handle_agent_event(&mut self, agent_id: String, event: AgentEvent) {
         match event {
-            AgentEvent::Connected {
-                agent_id,
-                session_id,
-            } => self.handle_agent_connected(agent_id, session_id),
-            AgentEvent::Disconnected { agent_id } => self.handle_agent_disconnected(agent_id),
-            AgentEvent::Error { agent_id, message } => {
+            AgentEvent::Disconnected => self.handle_agent_disconnected(agent_id),
+            AgentEvent::Error { message } => {
                 self.handle_agent_error(agent_id, message);
             }
-            AgentEvent::MessageChunk { agent_id, text } => {
+            AgentEvent::MessageChunk { text } => {
                 self.apply_agent_message_chunk(&agent_id, text);
             }
-            AgentEvent::NonTextContent {
-                agent_id,
-                description,
-            } => {
+            AgentEvent::NonTextContent { description } => {
                 self.apply_non_text_content(&agent_id, description);
             }
-            AgentEvent::ThoughtChunk { agent_id, text } => {
+            AgentEvent::ThoughtChunk { text } => {
                 self.apply_thought_chunk(&agent_id, text);
             }
             AgentEvent::ToolCall {
-                agent_id,
                 tool_call_id,
                 title,
                 status,
@@ -38,27 +30,22 @@ impl App {
                 self.apply_tool_call(&agent_id, tool_call_id, title, status);
             }
             AgentEvent::ToolCallUpdate {
-                agent_id,
                 tool_call_id,
                 title,
                 status,
             } => {
                 self.apply_tool_call_update(&agent_id, tool_call_id, title, status);
             }
-            AgentEvent::PermissionRequest {
-                agent_id,
-                request,
-                response_tx,
-            } => {
-                self.handle_permission_request(agent_id, request, response_tx);
+            AgentEvent::PermissionRequest { id, request } => {
+                self.handle_permission_request(agent_id, id, request);
             }
-            AgentEvent::PromptDone { agent_id, .. } => {
+            AgentEvent::TurnDone { .. } => {
                 self.handle_prompt_done(agent_id);
             }
         }
     }
 
-    fn handle_agent_connected(&mut self, agent_id: String, session_id: String) {
+    pub(super) fn handle_agent_connected(&mut self, agent_id: String, session_id: String) {
         if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
             agent.status = AgentStatus::Connected;
             agent.session_id = Some(session_id);

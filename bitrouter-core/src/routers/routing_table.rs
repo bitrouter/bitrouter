@@ -26,6 +26,8 @@ pub enum ApiProtocol {
     // Tool protocols
     Mcp,
     Rest,
+    // Agent protocols
+    Acp,
 }
 
 impl fmt::Display for ApiProtocol {
@@ -36,6 +38,7 @@ impl fmt::Display for ApiProtocol {
             Self::Google => "google",
             Self::Mcp => "mcp",
             Self::Rest => "rest",
+            Self::Acp => "acp",
         })
     }
 }

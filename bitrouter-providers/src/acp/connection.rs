@@ -10,72 +10,61 @@ use agent_client_protocol as acp;
 use tokio::sync::mpsc;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use super::client::{AcpClient, convert_stop_reason};
-use super::types::{AgentCommand, AgentEvent};
+use bitrouter_core::agents::event::AgentEvent;
+use bitrouter_core::agents::session::{AgentCapabilities, AgentSessionInfo};
+
+use super::client::{AcpClient, PermissionBridge, convert_stop_reason};
+use super::types::AgentCommand;
+
+/// Result of the agent handshake, sent back to the caller of `connect`.
+pub(crate) struct HandshakeResult {
+    pub session_info: AgentSessionInfo,
+    pub command_tx: mpsc::Sender<AgentCommand>,
+}
 
 /// Spawn an agent subprocess on a dedicated OS thread.
 ///
-/// Returns the thread handle and a command sender. The consumer
-/// receives events through the `event_tx` channel.
+/// Returns a thread handle. The `handshake_tx` oneshot resolves once
+/// the ACP initialize + new_session handshake completes (or fails).
 pub(crate) fn spawn_agent_thread(
-    agent_id: String,
+    agent_name: String,
     bin_path: PathBuf,
     args: Vec<String>,
-    event_tx: mpsc::Sender<AgentEvent>,
-) -> (std::thread::JoinHandle<()>, mpsc::Sender<AgentCommand>) {
-    let (command_tx, command_rx) = mpsc::channel::<AgentCommand>(32);
-
-    let handle = std::thread::spawn(move || {
+    handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         {
             Ok(rt) => rt,
             Err(e) => {
-                let _ = event_tx.blocking_send(AgentEvent::Error {
-                    agent_id,
-                    message: format!("failed to create runtime: {e}"),
-                });
+                let _ = handshake_tx.send(Err(format!("failed to create runtime: {e}")));
                 return;
             }
         };
 
         let local = tokio::task::LocalSet::new();
-        rt.block_on(local.run_until(agent_task_local(
-            agent_id, bin_path, args, event_tx, command_rx,
-        )));
-    });
-
-    (handle, command_tx)
+        rt.block_on(local.run_until(agent_task_local(agent_name, bin_path, args, handshake_tx)));
+    })
 }
 
 async fn agent_task_local(
-    agent_id: String,
+    agent_name: String,
     bin_path: PathBuf,
     args: Vec<String>,
-    event_tx: mpsc::Sender<AgentEvent>,
-    mut command_rx: mpsc::Receiver<AgentCommand>,
+    handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) {
-    if let Err(msg) =
-        run_agent_connection(&agent_id, &bin_path, &args, &event_tx, &mut command_rx).await
-    {
-        let _ = event_tx
-            .send(AgentEvent::Error {
-                agent_id: agent_id.clone(),
-                message: msg,
-            })
-            .await;
+    if let Err(msg) = run_agent_connection(&agent_name, &bin_path, &args, handshake_tx).await {
+        tracing::error!(agent = %agent_name, "agent connection error: {msg}");
     }
-
-    let _ = event_tx.send(AgentEvent::Disconnected { agent_id }).await;
 }
 
 async fn run_agent_connection(
-    agent_id: &str,
+    agent_name: &str,
     bin_path: &PathBuf,
     args: &[String],
-    event_tx: &mpsc::Sender<AgentEvent>,
-    command_rx: &mut mpsc::Receiver<AgentCommand>,
+    handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) -> Result<(), String> {
     // 1. Spawn subprocess
     let mut child = tokio::process::Command::new(bin_path)
@@ -85,21 +74,25 @@ async fn run_agent_connection(
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("failed to spawn {agent_id}: {e}"))?;
+        .map_err(|e| format!("failed to spawn {agent_name}: {e}"))?;
 
     let stdin = child
         .stdin
         .take()
-        .ok_or_else(|| format!("{agent_id}: stdin not captured"))?
+        .ok_or_else(|| format!("{agent_name}: stdin not captured"))?
         .compat_write();
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| format!("{agent_id}: stdout not captured"))?
+        .ok_or_else(|| format!("{agent_name}: stdout not captured"))?
         .compat();
 
     // 2. Set up ACP connection (spawn_local because ACP is !Send)
-    let client = AcpClient::new(agent_id.to_string(), event_tx.clone());
+    let permission_bridge = std::rc::Rc::new(PermissionBridge::new());
+    let reply_tx_slot: std::rc::Rc<std::cell::RefCell<Option<mpsc::Sender<AgentEvent>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+
+    let client = AcpClient::new(permission_bridge.clone(), reply_tx_slot.clone());
     let (conn, io_future) = acp::ClientSideConnection::new(client, stdin, stdout, |fut| {
         tokio::task::spawn_local(fut);
     });
@@ -116,53 +109,82 @@ async fn run_agent_connection(
         ),
     )
     .await
-    .map_err(|e| format!("{agent_id} initialize failed: {e}"))?;
+    .map_err(|e| format!("{agent_name} initialize failed: {e}"))?;
 
     // 4. Create session
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let session_resp = conn
         .new_session(acp::NewSessionRequest::new(cwd))
         .await
-        .map_err(|e| format!("{agent_id} new_session failed: {e}"))?;
+        .map_err(|e| format!("{agent_name} new_session failed: {e}"))?;
 
-    let session_id = session_resp.session_id;
+    let session_id = session_resp.session_id.to_string();
 
-    // 5. Notify consumer that the agent is connected
-    let _ = event_tx
-        .send(AgentEvent::Connected {
-            agent_id: agent_id.to_string(),
-            session_id: session_id.to_string(),
-        })
-        .await;
+    // 5. Send handshake result back to the caller
+    let (command_tx, mut command_rx) = mpsc::channel::<AgentCommand>(32);
 
-    // 6. Prompt loop
+    let session_info = AgentSessionInfo {
+        session_id: session_id.clone(),
+        agent_name: agent_name.to_string(),
+        capabilities: AgentCapabilities {
+            supports_permissions: true,
+            supports_thinking: true,
+        },
+    };
+
+    if handshake_tx
+        .send(Ok(HandshakeResult {
+            session_info,
+            command_tx,
+        }))
+        .is_err()
+    {
+        return Err("caller dropped before handshake completed".to_owned());
+    }
+
+    // 6. Command loop
     while let Some(cmd) = command_rx.recv().await {
         match cmd {
-            AgentCommand::Prompt(text) => {
+            AgentCommand::Prompt { text, reply_tx } => {
+                // Install the per-turn reply channel.
+                *reply_tx_slot.borrow_mut() = Some(reply_tx.clone());
+
                 let result = conn
                     .prompt(acp::PromptRequest::new(
-                        session_id.clone(),
+                        session_resp.session_id.clone(),
                         vec![text.into()],
                     ))
                     .await;
+
                 match result {
                     Ok(resp) => {
-                        let _ = event_tx
-                            .send(AgentEvent::PromptDone {
-                                agent_id: agent_id.to_string(),
+                        let _ = reply_tx
+                            .send(AgentEvent::TurnDone {
                                 stop_reason: convert_stop_reason(resp.stop_reason),
                             })
                             .await;
                     }
                     Err(e) => {
-                        let _ = event_tx
+                        let _ = reply_tx
                             .send(AgentEvent::Error {
-                                agent_id: agent_id.to_string(),
                                 message: format!("prompt failed: {e}"),
                             })
                             .await;
                     }
                 }
+
+                // Clear the per-turn channel. Dropping the sender
+                // closes the receiver naturally.
+                *reply_tx_slot.borrow_mut() = None;
+            }
+            AgentCommand::RespondPermission {
+                request_id,
+                response,
+            } => {
+                permission_bridge.resolve(request_id, response);
+            }
+            AgentCommand::Disconnect => {
+                break;
             }
         }
     }
