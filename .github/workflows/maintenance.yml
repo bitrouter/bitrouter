@@ -1,0 +1,98 @@
+name: Scheduled Maintenance
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # Every day at 00:00 UTC
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install cargo-outdated
+        run: cargo install cargo-outdated --locked
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+
+            You are performing scheduled maintenance on a Rust Cargo workspace.
+            The workspace root is `Cargo.toml`. Discover all member crates
+            dynamically by reading `[workspace] members` from the root manifest
+            and globbing `*/Cargo.toml` — do not assume a fixed list of crates.
+
+            Perform the following maintenance tasks and collect findings:
+
+            ## 1. Verify README examples
+            Find every README.md in the repo root and in each workspace member
+            directory (`*/README.md`). Scan them for Rust code examples (fenced
+            ```rust blocks). For each example, attempt to verify it compiles by
+            running `cargo check` or `cargo test --doc` on the relevant crate.
+            Record any examples that fail to compile.
+
+            ## 2. Check for outdated dependencies
+            Run `cargo outdated --workspace --root-deps-only` to identify direct
+            dependencies with newer versions available. Record any outdated deps
+            and their current vs latest versions.
+
+            ## 3. Scan TODO/FIXME in recent commits
+            Search the last 50 commits (on the default branch) for added lines
+            containing TODO, FIXME, HACK, or XXX comments. Use:
+              git log -50 --diff-filter=A -p -- '*.rs' | grep -n '^\+.*\(TODO\|FIXME\|HACK\|XXX\)'
+            Record any findings with the commit SHA, file, and comment text.
+
+            ## 4. Validate workspace builds
+            Run `cargo check --workspace --all-features` and
+            `cargo check --workspace --no-default-features`.
+            Record any compilation errors.
+
+            ## 5. Audit project structure descriptions
+            Compare the actual set of workspace member crates (from step 1) against
+            every document that describes the project structure — at minimum
+            README.md, CLAUDE.md, CONTRIBUTING.md, and DEVELOPMENT.md. Flag any
+            file that lists crates which no longer exist, or omits crates that do
+            exist. Record the file, the stale/missing reference, and what it
+            should say instead.
+
+            ## 6. Create a maintenance report issue
+            After collecting all findings, create a single GitHub issue titled
+            "[MAINTENANCE] Daily report — $(date -u +%Y-%m-%d)" with the label
+            "maintenance". The issue body should include:
+            - A summary section with pass/fail status for each check
+            - Detailed findings organized by section
+            - Suggested actions for any problems found
+
+            If the "maintenance" label does not exist, create it first:
+              gh label create maintenance --description "Automated maintenance reports" --color "0E8A16"
+
+            If ALL checks pass with zero findings, still create the issue but mark
+            it as a clean report and close it immediately.
+
+            ## 7. (Optional) Create a linked PR for auto-fixable issues
+            If there are outdated dependencies where the update is a compatible
+            semver bump (patch or minor), README doc-test fixes are
+            straightforward, or stale project structure descriptions can be
+            corrected, create a branch, apply the fixes, and open a PR linking
+            back to the maintenance issue. Use conventional commit format for all
+            commits (e.g., `chore(deps): update ...`). Title the PR using
+            conventional commit format. Only do this if there are concrete,
+            safe fixes to apply — do not create an empty PR.
+
+          claude_args: |
+            --allowedTools "Read,Write,Edit,Bash(cargo:*),Bash(git:*),Bash(gh issue:*),Bash(gh label:*),Bash(gh pr:*),Bash(date:*),Bash(grep:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(sed:*),Bash(sort:*)"
