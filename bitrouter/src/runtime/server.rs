@@ -65,6 +65,8 @@ pub struct ServerPlan<T, R> {
     /// When set, `serve()` reads the current `Arc<ToolGuardrail>` from this
     /// lock and the reload closure can swap it atomically.
     tool_guardrail: Option<Arc<std::sync::RwLock<Arc<bitrouter_guardrails::ToolGuardrail>>>>,
+    /// Per-key revocation set for JWT `id` claim checking.
+    revocation_set: Option<Arc<dyn bitrouter_core::auth::revocation::KeyRevocationSet>>,
 }
 
 impl<T, R> ServerPlan<T, R>
@@ -82,6 +84,7 @@ where
             reload_fn: None,
             tool_registry: None,
             tool_guardrail: None,
+            revocation_set: None,
         }
     }
 
@@ -131,6 +134,15 @@ where
         guardrail: Arc<std::sync::RwLock<Arc<bitrouter_guardrails::ToolGuardrail>>>,
     ) -> Self {
         self.tool_guardrail = Some(guardrail);
+        self
+    }
+
+    /// Provide a per-key revocation set for JWT `id` claim checking.
+    pub fn with_revocation_set(
+        mut self,
+        set: Arc<dyn bitrouter_core::auth::revocation::KeyRevocationSet>,
+    ) -> Self {
+        self.revocation_set = Some(set);
         self
     }
 
@@ -206,10 +218,14 @@ where
                 .map_err(|e| tracing::warn!("could not resolve operator CAIP-10: {e}"))
                 .ok()
         });
-        let auth_ctx = Arc::new(JwtAuthContext::new(
+        let mut auth_ctx = JwtAuthContext::new(
             self.db.as_ref().map(|db| db.as_ref().clone()),
             operator_caip10,
-        ));
+        );
+        if let Some(revocation_set) = self.revocation_set.clone() {
+            auth_ctx = auth_ctx.with_revocation_set(revocation_set);
+        }
+        let auth_ctx = Arc::new(auth_ctx);
 
         // Build the observation stack: spend tracking + metrics for all service types.
         let mut observe_builder = ObserveStack::builder();
@@ -271,6 +287,17 @@ where
         // Admin route management — gated by management auth.
         let admin_routes = auth::auth_gate(auth::management_auth(auth_ctx.clone()))
             .and(admin::admin_routes_filter(self.table.clone()));
+
+        // Admin key revocation endpoint — gated by management auth.
+        let admin_key_revoke = {
+            let revocation_set = self.revocation_set.clone();
+            auth::auth_gate(auth::management_auth(auth_ctx.clone()))
+                .and(warp::path!("admin" / "keys" / "revoke"))
+                .and(warp::post())
+                .and(warp::body::json::<KeyRevokeRequest>())
+                .and(warp::any().map(move || revocation_set.clone()))
+                .and_then(handle_key_revoke)
+        };
 
         // Build account filter that extracts caller context when auth is enabled,
         // or returns a default (empty) caller context when no database is configured.
@@ -675,6 +702,7 @@ where
             .or(model_list)
             .or(agent_list)
             .or(admin_routes)
+            .or(admin_key_revoke)
             .or(chat)
             .or(messages)
             .or(responses)
@@ -752,6 +780,7 @@ fn check_addr_available(addr: std::net::SocketAddr) -> Result<()> {
 fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> CallerContext {
     CallerContext {
         account_id: Some(id.account_id.0.to_string()),
+        key_id: id.key_id,
         models: id.models,
         budget: id.budget,
         budget_scope: id.budget_scope,
@@ -787,6 +816,40 @@ fn resolve_operator_caip10(
     };
 
     Ok(caip10.format())
+}
+
+// ── Admin key revocation endpoint ─────────────────────────────────
+
+/// Request body for `POST /admin/keys/revoke`.
+#[derive(serde::Deserialize)]
+struct KeyRevokeRequest {
+    /// The API key `id` to revoke (base64url-encoded, 43 chars).
+    id: String,
+}
+
+/// Handle key revocation requests.
+async fn handle_key_revoke(
+    body: KeyRevokeRequest,
+    revocation_set: Option<Arc<dyn bitrouter_core::auth::revocation::KeyRevocationSet>>,
+) -> std::result::Result<impl warp::Reply, warp::Rejection> {
+    let Some(revocation_set) = revocation_set else {
+        return Ok(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({
+                "error": { "message": "revocation not configured" }
+            })),
+            warp::http::StatusCode::SERVICE_UNAVAILABLE,
+        ));
+    };
+
+    revocation_set.revoke(&body.id).await;
+    tracing::info!(key_id = %body.id, "API key revoked");
+
+    Ok(warp::reply::with_status(
+        warp::reply::json(&serde_json::json!({
+            "revoked": body.id
+        })),
+        warp::http::StatusCode::OK,
+    ))
 }
 
 /// Rejection handler that turns [`Unauthorized`] into a JSON 401 response

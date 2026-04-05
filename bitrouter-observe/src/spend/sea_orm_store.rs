@@ -55,6 +55,7 @@ impl SpendStore for SeaOrmSpendStore {
                 id: Set(log.id),
                 service_type: Set(log.service_type.to_string()),
                 account_id: Set(log.account_id),
+                key_id: Set(log.key_id),
                 session_id: Set(log.session_id),
                 service_name: Set(log.service_name),
                 operation: Set(log.operation),

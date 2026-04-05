@@ -115,6 +115,7 @@ fn ows_sign_admin_jwt(wallet: &bitrouter_config::config::WalletConfig) -> Result
         mdl: None,
         bgt: None,
         bsc: None,
+        id: None, // Admin tokens are short-lived; no per-key tracking needed.
         key: None,
     };
 

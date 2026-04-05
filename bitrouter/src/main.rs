@@ -382,7 +382,11 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     expires_at,
                 } => cli::key::create(&name, &wallet, &policy, expires_at.as_deref())?,
                 KeyAction::List => cli::key::list()?,
-                KeyAction::Revoke { id } => cli::key::revoke(&id)?,
+                KeyAction::Revoke { id } => {
+                    // Load config for server communication.
+                    let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
+                    cli::key::revoke_on_server(&runtime.config, runtime.config.server.listen, &id)?;
+                }
                 KeyAction::Sign {
                     wallet,
                     models,

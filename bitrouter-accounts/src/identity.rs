@@ -50,6 +50,8 @@ pub struct Identity {
     pub account_id: AccountId,
     /// What this caller is permitted to do.
     pub scope: Scope,
+    /// API key identity from the JWT `id` claim, for per-key tracking.
+    pub key_id: Option<String>,
     /// CAIP-2 chain identifier derived from the operator's `iss` CAIP-10.
     /// Used to select the payment network backend for MPP.
     pub chain: Option<String>,

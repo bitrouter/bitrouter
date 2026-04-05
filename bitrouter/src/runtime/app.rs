@@ -196,6 +196,11 @@ impl
                 .with_tool_guardrail(shared_tool_guardrail)
                 .with_reload(reload_fn);
 
+        // Wire per-key revocation set (in-memory; lost on restart).
+        let revocation_set =
+            Arc::new(bitrouter_core::auth::revocation::InMemoryRevocationSet::new());
+        plan = plan.with_revocation_set(revocation_set);
+
         if let Some(db) = self.db {
             plan = plan.with_db(db);
         }
