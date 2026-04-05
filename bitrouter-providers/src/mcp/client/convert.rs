@@ -174,7 +174,6 @@ pub(crate) fn service_error(name: &str, err: rmcp::service::ServiceError) -> Mcp
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     #[test]
     fn tool_conversion() {
