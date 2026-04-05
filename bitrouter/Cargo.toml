@@ -43,19 +43,17 @@ mpp-solana = [
 
 [dependencies]
 # Internal crates
-bitrouter-accounts = { path = "../bitrouter-accounts", version = "0.18" }
-bitrouter-api = { path = "../bitrouter-api", version = "0.18", default-features = false, features = [
+bitrouter-accounts.workspace = true
+bitrouter-api = { workspace = true, features = [
     "openai",
     "anthropic",
     "google",
 ] }
-bitrouter-config = { path = "../bitrouter-config", version = "0.18" }
-bitrouter-core = { path = "../bitrouter-core", version = "0.18" }
-bitrouter-guardrails = { path = "../bitrouter-guardrails", version = "0.18" }
-bitrouter-observe = { path = "../bitrouter-observe", version = "0.18" }
-bitrouter-providers = { path = "../bitrouter-providers", version = "0.18", features = [
-    "agentskills",
-] }
+bitrouter-config.workspace = true
+bitrouter-core.workspace = true
+bitrouter-guardrails.workspace = true
+bitrouter-observe.workspace = true
+bitrouter-providers = { workspace = true, features = ["agentskills"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -91,7 +89,7 @@ uuid = { version = "1", features = ["v4"] }
 warp = { version = "0.4.2", features = ["server"] }
 
 # TUI (optional)
-bitrouter-tui = { path = "../bitrouter-tui", version = "0.18", optional = true }
+bitrouter-tui = { workspace = true, optional = true }
 anyhow = { version = "1", optional = true }
 
 
