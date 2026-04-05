@@ -747,6 +747,113 @@ struct McpObserveContext {
     caller: CallerContext,
 }
 
+// ── Payment-gated MCP filters ───────────────────────────────────────
+
+/// Combined MCP server filter with payment gating.
+///
+/// Like [`mcp_server_filter_with_observe`], but additionally verifies payment
+/// via the [`PaymentGate`](crate::mpp::PaymentGate) trait before dispatching
+/// JSON-RPC requests. Management actions (channel open / top-up / close)
+/// short-circuit and return the management response with a payment receipt.
+///
+/// `GET /mcp/sse` is served without payment verification (notification-only).
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+pub fn mcp_server_filter_with_payment_gate<T, A>(
+    server: Option<Arc<T>>,
+    tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
+    observer: Arc<dyn ToolObserveCallback>,
+    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: McpServer + 'static,
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
+    mcp_jsonrpc_filter_with_payment_gate(
+        server.clone(),
+        tool_call_handler,
+        observer,
+        payment_gate,
+        account_filter,
+    )
+    .or(mcp_sse_filter(server))
+}
+
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+fn mcp_jsonrpc_filter_with_payment_gate<T, A>(
+    server: Option<Arc<T>>,
+    tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
+    observer: Arc<dyn ToolObserveCallback>,
+    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: McpServer + 'static,
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
+    warp::path("mcp")
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(account_filter)
+        .and(warp::any().map(move || payment_gate.clone()))
+        .and(warp::header::optional::<String>("authorization"))
+        .and(warp::body::json::<serde_json::Value>())
+        .and(warp::any().map(move || server.clone()))
+        .and(warp::any().map(move || tool_call_handler.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and_then(handle_mcp_jsonrpc_with_gate::<T>)
+}
+
+#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+async fn handle_mcp_jsonrpc_with_gate<T: McpServer>(
+    caller: CallerContext,
+    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    auth_header: Option<String>,
+    body: serde_json::Value,
+    server: Option<Arc<T>>,
+    tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
+    observer: Arc<dyn ToolObserveCallback>,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+    let mpp_ctx = payment_gate
+        .verify_payment(caller.chain.clone(), auth_header)
+        .await?;
+
+    // Management actions (channel open/topUp/close) short-circuit.
+    if let Some(ref management) = mpp_ctx.management_response {
+        let reply = warp::reply::json(management);
+        if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+            return Ok(Box::new(warp::reply::with_header(
+                reply,
+                mpp::PAYMENT_RECEIPT_HEADER,
+                receipt_header,
+            )));
+        }
+        return Ok(Box::new(reply));
+    }
+
+    let _close_guard = crate::mpp::SessionCloseGuard::new(
+        payment_gate,
+        mpp_ctx.backend_key.clone(),
+        mpp_ctx.channel_id.clone(),
+    );
+
+    let ctx = Some(McpObserveContext { observer, caller });
+    let reply = handle_jsonrpc_value::<T>(body, server, tool_call_handler, ctx).await;
+
+    // Attach payment receipt header.
+    if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+        Ok(Box::new(warp::reply::with_header(
+            reply,
+            mpp::PAYMENT_RECEIPT_HEADER,
+            receipt_header,
+        )))
+    } else {
+        Ok(reply)
+    }
+}
+
+// ── Observation helpers ─────────────────────────────────────────────
+
 /// Fire a success [`ToolCallSuccessEvent`] for a completed MCP tool call.
 ///
 /// The event is spawned as an async task so it never blocks the response path.
