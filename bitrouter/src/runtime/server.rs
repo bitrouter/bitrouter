@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use bitrouter_api::router::{admin, models, routes};
+use bitrouter_api::router::{admin, agents, models, routes};
 use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
 #[cfg(feature = "mcp")]
@@ -257,6 +257,16 @@ where
 
         // Model listing — no auth required.
         let model_list = models::models_filter(self.table.clone());
+
+        // Agent listing — no auth required.
+        let agent_registry = if self.config.agents.is_empty() {
+            None
+        } else {
+            Some(Arc::new(bitrouter_config::ConfigAgentRegistry::new(
+                self.config.agents.clone(),
+            )))
+        };
+        let agent_list = agents::agents_filter(agent_registry);
 
         // Admin route management — gated by management auth.
         let admin_routes = auth::auth_gate(auth::management_auth(auth_ctx.clone()))
@@ -663,6 +673,7 @@ where
             .or(metrics_route)
             .or(route_list)
             .or(model_list)
+            .or(agent_list)
             .or(admin_routes)
             .or(chat)
             .or(messages)

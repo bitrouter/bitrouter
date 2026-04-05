@@ -1,3 +1,6 @@
+mod agent_config;
+mod agent_engine;
+mod agent_router;
 pub mod config;
 pub mod engine;
 mod guarded_model;
@@ -10,6 +13,9 @@ mod tool_config;
 mod tool_engine;
 mod tool_router;
 
+pub use agent_config::AgentGuardrailConfig;
+pub use agent_engine::AgentGuardrail;
+pub use agent_router::GuardedAgentRouter;
 pub use config::{BlockMessageConfig, CustomPatternDef, GuardrailConfig, PatternDirection};
 pub use engine::Guardrail;
 pub use pattern::PatternId;

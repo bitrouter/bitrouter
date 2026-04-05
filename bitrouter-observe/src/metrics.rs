@@ -29,8 +29,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use bitrouter_core::observe::{
-    ObserveCallback, RequestFailureEvent, RequestSuccessEvent, ToolCallFailureEvent,
-    ToolCallSuccessEvent, ToolObserveCallback,
+    AgentObserveCallback, AgentTurnFailureEvent, AgentTurnSuccessEvent, ObserveCallback,
+    RequestFailureEvent, RequestSuccessEvent, ToolCallFailureEvent, ToolCallSuccessEvent,
+    ToolObserveCallback,
 };
 use serde::Serialize;
 
@@ -329,6 +330,28 @@ impl ToolObserveCallback for MetricsCollector {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         let route = format!("tool:{}", event.ctx.provider);
         let endpoint = event.ctx.operation;
+        self.record(route, endpoint, event.ctx.latency_ms, true, None, None);
+        Box::pin(async {})
+    }
+}
+
+impl AgentObserveCallback for MetricsCollector {
+    fn on_agent_turn_success(
+        &self,
+        event: AgentTurnSuccessEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("agent:{}", event.ctx.agent_name);
+        let endpoint = event.ctx.protocol;
+        self.record(route, endpoint, event.ctx.latency_ms, false, None, None);
+        Box::pin(async {})
+    }
+
+    fn on_agent_turn_failure(
+        &self,
+        event: AgentTurnFailureEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let route = format!("agent:{}", event.ctx.agent_name);
+        let endpoint = event.ctx.protocol;
         self.record(route, endpoint, event.ctx.latency_ms, true, None, None);
         Box::pin(async {})
     }

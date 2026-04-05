@@ -141,3 +141,55 @@ pub trait ToolObserveCallback: Send + Sync {
         event: ToolCallFailureEvent,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
+
+// ── Agent turn observation ──────────────────────────────────────
+
+/// Context about an agent turn available to observation callbacks.
+#[derive(Debug, Clone)]
+pub struct AgentRequestContext {
+    /// The agent name (e.g. `"claude-code"`).
+    pub agent_name: String,
+    /// The wire protocol (e.g. `"acp"`, `"a2a"`).
+    pub protocol: String,
+    /// The session ID, if a session was established.
+    pub session_id: Option<String>,
+    /// Authenticated caller context.
+    pub caller: CallerContext,
+    /// End-to-end turn latency in milliseconds.
+    pub latency_ms: u64,
+}
+
+/// Event emitted when an agent turn completes successfully.
+#[derive(Debug, Clone)]
+pub struct AgentTurnSuccessEvent {
+    /// Agent turn context.
+    pub ctx: AgentRequestContext,
+}
+
+/// Event emitted when an agent turn fails.
+#[derive(Debug, Clone)]
+pub struct AgentTurnFailureEvent {
+    /// Agent turn context.
+    pub ctx: AgentRequestContext,
+    /// Error description.
+    pub error: String,
+}
+
+/// Callback trait for observing completed agent turns.
+///
+/// Parallel to [`ObserveCallback`] for model requests and
+/// [`ToolObserveCallback`] for tool calls. Implementations receive
+/// turn-level events for metrics aggregation.
+pub trait AgentObserveCallback: Send + Sync {
+    /// Called after an agent turn completes successfully.
+    fn on_agent_turn_success(
+        &self,
+        event: AgentTurnSuccessEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+
+    /// Called after an agent turn fails.
+    fn on_agent_turn_failure(
+        &self,
+        event: AgentTurnFailureEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
