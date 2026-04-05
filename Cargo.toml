@@ -3,7 +3,7 @@ resolver = "3"
 members = ["bitrouter", "bitrouter-*"]
 
 [workspace.package]
-version = "0.18.2"
+version = "0.18.3"
 
 [workspace.dependencies]
 bitrouter-accounts = { path = "bitrouter-accounts", version = "0.18" }
