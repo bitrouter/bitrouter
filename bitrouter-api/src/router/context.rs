@@ -2,9 +2,8 @@
 //! routing. Each protocol has its own extractor because request shapes
 //! differ, but the resulting `RouteContext` is protocol-agnostic.
 
-use bitrouter_core::routers::content::RouteContext;
-
 /// Whether a string slice contains a fenced code block marker.
+#[cfg(any(feature = "openai", feature = "anthropic", feature = "google"))]
 fn has_code_fence(text: &str) -> bool {
     text.contains("```")
 }
@@ -16,6 +15,7 @@ pub(crate) mod openai_chat {
     use bitrouter_core::api::openai::chat::types::{
         ChatCompletionRequest, ChatContentPart, ChatMessageContent,
     };
+    use bitrouter_core::routers::content::RouteContext;
 
     pub fn extract(request: &ChatCompletionRequest) -> RouteContext {
         let mut texts: Vec<String> = Vec::new();
@@ -67,6 +67,7 @@ pub(crate) mod openai_responses {
         ResponsesInput, ResponsesInputContent, ResponsesInputContentPart, ResponsesInputItem,
         ResponsesRequest,
     };
+    use bitrouter_core::routers::content::RouteContext;
 
     pub fn extract(request: &ResponsesRequest) -> RouteContext {
         let mut texts: Vec<String> = Vec::new();
@@ -132,6 +133,7 @@ pub(crate) mod anthropic_messages {
     use bitrouter_core::api::anthropic::messages::types::{
         AnthropicContentBlock, AnthropicMessageContent, MessagesRequest,
     };
+    use bitrouter_core::routers::content::RouteContext;
 
     pub fn extract(request: &MessagesRequest) -> RouteContext {
         let mut texts: Vec<String> = Vec::new();
@@ -180,6 +182,7 @@ pub(crate) mod anthropic_messages {
 pub(crate) mod google_generate {
     use super::*;
     use bitrouter_core::api::google::generate_content::types::GenerateContentRequest;
+    use bitrouter_core::routers::content::RouteContext;
 
     pub fn extract(request: &GenerateContentRequest) -> RouteContext {
         let mut texts: Vec<String> = Vec::new();

@@ -87,6 +87,7 @@ use bitrouter_core::models::shared::types::JsonSchema;
 use bitrouter_core::routers::content::RouteContext;
 #[cfg(feature = "mcp")]
 use bitrouter_core::routers::router::LanguageModelRouter;
+#[cfg(feature = "mcp")]
 use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
 #[cfg(feature = "mcp")]
 use bitrouter_providers::mcp::client::bridge::SingleServerBridge;

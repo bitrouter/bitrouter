@@ -5,7 +5,7 @@ use bitrouter_config::{ApiProtocol, ProviderConfig};
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::language::language_model::DynLanguageModel,
-    routers::{content::RouteContext, router::LanguageModelRouter, routing_table::RoutingTarget},
+    routers::{router::LanguageModelRouter, routing_table::RoutingTarget},
     tools::provider::DynToolProvider,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -400,6 +400,7 @@ where
         let name = name.to_owned();
         Box::pin(async move {
             use bitrouter_core::api::mcp::types::McpGatewayError;
+            use bitrouter_core::routers::content::RouteContext;
             use bitrouter_core::tools::provider::ToolProvider;
 
             let (_provider_name, tool_id) = name
