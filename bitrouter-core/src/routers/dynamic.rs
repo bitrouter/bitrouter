@@ -20,6 +20,7 @@ use super::admin::{
 use super::registry::{ModelEntry, ModelRegistry, ToolEntry, ToolRegistry};
 use super::reload::ReloadableRoutingTable;
 use super::routing_table::{ApiProtocol, RouteEntry, RoutingTable, RoutingTarget};
+use crate::routers::content::RouteContext;
 
 /// Internal representation of a dynamic route with its round-robin counter.
 struct DynamicRouteData {
@@ -90,14 +91,14 @@ impl<T> DynamicRoutingTable<T> {
 }
 
 impl<T: RoutingTable + Send + Sync> RoutingTable for DynamicRoutingTable<T> {
-    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
+    async fn route(&self, incoming_name: &str, context: &RouteContext) -> Result<RoutingTarget> {
         // Dynamic routes take precedence.
         if let Some(target) = self.resolve_dynamic(incoming_name) {
             return Ok(target);
         }
         // Clone the Arc and drop the lock before the async call.
         let inner = self.read_inner();
-        inner.route(incoming_name).await
+        inner.route(incoming_name, context).await
     }
 
     fn list_routes(&self) -> Vec<RouteEntry> {
@@ -238,7 +239,7 @@ mod tests {
     struct StaticTable;
 
     impl RoutingTable for StaticTable {
-        async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
+        async fn route(&self, incoming: &str, _context: &RouteContext) -> Result<RoutingTarget> {
             if incoming == "default" {
                 Ok(RoutingTarget {
                     provider_name: "openai".to_owned(),
@@ -265,7 +266,12 @@ mod tests {
 
     /// Helper to call the trait method with explicit type annotation.
     async fn route(table: &DynamicRoutingTable<StaticTable>, name: &str) -> Result<RoutingTarget> {
-        <DynamicRoutingTable<StaticTable> as RoutingTable>::route(table, name).await
+        <DynamicRoutingTable<StaticTable> as RoutingTable>::route(
+            table,
+            name,
+            &RouteContext::default(),
+        )
+        .await
     }
 
     #[tokio::test]
@@ -430,7 +436,11 @@ mod tests {
         }
 
         impl RoutingTable for FlexTable {
-            async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
+            async fn route(
+                &self,
+                incoming: &str,
+                _context: &RouteContext,
+            ) -> Result<RoutingTarget> {
                 if incoming == "default" {
                     if self.use_anthropic {
                         Ok(RoutingTarget {
@@ -456,7 +466,8 @@ mod tests {
         }
 
         async fn flex_route(t: &DynamicRoutingTable<FlexTable>, m: &str) -> Result<RoutingTarget> {
-            <DynamicRoutingTable<FlexTable> as RoutingTable>::route(t, m).await
+            <DynamicRoutingTable<FlexTable> as RoutingTable>::route(t, m, &RouteContext::default())
+                .await
         }
 
         let table = DynamicRoutingTable::new(FlexTable {
@@ -486,7 +497,11 @@ mod tests {
         }
 
         impl RoutingTable for FlexTable {
-            async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
+            async fn route(
+                &self,
+                incoming: &str,
+                _context: &RouteContext,
+            ) -> Result<RoutingTarget> {
                 if incoming == "default" {
                     if self.use_anthropic {
                         Ok(RoutingTarget {
@@ -512,7 +527,8 @@ mod tests {
         }
 
         async fn flex_route(t: &DynamicRoutingTable<FlexTable>, m: &str) -> Result<RoutingTarget> {
-            <DynamicRoutingTable<FlexTable> as RoutingTable>::route(t, m).await
+            <DynamicRoutingTable<FlexTable> as RoutingTable>::route(t, m, &RouteContext::default())
+                .await
         }
 
         let table = DynamicRoutingTable::new(FlexTable {

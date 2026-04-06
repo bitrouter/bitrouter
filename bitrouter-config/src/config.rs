@@ -71,6 +71,15 @@ pub struct BitrouterConfig {
     /// Agent definitions (ACP-compatible coding agents).
     #[serde(default)]
     pub agents: HashMap<String, AgentConfig>,
+
+    /// Content-based auto-routing rules.
+    ///
+    /// Each key is a virtual model name (e.g. `"auto"`) that triggers
+    /// content-aware classification when a request targets it. The rule
+    /// maps detected signals and complexity levels to concrete model names
+    /// defined in the `models` section.
+    #[serde(default)]
+    pub routing: HashMap<String, RoutingRuleConfig>,
 }
 
 impl BitrouterConfig {
@@ -785,6 +794,67 @@ pub struct ToolConfig {
     /// do not affect the execution protocol.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill: Option<String>,
+}
+
+// ── Content-based auto-routing configuration ────────────────────────
+
+/// Configuration for a content-based auto-routing rule.
+///
+/// When a request targets the trigger model name (the key in the `routing`
+/// map), the router inspects message content to detect keyword signals and
+/// estimate complexity, then selects a concrete model from the `models` map.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RoutingRuleConfig {
+    /// When `true` (the default), built-in signal definitions are merged
+    /// before user-defined signals. User signals with the same name
+    /// override the built-in version.
+    #[serde(default = "default_true")]
+    pub inherit_defaults: bool,
+
+    /// User-defined keyword signals, merged on top of built-ins.
+    #[serde(default)]
+    pub signals: HashMap<String, SignalConfig>,
+
+    /// Complexity estimation heuristics. When omitted, built-in defaults
+    /// are used (if `inherit_defaults` is true).
+    #[serde(default)]
+    pub complexity: ComplexityConfig,
+
+    /// Maps `signal[.complexity]` → model name.
+    ///
+    /// Lookup order: `"{signal}.{complexity}"` → `"{signal}"` → `"default"`.
+    /// Target model names must exist in the top-level `models` section.
+    #[serde(default)]
+    pub models: HashMap<String, String>,
+}
+
+/// Keyword signal configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SignalConfig {
+    /// Keywords to match (case-insensitive substring matching).
+    #[serde(default)]
+    pub keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ComplexityConfig {
+    /// Keywords that indicate higher complexity.
+    #[serde(default)]
+    pub high_keywords: Vec<String>,
+
+    /// Character count threshold: messages longer than this are considered
+    /// more complex.
+    #[serde(default)]
+    pub message_length_threshold: Option<usize>,
+
+    /// Turn count threshold: conversations with more turns are considered
+    /// more complex.
+    #[serde(default)]
+    pub turn_count_threshold: Option<usize>,
+
+    /// When `true`, the presence of fenced code blocks increases complexity.
+    #[serde(default)]
+    pub code_blocks_increase_complexity: bool,
 }
 
 #[cfg(test)]

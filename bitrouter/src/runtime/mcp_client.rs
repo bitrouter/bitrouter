@@ -84,6 +84,8 @@ use bitrouter_core::models::language::tool_choice::LanguageModelToolChoice;
 #[cfg(feature = "mcp")]
 use bitrouter_core::models::shared::types::JsonSchema;
 #[cfg(feature = "mcp")]
+use bitrouter_core::routers::content::RouteContext;
+#[cfg(feature = "mcp")]
 use bitrouter_core::routers::router::LanguageModelRouter;
 #[cfg(feature = "mcp")]
 use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
@@ -276,7 +278,10 @@ where
         if let Some(ref prefs) = params.model_preferences
             && let Some(ref hints) = prefs.hints
             && let Some(first) = hints.first()
-            && let Ok(target) = self.routing_table.route(&first.name).await
+            && let Ok(target) = self
+                .routing_table
+                .route(&first.name, &RouteContext::default())
+                .await
         {
             return Ok(target);
         }

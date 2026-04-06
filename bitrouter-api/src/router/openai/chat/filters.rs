@@ -13,6 +13,8 @@ use bitrouter_core::{
     },
     routers::{router::LanguageModelRouter, routing_table::RoutingTable},
 };
+
+use crate::router::context::openai_chat;
 use warp::Filter;
 
 use crate::error::{BadRequest, BitrouterRejection};
@@ -101,9 +103,10 @@ where
 {
     let is_stream = request.stream.unwrap_or(false);
     let incoming_model = convert::extract_model_name(&request).to_owned();
+    let route_ctx = openai_chat::extract(&request);
 
     let target = table
-        .route(&incoming_model)
+        .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -209,6 +212,7 @@ where
 
     let is_stream = request.stream.unwrap_or(false);
     let incoming_model = convert::extract_model_name(&request).to_owned();
+    let route_ctx = openai_chat::extract(&request);
 
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
@@ -221,7 +225,7 @@ where
     }
 
     let target = table
-        .route(&incoming_model)
+        .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -501,6 +505,7 @@ where
 {
     let is_stream = request.stream.unwrap_or(false);
     let incoming_model = convert::extract_model_name(&request).to_owned();
+    let route_ctx = openai_chat::extract(&request);
 
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
@@ -513,7 +518,7 @@ where
     }
 
     let target = table
-        .route(&incoming_model)
+        .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 

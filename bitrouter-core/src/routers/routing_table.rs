@@ -5,6 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::Result;
+use crate::routers::content::RouteContext;
 
 // ── API protocol ──────────────────────────────────────────────────
 
@@ -124,7 +125,14 @@ impl ModelPricing {
 /// Used for both model routing and tool routing with separate instances.
 pub trait RoutingTable: Send + Sync {
     /// Routes an incoming name to a routing target.
-    fn route(&self, incoming_name: &str) -> impl Future<Output = Result<RoutingTarget>> + Send;
+    ///
+    /// `context` carries optional message metadata for content-aware routing.
+    /// Non-API callers should pass [`RouteContext::default()`].
+    fn route(
+        &self,
+        incoming_name: &str,
+        context: &RouteContext,
+    ) -> impl Future<Output = Result<RoutingTarget>> + Send;
 
     /// Lists all configured routes.
     fn list_routes(&self) -> Vec<RouteEntry> {
@@ -133,8 +141,8 @@ pub trait RoutingTable: Send + Sync {
 }
 
 impl<T: RoutingTable> RoutingTable for Arc<T> {
-    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
-        (**self).route(incoming_name).await
+    async fn route(&self, incoming_name: &str, context: &RouteContext) -> Result<RoutingTarget> {
+        (**self).route(incoming_name, context).await
     }
 
     fn list_routes(&self) -> Vec<RouteEntry> {

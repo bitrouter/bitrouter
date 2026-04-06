@@ -400,6 +400,7 @@ where
         let name = name.to_owned();
         Box::pin(async move {
             use bitrouter_core::api::mcp::types::McpGatewayError;
+            use bitrouter_core::routers::content::RouteContext;
             use bitrouter_core::tools::provider::ToolProvider;
 
             let (_provider_name, tool_id) = name
@@ -408,13 +409,13 @@ where
                 .unwrap_or_else(|| (name.clone(), name.clone()));
 
             // Route through config-authoritative table.
-            let target =
-                self.tool_table
-                    .route(&name)
-                    .await
-                    .map_err(|e| McpGatewayError::ToolNotFound {
-                        name: format!("{name}: {e}"),
-                    })?;
+            let target = self
+                .tool_table
+                .route(&name, &RouteContext::default())
+                .await
+                .map_err(|e| McpGatewayError::ToolNotFound {
+                    name: format!("{name}: {e}"),
+                })?;
 
             // Dispatch through the tool router (GuardedToolRouter enforces
             // parameter restrictions on the returned provider).

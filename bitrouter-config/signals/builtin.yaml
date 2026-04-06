@@ -1,0 +1,91 @@
+# Built-in signal definitions for content-based auto-routing.
+#
+# These are embedded at compile time and available by default when
+# `inherit_defaults: true` (the default) is set in a routing rule.
+# Users can override any signal by defining one with the same name.
+
+signals:
+  coding:
+    keywords:
+      - code
+      - function
+      - debug
+      - implement
+      - refactor
+      - bug
+      - compile
+      - error
+      - syntax
+      - algorithm
+      - class
+      - method
+      - variable
+      - api
+      - endpoint
+      - programming
+      - script
+      - import
+      - unit test
+      - repository
+  math:
+    keywords:
+      - calculate
+      - equation
+      - proof
+      - algebra
+      - integral
+      - derivative
+      - theorem
+      - formula
+      - matrix
+      - vector
+      - probability
+      - statistics
+      - geometry
+      - trigonometry
+  creative:
+    keywords:
+      - story
+      - poem
+      - creative
+      - fiction
+      - character
+      - plot
+      - essay
+      - compose
+      - lyrics
+      - screenplay
+      - dialogue
+      - metaphor
+      - narrative
+  research:
+    keywords:
+      - research
+      - analyze
+      - compare
+      - study
+      - investigate
+      - review
+      - summarize
+      - literature
+      - survey
+      - findings
+      - methodology
+
+complexity:
+  high_keywords:
+    - complex
+    - advanced
+    - optimize
+    - architecture
+    - design
+    - comprehensive
+    - detailed
+    - in-depth
+    - multi-step
+    - production
+    - enterprise
+    - scalable
+  message_length_threshold: 1000
+  turn_count_threshold: 10
+  code_blocks_increase_complexity: true
