@@ -42,9 +42,8 @@ jobs:
             ## 1. Verify README examples
             Find every README.md in the repo root and in each workspace member
             directory (`*/README.md`). Scan them for Rust code examples (fenced
-            ```rust blocks). For each example, attempt to verify it compiles by
-            running `cargo check` or `cargo test --doc` on the relevant crate.
-            Record any examples that fail to compile.
+            ```rust blocks) and example CLI commands. Check the actual codebase
+            to see if the examples are correct.
 
             ## 2. Check for outdated dependencies
             Run `cargo outdated --workspace --root-deps-only` to identify direct
