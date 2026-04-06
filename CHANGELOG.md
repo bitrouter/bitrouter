@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1](https://github.com/bitrouter/bitrouter/compare/v0.19.0...v0.19.1)
+
+
+### ⚙️ Miscellaneous Tasks
+
+- *(maintenance)* Auto-fix outdated deps and stale doc path ([#264](https://github.com/bitrouter/bitrouter/pull/264)) - ([7cb7a55](https://github.com/bitrouter/bitrouter/commit/7cb7a55b18a34401d996ab61833204f61ddf1b36))
+
+
 ## [0.19.0](https://github.com/bitrouter/bitrouter/compare/v0.18.3...v0.19.0)
 
 
