@@ -46,7 +46,7 @@ Tool routing follows a parallel path:
 
 ### Runtime paths
 
-`bitrouter-runtime/src/paths.rs` is the source of truth for BitRouter's home-directory behavior.
+`bitrouter/src/runtime/paths.rs` is the source of truth for BitRouter's home-directory behavior.
 
 Resolution order:
 
