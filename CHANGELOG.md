@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/bitrouter/bitrouter/compare/v0.19.1...v0.20.0)
+
+
+### ⛰️ Features
+
+- Content-based auto-routing with keyword signal detection ([#269](https://github.com/bitrouter/bitrouter/pull/269)) - ([decbbd1](https://github.com/bitrouter/bitrouter/commit/decbbd1cc9541c74f4f1c75baa532dad37765046))
+
+
 ## [0.19.1](https://github.com/bitrouter/bitrouter/compare/v0.19.0...v0.19.1)
 
 
