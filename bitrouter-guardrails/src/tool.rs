@@ -17,6 +17,7 @@ use bitrouter_core::errors::{BitrouterError, Result};
 use bitrouter_core::routers::admin::{
     AdminToolRegistry, ToolFilter, ToolPolicyAdmin, ToolUpstreamEntry,
 };
+use bitrouter_core::routers::content::RouteContext;
 use bitrouter_core::routers::registry::{ToolEntry, ToolRegistry};
 use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
 
@@ -173,8 +174,8 @@ impl<T: ToolRegistry> AdminToolRegistry for GuardedToolRegistry<T> {
 }
 
 impl<T: RoutingTable + Send + Sync> RoutingTable for GuardedToolRegistry<T> {
-    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
-        self.inner.route(incoming_name).await
+    async fn route(&self, incoming_name: &str, context: &RouteContext) -> Result<RoutingTarget> {
+        self.inner.route(incoming_name, context).await
     }
 
     fn list_routes(&self) -> Vec<RouteEntry> {

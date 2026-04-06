@@ -5,7 +5,7 @@ use bitrouter_config::{ApiProtocol, ProviderConfig};
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::language::language_model::DynLanguageModel,
-    routers::{router::LanguageModelRouter, routing_table::RoutingTarget},
+    routers::{content::RouteContext, router::LanguageModelRouter, routing_table::RoutingTarget},
     tools::provider::DynToolProvider,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -408,13 +408,13 @@ where
                 .unwrap_or_else(|| (name.clone(), name.clone()));
 
             // Route through config-authoritative table.
-            let target =
-                self.tool_table
-                    .route(&name)
-                    .await
-                    .map_err(|e| McpGatewayError::ToolNotFound {
-                        name: format!("{name}: {e}"),
-                    })?;
+            let target = self
+                .tool_table
+                .route(&name, &RouteContext::default())
+                .await
+                .map_err(|e| McpGatewayError::ToolNotFound {
+                    name: format!("{name}: {e}"),
+                })?;
 
             // Dispatch through the tool router (GuardedToolRouter enforces
             // parameter restrictions on the returned provider).

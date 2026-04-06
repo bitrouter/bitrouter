@@ -156,6 +156,42 @@ models:
       - provider: google
         service_id: gemini-2.5-pro
 
+# ── Content-Based Auto-Routing ──────────────────────────────────────────────
+#
+# Routes requests to models based on message content analysis.
+# The router scans keywords to detect a signal (e.g. coding, math) and
+# estimates complexity, then maps signal[.complexity] → concrete model name.
+#
+# Built-in signals: coding, math, creative, research (enabled by default).
+# Set inherit_defaults: false to use only custom signals.
+
+# routing:
+#   auto:
+#     # Merge built-in signals (default: true).
+#     inherit_defaults: true
+#
+#     # Optional: add custom signals alongside built-ins.
+#     signals:
+#       devops:
+#         keywords: [kubernetes, docker, deploy, terraform, helm]
+#
+#     # Optional: override complexity thresholds.
+#     complexity:
+#       high_keywords: [complex, advanced, optimize, architecture]
+#       message_length_threshold: 1000
+#       turn_count_threshold: 10
+#       code_blocks_increase_complexity: true
+#
+#     # Map signal[.complexity] → model name (must exist in `models:`).
+#     # Lookup: "signal.complexity" → "signal" → "default".
+#     models:
+#       coding.high: coding       # complex code → Anthropic/Sonnet
+#       coding.low: fast          # simple code → GPT-4o-mini
+#       math: smart               # all math → priority routing
+#       creative: fast            # creative → fast model
+#       research: smart           # research → smart model
+#       default: fast             # no signal matched → fast
+
 # ── Tool Routing ────────────────────────────────────────────────────────────
 #
 # Virtual tool names that route to upstream MCP or REST tool providers.

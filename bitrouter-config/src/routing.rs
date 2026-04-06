@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitrouter_core::{
     errors::{BitrouterError, Result},
+    routers::content::RouteContext,
     routers::registry::{
         AgentCapabilityFlags, AgentEntry, AgentEntryStatus, AgentRegistry, ModelEntry,
         ModelRegistry, ToolEntry, ToolRegistry,
@@ -12,8 +13,10 @@ use bitrouter_core::{
 };
 
 use crate::config::{
-    AgentConfig, ModelConfig, ModelInfo, ProviderConfig, RoutingStrategy, ToolConfig,
+    AgentConfig, ModelConfig, ModelInfo, ProviderConfig, RoutingRuleConfig, RoutingStrategy,
+    ToolConfig,
 };
+use crate::content_routing::ContentRoutingRules;
 
 /// The provider name used as fallback when the user has no explicit `models:`
 /// section configured.
@@ -72,6 +75,8 @@ pub struct ConfigRoutingTable {
     models: HashMap<String, ModelConfig>,
     /// Per-model round-robin counters for load balancing.
     counters: HashMap<String, AtomicUsize>,
+    /// Compiled content-based routing rules (empty when no `routing:` config).
+    content_rules: ContentRoutingRules,
 }
 
 impl ConfigRoutingTable {
@@ -79,14 +84,25 @@ impl ConfigRoutingTable {
         providers: HashMap<String, ProviderConfig>,
         models: HashMap<String, ModelConfig>,
     ) -> Self {
+        Self::with_routing(providers, models, &HashMap::new())
+    }
+
+    /// Creates a routing table with content-based auto-routing rules.
+    pub fn with_routing(
+        providers: HashMap<String, ProviderConfig>,
+        models: HashMap<String, ModelConfig>,
+        routing: &HashMap<String, RoutingRuleConfig>,
+    ) -> Self {
         let counters = models
             .keys()
             .map(|k| (k.clone(), AtomicUsize::new(0)))
             .collect();
+        let content_rules = ContentRoutingRules::compile(routing);
         Self {
             providers,
             models,
             counters,
+            content_rules,
         }
     }
 
@@ -197,7 +213,23 @@ impl ConfigRoutingTable {
 }
 
 impl RoutingTable for ConfigRoutingTable {
-    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
+    async fn route(&self, incoming_name: &str, context: &RouteContext) -> Result<RoutingTarget> {
+        // Content-based auto-routing: if the requested model name is a trigger
+        // and the caller supplied non-empty context, classify and resolve.
+        if !context.is_empty()
+            && self.content_rules.is_trigger(incoming_name)
+            && let Some(resolved_name) = self.content_rules.resolve(incoming_name, context)
+        {
+            // Delegate the resolved name through normal routing with empty
+            // context to prevent recursive auto-routing.
+            let resolved = self.resolve(&resolved_name)?;
+            return Ok(RoutingTarget {
+                provider_name: resolved.provider_name,
+                service_id: resolved.service_id,
+                api_protocol: resolved.api_protocol,
+            });
+        }
+
         let resolved = self.resolve(incoming_name)?;
         Ok(RoutingTarget {
             provider_name: resolved.provider_name,
@@ -519,7 +551,7 @@ impl ConfigToolRoutingTable {
 }
 
 impl RoutingTable for ConfigToolRoutingTable {
-    async fn route(&self, incoming_name: &str) -> Result<RoutingTarget> {
+    async fn route(&self, incoming_name: &str, _context: &RouteContext) -> Result<RoutingTarget> {
         let resolved = self.resolve(incoming_name)?;
         Ok(RoutingTarget {
             provider_name: resolved.provider_name,
@@ -1035,6 +1067,144 @@ mod tests {
     fn no_fallback_list_models_empty_without_default_provider() {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         assert!(table.list_models().is_empty());
+    }
+
+    // ── Auto-routing integration tests ─────────────────────────────
+
+    #[tokio::test]
+    async fn auto_route_coding_signal_resolves() {
+        use crate::config::RoutingRuleConfig;
+        let mut models = HashMap::new();
+        models.insert(
+            "code-model".to_owned(),
+            ModelConfig {
+                endpoints: vec![crate::config::Endpoint {
+                    provider: "openai".into(),
+                    service_id: "gpt-4o".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+        models.insert(
+            "general".to_owned(),
+            ModelConfig {
+                endpoints: vec![crate::config::Endpoint {
+                    provider: "anthropic".into(),
+                    service_id: "claude-sonnet".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+
+        let mut routing = HashMap::new();
+        routing.insert(
+            "auto".to_owned(),
+            RoutingRuleConfig {
+                inherit_defaults: true,
+                models: HashMap::from([
+                    ("coding".into(), "code-model".into()),
+                    ("default".into(), "general".into()),
+                ]),
+                ..Default::default()
+            },
+        );
+
+        let table = ConfigRoutingTable::with_routing(test_providers(), models, &routing);
+
+        // Request with coding content → coding model
+        let ctx = RouteContext {
+            text: "help me debug this function and fix the compile error".into(),
+            char_count: 52,
+            turn_count: 1,
+            ..Default::default()
+        };
+        let target = table.route("auto", &ctx).await.unwrap();
+        assert_eq!(target.provider_name, "openai");
+        assert_eq!(target.service_id, "gpt-4o");
+    }
+
+    #[tokio::test]
+    async fn auto_route_empty_context_falls_through() {
+        use crate::config::RoutingRuleConfig;
+        let mut models = HashMap::new();
+        models.insert(
+            "auto".to_owned(),
+            ModelConfig {
+                endpoints: vec![crate::config::Endpoint {
+                    provider: "openai".into(),
+                    service_id: "gpt-4o".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+
+        let mut routing = HashMap::new();
+        routing.insert(
+            "auto".to_owned(),
+            RoutingRuleConfig {
+                inherit_defaults: true,
+                models: HashMap::from([("default".into(), "general".into())]),
+                ..Default::default()
+            },
+        );
+
+        let table = ConfigRoutingTable::with_routing(test_providers(), models, &routing);
+
+        // Empty context → skip auto-routing, use normal model lookup for "auto"
+        let target = table.route("auto", &RouteContext::default()).await.unwrap();
+        assert_eq!(target.provider_name, "openai");
+        assert_eq!(target.service_id, "gpt-4o");
+    }
+
+    #[tokio::test]
+    async fn auto_route_non_trigger_passes_through() {
+        use crate::config::RoutingRuleConfig;
+        let mut models = HashMap::new();
+        models.insert(
+            "my-model".to_owned(),
+            ModelConfig {
+                endpoints: vec![crate::config::Endpoint {
+                    provider: "anthropic".into(),
+                    service_id: "claude-sonnet".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+
+        let mut routing = HashMap::new();
+        routing.insert(
+            "auto".to_owned(),
+            RoutingRuleConfig {
+                inherit_defaults: true,
+                models: HashMap::from([("default".into(), "my-model".into())]),
+                ..Default::default()
+            },
+        );
+
+        let table = ConfigRoutingTable::with_routing(test_providers(), models, &routing);
+
+        // "my-model" is not a trigger → normal routing
+        let ctx = RouteContext {
+            text: "help me code".into(),
+            char_count: 12,
+            turn_count: 1,
+            ..Default::default()
+        };
+        let target = table.route("my-model", &ctx).await.unwrap();
+        assert_eq!(target.provider_name, "anthropic");
+        assert_eq!(target.service_id, "claude-sonnet");
     }
 
     // ── ConfigToolRoutingTable tests ────────────────────────────────

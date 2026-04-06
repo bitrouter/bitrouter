@@ -19,6 +19,8 @@ use crate::error::BitrouterRejection;
 
 use super::{convert, types::ResponsesRequest};
 
+use crate::router::context::openai_responses;
+
 /// Creates a warp filter for the `/v1/responses` endpoint.
 ///
 /// This is the zero-observability variant. For spend tracking and metrics,
@@ -96,9 +98,10 @@ where
 {
     let is_stream = request.stream.unwrap_or(false);
     let incoming_model = convert::extract_model_name(&request).to_owned();
+    let route_ctx = openai_responses::extract(&request);
 
     let target = table
-        .route(&incoming_model)
+        .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -269,6 +272,7 @@ where
 
     let is_stream = request.stream.unwrap_or(false);
     let incoming_model = convert::extract_model_name(&request).to_owned();
+    let route_ctx = openai_responses::extract(&request);
 
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
@@ -281,7 +285,7 @@ where
     }
 
     let target = table
-        .route(&incoming_model)
+        .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -482,6 +486,7 @@ where
 {
     let is_stream = request.stream.unwrap_or(false);
     let incoming_model = convert::extract_model_name(&request).to_owned();
+    let route_ctx = openai_responses::extract(&request);
 
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
@@ -494,7 +499,7 @@ where
     }
 
     let target = table
-        .route(&incoming_model)
+        .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 

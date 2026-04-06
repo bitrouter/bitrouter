@@ -198,6 +198,7 @@ mod tests {
     use bitrouter_core::routers::admin::{
         AdminRoutingTable, DynamicRoute, RouteEndpoint, RouteKind, RouteStrategy,
     };
+    use bitrouter_core::routers::content::RouteContext;
     use bitrouter_core::routers::dynamic::DynamicRoutingTable;
     use bitrouter_core::routers::routing_table::{
         ApiProtocol, RouteEntry, RoutingTable, RoutingTarget,
@@ -208,7 +209,7 @@ mod tests {
     struct MockTable;
 
     impl RoutingTable for MockTable {
-        async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
+        async fn route(&self, incoming: &str, _context: &RouteContext) -> Result<RoutingTarget> {
             if incoming == "default" {
                 Ok(RoutingTarget {
                     provider_name: "openai".to_owned(),

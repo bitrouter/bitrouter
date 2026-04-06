@@ -3,6 +3,7 @@ pub mod agents;
 pub mod agentskills;
 #[cfg(feature = "anthropic")]
 pub mod anthropic;
+pub(crate) mod context;
 #[cfg(feature = "google")]
 pub mod google;
 #[cfg(feature = "mcp")]

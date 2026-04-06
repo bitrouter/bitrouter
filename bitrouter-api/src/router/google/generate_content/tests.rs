@@ -14,6 +14,7 @@ use bitrouter_core::{
     },
     observe::{CallerContext, ObserveCallback, RequestFailureEvent, RequestSuccessEvent},
     routers::{
+        content::RouteContext,
         router::LanguageModelRouter,
         routing_table::{ApiProtocol, RoutingTable, RoutingTarget},
     },
@@ -30,7 +31,7 @@ use super::filters::{generate_content_filter, generate_content_filter_with_obser
 
 struct MockTable;
 impl RoutingTable for MockTable {
-    async fn route(&self, incoming: &str) -> Result<RoutingTarget> {
+    async fn route(&self, incoming: &str, _context: &RouteContext) -> Result<RoutingTarget> {
         Ok(RoutingTarget {
             provider_name: "mock".to_owned(),
             service_id: incoming.to_owned(),

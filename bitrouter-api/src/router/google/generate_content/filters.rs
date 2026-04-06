@@ -19,6 +19,8 @@ use crate::error::BitrouterRejection;
 
 use super::{convert, types::GenerateContentRequest};
 
+use crate::router::context::google_generate;
+
 /// Extracts the incoming model name and stream flag from the Google
 /// `v1beta/models/{model_action}` path segment and the request body.
 fn parse_google_request(model_action: &str, request: &GenerateContentRequest) -> (String, bool) {
@@ -116,9 +118,10 @@ where
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     let (incoming_model, is_stream) = parse_google_request(&model_action, &request);
+    let route_ctx = google_generate::extract(&request);
 
     let target = table
-        .route(&incoming_model)
+        .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -227,6 +230,7 @@ where
     }
 
     let (incoming_model, is_stream) = parse_google_request(&model_action, &request);
+    let route_ctx = google_generate::extract(&request);
 
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
@@ -239,7 +243,7 @@ where
     }
 
     let target = table
-        .route(&incoming_model)
+        .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -432,6 +436,7 @@ where
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     let (incoming_model, is_stream) = parse_google_request(&model_action, &request);
+    let route_ctx = google_generate::extract(&request);
 
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
@@ -444,7 +449,7 @@ where
     }
 
     let target = table
-        .route(&incoming_model)
+        .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
