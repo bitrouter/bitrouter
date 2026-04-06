@@ -38,7 +38,7 @@ bitrouter-core.workspace = true
 bitrouter-config = { workspace = true, optional = true }
 async-trait = { version = "0.1" }
 futures-core = { version = "0.3" }
-mpp = { package = "mpp-br", version = "0.8.1", default-features = false, features = [
+mpp = { package = "mpp-br", version = "0.8", default-features = false, features = [
     "reqwest-rustls-tls",
 ], optional = true }
 alloy = { version = "1", default-features = false, features = [
