@@ -5,9 +5,14 @@ on:
     - cron: "0 6 * * *" # Daily at 06:00 UTC
   workflow_dispatch: # Allow manual trigger
 
+permissions: {}
+
 jobs:
   update-models:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Generate GitHub token
         uses: actions/create-github-app-token@v2
