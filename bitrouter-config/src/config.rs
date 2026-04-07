@@ -683,6 +683,8 @@ pub enum AuthConfig {
     X402,
     /// MPP (Machine Payment Protocol) — requests are paid via an EVM wallet.
     Mpp,
+    /// OWS wallet authentication — requests are signed by a local wallet.
+    Wallet,
     /// Extension point for non-standard auth methods.
     Custom {
         method: String,
