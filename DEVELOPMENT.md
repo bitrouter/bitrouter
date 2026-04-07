@@ -139,8 +139,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.providers.clone(),
         config.models.clone(),
     ));
-    // Build a model router and optionally a tool router from provider configs
-    // let router = Arc::new(Router::new(reqwest::Client::new(), config.providers.clone()));
+    // Build a model router from provider configs.
+    // Router::new takes a reqwest_middleware::ClientWithMiddleware.
+    let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+    let router = Arc::new(crate::runtime::Router::new(client, config.providers.clone()));
 
     let health = warp::path("health")
         .and(warp::get())
