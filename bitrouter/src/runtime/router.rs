@@ -327,7 +327,9 @@ pub(crate) fn resolve_auth_header(config: &ProviderConfig) -> Option<(String, St
             let key = resolve_key(api_key, config);
             Some((header_name.clone(), key))
         }
-        Some(AuthConfig::X402 | AuthConfig::Mpp | AuthConfig::Custom { .. }) => None,
+        Some(
+            AuthConfig::X402 | AuthConfig::Mpp | AuthConfig::Wallet | AuthConfig::Custom { .. },
+        ) => None,
         None => {
             // Fall back to api_key field as Bearer token.
             config
