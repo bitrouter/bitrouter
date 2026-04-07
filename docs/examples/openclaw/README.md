@@ -6,17 +6,17 @@
 
 ## What You'll Show
 
-| # | Feature | Time |
-|---|---------|------|
-| 1 | [One-click integration](#1-one-click-integration) — point OpenClaw at BitRouter | 1 min |
-| 2 | [Multi-provider routing](#2-multi-provider-routing) — one endpoint, every LLM | 1 min |
-| 3 | [Model discovery](#3-model-discovery) — agents see all models dynamically | 30 sec |
-| 4 | [Smart routing](#4-smart-routing) — route by task, not by name | 1 min |
-| 5 | [Agent firewall](#5-agent-firewall) — protect secrets and block risky output | 1 min |
-| 6 | [Tools as a service](#6-tools-as-a-service) — tool routing through the MCP gateway | 1 min |
-| 7 | [Spend tracking](#7-spend-tracking) — per-request cost visibility | 30 sec |
-| 8 | [Key management & auth](#8-key-management--auth) — one key for the agent, all keys stay on the server | 1 min |
-| 9 | [Hot reload](#9-hot-reload) — change routes without restarting anything | 30 sec |
+| #   | Feature                                                                                               | Time   |
+| --- | ----------------------------------------------------------------------------------------------------- | ------ |
+| 1   | [One-click integration](#1-one-click-integration) — point OpenClaw at BitRouter                       | 1 min  |
+| 2   | [Multi-provider routing](#2-multi-provider-routing) — one endpoint, every LLM                         | 1 min  |
+| 3   | [Model discovery](#3-model-discovery) — agents see all models dynamically                             | 30 sec |
+| 4   | [Smart routing](#4-smart-routing) — route by task, not by name                                        | 1 min  |
+| 5   | [Agent firewall](#5-agent-firewall) — protect secrets and block risky output                          | 1 min  |
+| 6   | [Tools as a service](#6-tools-as-a-service) — tool routing through the MCP gateway                    | 1 min  |
+| 7   | [Spend tracking](#7-spend-tracking) — per-request cost visibility                                     | 30 sec |
+| 8   | [Key management & auth](#8-key-management--auth) — one key for the agent, all keys stay on the server | 1 min  |
+| 9   | [Hot reload](#9-hot-reload) — change routes without restarting anything                               | 30 sec |
 
 **Total: ~8 minutes of demo, expandable to 15+ with Q&A.**
 
@@ -24,11 +24,11 @@
 
 ## Prerequisites
 
-| Tool | Install |
-|------|---------|
-| **BitRouter** | `cargo install bitrouter` |
-| **OpenClaw** | `npm install -g openclaw` |
-| **API keys** | At least one of: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` |
+| Tool          | Install                                                                  |
+| ------------- | ------------------------------------------------------------------------ |
+| **BitRouter** | `cargo install bitrouter`                                                |
+| **OpenClaw**  | `npm install -g openclaw`                                                |
+| **API keys**  | At least one of: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` |
 
 ---
 
@@ -39,9 +39,9 @@ Show a typical OpenClaw config with direct provider keys — the "before" pictur
 ```jsonc
 // ~/.openclaw/openclaw.json — the old way
 {
-  agents: {
-    defaults: {
-      model: { primary: "anthropic/claude-sonnet-4-6" },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "anthropic/claude-sonnet-4-6" },
     },
   },
   // Every key lives in the agent process
@@ -83,22 +83,22 @@ BitRouter reads `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` from the environment (o
 ```jsonc
 // ~/.openclaw/openclaw.json — the new way
 {
-  models: {
-    providers: {
-      bitrouter: {
-        baseUrl: "http://localhost:8787/v1",
-        apiKey: "any-string",     // or a real JWT — see step 8
-        api: "openai-responses",  // BitRouter speaks OpenAI protocol
-        models: [
-          { id: "smart", name: "Smart (routed)", reasoning: true },
-          { id: "fast",  name: "Fast (routed)" },
+  "models": {
+    "providers": {
+      "bitrouter": {
+        "baseUrl": "http://localhost:8787/v1",
+        "apiKey": "any-string", // or a real JWT — see step 8
+        "api": "openai-responses", // BitRouter speaks OpenAI protocol
+        "models": [
+          { "id": "smart", "name": "Smart (routed)", "reasoning": true },
+          { "id": "fast", "name": "Fast (routed)" },
         ],
       },
     },
   },
-  agents: {
-    defaults: {
-      model: { primary: "bitrouter/smart" },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "bitrouter/smart" },
     },
   },
 }
@@ -271,12 +271,12 @@ The killer feature for autonomous agents. Add guardrails to `bitrouter.yaml`:
 guardrails:
   enabled: true
   upgoing:
-    api_keys: redact       # Strip API keys from prompts
-    private_keys: block    # Block private keys entirely
-    pii_emails: redact     # Redact email addresses
-    credentials: redact    # Redact passwords, tokens, etc.
+    api_keys: redact # Strip API keys from prompts
+    private_keys: block # Block private keys entirely
+    pii_emails: redact # Redact email addresses
+    credentials: redact # Redact passwords, tokens, etc.
   downgoing:
-    suspicious_commands: block  # Block "rm -rf", "DROP TABLE", etc.
+    suspicious_commands: block # Block "rm -rf", "DROP TABLE", etc.
   custom_patterns:
     - name: internal_tokens
       regex: "myapp_[A-Za-z0-9]{32}"
@@ -355,15 +355,13 @@ OpenClaw can consume BitRouter's MCP gateway as a tool source:
 ```jsonc
 // ~/.openclaw/openclaw.json
 {
-  models: {
-    providers: {
-      bitrouter: {
-        baseUrl: "http://localhost:8787/v1",
-        apiKey: "any-string",
-        api: "openai-responses",
-        models: [
-          { id: "smart", name: "Smart (routed)", reasoning: true },
-        ],
+  "models": {
+    "providers": {
+      "bitrouter": {
+        "baseUrl": "http://localhost:8787/v1",
+        "apiKey": "any-string",
+        "api": "openai-responses",
+        "models": [{ "id": "smart", "name": "Smart (routed)", "reasoning": true }],
       },
     },
   },
@@ -439,27 +437,27 @@ eyJhbGciOiJTT0xfRUREU0EiLCJ0eXAiOiJKV1QifQ...
 ```jsonc
 // ~/.openclaw/openclaw.json
 {
-  models: {
-    providers: {
-      bitrouter: {
-        baseUrl: "http://localhost:8787/v1",
-        apiKey: "eyJhbGciOiJTT0xfRUREU0EiLCJ0eXAiOiJKV1QifQ...",
-        api: "openai-responses",
-        models: [
-          { id: "smart", name: "Smart (routed)", reasoning: true },
-          { id: "fast",  name: "Fast (routed)" },
-          { id: "reasoning", name: "Deep Reasoning", reasoning: true },
+  "models": {
+    "providers": {
+      "bitrouter": {
+        "baseUrl": "http://localhost:8787/v1",
+        "apiKey": "eyJhbGciOiJTT0xfRUREU0EiLCJ0eXAiOiJKV1QifQ...",
+        "api": "openai-responses",
+        "models": [
+          { "id": "smart", "name": "Smart (routed)", "reasoning": true },
+          { "id": "fast", "name": "Fast (routed)" },
+          { "id": "reasoning", "name": "Deep Reasoning", "reasoning": true },
         ],
       },
     },
   },
-  agents: {
-    defaults: {
-      model: { primary: "bitrouter/smart" },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "bitrouter/smart" },
       // Fallback through BitRouter models — each one already has provider failover
-      model: {
-        primary: "bitrouter/smart",
-        fallbacks: ["bitrouter/fast"],
+      "model": {
+        "primary": "bitrouter/smart",
+        "fallbacks": ["bitrouter/fast"],
       },
     },
   },
@@ -468,11 +466,11 @@ eyJhbGciOiJTT0xfRUREU0EiLCJ0eXAiOiJKV1QifQ...
 
 **Key properties (encoded in the JWT):**
 
-| Field | Value | Meaning |
-|-------|-------|---------|
+| Field    | Value                            | Meaning                         |
+| -------- | -------------------------------- | ------------------------------- |
 | `models` | `["smart", "fast", "reasoning"]` | Agent can only use these routes |
-| `budget` | `5000000` (= $5.00) | Agent's spending cap (μUSD) |
-| `exp` | 30 days | Key auto-expires |
+| `budget` | `5000000` (= $5.00)              | Agent's spending cap (μUSD)     |
+| `exp`    | 30 days                          | Key auto-expires                |
 
 **Narrate:** _"The agent gets one token. It can access 'smart', 'fast', and 'reasoning' — nothing else. It has a $5 budget. When the budget runs out or the key expires, it stops working. The actual OpenAI/Anthropic keys never leave the BitRouter server."_
 
@@ -567,16 +565,16 @@ bitrouter route add creative-v2 anthropic:claude-sonnet-4-20250514
 
 ## What BitRouter Gives OpenClaw Agents
 
-| Without BitRouter | With BitRouter |
-|---|---|
-| API keys in the agent process | Keys stay on the server |
-| One provider at a time | Multi-provider failover |
-| Manual model selection | Content-aware auto-routing |
-| No cost visibility | Per-request spend tracking |
-| No content inspection | Agent firewall (redact/block) |
-| Tool configs per agent | Centralized MCP gateway |
-| Restart to change models | Hot reload + dynamic routes |
-| No budget enforcement | JWT budget caps per agent |
+| Without BitRouter             | With BitRouter                |
+| ----------------------------- | ----------------------------- |
+| API keys in the agent process | Keys stay on the server       |
+| One provider at a time        | Multi-provider failover       |
+| Manual model selection        | Content-aware auto-routing    |
+| No cost visibility            | Per-request spend tracking    |
+| No content inspection         | Agent firewall (redact/block) |
+| Tool configs per agent        | Centralized MCP gateway       |
+| Restart to change models      | Hot reload + dynamic routes   |
+| No budget enforcement         | JWT budget caps per agent     |
 
 ---
 
@@ -625,24 +623,24 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ```jsonc
 {
-  models: {
-    providers: {
-      bitrouter: {
-        baseUrl: "http://localhost:8787/v1",
-        apiKey: "any-string",
-        api: "openai-responses",
-        models: [
-          { id: "smart", name: "Smart (routed)", reasoning: true },
-          { id: "fast",  name: "Fast (routed)" },
+  "models": {
+    "providers": {
+      "bitrouter": {
+        "baseUrl": "http://localhost:8787/v1",
+        "apiKey": "any-string",
+        "api": "openai-responses",
+        "models": [
+          { "id": "smart", "name": "Smart (routed)", "reasoning": true },
+          { "id": "fast", "name": "Fast (routed)" },
         ],
       },
     },
   },
-  agents: {
-    defaults: {
-      model: {
-        primary: "bitrouter/smart",
-        fallbacks: ["bitrouter/fast"],
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bitrouter/smart",
+        "fallbacks": ["bitrouter/fast"],
       },
     },
   },
@@ -657,43 +655,43 @@ For multi-agent OpenClaw setups, each agent can target different BitRouter route
 
 ```jsonc
 {
-  models: {
-    providers: {
-      bitrouter: {
-        baseUrl: "http://localhost:8787/v1",
-        apiKey: "${BITROUTER_JWT}",
-        api: "openai-responses",
-        models: [
-          { id: "smart", name: "Smart", reasoning: true },
-          { id: "fast",  name: "Fast" },
-          { id: "reasoning", name: "Deep Reasoning", reasoning: true },
+  "models": {
+    "providers": {
+      "bitrouter": {
+        "baseUrl": "http://localhost:8787/v1",
+        "apiKey": "${BITROUTER_JWT}",
+        "api": "openai-responses",
+        "models": [
+          { "id": "smart", "name": "Smart", "reasoning": true },
+          { "id": "fast", "name": "Fast" },
+          { "id": "reasoning", "name": "Deep Reasoning", "reasoning": true },
         ],
       },
     },
   },
-  agents: {
-    list: [
+  "agents": {
+    "list": [
       {
-        id: "daily",
-        model: { primary: "bitrouter/fast" },
-        workspace: "~/.openclaw/workspace-daily",
+        "id": "daily",
+        "model": { "primary": "bitrouter/fast" },
+        "workspace": "~/.openclaw/workspace-daily",
       },
       {
-        id: "coding",
-        model: { primary: "bitrouter/smart" },
-        workspace: "~/.openclaw/workspace-coding",
+        "id": "coding",
+        "model": { "primary": "bitrouter/smart" },
+        "workspace": "~/.openclaw/workspace-coding",
       },
       {
-        id: "research",
-        model: { primary: "bitrouter/reasoning" },
-        workspace: "~/.openclaw/workspace-research",
+        "id": "research",
+        "model": { "primary": "bitrouter/reasoning" },
+        "workspace": "~/.openclaw/workspace-research",
       },
     ],
   },
-  bindings: [
-    { agentId: "daily",    match: { channel: "whatsapp" } },
-    { agentId: "coding",   match: { channel: "discord" } },
-    { agentId: "research", match: { channel: "telegram" } },
+  "bindings": [
+    { "agentId": "daily", "match": { "channel": "whatsapp" } },
+    { "agentId": "coding", "match": { "channel": "discord" } },
+    { "agentId": "research", "match": { "channel": "telegram" } },
   ],
 }
 ```
@@ -736,10 +734,10 @@ OpenClaw's heartbeat system could query BitRouter spend to alert when an agent i
 
 ```jsonc
 {
-  agents: {
-    defaults: {
-      heartbeat: {
-        every: "1h",
+  "agents": {
+    "defaults": {
+      "heartbeat": {
+        "every": "1h",
         // Future: BitRouter budget check in heartbeat
       },
     },
@@ -759,20 +757,20 @@ BitRouter's A2A agent management could complement OpenClaw's ACP system — agen
 
 ## Quick Reference
 
-| Command | What it does |
-|---------|-------------|
-| `bitrouter serve` | Start BitRouter in foreground |
-| `bitrouter start` | Start BitRouter as daemon |
-| `bitrouter reload` | Hot-reload config |
-| `bitrouter status` | Show server status + spend |
-| `bitrouter models list` | List available models |
-| `bitrouter tools list` | List available tools |
-| `bitrouter key sign --wallet W --models M --budget B --exp E` | Generate agent JWT |
-| `bitrouter key revoke --id ID` | Revoke an agent key |
-| `bitrouter route add NAME PROVIDER:MODEL` | Add dynamic route |
-| `openclaw gateway restart` | Restart OpenClaw gateway |
-| `openclaw models status` | Show resolved model + auth |
-| `/model bitrouter/smart` | Switch model in chat |
+| Command                                                       | What it does                  |
+| ------------------------------------------------------------- | ----------------------------- |
+| `bitrouter serve`                                             | Start BitRouter in foreground |
+| `bitrouter start`                                             | Start BitRouter as daemon     |
+| `bitrouter reload`                                            | Hot-reload config             |
+| `bitrouter status`                                            | Show server status + spend    |
+| `bitrouter models list`                                       | List available models         |
+| `bitrouter tools list`                                        | List available tools          |
+| `bitrouter key sign --wallet W --models M --budget B --exp E` | Generate agent JWT            |
+| `bitrouter key revoke --id ID`                                | Revoke an agent key           |
+| `bitrouter route add NAME PROVIDER:MODEL`                     | Add dynamic route             |
+| `openclaw gateway restart`                                    | Restart OpenClaw gateway      |
+| `openclaw models status`                                      | Show resolved model + auth    |
+| `/model bitrouter/smart`                                      | Switch model in chat          |
 
 ---
 

@@ -54,10 +54,7 @@ The payload is a JSON object with this shape:
   "iat": 1700000000,
   "exp": 1700000300,
   "scope": "admin",
-  "models": [
-    "openai/*",
-    "anthropic/claude-*"
-  ],
+  "models": ["openai/*", "anthropic/claude-*"],
   "budget": 2500000,
   "budget_scope": "session",
   "budget_range": {
