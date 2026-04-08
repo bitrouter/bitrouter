@@ -3,20 +3,20 @@ api_base: https://api.deepseek.com/v1
 env_prefix: DEEPSEEK
 models:
   deepseek-chat:
-    max_input_tokens: 65536
+    max_input_tokens: 131072
     max_output_tokens: 8192
     pricing:
       input_tokens:
-        no_cache: 0.27
-        cache_read: 0.07
+        no_cache: 0.28
+        cache_read: 0.028
       output_tokens:
-        text: 1.1
+        text: 0.42
   deepseek-reasoner:
-    max_input_tokens: 65536
-    max_output_tokens: 65536
+    max_input_tokens: 128000
+    max_output_tokens: 64000
     pricing:
       input_tokens:
-        no_cache: 0.55
-        cache_read: 0.14
+        no_cache: 0.28
+        cache_read: 0.028
       output_tokens:
-        text: 2.19
+        text: 0.42

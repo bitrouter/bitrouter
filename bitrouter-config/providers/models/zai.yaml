@@ -2,121 +2,142 @@ api_protocol: openai
 api_base: https://open.bigmodel.cn/api/paas/v4
 env_prefix: ZAI
 models:
-  glm-4-plus:
-    max_input_tokens: 128000
-    max_output_tokens: 4096
+  glm-4.5:
+    max_input_tokens: 131072
+    max_output_tokens: 98304
     pricing:
       input_tokens:
-        no_cache: 7.0
+        no_cache: 0.6
+        cache_read: 0.11
+        cache_write: 0.0
       output_tokens:
-        text: 7.0
-  glm-4-0520:
-    max_input_tokens: 128000
-    max_output_tokens: 4096
+        text: 2.2
+  glm-4.5-air:
+    max_input_tokens: 131072
+    max_output_tokens: 98304
     pricing:
       input_tokens:
-        no_cache: 14.0
+        no_cache: 0.2
+        cache_read: 0.03
+        cache_write: 0.0
       output_tokens:
-        text: 14.0
-  glm-4:
-    max_input_tokens: 128000
-    max_output_tokens: 4096
-    pricing:
-      input_tokens:
-        no_cache: 14.0
-      output_tokens:
-        text: 14.0
-  glm-4-air:
-    max_input_tokens: 128000
-    max_output_tokens: 4096
-    pricing:
-      input_tokens:
-        no_cache: 1.0
-      output_tokens:
-        text: 1.0
-  glm-4-airx:
-    max_input_tokens: 8192
-    max_output_tokens: 4096
-    pricing:
-      input_tokens:
-        no_cache: 2.0
-      output_tokens:
-        text: 2.0
-  glm-4-flash:
-    max_input_tokens: 128000
-    max_output_tokens: 4096
+        text: 1.1
+  glm-4.5-flash:
+    max_input_tokens: 131072
+    max_output_tokens: 98304
     pricing:
       input_tokens:
         no_cache: 0.0
+        cache_read: 0.0
+        cache_write: 0.0
       output_tokens:
         text: 0.0
-  glm-4-flashx:
+  glm-4.5v:
+    max_input_tokens: 64000
+    max_output_tokens: 16384
+    input_modalities:
+      - text
+      - image
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 1.8
+  glm-4.6:
+    max_input_tokens: 204800
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.11
+        cache_write: 0.0
+      output_tokens:
+        text: 2.2
+  glm-4.6v:
     max_input_tokens: 128000
-    max_output_tokens: 4096
-    pricing:
-      input_tokens:
-        no_cache: 1.0
-      output_tokens:
-        text: 1.0
-  glm-4-long:
-    max_input_tokens: 1000000
-    max_output_tokens: 4096
-    pricing:
-      input_tokens:
-        no_cache: 1.0
-      output_tokens:
-        text: 1.0
-  glm-4v-plus:
-    max_input_tokens: 8192
-    max_output_tokens: 4096
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 14.0
-      output_tokens:
-        text: 14.0
-  glm-4v:
-    max_input_tokens: 2048
-    max_output_tokens: 1024
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 7.0
-      output_tokens:
-        text: 7.0
-  glm-z1-flash:
-    max_input_tokens: 65536
-    max_output_tokens: 65536
-    pricing:
-      input_tokens:
-        no_cache: 0.0
-      output_tokens:
-        text: 0.0
-  glm-z1-air:
-    max_input_tokens: 65536
-    max_output_tokens: 65536
-    pricing:
-      input_tokens:
-        no_cache: 1.0
-      output_tokens:
-        text: 1.0
-  glm-z1-airx:
-    max_input_tokens: 32768
     max_output_tokens: 32768
+    input_modalities:
+      - text
+      - image
+      - video
     pricing:
       input_tokens:
-        no_cache: 2.0
+        no_cache: 0.3
       output_tokens:
-        text: 2.0
-  glm-z1-preview:
-    max_input_tokens: 65536
-    max_output_tokens: 65536
+        text: 0.9
+  glm-4.7:
+    max_input_tokens: 204800
+    max_output_tokens: 131072
     pricing:
       input_tokens:
-        no_cache: 7.0
+        no_cache: 0.6
+        cache_read: 0.11
+        cache_write: 0.0
       output_tokens:
-        text: 7.0
+        text: 2.2
+  glm-4.7-flash:
+    max_input_tokens: 200000
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+        cache_read: 0.0
+        cache_write: 0.0
+      output_tokens:
+        text: 0.0
+  glm-4.7-flashx:
+    max_input_tokens: 200000
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.07
+        cache_read: 0.01
+        cache_write: 0.0
+      output_tokens:
+        text: 0.4
+  glm-5:
+    max_input_tokens: 204800
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.2
+        cache_write: 0.0
+      output_tokens:
+        text: 3.2
+  glm-5-turbo:
+    max_input_tokens: 200000
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 1.2
+        cache_read: 0.24
+        cache_write: 0.0
+      output_tokens:
+        text: 4.0
+  glm-5.1:
+    max_input_tokens: 200000
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+        cache_write: 0.0
+      output_tokens:
+        text: 4.4
+  glm-5v-turbo:
+    max_input_tokens: 200000
+    max_output_tokens: 131072
+    input_modalities:
+      - text
+      - image
+      - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 1.2
+        cache_read: 0.24
+        cache_write: 0.0
+      output_tokens:
+        text: 4.0
