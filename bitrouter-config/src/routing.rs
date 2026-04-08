@@ -8,7 +8,9 @@ use bitrouter_core::{
         AgentCapabilityFlags, AgentEntry, AgentEntryStatus, AgentRegistry, ModelEntry,
         ModelRegistry, ToolEntry, ToolRegistry,
     },
-    routers::routing_table::{ApiProtocol, ModelPricing, RouteEntry, RoutingTable, RoutingTarget},
+    routers::routing_table::{
+        ApiProtocol, ModelPricing, RouteEntry, RoutingTable, RoutingTarget, strip_ansi_escapes,
+    },
     tools::definition::ToolDefinition,
 };
 
@@ -143,7 +145,7 @@ impl ConfigRoutingTable {
             let api_protocol = resolve_protocol(&self.providers, prefix, None)?;
             return Ok(ResolvedTarget {
                 provider_name: prefix.to_owned(),
-                service_id: suffix.to_owned(),
+                service_id: strip_ansi_escapes(suffix),
                 api_protocol,
                 api_key_override: None,
                 api_base_override: None,
@@ -161,7 +163,7 @@ impl ConfigRoutingTable {
             let api_protocol = resolve_protocol(&self.providers, DEFAULT_PROVIDER, None)?;
             return Ok(ResolvedTarget {
                 provider_name: DEFAULT_PROVIDER.to_owned(),
-                service_id: incoming.to_owned(),
+                service_id: strip_ansi_escapes(incoming),
                 api_protocol,
                 api_key_override: None,
                 api_base_override: None,
@@ -204,7 +206,7 @@ impl ConfigRoutingTable {
 
         Ok(ResolvedTarget {
             provider_name: endpoint.provider.clone(),
-            service_id: endpoint.service_id.clone(),
+            service_id: strip_ansi_escapes(&endpoint.service_id),
             api_protocol,
             api_key_override: endpoint.api_key.clone(),
             api_base_override: endpoint.api_base.clone(),
@@ -497,7 +499,7 @@ impl ConfigToolRoutingTable {
                         resolve_protocol(&self.providers, &ep.provider, ep.api_protocol)?;
                     return Ok(ResolvedTarget {
                         provider_name: ep.provider.clone(),
-                        service_id: ep.service_id.clone(),
+                        service_id: strip_ansi_escapes(&ep.service_id),
                         api_protocol,
                         api_key_override: ep.api_key.clone(),
                         api_base_override: ep.api_base.clone(),
@@ -542,7 +544,7 @@ impl ConfigToolRoutingTable {
 
         Ok(ResolvedTarget {
             provider_name: endpoint.provider.clone(),
-            service_id: endpoint.service_id.clone(),
+            service_id: strip_ansi_escapes(&endpoint.service_id),
             api_protocol,
             api_key_override: endpoint.api_key.clone(),
             api_base_override: endpoint.api_base.clone(),
@@ -1513,5 +1515,82 @@ mod tests {
     async fn agent_registry_empty() {
         let registry = ConfigAgentRegistry::new(HashMap::new());
         assert!(registry.list_agents().await.is_empty());
+    }
+
+    // ── ANSI escape code sanitization ────────────────────────────────
+
+    #[test]
+    fn ansi_escape_stripped_from_fallback_routing() {
+        // Reproduce: model name with ANSI bold code reaches fallback routing
+        // (Strategy 3). The service_id in the resolved target must be clean.
+        let mut providers = test_providers();
+        providers.insert(
+            "bitrouter".into(),
+            ProviderConfig {
+                api_protocol: Some(ApiProtocol::Openai),
+                api_base: Some("https://api.bitrouter.ai/v1".into()),
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::new(providers, HashMap::new());
+
+        // Incoming model name with ANSI bold suffix: \x1b[1m
+        let target = table.resolve("claude-opus-4-6\x1b[1m").unwrap();
+        assert_eq!(target.service_id, "claude-opus-4-6");
+    }
+
+    #[test]
+    fn ansi_escape_stripped_from_direct_routing() {
+        // Strategy 1: "provider:model_id" with ANSI in the model_id suffix.
+        let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
+        let target = table
+            .resolve("anthropic:\x1b[1mclaude-opus-4-6\x1b[0m")
+            .unwrap();
+        assert_eq!(target.provider_name, "anthropic");
+        assert_eq!(target.service_id, "claude-opus-4-6");
+    }
+
+    #[test]
+    fn ansi_escape_stripped_from_endpoint_service_id() {
+        // Strategy 2: model lookup where the endpoint service_id contains ANSI.
+        let mut models = HashMap::new();
+        models.insert(
+            "fast".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "anthropic".into(),
+                    service_id: "claude-opus-4-6\x1b[1m".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::new(test_providers(), models);
+        let target = table.resolve("fast").unwrap();
+        assert_eq!(target.service_id, "claude-opus-4-6");
+    }
+
+    #[tokio::test]
+    async fn ansi_escape_stripped_in_route_trait() {
+        // End-to-end: the RoutingTable::route method also strips ANSI.
+        let mut providers = test_providers();
+        providers.insert(
+            "bitrouter".into(),
+            ProviderConfig {
+                api_protocol: Some(ApiProtocol::Openai),
+                api_base: Some("https://api.bitrouter.ai/v1".into()),
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::new(providers, HashMap::new());
+
+        let target = table
+            .route("claude-opus-4-6\x1b[1m", &RouteContext::default())
+            .await
+            .unwrap();
+        assert_eq!(target.service_id, "claude-opus-4-6");
     }
 }

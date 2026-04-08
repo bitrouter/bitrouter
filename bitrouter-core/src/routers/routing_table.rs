@@ -149,3 +149,81 @@ impl<T: RoutingTable> RoutingTable for Arc<T> {
         (**self).list_routes()
     }
 }
+
+/// Strips ANSI escape sequences (CSI codes) from a string.
+///
+/// Model names and service IDs should never contain terminal formatting.
+/// This function removes any `ESC[…m` sequences to prevent ANSI leak
+/// from environment variables, config values, or client payloads.
+pub fn strip_ansi_escapes(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len);
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
+            // Skip ESC + '[' and consume parameter bytes until the final byte
+            // (an ASCII letter in 0x40..=0x7E) or end of string.
+            i += 2;
+            while i < len && !(0x40..=0x7E).contains(&bytes[i]) {
+                i += 1;
+            }
+            if i < len {
+                i += 1; // skip the final letter
+            }
+        } else {
+            // SAFETY: we advance one byte at a time but push the full char.
+            let ch = input[i..].chars().next().unwrap_or('\0');
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_ansi_removes_bold() {
+        assert_eq!(
+            strip_ansi_escapes("claude-opus-4-6\x1b[1m"),
+            "claude-opus-4-6"
+        );
+    }
+
+    #[test]
+    fn strip_ansi_removes_bold_prefix() {
+        assert_eq!(
+            strip_ansi_escapes("\x1b[1mclaude-opus-4-6\x1b[0m"),
+            "claude-opus-4-6"
+        );
+    }
+
+    #[test]
+    fn strip_ansi_noop_clean_string() {
+        assert_eq!(strip_ansi_escapes("gpt-4o"), "gpt-4o");
+    }
+
+    #[test]
+    fn strip_ansi_removes_color_codes() {
+        assert_eq!(
+            strip_ansi_escapes("\x1b[32mmodel-name\x1b[0m"),
+            "model-name"
+        );
+    }
+
+    #[test]
+    fn strip_ansi_handles_empty_string() {
+        assert_eq!(strip_ansi_escapes(""), "");
+    }
+
+    #[test]
+    fn strip_ansi_preserves_brackets_without_esc() {
+        // Literal brackets (no ESC prefix) should be preserved.
+        assert_eq!(strip_ansi_escapes("model[v2]"), "model[v2]");
+    }
+}
