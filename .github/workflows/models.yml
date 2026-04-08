@@ -61,7 +61,7 @@ jobs:
           # Expects --arg provider <models_dev_provider_id>
           read -r -d '' JQ_FILTER << 'JQEOF' || true
           def fmt_cost:
-            tostring | if test("\\.") then . else . + ".0" end;
+            tostring | if test("[.eE]") then . else . + ".0" end;
 
           .[$provider].models // {} |
           to_entries |
