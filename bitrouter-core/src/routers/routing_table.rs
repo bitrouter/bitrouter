@@ -153,8 +153,12 @@ impl<T: RoutingTable> RoutingTable for Arc<T> {
 /// Strips ANSI escape sequences (CSI codes) from a string.
 ///
 /// Model names and service IDs should never contain terminal formatting.
-/// This function removes any `ESC[…m` sequences to prevent ANSI leak
-/// from environment variables, config values, or client payloads.
+/// This function removes any `ESC[…X` sequences (where `X` is an ASCII
+/// letter in `0x40..=0x7E`) to prevent ANSI leak from environment
+/// variables, config values, or client payloads.
+///
+/// Malformed sequences (no final letter) are stripped up to end-of-string.
+/// Non-ANSI bracket characters (e.g. `model[v2]`) are preserved.
 pub fn strip_ansi_escapes(input: &str) -> String {
     let bytes = input.as_bytes();
     let len = bytes.len();
@@ -173,8 +177,9 @@ pub fn strip_ansi_escapes(input: &str) -> String {
                 i += 1; // skip the final letter
             }
         } else {
-            // SAFETY: we advance one byte at a time but push the full char.
-            let ch = input[i..].chars().next().unwrap_or('\0');
+            // The input is a valid UTF-8 `&str`, so indexing into a char
+            // boundary always yields a valid character.
+            let ch = input[i..].chars().next().unwrap_or_default();
             out.push(ch);
             i += ch.len_utf8();
         }
