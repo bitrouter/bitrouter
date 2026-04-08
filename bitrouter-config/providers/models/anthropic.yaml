@@ -8,6 +8,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 0.8
@@ -21,19 +22,21 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
-        no_cache: 1.0
-        cache_read: 0.1
-        cache_write: 1.25
+        no_cache: 0.8
+        cache_read: 0.08
+        cache_write: 1.0
       output_tokens:
-        text: 5.0
+        text: 4.0
   claude-3-5-sonnet-20240620:
     max_input_tokens: 200000
     max_output_tokens: 8192
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
@@ -47,19 +50,7 @@ models:
     input_modalities:
       - text
       - image
-    pricing:
-      input_tokens:
-        no_cache: 3.0
-        cache_read: 0.3
-        cache_write: 3.75
-      output_tokens:
-        text: 15.0
-  claude-3-5-sonnet-latest:
-    max_input_tokens: 200000
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
@@ -73,19 +64,7 @@ models:
     input_modalities:
       - text
       - image
-    pricing:
-      input_tokens:
-        no_cache: 3.0
-        cache_read: 0.3
-        cache_write: 3.75
-      output_tokens:
-        text: 15.0
-  claude-3-7-sonnet-latest:
-    max_input_tokens: 200000
-    max_output_tokens: 64000
-    input_modalities:
-      - text
-      - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
@@ -99,6 +78,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 0.25
@@ -112,6 +92,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 15.0
@@ -119,43 +100,18 @@ models:
         cache_write: 18.75
       output_tokens:
         text: 75.0
-  claude-3-opus-latest:
+  claude-3-sonnet-20240229:
     max_input_tokens: 200000
     max_output_tokens: 4096
     input_modalities:
       - text
       - image
-    pricing:
-      input_tokens:
-        no_cache: 15.0
-        cache_read: 1.5
-        cache_write: 18.75
-      output_tokens:
-        text: 75.0
-  claude-4-opus-20250514:
-    max_input_tokens: 200000
-    max_output_tokens: 32000
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 15.0
-        cache_read: 1.5
-        cache_write: 18.75
-      output_tokens:
-        text: 75.0
-  claude-4-sonnet-20250514:
-    max_input_tokens: 1000000
-    max_output_tokens: 64000
-    input_modalities:
-      - text
-      - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
         cache_read: 0.3
-        cache_write: 3.75
+        cache_write: 0.3
       output_tokens:
         text: 15.0
   claude-haiku-4-5:
@@ -164,6 +120,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 1.0
@@ -177,6 +134,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 1.0
@@ -184,12 +142,27 @@ models:
         cache_write: 1.25
       output_tokens:
         text: 5.0
+  claude-opus-4-0:
+    max_input_tokens: 200000
+    max_output_tokens: 32000
+    input_modalities:
+      - text
+      - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+        cache_read: 1.5
+        cache_write: 18.75
+      output_tokens:
+        text: 75.0
   claude-opus-4-1:
     max_input_tokens: 200000
     max_output_tokens: 32000
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 15.0
@@ -203,6 +176,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 15.0
@@ -216,6 +190,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 15.0
@@ -229,6 +204,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 5.0
@@ -242,6 +218,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 5.0
@@ -255,6 +232,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 5.0
@@ -262,25 +240,27 @@ models:
         cache_write: 6.25
       output_tokens:
         text: 25.0
-  claude-opus-4-6-20260205:
-    max_input_tokens: 1000000
-    max_output_tokens: 128000
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 5.0
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25.0
-  claude-sonnet-4-20250514:
-    max_input_tokens: 1000000
+  claude-sonnet-4-0:
+    max_input_tokens: 200000
     max_output_tokens: 64000
     input_modalities:
       - text
       - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15.0
+  claude-sonnet-4-20250514:
+    max_input_tokens: 200000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
@@ -294,6 +274,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
@@ -307,6 +288,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
@@ -315,11 +297,12 @@ models:
       output_tokens:
         text: 15.0
   claude-sonnet-4-6:
-    max_input_tokens: 200000
+    max_input_tokens: 1000000
     max_output_tokens: 64000
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
