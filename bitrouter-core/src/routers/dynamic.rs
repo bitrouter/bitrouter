@@ -19,7 +19,9 @@ use super::admin::{
 };
 use super::registry::{ModelEntry, ModelRegistry, ToolEntry, ToolRegistry};
 use super::reload::ReloadableRoutingTable;
-use super::routing_table::{ApiProtocol, RouteEntry, RoutingTable, RoutingTarget};
+use super::routing_table::{
+    ApiProtocol, RouteEntry, RoutingTable, RoutingTarget, strip_ansi_escapes,
+};
 use crate::routers::content::RouteContext;
 
 /// Internal representation of a dynamic route with its round-robin counter.
@@ -84,7 +86,7 @@ impl<T> DynamicRoutingTable<T> {
 
         Some(RoutingTarget {
             provider_name: endpoint.provider.clone(),
-            service_id: endpoint.service_id.clone(),
+            service_id: strip_ansi_escapes(&endpoint.service_id),
             api_protocol: endpoint.api_protocol.unwrap_or(ApiProtocol::Openai),
         })
     }
