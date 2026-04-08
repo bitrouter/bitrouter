@@ -1,0 +1,185 @@
+name: Update Models
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # Daily at 06:00 UTC
+  workflow_dispatch: # Allow manual trigger
+
+permissions: {}
+
+jobs:
+  update-models:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Fetch models.dev API
+        run: |
+          curl -sSf --retry 3 --retry-delay 5 \
+            https://models.dev/api.json \
+            -o /tmp/models-dev-api.json
+          echo "Fetched models.dev API ($(wc -c < /tmp/models-dev-api.json) bytes)"
+
+      - name: Update provider model definitions
+        run: |
+          set -euo pipefail
+
+          API="/tmp/models-dev-api.json"
+          PROVIDERS_DIR="bitrouter-config/providers/models"
+
+          # Mapping from bitrouter provider name to models.dev provider ID.
+          # Only providers that exist in both are listed here.
+          # "bitrouter" is intentionally excluded — it is not sourced from models.dev.
+          declare -A PROVIDER_MAP=(
+            [openai]=openai
+            [anthropic]=anthropic
+            [google]=google
+            [deepseek]=deepseek
+            [minimax]=minimax
+            [openrouter]=openrouter
+            [zai]=zai
+            [moonshot]=moonshotai
+            [qwen]=alibaba
+          )
+
+          # jq filter that converts a models.dev provider's models into
+          # bitrouter provider YAML (the "models:" section).
+          #
+          # Expects --arg provider <models_dev_provider_id>
+          read -r -d '' JQ_FILTER << 'JQEOF' || true
+          def fmt_cost:
+            tostring | if test("\\.") then . else . + ".0" end;
+
+          .[$provider].models // {} |
+          to_entries |
+          sort_by(.key) |
+          map(select(
+            (.value.status != "deprecated") and
+            (.value.status != "alpha") and
+            (.value.cost != null)
+          )) |
+          if length == 0 then ""
+          else
+            map(
+              (.value.modalities.input | map(if . == "pdf" then "file" else . end)) as $in_mod |
+              (.value.modalities.output | map(if . == "pdf" then "file" else . end)) as $out_mod |
+
+              "  " + .key + ":\n" +
+
+              # max_input_tokens: prefer limit.input, fall back to limit.context
+              (if .value.limit.input != null then
+                "    max_input_tokens: " + (.value.limit.input | tostring) + "\n"
+              elif .value.limit.context != null then
+                "    max_input_tokens: " + (.value.limit.context | tostring) + "\n"
+              else "" end) +
+
+              # max_output_tokens
+              "    max_output_tokens: " + (.value.limit.output | tostring) + "\n" +
+
+              # input_modalities (omit when default ["text"])
+              (if ($in_mod != ["text"]) and ($in_mod | length > 0) then
+                "    input_modalities:\n" +
+                ($in_mod | map("      - " + .) | join("\n")) + "\n"
+              else "" end) +
+
+              # output_modalities (omit when default ["text"])
+              (if ($out_mod != ["text"]) and ($out_mod | length > 0) then
+                "    output_modalities:\n" +
+                ($out_mod | map("      - " + .) | join("\n")) + "\n"
+              else "" end) +
+
+              # pricing
+              "    pricing:\n" +
+              "      input_tokens:\n" +
+              "        no_cache: " + (.value.cost.input | fmt_cost) + "\n" +
+              (if .value.cost.cache_read != null then
+                "        cache_read: " + (.value.cost.cache_read | fmt_cost) + "\n"
+              else "" end) +
+              (if .value.cost.cache_write != null then
+                "        cache_write: " + (.value.cost.cache_write | fmt_cost) + "\n"
+              else "" end) +
+              "      output_tokens:\n" +
+              "        text: " + (.value.cost.output | fmt_cost) + "\n" +
+              (if .value.cost.reasoning != null then
+                "        reasoning: " + (.value.cost.reasoning | fmt_cost) + "\n"
+              else "" end)
+            ) |
+            join("")
+          end
+          JQEOF
+
+          updated=0
+
+          for br_name in "${!PROVIDER_MAP[@]}"; do
+            md_name="${PROVIDER_MAP[$br_name]}"
+            yaml_file="$PROVIDERS_DIR/$br_name.yaml"
+
+            if [ ! -f "$yaml_file" ]; then
+              echo "⚠ $yaml_file not found, skipping $br_name"
+              continue
+            fi
+
+            # Check the provider exists in the API response
+            has_provider=$(jq -r --arg p "$md_name" 'has($p)' "$API")
+            if [ "$has_provider" != "true" ]; then
+              echo "⚠ Provider '$md_name' not found in models.dev API, skipping $br_name"
+              continue
+            fi
+
+            # Extract the YAML header (everything before the "models:" line)
+            header=$(sed -n '/^models:/q;p' "$yaml_file")
+
+            # Generate the models section from the API data
+            models=$(jq -r --arg provider "$md_name" "$JQ_FILTER" "$API")
+
+            if [ -z "$models" ]; then
+              echo "⚠ No eligible models for $br_name ($md_name), skipping"
+              continue
+            fi
+
+            # Write the updated file: header + models section
+            # NOTE: command substitution strips trailing newlines from $models,
+            # so we re-add one with printf '%s\n'.
+            {
+              printf '%s\n' "$header"
+              printf 'models:\n'
+              printf '%s\n' "$models"
+            } > "$yaml_file"
+
+            echo "✓ Updated $yaml_file (provider: $md_name)"
+            updated=$((updated + 1))
+          done
+
+          echo ""
+          echo "Updated $updated provider file(s)"
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          title: "chore(providers): update models from models.dev"
+          body: |
+            Automated daily update of provider model definitions from
+            [models.dev](https://models.dev/api.json).
+
+            **Source:** `https://models.dev/api.json`
+            **Workflow:** `update-models.yml`
+
+            Please review the diff to verify correctness before merging.
+          branch: chore/update-models
+          commit-message: "chore(providers): update models from models.dev"
+          labels: maintenance
+          delete-branch: true
