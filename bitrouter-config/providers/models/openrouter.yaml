@@ -2,43 +2,41 @@ api_protocol: openai
 api_base: https://openrouter.ai/api/v1
 env_prefix: OPENROUTER
 models:
-  anthropic/claude-3-haiku:
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.25
-      output_tokens:
-        text: 1.25
-  anthropic/claude-3.5-sonnet:
+  anthropic/claude-3.5-haiku:
     max_input_tokens: 200000
     max_output_tokens: 8192
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
-        no_cache: 3.0
+        no_cache: 0.8
+        cache_read: 0.08
+        cache_write: 1.0
       output_tokens:
-        text: 15.0
+        text: 4.0
   anthropic/claude-3.7-sonnet:
     max_input_tokens: 200000
     max_output_tokens: 128000
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
-        no_cache: 3.0
+        no_cache: 15.0
+        cache_read: 1.5
+        cache_write: 18.75
       output_tokens:
-        text: 15.0
+        text: 75.0
   anthropic/claude-haiku-4.5:
     max_input_tokens: 200000
-    max_output_tokens: 200000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 1.0
@@ -52,6 +50,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 15.0
@@ -65,6 +64,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 15.0
@@ -78,6 +78,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 5.0
@@ -91,6 +92,7 @@ models:
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 5.0
@@ -99,11 +101,12 @@ models:
       output_tokens:
         text: 25.0
   anthropic/claude-sonnet-4:
-    max_input_tokens: 1000000
+    max_input_tokens: 200000
     max_output_tokens: 64000
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
@@ -113,10 +116,11 @@ models:
         text: 15.0
   anthropic/claude-sonnet-4.5:
     max_input_tokens: 1000000
-    max_output_tokens: 1000000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
+      - file
     pricing:
       input_tokens:
         no_cache: 3.0
@@ -137,30 +141,111 @@ models:
         cache_write: 3.75
       output_tokens:
         text: 15.0
-  bytedance/ui-tars-1.5-7b:
+  arcee-ai/trinity-large-preview:free:
     max_input_tokens: 131072
-    max_output_tokens: 2048
+    max_output_tokens: 131072
     pricing:
       input_tokens:
-        no_cache: 0.1
+        no_cache: 0.0
       output_tokens:
-        text: 0.2
-  deepseek/deepseek-chat:
-    max_input_tokens: 65536
-    max_output_tokens: 8192
+        text: 0.0
+  arcee-ai/trinity-large-thinking:
+    max_input_tokens: 262144
+    max_output_tokens: 80000
     pricing:
       input_tokens:
-        no_cache: 0.14
+        no_cache: 0.22
       output_tokens:
-        text: 0.28
+        text: 0.85
+  arcee-ai/trinity-mini:free:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  black-forest-labs/flux.2-flex:
+    max_input_tokens: 67344
+    max_output_tokens: 67344
+    input_modalities:
+      - image
+      - text
+    output_modalities:
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  black-forest-labs/flux.2-klein-4b:
+    max_input_tokens: 40960
+    max_output_tokens: 40960
+    input_modalities:
+      - image
+      - text
+    output_modalities:
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  black-forest-labs/flux.2-max:
+    max_input_tokens: 46864
+    max_output_tokens: 46864
+    input_modalities:
+      - image
+      - text
+    output_modalities:
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  black-forest-labs/flux.2-pro:
+    max_input_tokens: 46864
+    max_output_tokens: 46864
+    input_modalities:
+      - image
+      - text
+    output_modalities:
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  bytedance-seed/seedream-4.5:
+    max_input_tokens: 4096
+    max_output_tokens: 4096
+    input_modalities:
+      - image
+      - text
+    output_modalities:
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  cognitivecomputations/dolphin-mistral-24b-venice-edition:free:
+    max_input_tokens: 32768
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
   deepseek/deepseek-chat-v3-0324:
-    max_input_tokens: 65536
+    max_input_tokens: 16384
     max_output_tokens: 8192
     pricing:
       input_tokens:
-        no_cache: 0.14
+        no_cache: 0.0
       output_tokens:
-        text: 0.28
+        text: 0.0
   deepseek/deepseek-chat-v3.1:
     max_input_tokens: 163840
     max_output_tokens: 163840
@@ -169,109 +254,212 @@ models:
         no_cache: 0.2
       output_tokens:
         text: 0.8
-  deepseek/deepseek-r1:
-    max_input_tokens: 65336
+  deepseek/deepseek-r1-distill-llama-70b:
+    max_input_tokens: 8192
     max_output_tokens: 8192
     pricing:
       input_tokens:
-        no_cache: 0.55
+        no_cache: 0.0
       output_tokens:
-        text: 2.19
-  deepseek/deepseek-r1-0528:
-    max_input_tokens: 65336
-    max_output_tokens: 8192
+        text: 0.0
+  deepseek/deepseek-v3.1-terminus:
+    max_input_tokens: 131072
+    max_output_tokens: 65536
     pricing:
       input_tokens:
-        no_cache: 0.5
+        no_cache: 0.27
       output_tokens:
-        text: 2.15
+        text: 1.0
+  deepseek/deepseek-v3.1-terminus:exacto:
+    max_input_tokens: 131072
+    max_output_tokens: 65536
+    pricing:
+      input_tokens:
+        no_cache: 0.27
+      output_tokens:
+        text: 1.0
   deepseek/deepseek-v3.2:
     max_input_tokens: 163840
-    max_output_tokens: 163840
+    max_output_tokens: 65536
     pricing:
       input_tokens:
         no_cache: 0.28
       output_tokens:
         text: 0.4
-  deepseek/deepseek-v3.2-exp:
+  deepseek/deepseek-v3.2-speciale:
     max_input_tokens: 163840
-    max_output_tokens: 163840
+    max_output_tokens: 65536
     pricing:
       input_tokens:
-        no_cache: 0.2
+        no_cache: 0.27
       output_tokens:
-        text: 0.4
+        text: 0.41
   google/gemini-2.0-flash-001:
     max_input_tokens: 1048576
     max_output_tokens: 8192
     input_modalities:
       - text
       - image
-    output_modalities:
-      - text
       - audio
+      - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.1
+        cache_read: 0.025
       output_tokens:
         text: 0.4
   google/gemini-2.5-flash:
     max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    output_modalities:
-      - text
-      - audio
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-      output_tokens:
-        text: 2.5
-  google/gemini-2.5-pro:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    output_modalities:
-      - text
-      - audio
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-      output_tokens:
-        text: 10.0
-  google/gemini-3-flash-preview:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.0375
+      output_tokens:
+        text: 2.5
+  google/gemini-2.5-flash-lite:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  google/gemini-2.5-flash-lite-preview-09-2025:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  google/gemini-2.5-flash-preview-09-2025:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.031
+      output_tokens:
+        text: 2.5
+  google/gemini-2.5-pro:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.31
+      output_tokens:
+        text: 10.0
+  google/gemini-2.5-pro-preview-05-06:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.31
+      output_tokens:
+        text: 10.0
+  google/gemini-2.5-pro-preview-06-05:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.31
+      output_tokens:
+        text: 10.0
+  google/gemini-3-flash-preview:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.5
         cache_read: 0.05
       output_tokens:
         text: 3.0
-        reasoning: 3.0
   google/gemini-3-pro-preview:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_input_tokens: 1050000
+    max_output_tokens: 66000
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
         no_cache: 2.0
-        cache_read: 0.2
       output_tokens:
         text: 12.0
+  google/gemini-3.1-flash-lite-preview:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
+      - file
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+        cache_write: 0.083
+      output_tokens:
+        text: 1.5
+        reasoning: 1.5
   google/gemini-3.1-pro-preview:
     max_input_tokens: 1048576
     max_output_tokens: 65536
@@ -280,78 +468,37 @@ models:
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
         no_cache: 2.0
-        cache_read: 0.2
       output_tokens:
         text: 12.0
-  gryphe/mythomax-l2-13b:
-    pricing:
-      input_tokens:
-        no_cache: 1.875
-      output_tokens:
-        text: 1.875
-  mancer/weaver:
-    pricing:
-      input_tokens:
-        no_cache: 5.625
-      output_tokens:
-        text: 5.625
-  meta-llama/llama-3-70b-instruct:
-    pricing:
-      input_tokens:
-        no_cache: 0.59
-      output_tokens:
-        text: 0.79
-  minimax/minimax-m2:
-    max_input_tokens: 204800
-    max_output_tokens: 204800
-    pricing:
-      input_tokens:
-        no_cache: 0.255
-      output_tokens:
-        text: 1.02
-  minimax/minimax-m2.1:
-    max_input_tokens: 204000
-    max_output_tokens: 64000
+        reasoning: 12.0
+  google/gemini-3.1-pro-preview-customtools:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
+      - audio
+      - video
+      - file
     pricing:
       input_tokens:
-        no_cache: 0.27
+        no_cache: 2.0
       output_tokens:
-        text: 1.2
-  minimax/minimax-m2.5:
-    max_input_tokens: 196608
-    max_output_tokens: 65536
+        text: 12.0
+        reasoning: 12.0
+  google/gemma-2-9b-it:
+    max_input_tokens: 8192
+    max_output_tokens: 8192
     pricing:
       input_tokens:
-        no_cache: 0.3
-        cache_read: 0.15
+        no_cache: 0.03
       output_tokens:
-        text: 1.1
-  mistralai/devstral-2512:
-    max_input_tokens: 262144
-    max_output_tokens: 65536
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-      output_tokens:
-        text: 0.6
-  mistralai/ministral-14b-2512:
-    max_input_tokens: 262144
-    max_output_tokens: 262144
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.2
-      output_tokens:
-        text: 0.2
-  mistralai/ministral-3b-2512:
+        text: 0.09
+  google/gemma-3-12b-it:
     max_input_tokens: 131072
     max_output_tokens: 131072
     input_modalities:
@@ -359,10 +506,304 @@ models:
       - image
     pricing:
       input_tokens:
-        no_cache: 0.1
+        no_cache: 0.03
       output_tokens:
         text: 0.1
-  mistralai/ministral-8b-2512:
+  google/gemma-3-12b-it:free:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  google/gemma-3-27b-it:
+    max_input_tokens: 96000
+    max_output_tokens: 96000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.04
+      output_tokens:
+        text: 0.15
+  google/gemma-3-27b-it:free:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  google/gemma-3-4b-it:
+    max_input_tokens: 96000
+    max_output_tokens: 96000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.01703
+      output_tokens:
+        text: 0.06815
+  google/gemma-3-4b-it:free:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  google/gemma-3n-e2b-it:free:
+    max_input_tokens: 8192
+    max_output_tokens: 2000
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  google/gemma-3n-e4b-it:
+    max_input_tokens: 32768
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 0.02
+      output_tokens:
+        text: 0.04
+  google/gemma-3n-e4b-it:free:
+    max_input_tokens: 8192
+    max_output_tokens: 2000
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  google/gemma-4-26b-a4b-it:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    input_modalities:
+      - text
+      - image
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.13
+      output_tokens:
+        text: 0.4
+  google/gemma-4-31b-it:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    input_modalities:
+      - text
+      - image
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.4
+  inception/mercury:
+    max_input_tokens: 128000
+    max_output_tokens: 32000
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 0.75
+  inception/mercury-2:
+    max_input_tokens: 128000
+    max_output_tokens: 50000
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 0.75
+  inception/mercury-coder:
+    max_input_tokens: 128000
+    max_output_tokens: 32000
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 0.75
+  liquid/lfm-2.5-1.2b-instruct:free:
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  liquid/lfm-2.5-1.2b-thinking:free:
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  meta-llama/llama-3.2-11b-vision-instruct:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  meta-llama/llama-3.2-3b-instruct:free:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  meta-llama/llama-3.3-70b-instruct:free:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  minimax/minimax-01:
+    max_input_tokens: 1000000
+    max_output_tokens: 1000000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 1.1
+  minimax/minimax-m1:
+    max_input_tokens: 1000000
+    max_output_tokens: 40000
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 2.2
+  minimax/minimax-m2:
+    max_input_tokens: 196600
+    max_output_tokens: 118000
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+        cache_read: 0.28
+        cache_write: 1.15
+      output_tokens:
+        text: 1.15
+  minimax/minimax-m2.1:
+    max_input_tokens: 204800
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 1.2
+  minimax/minimax-m2.5:
+    max_input_tokens: 204800
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.03
+      output_tokens:
+        text: 1.2
+  minimax/minimax-m2.7:
+    max_input_tokens: 204800
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+        cache_write: 0.375
+      output_tokens:
+        text: 1.2
+  mistralai/codestral-2508:
+    max_input_tokens: 256000
+    max_output_tokens: 256000
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 0.9
+  mistralai/devstral-2512:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+      output_tokens:
+        text: 0.6
+  mistralai/devstral-medium-2507:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 2.0
+  mistralai/devstral-small-2505:
+    max_input_tokens: 128000
+    max_output_tokens: 128000
+    pricing:
+      input_tokens:
+        no_cache: 0.06
+      output_tokens:
+        text: 0.12
+  mistralai/devstral-small-2507:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+      output_tokens:
+        text: 0.3
+  mistralai/mistral-medium-3:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 2.0
+  mistralai/mistral-medium-3.1:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 2.0
+  mistralai/mistral-small-2603:
     max_input_tokens: 262144
     max_output_tokens: 262144
     input_modalities:
@@ -372,78 +813,158 @@ models:
       input_tokens:
         no_cache: 0.15
       output_tokens:
-        text: 0.15
-  mistralai/mistral-7b-instruct:
-    pricing:
-      input_tokens:
-        no_cache: 0.13
-      output_tokens:
-        text: 0.13
-  mistralai/mistral-large:
-    pricing:
-      input_tokens:
-        no_cache: 8.0
-      output_tokens:
-        text: 24.0
-  mistralai/mistral-large-2512:
-    max_input_tokens: 262144
-    max_output_tokens: 262144
+        text: 0.6
+  mistralai/mistral-small-3.1-24b-instruct:
+    max_input_tokens: 128000
+    max_output_tokens: 8192
     input_modalities:
       - text
       - image
     pricing:
       input_tokens:
-        no_cache: 0.5
+        no_cache: 0.0
       output_tokens:
-        text: 1.5
-  mistralai/mistral-small-3.1-24b-instruct:
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-      output_tokens:
-        text: 0.3
+        text: 0.0
   mistralai/mistral-small-3.2-24b-instruct:
+    max_input_tokens: 96000
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
     pricing:
       input_tokens:
-        no_cache: 0.1
+        no_cache: 0.0
       output_tokens:
-        text: 0.3
-  mistralai/mixtral-8x22b-instruct:
+        text: 0.0
+  moonshotai/kimi-k2:
+    max_input_tokens: 131072
+    max_output_tokens: 32768
     pricing:
       input_tokens:
-        no_cache: 0.65
+        no_cache: 0.55
       output_tokens:
-        text: 0.65
+        text: 2.2
+  moonshotai/kimi-k2-0905:
+    max_input_tokens: 262144
+    max_output_tokens: 16384
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 2.5
+  moonshotai/kimi-k2-0905:exacto:
+    max_input_tokens: 262144
+    max_output_tokens: 16384
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 2.5
+  moonshotai/kimi-k2-thinking:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.15
+      output_tokens:
+        text: 2.5
   moonshotai/kimi-k2.5:
     max_input_tokens: 262144
     max_output_tokens: 262144
     input_modalities:
       - text
       - image
+      - video
     pricing:
       input_tokens:
         no_cache: 0.6
         cache_read: 0.1
       output_tokens:
         text: 3.0
-  openai/gpt-3.5-turbo:
+  moonshotai/kimi-k2:free:
+    max_input_tokens: 32800
+    max_output_tokens: 32800
     pricing:
       input_tokens:
-        no_cache: 1.5
+        no_cache: 0.0
       output_tokens:
-        text: 2.0
-  openai/gpt-3.5-turbo-16k:
+        text: 0.0
+  nousresearch/hermes-3-llama-3.1-405b:free:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
     pricing:
       input_tokens:
-        no_cache: 3.0
+        no_cache: 0.0
       output_tokens:
-        text: 4.0
-  openai/gpt-4:
+        text: 0.0
+  nousresearch/hermes-4-405b:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
     pricing:
       input_tokens:
-        no_cache: 30.0
+        no_cache: 1.0
       output_tokens:
-        text: 60.0
+        text: 3.0
+  nousresearch/hermes-4-70b:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.13
+      output_tokens:
+        text: 0.4
+  nvidia/nemotron-3-nano-30b-a3b:free:
+    max_input_tokens: 256000
+    max_output_tokens: 256000
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  nvidia/nemotron-3-super-120b-a12b:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+      output_tokens:
+        text: 0.5
+  nvidia/nemotron-3-super-120b-a12b:free:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  nvidia/nemotron-nano-12b-v2-vl:free:
+    max_input_tokens: 128000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  nvidia/nemotron-nano-9b-v2:
+    max_input_tokens: 131072
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.04
+      output_tokens:
+        text: 0.16
+  nvidia/nemotron-nano-9b-v2:free:
+    max_input_tokens: 128000
+    max_output_tokens: 128000
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
   openai/gpt-4.1:
     max_input_tokens: 1047576
     max_output_tokens: 32768
@@ -468,53 +989,7 @@ models:
         cache_read: 0.1
       output_tokens:
         text: 1.6
-  openai/gpt-4.1-nano:
-    max_input_tokens: 1047576
-    max_output_tokens: 32768
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-        cache_read: 0.025
-      output_tokens:
-        text: 0.4
-  openai/gpt-4o:
-    max_input_tokens: 128000
-    max_output_tokens: 4096
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 2.5
-      output_tokens:
-        text: 10.0
-  openai/gpt-4o-2024-05-13:
-    max_input_tokens: 128000
-    max_output_tokens: 4096
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 5.0
-      output_tokens:
-        text: 15.0
-  openai/gpt-5:
-    max_input_tokens: 272000
-    max_output_tokens: 128000
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.125
-      output_tokens:
-        text: 10.0
-  openai/gpt-5-chat:
+  openai/gpt-4o-mini:
     max_input_tokens: 128000
     max_output_tokens: 16384
     input_modalities:
@@ -522,47 +997,33 @@ models:
       - image
     pricing:
       input_tokens:
+        no_cache: 0.15
+        cache_read: 0.08
+      output_tokens:
+        text: 0.6
+  openai/gpt-5:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
         no_cache: 1.25
-        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  openai/gpt-5-chat:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
       output_tokens:
         text: 10.0
   openai/gpt-5-codex:
-    max_input_tokens: 272000
-    max_output_tokens: 128000
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.125
-      output_tokens:
-        text: 10.0
-  openai/gpt-5-mini:
-    max_input_tokens: 272000
-    max_output_tokens: 128000
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.25
-        cache_read: 0.025
-      output_tokens:
-        text: 2.0
-  openai/gpt-5-nano:
-    max_input_tokens: 272000
-    max_output_tokens: 128000
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.05
-        cache_read: 0.005
-      output_tokens:
-        text: 0.4
-  openai/gpt-5.1-codex-max:
     max_input_tokens: 400000
     max_output_tokens: 128000
     input_modalities:
@@ -574,8 +1035,117 @@ models:
         cache_read: 0.125
       output_tokens:
         text: 10.0
+  openai/gpt-5-image:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - file
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+        cache_read: 1.25
+      output_tokens:
+        text: 10.0
+  openai/gpt-5-mini:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+      output_tokens:
+        text: 2.0
+  openai/gpt-5-nano:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.05
+      output_tokens:
+        text: 0.4
+  openai/gpt-5-pro:
+    max_input_tokens: 400000
+    max_output_tokens: 272000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 15.0
+      output_tokens:
+        text: 120.0
+  openai/gpt-5.1:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  openai/gpt-5.1-chat:
+    max_input_tokens: 128000
+    max_output_tokens: 16384
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  openai/gpt-5.1-codex:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.125
+      output_tokens:
+        text: 10.0
+  openai/gpt-5.1-codex-max:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.11
+      output_tokens:
+        text: 9.0
+  openai/gpt-5.1-codex-mini:
+    max_input_tokens: 400000
+    max_output_tokens: 100000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 2.0
   openai/gpt-5.2:
-    max_input_tokens: 272000
+    max_input_tokens: 400000
     max_output_tokens: 128000
     input_modalities:
       - text
@@ -599,7 +1169,7 @@ models:
       output_tokens:
         text: 14.0
   openai/gpt-5.2-codex:
-    max_input_tokens: 272000
+    max_input_tokens: 400000
     max_output_tokens: 128000
     input_modalities:
       - text
@@ -611,7 +1181,7 @@ models:
       output_tokens:
         text: 14.0
   openai/gpt-5.2-pro:
-    max_input_tokens: 272000
+    max_input_tokens: 400000
     max_output_tokens: 128000
     input_modalities:
       - text
@@ -621,23 +1191,120 @@ models:
         no_cache: 21.0
       output_tokens:
         text: 168.0
+  openai/gpt-5.3-codex:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 1.75
+        cache_read: 0.175
+      output_tokens:
+        text: 14.0
+  openai/gpt-5.4:
+    max_input_tokens: 922000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+      output_tokens:
+        text: 15.0
+  openai/gpt-5.4-mini:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 7.5E-7
+        cache_read: 7.5E-8
+      output_tokens:
+        text: 0.0000045
+  openai/gpt-5.4-nano:
+    max_input_tokens: 400000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 2E-7
+        cache_read: 2E-8
+      output_tokens:
+        text: 0.00000125
+  openai/gpt-5.4-pro:
+    max_input_tokens: 922000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 30.0
+        cache_read: 30.0
+      output_tokens:
+        text: 180.0
   openai/gpt-oss-120b:
     max_input_tokens: 131072
     max_output_tokens: 32768
     pricing:
       input_tokens:
-        no_cache: 0.18
+        no_cache: 0.072
       output_tokens:
-        text: 0.8
+        text: 0.28
+  openai/gpt-oss-120b:exacto:
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 0.05
+      output_tokens:
+        text: 0.24
+  openai/gpt-oss-120b:free:
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
   openai/gpt-oss-20b:
     max_input_tokens: 131072
     max_output_tokens: 32768
     pricing:
       input_tokens:
-        no_cache: 0.02
+        no_cache: 0.05
       output_tokens:
-        text: 0.1
-  openai/o1:
+        text: 0.2
+  openai/gpt-oss-20b:free:
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  openai/gpt-oss-safeguard-20b:
+    max_input_tokens: 131072
+    max_output_tokens: 65536
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+      output_tokens:
+        text: 0.3
+  openai/o4-mini:
     max_input_tokens: 200000
     max_output_tokens: 100000
     input_modalities:
@@ -645,219 +1312,459 @@ models:
       - image
     pricing:
       input_tokens:
-        no_cache: 15.0
-        cache_read: 7.5
-      output_tokens:
-        text: 60.0
-  openai/o3-mini:
-    max_input_tokens: 128000
-    max_output_tokens: 65536
-    pricing:
-      input_tokens:
         no_cache: 1.1
+        cache_read: 0.28
       output_tokens:
         text: 4.4
-  openai/o3-mini-high:
-    max_input_tokens: 128000
-    max_output_tokens: 65536
-    pricing:
-      input_tokens:
-        no_cache: 1.1
-      output_tokens:
-        text: 4.4
-  openrouter/auto:
-    max_input_tokens: 2000000
-    input_modalities:
-      - text
-      - image
-      - audio
-  openrouter/bodybuilder:
-    max_input_tokens: 128000
   openrouter/free:
     max_input_tokens: 200000
+    max_output_tokens: 8000
     input_modalities:
       - text
       - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  prime-intellect/intellect-3:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 1.1
   qwen/qwen-2.5-coder-32b-instruct:
-    max_input_tokens: 33792
-    max_output_tokens: 33792
+    max_input_tokens: 32768
+    max_output_tokens: 8192
     pricing:
       input_tokens:
-        no_cache: 0.18
+        no_cache: 0.0
       output_tokens:
-        text: 0.18
-  qwen/qwen-vl-plus:
-    max_input_tokens: 8192
-    max_output_tokens: 2048
+        text: 0.0
+  qwen/qwen2.5-vl-72b-instruct:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
     input_modalities:
       - text
       - image
     pricing:
       input_tokens:
-        no_cache: 0.21
+        no_cache: 0.0
       output_tokens:
-        text: 0.63
-  qwen/qwen3-235b-a22b-2507:
+        text: 0.0
+  qwen/qwen3-235b-a22b-07-25:
     max_input_tokens: 262144
-    max_output_tokens: 262144
+    max_output_tokens: 131072
     pricing:
       input_tokens:
-        no_cache: 0.071
+        no_cache: 0.15
       output_tokens:
-        text: 0.1
+        text: 0.85
   qwen/qwen3-235b-a22b-thinking-2507:
     max_input_tokens: 262144
-    max_output_tokens: 262144
+    max_output_tokens: 81920
     pricing:
       input_tokens:
-        no_cache: 0.11
+        no_cache: 0.078
       output_tokens:
-        text: 0.6
+        text: 0.312
+  qwen/qwen3-30b-a3b-instruct-2507:
+    max_input_tokens: 262000
+    max_output_tokens: 262000
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 0.8
+  qwen/qwen3-30b-a3b-thinking-2507:
+    max_input_tokens: 262000
+    max_output_tokens: 262000
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 0.8
+  qwen/qwen3-4b:free:
+    max_input_tokens: 40960
+    max_output_tokens: 40960
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
   qwen/qwen3-coder:
-    max_input_tokens: 262100
-    max_output_tokens: 262100
-    pricing:
-      input_tokens:
-        no_cache: 0.22
-      output_tokens:
-        text: 0.95
-  qwen/qwen3-coder-plus:
-    max_input_tokens: 997952
-    max_output_tokens: 65536
-    pricing:
-      input_tokens:
-        no_cache: 1.0
-      output_tokens:
-        text: 5.0
-  qwen/qwen3.5-122b-a10b:
     max_input_tokens: 262144
-    max_output_tokens: 65536
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.4
-      output_tokens:
-        text: 2.0
-  qwen/qwen3.5-27b:
-    max_input_tokens: 262144
-    max_output_tokens: 65536
-    input_modalities:
-      - text
-      - image
+    max_output_tokens: 66536
     pricing:
       input_tokens:
         no_cache: 0.3
       output_tokens:
-        text: 2.4
-  qwen/qwen3.5-35b-a3b:
-    max_input_tokens: 262144
+        text: 1.2
+  qwen/qwen3-coder-30b-a3b-instruct:
+    max_input_tokens: 160000
     max_output_tokens: 65536
-    input_modalities:
-      - text
-      - image
     pricing:
       input_tokens:
-        no_cache: 0.25
+        no_cache: 0.07
       output_tokens:
-        text: 2.0
+        text: 0.27
+  qwen/qwen3-coder-flash:
+    max_input_tokens: 128000
+    max_output_tokens: 66536
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 1.5
+  qwen/qwen3-coder:exacto:
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 0.38
+      output_tokens:
+        text: 1.53
+  qwen/qwen3-coder:free:
+    max_input_tokens: 262144
+    max_output_tokens: 66536
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  qwen/qwen3-max:
+    max_input_tokens: 262144
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 1.2
+      output_tokens:
+        text: 6.0
+  qwen/qwen3-next-80b-a3b-instruct:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 1.4
+  qwen/qwen3-next-80b-a3b-instruct:free:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  qwen/qwen3-next-80b-a3b-thinking:
+    max_input_tokens: 262144
+    max_output_tokens: 262144
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 1.4
   qwen/qwen3.5-397b-a17b:
     max_input_tokens: 262144
     max_output_tokens: 65536
     input_modalities:
       - text
       - image
+      - video
     pricing:
       input_tokens:
         no_cache: 0.6
       output_tokens:
         text: 3.6
-  qwen/qwen3.5-flash-02-23:
-    max_input_tokens: 1000000
-    max_output_tokens: 65536
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-      output_tokens:
-        text: 0.4
   qwen/qwen3.5-plus-02-15:
     max_input_tokens: 1000000
     max_output_tokens: 65536
     input_modalities:
       - text
       - image
+      - video
     pricing:
       input_tokens:
         no_cache: 0.4
       output_tokens:
         text: 2.4
-  switchpoint/router:
-    max_input_tokens: 131072
-    max_output_tokens: 131072
+  qwen/qwen3.6-plus:free:
+    max_input_tokens: 1000000
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
     pricing:
       input_tokens:
-        no_cache: 0.85
+        no_cache: 0.0
       output_tokens:
-        text: 3.4
-  undi95/remm-slerp-l2-13b:
+        text: 0.0
+  sourceful/riverflow-v2-fast-preview:
+    max_input_tokens: 8192
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - image
     pricing:
       input_tokens:
-        no_cache: 1.875
+        no_cache: 0.0
       output_tokens:
-        text: 1.875
-  x-ai/grok-4:
+        text: 0.0
+  sourceful/riverflow-v2-max-preview:
+    max_input_tokens: 8192
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  sourceful/riverflow-v2-standard-preview:
+    max_input_tokens: 8192
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  stepfun/step-3.5-flash:
     max_input_tokens: 256000
     max_output_tokens: 256000
     pricing:
       input_tokens:
-        no_cache: 3.0
+        no_cache: 0.1
+        cache_read: 0.02
       output_tokens:
-        text: 15.0
-  xiaomi/mimo-v2-flash:
-    max_input_tokens: 262144
-    max_output_tokens: 16384
+        text: 0.3
+  stepfun/step-3.5-flash:free:
+    max_input_tokens: 256000
+    max_output_tokens: 256000
     pricing:
       input_tokens:
-        no_cache: 0.09
+        no_cache: 0.0
       output_tokens:
-        text: 0.29
-  z-ai/glm-4.6:
-    max_input_tokens: 202800
-    max_output_tokens: 131000
+        text: 0.0
+  x-ai/grok-3:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 0.75
+        cache_write: 15.0
+      output_tokens:
+        text: 15.0
+  x-ai/grok-3-beta:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 0.75
+        cache_write: 15.0
+      output_tokens:
+        text: 15.0
+  x-ai/grok-3-mini:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.075
+        cache_write: 0.5
+      output_tokens:
+        text: 0.5
+  x-ai/grok-3-mini-beta:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.075
+        cache_write: 0.5
+      output_tokens:
+        text: 0.5
+  x-ai/grok-4:
+    max_input_tokens: 256000
+    max_output_tokens: 64000
+    pricing:
+      input_tokens:
+        no_cache: 3.0
+        cache_read: 0.75
+        cache_write: 15.0
+      output_tokens:
+        text: 15.0
+  x-ai/grok-4-fast:
+    max_input_tokens: 2000000
+    max_output_tokens: 30000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+        cache_read: 0.05
+        cache_write: 0.05
+      output_tokens:
+        text: 0.5
+  x-ai/grok-4.1-fast:
+    max_input_tokens: 2000000
+    max_output_tokens: 30000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+        cache_read: 0.05
+        cache_write: 0.05
+      output_tokens:
+        text: 0.5
+  x-ai/grok-4.20-beta:
+    max_input_tokens: 2000000
+    max_output_tokens: 30000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.2
+      output_tokens:
+        text: 6.0
+  x-ai/grok-4.20-multi-agent-beta:
+    max_input_tokens: 2000000
+    max_output_tokens: 30000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.2
+      output_tokens:
+        text: 6.0
+  x-ai/grok-code-fast-1:
+    max_input_tokens: 256000
+    max_output_tokens: 10000
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+        cache_read: 0.02
+      output_tokens:
+        text: 1.5
+  xiaomi/mimo-v2-flash:
+    max_input_tokens: 262144
+    max_output_tokens: 65536
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+      output_tokens:
+        text: 0.3
+  xiaomi/mimo-v2-omni:
+    max_input_tokens: 262144
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
+      - audio
     pricing:
       input_tokens:
         no_cache: 0.4
+        cache_read: 0.08
       output_tokens:
-        text: 1.75
-  z-ai/glm-4.6:exacto:
-    max_input_tokens: 202800
-    max_output_tokens: 131000
+        text: 2.0
+  xiaomi/mimo-v2-pro:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
     pricing:
       input_tokens:
-        no_cache: 0.45
+        no_cache: 1.0
+        cache_read: 0.2
+      output_tokens:
+        text: 3.0
+  z-ai/glm-4.5:
+    max_input_tokens: 128000
+    max_output_tokens: 96000
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 2.2
+  z-ai/glm-4.5-air:
+    max_input_tokens: 128000
+    max_output_tokens: 96000
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 1.1
+  z-ai/glm-4.5-air:free:
+    max_input_tokens: 128000
+    max_output_tokens: 96000
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  z-ai/glm-4.5v:
+    max_input_tokens: 64000
+    max_output_tokens: 16384
+    input_modalities:
+      - text
+      - image
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 1.8
+  z-ai/glm-4.6:
+    max_input_tokens: 200000
+    max_output_tokens: 128000
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.11
+      output_tokens:
+        text: 2.2
+  z-ai/glm-4.6:exacto:
+    max_input_tokens: 200000
+    max_output_tokens: 128000
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.11
       output_tokens:
         text: 1.9
   z-ai/glm-4.7:
-    max_input_tokens: 202752
-    max_output_tokens: 64000
-    input_modalities:
-      - text
-      - image
+    max_input_tokens: 204800
+    max_output_tokens: 131072
     pricing:
       input_tokens:
-        no_cache: 0.4
+        no_cache: 0.6
+        cache_read: 0.11
       output_tokens:
-        text: 1.5
+        text: 2.2
   z-ai/glm-4.7-flash:
     max_input_tokens: 200000
-    max_output_tokens: 32000
-    input_modalities:
-      - text
-      - image
+    max_output_tokens: 65535
     pricing:
       input_tokens:
         no_cache: 0.07
@@ -865,9 +1772,29 @@ models:
         text: 0.4
   z-ai/glm-5:
     max_input_tokens: 202752
-    max_output_tokens: 128000
+    max_output_tokens: 131000
     pricing:
       input_tokens:
-        no_cache: 0.8
+        no_cache: 1.0
+        cache_read: 0.2
       output_tokens:
-        text: 2.56
+        text: 3.2
+  z-ai/glm-5-turbo:
+    max_input_tokens: 202752
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.96
+        cache_read: 0.192
+        cache_write: 0.0
+      output_tokens:
+        text: 3.2
+  z-ai/glm-5.1:
+    max_input_tokens: 202752
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4

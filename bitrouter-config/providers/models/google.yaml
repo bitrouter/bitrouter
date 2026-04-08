@@ -3,138 +3,47 @@ api_base: https://generativelanguage.googleapis.com
 env_prefix: GOOGLE
 models:
   gemini-1.5-flash:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.075
-      output_tokens:
-        text: 0.3
-  gemini-1.5-flash-001:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.075
-        cache_read: 0.0187
-        cache_write: 1.0
-      output_tokens:
-        text: 0.3
-  gemini-1.5-flash-002:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.075
-        cache_read: 0.0187
-        cache_write: 1.0
-      output_tokens:
-        text: 0.3
-  gemini-1.5-flash-8b:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-  gemini-1.5-flash-8b-exp-0827:
     max_input_tokens: 1000000
     max_output_tokens: 8192
     input_modalities:
       - text
       - image
-  gemini-1.5-flash-8b-exp-0924:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-  gemini-1.5-flash-exp-0827:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-  gemini-1.5-flash-latest:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
+      - audio
+      - video
     pricing:
       input_tokens:
         no_cache: 0.075
+        cache_read: 0.01875
       output_tokens:
         text: 0.3
+  gemini-1.5-flash-8b:
+    max_input_tokens: 1000000
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.0375
+        cache_read: 0.01
+      output_tokens:
+        text: 0.15
   gemini-1.5-pro:
-    max_input_tokens: 2097152
+    max_input_tokens: 1000000
     max_output_tokens: 8192
     input_modalities:
       - text
       - image
+      - audio
+      - video
     pricing:
       input_tokens:
-        no_cache: 3.5
+        no_cache: 1.25
+        cache_read: 0.3125
       output_tokens:
-        text: 10.5
-  gemini-1.5-pro-001:
-    max_input_tokens: 2097152
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 3.5
-      output_tokens:
-        text: 10.5
-  gemini-1.5-pro-002:
-    max_input_tokens: 2097152
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 3.5
-      output_tokens:
-        text: 10.5
-  gemini-1.5-pro-exp-0801:
-    max_input_tokens: 2097152
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 3.5
-      output_tokens:
-        text: 10.5
-  gemini-1.5-pro-exp-0827:
-    max_input_tokens: 2097152
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-  gemini-1.5-pro-latest:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 3.5
-      output_tokens:
-        text: 1.05
+        text: 5.0
   gemini-2.0-flash:
     max_input_tokens: 1048576
     max_output_tokens: 8192
@@ -143,43 +52,13 @@ models:
       - image
       - audio
       - video
-    output_modalities:
-      - text
-      - image
+      - file
     pricing:
       input_tokens:
         no_cache: 0.1
         cache_read: 0.025
       output_tokens:
         text: 0.4
-  gemini-2.0-flash-001:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    output_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-        cache_read: 0.025
-      output_tokens:
-        text: 0.4
-  gemini-2.0-flash-exp:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    output_modalities:
-      - text
-      - image
   gemini-2.0-flash-lite:
     max_input_tokens: 1048576
     max_output_tokens: 8192
@@ -188,388 +67,282 @@ models:
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.075
-        cache_read: 0.0187
       output_tokens:
         text: 0.3
-  gemini-2.0-flash-lite-001:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    pricing:
-      input_tokens:
-        no_cache: 0.075
-        cache_read: 0.0187
-      output_tokens:
-        text: 0.3
-  gemini-2.0-flash-lite-preview-02-05:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    pricing:
-      input_tokens:
-        no_cache: 0.075
-        cache_read: 0.0187
-      output_tokens:
-        text: 0.3
-  gemini-2.0-flash-live-001:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    output_modalities:
-      - text
-      - audio
-    pricing:
-      input_tokens:
-        no_cache: 0.35
-        cache_read: 0.075
-      output_tokens:
-        text: 1.5
-  gemini-2.0-flash-preview-image-generation:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    output_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-        cache_read: 0.025
-      output_tokens:
-        text: 0.4
-  gemini-2.0-flash-thinking-exp:
-    max_input_tokens: 1048576
-    max_output_tokens: 65536
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    output_modalities:
-      - text
-      - image
-  gemini-2.0-flash-thinking-exp-01-21:
-    max_input_tokens: 1048576
-    max_output_tokens: 65536
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    output_modalities:
-      - text
-      - image
-  gemini-2.0-pro-exp-02-05:
-    max_input_tokens: 2097152
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-      - audio
-  gemini-2.5-computer-use-preview-10-2025:
-    max_input_tokens: 128000
-    max_output_tokens: 64000
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-      output_tokens:
-        text: 10.0
   gemini-2.5-flash:
     max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.3
-        cache_read: 0.03
+        cache_read: 0.075
       output_tokens:
         text: 2.5
-        reasoning: 2.5
-  gemini-2.5-flash-lite:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
+  gemini-2.5-flash-image:
+    max_input_tokens: 32768
+    max_output_tokens: 32768
     input_modalities:
       - text
       - image
-      - audio
-      - video
+    output_modalities:
+      - text
+      - image
     pricing:
       input_tokens:
-        no_cache: 0.1
-        cache_read: 0.01
+        no_cache: 0.3
+        cache_read: 0.075
       output_tokens:
-        text: 0.4
-        reasoning: 0.4
-  gemini-2.5-flash-lite-preview-06-17:
+        text: 30.0
+  gemini-2.5-flash-image-preview:
+    max_input_tokens: 32768
+    max_output_tokens: 32768
+    input_modalities:
+      - text
+      - image
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.075
+      output_tokens:
+        text: 30.0
+  gemini-2.5-flash-lite:
     max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.1
         cache_read: 0.025
       output_tokens:
         text: 0.4
-        reasoning: 0.4
-  gemini-2.5-flash-lite-preview-09-2025:
+  gemini-2.5-flash-lite-preview-06-17:
     max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.1
-        cache_read: 0.01
+        cache_read: 0.025
       output_tokens:
         text: 0.4
-        reasoning: 0.4
-  gemini-2.5-flash-native-audio-latest:
+  gemini-2.5-flash-lite-preview-09-2025:
     max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - audio
-    output_modalities:
-      - text
-      - audio
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-      output_tokens:
-        text: 2.5
-  gemini-2.5-flash-native-audio-preview-09-2025:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - audio
-    output_modalities:
-      - text
-      - audio
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-      output_tokens:
-        text: 2.5
-  gemini-2.5-flash-native-audio-preview-12-2025:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - audio
-    output_modalities:
-      - text
-      - audio
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-      output_tokens:
-        text: 2.5
-  gemini-2.5-flash-preview-04-17:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.025
+      output_tokens:
+        text: 0.4
+  gemini-2.5-flash-preview-04-17:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.15
         cache_read: 0.0375
       output_tokens:
         text: 0.6
-        reasoning: 3.5
   gemini-2.5-flash-preview-05-20:
     max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
-        no_cache: 0.3
-        cache_read: 0.075
+        no_cache: 0.15
+        cache_read: 0.0375
       output_tokens:
-        text: 2.5
-        reasoning: 2.5
+        text: 0.6
   gemini-2.5-flash-preview-09-2025:
     max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.3
         cache_read: 0.075
       output_tokens:
         text: 2.5
-        reasoning: 2.5
-  gemini-2.5-pro:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.125
-      output_tokens:
-        text: 10.0
-  gemini-2.5-pro-exp-03-25:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-  gemini-2.5-pro-preview-03-25:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.125
-      output_tokens:
-        text: 10.0
-  gemini-2.5-pro-preview-05-06:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.125
-      output_tokens:
-        text: 10.0
-  gemini-2.5-pro-preview-06-05:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.125
-      output_tokens:
-        text: 10.0
-  gemini-2.5-pro-preview-tts:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
+  gemini-2.5-flash-preview-tts:
+    max_input_tokens: 8000
+    max_output_tokens: 16000
     output_modalities:
       - audio
     pricing:
       input_tokens:
-        no_cache: 1.25
-        cache_read: 0.125
+        no_cache: 0.5
       output_tokens:
         text: 10.0
-  gemini-3-flash-preview:
+  gemini-2.5-pro:
     max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.31
+      output_tokens:
+        text: 10.0
+  gemini-2.5-pro-preview-05-06:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.31
+      output_tokens:
+        text: 10.0
+  gemini-2.5-pro-preview-06-05:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.31
+      output_tokens:
+        text: 10.0
+  gemini-2.5-pro-preview-tts:
+    max_input_tokens: 8000
+    max_output_tokens: 16000
+    output_modalities:
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 20.0
+  gemini-3-flash-preview:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
+      - audio
+      - file
     pricing:
       input_tokens:
         no_cache: 0.5
         cache_read: 0.05
       output_tokens:
         text: 3.0
-        reasoning: 3.0
   gemini-3-pro-preview:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_input_tokens: 1000000
+    max_output_tokens: 64000
     input_modalities:
       - text
       - image
-      - audio
       - video
+      - audio
+      - file
     pricing:
       input_tokens:
         no_cache: 2.0
         cache_read: 0.2
       output_tokens:
         text: 12.0
+  gemini-3.1-flash-image-preview:
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_modalities:
+      - text
+      - image
+      - file
+    output_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+      output_tokens:
+        text: 60.0
   gemini-3.1-flash-lite-preview:
     max_input_tokens: 1048576
     max_output_tokens: 65536
     input_modalities:
       - text
       - image
-      - audio
       - video
+      - audio
+      - file
     pricing:
       input_tokens:
         no_cache: 0.25
         cache_read: 0.025
+        cache_write: 1.0
       output_tokens:
         text: 1.5
-        reasoning: 1.5
   gemini-3.1-pro-preview:
     max_input_tokens: 1048576
     max_output_tokens: 65536
     input_modalities:
       - text
       - image
-      - audio
       - video
+      - audio
+      - file
     pricing:
       input_tokens:
         no_cache: 2.0
@@ -582,141 +355,130 @@ models:
     input_modalities:
       - text
       - image
-      - audio
       - video
+      - audio
+      - file
     pricing:
       input_tokens:
         no_cache: 2.0
         cache_read: 0.2
       output_tokens:
         text: 12.0
-  gemini-exp-1114:
-    max_input_tokens: 1048576
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-  gemini-exp-1206:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
-    input_modalities:
-      - text
-      - image
-      - audio
-      - video
+  gemini-embedding-001:
+    max_input_tokens: 2048
+    max_output_tokens: 3072
     pricing:
       input_tokens:
-        no_cache: 0.3
-        cache_read: 0.03
+        no_cache: 0.15
       output_tokens:
-        text: 2.5
-        reasoning: 2.5
+        text: 0.0
   gemini-flash-latest:
     max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.3
-        cache_read: 0.03
+        cache_read: 0.075
       output_tokens:
         text: 2.5
-        reasoning: 2.5
   gemini-flash-lite-latest:
     max_input_tokens: 1048576
-    max_output_tokens: 65535
+    max_output_tokens: 65536
     input_modalities:
       - text
       - image
       - audio
       - video
+      - file
     pricing:
       input_tokens:
         no_cache: 0.1
-        cache_read: 0.01
+        cache_read: 0.025
       output_tokens:
         text: 0.4
-        reasoning: 0.4
-  gemini-gemma-2-27b-it:
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.35
-      output_tokens:
-        text: 1.05
-  gemini-gemma-2-9b-it:
-    max_output_tokens: 8192
-    input_modalities:
-      - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.35
-      output_tokens:
-        text: 1.05
-  gemini-pro:
-    max_input_tokens: 32760
-    max_output_tokens: 8192
-    pricing:
-      input_tokens:
-        no_cache: 0.35
-      output_tokens:
-        text: 1.05
-  gemini-pro-latest:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
+  gemini-live-2.5-flash:
+    max_input_tokens: 128000
+    max_output_tokens: 8000
     input_modalities:
       - text
       - image
       - audio
       - video
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.125
-      output_tokens:
-        text: 10.0
-  gemini-pro-vision:
-    max_input_tokens: 30720
-    max_output_tokens: 2048
-    input_modalities:
+    output_modalities:
       - text
-      - image
-    pricing:
-      input_tokens:
-        no_cache: 0.35
-      output_tokens:
-        text: 1.05
-  gemini-robotics-er-1.5-preview:
-    max_input_tokens: 1048576
-    max_output_tokens: 65535
-    input_modalities:
-      - text
-      - image
-      - video
       - audio
     pricing:
       input_tokens:
-        no_cache: 0.3
+        no_cache: 0.5
       output_tokens:
-        text: 2.5
-        reasoning: 2.5
+        text: 2.0
+  gemini-live-2.5-flash-preview-native-audio:
+    max_input_tokens: 131072
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - audio
+      - video
+    output_modalities:
+      - text
+      - audio
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+      output_tokens:
+        text: 2.0
+  gemma-3-12b-it:
+    max_input_tokens: 32768
+    max_output_tokens: 8192
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
   gemma-3-27b-it:
     max_input_tokens: 131072
     max_output_tokens: 8192
     input_modalities:
       - text
       - image
-  learnlm-1.5-pro-experimental:
-    max_input_tokens: 32767
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gemma-3-4b-it:
+    max_input_tokens: 32768
     max_output_tokens: 8192
     input_modalities:
       - text
       - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gemma-3n-e2b-it:
+    max_input_tokens: 8192
+    max_output_tokens: 2000
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gemma-3n-e4b-it:
+    max_input_tokens: 8192
+    max_output_tokens: 2000
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
