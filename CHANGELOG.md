@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0](https://github.com/bitrouter/bitrouter/compare/v0.20.0...v0.21.0)
+
+
+### 🐛 Bug Fixes
+
+- Add wallet variant to AuthConfig enum ([#275](https://github.com/bitrouter/bitrouter/pull/275)) - ([755239a](https://github.com/bitrouter/bitrouter/commit/755239abe88964b5e7243c1225e2d0c02aeb8840))
+- Strip ANSI escape codes from model names in routing ([#284](https://github.com/bitrouter/bitrouter/pull/284)) - ([b008f58](https://github.com/bitrouter/bitrouter/commit/b008f58775184bb3305e7bd29363b51662147827))
+
+### 📚 Documentation
+
+- Fix stale a2a refs and broken code example ([#272](https://github.com/bitrouter/bitrouter/pull/272)) - ([2dbde0f](https://github.com/bitrouter/bitrouter/commit/2dbde0f664bab106c444c8a029cfe42c16cbd24b))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#287](https://github.com/bitrouter/bitrouter/pull/287)) - ([4a8e9e1](https://github.com/bitrouter/bitrouter/commit/4a8e9e15b0b610fb04cd222ee97150f2480dff9a))
+- *(providers)* Update models from models.dev ([#283](https://github.com/bitrouter/bitrouter/pull/283)) - ([53c87d1](https://github.com/bitrouter/bitrouter/commit/53c87d15cc32c765d346b5fadc2540bc0d6325c2))
+
+
 ## [0.20.0](https://github.com/bitrouter/bitrouter/compare/v0.19.1...v0.20.0)
 
 
