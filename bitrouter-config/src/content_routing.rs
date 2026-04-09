@@ -68,7 +68,7 @@ pub struct ContentRoutingRules {
 
 // ── Default built-in signals ────────────────────────────────────────
 
-/// Parsed shape of `signals/builtin.yaml`.
+/// Parsed shape of `signals.yaml`.
 #[derive(Debug, serde::Deserialize)]
 struct BuiltinSignalsDef {
     #[serde(default)]
@@ -89,7 +89,7 @@ struct BuiltinComplexityDef {
     code_blocks_increase_complexity: bool,
 }
 
-const BUILTIN_SIGNALS_YAML: &str = include_str!("../signals/builtin.yaml");
+const BUILTIN_SIGNALS_YAML: &str = include_str!("signals.yaml");
 
 fn load_builtin_signals() -> BuiltinSignalsDef {
     serde_saphyr::from_str(BUILTIN_SIGNALS_YAML).unwrap_or_else(|e| {
