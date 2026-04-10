@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1609,7 +1609,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-accounts"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "bitrouter-core",
  "chrono",
@@ -1624,7 +1624,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-api"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "alloy",
  "async-trait",
@@ -1649,7 +1649,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-blob"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "bitrouter-core",
  "tempfile",
@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-config"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "bitrouter-core",
  "bitrouter-guardrails",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-core"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-guardrails"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "bitrouter-core",
  "futures-core",
@@ -1712,7 +1712,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-observe"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "bitrouter-core",
  "chrono",
@@ -1727,7 +1727,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-providers"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
@@ -1758,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-tui"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "bitrouter-config",
  "bitrouter-core",

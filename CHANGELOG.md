@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.1](https://github.com/bitrouter/bitrouter/compare/v0.21.0...v0.21.1)
+
+
+### 🚜 Refactor
+
+- *(config)* Place built-in signals under `src` ([#288](https://github.com/bitrouter/bitrouter/pull/288)) - ([32cfbe4](https://github.com/bitrouter/bitrouter/commit/32cfbe4e2050c3edd050c41d3d8dc1a03ce37b99))
+
+
 ## [0.21.0](https://github.com/bitrouter/bitrouter/compare/v0.20.0...v0.21.0)
 
 
