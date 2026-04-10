@@ -301,11 +301,17 @@ where
 
         // Build account filter that extracts caller context when auth is enabled,
         // or returns a default (empty) caller context when no database is configured.
+        // When a database is connected, budget enforcement is chained after auth:
+        // accumulated spend is compared against the JWT `bgt` claim.
+        let spend_store = observe.spend_store.clone();
         let account_filter = if self.db.is_some() {
             let auth_filter = auth::openai_auth(auth_ctx.clone());
+            let ss = spend_store.clone();
             warp::any()
                 .and(auth_filter)
                 .map(identity_to_caller_context)
+                .and(warp::any().map(move || ss.clone()))
+                .and_then(crate::runtime::budget::check_budget)
                 .boxed()
         } else {
             warp::any().map(CallerContext::default).boxed()
@@ -313,9 +319,12 @@ where
 
         let anthropic_account_filter = if self.db.is_some() {
             let auth_filter = auth::anthropic_auth(auth_ctx.clone());
+            let ss = spend_store.clone();
             warp::any()
                 .and(auth_filter)
                 .map(identity_to_caller_context)
+                .and(warp::any().map(move || ss.clone()))
+                .and_then(crate::runtime::budget::check_budget)
                 .boxed()
         } else {
             warp::any().map(CallerContext::default).boxed()
@@ -784,6 +793,7 @@ fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> Cal
         models: id.models,
         budget: id.budget,
         budget_scope: id.budget_scope,
+        issued_at: id.issued_at,
         key: id.key,
         chain: id.chain,
     }
@@ -867,6 +877,19 @@ async fn handle_auth_rejection(
         return Ok(Box::new(warp::reply::with_status(
             json,
             warp::http::StatusCode::UNAUTHORIZED,
+        )) as Box<dyn warp::Reply>);
+    }
+
+    if let Some(e) = rejection.find::<crate::runtime::budget::BudgetExhausted>() {
+        let json = warp::reply::json(&serde_json::json!({
+            "error": {
+                "message": e.to_string(),
+                "type": "budget_exhausted",
+            }
+        }));
+        return Ok(Box::new(warp::reply::with_status(
+            json,
+            warp::http::StatusCode::TOO_MANY_REQUESTS,
         )) as Box<dyn warp::Reply>);
     }
 
