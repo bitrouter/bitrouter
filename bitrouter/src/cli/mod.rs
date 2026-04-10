@@ -3,6 +3,7 @@ pub mod admin_auth;
 pub mod agents;
 pub mod key;
 pub mod models;
+pub mod policy;
 pub mod route;
 pub mod tools;
 pub mod update_check;

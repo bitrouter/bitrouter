@@ -29,6 +29,9 @@ pub struct CallerContext {
     pub budget: Option<u64>,
     /// Whether the budget applies per-session or per-account.
     pub budget_scope: Option<BudgetScope>,
+    /// JWT issued-at timestamp (seconds since epoch).
+    /// Used as the `since` boundary for session-scoped budget enforcement.
+    pub issued_at: Option<u64>,
     /// OWS agent key for payment authorization (from JWT `key` claim).
     pub key: Option<String>,
     /// CAIP-2 chain identifier derived from the operator's `iss` CAIP-10.

@@ -1,6 +1,7 @@
 pub mod agentskills_client;
 pub mod app;
 pub mod auth;
+pub mod budget;
 pub mod daemon;
 pub mod error;
 pub mod mcp_client;

@@ -99,6 +99,12 @@ enum Command {
         action: AgentsAction,
     },
 
+    /// Manage spend-limit policies for OWS wallet signing
+    Policy {
+        #[command(subcommand)]
+        action: PolicyAction,
+    },
+
     /// Reset configuration and re-run setup
     Reset,
 }
@@ -222,6 +228,56 @@ enum AgentsAction {
     List,
     /// Check that agent routing through BitRouter is working
     Check,
+}
+
+#[derive(Debug, Subcommand)]
+enum PolicyAction {
+    /// Evaluate a policy (OWS executable policy entry point — reads JSON from stdin)
+    Eval,
+    /// Create a new spend-limit policy
+    Create {
+        /// Policy name
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Daily spend limit in micro-USD
+        #[arg(long)]
+        daily_limit: Option<u64>,
+
+        /// Monthly spend limit in micro-USD
+        #[arg(long)]
+        monthly_limit: Option<u64>,
+
+        /// Per-transaction maximum in micro-USD
+        #[arg(long)]
+        per_tx_max: Option<u64>,
+
+        /// Allowed chains (CAIP-2, comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        chains: Option<Vec<String>>,
+
+        /// Expiration timestamp (ISO 8601)
+        #[arg(long)]
+        expires: Option<String>,
+
+        /// Import from a custom policy JSON file
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+    },
+    /// List all policies
+    List,
+    /// Show policy details
+    Show {
+        /// Policy ID
+        #[arg(long)]
+        id: String,
+    },
+    /// Delete a policy
+    Delete {
+        /// Policy ID
+        #[arg(long)]
+        id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -402,6 +458,36 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     exp.as_deref(),
                     ows_key.as_deref(),
                 )?,
+            }
+            return Ok(());
+        }
+        Some(Command::Policy { action }) => {
+            let pd = cli::policy::policy_dir(&paths.home_dir);
+            match action {
+                PolicyAction::Eval => cli::policy::eval(&pd)?,
+                PolicyAction::Create {
+                    name,
+                    daily_limit,
+                    monthly_limit,
+                    per_tx_max,
+                    chains,
+                    expires,
+                    file,
+                } => cli::policy::create(
+                    &pd,
+                    cli::policy::CreateOpts {
+                        name: name.as_deref().unwrap_or("default"),
+                        daily_limit,
+                        monthly_limit,
+                        per_tx_max,
+                        chains: chains.as_deref().unwrap_or(&[]),
+                        expires_at: expires.as_deref(),
+                        file: file.as_deref(),
+                    },
+                )?,
+                PolicyAction::List => cli::policy::list(&pd)?,
+                PolicyAction::Show { id } => cli::policy::show(&pd, &id)?,
+                PolicyAction::Delete { id } => cli::policy::delete(&pd, &id)?,
             }
             return Ok(());
         }
