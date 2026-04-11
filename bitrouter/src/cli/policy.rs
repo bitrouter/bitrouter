@@ -13,84 +13,11 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use bitrouter_accounts::policy::file::{
+    self, PolicyConfig, PolicyContext, PolicyFile, PolicyResult,
+};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-// ── Data types ───────────────────────────────────────────────────
-
-/// Input context sent by OWS on stdin when invoking an executable policy.
-///
-/// Additional fields (`wallet`, `api_key`, etc.) are accepted and ignored
-/// by serde's default behavior — only the fields needed for evaluation are
-/// declared here.
-#[derive(Debug, Deserialize)]
-pub struct PolicyContext {
-    /// CAIP-2 chain identifier (e.g. `"tempo:mainnet"`).
-    #[serde(default)]
-    pub chain: Option<String>,
-    /// Transaction value in micro-USD.
-    #[serde(default)]
-    pub transaction_value: u64,
-    /// Accumulated daily spend in micro-USD (provided by OWS).
-    #[serde(default)]
-    pub daily_total: u64,
-    /// Accumulated monthly spend in micro-USD (provided by OWS).
-    #[serde(default)]
-    pub monthly_total: u64,
-}
-
-/// Result written to stdout after policy evaluation.
-#[derive(Debug, Serialize)]
-pub struct PolicyResult {
-    pub allow: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-/// Operator-defined spend limits stored in a policy file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyConfig {
-    /// Human-readable policy name.
-    pub name: String,
-
-    /// Maximum daily spend in micro-USD.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub daily_limit: Option<u64>,
-
-    /// Maximum monthly spend in micro-USD.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub monthly_limit: Option<u64>,
-
-    /// Maximum per-transaction value in micro-USD.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub per_tx_max: Option<u64>,
-
-    /// Allowed chains (CAIP-2). Empty means all chains allowed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_chains: Vec<String>,
-
-    /// Policy expiration (ISO 8601). After this time, policy denies all.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<String>,
-}
-
-/// Full on-disk policy file: config + OWS integration metadata.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PolicyFile {
-    /// Unique policy ID (UUID).
-    pub id: String,
-
-    /// The spend-limit configuration.
-    #[serde(flatten)]
-    pub config: PolicyConfig,
-
-    /// Path to the evaluator executable (populated by `create`).
-    pub executable: String,
-
-    /// When this policy was created (ISO 8601).
-    pub created_at: String,
-}
 
 // ── Eval subcommand ──────────────────────────────────────────────
 
@@ -211,7 +138,7 @@ fn check_policy(config: &PolicyConfig, ctx: &PolicyContext) -> Option<String> {
 
 // ── CLI subcommands ──────────────────────────────────────────────
 
-/// Options for creating a spend-limit policy.
+/// Options for creating a policy.
 pub struct CreateOpts<'a> {
     pub name: &'a str,
     pub daily_limit: Option<u64>,
@@ -220,6 +147,10 @@ pub struct CreateOpts<'a> {
     pub chains: &'a [String],
     pub expires_at: Option<&'a str>,
     pub file: Option<&'a Path>,
+    /// Tool deny rules as "provider:tool" pairs.
+    pub tool_deny: &'a [String],
+    /// Tool allow rules as "provider:tool" pairs.
+    pub tool_allow: &'a [String],
 }
 
 /// Create a new spend-limit policy.
@@ -252,6 +183,7 @@ pub fn create(policy_dir: &Path, opts: CreateOpts<'_>) -> Result {
                 per_tx_max: opts.per_tx_max,
                 allowed_chains: opts.chains.to_vec(),
                 expires_at: opts.expires_at.map(String::from),
+                tool_rules: parse_tool_rules(opts.tool_deny, opts.tool_allow),
             },
             executable: format!("{bitrouter_exe} policy eval"),
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -354,38 +286,50 @@ pub fn delete(policy_dir: &Path, id: &str) -> Result {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-/// Load all policy files from the policy directory.
-fn load_policies(dir: &Path) -> Result<Vec<PolicyFile>> {
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
+/// Parse `--tool-deny` and `--tool-allow` flags into a `tool_rules` map.
+///
+/// Flags use "provider:tool" format (e.g. "github:delete_repo").
+fn parse_tool_rules(
+    deny: &[String],
+    allow: &[String],
+) -> std::collections::HashMap<String, bitrouter_accounts::policy::config::ToolProviderPolicy> {
+    let mut rules: std::collections::HashMap<
+        String,
+        bitrouter_accounts::policy::config::ToolProviderPolicy,
+    > = std::collections::HashMap::new();
 
-    let mut policies = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "json") {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => match serde_json::from_str::<PolicyFile>(&content) {
-                    Ok(pf) => policies.push(pf),
-                    Err(e) => {
-                        eprintln!("warning: skipping {}: {e}", path.display());
-                    }
-                },
-                Err(e) => {
-                    eprintln!("warning: cannot read {}: {e}", path.display());
-                }
-            }
+    for entry in deny {
+        if let Some((provider, tool)) = entry.split_once(':') {
+            let policy = rules.entry(provider.to_string()).or_default();
+            let filter = policy.filter.get_or_insert_default();
+            filter.deny.get_or_insert_default().push(tool.to_string());
+        } else {
+            eprintln!("warning: ignoring malformed --tool-deny '{entry}' (expected provider:tool)");
         }
     }
 
-    policies.sort_by(|a, b| a.config.name.cmp(&b.config.name));
-    Ok(policies)
+    for entry in allow {
+        if let Some((provider, tool)) = entry.split_once(':') {
+            let policy = rules.entry(provider.to_string()).or_default();
+            let filter = policy.filter.get_or_insert_default();
+            filter.allow.get_or_insert_default().push(tool.to_string());
+        } else {
+            eprintln!(
+                "warning: ignoring malformed --tool-allow '{entry}' (expected provider:tool)"
+            );
+        }
+    }
+
+    rules
+}
+
+fn load_policies(dir: &Path) -> Result<Vec<PolicyFile>> {
+    file::load_policies(dir)
 }
 
 /// Resolve the policy directory for a given BitRouter home.
 pub fn policy_dir(home: &Path) -> PathBuf {
-    home.join("policies")
+    file::policy_dir(home)
 }
 
 #[cfg(test)]
@@ -401,6 +345,7 @@ mod tests {
             per_tx_max: Some(2_000_000),
             allowed_chains: vec!["tempo:mainnet".into()],
             expires_at: None,
+            tool_rules: Default::default(),
         };
         let ctx = PolicyContext {
             chain: Some("tempo:mainnet".into()),
@@ -421,6 +366,7 @@ mod tests {
             per_tx_max: None,
             allowed_chains: vec![],
             expires_at: None,
+            tool_rules: Default::default(),
         };
         let ctx = PolicyContext {
             chain: None,
@@ -443,6 +389,7 @@ mod tests {
             per_tx_max: None,
             allowed_chains: vec![],
             expires_at: None,
+            tool_rules: Default::default(),
         };
         let ctx = PolicyContext {
             chain: None,
@@ -465,6 +412,7 @@ mod tests {
             per_tx_max: Some(1_000_000),
             allowed_chains: vec![],
             expires_at: None,
+            tool_rules: Default::default(),
         };
         let ctx = PolicyContext {
             chain: None,
@@ -487,6 +435,7 @@ mod tests {
             per_tx_max: None,
             allowed_chains: vec!["tempo:mainnet".into()],
             expires_at: None,
+            tool_rules: Default::default(),
         };
         let ctx = PolicyContext {
             chain: Some("solana:mainnet".into()),
@@ -509,6 +458,7 @@ mod tests {
             per_tx_max: None,
             allowed_chains: vec![],
             expires_at: Some("2020-01-01T00:00:00Z".into()),
+            tool_rules: Default::default(),
         };
         let ctx = PolicyContext {
             chain: None,

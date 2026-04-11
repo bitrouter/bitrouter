@@ -8,6 +8,7 @@ pub mod models;
 pub mod observe;
 pub mod pricing;
 pub mod routers;
+pub mod sync;
 pub mod tools;
 
 pub mod jwt {

@@ -299,3 +299,34 @@ impl<T: HasParamRestrictions> HasParamRestrictions for std::sync::Arc<T> {
         (**self).get_param_restrictions(server)
     }
 }
+
+/// The merged result of evaluating multiple policies for one provider.
+#[derive(Debug, Default)]
+pub struct ResolvedToolRules {
+    /// Merged visibility filter.
+    pub filter: Option<ToolFilter>,
+    /// Merged parameter restrictions.
+    pub param_restrictions: Option<ParamRestrictions>,
+}
+
+/// Per-caller policy resolution for tool access control.
+///
+/// Implementations load policy files and resolve merged access rules across
+/// multiple policies using AND semantics (deny lists unioned, allow lists
+/// intersected). The MCP filter layer uses this trait to enforce per-caller
+/// tool visibility and parameter restrictions.
+pub trait ToolPolicyResolver: Send + Sync {
+    /// Resolve merged [`ToolFilter`]s across all referenced policies.
+    ///
+    /// Returns a map of provider name → merged filter. Providers not
+    /// mentioned in any policy are absent (meaning all-allow).
+    fn resolve_filters(&self, policy_ids: &[String]) -> HashMap<String, ToolFilter>;
+
+    /// Resolve merged tool rules for a specific provider across all
+    /// referenced policies.
+    fn resolve_tool_rules(
+        &self,
+        policy_ids: &[String],
+        provider: &str,
+    ) -> Option<ResolvedToolRules>;
+}

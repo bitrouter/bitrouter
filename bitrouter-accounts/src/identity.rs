@@ -66,4 +66,6 @@ pub struct Identity {
     pub issued_at: Option<u64>,
     /// OWS agent key for payment authorization (from JWT `key` claim).
     pub key: Option<String>,
+    /// Policy IDs from JWT `pol` claim.
+    pub policy_ids: Option<Vec<String>>,
 }

@@ -19,6 +19,8 @@ fn default_true() -> bool {
     true
 }
 
+// ── Policy configuration ────────────────────────────────────────────
+
 // ── Top-level configuration ──────────────────────────────────────────
 
 /// Root configuration file, typically `bitrouter.yaml`.
@@ -31,7 +33,7 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub database: DatabaseConfig,
 
-    /// Guardrails configuration — local firewall for AI agent traffic.
+    /// Guardrails configuration — content inspection firewall for AI traffic.
     #[serde(default)]
     pub guardrails: bitrouter_guardrails::GuardrailConfig,
 

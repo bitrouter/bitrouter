@@ -70,6 +70,12 @@ pub struct BitrouterClaims {
     /// and uses its associated policies for spending enforcement.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+
+    /// Policy IDs attached to this key. Evaluated at request time with AND
+    /// semantics — all referenced policies must allow the operation.
+    /// When absent or empty, no policy restrictions apply (owner mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pol: Option<Vec<String>>,
 }
 
 impl BitrouterClaims {

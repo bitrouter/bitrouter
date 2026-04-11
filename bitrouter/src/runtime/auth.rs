@@ -213,6 +213,7 @@ async fn resolve_jwt_identity(
         budget_scope: claims.bsc,
         issued_at: claims.iat,
         key: claims.key,
+        policy_ids: claims.pol,
     })
 }
 
@@ -288,6 +289,7 @@ fn open_identity() -> impl Filter<Extract = (Identity,), Error = warp::Rejection
             budget_scope: None,
             issued_at: None,
             key: None,
+            policy_ids: None,
         })
     })
 }

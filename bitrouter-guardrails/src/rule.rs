@@ -17,13 +17,20 @@ pub enum Action {
 
 use std::borrow::Cow;
 
+/// Identifies the source of a guardrail violation.
+#[derive(Debug, Clone)]
+pub enum ViolationSource {
+    /// A built-in pattern triggered this violation.
+    BuiltIn(crate::pattern::PatternId),
+    /// A user-defined custom pattern triggered this violation.
+    Custom(String),
+}
+
 /// A single guardrail violation detected during inspection.
 #[derive(Debug, Clone)]
 pub struct Violation {
-    /// The built-in pattern that triggered this violation (if any).
-    pub pattern_id: Option<crate::pattern::PatternId>,
-    /// The custom pattern name that triggered this violation (if any).
-    pub custom_name: Option<String>,
+    /// Which pattern triggered this violation.
+    pub source: ViolationSource,
     /// Human-readable description of what was detected.
     pub description: Cow<'static, str>,
     /// The action that was applied to this violation.
@@ -72,8 +79,7 @@ mod tests {
     fn inspection_result_is_not_clean_with_violations() {
         let result = InspectionResult {
             violations: vec![Violation {
-                pattern_id: Some(crate::pattern::PatternId::ApiKeys),
-                custom_name: None,
+                source: ViolationSource::BuiltIn(crate::pattern::PatternId::ApiKeys),
                 description: Cow::Borrowed("API keys from common providers"),
                 action: Action::Warn,
                 matched: "sk-abc123".to_owned(),

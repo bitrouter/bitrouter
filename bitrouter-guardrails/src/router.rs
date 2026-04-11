@@ -7,6 +7,7 @@ use bitrouter_core::{
         stream_result::LanguageModelStreamResult,
     },
     routers::{router::LanguageModelRouter, routing_table::RoutingTarget},
+    sync::HotSwap,
 };
 
 use crate::engine::Guardrail;
@@ -17,14 +18,26 @@ use crate::guarded_model::GuardedModel;
 ///
 /// When the guardrail is disabled (`enabled: false` in config) the wrapper
 /// is a zero-cost pass-through — it returns the inner model unchanged.
+///
+/// The guardrail engine is held in a [`HotSwap`] so it can be swapped
+/// atomically during config hot-reload without dropping in-flight requests.
 pub struct GuardedRouter<R> {
     inner: R,
-    guardrail: Arc<Guardrail>,
+    guardrail: HotSwap<Guardrail>,
 }
 
 impl<R> GuardedRouter<R> {
     /// Wrap an existing router with guardrail enforcement.
     pub fn new(inner: R, guardrail: Arc<Guardrail>) -> Self {
+        Self {
+            inner,
+            guardrail: HotSwap::from_arc(guardrail),
+        }
+    }
+
+    /// Wrap an existing router with a shared guardrail handle for
+    /// hot-reload support. The reload closure can write to the same handle.
+    pub fn with_hot_swap(inner: R, guardrail: HotSwap<Guardrail>) -> Self {
         Self { inner, guardrail }
     }
 }
@@ -36,14 +49,14 @@ where
 {
     async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
         let model = self.inner.route_model(target).await?;
+        let guardrail = self.guardrail.load();
 
-        if self.guardrail.is_disabled() {
+        if guardrail.is_disabled() {
             return Ok(model);
         }
 
         Ok(DynLanguageModel::new_box(GuardedModel::new(
-            model,
-            self.guardrail.clone(),
+            model, guardrail,
         )))
     }
 }

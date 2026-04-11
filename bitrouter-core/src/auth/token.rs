@@ -217,6 +217,7 @@ mod tests {
             bsc: None,
             id: None,
             key: None,
+            pol: None,
         }
     }
 
@@ -233,6 +234,7 @@ mod tests {
             bsc: None,
             id: None,
             key: None,
+            pol: None,
         }
     }
 
@@ -309,6 +311,7 @@ mod tests {
             bsc: None,
             id: None,
             key: None,
+            pol: None,
         };
         check_expiration(&claims).expect("not expired");
     }
@@ -325,6 +328,7 @@ mod tests {
             bsc: None,
             id: None,
             key: None,
+            pol: None,
         };
         assert!(check_expiration(&claims).is_err());
     }
@@ -341,6 +345,7 @@ mod tests {
             bsc: None,
             id: None,
             key: None,
+            pol: None,
         };
         check_expiration(&claims).expect("no exp means valid");
     }
@@ -397,6 +402,7 @@ mod tests {
             bsc: None,
             id: None,
             key: None,
+            pol: None,
         };
         let token = sign(&claims, &kp).expect("sign");
         let decoded = verify(&token).expect("verify");
@@ -419,6 +425,7 @@ mod tests {
             bsc: Some(crate::auth::claims::BudgetScope::Session),
             id: Some("obsWNDRE4Mq8s2K7x9fGhJlPvTnYc1Ua0ZiDwXbR5eo".to_string()),
             key: Some("ows_key_abc123".to_string()),
+            pol: None,
         };
         let token = sign(&claims, &kp).expect("sign");
         let decoded = verify(&token).expect("verify");
@@ -446,6 +453,7 @@ mod tests {
             bsc: None,
             id: None,
             key: None,
+            pol: None,
         };
         let token = sign(&claims, &kp).expect("sign");
         let decoded = verify(&token).expect("verify");

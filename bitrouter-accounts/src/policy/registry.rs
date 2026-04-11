@@ -1,17 +1,12 @@
 //! Tool registry wrapper that layers visibility filters on top of any
 //! [`ToolRegistry`].
 //!
-//! [`GuardedToolRegistry`] mirrors [`GuardedRouter`](crate::router::GuardedRouter)
-//! for models at the discovery layer — it is a composable decorator that
-//! controls which tools are visible without coupling to routing or
-//! call-time enforcement.
-//!
-//! Call-time parameter enforcement lives in
-//! [`GuardedToolProvider`](crate::guarded_tool_provider::GuardedToolProvider),
-//! created by [`GuardedToolRouter`](crate::tool_router::GuardedToolRouter).
+//! Controls which tools are visible in the admin tool listing endpoint.
+//! Per-caller enforcement (tool visibility + parameter restrictions) is
+//! handled in the MCP filter layer via [`ToolPolicyResolver`].
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 use bitrouter_core::errors::{BitrouterError, Result};
 use bitrouter_core::routers::admin::{
@@ -25,17 +20,9 @@ use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTa
 ///
 /// Wraps any `T: ToolRegistry` and layers per-server filter policy on top.
 /// Filters control which tools are visible in `list_tools()`.
-///
-/// Call-time enforcement (parameter restrictions) is handled separately by
-/// [`GuardedToolProvider`](crate::guarded_tool_provider::GuardedToolProvider)
-/// via the [`ToolGuardrail`](crate::tool_engine::ToolGuardrail) engine.
-///
-/// An optional shared `ToolGuardrail` reference allows `list_upstreams()`
-/// to include parameter restriction info in admin responses.
 pub struct GuardedToolRegistry<T> {
     inner: T,
     filters: RwLock<HashMap<String, ToolFilter>>,
-    guardrail: Option<Arc<std::sync::RwLock<Arc<crate::tool_engine::ToolGuardrail>>>>,
 }
 
 impl<T> GuardedToolRegistry<T> {
@@ -44,17 +31,7 @@ impl<T> GuardedToolRegistry<T> {
         Self {
             inner,
             filters: RwLock::new(filters),
-            guardrail: None,
         }
-    }
-
-    /// Attach a shared tool guardrail for admin inspection.
-    pub fn with_guardrail(
-        mut self,
-        guardrail: Arc<std::sync::RwLock<Arc<crate::tool_engine::ToolGuardrail>>>,
-    ) -> Self {
-        self.guardrail = Some(guardrail);
-        self
     }
 
     /// Access the inner registry.
@@ -116,7 +93,7 @@ impl<T: ToolRegistry> ToolPolicyAdmin for GuardedToolRegistry<T> {
         _restrictions: bitrouter_core::routers::admin::ParamRestrictions,
     ) -> Result<()> {
         tracing::warn!(
-            "runtime parameter restriction updates are managed by ToolGuardrail config — \
+            "runtime parameter restriction updates are managed by per-caller policy files — \
              this operation is a no-op"
         );
         Ok(())
@@ -127,10 +104,6 @@ impl<T: ToolRegistry> AdminToolRegistry for GuardedToolRegistry<T> {
     async fn list_upstreams(&self) -> Vec<ToolUpstreamEntry> {
         let all_tools = self.inner.list_tools().await;
         let filters = self.filters.read().ok();
-        let guardrail_snapshot = self
-            .guardrail
-            .as_ref()
-            .and_then(|g| g.read().ok().map(|guard| Arc::clone(&guard)));
 
         let mut counts: HashMap<String, usize> = HashMap::new();
         for tool in &all_tools {
@@ -156,15 +129,11 @@ impl<T: ToolRegistry> AdminToolRegistry for GuardedToolRegistry<T> {
             .into_iter()
             .map(|(name, tool_count)| {
                 let filter = filters.as_ref().and_then(|f| f.get(&name).cloned());
-                let param_restrictions = guardrail_snapshot
-                    .as_ref()
-                    .and_then(|g| g.param_restrictions_for(&name).cloned())
-                    .filter(|r| !r.rules.is_empty());
                 ToolUpstreamEntry {
                     name,
                     tool_count,
                     filter,
-                    param_restrictions,
+                    param_restrictions: None,
                 }
             })
             .collect();

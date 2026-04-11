@@ -104,6 +104,7 @@ pub fn sign(
     budget_scope: Option<&str>,
     exp: Option<&str>,
     ows_key: Option<&str>,
+    policies: Option<&[String]>,
 ) -> Result {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -175,6 +176,7 @@ pub fn sign(
         bsc,
         id: Some(key_id),
         key: ows_key.map(String::from),
+        pol: policies.map(|p| p.to_vec()),
     };
 
     // 6. Prompt passphrase and sign.
