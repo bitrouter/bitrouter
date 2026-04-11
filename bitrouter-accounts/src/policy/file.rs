@@ -173,7 +173,7 @@ mod tests {
             "name": "restricted-agent",
             "tool_rules": {
                 "github": {
-                    "filter": { "deny": ["delete_repo"] }
+                    "allow": ["search_code", "get_file"]
                 }
             },
             "executable": "bitrouter policy eval",
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(pf.config.name, "restricted-agent");
         assert!(pf.config.tool_rules.contains_key("github"));
         let github = &pf.config.tool_rules["github"];
-        assert!(github.filter.is_some());
+        assert!(github.filter.allow.is_some());
     }
 
     #[test]

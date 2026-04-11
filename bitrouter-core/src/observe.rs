@@ -37,9 +37,9 @@ pub struct CallerContext {
     /// CAIP-2 chain identifier derived from the operator's `iss` CAIP-10.
     /// Used for MPP payment network selection.
     pub chain: Option<String>,
-    /// Policy IDs from JWT `pol` claim. Enforcement layers resolve
-    /// these to policy files and evaluate tool/API access rules.
-    pub policy_ids: Option<Vec<String>>,
+    /// Policy ID from JWT `pol` claim. Enforcement layers resolve
+    /// this to a policy file and evaluate tool allow-lists.
+    pub policy_id: Option<String>,
 }
 
 /// Context about the request available to observation callbacks.

@@ -521,10 +521,10 @@ async fn handle_tools_list<T: McpToolServer>(
 
     // Per-caller tool visibility filtering via policy resolver.
     if let Some(ctx) = observe_ctx
-        && let Some(ref policy_ids) = ctx.caller.policy_ids
+        && let Some(ref policy_id) = ctx.caller.policy_id
         && let Some(ref resolver) = ctx.policy_resolver
     {
-        let filters = resolver.resolve_filters(policy_ids);
+        let filters = resolver.resolve_filters(policy_id);
         if !filters.is_empty() {
             tools.retain(|tool| {
                 let (server_name, tool_name) =
@@ -554,7 +554,7 @@ async fn handle_tools_call<T: McpToolServer>(
     tool_call_handler: Option<&dyn ToolCallHandler>,
     observe_ctx: &Option<McpObserveContext>,
 ) -> JsonRpcResponse {
-    let mut call_params: CallToolParams = match extract_params(id, params, "tools/call") {
+    let call_params: CallToolParams = match extract_params(id, params, "tools/call") {
         Ok(p) => p,
         Err(resp) => return *resp,
     };
@@ -567,40 +567,24 @@ async fn handle_tools_call<T: McpToolServer>(
 
     // Per-caller tool access enforcement via policy resolver.
     if let Some(ctx) = observe_ctx
-        && let Some(ref policy_ids) = ctx.caller.policy_ids
+        && let Some(ref policy_id) = ctx.caller.policy_id
         && let Some(ref resolver) = ctx.policy_resolver
-        && let Some(rules) = resolver.resolve_tool_rules(policy_ids, server_name)
+        && let Some(filter) = resolver.resolve_tool_filter(policy_id, server_name)
+        && !filter.accepts(tool_name)
     {
-        // Visibility check: deny if tool not allowed.
-        if let Some(ref filter) = rules.filter
-            && !filter.accepts(tool_name)
-        {
-            emit_tool_failure(
-                observe_ctx,
-                server_name,
-                tool_name,
-                start,
-                "denied by policy",
-            );
-            return JsonRpcResponse::error(
-                id.clone(),
-                error_codes::METHOD_NOT_FOUND,
-                format!("tool not found: {}", call_params.name),
-                None,
-            );
-        }
-        // Parameter restrictions: strip or reject denied params in-place.
-        if let Some(ref restrictions) = rules.param_restrictions
-            && let Err(e) = restrictions.check(tool_name, &mut call_params.arguments)
-        {
-            emit_tool_failure(observe_ctx, server_name, tool_name, start, &e.to_string());
-            return JsonRpcResponse::error(
-                id.clone(),
-                error_codes::INVALID_PARAMS,
-                e.to_string(),
-                None,
-            );
-        }
+        emit_tool_failure(
+            observe_ctx,
+            server_name,
+            tool_name,
+            start,
+            "denied by policy",
+        );
+        return JsonRpcResponse::error(
+            id.clone(),
+            error_codes::METHOD_NOT_FOUND,
+            format!("tool not found: {}", call_params.name),
+            None,
+        );
     }
 
     // When a ToolCallHandler is provided, dispatch through the protocol-neutral

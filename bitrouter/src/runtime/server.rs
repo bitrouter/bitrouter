@@ -63,7 +63,7 @@ pub struct ServerPlan<T, R> {
     /// Per-caller tool policy resolver for MCP enforcement.
     ///
     /// When set, the MCP filter layer resolves per-caller policies from
-    /// JWT `pol` claims and enforces tool visibility + parameter restrictions.
+    /// the JWT `pol` claim and enforces tool allow-lists.
     policy_resolver: Option<Arc<dyn bitrouter_core::routers::admin::ToolPolicyResolver>>,
     /// Per-key revocation set for JWT `id` claim checking.
     revocation_set: Option<Arc<dyn bitrouter_core::auth::revocation::KeyRevocationSet>>,
@@ -782,7 +782,7 @@ fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> Cal
         issued_at: id.issued_at,
         key: id.key,
         chain: id.chain,
-        policy_ids: id.policy_ids,
+        policy_id: id.policy_id,
     }
 }
 

@@ -71,11 +71,11 @@ pub struct BitrouterClaims {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
 
-    /// Policy IDs attached to this key. Evaluated at request time with AND
-    /// semantics — all referenced policies must allow the operation.
-    /// When absent or empty, no policy restrictions apply (owner mode).
+    /// Policy ID attached to this key. When present, the server resolves
+    /// the policy file and enforces tool allow-lists at request time.
+    /// When absent, no policy restrictions apply (owner mode).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pol: Option<Vec<String>>,
+    pub pol: Option<String>,
 }
 
 impl BitrouterClaims {

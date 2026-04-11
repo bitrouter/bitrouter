@@ -147,8 +147,6 @@ pub struct CreateOpts<'a> {
     pub chains: &'a [String],
     pub expires_at: Option<&'a str>,
     pub file: Option<&'a Path>,
-    /// Tool deny rules as "provider:tool" pairs.
-    pub tool_deny: &'a [String],
     /// Tool allow rules as "provider:tool" pairs.
     pub tool_allow: &'a [String],
 }
@@ -183,7 +181,7 @@ pub fn create(policy_dir: &Path, opts: CreateOpts<'_>) -> Result {
                 per_tx_max: opts.per_tx_max,
                 allowed_chains: opts.chains.to_vec(),
                 expires_at: opts.expires_at.map(String::from),
-                tool_rules: parse_tool_rules(opts.tool_deny, opts.tool_allow),
+                tool_rules: parse_tool_rules(opts.tool_allow),
             },
             executable: format!("{bitrouter_exe} policy eval"),
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -286,11 +284,10 @@ pub fn delete(policy_dir: &Path, id: &str) -> Result {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-/// Parse `--tool-deny` and `--tool-allow` flags into a `tool_rules` map.
+/// Parse `--tool-allow` flags into a `tool_rules` map.
 ///
-/// Flags use "provider:tool" format (e.g. "github:delete_repo").
+/// Flags use "provider:tool" format (e.g. "github:search_code").
 fn parse_tool_rules(
-    deny: &[String],
     allow: &[String],
 ) -> std::collections::HashMap<String, bitrouter_accounts::policy::config::ToolProviderPolicy> {
     let mut rules: std::collections::HashMap<
@@ -298,21 +295,14 @@ fn parse_tool_rules(
         bitrouter_accounts::policy::config::ToolProviderPolicy,
     > = std::collections::HashMap::new();
 
-    for entry in deny {
-        if let Some((provider, tool)) = entry.split_once(':') {
-            let policy = rules.entry(provider.to_string()).or_default();
-            let filter = policy.filter.get_or_insert_default();
-            filter.deny.get_or_insert_default().push(tool.to_string());
-        } else {
-            eprintln!("warning: ignoring malformed --tool-deny '{entry}' (expected provider:tool)");
-        }
-    }
-
     for entry in allow {
         if let Some((provider, tool)) = entry.split_once(':') {
             let policy = rules.entry(provider.to_string()).or_default();
-            let filter = policy.filter.get_or_insert_default();
-            filter.allow.get_or_insert_default().push(tool.to_string());
+            policy
+                .filter
+                .allow
+                .get_or_insert_default()
+                .push(tool.to_string());
         } else {
             eprintln!(
                 "warning: ignoring malformed --tool-allow '{entry}' (expected provider:tool)"

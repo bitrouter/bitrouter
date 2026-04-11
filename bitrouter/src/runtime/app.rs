@@ -17,17 +17,17 @@ struct HotSwapPolicyResolver(
 impl bitrouter_core::routers::admin::ToolPolicyResolver for HotSwapPolicyResolver {
     fn resolve_filters(
         &self,
-        policy_ids: &[String],
+        policy_id: &str,
     ) -> HashMap<String, bitrouter_core::routers::admin::ToolFilter> {
-        self.0.load().resolve_filters(policy_ids)
+        self.0.load().resolve_filters(policy_id)
     }
 
-    fn resolve_tool_rules(
+    fn resolve_tool_filter(
         &self,
-        policy_ids: &[String],
+        policy_id: &str,
         provider: &str,
-    ) -> Option<bitrouter_core::routers::admin::ResolvedToolRules> {
-        self.0.load().resolve_tool_rules(policy_ids, provider)
+    ) -> Option<bitrouter_core::routers::admin::ToolFilter> {
+        self.0.load().resolve_tool_filter(policy_id, provider)
     }
 }
 

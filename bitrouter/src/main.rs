@@ -264,10 +264,6 @@ enum PolicyAction {
         #[arg(long)]
         file: Option<std::path::PathBuf>,
 
-        /// Deny a tool for a provider (format: "provider:tool", repeatable)
-        #[arg(long = "tool-deny")]
-        tool_deny: Vec<String>,
-
         /// Allow only specific tools for a provider (format: "provider:tool", repeatable)
         #[arg(long = "tool-allow")]
         tool_allow: Vec<String>,
@@ -342,9 +338,9 @@ enum KeyAction {
         #[arg(long)]
         ows_key: Option<String>,
 
-        /// Policy ID(s) to embed in the token (evaluated at request time)
+        /// Policy ID to embed in the token (evaluated at request time)
         #[arg(long)]
-        policy: Vec<String>,
+        policy: Option<String>,
     },
 }
 
@@ -470,11 +466,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     budget_scope.as_deref(),
                     exp.as_deref(),
                     ows_key.as_deref(),
-                    if policy.is_empty() {
-                        None
-                    } else {
-                        Some(&policy)
-                    },
+                    policy.as_deref(),
                 )?,
             }
             return Ok(());
@@ -491,7 +483,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     chains,
                     expires,
                     file,
-                    tool_deny,
                     tool_allow,
                 } => cli::policy::create(
                     &pd,
@@ -503,7 +494,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         chains: chains.as_deref().unwrap_or(&[]),
                         expires_at: expires.as_deref(),
                         file: file.as_deref(),
-                        tool_deny: &tool_deny,
                         tool_allow: &tool_allow,
                     },
                 )?,

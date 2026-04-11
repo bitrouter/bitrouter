@@ -86,18 +86,6 @@ impl<T: ToolRegistry> ToolPolicyAdmin for GuardedToolRegistry<T> {
         }
         Ok(())
     }
-
-    async fn update_param_restrictions(
-        &self,
-        _server: &str,
-        _restrictions: bitrouter_core::routers::admin::ParamRestrictions,
-    ) -> Result<()> {
-        tracing::warn!(
-            "runtime parameter restriction updates are managed by per-caller policy files — \
-             this operation is a no-op"
-        );
-        Ok(())
-    }
 }
 
 impl<T: ToolRegistry> AdminToolRegistry for GuardedToolRegistry<T> {
@@ -133,7 +121,6 @@ impl<T: ToolRegistry> AdminToolRegistry for GuardedToolRegistry<T> {
                     name,
                     tool_count,
                     filter,
-                    param_restrictions: None,
                 }
             })
             .collect();
@@ -222,31 +209,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deny_filter_hides_tools() {
-        let reg = test_registry();
-        reg.update_filter(
-            "github",
-            Some(ToolFilter {
-                allow: None,
-                deny: Some(vec!["search".to_owned()]),
-            }),
-        )
-        .await
-        .ok();
-
-        let tools = reg.list_tools().await;
-        assert_eq!(tools.len(), 2);
-        assert!(tools.iter().all(|t| t.id != "github/search"));
-    }
-
-    #[tokio::test]
     async fn allow_filter_restricts_tools() {
         let reg = test_registry();
         reg.update_filter(
             "github",
             Some(ToolFilter {
                 allow: Some(vec!["search".to_owned()]),
-                deny: None,
             }),
         )
         .await
@@ -264,8 +232,7 @@ mod tests {
         reg.update_filter(
             "github",
             Some(ToolFilter {
-                deny: Some(vec!["search".to_owned()]),
-                ..Default::default()
+                allow: Some(vec!["search".to_owned()]),
             }),
         )
         .await
@@ -277,23 +244,13 @@ mod tests {
     }
 
     #[test]
-    fn tool_filter_accepts_logic() {
+    fn tool_filter_allow_list_logic() {
         let filter = ToolFilter {
             allow: Some(vec!["search".to_owned()]),
-            deny: Some(vec!["delete".to_owned()]),
         };
         assert!(filter.accepts("search"));
         assert!(!filter.accepts("delete"));
         assert!(!filter.accepts("create")); // not in allow list
-    }
-
-    #[test]
-    fn tool_filter_deny_takes_precedence() {
-        let filter = ToolFilter {
-            allow: Some(vec!["search".to_owned()]),
-            deny: Some(vec!["search".to_owned()]),
-        };
-        assert!(!filter.accepts("search")); // deny wins
     }
 
     #[test]

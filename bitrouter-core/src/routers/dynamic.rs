@@ -160,7 +160,6 @@ impl<T: ToolRegistry + Send + Sync> AdminToolRegistry for DynamicRoutingTable<T>
                 name,
                 tool_count,
                 filter: None,
-                param_restrictions: None,
             })
             .collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
