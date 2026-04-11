@@ -18,8 +18,17 @@ use crate::{
         CompiledPattern, CustomCompiledPattern, builtin_patterns, compile_custom_patterns,
         downgoing_pattern_ids, upgoing_pattern_ids,
     },
-    rule::{Action, InspectionResult, REDACTED_PLACEHOLDER, Violation},
+    rule::{Action, InspectionResult, REDACTED_PLACEHOLDER, Violation, ViolationSource},
 };
+
+/// Traffic direction for guardrail inspection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    /// Outbound: user/tool → LLM provider.
+    Upgoing,
+    /// Inbound: LLM provider → user/tool.
+    Downgoing,
+}
 
 /// The guardrail engine.
 ///
@@ -49,122 +58,23 @@ impl Guardrail {
         !self.config.enabled
     }
 
-    // ── Upgoing (outbound) inspection ────────────────────────────────
-
-    /// Inspect a text string for upgoing pattern matches and apply configured
-    /// rules. Returns the inspection result containing any violations and
-    /// the (possibly redacted) text.
+    /// Inspect a text string for upgoing (outbound) pattern matches.
     pub fn inspect_upgoing_text(&self, text: &str) -> InspectionResult {
-        if self.is_disabled() {
-            return InspectionResult {
-                violations: vec![],
-                blocked: false,
-                content: text.to_owned(),
-            };
-        }
-
-        let upgoing_ids = upgoing_pattern_ids();
-        let mut violations = Vec::new();
-        let mut content = text.to_owned();
-        let mut blocked = false;
-
-        // Built-in patterns
-        for pat in &self.patterns {
-            if !upgoing_ids.contains(&pat.id) {
-                continue;
-            }
-            if self.config.is_pattern_disabled(pat.id) {
-                continue;
-            }
-            let action = self.config.upgoing_action(pat.id);
-            for m in pat.regex.find_iter(text) {
-                let matched = m.as_str().to_owned();
-                match action {
-                    Action::Warn => {
-                        tracing::warn!(
-                            pattern = ?pat.id,
-                            matched = %matched,
-                            "guardrail: upgoing content matched sensitive pattern (warn)"
-                        );
-                    }
-                    Action::Redact => {
-                        content = content.replace(&matched, REDACTED_PLACEHOLDER);
-                        tracing::info!(
-                            pattern = ?pat.id,
-                            "guardrail: upgoing content redacted"
-                        );
-                    }
-                    Action::Block => {
-                        blocked = true;
-                        tracing::warn!(
-                            pattern = ?pat.id,
-                            "guardrail: upgoing content blocked"
-                        );
-                    }
-                }
-                violations.push(Violation {
-                    pattern_id: Some(pat.id),
-                    custom_name: None,
-                    description: Cow::Borrowed(pat.description),
-                    action,
-                    matched,
-                });
-            }
-        }
-
-        // Custom patterns (upgoing or both)
-        for cpat in &self.custom_patterns {
-            if cpat.direction != PatternDirection::Upgoing
-                && cpat.direction != PatternDirection::Both
-            {
-                continue;
-            }
-            let action = self.config.custom_upgoing_action(&cpat.name);
-            for m in cpat.regex.find_iter(text) {
-                let matched = m.as_str().to_owned();
-                match action {
-                    Action::Warn => {
-                        tracing::warn!(
-                            pattern = %cpat.name,
-                            matched = %matched,
-                            "guardrail: upgoing content matched custom pattern (warn)"
-                        );
-                    }
-                    Action::Redact => {
-                        content = content.replace(&matched, REDACTED_PLACEHOLDER);
-                        tracing::info!(
-                            pattern = %cpat.name,
-                            "guardrail: upgoing custom pattern redacted"
-                        );
-                    }
-                    Action::Block => {
-                        blocked = true;
-                        tracing::warn!(
-                            pattern = %cpat.name,
-                            "guardrail: upgoing content blocked by custom pattern"
-                        );
-                    }
-                }
-                violations.push(Violation {
-                    pattern_id: None,
-                    custom_name: Some(cpat.name.clone()),
-                    description: Cow::Owned(cpat.description.clone()),
-                    action,
-                    matched,
-                });
-            }
-        }
-
-        InspectionResult {
-            violations,
-            blocked,
-            content,
-        }
+        self.inspect_text(text, Direction::Upgoing)
     }
 
-    /// Inspect a text string for downgoing pattern matches and apply
-    /// configured rules.
+    /// Inspect a text string for downgoing (inbound) pattern matches.
     pub fn inspect_downgoing_text(&self, text: &str) -> InspectionResult {
+        self.inspect_text(text, Direction::Downgoing)
+    }
+
+    /// Unified text inspection for both directions.
+    ///
+    /// Matches built-in and custom patterns against the input text,
+    /// applying the configured action (warn/redact/block) per match.
+    /// Redaction uses offset-based replacement to avoid the pitfalls of
+    /// `String::replace` (double-replacing overlapping or repeated matches).
+    fn inspect_text(&self, text: &str, direction: Direction) -> InspectionResult {
         if self.is_disabled() {
             return InspectionResult {
                 violations: vec![],
@@ -173,20 +83,33 @@ impl Guardrail {
             };
         }
 
-        let downgoing_ids = downgoing_pattern_ids();
+        let dir_label = match direction {
+            Direction::Upgoing => "upgoing",
+            Direction::Downgoing => "downgoing",
+        };
+
+        let pattern_ids = match direction {
+            Direction::Upgoing => upgoing_pattern_ids(),
+            Direction::Downgoing => downgoing_pattern_ids(),
+        };
+
         let mut violations = Vec::new();
-        let mut content = text.to_owned();
         let mut blocked = false;
+        // Collect byte ranges to redact; applied in reverse order at the end.
+        let mut redact_ranges: Vec<std::ops::Range<usize>> = Vec::new();
 
         // Built-in patterns
         for pat in &self.patterns {
-            if !downgoing_ids.contains(&pat.id) {
+            if !pattern_ids.contains(&pat.id) {
                 continue;
             }
             if self.config.is_pattern_disabled(pat.id) {
                 continue;
             }
-            let action = self.config.downgoing_action(pat.id);
+            let action = match direction {
+                Direction::Upgoing => self.config.upgoing_action(pat.id),
+                Direction::Downgoing => self.config.downgoing_action(pat.id),
+            };
             for m in pat.regex.find_iter(text) {
                 let matched = m.as_str().to_owned();
                 match action {
@@ -194,27 +117,26 @@ impl Guardrail {
                         tracing::warn!(
                             pattern = ?pat.id,
                             matched = %matched,
-                            "guardrail: downgoing content matched suspicious pattern (warn)"
+                            "guardrail: {dir_label} content matched pattern (warn)"
                         );
                     }
                     Action::Redact => {
-                        content = content.replace(&matched, REDACTED_PLACEHOLDER);
+                        redact_ranges.push(m.range());
                         tracing::info!(
                             pattern = ?pat.id,
-                            "guardrail: downgoing content redacted"
+                            "guardrail: {dir_label} content redacted"
                         );
                     }
                     Action::Block => {
                         blocked = true;
                         tracing::warn!(
                             pattern = ?pat.id,
-                            "guardrail: downgoing content blocked"
+                            "guardrail: {dir_label} content blocked"
                         );
                     }
                 }
                 violations.push(Violation {
-                    pattern_id: Some(pat.id),
-                    custom_name: None,
+                    source: ViolationSource::BuiltIn(pat.id),
                     description: Cow::Borrowed(pat.description),
                     action,
                     matched,
@@ -222,14 +144,20 @@ impl Guardrail {
             }
         }
 
-        // Custom patterns (downgoing or both)
+        // Custom patterns
+        let (custom_dir_a, custom_dir_b) = match direction {
+            Direction::Upgoing => (PatternDirection::Upgoing, PatternDirection::Both),
+            Direction::Downgoing => (PatternDirection::Downgoing, PatternDirection::Both),
+        };
+
         for cpat in &self.custom_patterns {
-            if cpat.direction != PatternDirection::Downgoing
-                && cpat.direction != PatternDirection::Both
-            {
+            if cpat.direction != custom_dir_a && cpat.direction != custom_dir_b {
                 continue;
             }
-            let action = self.config.custom_downgoing_action(&cpat.name);
+            let action = match direction {
+                Direction::Upgoing => self.config.custom_upgoing_action(&cpat.name),
+                Direction::Downgoing => self.config.custom_downgoing_action(&cpat.name),
+            };
             for m in cpat.regex.find_iter(text) {
                 let matched = m.as_str().to_owned();
                 match action {
@@ -237,32 +165,52 @@ impl Guardrail {
                         tracing::warn!(
                             pattern = %cpat.name,
                             matched = %matched,
-                            "guardrail: downgoing content matched custom pattern (warn)"
+                            "guardrail: {dir_label} content matched custom pattern (warn)"
                         );
                     }
                     Action::Redact => {
-                        content = content.replace(&matched, REDACTED_PLACEHOLDER);
+                        redact_ranges.push(m.range());
                         tracing::info!(
                             pattern = %cpat.name,
-                            "guardrail: downgoing custom pattern redacted"
+                            "guardrail: {dir_label} custom pattern redacted"
                         );
                     }
                     Action::Block => {
                         blocked = true;
                         tracing::warn!(
                             pattern = %cpat.name,
-                            "guardrail: downgoing content blocked by custom pattern"
+                            "guardrail: {dir_label} content blocked by custom pattern"
                         );
                     }
                 }
                 violations.push(Violation {
-                    pattern_id: None,
-                    custom_name: Some(cpat.name.clone()),
+                    source: ViolationSource::Custom(cpat.name.clone()),
                     description: Cow::Owned(cpat.description.clone()),
                     action,
                     matched,
                 });
             }
+        }
+
+        // Merge overlapping ranges, then apply in reverse offset order so
+        // earlier replacements don't shift the byte positions of later ones.
+        redact_ranges.sort_by(|a, b| a.start.cmp(&b.start));
+        let merged: Vec<std::ops::Range<usize>> =
+            redact_ranges
+                .into_iter()
+                .fold(Vec::new(), |mut acc, range| {
+                    if let Some(last) = acc.last_mut()
+                        && range.start <= last.end
+                    {
+                        last.end = last.end.max(range.end);
+                        return acc;
+                    }
+                    acc.push(range);
+                    acc
+                });
+        let mut content = text.to_owned();
+        for range in merged.into_iter().rev() {
+            content.replace_range(range, REDACTED_PLACEHOLDER);
         }
 
         InspectionResult {
@@ -592,7 +540,10 @@ mod tests {
         // Content is unchanged under Warn
         assert_eq!(result.content, text);
         assert_eq!(result.violations.len(), 1);
-        assert_eq!(result.violations[0].pattern_id, Some(PatternId::ApiKeys));
+        assert!(matches!(
+            result.violations[0].source,
+            ViolationSource::BuiltIn(PatternId::ApiKeys)
+        ));
         assert_eq!(result.violations[0].action, Action::Warn);
     }
 
@@ -650,10 +601,10 @@ mod tests {
         let result = g.inspect_downgoing_text(text);
         assert!(!result.blocked);
         assert_eq!(result.violations.len(), 1);
-        assert_eq!(
-            result.violations[0].pattern_id,
-            Some(PatternId::SuspiciousCommands)
-        );
+        assert!(matches!(
+            result.violations[0].source,
+            ViolationSource::BuiltIn(PatternId::SuspiciousCommands)
+        ));
     }
 
     #[test]
@@ -860,7 +811,9 @@ mod tests {
         let text = "token: myapp_AAAABBBBCCCCDDDD here";
         let result = g.inspect_upgoing_text(text);
         assert_eq!(result.violations.len(), 1);
-        assert!(result.violations[0].custom_name.as_deref() == Some("my_token"));
+        assert!(
+            matches!(&result.violations[0].source, ViolationSource::Custom(name) if name == "my_token")
+        );
         assert!(result.content.contains(REDACTED_PLACEHOLDER));
         assert!(!result.content.contains("myapp_AAAA"));
     }
@@ -884,7 +837,9 @@ mod tests {
         let result = g.inspect_downgoing_text(text);
         assert!(result.blocked);
         assert_eq!(result.violations.len(), 1);
-        assert!(result.violations[0].custom_name.as_deref() == Some("evil_url"));
+        assert!(
+            matches!(&result.violations[0].source, ViolationSource::Custom(name) if name == "evil_url")
+        );
     }
 
     #[test]

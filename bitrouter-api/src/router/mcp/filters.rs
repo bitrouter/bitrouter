@@ -25,6 +25,7 @@ use bitrouter_core::observe::{
     CallerContext, ToolCallFailureEvent, ToolCallSuccessEvent, ToolObserveCallback,
     ToolRequestContext,
 };
+use bitrouter_core::routers::admin::ToolPolicyResolver;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use warp::Filter;
@@ -76,13 +77,20 @@ pub fn mcp_server_filter_with_observe<T, A>(
     tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
     observer: Arc<dyn ToolObserveCallback>,
     account_filter: A,
+    policy_resolver: Option<Arc<dyn ToolPolicyResolver>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
     T: McpServer + 'static,
     A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
-    mcp_jsonrpc_filter_with_observe(server.clone(), tool_call_handler, observer, account_filter)
-        .or(mcp_sse_filter(server))
+    mcp_jsonrpc_filter_with_observe(
+        server.clone(),
+        tool_call_handler,
+        observer,
+        account_filter,
+        policy_resolver,
+    )
+    .or(mcp_sse_filter(server))
 }
 
 /// Combined bridge filter for all configured bridge servers.
@@ -127,6 +135,7 @@ fn mcp_jsonrpc_filter_with_observe<T, A>(
     tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
     observer: Arc<dyn ToolObserveCallback>,
     account_filter: A,
+    policy_resolver: Option<Arc<dyn ToolPolicyResolver>>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
     T: McpServer + 'static,
@@ -140,14 +149,20 @@ where
         .and(warp::any().map(move || server.clone()))
         .and(warp::any().map(move || tch.clone()))
         .and(warp::any().map(move || observer.clone()))
+        .and(warp::any().map(move || policy_resolver.clone()))
         .and(account_filter)
         .then(
             |body: serde_json::Value,
              server: Option<Arc<T>>,
              tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
              observer: Arc<dyn ToolObserveCallback>,
+             policy_resolver: Option<Arc<dyn ToolPolicyResolver>>,
              caller: CallerContext| async move {
-                let ctx = Some(McpObserveContext { observer, caller });
+                let ctx = Some(McpObserveContext {
+                    observer,
+                    caller,
+                    policy_resolver,
+                });
                 handle_jsonrpc_value::<T>(body, server, tool_call_handler, ctx).await
             },
         )
@@ -228,7 +243,7 @@ async fn dispatch_request<T: McpServer>(
     match method {
         "initialize" => handle_initialize(id, server_name),
         "ping" => handle_ping(id),
-        "tools/list" => handle_tools_list(id, server).await,
+        "tools/list" => handle_tools_list(id, server, observe_ctx).await,
         "tools/call" => handle_tools_call(id, params, server, tool_call_handler, observe_ctx).await,
         "resources/list" => handle_resources_list(id, server).await,
         "resources/read" => handle_resources_read(id, params, server).await,
@@ -497,8 +512,31 @@ fn from_wire_name(wire: &str) -> String {
     }
 }
 
-async fn handle_tools_list<T: McpToolServer>(id: &JsonRpcId, server: &T) -> JsonRpcResponse {
+async fn handle_tools_list<T: McpToolServer>(
+    id: &JsonRpcId,
+    server: &T,
+    observe_ctx: &Option<McpObserveContext>,
+) -> JsonRpcResponse {
     let mut tools = server.list_tools().await;
+
+    // Per-caller tool visibility filtering via policy resolver.
+    if let Some(ctx) = observe_ctx
+        && let Some(ref policy_id) = ctx.caller.policy_id
+        && let Some(ref resolver) = ctx.policy_resolver
+    {
+        let filters = resolver.resolve_filters(policy_id);
+        if !filters.is_empty() {
+            tools.retain(|tool| {
+                let (server_name, tool_name) =
+                    tool.name.split_once('/').unwrap_or(("", &tool.name));
+                match filters.get(server_name) {
+                    Some(filter) => filter.accepts(tool_name),
+                    None => true,
+                }
+            });
+        }
+    }
+
     for tool in &mut tools {
         tool.name = to_wire_name(&tool.name);
     }
@@ -526,6 +564,28 @@ async fn handle_tools_call<T: McpToolServer>(
         .split_once('/')
         .unwrap_or(("unknown", &internal_name));
     let start = Instant::now();
+
+    // Per-caller tool access enforcement via policy resolver.
+    if let Some(ctx) = observe_ctx
+        && let Some(ref policy_id) = ctx.caller.policy_id
+        && let Some(ref resolver) = ctx.policy_resolver
+        && let Some(filter) = resolver.resolve_tool_filter(policy_id, server_name)
+        && !filter.accepts(tool_name)
+    {
+        emit_tool_failure(
+            observe_ctx,
+            server_name,
+            tool_name,
+            start,
+            "denied by policy",
+        );
+        return JsonRpcResponse::error(
+            id.clone(),
+            error_codes::METHOD_NOT_FOUND,
+            format!("tool not found: {}", call_params.name),
+            None,
+        );
+    }
 
     // When a ToolCallHandler is provided, dispatch through the protocol-neutral
     // ToolRouter chain. Otherwise fall back to the McpToolServer (bridge mode).
@@ -745,6 +805,7 @@ fn gateway_error_to_jsonrpc(err: &McpGatewayError) -> (i64, String) {
 struct McpObserveContext {
     observer: Arc<dyn ToolObserveCallback>,
     caller: CallerContext,
+    policy_resolver: Option<Arc<dyn ToolPolicyResolver>>,
 }
 
 // ── Payment-gated MCP filters ───────────────────────────────────────
@@ -837,7 +898,11 @@ async fn handle_mcp_jsonrpc_with_gate<T: McpServer>(
         mpp_ctx.channel_id.clone(),
     );
 
-    let ctx = Some(McpObserveContext { observer, caller });
+    let ctx = Some(McpObserveContext {
+        observer,
+        caller,
+        policy_resolver: None,
+    });
     let reply = handle_jsonrpc_value::<T>(body, server, tool_call_handler, ctx).await;
 
     // Attach payment receipt header.

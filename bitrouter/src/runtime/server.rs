@@ -51,7 +51,7 @@ pub struct ServerPlan<T, R> {
     /// inner `DynamicRoutingTable` `Arc` and swap it on SIGHUP.
     tool_registry: Option<
         Arc<
-            bitrouter_guardrails::tool::GuardedToolRegistry<
+            bitrouter_core::policy::GuardedToolRegistry<
                 Arc<
                     bitrouter_core::routers::dynamic::DynamicRoutingTable<
                         bitrouter_config::ConfigToolRoutingTable,
@@ -60,11 +60,11 @@ pub struct ServerPlan<T, R> {
             >,
         >,
     >,
-    /// Shared tool guardrail for hot-reload support.
+    /// Per-caller tool policy resolver for MCP enforcement.
     ///
-    /// When set, `serve()` reads the current `Arc<ToolGuardrail>` from this
-    /// lock and the reload closure can swap it atomically.
-    tool_guardrail: Option<Arc<std::sync::RwLock<Arc<bitrouter_guardrails::ToolGuardrail>>>>,
+    /// When set, the MCP filter layer resolves per-caller policies from
+    /// the JWT `pol` claim and enforces tool allow-lists.
+    policy_resolver: Option<Arc<dyn bitrouter_core::routers::admin::ToolPolicyResolver>>,
     /// Per-key revocation set for JWT `id` claim checking.
     revocation_set: Option<Arc<dyn bitrouter_core::auth::revocation::KeyRevocationSet>>,
 }
@@ -83,7 +83,7 @@ where
             paths: None,
             reload_fn: None,
             tool_registry: None,
-            tool_guardrail: None,
+            policy_resolver: None,
             revocation_set: None,
         }
     }
@@ -115,7 +115,7 @@ where
     pub fn with_tool_registry(
         mut self,
         registry: Arc<
-            bitrouter_guardrails::tool::GuardedToolRegistry<
+            bitrouter_core::policy::GuardedToolRegistry<
                 Arc<
                     bitrouter_core::routers::dynamic::DynamicRoutingTable<
                         bitrouter_config::ConfigToolRoutingTable,
@@ -128,12 +128,12 @@ where
         self
     }
 
-    /// Provide a shared tool guardrail for hot-reload support.
-    pub fn with_tool_guardrail(
+    /// Provide a per-caller policy resolver for MCP tool access enforcement.
+    pub fn with_policy_resolver(
         mut self,
-        guardrail: Arc<std::sync::RwLock<Arc<bitrouter_guardrails::ToolGuardrail>>>,
+        resolver: Arc<dyn bitrouter_core::routers::admin::ToolPolicyResolver>,
     ) -> Self {
-        self.tool_guardrail = Some(guardrail);
+        self.policy_resolver = Some(resolver);
         self
     }
 
@@ -510,9 +510,9 @@ where
                         self.config.tools.clone(),
                     ),
                 ));
-            Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
+            Arc::new(bitrouter_core::policy::GuardedToolRegistry::new(
                 inner_tool_table,
-                self.config.guardrails.tools.filters_map(),
+                std::collections::HashMap::new(),
             ))
         };
 
@@ -562,37 +562,18 @@ where
             tracing::info!("tool router initialized");
         }
 
-        // Wrap with tool guardrail for parameter restriction enforcement.
-        // Use the shared guardrail lock from app.rs if provided (enables
-        // hot-reload), otherwise build a static one from config.
-        //
-        // The guarded tool router + tool call handler are only consumed by the
-        // MCP server endpoint, so they are built only when the `mcp` feature
-        // is enabled.
+        // The tool call handler dispatches through the lazy tool router.
+        // Per-caller policy enforcement (visibility + param restrictions) is
+        // handled in the MCP filter layer via the policy resolver — no
+        // GuardedToolRouter wrapping needed.
         #[cfg(feature = "mcp")]
         let tool_call_handler: Option<
             Arc<dyn bitrouter_core::api::mcp::gateway::ToolCallHandler>,
         > = {
-            let tool_router = if let Some(shared) = self.tool_guardrail {
-                Arc::new(
-                    bitrouter_guardrails::GuardedToolRouter::with_shared_guardrail(
-                        lazy_tool_router.clone(),
-                        shared,
-                    ),
-                )
-            } else {
-                let guardrail = Arc::new(bitrouter_guardrails::ToolGuardrail::new(
-                    self.config.guardrails.tools.clone(),
-                ));
-                Arc::new(bitrouter_guardrails::GuardedToolRouter::new(
-                    lazy_tool_router.clone(),
-                    guardrail,
-                ))
-            };
             if lazy_tool_router.has_providers() {
                 Some(Arc::new(
                     crate::runtime::router::RouterToolCallHandler::new(
-                        tool_router,
+                        lazy_tool_router.clone(),
                         dynamic_tool_registry.clone(),
                     ),
                 ))
@@ -619,7 +600,7 @@ where
                     let inner: DynMcpTable = Arc::new(
                         bitrouter_core::routers::dynamic::DynamicRoutingTable::new(mcp_reg),
                     );
-                    let admin = Arc::new(bitrouter_guardrails::tool::GuardedToolRegistry::new(
+                    let admin = Arc::new(bitrouter_core::policy::GuardedToolRegistry::new(
                         Arc::clone(&inner),
                         std::collections::HashMap::new(),
                     ));
@@ -659,6 +640,7 @@ where
                 tool_call_handler,
                 tool_observer,
                 account_filter.clone(),
+                self.policy_resolver.clone(),
             )
             .map(|r| Box::new(r) as Box<dyn warp::Reply>)
             .boxed()
@@ -796,6 +778,7 @@ fn identity_to_caller_context(id: bitrouter_accounts::identity::Identity) -> Cal
         issued_at: id.issued_at,
         key: id.key,
         chain: id.chain,
+        policy_id: id.policy_id,
     }
 }
 

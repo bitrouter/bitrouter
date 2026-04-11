@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -5,6 +6,28 @@ use bitrouter_config::BitrouterConfig;
 use sea_orm::DatabaseConnection;
 
 use crate::runtime::{error::Result, paths::RuntimePaths, server::ServerTableBound};
+
+/// Adapter that wraps a `HotSwap<PolicyCache>` behind the `ToolPolicyResolver`
+/// trait so the MCP filter layer can resolve per-caller policies without knowing
+/// the concrete cache type.
+struct HotSwapPolicyResolver(bitrouter_core::sync::HotSwap<bitrouter_core::policy::PolicyCache>);
+
+impl bitrouter_core::routers::admin::ToolPolicyResolver for HotSwapPolicyResolver {
+    fn resolve_filters(
+        &self,
+        policy_id: &str,
+    ) -> HashMap<String, bitrouter_core::routers::admin::ToolFilter> {
+        self.0.load().resolve_filters(policy_id)
+    }
+
+    fn resolve_tool_filter(
+        &self,
+        policy_id: &str,
+        provider: &str,
+    ) -> Option<bitrouter_core::routers::admin::ToolFilter> {
+        self.0.load().resolve_tool_filter(policy_id, provider)
+    }
+}
 
 pub struct AppRuntime<R> {
     pub config: BitrouterConfig,
@@ -131,26 +154,23 @@ impl
         let inner_tool_table = Arc::new(
             bitrouter_core::routers::dynamic::DynamicRoutingTable::new(tool_table),
         );
-        // Shared tool guardrail for hot-reload. The reload closure swaps the
-        // inner Arc; server.rs reads it when building the GuardedToolRouter.
-        let shared_tool_guardrail = Arc::new(std::sync::RwLock::new(Arc::new(
-            bitrouter_guardrails::ToolGuardrail::new(self.config.guardrails.tools.clone()),
-        )));
+        // Per-caller policy cache — loads policy files from <home>/policies/.
+        // Wrapped in HotSwap for atomic reload on SIGHUP.
+        let policy_dir = bitrouter_core::policy::policy_dir(&self.paths.home_dir);
+        let policy_cache = bitrouter_core::sync::HotSwap::new(load_policy_cache(&policy_dir));
+        let shared_policy_resolver: Arc<dyn bitrouter_core::routers::admin::ToolPolicyResolver> =
+            Arc::new(HotSwapPolicyResolver(policy_cache.clone()));
 
-        let tool_registry = Arc::new(
-            bitrouter_guardrails::tool::GuardedToolRegistry::new(
-                Arc::clone(&inner_tool_table),
-                self.config.guardrails.tools.filters_map(),
-            )
-            .with_guardrail(Arc::clone(&shared_tool_guardrail)),
-        );
+        let tool_registry = Arc::new(bitrouter_core::policy::GuardedToolRegistry::new(
+            Arc::clone(&inner_tool_table),
+            std::collections::HashMap::new(),
+        ));
 
         // Build the reload callback — captures routing table, tool registry,
         // and tool guardrail so it can re-read config and swap everything.
         let reload_table = Arc::clone(&table);
         let reload_tool_inner = Arc::clone(&inner_tool_table);
-        let reload_tool_registry = Arc::clone(&tool_registry);
-        let reload_tool_guardrail = Arc::clone(&shared_tool_guardrail);
+        let reload_policy_cache = policy_cache.clone();
         let reload_paths = paths.clone();
         let reload_fn = move || {
             let env_file = reload_paths
@@ -177,16 +197,14 @@ impl
                 .reload(new_tool_table)
                 .map_err(|e| e.to_string())?;
 
-            // Reload tool guardrail filters and restrictions from new config.
-            reload_tool_registry
-                .sync_filters(config.guardrails.tools.filters_map())
+            // Reload per-caller policy cache from policy files.
+            // On failure, retain the existing cache rather than replacing with
+            // an empty one (which would silently disable all policy enforcement).
+            let pol_dir = bitrouter_core::policy::policy_dir(&reload_paths.home_dir);
+            let new_cache = load_policy_cache(&pol_dir);
+            reload_policy_cache
+                .store(new_cache)
                 .map_err(|e| e.to_string())?;
-
-            if let Ok(mut guard) = reload_tool_guardrail.write() {
-                *guard = Arc::new(bitrouter_guardrails::ToolGuardrail::new(
-                    config.guardrails.tools.clone(),
-                ));
-            }
 
             tracing::info!("model and tool routing tables reloaded");
             Ok(())
@@ -196,7 +214,7 @@ impl
             crate::runtime::server::ServerPlan::new(self.config, table, Arc::new(model_router))
                 .with_paths(paths)
                 .with_tool_registry(tool_registry)
-                .with_tool_guardrail(shared_tool_guardrail)
+                .with_policy_resolver(shared_policy_resolver)
                 .with_reload(reload_fn);
 
         // Wire per-key revocation set. Use DB-backed persistence when a
@@ -215,6 +233,26 @@ impl
             plan = plan.with_db(db);
         }
         plan.serve().await
+    }
+}
+
+/// Load policy files and build a [`PolicyCache`], logging any skipped files.
+fn load_policy_cache(dir: &Path) -> bitrouter_core::policy::PolicyCache {
+    match bitrouter_core::policy::load_policies(dir) {
+        Ok(loaded) => {
+            for skip in &loaded.skipped {
+                tracing::warn!(
+                    path = %skip.path.display(),
+                    error = %skip.error,
+                    "skipping malformed policy file",
+                );
+            }
+            bitrouter_core::policy::PolicyCache::new(loaded.policies)
+        }
+        Err(e) => {
+            tracing::warn!("failed to load policy files: {e}");
+            bitrouter_core::policy::PolicyCache::empty()
+        }
     }
 }
 

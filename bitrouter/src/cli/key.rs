@@ -27,7 +27,7 @@ pub fn create(
     println!("  ID:       {}", key_file.id);
     println!("  Wallets:  {}", key_file.wallet_ids.join(", "));
     if !key_file.policy_ids.is_empty() {
-        println!("  Policies: {}", key_file.policy_ids.join(", "));
+        println!("  Policy:   {}", key_file.policy_ids.join(", "));
     }
     if let Some(ref exp) = key_file.expires_at {
         println!("  Expires:  {exp}");
@@ -104,6 +104,7 @@ pub fn sign(
     budget_scope: Option<&str>,
     exp: Option<&str>,
     ows_key: Option<&str>,
+    policy: Option<&str>,
 ) -> Result {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -175,6 +176,7 @@ pub fn sign(
         bsc,
         id: Some(key_id),
         key: ows_key.map(String::from),
+        pol: policy.map(String::from),
     };
 
     // 6. Prompt passphrase and sign.

@@ -90,131 +90,24 @@ pub trait AdminRoutingTable: RoutingTable {
 
 // ── Tool admin ──────────────────────────────────────────────────────
 
-/// Allow/deny filter applied to an upstream tool server.
+/// Allow-list filter applied to an upstream tool server.
 ///
-/// When both `allow` and `deny` are set, deny takes precedence.
+/// When `allow` is `None`, all tools are visible. When `Some`, only tools
+/// whose un-namespaced name appears in the list are visible.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolFilter {
     /// If set, only tools whose un-namespaced name appears in this list are visible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow: Option<Vec<String>>,
-    /// Tools whose un-namespaced name appears in this list are hidden.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deny: Option<Vec<String>>,
 }
 
 impl ToolFilter {
     /// Returns `true` if `tool_name` (un-namespaced) passes this filter.
     pub fn accepts(&self, tool_name: &str) -> bool {
-        if let Some(deny) = &self.deny
-            && deny.iter().any(|d| d == tool_name)
-        {
-            return false;
+        match &self.allow {
+            Some(allow) => allow.iter().any(|a| a == tool_name),
+            None => true,
         }
-        if let Some(allow) = &self.allow {
-            return allow.iter().any(|a| a == tool_name);
-        }
-        true
-    }
-}
-
-/// Action taken when a parameter violates restrictions.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ParamViolationAction {
-    /// Remove the parameter silently, proceed with call.
-    Strip,
-    /// Reject the entire tool call.
-    #[default]
-    Reject,
-}
-
-/// Restriction rules for a single tool's parameters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParamRule {
-    /// Parameters to deny. Deny takes precedence over allow.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deny: Option<Vec<String>>,
-    /// If set, only these parameters are allowed through.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allow: Option<Vec<String>>,
-    /// What to do when a restricted parameter is found.
-    #[serde(default)]
-    pub action: ParamViolationAction,
-}
-
-/// Per-server parameter restrictions applied before forwarding tool calls.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ParamRestrictions {
-    /// Per-tool parameter rules. Keys are un-namespaced tool names.
-    #[serde(default)]
-    pub rules: HashMap<String, ParamRule>,
-}
-
-impl ParamRestrictions {
-    /// Validate and optionally mutate tool call arguments.
-    ///
-    /// Returns `Ok(())` if allowed (possibly with stripped params).
-    /// Returns `Err` if a parameter is denied and action is `Reject`.
-    pub fn check(
-        &self,
-        tool_name: &str,
-        arguments: &mut Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> Result<()> {
-        let Some(rule) = self.rules.get(tool_name) else {
-            return Ok(());
-        };
-        let Some(args) = arguments.as_mut() else {
-            return Ok(());
-        };
-
-        // Deny list takes precedence.
-        if let Some(deny) = &rule.deny {
-            let denied: Vec<String> = args
-                .keys()
-                .filter(|k| deny.iter().any(|d| d == *k))
-                .cloned()
-                .collect();
-            for key in &denied {
-                match rule.action {
-                    ParamViolationAction::Reject => {
-                        return Err(crate::errors::BitrouterError::invalid_request(
-                            None,
-                            format!("parameter '{key}' denied on tool '{tool_name}'"),
-                            None,
-                        ));
-                    }
-                    ParamViolationAction::Strip => {
-                        args.remove(key);
-                    }
-                }
-            }
-        }
-
-        // Allow list: reject/strip any key NOT in the list.
-        if let Some(allow) = &rule.allow {
-            let disallowed: Vec<String> = args
-                .keys()
-                .filter(|k| !allow.iter().any(|a| a == *k))
-                .cloned()
-                .collect();
-            for key in &disallowed {
-                match rule.action {
-                    ParamViolationAction::Reject => {
-                        return Err(crate::errors::BitrouterError::invalid_request(
-                            None,
-                            format!("parameter '{key}' denied on tool '{tool_name}'"),
-                            None,
-                        ));
-                    }
-                    ParamViolationAction::Strip => {
-                        args.remove(key);
-                    }
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -228,9 +121,6 @@ pub struct ToolUpstreamEntry {
     /// Active tool filter, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<ToolFilter>,
-    /// Active parameter restrictions, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub param_restrictions: Option<ParamRestrictions>,
 }
 
 /// Admin interface for inspecting tool registries at runtime.
@@ -255,12 +145,6 @@ pub trait ToolPolicyAdmin: ToolRegistry {
         server: &str,
         filter: Option<ToolFilter>,
     ) -> impl Future<Output = Result<()>> + Send;
-    /// Update parameter restrictions for a specific upstream server.
-    fn update_param_restrictions(
-        &self,
-        server: &str,
-        restrictions: ParamRestrictions,
-    ) -> impl Future<Output = Result<()>> + Send;
 }
 
 impl<T: AdminToolRegistry> AdminToolRegistry for std::sync::Arc<T> {
@@ -273,29 +157,20 @@ impl<T: ToolPolicyAdmin> ToolPolicyAdmin for std::sync::Arc<T> {
     async fn update_filter(&self, server: &str, filter: Option<ToolFilter>) -> Result<()> {
         (**self).update_filter(server, filter).await
     }
-
-    async fn update_param_restrictions(
-        &self,
-        server: &str,
-        restrictions: ParamRestrictions,
-    ) -> Result<()> {
-        (**self)
-            .update_param_restrictions(server, restrictions)
-            .await
-    }
 }
 
-/// Trait for types that can provide parameter restriction lookups.
+/// Per-caller policy resolution for tool access control.
 ///
-/// Used by the tool call handler to enforce restrictions without coupling
-/// to a concrete policy implementation.
-pub trait HasParamRestrictions: Send + Sync {
-    /// Read the current parameter restrictions for a server.
-    fn get_param_restrictions(&self, server: &str) -> Option<ParamRestrictions>;
-}
+/// Implementations load policy files and resolve the tool allow-list for
+/// callers identified by a single policy ID. The MCP filter layer uses
+/// this trait to enforce per-caller tool visibility.
+pub trait ToolPolicyResolver: Send + Sync {
+    /// Resolve [`ToolFilter`]s for the given policy.
+    ///
+    /// Returns a map of provider name → filter. Providers not mentioned
+    /// in the policy are absent (meaning all-allow).
+    fn resolve_filters(&self, policy_id: &str) -> HashMap<String, ToolFilter>;
 
-impl<T: HasParamRestrictions> HasParamRestrictions for std::sync::Arc<T> {
-    fn get_param_restrictions(&self, server: &str) -> Option<ParamRestrictions> {
-        (**self).get_param_restrictions(server)
-    }
+    /// Resolve the tool filter for a specific provider in the given policy.
+    fn resolve_tool_filter(&self, policy_id: &str, provider: &str) -> Option<ToolFilter>;
 }

@@ -6,8 +6,10 @@ pub mod errors;
 pub mod hooks;
 pub mod models;
 pub mod observe;
+pub mod policy;
 pub mod pricing;
 pub mod routers;
+pub mod sync;
 pub mod tools;
 
 pub mod jwt {

@@ -266,18 +266,12 @@ guardrails:
     include_details: true
     include_help_link: true
 
-  # Tool access guardrails.
+  # Tool access guardrails (per-caller enforcement uses policy files).
   tools:
     enabled: true
     providers:
       github-mcp:
-        filter:
-          deny: [delete_repo, delete_branch]
-        param_restrictions:
-          rules:
-            create_issue:
-              deny: [assignees]
-              action: strip # strip | reject
+        allow: [search_code, get_file, list_repos]
 
 # ── Wallet ──────────────────────────────────────────────────────────────────
 #

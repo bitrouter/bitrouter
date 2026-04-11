@@ -1617,8 +1617,10 @@ dependencies = [
  "sea-orm",
  "sea-orm-migration",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "tokio",
+ "tracing",
  "uuid",
  "warp",
 ]
