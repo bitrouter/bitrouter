@@ -51,7 +51,7 @@ pub struct ServerPlan<T, R> {
     /// inner `DynamicRoutingTable` `Arc` and swap it on SIGHUP.
     tool_registry: Option<
         Arc<
-            bitrouter_accounts::policy::registry::GuardedToolRegistry<
+            bitrouter_core::policy::GuardedToolRegistry<
                 Arc<
                     bitrouter_core::routers::dynamic::DynamicRoutingTable<
                         bitrouter_config::ConfigToolRoutingTable,
@@ -115,7 +115,7 @@ where
     pub fn with_tool_registry(
         mut self,
         registry: Arc<
-            bitrouter_accounts::policy::registry::GuardedToolRegistry<
+            bitrouter_core::policy::GuardedToolRegistry<
                 Arc<
                     bitrouter_core::routers::dynamic::DynamicRoutingTable<
                         bitrouter_config::ConfigToolRoutingTable,
@@ -510,12 +510,10 @@ where
                         self.config.tools.clone(),
                     ),
                 ));
-            Arc::new(
-                bitrouter_accounts::policy::registry::GuardedToolRegistry::new(
-                    inner_tool_table,
-                    std::collections::HashMap::new(),
-                ),
-            )
+            Arc::new(bitrouter_core::policy::GuardedToolRegistry::new(
+                inner_tool_table,
+                std::collections::HashMap::new(),
+            ))
         };
 
         // ── Skills registry (filesystem-backed, no DB) ──────────────
@@ -602,12 +600,10 @@ where
                     let inner: DynMcpTable = Arc::new(
                         bitrouter_core::routers::dynamic::DynamicRoutingTable::new(mcp_reg),
                     );
-                    let admin = Arc::new(
-                        bitrouter_accounts::policy::registry::GuardedToolRegistry::new(
-                            Arc::clone(&inner),
-                            std::collections::HashMap::new(),
-                        ),
-                    );
+                    let admin = Arc::new(bitrouter_core::policy::GuardedToolRegistry::new(
+                        Arc::clone(&inner),
+                        std::collections::HashMap::new(),
+                    ));
                     (Some(inner), Some(admin))
                 }
                 None => (None, None),

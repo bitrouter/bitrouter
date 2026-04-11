@@ -13,7 +13,6 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use bitrouter_accounts::policy::file;
 use bitrouter_core::policy::{PolicyConfig, PolicyContext, PolicyFile, PolicyResult};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -311,7 +310,11 @@ fn parse_tool_rules(
 }
 
 fn load_policies(dir: &Path) -> Result<Vec<PolicyFile>> {
-    file::load_policies(dir)
+    let loaded = bitrouter_core::policy::load_policies(dir)?;
+    for skip in &loaded.skipped {
+        eprintln!("warning: skipping {}: {}", skip.path.display(), skip.error);
+    }
+    Ok(loaded.policies)
 }
 
 /// Resolve the policy directory for a given BitRouter home.

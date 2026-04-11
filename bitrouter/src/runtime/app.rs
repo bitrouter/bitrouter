@@ -10,9 +10,7 @@ use crate::runtime::{error::Result, paths::RuntimePaths, server::ServerTableBoun
 /// Adapter that wraps a `HotSwap<PolicyCache>` behind the `ToolPolicyResolver`
 /// trait so the MCP filter layer can resolve per-caller policies without knowing
 /// the concrete cache type.
-struct HotSwapPolicyResolver(
-    bitrouter_core::sync::HotSwap<bitrouter_accounts::policy::cache::PolicyCache>,
-);
+struct HotSwapPolicyResolver(bitrouter_core::sync::HotSwap<bitrouter_core::policy::PolicyCache>);
 
 impl bitrouter_core::routers::admin::ToolPolicyResolver for HotSwapPolicyResolver {
     fn resolve_filters(
@@ -159,21 +157,14 @@ impl
         // Per-caller policy cache — loads policy files from <home>/policies/.
         // Wrapped in HotSwap for atomic reload on SIGHUP.
         let policy_dir = bitrouter_core::policy::policy_dir(&self.paths.home_dir);
-        let policy_cache = bitrouter_core::sync::HotSwap::new(
-            bitrouter_accounts::policy::cache::PolicyCache::load(&policy_dir).unwrap_or_else(|e| {
-                tracing::warn!("failed to load policy files: {e}");
-                bitrouter_accounts::policy::cache::PolicyCache::empty()
-            }),
-        );
+        let policy_cache = bitrouter_core::sync::HotSwap::new(load_policy_cache(&policy_dir));
         let shared_policy_resolver: Arc<dyn bitrouter_core::routers::admin::ToolPolicyResolver> =
             Arc::new(HotSwapPolicyResolver(policy_cache.clone()));
 
-        let tool_registry = Arc::new(
-            bitrouter_accounts::policy::registry::GuardedToolRegistry::new(
-                Arc::clone(&inner_tool_table),
-                std::collections::HashMap::new(),
-            ),
-        );
+        let tool_registry = Arc::new(bitrouter_core::policy::GuardedToolRegistry::new(
+            Arc::clone(&inner_tool_table),
+            std::collections::HashMap::new(),
+        ));
 
         // Build the reload callback — captures routing table, tool registry,
         // and tool guardrail so it can re-read config and swap everything.
@@ -210,16 +201,10 @@ impl
             // On failure, retain the existing cache rather than replacing with
             // an empty one (which would silently disable all policy enforcement).
             let pol_dir = bitrouter_core::policy::policy_dir(&reload_paths.home_dir);
-            match bitrouter_accounts::policy::cache::PolicyCache::load(&pol_dir) {
-                Ok(new_cache) => {
-                    reload_policy_cache
-                        .store(new_cache)
-                        .map_err(|e| e.to_string())?;
-                }
-                Err(e) => {
-                    tracing::warn!("failed to reload policy files, keeping existing cache: {e}");
-                }
-            }
+            let new_cache = load_policy_cache(&pol_dir);
+            reload_policy_cache
+                .store(new_cache)
+                .map_err(|e| e.to_string())?;
 
             tracing::info!("model and tool routing tables reloaded");
             Ok(())
@@ -248,6 +233,26 @@ impl
             plan = plan.with_db(db);
         }
         plan.serve().await
+    }
+}
+
+/// Load policy files and build a [`PolicyCache`], logging any skipped files.
+fn load_policy_cache(dir: &Path) -> bitrouter_core::policy::PolicyCache {
+    match bitrouter_core::policy::load_policies(dir) {
+        Ok(loaded) => {
+            for skip in &loaded.skipped {
+                tracing::warn!(
+                    path = %skip.path.display(),
+                    error = %skip.error,
+                    "skipping malformed policy file",
+                );
+            }
+            bitrouter_core::policy::PolicyCache::new(loaded.policies)
+        }
+        Err(e) => {
+            tracing::warn!("failed to load policy files: {e}");
+            bitrouter_core::policy::PolicyCache::empty()
+        }
     }
 }
 

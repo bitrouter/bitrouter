@@ -28,5 +28,4 @@ pub mod entity;
 pub mod filters;
 pub mod identity;
 pub mod migration;
-pub mod policy;
 pub mod service;
