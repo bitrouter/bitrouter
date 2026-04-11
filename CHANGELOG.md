@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/bitrouter/bitrouter/compare/v0.21.0...v0.22.0)
+
+
+### ⛰️ Features
+
+- Per-caller policy engine for tool access control ([#296](https://github.com/bitrouter/bitrouter/pull/296)) - ([0e11786](https://github.com/bitrouter/bitrouter/commit/0e11786a0bfb7dcec5afc8c3a51abe338bdc225e))
+- Spend-limit policy engine and policy CLI ([#292](https://github.com/bitrouter/bitrouter/pull/292)) - ([133f3ae](https://github.com/bitrouter/bitrouter/commit/133f3ae19427c61d533891eba42124f662dceea1))
+
+### 🚜 Refactor
+
+- *(config)* Place built-in signals under `src` ([#288](https://github.com/bitrouter/bitrouter/pull/288)) - ([32cfbe4](https://github.com/bitrouter/bitrouter/commit/32cfbe4e2050c3edd050c41d3d8dc1a03ce37b99))
+
+
 ## [0.21.0](https://github.com/bitrouter/bitrouter/compare/v0.20.0...v0.21.0)
 
 
