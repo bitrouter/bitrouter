@@ -1,0 +1,16 @@
+protocol: acp
+binary: openhands
+args:
+  - acp
+distribution:
+  - uvx:
+      package: "openhands-ai"
+      args:
+        - acp
+routing:
+  env:
+    OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+# OpenHands stores LLM settings in ~/.openhands/settings.json via
+# its /settings command. Base URL override is configured interactively;
+# env var injection provides API keys at spawn time.

@@ -4,3 +4,7 @@ args: []
 distribution:
   - npx:
       package: "@agentclientprotocol/claude-agent-acp"
+routing:
+  env:
+    ANTHROPIC_BASE_URL: "${BITROUTER_URL_V1}"
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"

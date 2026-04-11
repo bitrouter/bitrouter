@@ -8,3 +8,4 @@ distribution:
       package: "@github/copilot"
       args:
         - "--acp"
+# No routing: Copilot uses GitHub OAuth with no base URL override.

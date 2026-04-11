@@ -16,10 +16,13 @@ mpp-solana = []
 [dependencies]
 bitrouter-core.workspace = true
 bitrouter-guardrails.workspace = true
+dirs = "6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 serde-saphyr = { version = "0.0" }
 thiserror = { version = "2.0" }
+toml_edit = { version = "0.22" }
 
 [dev-dependencies]
+tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }

@@ -177,7 +177,14 @@ impl App {
         use bitrouter_core::agents::event::AgentEvent;
         use bitrouter_core::agents::provider::AgentProvider;
 
-        let provider = AcpAgentProvider::new(agent_id.to_string(), config.clone());
+        // Resolve routing env vars for this agent.
+        let routing_env = config
+            .routing
+            .as_ref()
+            .map(|r| self.routing_ctx.resolve_env(r))
+            .unwrap_or_default();
+
+        let provider = AcpAgentProvider::new(agent_id.to_string(), config.clone(), routing_env);
         let provider = std::sync::Arc::new(provider);
         self.agent_providers
             .insert(agent_id.to_string(), provider.clone());
@@ -300,6 +307,7 @@ impl App {
                     .get(&da.name)
                     .map(|c| c.distribution.clone())
                     .unwrap_or_default();
+                let routing = known.get(&da.name).and_then(|c| c.routing.clone());
                 self.state.agents.push(crate::model::Agent {
                     name: da.name.clone(),
                     config: Some(bitrouter_config::AgentConfig {
@@ -308,6 +316,7 @@ impl App {
                         args: da.args.clone(),
                         enabled: true,
                         distribution,
+                        routing,
                     }),
                     status: new_status,
                     session_id: None,

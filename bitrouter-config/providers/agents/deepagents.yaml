@@ -1,15 +1,12 @@
 protocol: acp
-binary: openclaw
-args:
-  - acp
+binary: deepagents-acp
+args: []
 distribution:
   - npx:
-      package: openclaw
-      args:
-        - acp
+      package: "deepagents-acp"
 routing:
   env:
     OPENAI_BASE_URL: "${BITROUTER_URL_V1}"
-    OPENAI_API_KEY: "${OPENAI_API_KEY}"
     ANTHROPIC_BASE_URL: "${BITROUTER_URL_V1}"
+    OPENAI_API_KEY: "${OPENAI_API_KEY}"
     ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"

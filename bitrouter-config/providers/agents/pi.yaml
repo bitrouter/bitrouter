@@ -1,0 +1,13 @@
+protocol: acp
+binary: pi-acp
+args: []
+distribution:
+  - npx:
+      package: "pi-acp"
+routing:
+  env:
+    OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+# pi-acp is a thin ACP adapter that spawns `pi --mode rpc`.
+# LLM provider config is managed by the underlying `pi` agent;
+# env vars are passed through to the child process.

@@ -25,3 +25,8 @@ distribution:
           cmd: "./opencode"
           args:
             - acp
+routing:
+  env:
+    LOCAL_ENDPOINT: "${BITROUTER_URL_V1}"
+    OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
