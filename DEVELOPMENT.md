@@ -122,7 +122,7 @@ If you want BitRouter's routing and provider adapters without the stock CLI/runt
 
 ### Option 1: reuse the existing config and provider router
 
-This is the shortest path when you want BitRouter-compatible config loading and provider instantiation:
+This is the shortest path when you want BitRouter-compatible config loading and provider instantiation. Because `bitrouter` is a binary crate (no `lib.rs`), this option is for **forks of the `bitrouter` binary** — you write your server entry point inside that crate alongside the existing `Router` implementation. If you want to use `bitrouter-api` purely as a library dependency without forking the binary, skip to Option 2.
 
 ```rust
 use std::sync::Arc;
@@ -141,6 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     // Build a model router from provider configs.
     // Router::new takes a reqwest_middleware::ClientWithMiddleware.
+    // `crate::runtime::Router` refers to the internal router in the `bitrouter` binary crate.
     let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
     let router = Arc::new(crate::runtime::Router::new(client, config.providers.clone()));
 
