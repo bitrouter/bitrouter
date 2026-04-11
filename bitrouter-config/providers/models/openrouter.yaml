@@ -755,6 +755,14 @@ models:
         cache_read: 0.03
       output_tokens:
         text: 1.2
+  minimax/minimax-m2.5:free:
+    max_input_tokens: 204800
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
   minimax/minimax-m2.7:
     max_input_tokens: 204800
     max_output_tokens: 131072
@@ -1502,6 +1510,18 @@ models:
         no_cache: 0.6
       output_tokens:
         text: 3.6
+  qwen/qwen3.5-flash-02-23:
+    max_input_tokens: 1000000
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.065
+      output_tokens:
+        text: 0.26
   qwen/qwen3.5-plus-02-15:
     max_input_tokens: 1000000
     max_output_tokens: 65536
