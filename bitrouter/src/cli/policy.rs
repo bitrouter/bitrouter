@@ -13,9 +13,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use bitrouter_accounts::policy::file::{
-    self, PolicyConfig, PolicyContext, PolicyFile, PolicyResult,
-};
+use bitrouter_accounts::policy::file;
+use bitrouter_core::policy::{PolicyConfig, PolicyContext, PolicyFile, PolicyResult};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -289,11 +288,9 @@ pub fn delete(policy_dir: &Path, id: &str) -> Result {
 /// Flags use "provider:tool" format (e.g. "github:search_code").
 fn parse_tool_rules(
     allow: &[String],
-) -> std::collections::HashMap<String, bitrouter_accounts::policy::config::ToolProviderPolicy> {
-    let mut rules: std::collections::HashMap<
-        String,
-        bitrouter_accounts::policy::config::ToolProviderPolicy,
-    > = std::collections::HashMap::new();
+) -> std::collections::HashMap<String, bitrouter_core::policy::ToolProviderPolicy> {
+    let mut rules: std::collections::HashMap<String, bitrouter_core::policy::ToolProviderPolicy> =
+        std::collections::HashMap::new();
 
     for entry in allow {
         if let Some((provider, tool)) = entry.split_once(':') {
@@ -319,7 +316,7 @@ fn load_policies(dir: &Path) -> Result<Vec<PolicyFile>> {
 
 /// Resolve the policy directory for a given BitRouter home.
 pub fn policy_dir(home: &Path) -> PathBuf {
-    file::policy_dir(home)
+    bitrouter_core::policy::policy_dir(home)
 }
 
 #[cfg(test)]

@@ -158,7 +158,7 @@ impl
         );
         // Per-caller policy cache — loads policy files from <home>/policies/.
         // Wrapped in HotSwap for atomic reload on SIGHUP.
-        let policy_dir = bitrouter_accounts::policy::file::policy_dir(&self.paths.home_dir);
+        let policy_dir = bitrouter_core::policy::policy_dir(&self.paths.home_dir);
         let policy_cache = bitrouter_core::sync::HotSwap::new(
             bitrouter_accounts::policy::cache::PolicyCache::load(&policy_dir).unwrap_or_else(|e| {
                 tracing::warn!("failed to load policy files: {e}");
@@ -209,7 +209,7 @@ impl
             // Reload per-caller policy cache from policy files.
             // On failure, retain the existing cache rather than replacing with
             // an empty one (which would silently disable all policy enforcement).
-            let pol_dir = bitrouter_accounts::policy::file::policy_dir(&reload_paths.home_dir);
+            let pol_dir = bitrouter_core::policy::policy_dir(&reload_paths.home_dir);
             match bitrouter_accounts::policy::cache::PolicyCache::load(&pol_dir) {
                 Ok(new_cache) => {
                     reload_policy_cache

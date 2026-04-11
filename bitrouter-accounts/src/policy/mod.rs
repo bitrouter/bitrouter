@@ -1,17 +1,14 @@
 //! Per-caller tool access-control policy engine.
 //!
-//! Policies are JSON files stored in `<home>/policies/`, attached to API keys
-//! via a single JWT `pol` claim, and evaluated at request time.
+//! Policy data types live in [`bitrouter_core::policy`]. This module provides:
 //!
-//! - **Policy files** — [`file`] defines the on-disk policy format with
-//!   spend limits and per-provider tool allow-lists.
-//! - **Policy cache** — [`cache::PolicyCache`] loads policy files and resolves
-//!   tool allow-lists for a single policy.
+//! - **Policy loading** — [`file::load_policies`] loads policy files from
+//!   `<home>/policies/` with tracing-based error reporting.
+//! - **Policy cache** — [`cache::PolicyCache`] holds loaded policies and
+//!   implements [`ToolPolicyResolver`](bitrouter_core::routers::admin::ToolPolicyResolver).
 //! - **Tool registry** — [`registry::GuardedToolRegistry`] wraps any
 //!   [`ToolRegistry`](bitrouter_core::routers::registry::ToolRegistry) for
-//!   admin API tool listing.
-//! - **Configuration** — [`config::ToolProviderPolicy`] defines per-provider
-//!   allow-list bundles reused by policy files.
+//!   admin API tool listing with visibility filtering.
 
 pub mod cache;
 pub mod config;

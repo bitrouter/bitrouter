@@ -61,7 +61,7 @@ mod tests {
 
     fn make_policy_file(
         id: &str,
-        tool_rules: HashMap<String, super::super::config::ToolProviderPolicy>,
+        tool_rules: HashMap<String, bitrouter_core::policy::ToolProviderPolicy>,
     ) -> PolicyFile {
         PolicyFile {
             id: id.to_string(),
@@ -91,7 +91,7 @@ mod tests {
         let mut tool_rules = HashMap::new();
         tool_rules.insert(
             "github".into(),
-            super::super::config::ToolProviderPolicy {
+            bitrouter_core::policy::ToolProviderPolicy {
                 filter: ToolFilter {
                     allow: Some(vec!["search_code".into(), "get_file".into()]),
                 },
@@ -115,7 +115,7 @@ mod tests {
         let mut tool_rules = HashMap::new();
         tool_rules.insert(
             "github".into(),
-            super::super::config::ToolProviderPolicy {
+            bitrouter_core::policy::ToolProviderPolicy {
                 filter: ToolFilter::default(),
             },
         );
@@ -134,7 +134,7 @@ mod tests {
         let mut tool_rules = HashMap::new();
         tool_rules.insert(
             "github".into(),
-            super::super::config::ToolProviderPolicy {
+            bitrouter_core::policy::ToolProviderPolicy {
                 filter: ToolFilter {
                     allow: Some(vec!["search_code".into()]),
                 },
