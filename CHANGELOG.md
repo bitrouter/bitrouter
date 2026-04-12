@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.2](https://github.com/bitrouter/bitrouter/compare/v0.23.1...v0.23.2)
+
+
+### ⛰️ Features
+
+- *(auth)* Interactive provider onboarding and re-auth UX ([#318](https://github.com/bitrouter/bitrouter/pull/318)) - ([cc25f50](https://github.com/bitrouter/bitrouter/commit/cc25f5080734eb0ba4144ea44667f15a8cc40314))
+
+
 ## [0.23.0](https://github.com/bitrouter/bitrouter/compare/v0.22.1...v0.23.0)
 
 
