@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.2](https://github.com/bitrouter/bitrouter/compare/v0.23.1...v0.23.2)
+
+
+### ⚙️ Miscellaneous Tasks
+
+- Update Cargo.lock dependencies - ([0000000](https://github.com/bitrouter/bitrouter/commit/0000000))
+
+
 ## [0.23.0](https://github.com/bitrouter/bitrouter/compare/v0.22.1...v0.23.0)
 
 
