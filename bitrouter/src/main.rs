@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+mod auth;
 mod cli;
 mod init;
 mod runtime;
@@ -103,6 +104,12 @@ enum Command {
     Policy {
         #[command(subcommand)]
         action: PolicyAction,
+    },
+
+    /// Manage OAuth authentication for providers
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
     },
 
     /// Reset configuration and re-run setup
@@ -282,6 +289,17 @@ enum PolicyAction {
         #[arg(long)]
         id: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum AuthAction {
+    /// Authenticate with an OAuth provider (device code flow)
+    Login {
+        /// Provider name (must use `auth.type: oauth` in config)
+        provider: String,
+    },
+    /// Show OAuth authentication status for all providers
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -503,6 +521,16 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             return Ok(());
         }
+        Some(Command::Auth { action }) => {
+            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
+            match action {
+                AuthAction::Login { provider } => {
+                    cli::auth::run_login(&runtime.config, &paths, &provider)?
+                }
+                AuthAction::Status => cli::auth::run_status(&runtime.config, &paths)?,
+            }
+            return Ok(());
+        }
         Some(Command::Tools { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
@@ -614,7 +642,8 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let model_router = crate::runtime::Router::new(
                 client_builder.build(),
                 runtime.config.providers.clone(),
-            );
+            )
+            .with_token_store(paths.token_store_file.clone());
             runtime.serve_with_reload(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,

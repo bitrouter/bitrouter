@@ -13,6 +13,8 @@ pub struct RuntimePaths {
     pub env_file: PathBuf,
     pub runtime_dir: PathBuf,
     pub log_dir: PathBuf,
+    /// OAuth token store file (`<home>/tokens.json`).
+    pub token_store_file: PathBuf,
 }
 
 impl RuntimePaths {
@@ -24,6 +26,7 @@ impl RuntimePaths {
             env_file: home.join(".env"),
             runtime_dir: home.join("run"),
             log_dir: home.join("logs"),
+            token_store_file: home.join("tokens.json"),
             home_dir: home,
         }
     }
@@ -126,6 +129,7 @@ fn scaffold_home(home: &Path) -> std::io::Result<()> {
 # Secrets and credentials
 .env
 .keys/
+tokens.json
 
 # Runtime state
 bitrouter.db

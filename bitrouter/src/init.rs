@@ -28,6 +28,7 @@ const PROVIDERS: &[(&str, &str)] = &[
     ("openai", "OpenAI"),
     ("anthropic", "Anthropic"),
     ("google", "Google"),
+    ("github-copilot", "GitHub Copilot"),
 ];
 
 pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error::Error>> {
@@ -152,6 +153,20 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
         }
 
         for &name in &selected_providers {
+            // Skip API key prompt for OAuth providers — they authenticate
+            // via the device code flow at `bitrouter auth login`.
+            let is_oauth = defs
+                .get(name)
+                .and_then(|bp| bp.config.auth.as_ref())
+                .is_some_and(|a| matches!(a, bitrouter_config::AuthConfig::OAuth { .. }));
+            if is_oauth {
+                println!(
+                    "  {} uses OAuth — run `bitrouter auth login {name}` to authenticate.",
+                    provider_display_name(name),
+                );
+                continue;
+            }
+
             let fallback = name.to_uppercase();
             let prefix = defs
                 .get(name)

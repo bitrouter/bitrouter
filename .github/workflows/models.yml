@@ -53,6 +53,7 @@ jobs:
             [zai]=zai
             [moonshot]=moonshotai
             [qwen]=alibaba
+            [github-copilot]=github-copilot
           )
 
           # jq filter that converts a models.dev provider's models into

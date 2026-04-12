@@ -115,6 +115,7 @@ pub fn write_init_config(
 # Secrets and credentials
 .env
 .keys/
+tokens.json
 
 # Runtime state
 bitrouter.db
@@ -180,14 +181,27 @@ fn generate_config_yaml(options: &InitOptions) -> String {
         } else {
             // BYOK builtin providers
             for name in &options.providers {
-                let fallback = name.to_uppercase();
-                let prefix = defs
-                    .get(name)
-                    .and_then(|bp| bp.config.env_prefix.as_deref())
-                    .unwrap_or(&fallback);
-                yaml.push_str(&format!(
-                    "  {name}:\n    api_key: \"${{{prefix}_API_KEY}}\"\n\n"
-                ));
+                // OAuth providers inherit all config from built-in defaults
+                // (no api_key needed — tokens are managed by the token store).
+                let is_oauth = defs
+                    .get(name.as_str())
+                    .and_then(|bp| bp.config.auth.as_ref())
+                    .is_some_and(|a| matches!(a, crate::config::AuthConfig::OAuth { .. }));
+                if is_oauth {
+                    yaml.push_str(&format!(
+                        "  # {name}: OAuth — run `bitrouter auth login {name}` to authenticate\n"
+                    ));
+                    yaml.push_str(&format!("  {name}: {{}}\n\n"));
+                } else {
+                    let fallback = name.to_uppercase();
+                    let prefix = defs
+                        .get(name.as_str())
+                        .and_then(|bp| bp.config.env_prefix.as_deref())
+                        .unwrap_or(&fallback);
+                    yaml.push_str(&format!(
+                        "  {name}:\n    api_key: \"${{{prefix}_API_KEY}}\"\n\n"
+                    ));
+                }
             }
 
             // Custom providers

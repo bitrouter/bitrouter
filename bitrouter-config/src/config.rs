@@ -749,12 +749,40 @@ pub enum AuthConfig {
     Mpp,
     /// OWS wallet authentication — requests are signed by a local wallet.
     Wallet,
+    /// OAuth 2.0 authentication.
+    ///
+    /// Tokens are acquired interactively via the device code flow (RFC 8628)
+    /// and persisted to the token store (`tokens.json`).
+    #[serde(rename = "oauth")]
+    OAuth {
+        /// OAuth grant type (currently only `device_code`).
+        grant: OAuthGrant,
+        /// OAuth client ID.
+        client_id: String,
+        /// Requested scopes (space-separated).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        /// Device authorization endpoint URL.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_auth_url: Option<String>,
+        /// Token endpoint URL.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_url: Option<String>,
+    },
     /// Extension point for non-standard auth methods.
     Custom {
         method: String,
         #[serde(default)]
         params: serde_json::Value,
     },
+}
+
+/// OAuth grant type.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthGrant {
+    /// OAuth 2.0 Device Authorization Grant (RFC 8628).
+    DeviceCode,
 }
 
 // ── Model routing configuration ──────────────────────────────────────
@@ -1245,5 +1273,74 @@ tools:
         assert!(config.providers.contains_key("google"));
         assert!(config.models.is_empty());
         assert!(config.guardrails.enabled);
+    }
+
+    #[test]
+    fn load_with_oauth_auth() {
+        let yaml = r#"
+providers:
+  github-copilot:
+    api_protocol: openai
+    api_base: "https://api.githubcopilot.com"
+    auth:
+      type: oauth
+      grant: device_code
+      client_id: "Iv23limb4eFHH5zfOCr2"
+      scope: "read:user"
+      device_auth_url: "https://github.com/login/device/code"
+      token_url: "https://github.com/login/oauth/access_token"
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        let p = &config.providers["github-copilot"];
+        assert!(matches!(p.auth, Some(AuthConfig::OAuth { .. })));
+        if let Some(AuthConfig::OAuth {
+            grant,
+            client_id,
+            scope,
+            device_auth_url,
+            token_url,
+        }) = &p.auth
+        {
+            assert_eq!(*grant, OAuthGrant::DeviceCode);
+            assert_eq!(client_id, "Iv23limb4eFHH5zfOCr2");
+            assert_eq!(scope.as_deref(), Some("read:user"));
+            assert_eq!(
+                device_auth_url.as_deref(),
+                Some("https://github.com/login/device/code")
+            );
+            assert_eq!(
+                token_url.as_deref(),
+                Some("https://github.com/login/oauth/access_token")
+            );
+        }
+    }
+
+    #[test]
+    fn load_oauth_with_defaults() {
+        let yaml = r#"
+providers:
+  test-oauth:
+    api_protocol: openai
+    api_base: "https://api.example.com"
+    auth:
+      type: oauth
+      grant: device_code
+      client_id: "test-client-id"
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        let p = &config.providers["test-oauth"];
+        if let Some(AuthConfig::OAuth {
+            scope,
+            device_auth_url,
+            token_url,
+            ..
+        }) = &p.auth
+        {
+            assert!(scope.is_none());
+            assert!(device_auth_url.is_none());
+            assert!(token_url.is_none());
+        } else {
+            panic!("expected OAuth auth config");
+        }
     }
 }
