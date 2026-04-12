@@ -117,7 +117,7 @@ enum Command {
         action: PolicyAction,
     },
 
-    /// Manage OAuth authentication for providers
+    /// Manage provider authentication
     Auth {
         #[command(subcommand)]
         action: AuthAction,
@@ -304,12 +304,17 @@ enum PolicyAction {
 
 #[derive(Debug, Subcommand)]
 enum AuthAction {
-    /// Authenticate with an OAuth provider (device code flow)
+    /// Authenticate with providers (interactive or single-provider)
     Login {
-        /// Provider name (must use `auth.type: oauth` in config)
-        provider: String,
+        /// Provider name (optional — omit for interactive multi-provider flow)
+        provider: Option<String>,
     },
-    /// Show OAuth authentication status for all providers
+    /// Re-authenticate an existing provider
+    Refresh {
+        /// Provider name (optional — omit for interactive picker)
+        provider: Option<String>,
+    },
+    /// Show authentication status for all providers
     Status,
 }
 
@@ -534,12 +539,19 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Auth { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
-            match action {
+            // Auth commands use blocking I/O (reqwest::blocking for OAuth,
+            // dialoguer for interactive prompts). `block_in_place` lets them
+            // run on the current Tokio worker thread without conflicting with
+            // the outer async runtime.
+            tokio::task::block_in_place(|| match action {
                 AuthAction::Login { provider } => {
-                    cli::auth::run_login(&runtime.config, &paths, &provider)?
+                    cli::auth::run_login(&runtime.config, &paths, provider.as_deref())
                 }
-                AuthAction::Status => cli::auth::run_status(&runtime.config, &paths)?,
-            }
+                AuthAction::Refresh { provider } => {
+                    cli::auth::run_refresh(&runtime.config, &paths, provider.as_deref())
+                }
+                AuthAction::Status => cli::auth::run_status(&runtime.config, &paths),
+            })?;
             return Ok(());
         }
         Some(Command::Tools { action }) => {
