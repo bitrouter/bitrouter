@@ -528,15 +528,19 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Auth { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
-            match action {
+            // Auth commands use blocking I/O (reqwest::blocking for OAuth,
+            // dialoguer for interactive prompts). `block_in_place` lets them
+            // run on the current Tokio worker thread without conflicting with
+            // the outer async runtime.
+            tokio::task::block_in_place(|| match action {
                 AuthAction::Login { provider } => {
-                    cli::auth::run_login(&runtime.config, &paths, provider.as_deref())?
+                    cli::auth::run_login(&runtime.config, &paths, provider.as_deref())
                 }
                 AuthAction::Refresh { provider } => {
-                    cli::auth::run_refresh(&runtime.config, &paths, provider.as_deref())?
+                    cli::auth::run_refresh(&runtime.config, &paths, provider.as_deref())
                 }
-                AuthAction::Status => cli::auth::run_status(&runtime.config, &paths)?,
-            }
+                AuthAction::Status => cli::auth::run_status(&runtime.config, &paths),
+            })?;
             return Ok(());
         }
         Some(Command::Tools { action }) => {
