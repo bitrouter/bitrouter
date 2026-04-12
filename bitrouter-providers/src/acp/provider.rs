@@ -61,11 +61,7 @@ impl AcpAgentProvider {
     /// This does **not** spawn any subprocess — call
     /// [`connect`](AgentProvider::connect) to establish a session.
     pub fn new(agent_name: String, config: AgentConfig) -> Self {
-        let session_config = config
-            .session
-            .as_ref()
-            .cloned()
-            .unwrap_or_default();
+        let session_config = config.session.as_ref().cloned().unwrap_or_default();
         Self {
             agent_name,
             config,
@@ -351,3 +347,71 @@ const _: () = {
     const fn _assert<T: Send + Sync>() {}
     _assert::<AcpAgentProvider>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitrouter_config::{AgentConfig, AgentProtocol, AgentSessionConfig};
+
+    fn make_config(session: Option<AgentSessionConfig>) -> AgentConfig {
+        AgentConfig {
+            protocol: AgentProtocol::Acp,
+            binary: "nonexistent-agent-binary".to_owned(),
+            args: Vec::new(),
+            enabled: true,
+            distribution: Vec::new(),
+            session,
+            a2a: None,
+        }
+    }
+
+    #[test]
+    fn provider_defaults_to_single_session() {
+        let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
+        assert_eq!(provider.max_concurrent(), 1);
+        assert_eq!(provider.idle_timeout(), Duration::from_secs(600));
+        assert_eq!(provider.session_count(), 0);
+    }
+
+    #[test]
+    fn provider_respects_session_config() {
+        let config = make_config(Some(AgentSessionConfig {
+            idle_timeout_secs: 120,
+            max_concurrent: 8,
+        }));
+        let provider = AcpAgentProvider::new("test".to_owned(), config);
+        assert_eq!(provider.max_concurrent(), 8);
+        assert_eq!(provider.idle_timeout(), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn provider_agent_name() {
+        let provider = AcpAgentProvider::new("claude-code".to_owned(), make_config(None));
+        assert_eq!(provider.agent_name(), "claude-code");
+        assert_eq!(provider.protocol_name(), "acp");
+    }
+
+    #[tokio::test]
+    async fn submit_without_connect_errors() {
+        let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
+        let result = provider
+            .submit("nonexistent-session", "hello".to_owned())
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn disconnect_unknown_session_is_noop() {
+        let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
+        // Disconnecting a session that doesn't exist should succeed silently.
+        let result = provider.disconnect("nonexistent-session").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cleanup_idle_sessions_empty_pool() {
+        let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
+        let cleaned = provider.cleanup_idle_sessions().await;
+        assert_eq!(cleaned, 0);
+    }
+}

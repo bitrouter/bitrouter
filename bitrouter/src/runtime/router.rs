@@ -469,11 +469,10 @@ impl ConfigAgentRouter {
             .into_iter()
             .filter(|(_, config)| config.enabled)
             .map(|(name, config)| {
-                let provider =
-                    Arc::new(bitrouter_providers::acp::provider::AcpAgentProvider::new(
-                        name.clone(),
-                        config,
-                    ));
+                let provider = Arc::new(bitrouter_providers::acp::provider::AcpAgentProvider::new(
+                    name.clone(),
+                    config,
+                ));
                 (name, provider)
             })
             .collect();
@@ -498,11 +497,7 @@ impl bitrouter_core::routers::router::AgentRouter for ConfigAgentRouter {
         agent_name: &str,
     ) -> Result<Box<bitrouter_core::agents::provider::DynAgentProvider<'static>>> {
         let provider = self.agents.get(agent_name).ok_or_else(|| {
-            BitrouterError::invalid_request(
-                None,
-                format!("unknown agent: {agent_name}"),
-                None,
-            )
+            BitrouterError::invalid_request(None, format!("unknown agent: {agent_name}"), None)
         })?;
         Ok(bitrouter_core::agents::provider::DynAgentProvider::new_box(
             Arc::clone(provider),
@@ -588,5 +583,75 @@ mod tests {
             Arc::new(reqwest::Client::new()),
         );
         assert!(!router.has_providers());
+    }
+
+    // ── ConfigAgentRouter ────────────────────────────────────────────
+
+    #[cfg(feature = "tui")]
+    fn test_agent_configs() -> HashMap<String, bitrouter_config::AgentConfig> {
+        let mut m = HashMap::new();
+        m.insert(
+            "claude-code".to_owned(),
+            bitrouter_config::AgentConfig {
+                protocol: bitrouter_config::AgentProtocol::Acp,
+                binary: "claude".to_owned(),
+                args: vec!["--agent".to_owned()],
+                enabled: true,
+                distribution: Vec::new(),
+                session: Some(bitrouter_config::AgentSessionConfig {
+                    idle_timeout_secs: 300,
+                    max_concurrent: 5,
+                }),
+                a2a: None,
+            },
+        );
+        m.insert(
+            "disabled-agent".to_owned(),
+            bitrouter_config::AgentConfig {
+                protocol: bitrouter_config::AgentProtocol::Acp,
+                binary: "disabled".to_owned(),
+                args: Vec::new(),
+                enabled: false,
+                distribution: Vec::new(),
+                session: None,
+                a2a: None,
+            },
+        );
+        m
+    }
+
+    #[cfg(feature = "tui")]
+    #[tokio::test]
+    async fn agent_router_routes_enabled_agent() {
+        use bitrouter_core::routers::router::AgentRouter;
+        let router = super::ConfigAgentRouter::new(test_agent_configs());
+        let provider = router.route_agent("claude-code").await;
+        assert!(provider.is_ok());
+    }
+
+    #[cfg(feature = "tui")]
+    #[tokio::test]
+    async fn agent_router_rejects_unknown_agent() {
+        use bitrouter_core::routers::router::AgentRouter;
+        let router = super::ConfigAgentRouter::new(test_agent_configs());
+        assert!(router.route_agent("nonexistent").await.is_err());
+    }
+
+    #[cfg(feature = "tui")]
+    #[tokio::test]
+    async fn agent_router_skips_disabled_agent() {
+        use bitrouter_core::routers::router::AgentRouter;
+        let router = super::ConfigAgentRouter::new(test_agent_configs());
+        // Disabled agents should not be routable.
+        assert!(router.route_agent("disabled-agent").await.is_err());
+    }
+
+    #[cfg(feature = "tui")]
+    #[tokio::test]
+    async fn agent_router_providers_iterator() {
+        let router = super::ConfigAgentRouter::new(test_agent_configs());
+        // Only enabled agents are in the provider pool.
+        let count = router.providers().count();
+        assert_eq!(count, 1);
     }
 }

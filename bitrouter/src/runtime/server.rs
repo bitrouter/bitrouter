@@ -290,22 +290,19 @@ where
         // Agent router — resolves agent names to live provider instances.
         // Also spawns a background task for idle session cleanup.
         #[cfg(feature = "tui")]
-        let _agent_router = {
-            let router = if self.config.agents.is_empty() {
-                None
-            } else {
-                let r = Arc::new(crate::runtime::router::ConfigAgentRouter::new(
-                    self.config.agents.clone(),
-                ));
-                // Spawn idle-session cleanup loop.
-                let cleanup_router = Arc::clone(&r);
-                tokio::spawn(async move {
-                    agent_session_cleanup_loop(cleanup_router).await;
-                });
-                tracing::info!("agent router initialized");
-                Some(r)
-            };
-            router
+        let _agent_router = if self.config.agents.is_empty() {
+            None
+        } else {
+            let r = Arc::new(crate::runtime::router::ConfigAgentRouter::new(
+                self.config.agents.clone(),
+            ));
+            // Spawn idle-session cleanup loop.
+            let cleanup_router = Arc::clone(&r);
+            tokio::spawn(async move {
+                agent_session_cleanup_loop(cleanup_router).await;
+            });
+            tracing::info!("agent router initialized");
+            Some(r)
         };
 
         // Admin route management — gated by management auth.
