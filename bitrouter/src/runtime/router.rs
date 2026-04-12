@@ -444,6 +444,72 @@ where
     }
 }
 
+// ── Agent router ─────────────────────────────────────────────────
+
+/// Config-driven agent router that creates and caches
+/// [`AcpAgentProvider`] instances from the `agents:` config section.
+///
+/// Enabled agents get a shared provider on construction. Callers receive
+/// an `Arc`-wrapped handle so that multiple API requests can share the
+/// same session pool for a given agent.
+#[cfg(feature = "tui")]
+pub struct ConfigAgentRouter {
+    agents: HashMap<String, Arc<bitrouter_providers::acp::provider::AcpAgentProvider>>,
+}
+
+#[cfg(feature = "tui")]
+impl ConfigAgentRouter {
+    /// Build a router from the `agents:` configuration map.
+    ///
+    /// Only enabled agents are instantiated. Disabled agents are silently
+    /// skipped — they still appear in the discovery registry but cannot
+    /// be routed to.
+    pub fn new(agent_configs: HashMap<String, bitrouter_config::AgentConfig>) -> Self {
+        let agents = agent_configs
+            .into_iter()
+            .filter(|(_, config)| config.enabled)
+            .map(|(name, config)| {
+                let provider =
+                    Arc::new(bitrouter_providers::acp::provider::AcpAgentProvider::new(
+                        name.clone(),
+                        config,
+                    ));
+                (name, provider)
+            })
+            .collect();
+        Self { agents }
+    }
+
+    /// Returns an iterator over the managed providers.
+    ///
+    /// Used by the runtime to drive idle-session cleanup across all
+    /// agents.
+    pub fn providers(
+        &self,
+    ) -> impl Iterator<Item = &Arc<bitrouter_providers::acp::provider::AcpAgentProvider>> {
+        self.agents.values()
+    }
+}
+
+#[cfg(feature = "tui")]
+impl bitrouter_core::routers::router::AgentRouter for ConfigAgentRouter {
+    async fn route_agent(
+        &self,
+        agent_name: &str,
+    ) -> Result<Box<bitrouter_core::agents::provider::DynAgentProvider<'static>>> {
+        let provider = self.agents.get(agent_name).ok_or_else(|| {
+            BitrouterError::invalid_request(
+                None,
+                format!("unknown agent: {agent_name}"),
+                None,
+            )
+        })?;
+        Ok(bitrouter_core::agents::provider::DynAgentProvider::new_box(
+            Arc::clone(provider),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
