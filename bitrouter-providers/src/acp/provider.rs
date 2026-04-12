@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bitrouter_config::{AgentConfig, AgentSessionConfig, Distribution};
@@ -19,7 +19,7 @@ use bitrouter_core::agents::event::{AgentEvent, PermissionRequestId, PermissionR
 use bitrouter_core::agents::provider::AgentProvider;
 use bitrouter_core::agents::session::AgentSessionInfo;
 use bitrouter_core::errors::{BitrouterError, Result};
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 use super::connection::{HandshakeResult, spawn_agent_thread};
 use super::types::AgentCommand;
@@ -35,6 +35,9 @@ struct SessionEntry {
     command_tx: mpsc::Sender<AgentCommand>,
     _thread_handle: std::thread::JoinHandle<()>,
     last_active: Instant,
+    /// Held for the lifetime of the session. Dropping it releases the
+    /// concurrency slot in the provider's semaphore.
+    _permit: OwnedSemaphorePermit,
 }
 
 /// Send-safe handle to one or more ACP agent connections.
@@ -53,6 +56,9 @@ pub struct AcpAgentProvider {
     session_config: AgentSessionConfig,
     /// Active sessions keyed by protocol-assigned session ID.
     sessions: Mutex<HashMap<String, SessionEntry>>,
+    /// Limits concurrent sessions. Initialized with `max_concurrent`
+    /// permits; each active session (and in-flight connect) holds one.
+    connect_semaphore: Arc<Semaphore>,
 }
 
 impl AcpAgentProvider {
@@ -62,11 +68,13 @@ impl AcpAgentProvider {
     /// [`connect`](AgentProvider::connect) to establish a session.
     pub fn new(agent_name: String, config: AgentConfig) -> Self {
         let session_config = config.session.as_ref().cloned().unwrap_or_default();
+        let connect_semaphore = Arc::new(Semaphore::new(session_config.max_concurrent));
         Self {
             agent_name,
             config,
             session_config,
             sessions: Mutex::new(HashMap::new()),
+            connect_semaphore,
         }
     }
 
@@ -89,6 +97,8 @@ impl AcpAgentProvider {
     ///
     /// Returns the number of sessions cleaned up. Sends a graceful
     /// [`Disconnect`](AgentCommand::Disconnect) to each removed session.
+    /// Dropping the removed entries releases their semaphore permits,
+    /// freeing concurrency slots for new connections.
     pub async fn cleanup_idle_sessions(&self) -> usize {
         let idle_timeout = self.idle_timeout();
         let now = Instant::now();
@@ -130,19 +140,18 @@ impl AgentProvider for AcpAgentProvider {
     }
 
     async fn connect(&self) -> Result<AgentSessionInfo> {
-        // Enforce max concurrency.
-        {
-            let sessions = self.sessions.lock().map_err(|_| {
-                BitrouterError::transport(Some(&self.agent_name), "session lock poisoned")
-            })?;
-            let max = self.session_config.max_concurrent;
-            if sessions.len() >= max {
-                return Err(BitrouterError::transport(
+        // Atomically reserve a concurrency slot. The permit is held for
+        // the lifetime of the session (stored in SessionEntry) and
+        // released when the session is removed.
+        let permit = Arc::clone(&self.connect_semaphore)
+            .try_acquire_owned()
+            .map_err(|_| {
+                let max = self.session_config.max_concurrent;
+                BitrouterError::transport(
                     Some(&self.agent_name),
                     format!("max concurrent sessions ({max}) reached"),
-                ));
-            }
-        }
+                )
+            })?;
 
         let launch = resolve_launch(&self.config);
         let (handshake_tx, handshake_rx) = tokio::sync::oneshot::channel();
@@ -176,6 +185,7 @@ impl AgentProvider for AcpAgentProvider {
                     command_tx,
                     _thread_handle: thread_handle,
                     last_active: Instant::now(),
+                    _permit: permit,
                 },
             );
         }
