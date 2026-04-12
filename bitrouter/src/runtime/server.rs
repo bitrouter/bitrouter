@@ -289,8 +289,9 @@ where
 
         // Agent router — resolves agent names to live provider instances.
         // Also spawns a background task for idle session cleanup.
+        // Held as a keepalive handle to prevent the Arc from being dropped.
         #[cfg(feature = "tui")]
-        let _agent_router = if self.config.agents.is_empty() {
+        let _agent_router_handle = if self.config.agents.is_empty() {
             None
         } else {
             let r = Arc::new(crate::runtime::router::ConfigAgentRouter::new(
@@ -1029,11 +1030,11 @@ async fn agent_session_cleanup_loop(router: Arc<crate::runtime::router::ConfigAg
     loop {
         tokio::time::sleep(INTERVAL).await;
         for provider in router.providers() {
-            let cleaned = provider.cleanup_idle_sessions().await;
-            if cleaned > 0 {
+            let cleaned_count = provider.cleanup_idle_sessions().await;
+            if cleaned_count > 0 {
                 tracing::info!(
                     agent = provider.agent_name(),
-                    cleaned,
+                    cleaned_count,
                     "cleaned up idle agent sessions",
                 );
             }
