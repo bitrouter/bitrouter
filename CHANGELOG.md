@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0](https://github.com/bitrouter/bitrouter/compare/v0.22.1...v0.23.0)
+
+
+### ⛰️ Features
+
+- *(auth)* OAuth device code flow support ([#313](https://github.com/bitrouter/bitrouter/pull/313)) - ([f9ea9a9](https://github.com/bitrouter/bitrouter/commit/f9ea9a9c429074708c26f196b8eafca28dcecf85))
+- Refactor ACP agent infra for reverse-proxy support ([#312](https://github.com/bitrouter/bitrouter/pull/312)) - ([b697558](https://github.com/bitrouter/bitrouter/commit/b697558f2205f01d2bd52460e9c22311530d6876))
+
+
 ## [0.22.1](https://github.com/bitrouter/bitrouter/compare/v0.22.0...v0.22.1)
 
 
