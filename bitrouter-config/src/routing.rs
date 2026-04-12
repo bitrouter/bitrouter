@@ -1472,6 +1472,8 @@ mod tests {
             args: Vec::new(),
             enabled,
             distribution: Vec::new(),
+            session: None,
+            a2a: None,
         }
     }
 

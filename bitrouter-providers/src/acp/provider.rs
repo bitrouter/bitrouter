@@ -4,11 +4,17 @@
 //! `bitrouter-core`. It hides the `!Send` ACP internals behind an mpsc
 //! channel interface. The provider is `Send + Sync` and can be held
 //! anywhere in the application.
+//!
+//! The provider supports multiple concurrent sessions, each backed by its
+//! own subprocess and OS thread. Sessions are keyed by the protocol-assigned
+//! session ID and tracked with a last-active timestamp for idle cleanup.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-use bitrouter_config::{AgentConfig, Distribution};
+use bitrouter_config::{AgentConfig, AgentSessionConfig, Distribution};
 use bitrouter_core::agents::event::{AgentEvent, PermissionRequestId, PermissionResponse};
 use bitrouter_core::agents::provider::AgentProvider;
 use bitrouter_core::agents::session::AgentSessionInfo;
@@ -24,39 +30,97 @@ pub(crate) struct LaunchCommand {
     pub args: Vec<String>,
 }
 
-/// Send-safe handle to an ACP agent connection.
+/// A single active ACP session within the provider's pool.
+struct SessionEntry {
+    command_tx: mpsc::Sender<AgentCommand>,
+    _thread_handle: std::thread::JoinHandle<()>,
+    last_active: Instant,
+}
+
+/// Send-safe handle to one or more ACP agent connections.
 ///
-/// Internally manages a dedicated OS thread with a single-threaded
-/// tokio runtime and `LocalSet` (because ACP types are `!Send`).
-/// All communication crosses the thread boundary via mpsc channels.
+/// Internally manages a pool of sessions, each on a dedicated OS thread
+/// with a single-threaded tokio runtime and `LocalSet` (because ACP types
+/// are `!Send`). All communication crosses thread boundaries via mpsc
+/// channels.
+///
+/// The pool enforces a configurable max-concurrency limit and tracks
+/// per-session idle timestamps so that the runtime can periodically
+/// reclaim stale sessions via [`cleanup_idle_sessions`](Self::cleanup_idle_sessions).
 pub struct AcpAgentProvider {
     agent_name: String,
     config: AgentConfig,
-    /// Command channel to the agent thread. Set after `connect`.
-    state: Mutex<ConnectionState>,
-}
-
-enum ConnectionState {
-    /// Not yet connected.
-    Idle,
-    /// Connected to the agent subprocess.
-    Connected {
-        command_tx: mpsc::Sender<AgentCommand>,
-        _thread_handle: std::thread::JoinHandle<()>,
-    },
+    session_config: AgentSessionConfig,
+    /// Active sessions keyed by protocol-assigned session ID.
+    sessions: Mutex<HashMap<String, SessionEntry>>,
 }
 
 impl AcpAgentProvider {
     /// Create a new provider for the given agent.
     ///
-    /// This does **not** spawn the subprocess — call
-    /// [`connect`](AgentProvider::connect) to establish the session.
+    /// This does **not** spawn any subprocess — call
+    /// [`connect`](AgentProvider::connect) to establish a session.
     pub fn new(agent_name: String, config: AgentConfig) -> Self {
+        let session_config = config
+            .session
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
         Self {
             agent_name,
             config,
-            state: Mutex::new(ConnectionState::Idle),
+            session_config,
+            sessions: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Returns the configured idle timeout for sessions.
+    pub fn idle_timeout(&self) -> Duration {
+        Duration::from_secs(self.session_config.idle_timeout_secs)
+    }
+
+    /// Returns the maximum number of concurrent sessions allowed.
+    pub fn max_concurrent(&self) -> usize {
+        self.session_config.max_concurrent
+    }
+
+    /// Returns the number of currently active sessions.
+    pub fn session_count(&self) -> usize {
+        self.sessions.lock().map(|s| s.len()).unwrap_or(0)
+    }
+
+    /// Remove sessions that have been idle longer than the configured timeout.
+    ///
+    /// Returns the number of sessions cleaned up. Sends a graceful
+    /// [`Disconnect`](AgentCommand::Disconnect) to each removed session.
+    pub async fn cleanup_idle_sessions(&self) -> usize {
+        let idle_timeout = self.idle_timeout();
+        let now = Instant::now();
+
+        let to_cleanup: Vec<mpsc::Sender<AgentCommand>> = {
+            let mut sessions = match self.sessions.lock() {
+                Ok(s) => s,
+                Err(_) => return 0,
+            };
+            let mut senders = Vec::new();
+            let mut ids_to_remove = Vec::new();
+            for (id, entry) in sessions.iter() {
+                if now.duration_since(entry.last_active) > idle_timeout {
+                    senders.push(entry.command_tx.clone());
+                    ids_to_remove.push(id.clone());
+                }
+            }
+            for id in &ids_to_remove {
+                sessions.remove(id);
+            }
+            senders
+        };
+
+        let count = to_cleanup.len();
+        for tx in to_cleanup {
+            let _ = tx.send(AgentCommand::Disconnect).await;
+        }
+        count
     }
 }
 
@@ -70,6 +134,20 @@ impl AgentProvider for AcpAgentProvider {
     }
 
     async fn connect(&self) -> Result<AgentSessionInfo> {
+        // Enforce max concurrency.
+        {
+            let sessions = self.sessions.lock().map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "session lock poisoned")
+            })?;
+            let max = self.session_config.max_concurrent;
+            if sessions.len() >= max {
+                return Err(BitrouterError::transport(
+                    Some(&self.agent_name),
+                    format!("max concurrent sessions ({max}) reached"),
+                ));
+            }
+        }
+
         let launch = resolve_launch(&self.config);
         let (handshake_tx, handshake_rx) = tokio::sync::oneshot::channel();
 
@@ -92,28 +170,37 @@ impl AgentProvider for AcpAgentProvider {
             command_tx,
         } = handshake.map_err(|msg| BitrouterError::transport(Some(&self.agent_name), msg))?;
 
-        let mut state = self.state.lock().map_err(|_| {
-            BitrouterError::transport(Some(&self.agent_name), "state lock poisoned")
-        })?;
-        *state = ConnectionState::Connected {
-            command_tx,
-            _thread_handle: thread_handle,
-        };
+        {
+            let mut sessions = self.sessions.lock().map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "session lock poisoned")
+            })?;
+            sessions.insert(
+                session_info.session_id.clone(),
+                SessionEntry {
+                    command_tx,
+                    _thread_handle: thread_handle,
+                    last_active: Instant::now(),
+                },
+            );
+        }
 
         Ok(session_info)
     }
 
-    async fn submit(&self, _session_id: &str, text: String) -> Result<mpsc::Receiver<AgentEvent>> {
+    async fn submit(&self, session_id: &str, text: String) -> Result<mpsc::Receiver<AgentEvent>> {
         let command_tx = {
-            let state = self.state.lock().map_err(|_| {
-                BitrouterError::transport(Some(&self.agent_name), "state lock poisoned")
+            let mut sessions = self.sessions.lock().map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "session lock poisoned")
             })?;
-            match &*state {
-                ConnectionState::Connected { command_tx, .. } => command_tx.clone(),
-                ConnectionState::Idle => {
+            match sessions.get_mut(session_id) {
+                Some(entry) => {
+                    entry.last_active = Instant::now();
+                    entry.command_tx.clone()
+                }
+                None => {
                     return Err(BitrouterError::transport(
                         Some(&self.agent_name),
-                        "agent not connected — call connect() first",
+                        format!("session '{session_id}' not found — call connect() first"),
                     ));
                 }
             }
@@ -133,20 +220,23 @@ impl AgentProvider for AcpAgentProvider {
 
     async fn respond_permission(
         &self,
-        _session_id: &str,
+        session_id: &str,
         request_id: PermissionRequestId,
         response: PermissionResponse,
     ) -> Result<()> {
         let command_tx = {
-            let state = self.state.lock().map_err(|_| {
-                BitrouterError::transport(Some(&self.agent_name), "state lock poisoned")
+            let mut sessions = self.sessions.lock().map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "session lock poisoned")
             })?;
-            match &*state {
-                ConnectionState::Connected { command_tx, .. } => command_tx.clone(),
-                ConnectionState::Idle => {
+            match sessions.get_mut(session_id) {
+                Some(entry) => {
+                    entry.last_active = Instant::now();
+                    entry.command_tx.clone()
+                }
+                None => {
                     return Err(BitrouterError::transport(
                         Some(&self.agent_name),
-                        "agent not connected",
+                        format!("session '{session_id}' not found"),
                     ));
                 }
             }
@@ -165,23 +255,12 @@ impl AgentProvider for AcpAgentProvider {
         Ok(())
     }
 
-    async fn disconnect(&self, _session_id: &str) -> Result<()> {
+    async fn disconnect(&self, session_id: &str) -> Result<()> {
         let command_tx = {
-            let mut state = self.state.lock().map_err(|_| {
-                BitrouterError::transport(Some(&self.agent_name), "state lock poisoned")
+            let mut sessions = self.sessions.lock().map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "session lock poisoned")
             })?;
-            match std::mem::replace(&mut *state, ConnectionState::Idle) {
-                ConnectionState::Connected {
-                    command_tx,
-                    _thread_handle,
-                } => {
-                    // Thread handle is dropped here, which is fine —
-                    // the thread will exit after receiving Disconnect
-                    // or when the command channel closes.
-                    Some(command_tx)
-                }
-                ConnectionState::Idle => None,
-            }
+            sessions.remove(session_id).map(|entry| entry.command_tx)
         };
 
         if let Some(tx) = command_tx {
@@ -194,9 +273,9 @@ impl AgentProvider for AcpAgentProvider {
 
 impl Drop for AcpAgentProvider {
     fn drop(&mut self) {
-        // Dropping the command_tx signals the agent thread to exit.
-        // We intentionally do NOT join the thread here to avoid
-        // blocking the caller.
+        // Dropping the sessions map drops all command_tx senders,
+        // signaling agent threads to exit. We intentionally do NOT
+        // join threads here to avoid blocking the caller.
     }
 }
 
