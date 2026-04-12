@@ -1,0 +1,11 @@
+api_protocol: openai
+api_base: https://api.githubcopilot.com
+env_prefix: GITHUB_COPILOT
+auth:
+  type: oauth
+  grant: device_code
+  client_id: "Iv23limb4eFHH5zfOCr2"
+  scope: "read:user"
+  device_auth_url: "https://github.com/login/device/code"
+  token_url: "https://github.com/login/oauth/access_token"
+models: {}

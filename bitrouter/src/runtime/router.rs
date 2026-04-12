@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_config::{ApiProtocol, ProviderConfig};
@@ -19,15 +20,48 @@ use bitrouter_providers::mcp::client::upstream::UpstreamConnection;
 pub struct Router {
     client: ClientWithMiddleware,
     providers: HashMap<String, ProviderConfig>,
+    /// Path to the OAuth token store file (`tokens.json`).
+    /// When set, OAuth-authenticated providers resolve their API key from
+    /// the token store at request time.
+    token_store_path: Option<PathBuf>,
 }
 
 impl Router {
     pub fn new(client: ClientWithMiddleware, providers: HashMap<String, ProviderConfig>) -> Self {
-        Self { client, providers }
+        Self {
+            client,
+            providers,
+            token_store_path: None,
+        }
     }
 
-    fn build_openai_config(&self, provider: &ProviderConfig) -> Result<OpenAiConfig> {
-        let api_key = provider.api_key.clone().unwrap_or_default();
+    /// Set the path to the OAuth token store.
+    pub fn with_token_store(mut self, path: PathBuf) -> Self {
+        self.token_store_path = Some(path);
+        self
+    }
+
+    /// Resolve the API key for a provider, checking the OAuth token store
+    /// when the provider uses `auth.type: oauth`.
+    fn resolve_api_key(&self, provider_name: &str, provider: &ProviderConfig) -> String {
+        use bitrouter_config::AuthConfig;
+        if matches!(provider.auth, Some(AuthConfig::OAuth { .. }))
+            && let Some(ref path) = self.token_store_path
+        {
+            let store = crate::auth::token_store::TokenStore::load(path);
+            if let Some(token) = store.get(provider_name) {
+                return token.access_token.clone();
+            }
+        }
+        provider.api_key.clone().unwrap_or_default()
+    }
+
+    fn build_openai_config(
+        &self,
+        provider_name: &str,
+        provider: &ProviderConfig,
+    ) -> Result<OpenAiConfig> {
+        let api_key = self.resolve_api_key(provider_name, provider);
         let base_url = provider
             .api_base
             .clone()
@@ -90,7 +124,7 @@ impl LanguageModelRouter for Router {
 
         match target.api_protocol {
             ApiProtocol::Openai => {
-                let config = self.build_openai_config(provider)?;
+                let config = self.build_openai_config(&target.provider_name, provider)?;
                 let model = OpenAiChatCompletionsModel::with_client(
                     target.service_id,
                     self.client.clone(),
@@ -328,7 +362,11 @@ pub(crate) fn resolve_auth_header(config: &ProviderConfig) -> Option<(String, St
             Some((header_name.clone(), key))
         }
         Some(
-            AuthConfig::X402 | AuthConfig::Mpp | AuthConfig::Wallet | AuthConfig::Custom { .. },
+            AuthConfig::X402
+            | AuthConfig::Mpp
+            | AuthConfig::Wallet
+            | AuthConfig::Custom { .. }
+            | AuthConfig::OAuth { .. },
         ) => None,
         None => {
             // Fall back to api_key field as Bearer token.

@@ -34,6 +34,10 @@ const PROVIDER_DEFS: &[(&str, &str)] = &[
         include_str!("../providers/models/moonshot.yaml"),
     ),
     ("qwen", include_str!("../providers/models/qwen.yaml")),
+    (
+        "github-copilot",
+        include_str!("../providers/models/github-copilot.yaml"),
+    ),
 ];
 
 /// Raw YAML shape for built-in provider files.
@@ -42,6 +46,8 @@ struct ProviderDef {
     api_protocol: ApiProtocol,
     api_base: String,
     env_prefix: String,
+    #[serde(default)]
+    auth: Option<AuthConfig>,
     #[serde(default)]
     models: HashMap<String, ModelInfo>,
 }
@@ -73,6 +79,7 @@ pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
                         api_protocol: Some(def.api_protocol),
                         api_base: Some(def.api_base),
                         env_prefix: Some(def.env_prefix),
+                        auth: def.auth,
                         models: if def.models.is_empty() {
                             None
                         } else {
@@ -804,5 +811,44 @@ mod tests {
         let (name, config) = skill_tools[0];
         assert_eq!(name, "exa_company_research");
         assert_eq!(config.skill.as_deref(), Some("exa_company_research"));
+    }
+
+    #[test]
+    fn builtin_registry_contains_github_copilot() {
+        let providers = builtin_providers();
+        assert!(
+            providers.contains_key("github-copilot"),
+            "github-copilot should be in the builtin provider registry"
+        );
+        assert_eq!(
+            providers["github-copilot"].api_protocol,
+            Some(ApiProtocol::Openai)
+        );
+        assert!(matches!(
+            providers["github-copilot"].auth,
+            Some(AuthConfig::OAuth { .. })
+        ));
+    }
+
+    #[test]
+    fn builtin_github_copilot_oauth_config() {
+        let defs = builtin_provider_defs();
+        let bp = &defs["github-copilot"];
+        if let Some(AuthConfig::OAuth {
+            ref grant,
+            ref client_id,
+            ref scope,
+            ref device_auth_url,
+            ref token_url,
+        }) = bp.config.auth
+        {
+            assert_eq!(*grant, crate::config::OAuthGrant::DeviceCode);
+            assert_eq!(client_id, "Iv23limb4eFHH5zfOCr2");
+            assert_eq!(scope.as_deref(), Some("read:user"));
+            assert!(device_auth_url.is_some());
+            assert!(token_url.is_some());
+        } else {
+            panic!("expected OAuth auth config for github-copilot");
+        }
     }
 }
