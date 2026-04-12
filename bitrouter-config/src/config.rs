@@ -244,6 +244,56 @@ pub enum Distribution {
     },
 }
 
+/// Session pool configuration for an agent.
+///
+/// Controls how many concurrent sessions can run and when idle sessions
+/// are cleaned up. When omitted from agent config, defaults produce
+/// single-session behavior (compatible with the TUI path).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSessionConfig {
+    /// Idle timeout in seconds before a session is cleaned up.
+    /// Default: 600 (10 minutes).
+    #[serde(default = "default_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+
+    /// Maximum number of concurrent sessions for this agent.
+    /// Default: 1.
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: usize,
+}
+
+fn default_idle_timeout_secs() -> u64 {
+    600
+}
+
+fn default_max_concurrent() -> usize {
+    1
+}
+
+impl Default for AgentSessionConfig {
+    fn default() -> Self {
+        Self {
+            idle_timeout_secs: default_idle_timeout_secs(),
+            max_concurrent: default_max_concurrent(),
+        }
+    }
+}
+
+/// A2A exposure configuration for an agent.
+///
+/// Controls whether the agent is exposed via the A2A protocol.
+/// Consumed by downstream endpoint wiring, not by this crate.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentA2aConfig {
+    /// Whether to expose this agent via A2A.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Skills advertised in the A2A Agent Card.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+}
+
 /// Configuration for a single agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -265,6 +315,18 @@ pub struct AgentConfig {
     /// Ordered list of distribution methods (tried in sequence as fallbacks).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub distribution: Vec<Distribution>,
+
+    /// Session pool configuration (idle timeout, concurrency cap).
+    ///
+    /// When omitted, defaults to single-session behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<AgentSessionConfig>,
+
+    /// A2A exposure configuration.
+    ///
+    /// When omitted or `enabled: false`, the agent is not exposed via A2A.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a2a: Option<AgentA2aConfig>,
 }
 
 // ── Database configuration ────────────────────────────────────────────

@@ -1472,6 +1472,8 @@ mod tests {
             args: Vec::new(),
             enabled,
             distribution: Vec::new(),
+            session: None,
+            a2a: None,
         }
     }
 
@@ -1515,6 +1517,61 @@ mod tests {
     async fn agent_registry_empty() {
         let registry = ConfigAgentRegistry::new(HashMap::new());
         assert!(registry.list_agents().await.is_empty());
+    }
+
+    #[test]
+    fn agent_config_backward_compat_no_session_no_a2a() {
+        let yaml = "binary: claude\nargs: [\"--agent\"]\n";
+        let config: AgentConfig = serde_saphyr::from_str(yaml).expect("should parse");
+        assert_eq!(config.binary, "claude");
+        assert!(config.session.is_none());
+        assert!(config.a2a.is_none());
+    }
+
+    #[test]
+    fn agent_config_with_session_and_a2a() {
+        let yaml = r#"
+binary: claude
+session:
+  idle_timeout_secs: 300
+  max_concurrent: 5
+a2a:
+  enabled: true
+  skills:
+    - coding
+    - review
+"#;
+        let config: AgentConfig = serde_saphyr::from_str(yaml).expect("should parse");
+        let session = config.session.expect("session should be present");
+        assert_eq!(session.idle_timeout_secs, 300);
+        assert_eq!(session.max_concurrent, 5);
+
+        let a2a = config.a2a.expect("a2a should be present");
+        assert!(a2a.enabled);
+        assert_eq!(a2a.skills, vec!["coding", "review"]);
+    }
+
+    #[test]
+    fn agent_session_config_defaults() {
+        let config = crate::config::AgentSessionConfig::default();
+        assert_eq!(config.idle_timeout_secs, 600);
+        assert_eq!(config.max_concurrent, 1);
+    }
+
+    #[test]
+    fn agent_session_config_partial_defaults() {
+        let yaml = "idle_timeout_secs: 120\n";
+        let config: crate::config::AgentSessionConfig =
+            serde_saphyr::from_str(yaml).expect("should parse");
+        assert_eq!(config.idle_timeout_secs, 120);
+        assert_eq!(config.max_concurrent, 1); // default
+    }
+
+    #[test]
+    fn agent_a2a_config_defaults() {
+        let config = crate::config::AgentA2aConfig::default();
+        assert!(!config.enabled);
+        assert!(config.skills.is_empty());
     }
 
     // ── ANSI escape code sanitization ────────────────────────────────

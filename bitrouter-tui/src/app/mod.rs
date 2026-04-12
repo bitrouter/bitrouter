@@ -165,6 +165,8 @@ impl App {
                         args: da.args.clone(),
                         enabled: true,
                         distribution,
+                        session: None,
+                        a2a: None,
                     }),
                     status,
                     session_id: None,

@@ -14,6 +14,9 @@ use bitrouter_observe::builder::ObserveStack;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
+#[cfg(feature = "tui")]
+use bitrouter_core::agents::provider::AgentProvider as _;
+
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
 use crate::runtime::error::Result;
 
@@ -283,6 +286,25 @@ where
             )))
         };
         let agent_list = agents::agents_filter(agent_registry);
+
+        // Agent router — resolves agent names to live provider instances.
+        // Also spawns a background task for idle session cleanup.
+        // Held as a keepalive handle to prevent the Arc from being dropped.
+        #[cfg(feature = "tui")]
+        let _agent_router_handle = if self.config.agents.is_empty() {
+            None
+        } else {
+            let r = Arc::new(crate::runtime::router::ConfigAgentRouter::new(
+                self.config.agents.clone(),
+            ));
+            // Spawn idle-session cleanup loop.
+            let cleanup_router = Arc::clone(&r);
+            tokio::spawn(async move {
+                agent_session_cleanup_loop(cleanup_router).await;
+            });
+            tracing::info!("agent router initialized");
+            Some(r)
+        };
 
         // Admin route management — gated by management auth.
         let admin_routes = auth::auth_gate(auth::management_auth(auth_ctx.clone()))
@@ -992,6 +1014,29 @@ async fn wait_for_reload_signal(paths: &Option<crate::runtime::paths::RuntimePat
                     let _ = std::fs::remove_file(&flag);
                     return;
                 }
+            }
+        }
+    }
+}
+
+/// Background loop that periodically removes idle agent sessions.
+///
+/// Runs every 60 seconds and calls [`AcpAgentProvider::cleanup_idle_sessions`]
+/// on every provider managed by the router. Logging is emitted only when
+/// sessions are actually cleaned up.
+#[cfg(feature = "tui")]
+async fn agent_session_cleanup_loop(router: Arc<crate::runtime::router::ConfigAgentRouter>) {
+    const INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+    loop {
+        tokio::time::sleep(INTERVAL).await;
+        for provider in router.providers() {
+            let cleaned_count = provider.cleanup_idle_sessions().await;
+            if cleaned_count > 0 {
+                tracing::info!(
+                    agent = provider.agent_name(),
+                    cleaned_count,
+                    "cleaned up idle agent sessions",
+                );
             }
         }
     }
