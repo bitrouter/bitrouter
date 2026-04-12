@@ -339,6 +339,58 @@ fn merge_env_file(env_path: &Path, options: &InitOptions) -> String {
     result
 }
 
+/// Update or insert a single environment variable in a `.env` file.
+///
+/// If the file exists, the variable is updated in place (or appended).
+/// If the file does not exist, it is created with a standard header.
+pub fn update_env_key(env_path: &Path, var_name: &str, value: &str) -> crate::error::Result<()> {
+    if let Some(parent) = env_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| crate::error::ConfigError::ConfigRead {
+            path: parent.to_path_buf(),
+            source: e,
+        })?;
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut found = false;
+
+    if env_path.exists() {
+        if let Ok(file) = std::fs::File::open(env_path) {
+            for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+                let trimmed = line.trim();
+                if let Some((key, _)) = trimmed.split_once('=')
+                    && key.trim() == var_name
+                {
+                    lines.push(format!("{var_name}={value}"));
+                    found = true;
+                    continue;
+                }
+                lines.push(line);
+            }
+        }
+    } else {
+        lines.push("# BitRouter environment variables".to_owned());
+        lines.push("# This file is ignored by git.".to_owned());
+        lines.push(String::new());
+    }
+
+    if !found {
+        lines.push(format!("{var_name}={value}"));
+    }
+
+    let mut content = lines.join("\n");
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+
+    std::fs::write(env_path, &content).map_err(|e| crate::error::ConfigError::ConfigRead {
+        path: env_path.to_path_buf(),
+        source: e,
+    })?;
+
+    Ok(())
+}
+
 /// Append an agent definition to an existing `bitrouter.yaml`.
 ///
 /// Reads the file, deserializes it, inserts the agent, and writes back.
@@ -501,5 +553,45 @@ mod tests {
         assert!(yaml.contains("api_protocol: mcp"));
         assert!(yaml.contains("https://mcp.example.com"));
         assert!(yaml.contains("Bearer sk-test"));
+    }
+
+    #[test]
+    fn update_env_key_creates_new_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env_path = dir.path().join(".env");
+
+        update_env_key(&env_path, "OPENAI_API_KEY", "sk-test").unwrap();
+
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(content.contains("OPENAI_API_KEY=sk-test"));
+    }
+
+    #[test]
+    fn update_env_key_updates_existing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env_path = dir.path().join(".env");
+
+        std::fs::write(&env_path, "OPENAI_API_KEY=old-key\nOTHER_VAR=keep\n").unwrap();
+
+        update_env_key(&env_path, "OPENAI_API_KEY", "new-key").unwrap();
+
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(content.contains("OPENAI_API_KEY=new-key"));
+        assert!(content.contains("OTHER_VAR=keep"));
+        assert!(!content.contains("old-key"));
+    }
+
+    #[test]
+    fn update_env_key_appends_new_var() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env_path = dir.path().join(".env");
+
+        std::fs::write(&env_path, "EXISTING_VAR=value\n").unwrap();
+
+        update_env_key(&env_path, "NEW_VAR", "new-value").unwrap();
+
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(content.contains("EXISTING_VAR=value"));
+        assert!(content.contains("NEW_VAR=new-value"));
     }
 }

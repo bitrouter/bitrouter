@@ -27,5 +27,6 @@ pub use routing::{
     ConfigAgentRegistry, ConfigRoutingTable, ConfigToolRoutingTable, ResolvedTarget,
 };
 pub use writer::{
-    CustomProviderInit, InitOptions, InitResult, ToolProviderInit, write_agent, write_init_config,
+    CustomProviderInit, InitOptions, InitResult, ToolProviderInit, update_env_key, write_agent,
+    write_init_config,
 };
