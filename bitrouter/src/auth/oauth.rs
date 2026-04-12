@@ -41,8 +41,6 @@ fn default_interval() -> u64 {
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: Option<String>,
-    token_type: Option<String>,
-    scope: Option<String>,
     error: Option<String>,
     #[serde(default)]
     expires_in: u64,
@@ -109,8 +107,6 @@ pub fn poll_for_token(
             .map_err(|e| format!("failed to parse token response: {e}\nbody: {body}"))?;
 
         if let Some(access_token) = token_resp.access_token {
-            let _ = token_resp.token_type;
-            let _ = token_resp.scope;
             let expires_at = if token_resp.expires_in > 0 {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

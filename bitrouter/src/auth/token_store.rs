@@ -156,7 +156,9 @@ mod tests {
 
     #[test]
     fn load_missing_file_returns_empty() {
-        let store = TokenStore::load("/tmp/nonexistent_tokens_12345.json");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("nonexistent_tokens.json");
+        let store = TokenStore::load(&path);
         assert!(store.get("anything").is_none());
     }
 }
