@@ -24,6 +24,7 @@ acp = [
     "dep:tar",
     "dep:zip",
     "tokio/process",
+    "tokio/io-std",
 ]
 agentskills = [
     "dep:tracing",
