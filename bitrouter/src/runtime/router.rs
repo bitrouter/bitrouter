@@ -12,6 +12,10 @@ use bitrouter_core::{
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest_middleware::ClientWithMiddleware;
 
+use super::copilot::{
+    COPILOT_PROVIDER, anthropic_api_base, copilot_default_headers, is_anthropic_model,
+};
+
 #[cfg(feature = "mcp")]
 use bitrouter_providers::mcp::client::upstream::UpstreamConnection;
 
@@ -78,8 +82,12 @@ impl Router {
         })
     }
 
-    fn build_anthropic_config(&self, provider: &ProviderConfig) -> Result<AnthropicConfig> {
-        let api_key = provider.api_key.clone().unwrap_or_default();
+    fn build_anthropic_config(
+        &self,
+        provider_name: &str,
+        provider: &ProviderConfig,
+    ) -> Result<AnthropicConfig> {
+        let api_key = self.resolve_api_key(provider_name, provider);
         let base_url = provider
             .api_base
             .clone()
@@ -122,9 +130,39 @@ impl LanguageModelRouter for Router {
             )
         })?;
 
+        let is_copilot = target.provider_name == COPILOT_PROVIDER;
+
+        // Phase 3: Copilot Claude models use the Anthropic Messages API.
+        if is_copilot && is_anthropic_model(&target.service_id) {
+            let api_key = self.resolve_api_key(&target.provider_name, provider);
+            let base_url = anthropic_api_base(provider.api_base.as_deref());
+            let mut default_headers = parse_headers(provider.default_headers.as_ref())?;
+            merge_copilot_headers(&mut default_headers)?;
+
+            let config = AnthropicConfig {
+                api_key,
+                base_url,
+                api_version: "2023-06-01".into(),
+                default_headers,
+            };
+            let model =
+                AnthropicMessagesModel::with_client(target.service_id, self.client.clone(), config);
+            return Ok(DynLanguageModel::new_box(model));
+        }
+
+        // Phase 2: Inject Copilot-specific headers for non-Claude models.
+        let copilot_headers = if is_copilot {
+            Some(copilot_default_headers())
+        } else {
+            None
+        };
+
         match target.api_protocol {
             ApiProtocol::Openai => {
-                let config = self.build_openai_config(&target.provider_name, provider)?;
+                let mut config = self.build_openai_config(&target.provider_name, provider)?;
+                if let Some(ref extra) = copilot_headers {
+                    merge_into_header_map(&mut config.default_headers, extra)?;
+                }
                 let model = OpenAiChatCompletionsModel::with_client(
                     target.service_id,
                     self.client.clone(),
@@ -133,7 +171,7 @@ impl LanguageModelRouter for Router {
                 Ok(DynLanguageModel::new_box(model))
             }
             ApiProtocol::Anthropic => {
-                let config = self.build_anthropic_config(provider)?;
+                let config = self.build_anthropic_config(&target.provider_name, provider)?;
                 let model = AnthropicMessagesModel::with_client(
                     target.service_id,
                     self.client.clone(),
@@ -162,6 +200,29 @@ impl LanguageModelRouter for Router {
             }
         }
     }
+}
+
+/// Merge Copilot default headers into an existing [`HeaderMap`].
+fn merge_copilot_headers(map: &mut HeaderMap) -> Result<()> {
+    merge_into_header_map(map, &copilot_default_headers())
+}
+
+/// Merge string-keyed headers into a [`HeaderMap`].
+fn merge_into_header_map(map: &mut HeaderMap, extra: &HashMap<String, String>) -> Result<()> {
+    for (k, v) in extra {
+        let name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| {
+            BitrouterError::invalid_request(None, format!("invalid header name '{k}': {e}"), None)
+        })?;
+        let value = HeaderValue::from_str(v).map_err(|e| {
+            BitrouterError::invalid_request(
+                None,
+                format!("invalid header value for '{k}': {e}"),
+                None,
+            )
+        })?;
+        map.insert(name, value);
+    }
+    Ok(())
 }
 
 fn parse_headers(headers: Option<&HashMap<String, String>>) -> Result<HeaderMap> {

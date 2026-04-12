@@ -182,17 +182,34 @@ pub fn run_device_flow(
 }
 
 /// Build [`DeviceCodeParams`] from an `AuthConfig::OAuth` variant.
+///
+/// When `domain` is set and explicit URLs are not provided, the device auth
+/// and token URLs are derived from the domain using GitHub Enterprise
+/// conventions (see [`crate::runtime::copilot::enterprise_urls`]).
 pub fn params_from_oauth_config(
     client_id: &str,
     scope: Option<&str>,
     device_auth_url: Option<&str>,
     token_url: Option<&str>,
+    domain: Option<&str>,
 ) -> DeviceCodeParams {
+    let (default_device_url, default_token_url) = match domain {
+        Some(d) if !d.is_empty() && d != "github.com" => {
+            let (dev, tok, _api) = crate::runtime::copilot::enterprise_urls(d);
+            (dev, tok)
+        }
+        _ => (
+            GITHUB_DEVICE_AUTH_URL.to_owned(),
+            GITHUB_TOKEN_URL.to_owned(),
+        ),
+    };
     DeviceCodeParams {
         client_id: client_id.to_owned(),
         scope: scope.map(str::to_owned),
-        device_auth_url: device_auth_url.unwrap_or(GITHUB_DEVICE_AUTH_URL).to_owned(),
-        token_url: token_url.unwrap_or(GITHUB_TOKEN_URL).to_owned(),
+        device_auth_url: device_auth_url
+            .map(str::to_owned)
+            .unwrap_or(default_device_url),
+        token_url: token_url.map(str::to_owned).unwrap_or(default_token_url),
     }
 }
 

@@ -253,6 +253,7 @@ fn auth_provider_flow(
         scope,
         device_auth_url,
         token_url,
+        domain,
         ..
     }) = auth
     {
@@ -262,6 +263,7 @@ fn auth_provider_flow(
             scope.as_deref(),
             device_auth_url.as_deref(),
             token_url.as_deref(),
+            domain.as_deref(),
         );
         let mut store = TokenStore::load(&paths.token_store_file);
         crate::auth::oauth::run_device_flow(name, &params, &mut store)?;

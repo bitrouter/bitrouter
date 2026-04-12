@@ -768,6 +768,14 @@ pub enum AuthConfig {
         /// Token endpoint URL.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token_url: Option<String>,
+        /// GitHub domain (defaults to `github.com`).
+        ///
+        /// For GitHub Enterprise, set this to the enterprise domain
+        /// (e.g. `company.ghe.com`). When set, `device_auth_url`,
+        /// `token_url`, and `api_base` are derived from the domain
+        /// unless explicitly overridden.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        domain: Option<String>,
     },
     /// Extension point for non-standard auth methods.
     Custom {
@@ -1299,6 +1307,7 @@ providers:
             scope,
             device_auth_url,
             token_url,
+            ..
         }) = &p.auth
         {
             assert_eq!(*grant, OAuthGrant::DeviceCode);
