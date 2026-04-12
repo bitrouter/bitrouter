@@ -8,4 +8,282 @@ auth:
   scope: "read:user"
   device_auth_url: "https://github.com/login/device/code"
   token_url: "https://github.com/login/oauth/access_token"
-models: {}
+models:
+  claude-haiku-4.5:
+    max_input_tokens: 128000
+    max_output_tokens: 32000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  claude-opus-4.5:
+    max_input_tokens: 128000
+    max_output_tokens: 32000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  claude-opus-4.6:
+    max_input_tokens: 128000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  claude-opus-41:
+    max_input_tokens: 80000
+    max_output_tokens: 16000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  claude-sonnet-4:
+    max_input_tokens: 128000
+    max_output_tokens: 16000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  claude-sonnet-4.5:
+    max_input_tokens: 128000
+    max_output_tokens: 32000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  claude-sonnet-4.6:
+    max_input_tokens: 128000
+    max_output_tokens: 32000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gemini-2.5-pro:
+    max_input_tokens: 128000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gemini-3-flash-preview:
+    max_input_tokens: 128000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gemini-3-pro-preview:
+    max_input_tokens: 128000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gemini-3.1-pro-preview:
+    max_input_tokens: 128000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-4.1:
+    max_input_tokens: 64000
+    max_output_tokens: 16384
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-4o:
+    max_input_tokens: 64000
+    max_output_tokens: 4096
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5:
+    max_input_tokens: 128000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5-mini:
+    max_input_tokens: 128000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5.1:
+    max_input_tokens: 128000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5.1-codex:
+    max_input_tokens: 128000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5.1-codex-max:
+    max_input_tokens: 128000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5.1-codex-mini:
+    max_input_tokens: 128000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5.2:
+    max_input_tokens: 128000
+    max_output_tokens: 64000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5.2-codex:
+    max_input_tokens: 272000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5.3-codex:
+    max_input_tokens: 272000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5.4:
+    max_input_tokens: 272000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  gpt-5.4-mini:
+    max_input_tokens: 272000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
+  grok-code-fast-1:
+    max_input_tokens: 128000
+    max_output_tokens: 64000
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0

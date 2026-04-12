@@ -51,6 +51,7 @@ struct TokenResponse {
 pub fn request_device_code(
     params: &DeviceCodeParams,
 ) -> Result<DeviceCodeResponse, Box<dyn std::error::Error>> {
+    require_https(&params.device_auth_url, "device_auth_url")?;
     let client = reqwest::blocking::Client::new();
     let mut body = format!("client_id={}", url_encode(&params.client_id));
     if let Some(ref scope) = params.scope {
@@ -83,6 +84,7 @@ pub fn poll_for_token(
     params: &DeviceCodeParams,
     device_code: &DeviceCodeResponse,
 ) -> Result<OAuthToken, Box<dyn std::error::Error>> {
+    require_https(&params.token_url, "token_url")?;
     let client = reqwest::blocking::Client::new();
     let mut interval = std::time::Duration::from_secs(device_code.interval.max(1));
 
@@ -192,6 +194,18 @@ pub fn params_from_oauth_config(
         device_auth_url: device_auth_url.unwrap_or(GITHUB_DEVICE_AUTH_URL).to_owned(),
         token_url: token_url.unwrap_or(GITHUB_TOKEN_URL).to_owned(),
     }
+}
+
+/// Validate that a URL uses HTTPS to prevent cleartext credential transmission.
+fn require_https(url: &str, field_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if !url.starts_with("https://") {
+        return Err(format!(
+            "OAuth {field_name} must use HTTPS (got {url}). \
+             Refusing to transmit credentials over an insecure connection."
+        )
+        .into());
+    }
+    Ok(())
 }
 
 /// Minimal percent-encoding for URL form values (RFC 3986).
