@@ -1,5 +1,7 @@
 pub mod admin_auth;
 #[cfg(feature = "tui")]
+pub mod agent_proxy;
+#[cfg(feature = "tui")]
 pub mod agents;
 pub mod auth;
 pub mod key;

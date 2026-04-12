@@ -100,6 +100,17 @@ enum Command {
         action: AgentsAction,
     },
 
+    /// Run as ACP stdio proxy for a configured agent
+    #[command(name = "agent-proxy")]
+    AgentProxy {
+        /// Agent name to proxy (must be configured and enabled)
+        agent_name: String,
+
+        /// Pre-authenticated JWT token (skips ACP authenticate step)
+        #[arg(long)]
+        token: Option<String>,
+    },
+
     /// Manage spend-limit policies for OWS wallet signing
     Policy {
         #[command(subcommand)]
@@ -549,6 +560,16 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 ModelsAction::List => cli::models::run_list(&runtime.config)?,
             }
             return Ok(());
+        }
+        #[cfg(feature = "tui")]
+        Some(Command::AgentProxy { agent_name, token }) => {
+            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
+            cli::agent_proxy::run(&runtime.config, &agent_name, token.as_deref())?;
+            return Ok(());
+        }
+        #[cfg(not(feature = "tui"))]
+        Some(Command::AgentProxy { .. }) => {
+            return Err("agent-proxy requires the `tui` feature".into());
         }
         #[cfg(feature = "tui")]
         Some(Command::Agents { action }) => {

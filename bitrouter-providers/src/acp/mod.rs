@@ -8,6 +8,7 @@ pub mod discovery;
 pub mod install;
 pub mod platform;
 pub mod provider;
+pub mod proxy;
 pub mod types;
 
 mod client;
