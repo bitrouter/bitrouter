@@ -1,0 +1,16 @@
+protocol: acp
+binary: hermes
+args:
+  - acp
+distribution:
+  - uvx:
+      package: "hermes-agent[acp]"
+      args:
+        - acp
+routing:
+  env:
+    OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+# Hermes stores provider config in ~/.hermes/config.yaml and
+# ~/.hermes/.env. Provider switching via `hermes model`.
+# Env vars are injected at spawn for API key passthrough.

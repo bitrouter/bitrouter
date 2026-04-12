@@ -1,0 +1,37 @@
+protocol: acp
+binary: kilo
+args:
+  - acp
+distribution:
+  - npx:
+      package: "@anthropics/kilo"
+      args:
+        - acp
+  - binary:
+      platforms:
+        darwin-aarch64:
+          archive: "https://github.com/Kilo-Org/kilocode/releases/latest/download/kilo-darwin-arm64.tar.gz"
+          cmd: "./kilo"
+          args:
+            - acp
+        darwin-x86_64:
+          archive: "https://github.com/Kilo-Org/kilocode/releases/latest/download/kilo-darwin-x64.tar.gz"
+          cmd: "./kilo"
+          args:
+            - acp
+        linux-x86_64:
+          archive: "https://github.com/Kilo-Org/kilocode/releases/latest/download/kilo-linux-x64.tar.gz"
+          cmd: "./kilo"
+          args:
+            - acp
+        linux-aarch64:
+          archive: "https://github.com/Kilo-Org/kilocode/releases/latest/download/kilo-linux-arm64.tar.gz"
+          cmd: "./kilo"
+          args:
+            - acp
+routing:
+  config_files:
+    - path: "~/.config/kilo/opencode.json"
+      format: json
+      values:
+        provider.bitrouter.api: "${BITROUTER_URL_V1}"

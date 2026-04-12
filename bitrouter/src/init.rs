@@ -268,7 +268,8 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
 
     // ── Step 3: Agents (requires tui feature) ─────────────────────
     #[cfg(feature = "tui")]
-    let (discovered_agent_names, agent_routing_configured) = run_agent_step(&theme, &listen_str)?;
+    let (discovered_agent_names, agent_routing_configured) =
+        run_agent_step(&theme, &listen_str, &api_keys)?;
     #[cfg(not(feature = "tui"))]
     let (discovered_agent_names, agent_routing_configured): (Vec<String>, bool) =
         (Vec::new(), false);
@@ -557,14 +558,21 @@ fn mask_key(key: &str) -> String {
     format!("{prefix}...{suffix}")
 }
 
-/// Step 4: Discover ACP agents on PATH and optionally configure env vars
-/// so they route through BitRouter.
+/// Step 4: Discover ACP agents on PATH and optionally configure them
+/// to route their LLM traffic through BitRouter.
+///
+/// Two mechanisms are used:
+/// 1. **Config-file patches**: write/update each agent's native config to
+///    point at BitRouter (per-agent, from the `routing.config_files` YAML).
+/// 2. **Env vars at spawn time**: injected automatically by the TUI when
+///    connecting to an agent (per-agent, from the `routing.env` YAML).
 ///
 /// Returns `(discovered_names, routing_configured)`.
 #[cfg(feature = "tui")]
 fn run_agent_step(
     theme: &ColorfulTheme,
     listen_str: &str,
+    api_keys: &HashMap<String, String>,
 ) -> Result<(Vec<String>, bool), Box<dyn std::error::Error>> {
     println!();
     println!("  Step 4 · Agents");
@@ -608,7 +616,7 @@ fn run_agent_step(
         .collect();
 
     let configure = Confirm::with_theme(theme)
-        .with_prompt("Configure agents to route through BitRouter? (sets env vars)")
+        .with_prompt("Configure agents to route through BitRouter?")
         .default(true)
         .interact()?;
 
@@ -616,17 +624,62 @@ fn run_agent_step(
         return Ok((all_names, false));
     }
 
+    // Build routing context from listen address and provider API keys.
+    // Map init-wizard key names (e.g. "openai") to standard env var names.
+    let mut provider_keys = HashMap::new();
+    for (name, key) in api_keys {
+        let env_name = match name.as_str() {
+            "openai" => "OPENAI_API_KEY",
+            "anthropic" => "ANTHROPIC_API_KEY",
+            "google" => "GOOGLE_API_KEY",
+            _ => continue,
+        };
+        provider_keys.insert(env_name.to_owned(), key.clone());
+    }
+
+    let routing_ctx = bitrouter_config::RoutingContext::new(listen_str, &provider_keys);
+
+    // Apply per-agent config file patches.
+    let mut any_patched = false;
+    for name in &all_names {
+        let config = match known.get(name.as_str()) {
+            Some(c) => c,
+            None => continue,
+        };
+        let routing = match &config.routing {
+            Some(r) if !r.config_files.is_empty() => r,
+            _ => continue,
+        };
+
+        let results = routing_ctx.apply_config_patches(&routing.config_files);
+        for (path, result) in &results {
+            match result {
+                Ok(()) => {
+                    println!("  {name}: patched {}", path.display());
+                    any_patched = true;
+                }
+                Err(e) => {
+                    eprintln!("  {name}: failed to patch {}: {e}", path.display());
+                }
+            }
+        }
+    }
+
+    if any_patched {
+        println!();
+    }
+
+    // Also offer shell profile env vars as a broad fallback.
     let env_vars = routing_env_vars(listen_str);
 
-    println!();
-    println!("  The following env vars route agent traffic through BitRouter:");
+    println!("  Env vars for agents without native config (injected at spawn):");
     for (var, val) in &env_vars {
         println!("    export {var}={val}");
     }
     println!();
 
     let write_profile = Confirm::with_theme(theme)
-        .with_prompt("Add these to your shell profile?")
+        .with_prompt("Also add these to your shell profile? (fallback for non-TUI usage)")
         .default(false)
         .interact()?;
 
@@ -635,15 +688,11 @@ fn run_agent_step(
             Ok(path) => println!("  ✓ Appended to {path}"),
             Err(e) => eprintln!("  Warning: could not write shell profile: {e}"),
         }
-    } else {
-        println!("  Copy the exports above into your shell profile to activate.");
     }
 
     println!();
-    println!("  To verify agent routing:");
-    println!("    1. source ~/.zshrc   (or open a new terminal)");
-    println!("    2. bitrouter serve   (start the proxy)");
-    println!("    3. bitrouter agents check");
+    println!("  Agent routing configured. The TUI will inject per-agent");
+    println!("  env vars automatically when connecting to agents.");
 
     Ok((all_names, true))
 }

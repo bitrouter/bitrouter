@@ -1472,6 +1472,7 @@ mod tests {
             args: Vec::new(),
             enabled,
             distribution: Vec::new(),
+            routing: None,
         }
     }
 

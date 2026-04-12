@@ -208,6 +208,19 @@ const AGENT_DEFS: &[(&str, &str)] = &[
         include_str!("../providers/agents/opencode.yaml"),
     ),
     ("codex", include_str!("../providers/agents/codex.yaml")),
+    ("goose", include_str!("../providers/agents/goose.yaml")),
+    ("cline", include_str!("../providers/agents/cline.yaml")),
+    ("kilo", include_str!("../providers/agents/kilo.yaml")),
+    (
+        "deepagents",
+        include_str!("../providers/agents/deepagents.yaml"),
+    ),
+    (
+        "openhands",
+        include_str!("../providers/agents/openhands.yaml"),
+    ),
+    ("pi", include_str!("../providers/agents/pi.yaml")),
+    ("hermes", include_str!("../providers/agents/hermes.yaml")),
 ];
 
 /// Returns the built-in agent definitions keyed by agent name.

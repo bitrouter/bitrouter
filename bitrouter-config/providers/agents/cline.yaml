@@ -1,0 +1,19 @@
+protocol: acp
+binary: cline
+args:
+  - "--acp"
+distribution:
+  - npx:
+      package: "cline"
+      args:
+        - "--acp"
+routing:
+  env:
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+    OPENAI_API_KEY: "${OPENAI_API_KEY}"
+  config_files:
+    - path: "~/.cline/data/globalState.json"
+      format: json
+      values:
+        anthropicBaseUrl: "${BITROUTER_URL_V1}"
+        openAiBaseUrl: "${BITROUTER_URL_V1}"

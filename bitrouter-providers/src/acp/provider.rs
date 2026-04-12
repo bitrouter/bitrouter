@@ -5,6 +5,7 @@
 //! channel interface. The provider is `Send + Sync` and can be held
 //! anywhere in the application.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -32,6 +33,8 @@ pub(crate) struct LaunchCommand {
 pub struct AcpAgentProvider {
     agent_name: String,
     config: AgentConfig,
+    /// Resolved routing env vars to inject into the subprocess.
+    routing_env: HashMap<String, String>,
     /// Command channel to the agent thread. Set after `connect`.
     state: Mutex<ConnectionState>,
 }
@@ -51,10 +54,19 @@ impl AcpAgentProvider {
     ///
     /// This does **not** spawn the subprocess — call
     /// [`connect`](AgentProvider::connect) to establish the session.
-    pub fn new(agent_name: String, config: AgentConfig) -> Self {
+    ///
+    /// `routing_env` contains resolved environment variables that will be
+    /// injected into the agent subprocess to redirect LLM traffic through
+    /// BitRouter. Pass an empty map to skip routing injection.
+    pub fn new(
+        agent_name: String,
+        config: AgentConfig,
+        routing_env: HashMap<String, String>,
+    ) -> Self {
         Self {
             agent_name,
             config,
+            routing_env,
             state: Mutex::new(ConnectionState::Idle),
         }
     }
@@ -77,6 +89,7 @@ impl AgentProvider for AcpAgentProvider {
             self.agent_name.clone(),
             launch.binary,
             launch.args,
+            self.routing_env.clone(),
             handshake_tx,
         );
 

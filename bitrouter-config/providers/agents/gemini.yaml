@@ -7,3 +7,9 @@ distribution:
       package: "@google/gemini-cli"
       args:
         - "--acp"
+routing:
+  env:
+    GEMINI_API_KEY: "${GOOGLE_API_KEY}"
+# Gemini CLI does not expose a user-facing base URL override env var.
+# Only the API key is injected. LLM traffic routing through BitRouter
+# is not supported for this agent until ACP providers/set lands.

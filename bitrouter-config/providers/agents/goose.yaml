@@ -1,0 +1,33 @@
+protocol: acp
+binary: goose
+args:
+  - acp
+distribution:
+  - binary:
+      platforms:
+        darwin-aarch64:
+          archive: "https://github.com/block/goose/releases/latest/download/goose-aarch64-apple-darwin.tar.gz"
+          cmd: "./goose"
+          args:
+            - acp
+        darwin-x86_64:
+          archive: "https://github.com/block/goose/releases/latest/download/goose-x86_64-apple-darwin.tar.gz"
+          cmd: "./goose"
+          args:
+            - acp
+        linux-x86_64:
+          archive: "https://github.com/block/goose/releases/latest/download/goose-x86_64-unknown-linux-gnu.tar.gz"
+          cmd: "./goose"
+          args:
+            - acp
+        linux-aarch64:
+          archive: "https://github.com/block/goose/releases/latest/download/goose-aarch64-unknown-linux-gnu.tar.gz"
+          cmd: "./goose"
+          args:
+            - acp
+routing:
+  env:
+    OPENAI_HOST: "${BITROUTER_URL}"
+    ANTHROPIC_HOST: "${BITROUTER_URL}"
+    OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"

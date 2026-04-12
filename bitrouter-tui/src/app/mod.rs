@@ -102,6 +102,8 @@ pub struct App {
     agent_providers: HashMap<String, Arc<AcpAgentProvider>>,
     /// Cloned event sender for spawning agent connections.
     event_tx: mpsc::Sender<AppEvent>,
+    /// Routing context for resolving agent env vars.
+    routing_ctx: bitrouter_config::RoutingContext,
 }
 
 impl App {
@@ -165,6 +167,7 @@ impl App {
                         args: da.args.clone(),
                         enabled: true,
                         distribution,
+                        routing: known_config.and_then(|c| c.routing.clone()),
                     }),
                     status,
                     session_id: None,
@@ -172,6 +175,11 @@ impl App {
                 });
             }
         }
+
+        // Build routing context for agent env var injection.
+        let provider_keys = bitrouter_config::extract_provider_keys(&bitrouter_config.providers);
+        let listen_str = bitrouter_config.server.listen.to_string();
+        let routing_ctx = bitrouter_config::RoutingContext::new(&listen_str, &provider_keys);
 
         Self {
             running: true,
@@ -192,6 +200,7 @@ impl App {
             },
             agent_providers: HashMap::new(),
             event_tx,
+            routing_ctx,
         }
     }
 

@@ -26,10 +26,14 @@ pub(crate) struct HandshakeResult {
 ///
 /// Returns a thread handle. The `handshake_tx` oneshot resolves once
 /// the ACP initialize + new_session handshake completes (or fails).
+///
+/// `routing_env` is injected into the subprocess environment to redirect
+/// the agent's LLM traffic through BitRouter's proxy.
 pub(crate) fn spawn_agent_thread(
     agent_name: String,
     bin_path: PathBuf,
     args: Vec<String>,
+    routing_env: std::collections::HashMap<String, String>,
     handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
@@ -45,7 +49,13 @@ pub(crate) fn spawn_agent_thread(
         };
 
         let local = tokio::task::LocalSet::new();
-        rt.block_on(local.run_until(agent_task_local(agent_name, bin_path, args, handshake_tx)));
+        rt.block_on(local.run_until(agent_task_local(
+            agent_name,
+            bin_path,
+            args,
+            routing_env,
+            handshake_tx,
+        )));
     })
 }
 
@@ -53,9 +63,12 @@ async fn agent_task_local(
     agent_name: String,
     bin_path: PathBuf,
     args: Vec<String>,
+    routing_env: std::collections::HashMap<String, String>,
     handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) {
-    if let Err(msg) = run_agent_connection(&agent_name, &bin_path, &args, handshake_tx).await {
+    if let Err(msg) =
+        run_agent_connection(&agent_name, &bin_path, &args, &routing_env, handshake_tx).await
+    {
         tracing::error!(agent = %agent_name, "agent connection error: {msg}");
     }
 }
@@ -64,15 +77,27 @@ async fn run_agent_connection(
     agent_name: &str,
     bin_path: &PathBuf,
     args: &[String],
+    routing_env: &std::collections::HashMap<String, String>,
     handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) -> Result<(), String> {
-    // 1. Spawn subprocess
-    let mut child = tokio::process::Command::new(bin_path)
-        .args(args)
+    // 1. Spawn subprocess with routing env vars injected
+    let mut cmd = tokio::process::Command::new(bin_path);
+    cmd.args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+
+    if !routing_env.is_empty() {
+        cmd.envs(routing_env);
+        tracing::debug!(
+            agent = %agent_name,
+            vars = ?routing_env.keys().collect::<Vec<_>>(),
+            "injecting routing env vars"
+        );
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn {agent_name}: {e}"))?;
 

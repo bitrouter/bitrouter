@@ -265,6 +265,62 @@ pub struct AgentConfig {
     /// Ordered list of distribution methods (tried in sequence as fallbacks).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub distribution: Vec<Distribution>,
+
+    /// Routing configuration for redirecting this agent's LLM traffic
+    /// through BitRouter's proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<AgentRouting>,
+}
+
+// ── Agent routing configuration ─────────────────────────────────────
+
+/// Describes how to redirect an agent's LLM traffic through BitRouter.
+///
+/// Two mechanisms are supported:
+/// - **`env`**: Environment variables injected at subprocess spawn time.
+/// - **`config_files`**: Native config files written during onboarding.
+///
+/// String values support `${VAR}` substitution. The following variables
+/// are provided automatically:
+/// - `${BITROUTER_URL}` — the proxy base URL (e.g. `http://127.0.0.1:8787`)
+/// - `${BITROUTER_URL_V1}` — `${BITROUTER_URL}/v1`
+/// - Provider API keys via their env prefix (e.g. `${OPENAI_API_KEY}`)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentRouting {
+    /// Environment variables to inject when spawning the agent subprocess.
+    ///
+    /// Keys are variable names, values support `${VAR}` substitution.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
+
+    /// Config files to write or patch during onboarding to redirect
+    /// this agent's LLM traffic through BitRouter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_files: Vec<ConfigFilePatch>,
+}
+
+/// A patch to apply to an agent's native config file during onboarding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigFilePatch {
+    /// Path to the config file. Supports `~` for home directory.
+    pub path: String,
+
+    /// File format used for reading/writing.
+    pub format: ConfigFileFormat,
+
+    /// Key-value pairs to set in the config file.
+    ///
+    /// Keys use dot-notation for nested fields (e.g. `providers.openai.baseUrl`).
+    /// Values support `${VAR}` substitution.
+    pub values: HashMap<String, serde_json::Value>,
+}
+
+/// Supported config file formats for agent routing patches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigFileFormat {
+    Json,
+    Toml,
 }
 
 // ── Database configuration ────────────────────────────────────────────
