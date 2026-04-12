@@ -1,0 +1,35 @@
+name: Release dry run
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+jobs:
+  release-dry-run:
+    name: release-plz dry run
+    if: contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+
+      - name: Run release-plz release --dry-run
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+          dry_run: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
