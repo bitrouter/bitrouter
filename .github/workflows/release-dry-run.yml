@@ -6,7 +6,7 @@ on:
 
 jobs:
   release-dry-run:
-    name: release-plz dry run
+    name: release dry run
     if: contains(github.event.pull_request.labels.*.name, 'release')
     runs-on: ubuntu-latest
     permissions:
@@ -26,10 +26,14 @@ jobs:
         with:
           save-if: false
 
-      - name: Run release-plz release --dry-run
-        uses: release-plz/action@v0.5
-        with:
-          command: release
-          dry_run: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # release-plz release --dry-run does not work reliably for
+      # workspace-internal dependency bumps because it skips the actual
+      # crates.io upload, so downstream crates cannot resolve the new
+      # version of their workspace dependency during packaging.
+      # See: https://github.com/release-plz/release-plz/issues/2501
+      #
+      # Instead, we run `cargo package --workspace` which resolves all
+      # workspace dependencies locally and validates that every crate
+      # can be packaged successfully.
+      - name: Validate packaging (cargo package --workspace)
+        run: cargo package --workspace
