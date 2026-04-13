@@ -253,15 +253,34 @@ fn auth_provider_flow(
         scope,
         device_auth_url,
         token_url,
+        domain,
         ..
     }) = auth
     {
+        // Warn when using the borrowed OpenCode client ID so users understand
+        // the GitHub authorization page will show "OpenCode" as the app name.
+        const OPENCODE_CLIENT_ID: &str = "Ov23li8tweQw6odWQebz";
+        if name == "github-copilot" && client_id == OPENCODE_CLIENT_ID {
+            eprintln!();
+            eprintln!(
+                "  \x1b[33m⚠ The default GitHub Copilot integration borrows OpenCode's OAuth\x1b[0m"
+            );
+            eprintln!(
+                "  \x1b[33m  client ID. The GitHub authorization page will show \"OpenCode\".\x1b[0m"
+            );
+            eprintln!(
+                "  \x1b[33m  To use your own, set `auth.client_id` in the github-copilot\x1b[0m"
+            );
+            eprintln!("  \x1b[33m  provider block of your bitrouter.yaml.\x1b[0m");
+        }
+
         // OAuth device code flow
         let params = params_from_oauth_config(
             client_id.as_str(),
             scope.as_deref(),
             device_auth_url.as_deref(),
             token_url.as_deref(),
+            domain.as_deref(),
         );
         let mut store = TokenStore::load(&paths.token_store_file);
         crate::auth::oauth::run_device_flow(name, &params, &mut store)?;

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bitrouter_core::api::openai::chat::types::ChatCompletionResponse;
 use bitrouter_core::{
@@ -18,6 +19,7 @@ use bitrouter_core::{
 };
 use regex::Regex;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use serde_json::json;
 use tokio::{select, sync::mpsc};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
@@ -136,6 +138,22 @@ impl OpenAiChatCompletionsModel {
                 },
             )
             .await?;
+
+        // Some providers (e.g. GitHub Copilot) omit the `created` field.
+        // Fill it in with the current timestamp so the typed struct can
+        // always rely on its presence.
+        let mut response_body = response_body;
+        if let Some(obj) = response_body.as_object_mut() {
+            obj.entry("created").or_insert_with(|| {
+                json!(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64
+                )
+            });
+        }
+
         let completion: ChatCompletionResponse = serde_json::from_value(response_body.clone())
             .map_err(|error| {
                 BitrouterError::response_decode(

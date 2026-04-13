@@ -840,10 +840,11 @@ mod tests {
             ref scope,
             ref device_auth_url,
             ref token_url,
+            ..
         }) = bp.config.auth
         {
             assert_eq!(*grant, crate::config::OAuthGrant::DeviceCode);
-            assert_eq!(client_id, "Iv23limb4eFHH5zfOCr2");
+            assert_eq!(client_id, "Ov23li8tweQw6odWQebz");
             assert_eq!(scope.as_deref(), Some("read:user"));
             assert!(device_auth_url.is_some());
             assert!(token_url.is_some());
