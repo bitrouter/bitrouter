@@ -39,6 +39,7 @@ use bitrouter_core::api::openai::chat::types::{
     ChatMessageContent, ChatMessageToolCall, ChatMessageToolCallFunction, ChatNamedToolChoice,
     ChatResponseFormat, ChatResponseToolCallDelta, ChatTool, ChatToolChoice, ChatToolFunction,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) const OPENAI_PROVIDER_NAME: &str = "openai";
 const STREAM_TEXT_ID: &str = "text";
@@ -800,6 +801,20 @@ impl OpenAiSseParser {
                 }),
             });
             return parts;
+        }
+
+        // Some providers (e.g. GitHub Copilot) omit the `created` field.
+        // Fill it in with the current timestamp before typed deserialization.
+        let mut raw_value = raw_value;
+        if let Some(obj) = raw_value.as_object_mut() {
+            obj.entry("created").or_insert_with(|| {
+                json!(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64
+                )
+            });
         }
 
         let chunk: ChatCompletionChunk = match serde_json::from_value(raw_value.clone()) {
