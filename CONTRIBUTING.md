@@ -46,7 +46,7 @@ For larger changes, opening an issue before writing code is the fastest way to a
 4. Update docs when user-facing behavior, config, or provider support changes.
 5. Run the required validation commands locally before opening the PR:
    - `cargo fmt -- --check`
-   - `cargo clippy`
+   - `cargo clippy --all-features`
    - `cargo nextest run`
 6. Open a pull request with a clear summary and note any follow-up work.
 

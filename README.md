@@ -84,7 +84,7 @@ npx skills add BitRouterAI/agent-skills
 | Google     | ✅     | Generative AI API                |
 | OpenRouter | ✅     | Chat Completions + Responses API |
 
-Want to see another provider supported? [Open an issue](https://github.com/AIMOverse/bitrouter/issues) or submit a PR — contributions are welcome. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
+Want to see another provider supported? [Open an issue](https://github.com/bitrouter/bitrouter/issues) or submit a PR — contributions are welcome. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
 
 ## Supported Agent Runtimes
 
@@ -99,7 +99,7 @@ BitRouter works as a drop-in proxy for agent runtimes that support custom API ba
 | [OpenCode](https://github.com/opencode-ai/opencode)      | CLI + Skills                                                     |
 | [Kilo Code](https://github.com/Kilo-Org/kilocode)        | CLI + Skills                                                     |
 
-Any agent runtime that can target a custom OpenAI or Anthropic base URL works with BitRouter out of the box. **Building an agent runtime or framework?** We partner with teams to build native BitRouter integrations — reach out on [Discord](https://discord.gg/G3zVrZDa5C) or [open an issue](https://github.com/AIMOverse/bitrouter/issues).
+Any agent runtime that can target a custom OpenAI or Anthropic base URL works with BitRouter out of the box. **Building an agent runtime or framework?** We partner with teams to build native BitRouter integrations — reach out on [Discord](https://discord.gg/G3zVrZDa5C) or [open an issue](https://github.com/bitrouter/bitrouter/issues).
 
 ## Comparison
 
