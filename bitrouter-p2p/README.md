@@ -78,6 +78,40 @@ p2p:
     - "<base32 EndpointId of inbound peer>"
 ```
 
+## Testing
+
+### Unit / integration tests (local, CI-safe)
+
+```sh
+cargo test -p bitrouter-p2p --all-features
+```
+
+These spin up two iroh endpoints in the same process and validate correctness (framing, auth, streaming, headers).
+
+### Cross-network latency benchmark
+
+Measure real-world P2P tunnel latency between two machines using the `test_peer` example and the `measure_p2p_latency` test.
+
+**On the remote machine** (the peer exposing an endpoint):
+
+```sh
+cargo run -p bitrouter-p2p --example test_peer
+```
+
+This prints the `EndpointId` and waits for connections. By default it accepts all peers (open mode). To restrict to a specific peer:
+
+```sh
+ALLOW_PEER_ID=<hex> cargo run -p bitrouter-p2p --example test_peer
+```
+
+**On your machine** (the tester):
+
+```sh
+REMOTE_PEER_ID=<hex> cargo test -p bitrouter-p2p measure_p2p_latency -- --nocapture
+```
+
+The test connects via iroh discovery, runs cold/warm/SSE requests, and prints a latency report. Without `REMOTE_PEER_ID`, it falls back to local mode (same as CI).
+
 ## Feature Flag
 
 The P2P feature is gated behind `p2p` in the `bitrouter` binary crate:
