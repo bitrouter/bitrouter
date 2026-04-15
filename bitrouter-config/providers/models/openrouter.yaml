@@ -157,14 +157,6 @@ models:
         no_cache: 0.22
       output_tokens:
         text: 0.85
-  arcee-ai/trinity-mini:free:
-    max_input_tokens: 131072
-    max_output_tokens: 131072
-    pricing:
-      input_tokens:
-        no_cache: 0.0
-      output_tokens:
-        text: 0.0
   black-forest-labs/flux.2-flex:
     max_input_tokens: 67344
     max_output_tokens: 67344
@@ -644,15 +636,6 @@ models:
         no_cache: 0.0
       output_tokens:
         text: 0.0
-  inception/mercury:
-    max_input_tokens: 128000
-    max_output_tokens: 32000
-    pricing:
-      input_tokens:
-        no_cache: 0.25
-        cache_read: 0.025
-      output_tokens:
-        text: 0.75
   inception/mercury-2:
     max_input_tokens: 128000
     max_output_tokens: 50000
@@ -662,9 +645,9 @@ models:
         cache_read: 0.025
       output_tokens:
         text: 0.75
-  inception/mercury-coder:
+  inception/mercury-edit-2:
     max_input_tokens: 128000
-    max_output_tokens: 32000
+    max_output_tokens: 8192
     pricing:
       input_tokens:
         no_cache: 0.25
@@ -922,14 +905,6 @@ models:
         cache_read: 0.1
       output_tokens:
         text: 3.0
-  moonshotai/kimi-k2:free:
-    max_input_tokens: 32800
-    max_output_tokens: 32800
-    pricing:
-      input_tokens:
-        no_cache: 0.0
-      output_tokens:
-        text: 0.0
   nousresearch/hermes-3-llama-3.1-405b:free:
     max_input_tokens: 131072
     max_output_tokens: 131072
@@ -1356,6 +1331,14 @@ models:
         cache_read: 0.28
       output_tokens:
         text: 4.4
+  openrouter/elephant-alpha:
+    max_input_tokens: 262144
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
   openrouter/free:
     max_input_tokens: 200000
     max_output_tokens: 8000
@@ -1426,14 +1409,6 @@ models:
         no_cache: 0.2
       output_tokens:
         text: 0.8
-  qwen/qwen3-4b:free:
-    max_input_tokens: 40960
-    max_output_tokens: 40960
-    pricing:
-      input_tokens:
-        no_cache: 0.0
-      output_tokens:
-        text: 0.0
   qwen/qwen3-coder:
     max_input_tokens: 262144
     max_output_tokens: 66536
@@ -1466,14 +1441,6 @@ models:
         no_cache: 0.38
       output_tokens:
         text: 1.53
-  qwen/qwen3-coder:free:
-    max_input_tokens: 262144
-    max_output_tokens: 66536
-    pricing:
-      input_tokens:
-        no_cache: 0.0
-      output_tokens:
-        text: 0.0
   qwen/qwen3-max:
     max_input_tokens: 262144
     max_output_tokens: 32768
@@ -1490,14 +1457,6 @@ models:
         no_cache: 0.14
       output_tokens:
         text: 1.4
-  qwen/qwen3-next-80b-a3b-instruct:free:
-    max_input_tokens: 262144
-    max_output_tokens: 262144
-    pricing:
-      input_tokens:
-        no_cache: 0.0
-      output_tokens:
-        text: 0.0
   qwen/qwen3-next-80b-a3b-thinking:
     max_input_tokens: 262144
     max_output_tokens: 262144
@@ -1602,14 +1561,6 @@ models:
         cache_read: 0.02
       output_tokens:
         text: 0.3
-  stepfun/step-3.5-flash:free:
-    max_input_tokens: 256000
-    max_output_tokens: 256000
-    pricing:
-      input_tokens:
-        no_cache: 0.0
-      output_tokens:
-        text: 0.0
   x-ai/grok-3:
     max_input_tokens: 131072
     max_output_tokens: 8192
