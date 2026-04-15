@@ -28,6 +28,9 @@ pub struct Router {
     /// When set, OAuth-authenticated providers resolve their API key from
     /// the token store at request time.
     token_store_path: Option<PathBuf>,
+    /// Shared iroh endpoint for outbound P2P connections.
+    #[cfg(feature = "p2p")]
+    iroh_endpoint: Option<iroh::Endpoint>,
 }
 
 impl Router {
@@ -36,12 +39,21 @@ impl Router {
             client,
             providers,
             token_store_path: None,
+            #[cfg(feature = "p2p")]
+            iroh_endpoint: None,
         }
     }
 
     /// Set the path to the OAuth token store.
     pub fn with_token_store(mut self, path: PathBuf) -> Self {
         self.token_store_path = Some(path);
+        self
+    }
+
+    /// Set the shared iroh endpoint for outbound P2P connections.
+    #[cfg(feature = "p2p")]
+    pub fn with_iroh_endpoint(mut self, endpoint: iroh::Endpoint) -> Self {
+        self.iroh_endpoint = Some(endpoint);
         self
     }
 
@@ -188,6 +200,48 @@ impl LanguageModelRouter for Router {
                 );
                 Ok(DynLanguageModel::new_box(model))
             }
+            #[cfg(feature = "p2p")]
+            ApiProtocol::P2p => {
+                let node_id_str = provider.node_id.as_deref().ok_or_else(|| {
+                    BitrouterError::invalid_request(
+                        Some(&target.provider_name),
+                        format!(
+                            "P2P provider '{}' has no node_id configured",
+                            target.provider_name
+                        ),
+                        None,
+                    )
+                })?;
+                let node_id: iroh::EndpointId = node_id_str.parse().map_err(|e| {
+                    BitrouterError::invalid_request(
+                        Some(&target.provider_name),
+                        format!("invalid node_id '{node_id_str}': {e}"),
+                        None,
+                    )
+                })?;
+                let endpoint = self.iroh_endpoint.as_ref().ok_or_else(|| {
+                    BitrouterError::invalid_request(
+                        Some(&target.provider_name),
+                        "P2P endpoint not initialized",
+                        None,
+                    )
+                })?;
+                let model = bitrouter_providers::p2p::provider::P2pModel::new(
+                    target.service_id,
+                    node_id,
+                    endpoint.clone(),
+                );
+                Ok(DynLanguageModel::new_box(model))
+            }
+            #[cfg(not(feature = "p2p"))]
+            ApiProtocol::P2p => Err(BitrouterError::invalid_request(
+                Some(&target.provider_name),
+                format!(
+                    "P2P protocol not available (feature disabled) for provider '{}'",
+                    target.provider_name
+                ),
+                None,
+            )),
             ApiProtocol::Mcp | ApiProtocol::Rest | ApiProtocol::Acp => {
                 Err(BitrouterError::invalid_request(
                     Some(&target.provider_name),

@@ -213,7 +213,7 @@ fn tool_from_language_model(tool: &LanguageModelTool) -> Result<ChatTool> {
 
 // ── Response conversion ─────────────────────────────────────────────────────
 
-pub(super) fn response_to_generate_result(
+pub(crate) fn response_to_generate_result(
     response: ChatCompletionResponse,
     request_headers: Option<HeaderMap>,
     request_body: JsonValue,
@@ -268,7 +268,7 @@ pub(super) fn response_to_generate_result(
 
 // ── Request building ────────────────────────────────────────────────────────
 
-pub(super) fn build_chat_request(
+pub(crate) fn build_chat_request(
     model_id: &str,
     options: &LanguageModelCallOptions,
     stream: bool,
@@ -1003,7 +1003,7 @@ impl OpenAiStreamState {
 }
 
 /// A boxed byte stream used by the SSE driver, abstracting over the transport.
-pub(super) type ByteStream = Pin<
+pub(crate) type ByteStream = Pin<
     Box<
         dyn Stream<Item = std::result::Result<Bytes, Box<dyn std::error::Error + Send + Sync>>>
             + Send,
@@ -1012,7 +1012,7 @@ pub(super) type ByteStream = Pin<
 
 /// Reads chunks from `bytes_stream`, parses SSE events, and forwards
 /// [`LanguageModelStreamPart`]s into `sender`.  Respects `abort_signal`.
-pub(super) async fn drive_sse_stream(
+pub(crate) async fn drive_sse_stream(
     mut bytes_stream: ByteStream,
     abort_signal: Option<CancellationToken>,
     sender: mpsc::Sender<LanguageModelStreamPart>,

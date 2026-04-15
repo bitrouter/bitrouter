@@ -29,6 +29,8 @@ pub enum ApiProtocol {
     Rest,
     // Agent protocols
     Acp,
+    // P2P tunnel protocol
+    P2p,
 }
 
 impl fmt::Display for ApiProtocol {
@@ -40,6 +42,7 @@ impl fmt::Display for ApiProtocol {
             Self::Mcp => "mcp",
             Self::Rest => "rest",
             Self::Acp => "acp",
+            Self::P2p => "p2p",
         })
     }
 }

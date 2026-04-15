@@ -672,11 +672,34 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         client_builder
                     }
                 };
-            let model_router = crate::runtime::Router::new(
+            let mut model_router = crate::runtime::Router::new(
                 client_builder.build(),
                 runtime.config.providers.clone(),
             )
             .with_token_store(paths.token_store_file.clone());
+
+            // Initialize P2P endpoint when enabled.
+            #[cfg(feature = "p2p")]
+            if runtime.config.p2p.as_ref().is_some_and(|c| c.enabled) {
+                let key_path = paths.home_dir.join("p2p_key");
+                let seed = load_or_generate_p2p_seed(&key_path)?;
+                let p2p_endpoint = bitrouter_p2p::endpoint::P2pEndpoint::from_seed(seed)
+                    .await
+                    .map_err(|e| {
+                        crate::runtime::error::RuntimeError::Config(
+                            bitrouter_config::ConfigError::ConfigParse(format!(
+                                "P2P endpoint initialization failed: {e}"
+                            )),
+                        )
+                    })?;
+                tracing::info!(
+                    node_id = %p2p_endpoint.id(),
+                    "P2P endpoint initialized"
+                );
+                model_router = model_router.with_iroh_endpoint(p2p_endpoint.endpoint().clone());
+                runtime.p2p_endpoint = Some(p2p_endpoint);
+            }
+
             runtime.serve_with_reload(model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
@@ -896,6 +919,36 @@ fn ensure_ows_passphrase(
     unsafe { std::env::set_var("OWS_PASSPHRASE", passphrase) };
 
     Ok(())
+}
+
+/// Load or generate a 32-byte Ed25519 seed for the P2P iroh endpoint.
+///
+/// On first run, a random seed is generated and persisted to `path`.
+/// On subsequent runs, the seed is loaded from disk so the node's
+/// `EndpointId` remains stable across restarts.
+#[cfg(feature = "p2p")]
+fn load_or_generate_p2p_seed(
+    path: &std::path::Path,
+) -> std::result::Result<[u8; 32], Box<dyn std::error::Error>> {
+    if path.exists() {
+        let data = std::fs::read(path)?;
+        if data.len() != 32 {
+            return Err(format!(
+                "P2P key file {} has invalid length {} (expected 32)",
+                path.display(),
+                data.len()
+            )
+            .into());
+        }
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&data);
+        Ok(seed)
+    } else {
+        let seed: [u8; 32] = rand::random();
+        std::fs::write(path, seed)?;
+        tracing::info!(path = %path.display(), "generated new P2P identity key");
+        Ok(seed)
+    }
 }
 
 fn has_removed_headless_flag<I, S>(args: I) -> bool

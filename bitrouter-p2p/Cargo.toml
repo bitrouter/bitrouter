@@ -1,0 +1,33 @@
+[package]
+name = "bitrouter-p2p"
+version = { workspace = true }
+edition = "2024"
+description = "BitRouter P2P networking — iroh-based QUIC tunnel between BitRouter instances"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+readme = "README.md"
+
+[dependencies]
+bitrouter-core.workspace = true
+
+iroh = "0.97"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1", features = ["macros", "rt", "sync", "io-util"] }
+tracing = "0.1"
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "rustls",
+    "stream",
+] }
+bytes = "1"
+futures-core = "0.3"
+tokio-stream = "0.1"
+base64 = "0.22"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "net", "time"] }
+tokio-stream = "0.1"
+tracing-subscriber = "0.3"

@@ -70,6 +70,9 @@ pub struct ServerPlan<T, R> {
     policy_resolver: Option<Arc<dyn bitrouter_core::routers::admin::ToolPolicyResolver>>,
     /// Per-key revocation set for JWT `id` claim checking.
     revocation_set: Option<Arc<dyn bitrouter_core::auth::revocation::KeyRevocationSet>>,
+    /// P2P (iroh) endpoint for peer-to-peer model tunneling.
+    #[cfg(feature = "p2p")]
+    p2p_endpoint: Option<bitrouter_p2p::endpoint::P2pEndpoint>,
 }
 
 impl<T, R> ServerPlan<T, R>
@@ -88,6 +91,8 @@ where
             tool_registry: None,
             policy_resolver: None,
             revocation_set: None,
+            #[cfg(feature = "p2p")]
+            p2p_endpoint: None,
         }
     }
 
@@ -146,6 +151,13 @@ where
         set: Arc<dyn bitrouter_core::auth::revocation::KeyRevocationSet>,
     ) -> Self {
         self.revocation_set = Some(set);
+        self
+    }
+
+    /// Set the P2P (iroh) endpoint for peer-to-peer model tunneling.
+    #[cfg(feature = "p2p")]
+    pub fn with_p2p_endpoint(mut self, endpoint: bitrouter_p2p::endpoint::P2pEndpoint) -> Self {
+        self.p2p_endpoint = Some(endpoint);
         self
     }
 
@@ -739,6 +751,27 @@ where
             None
         };
 
+        // ── P2P accept loop ──────────────────────────────────────────
+        #[cfg(feature = "p2p")]
+        let _p2p_guard = if let Some(ref p2p) = self.p2p_endpoint {
+            let allow_list: std::collections::HashSet<iroh::EndpointId> = self
+                .config
+                .p2p
+                .as_ref()
+                .map(|c| c.allow_list.iter().filter_map(|s| s.parse().ok()).collect())
+                .unwrap_or_default();
+            let handler = std::sync::Arc::new(bitrouter_p2p::inbound::InboundHandler::new(addr));
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+            let handle = p2p.accept(handler, std::sync::Arc::new(allow_list), shutdown_rx);
+            tracing::info!(
+                node_id = %p2p.id().fmt_short(),
+                "P2P endpoint accepting connections"
+            );
+            Some((handle, shutdown_tx))
+        } else {
+            None
+        };
+
         // ── Serve ────────────────────────────────────────────────────
         if let Some(ref db) = self.db {
             let db_conn = db.as_ref().clone();
@@ -774,6 +807,17 @@ where
                 .await
                 .graceful(shutdown_signal());
             server.run().await;
+        }
+
+        // ── P2P shutdown ──────────────────────────────────────────
+        #[cfg(feature = "p2p")]
+        if let Some((handle, shutdown_tx)) = _p2p_guard {
+            let _ = shutdown_tx.send(true);
+            let _ = handle.await;
+        }
+        #[cfg(feature = "p2p")]
+        if let Some(p2p) = self.p2p_endpoint {
+            p2p.shutdown().await;
         }
 
         tracing::info!("server stopped");

@@ -20,3 +20,6 @@ pub mod acp;
 
 #[cfg(feature = "agentskills")]
 pub mod agentskills;
+
+#[cfg(feature = "p2p")]
+pub mod p2p;

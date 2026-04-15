@@ -34,6 +34,9 @@ pub struct AppRuntime<R> {
     pub paths: RuntimePaths,
     pub routing_table: R,
     pub db: Option<Arc<DatabaseConnection>>,
+    /// P2P (iroh) endpoint, initialized when `p2p.enabled` is `true`.
+    #[cfg(feature = "p2p")]
+    pub p2p_endpoint: Option<bitrouter_p2p::endpoint::P2pEndpoint>,
 }
 
 impl<R: ServerTableBound + Send + Sync + 'static> AppRuntime<R> {
@@ -105,6 +108,8 @@ impl
             paths,
             routing_table,
             db: None,
+            #[cfg(feature = "p2p")]
+            p2p_endpoint: None,
         })
     }
 
@@ -128,6 +133,8 @@ impl
             paths,
             routing_table,
             db: None,
+            #[cfg(feature = "p2p")]
+            p2p_endpoint: None,
         }
     }
 
@@ -232,6 +239,12 @@ impl
         if let Some(db) = self.db {
             plan = plan.with_db(db);
         }
+
+        #[cfg(feature = "p2p")]
+        if let Some(p2p_endpoint) = self.p2p_endpoint {
+            plan = plan.with_p2p_endpoint(p2p_endpoint);
+        }
+
         plan.serve().await
     }
 }

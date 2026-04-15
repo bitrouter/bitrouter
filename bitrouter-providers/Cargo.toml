@@ -34,6 +34,7 @@ agentskills = [
     "dep:bitrouter-config",
     "tokio/fs",
 ]
+p2p = ["dep:bitrouter-p2p", "dep:iroh", "dep:tracing"]
 
 [dependencies]
 bitrouter-core.workspace = true
@@ -78,6 +79,10 @@ bitrouter-config = { workspace = true, optional = true }
 chrono = { version = "0.4", optional = true }
 serde-saphyr = { version = "0.0", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
+
+# p2p
+bitrouter-p2p = { workspace = true, optional = true }
+iroh = { version = "0.97", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

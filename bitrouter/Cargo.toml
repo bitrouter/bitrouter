@@ -39,6 +39,7 @@ mpp-solana = [
     "dep:bs58",
     "dep:curve25519-dalek",
 ]
+p2p = ["dep:bitrouter-p2p", "bitrouter-providers/p2p", "dep:iroh"]
 
 [dependencies]
 # Internal crates
@@ -94,6 +95,9 @@ warp = { version = "0.4.2", features = ["server"] }
 bitrouter-tui = { workspace = true, optional = true }
 anyhow = { version = "1", optional = true }
 
+# P2P (optional)
+bitrouter-p2p = { workspace = true, optional = true }
+iroh = { version = "0.97", optional = true }
 
 # MPP payment middleware (optional)
 mpp = { package = "mpp-br", version = "0.8", default-features = false, features = [

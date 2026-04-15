@@ -272,6 +272,12 @@ pub fn merge_provider(base: &mut ProviderConfig, overlay: ProviderConfig) {
     if overlay.models.is_some() {
         base.models = overlay.models;
     }
+    if overlay.node_id.is_some() {
+        base.node_id = overlay.node_id;
+    }
+    if overlay.target_protocol.is_some() {
+        base.target_protocol = overlay.target_protocol;
+    }
 }
 
 /// Resolves all provider derivation chains and applies `env_prefix` overrides.

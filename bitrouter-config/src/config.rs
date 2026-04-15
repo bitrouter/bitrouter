@@ -52,6 +52,10 @@ pub struct BitrouterConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallet: Option<WalletConfig>,
 
+    /// P2P (iroh) networking configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p2p: Option<P2pConfig>,
+
     /// When `true` (the default), built-in provider definitions are merged
     /// into the provider set before user overrides are applied.  Set to
     /// `false` to use *only* the providers declared in the config file.
@@ -442,6 +446,17 @@ pub struct ProviderConfig {
     /// Streamable HTTP endpoint at `POST /mcp/{name}` and `GET /mcp/{name}/sse`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<bool>,
+
+    // ── P2P-specific provider fields ────────────────────────────────
+    /// Remote iroh NodeId for P2P providers (`api_protocol: p2p`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+
+    /// The API protocol the remote peer uses for the target model.
+    /// Reserved for future use. Currently all P2P tunneled requests
+    /// use OpenAI chat completions format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_protocol: Option<ApiProtocol>,
 }
 
 // ── Model metadata & pricing ─────────────────────────────────────────
@@ -730,6 +745,21 @@ pub struct PaymentClientConfig {
     /// Used when the server challenge does not include `suggestedDeposit`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_default_deposit: Option<u128>,
+}
+
+// ── P2P networking configuration ─────────────────────────────────────
+
+/// P2P (iroh) networking configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct P2pConfig {
+    /// Whether the iroh P2P endpoint is active.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Node IDs of peers allowed to connect inbound.
+    /// Empty list = refuse all inbound (outbound-only mode).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_list: Vec<String>,
 }
 
 /// Authentication configuration.

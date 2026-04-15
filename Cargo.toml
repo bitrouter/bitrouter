@@ -14,6 +14,7 @@ bitrouter-core = { path = "bitrouter-core", version = "0.24" }
 bitrouter-guardrails = { path = "bitrouter-guardrails", version = "0.24" }
 bitrouter-observe = { path = "bitrouter-observe", version = "0.24" }
 bitrouter-providers = { path = "bitrouter-providers", version = "0.24" }
+bitrouter-p2p = { path = "bitrouter-p2p", version = "0.24" }
 bitrouter-tui = { path = "bitrouter-tui", version = "0.24" }
 
 # The profile that 'dist' will build with
