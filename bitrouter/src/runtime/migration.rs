@@ -16,5 +16,8 @@ impl MigratorTrait for Migrator {
 
 /// Run all pending migrations against the given database connection.
 pub async fn migrate(db: &sea_orm::DatabaseConnection) -> Result<(), sea_orm::DbErr> {
-    Migrator::up(db, None).await
+    tracing::info!("running pending database migrations");
+    Migrator::up(db, None).await?;
+    tracing::info!("database migrations complete");
+    Ok(())
 }

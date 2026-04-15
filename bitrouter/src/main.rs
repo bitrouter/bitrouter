@@ -635,7 +635,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             &paths.home_dir,
             env_file,
         );
-        match sea_orm::Database::connect(&db_url).await {
+        let mut db_opts = sea_orm::ConnectOptions::new(&db_url);
+        db_opts.sqlx_logging_level(tracing::log::LevelFilter::Debug);
+        match sea_orm::Database::connect(db_opts).await {
             Ok(db) => {
                 if let Err(e) = crate::runtime::migrate(&db).await {
                     tracing::warn!("database migration failed: {e}");

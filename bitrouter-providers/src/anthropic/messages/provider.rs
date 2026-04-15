@@ -205,16 +205,18 @@ impl AnthropicMessagesModel {
     fn build_headers(&self, extra_headers: &Option<HeaderMap>) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(
-            HeaderName::from_static("x-api-key"),
-            HeaderValue::from_str(&self.config.api_key).map_err(|error| {
-                BitrouterError::invalid_request(
-                    Some(ANTHROPIC_PROVIDER_NAME),
-                    format!("invalid x-api-key header: {error}"),
-                    None,
-                )
-            })?,
-        );
+        if !self.config.api_key.is_empty() {
+            headers.insert(
+                HeaderName::from_static("x-api-key"),
+                HeaderValue::from_str(&self.config.api_key).map_err(|error| {
+                    BitrouterError::invalid_request(
+                        Some(ANTHROPIC_PROVIDER_NAME),
+                        format!("invalid x-api-key header: {error}"),
+                        None,
+                    )
+                })?,
+            );
+        }
         headers.insert(
             HeaderName::from_static("anthropic-version"),
             HeaderValue::from_str(&self.config.api_version).map_err(|error| {

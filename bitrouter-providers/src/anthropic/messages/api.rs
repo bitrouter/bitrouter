@@ -940,9 +940,16 @@ impl AnthropicStreamState {
                 if let Some(stop_reason) = delta.stop_reason.as_deref() {
                     self.finish_reason = Some(map_finish_reason(Some(stop_reason)));
                 }
-                if let Some(usage) = usage {
-                    self.merge_usage(usage);
-                }
+                // Some providers (e.g. GitHub Copilot) omit usage in
+                // message_delta. Default to zero tokens so downstream
+                // serialization always includes a usage object.
+                let usage = usage.unwrap_or(MessagesUsage {
+                    input_tokens: Some(0),
+                    output_tokens: Some(0),
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
+                });
+                self.merge_usage(usage);
                 Vec::new()
             }
             MessagesStreamEvent::MessageStop => self.finish_parts(),

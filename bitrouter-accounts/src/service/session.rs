@@ -32,7 +32,9 @@ impl<'db> SessionService<'db> {
             created_at: Set(now),
             updated_at: Set(now),
         };
-        model.insert(self.db).await
+        let session = model.insert(self.db).await?;
+        tracing::info!(session_id = %session.id, account_id = %account_id.0, "session created");
+        Ok(session)
     }
 
     pub async fn get_session(&self, session_id: Uuid) -> Result<Option<session::Model>, DbErr> {
@@ -51,6 +53,7 @@ impl<'db> SessionService<'db> {
         session::Entity::delete_by_id(session_id)
             .exec(self.db)
             .await?;
+        tracing::info!(session_id = %session_id, "session deleted");
         Ok(())
     }
 
@@ -92,7 +95,9 @@ impl<'db> SessionService<'db> {
             .exec(self.db)
             .await?;
 
-        model.insert(self.db).await
+        let msg = model.insert(self.db).await?;
+        tracing::info!(session_id = %session_id, message_id = %msg.id, role = %role, "message appended");
+        Ok(msg)
     }
 
     pub async fn list_messages(&self, session_id: Uuid) -> Result<Vec<message::Model>, DbErr> {
@@ -139,7 +144,9 @@ impl<'db> SessionService<'db> {
             size_bytes: Set(size_bytes),
             created_at: Set(now),
         };
-        model.insert(self.db).await
+        let file = model.insert(self.db).await?;
+        tracing::info!(session_id = %session_id, file_id = %file.id, "session file attached");
+        Ok(file)
     }
 
     /// List all files attached to a session.

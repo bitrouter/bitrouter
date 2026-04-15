@@ -51,6 +51,10 @@ impl SpendStore for SeaOrmSpendStore {
                 i64::MAX
             });
 
+            let service_type_str = log.service_type.to_string();
+            let service_name_str = log.service_name.clone();
+            let success = log.success;
+
             let active = spend_log::ActiveModel {
                 id: Set(log.id),
                 service_type: Set(log.service_type.to_string()),
@@ -70,6 +74,13 @@ impl SpendStore for SeaOrmSpendStore {
 
             if let Err(e) = active.insert(&self.db).await {
                 tracing::warn!(error = %e, "failed to write spend log");
+            } else {
+                tracing::info!(
+                    service_type = %service_type_str,
+                    service_name = %service_name_str,
+                    success = success,
+                    "spend log recorded",
+                );
             }
         })
     }
