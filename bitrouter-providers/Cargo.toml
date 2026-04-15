@@ -69,7 +69,7 @@ agent-client-protocol = { version = "0.10", optional = true }
 async-trait = { version = "0.1", optional = true }
 flate2 = { version = "1", optional = true }
 tar = { version = "0.4", optional = true }
-zip = { version = "2", optional = true, default-features = false, features = [
+zip = { version = "8.5", optional = true, default-features = false, features = [
     "deflate",
 ] }
 

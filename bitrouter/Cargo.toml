@@ -96,7 +96,7 @@ anyhow = { version = "1", optional = true }
 
 
 # MPP payment middleware (optional)
-mpp = { package = "mpp-br", version = "0.8", default-features = false, features = [
+mpp = { package = "mpp-br", version = "0.9", default-features = false, features = [
     "client",
     "middleware",
     "tempo",
