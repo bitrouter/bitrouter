@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.1](https://github.com/bitrouter/bitrouter/compare/v0.24.0...v0.24.1)
+
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#337](https://github.com/bitrouter/bitrouter/pull/337)) - ([587c76d](https://github.com/bitrouter/bitrouter/commit/587c76df8c4fcdbbc4627f276bf1b7bebced5f11))
+- Update Cargo.lock dependencies - ([0000000](https://github.com/bitrouter/bitrouter/commit/0000000))
+
+
 ## [0.24.0](https://github.com/bitrouter/bitrouter/compare/v0.23.1...v0.24.0)
 
 
