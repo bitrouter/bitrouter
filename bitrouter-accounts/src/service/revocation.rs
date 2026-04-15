@@ -39,7 +39,13 @@ impl KeyRevocationSet for DbRevocationSet {
                 .one(db.as_ref())
                 .await
             {
-                Ok(row) => row.is_some(),
+                Ok(row) => {
+                    let revoked = row.is_some();
+                    if revoked {
+                        tracing::info!(key_id = %key_id, "key revocation check: revoked");
+                    }
+                    revoked
+                }
                 Err(_) => {
                     // DB error — fail closed (treat as revoked) to avoid
                     // accidentally admitting a revoked key.
@@ -72,6 +78,8 @@ impl KeyRevocationSet for DbRevocationSet {
                 .await
             {
                 eprintln!("failed to persist key revocation for {key_id}: {e}");
+            } else {
+                tracing::info!(key_id = %key_id, "key revoked");
             }
         })
     }

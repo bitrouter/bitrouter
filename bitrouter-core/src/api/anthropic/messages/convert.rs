@@ -228,14 +228,23 @@ impl StreamConverter {
                     MessagesStreamEvent::ContentBlockStop { index },
                 ]
             }
-            LanguageModelStreamPart::Finish { finish_reason, .. } => {
+            LanguageModelStreamPart::Finish {
+                finish_reason,
+                usage,
+                ..
+            } => {
                 vec![MessagesStreamEvent::MessageDelta {
                     delta: MessagesMessageDelta {
                         delta_type: "message_delta".to_owned(),
                         stop_reason: Some(map_finish_reason(finish_reason)),
                         stop_sequence: None,
                     },
-                    usage: None,
+                    usage: Some(MessagesUsage {
+                        input_tokens: usage.input_tokens.total,
+                        output_tokens: usage.output_tokens.total,
+                        cache_creation_input_tokens: usage.input_tokens.cache_write,
+                        cache_read_input_tokens: usage.input_tokens.cache_read,
+                    }),
                     message: Some(MessagesStreamMessage {
                         id: format!("msg-{}", generate_id()),
                         model: self.model_id.clone(),

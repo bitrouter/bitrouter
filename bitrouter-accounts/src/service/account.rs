@@ -26,7 +26,9 @@ impl<'db> AccountService<'db> {
             created_at: Set(now),
             updated_at: Set(now),
         };
-        model.insert(self.db).await
+        let account = model.insert(self.db).await?;
+        tracing::info!(account_id = %account.id, name = %account.name, "account created");
+        Ok(account)
     }
 
     pub async fn get_account(&self, id: AccountId) -> Result<Option<account::Model>, DbErr> {
@@ -63,7 +65,9 @@ impl<'db> AccountService<'db> {
             created_at: Set(now),
             updated_at: Set(now),
         };
-        model.insert(self.db).await
+        let account = model.insert(self.db).await?;
+        tracing::info!(account_id = %account.id, "account created with pubkey");
+        Ok(account)
     }
 
     /// Find an existing account by pubkey, or create one.
@@ -77,6 +81,7 @@ impl<'db> AccountService<'db> {
     ) -> Result<Option<account::Model>, DbErr> {
         // Check current active pubkey.
         if let Some(account) = self.find_by_pubkey(pubkey).await? {
+            tracing::info!(account_id = %account.id, "account resolved by pubkey");
             return Ok(Some(account));
         }
 
@@ -86,6 +91,7 @@ impl<'db> AccountService<'db> {
             .one(self.db)
             .await?;
         if rotated.is_some() {
+            tracing::info!("pubkey lookup rejected: key was previously rotated");
             return Ok(None);
         }
 
@@ -136,6 +142,7 @@ impl<'db> AccountService<'db> {
         active.caip10_identity = Set(Some(new_pubkey.to_owned()));
         active.updated_at = Set(now);
         let updated = active.update(self.db).await?;
+        tracing::info!(account_id = %account_id.0, "account pubkey rotated");
 
         Ok(Some(updated))
     }

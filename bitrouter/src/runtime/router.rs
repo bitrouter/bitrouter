@@ -133,14 +133,26 @@ impl LanguageModelRouter for Router {
         let is_copilot = target.provider_name == COPILOT_PROVIDER;
 
         // Phase 3: Copilot Claude models use the Anthropic Messages API.
+        // Copilot authenticates via OAuth Bearer token, not Anthropic's x-api-key,
+        // so we pass the token through the Authorization header instead.
         if is_copilot && is_anthropic_model(&target.service_id) {
             let api_key = self.resolve_api_key(&target.provider_name, provider);
             let base_url = anthropic_api_base(provider.api_base.as_deref());
             let mut default_headers = parse_headers(provider.default_headers.as_ref())?;
             merge_copilot_headers(&mut default_headers)?;
+            default_headers.insert(
+                reqwest::header::AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|e| {
+                    BitrouterError::invalid_request(
+                        None,
+                        format!("invalid Authorization header: {e}"),
+                        None,
+                    )
+                })?,
+            );
 
             let config = AnthropicConfig {
-                api_key,
+                api_key: String::new(),
                 base_url,
                 api_version: "2023-06-01".into(),
                 default_headers,

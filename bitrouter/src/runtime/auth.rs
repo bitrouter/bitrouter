@@ -9,11 +9,11 @@
 //!
 //! Credentials are extracted from the protocol-appropriate header:
 //!
-//! | Protocol   | Header                          |
-//! |------------|---------------------------------|
-//! | OpenAI     | `Authorization: Bearer <token>` |
-//! | Anthropic  | `x-api-key: <token>`            |
-//! | Management | `Authorization: Bearer <token>` |
+//! | Protocol   | Header                                          |
+//! |------------|-------------------------------------------------|
+//! | OpenAI     | `Authorization: Bearer <token>`                 |
+//! | Anthropic  | `x-api-key: <token>` or `Authorization: Bearer` |
+//! | Management | `Authorization: Bearer <token>`                 |
 //!
 //! When no database is configured, auth is disabled and all requests are
 //! allowed through (open proxy mode).
@@ -93,16 +93,6 @@ pub fn bearer_credential() -> impl Filter<Extract = (String,), Error = warp::Rej
             }
         },
     )
-}
-
-/// Warp filter: extract credential from `x-api-key` header.
-pub fn x_api_key_credential() -> impl Filter<Extract = (String,), Error = warp::Rejection> + Clone {
-    warp::header::optional::<String>("x-api-key").and_then(|header: Option<String>| async move {
-        match header {
-            Some(key) if !key.is_empty() => Ok(key),
-            _ => Err(warp::reject::custom(Unauthorized("missing x-api-key"))),
-        }
-    })
 }
 
 /// Warp filter: extract credential from either `Authorization: Bearer` **or**
@@ -237,9 +227,12 @@ pub fn openai_auth(
         .boxed()
 }
 
-/// Build an auth filter for Anthropic-protocol routes (`x-api-key`).
+/// Build an auth filter for Anthropic-protocol routes.
 ///
-/// When auth is disabled (no DB), returns a passthrough identity.
+/// Accepts credentials from either `x-api-key` (standard Anthropic) or
+/// `Authorization: Bearer` (used by clients like Claude Code that set
+/// `ANTHROPIC_AUTH_TOKEN`). When auth is disabled (no DB), returns a
+/// passthrough identity.
 pub fn anthropic_auth(
     ctx: Arc<JwtAuthContext>,
 ) -> impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone {
@@ -247,7 +240,7 @@ pub fn anthropic_auth(
         return open_identity().boxed();
     }
     let ctx = ctx.clone();
-    x_api_key_credential()
+    any_credential()
         .and(warp::any().map(move || ctx.clone()))
         .and_then(|credential: String, ctx: Arc<JwtAuthContext>| async move {
             resolve_identity(&credential, &ctx).await
