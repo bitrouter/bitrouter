@@ -22,6 +22,7 @@ mpp-tempo = [
     "dep:alloy",
     "dep:tempo-primitives",
     "dep:tempo-alloy",
+    "dep:tempo-contracts",
 ]
 mpp-solana = [
     "dep:mpp",
@@ -38,7 +39,7 @@ bitrouter-core.workspace = true
 bitrouter-config = { workspace = true, optional = true }
 async-trait = { version = "0.1" }
 futures-core = { version = "0.3" }
-mpp = { package = "mpp-br", version = "0.8", default-features = false, features = [
+mpp = { package = "mpp-br", version = "0.9", default-features = false, features = [
     "reqwest-rustls-tls",
 ], optional = true }
 alloy = { version = "1", default-features = false, features = [
@@ -49,8 +50,9 @@ alloy = { version = "1", default-features = false, features = [
     "network",
     "eips",
 ], optional = true }
-tempo-primitives = { version = "1", optional = true }
-tempo-alloy = { version = "1", optional = true }
+tempo-primitives = { version = "~1.5", optional = true }
+tempo-alloy = { version = "~1.5", optional = true }
+tempo-contracts = { version = "~1.5", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 ed25519-dalek = { version = "2", features = ["std"], optional = true }
