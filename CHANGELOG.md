@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.2](https://github.com/bitrouter/bitrouter/compare/v0.24.1...v0.24.2)
+
+
+### 🐛 Bug Fixes
+
+- *(providers)* Copilot Claude auth, streaming, and observability ([#340](https://github.com/bitrouter/bitrouter/pull/340)) - ([d690e5d](https://github.com/bitrouter/bitrouter/commit/d690e5db9b8eb21ea9d48cb6c0657aa3ae10666a))
+
+
 ## [0.24.1](https://github.com/bitrouter/bitrouter/compare/v0.24.0...v0.24.1)
 
 
