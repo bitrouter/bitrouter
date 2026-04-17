@@ -141,8 +141,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     // Build a model router from provider configs.
     // Router::new takes a reqwest_middleware::ClientWithMiddleware.
+    // Note: Router lives in the `bitrouter` binary crate (bitrouter::runtime::Router).
+    // Add `bitrouter = { path = "bitrouter" }` to your Cargo.toml to use it.
     let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
-    let router = Arc::new(crate::runtime::Router::new(client, config.providers.clone()));
+    let router = Arc::new(bitrouter::runtime::Router::new(client, config.providers.clone()));
 
     let health = warp::path("health")
         .and(warp::get())

@@ -33,18 +33,24 @@ adapter installation.
 
 ### Subcommands
 
-| Command   | What it does                                                                  |
-| --------- | ----------------------------------------------------------------------------- |
-| `init`    | Interactive setup wizard for provider configuration                           |
-| `serve`   | Start the API server in the foreground                                        |
-| `start`   | Start BitRouter as a background daemon                                        |
-| `stop`    | Stop the running daemon                                                       |
-| `status`  | Print resolved paths, listen address, configured providers, and daemon status |
-| `restart` | Restart the background daemon                                                 |
-| `reload`  | Hot-reload the configuration file without restarting                           |
-| `account` | Manage local Ed25519 account keypairs used to sign BitRouter JWTs             |
-| `keygen`  | Sign a JWT with the active account key                                        |
-| `keys`    | List, inspect, and remove locally stored JWTs                                 |
+| Command        | What it does                                                                  |
+| -------------- | ----------------------------------------------------------------------------- |
+| `serve`        | Start the API server in the foreground                                        |
+| `start`        | Start BitRouter as a background daemon                                        |
+| `stop`         | Stop the running daemon                                                       |
+| `status`       | Print resolved paths, listen address, configured providers, and daemon status |
+| `restart`      | Restart the background daemon                                                 |
+| `reload`       | Hot-reload the configuration file without restarting                          |
+| `reset`        | Reset configuration and re-run the interactive setup wizard                   |
+| `wallet`       | Manage OWS wallets (create, import, list, info, export, delete, rename)       |
+| `key`          | Manage OWS API keys (create, sign, list, revoke)                              |
+| `route`        | Manage runtime routes on a running daemon (list, add, rm)                     |
+| `tools`        | Inspect MCP tools on a running daemon (list, status, discover)                |
+| `models`       | List routable models                                                          |
+| `agents`       | List available ACP agents                                                     |
+| `agent-proxy`  | Run as ACP stdio proxy for a configured agent                                 |
+| `policy`       | Manage spend-limit policies for OWS wallet signing                            |
+| `auth`         | Manage provider authentication (login, refresh, status)                       |
 
 ### Global options
 
@@ -57,21 +63,22 @@ These flags are available on the top-level command and on each subcommand:
 - `--logs-dir <PATH>` — override `<home>/logs`
 - `--db <DATABASE_URL>` — override the database URL from environment variables and config
 
-### Local account and JWT helpers
+### Wallet and API key helpers
 
-BitRouter can generate and manage local Ed25519 account keys under `<home>/.keys`, then use the active account to mint JWTs for API access:
+BitRouter manages OWS wallets under `<home>/.keys` and uses the active wallet to mint JWTs for API access:
 
 ```bash
-# Generate a local account keypair and set it active
-bitrouter account --generate-key
+# Create a new wallet and set it active
+bitrouter wallet create --name default --words 12
 
-# Create an API token for that account and save it locally
-bitrouter keygen --exp 30d --models openai:gpt-4o --name default
+# Sign a JWT with the active wallet (mint an API token)
+bitrouter key sign --wallet default --exp 30d
 
-# Inspect or remove saved tokens
-bitrouter keys --list
-bitrouter keys --show default
-bitrouter keys --rm default
+# List stored API keys
+bitrouter key list
+
+# Revoke an API key by ID
+bitrouter key revoke --id <id>
 ```
 
 ## Configuration and `BITROUTER_HOME`
@@ -100,7 +107,7 @@ The scaffolded `.gitignore` ignores `logs/`, `run/`, and `.env`. The runtime aut
 
 ### Minimal configuration
 
-The easiest way to create a configuration is to run `bitrouter init`, which generates `bitrouter.yaml` and `.env` interactively. You can also write the config manually:
+The easiest way to create a configuration is to run `bitrouter reset`, which re-runs the interactive setup wizard and generates `bitrouter.yaml` and `.env`. You can also write the config manually:
 
 ```yaml
 server:
@@ -122,7 +129,7 @@ Provider definitions are merged on top of BitRouter's built-in provider registry
 
 ### Custom providers
 
-`bitrouter init` supports adding custom OpenAI-compatible or Anthropic-compatible providers. You can also define them manually in `bitrouter.yaml`:
+The setup wizard (`bitrouter reset`) supports adding custom OpenAI-compatible or Anthropic-compatible providers. You can also define them manually in `bitrouter.yaml`:
 
 ```yaml
 providers:

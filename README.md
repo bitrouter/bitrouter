@@ -52,7 +52,7 @@ On first launch, BitRouter runs an interactive setup wizard with two modes:
 
 After setup, the TUI and API server start at `http://localhost:8787`.
 
-You can re-run the wizard at any time with `bitrouter init`.
+You can re-run the wizard at any time with `bitrouter reset`.
 
 ### BYOK (bring your own keys)
 
@@ -124,7 +124,7 @@ Any agent runtime that can target a custom OpenAI or Anthropic base URL works wi
 
 - [x] Core routing engine and provider abstractions
 - [x] OpenAI, Anthropic, and Google adapters
-- [x] Interactive setup wizard (`bitrouter init`) with auto-detection
+- [x] Interactive setup wizard (auto-runs on first launch, re-run via `bitrouter reset`) with auto-detection
 - [x] Custom provider support (OpenAI-compatible / Anthropic-compatible)
 - [x] Cross-protocol routing (e.g. OpenAI format → Anthropic provider)
 - [x] MCP & Skills protocol support
