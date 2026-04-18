@@ -240,6 +240,20 @@ models:
         cache_write: 6.25
       output_tokens:
         text: 25.0
+  claude-opus-4-7:
+    max_input_tokens: 1000000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25.0
   claude-sonnet-4-0:
     max_input_tokens: 200000
     max_output_tokens: 64000
