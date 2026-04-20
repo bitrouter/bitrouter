@@ -413,11 +413,7 @@ fn error_rate(total: u64, errors: u64) -> f64 {
 }
 
 fn avg(total: u64, count: u64) -> Option<u64> {
-    if count == 0 {
-        None
-    } else {
-        Some(total / count)
-    }
+    total.checked_div(count)
 }
 
 fn system_time_to_unix_secs(t: SystemTime) -> u64 {

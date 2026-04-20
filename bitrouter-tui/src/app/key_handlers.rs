@@ -140,10 +140,8 @@ impl App {
                 }
                 self.submit_input();
             }
-            KeyCode::Tab => {
-                if self.state.autocomplete.is_some() {
-                    self.accept_autocomplete();
-                }
+            KeyCode::Tab if self.state.autocomplete.is_some() => {
+                self.accept_autocomplete();
             }
             KeyCode::Esc => {
                 if self.state.autocomplete.is_some() {
@@ -276,17 +274,15 @@ impl App {
     fn handle_tab_mode_key(&mut self, key: KeyEvent) {
         let tab_count = self.state.tabs.len();
         match key.code {
-            KeyCode::Char('h') | KeyCode::Left => {
-                if tab_count > 0 && self.state.active_tab > 0 {
-                    let idx = self.state.active_tab - 1;
-                    self.switch_tab(idx);
-                }
+            KeyCode::Char('h') | KeyCode::Left if tab_count > 0 && self.state.active_tab > 0 => {
+                let idx = self.state.active_tab - 1;
+                self.switch_tab(idx);
             }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if tab_count > 0 && self.state.active_tab + 1 < tab_count {
-                    let idx = self.state.active_tab + 1;
-                    self.switch_tab(idx);
-                }
+            KeyCode::Char('l') | KeyCode::Right
+                if tab_count > 0 && self.state.active_tab + 1 < tab_count =>
+            {
+                let idx = self.state.active_tab + 1;
+                self.switch_tab(idx);
             }
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as usize) - ('1' as usize);
