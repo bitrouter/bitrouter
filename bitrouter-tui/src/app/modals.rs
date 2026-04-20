@@ -19,10 +19,9 @@ impl App {
         match modal_kind {
             0 => self.handle_observability_key(key),
             1 => self.handle_command_palette_key(key),
-            2
-                if (key.code == KeyCode::Esc || key.code == KeyCode::Char('?')) => {
-                    self.state.modal = None;
-                }
+            2 if (key.code == KeyCode::Esc || key.code == KeyCode::Char('?')) => {
+                self.state.modal = None;
+            }
             _ => {}
         }
     }

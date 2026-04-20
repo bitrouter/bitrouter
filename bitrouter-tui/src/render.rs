@@ -281,7 +281,9 @@ fn strip_unordered_list(line: &str) -> Option<(&str, &str)> {
     let indent = &line[..indent_len];
     let rest = if let Some(r) = stripped.strip_prefix("- ") {
         r
-    } else { stripped.strip_prefix("* ")? };
+    } else {
+        stripped.strip_prefix("* ")?
+    };
     Some((indent, rest))
 }
 
