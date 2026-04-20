@@ -194,7 +194,7 @@ impl Guardrail {
 
         // Merge overlapping ranges, then apply in reverse offset order so
         // earlier replacements don't shift the byte positions of later ones.
-        redact_ranges.sort_by(|a, b| a.start.cmp(&b.start));
+        redact_ranges.sort_by_key(|a| a.start);
         let merged: Vec<std::ops::Range<usize>> =
             redact_ranges
                 .into_iter()
