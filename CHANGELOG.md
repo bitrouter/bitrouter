@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.4](https://github.com/bitrouter/bitrouter/compare/v0.24.3...v0.24.4)
+
+
+### 🐛 Bug Fixes
+
+- Apply Rust 1.95 clippy styles ([#356](https://github.com/bitrouter/bitrouter/pull/356)) - ([c7c58b4](https://github.com/bitrouter/bitrouter/commit/c7c58b41ec6a66b5f14159cfc59f81a62b546663))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#359](https://github.com/bitrouter/bitrouter/pull/359)) - ([a16105c](https://github.com/bitrouter/bitrouter/commit/a16105c130774e6763af65d32d10d41372afa4e0))
+- *(providers)* Update models from models.dev ([#355](https://github.com/bitrouter/bitrouter/pull/355)) - ([7ce9f57](https://github.com/bitrouter/bitrouter/commit/7ce9f574dfd2ef96c8f69b66e1cc1ee93c7eca93))
+- *(providers)* Update models from models.dev ([#347](https://github.com/bitrouter/bitrouter/pull/347)) - ([25f637c](https://github.com/bitrouter/bitrouter/commit/25f637cc4a951c6245a46a5d69699918802beddf))
+
+
 ## [0.24.3](https://github.com/bitrouter/bitrouter/compare/v0.24.2...v0.24.3)
 
 
