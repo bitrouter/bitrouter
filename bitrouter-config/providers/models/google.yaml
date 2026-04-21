@@ -85,7 +85,7 @@ models:
     pricing:
       input_tokens:
         no_cache: 0.3
-        cache_read: 0.075
+        cache_read: 0.03
       output_tokens:
         text: 2.5
   gemini-2.5-flash-image:
