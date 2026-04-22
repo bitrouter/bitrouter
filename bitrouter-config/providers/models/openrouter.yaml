@@ -1267,10 +1267,10 @@ models:
       - file
     pricing:
       input_tokens:
-        no_cache: 7.5E-7
-        cache_read: 7.5E-8
+        no_cache: 0.75
+        cache_read: 0.075
       output_tokens:
-        text: 0.0000045
+        text: 4.5
   openai/gpt-5.4-nano:
     max_input_tokens: 400000
     max_output_tokens: 128000
@@ -1280,10 +1280,10 @@ models:
       - file
     pricing:
       input_tokens:
-        no_cache: 2E-7
-        cache_read: 2E-8
+        no_cache: 0.2
+        cache_read: 0.02
       output_tokens:
-        text: 0.00000125
+        text: 1.25
   openai/gpt-5.4-pro:
     max_input_tokens: 922000
     max_output_tokens: 128000
