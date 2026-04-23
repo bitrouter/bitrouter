@@ -1623,8 +1623,11 @@ version = "0.25.0"
 dependencies = [
  "alloy",
  "async-trait",
+ "bitrouter-accounts",
  "bitrouter-config",
  "bitrouter-core",
+ "bitrouter-guardrails",
+ "bitrouter-observe",
  "bs58",
  "ed25519-dalek",
  "futures-core",

@@ -18,8 +18,25 @@ model resolution and execution to the routing contracts from `bitrouter-core`.
 
 ## Feature flags
 
-- `openai`, `anthropic`, `google` enable provider-compatible HTTP surfaces.
-- `mcp` enables the MCP routing surface.
+Each feature exists to pull a distinct dependency tree — pure module
+toggles are not features. The provider-compatible HTTP surfaces
+(OpenAI, Anthropic, Google, MCP) are always available without any
+feature.
 
-Default features keep the current API surface enabled:
-`openai`, `anthropic`, `google`, and `mcp`.
+Optional companion-crate facades:
+
+- `accounts` — re-export [`bitrouter-accounts`] (account/session/key
+  Warp filter builders and services). Pulls `sea-orm`.
+- `observe` — re-export [`bitrouter-observe`] (`ObserveStack`, spend
+  store, metrics). Pulls `sea-orm`.
+- `guardrails` — re-export [`bitrouter-guardrails`] (`Guardrail`,
+  `GuardedRouter`).
+
+Payment middleware:
+
+- `mpp-tempo` — Tempo-chain MPP server payment integration.
+- `mpp-solana` — Solana-chain MPP server payment integration.
+
+[`bitrouter-accounts`]: https://crates.io/crates/bitrouter-accounts
+[`bitrouter-observe`]: https://crates.io/crates/bitrouter-observe
+[`bitrouter-guardrails`]: https://crates.io/crates/bitrouter-guardrails
