@@ -165,7 +165,12 @@ mod tests {
         assert_eq!(idx.agents.len(), 2);
         assert_eq!(idx.agents[0].id, "claude-acp");
         assert!(idx.agents[0].distribution.npx.is_some());
-        assert!(idx.agents[1].distribution.binary.contains_key("darwin-aarch64"));
+        assert!(
+            idx.agents[1]
+                .distribution
+                .binary
+                .contains_key("darwin-aarch64")
+        );
         Ok(())
     }
 

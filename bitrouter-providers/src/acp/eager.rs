@@ -149,7 +149,10 @@ pub async fn uninstall_agent(
                 // metadata at call time is cleaner; here we rely on the
                 // npm global cache cleanup being idempotent and silent.
                 // Callers who care should delete the npm package directly.
-                tracing::debug!(agent_id, "npx-installed agent — leaving npm global cache intact");
+                tracing::debug!(
+                    agent_id,
+                    "npx-installed agent — leaving npm global cache intact"
+                );
             }
             InstallMethod::Uvx => {
                 tracing::debug!(agent_id, "uvx-installed agent — leaving uv tool dir intact");

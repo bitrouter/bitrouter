@@ -14,4 +14,6 @@ pub struct TuiConfig {
     pub agents_dir: PathBuf,
     /// Install-state ledger (`<home>/agents/state.json`).
     pub agent_state_file: PathBuf,
+    /// On-disk cache directory (`<home>/cache/`).
+    pub cache_dir: PathBuf,
 }

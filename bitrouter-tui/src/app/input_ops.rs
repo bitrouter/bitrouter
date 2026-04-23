@@ -79,6 +79,19 @@ impl App {
             return;
         }
 
+        // Slash commands take precedence over agent routing.  Unknown
+        // `/...` input falls through to the prompt path so users can
+        // still talk about literal slashes.
+        if raw_text.trim_start().starts_with('/') {
+            let cfg = self.bitrouter_config.clone();
+            if self.try_handle_slash(&raw_text, &cfg) {
+                self.state.input.clear();
+                self.state.input_target = InputTarget::Default;
+                self.close_autocomplete();
+                return;
+            }
+        }
+
         let agent_names: Vec<String> = self.state.agents.iter().map(|a| a.name.clone()).collect();
         let target = input::parse_mentions(&raw_text, &agent_names);
         let clean_text = input::strip_mentions(&raw_text);

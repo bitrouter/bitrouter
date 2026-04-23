@@ -667,9 +667,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 AgentsAction::Install { id } => {
                     cli::agents::run_install(&id, &runtime.config, &paths).await?
                 }
-                AgentsAction::Uninstall { id } => {
-                    cli::agents::run_uninstall(&id, &paths).await?
-                }
+                AgentsAction::Uninstall { id } => cli::agents::run_uninstall(&id, &paths).await?,
                 AgentsAction::Update { id } => {
                     cli::agents::run_update(id.as_deref(), &runtime.config, &paths).await?
                 }
@@ -685,9 +683,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             match action {
                 ProvidersAction::List => cli::providers::run_list(&runtime.config)?,
-                ProvidersAction::Use { mode } => {
-                    cli::providers::run_use(&mode, &runtime.config)?
-                }
+                ProvidersAction::Use { mode } => cli::providers::run_use(&mode, &runtime.config)?,
             }
             return Ok(());
         }
@@ -964,6 +960,7 @@ async fn launch_after_init(
                 daemon_pid: status.daemon_pid,
                 agents_dir: paths.agents_dir.clone(),
                 agent_state_file: paths.agent_state_file.clone(),
+                cache_dir: paths.cache_dir.clone(),
             };
             let mut bitrouter_config = runtime.config.clone();
             bitrouter_providers::acp::state::overlay_install_state_sync(

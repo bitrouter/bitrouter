@@ -122,8 +122,8 @@ impl App {
 
             // The forwarding task handles Done/Failed via InstallProgress,
             // so we only need to drive the install to completion here.
-            let _ = install_binary_agent(&agent_id_owned, &install_dir, &platforms, progress_tx)
-                .await;
+            let _ =
+                install_binary_agent(&agent_id_owned, &install_dir, &platforms, progress_tx).await;
         });
     }
 

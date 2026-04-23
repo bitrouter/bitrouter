@@ -132,7 +132,10 @@ pub async fn run_install(
     let reporter = tokio::spawn(async move {
         while let Some(p) = progress_rx.recv().await {
             match p {
-                InstallProgress::Downloading { bytes_received, total } => {
+                InstallProgress::Downloading {
+                    bytes_received,
+                    total,
+                } => {
                     if let Some(t) = total {
                         let pct = if t > 0 { (bytes_received * 100) / t } else { 0 };
                         println!("  [{id_copy}] downloading: {pct}%");

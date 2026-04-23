@@ -32,6 +32,9 @@ pub enum AppEvent {
     },
     /// Binary agent install failed.
     InstallFailed { agent_id: String, message: String },
+    /// A system message raised by a background task (e.g. slash command
+    /// output).  Rendered into the active tab's scrollback.
+    SystemMessage { text: String },
 }
 
 /// Multiplexes terminal events and agent events into a single channel.

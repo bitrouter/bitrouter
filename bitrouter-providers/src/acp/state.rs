@@ -72,10 +72,7 @@ pub async fn load_state(state_file: &Path) -> Result<Vec<InstallRecord>, String>
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(format!(
-            "failed to read {}: {e}",
-            state_file.display()
-        )),
+        Err(e) => Err(format!("failed to read {}: {e}", state_file.display())),
     }
 }
 
@@ -97,9 +94,13 @@ pub async fn save_state(state_file: &Path, records: &[InstallRecord]) -> Result<
         .await
         .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
 
-    tokio::fs::rename(&tmp, state_file)
-        .await
-        .map_err(|e| format!("failed to rename {} → {}: {e}", tmp.display(), state_file.display()))
+    tokio::fs::rename(&tmp, state_file).await.map_err(|e| {
+        format!(
+            "failed to rename {} → {}: {e}",
+            tmp.display(),
+            state_file.display()
+        )
+    })
 }
 
 /// Insert or replace the record with the matching `id`.
@@ -163,10 +164,7 @@ pub fn load_state_sync(state_file: &Path) -> Vec<InstallRecord> {
 /// This is the read path that pairs with [`upsert_record`]: the
 /// installer writes the resolved path; this function lets the TUI and
 /// CLI start cold and still find their installed agents.
-pub fn overlay_install_state_sync(
-    agents: &mut HashMap<String, AgentConfig>,
-    state_file: &Path,
-) {
+pub fn overlay_install_state_sync(agents: &mut HashMap<String, AgentConfig>, state_file: &Path) {
     for record in load_state_sync(state_file) {
         if let (InstallMethod::Binary, Some(path)) =
             (record.method, record.resolved_binary_path.as_ref())
@@ -219,7 +217,10 @@ mod tests {
 
         let records = load_state(&path).await?;
         assert_eq!(records.len(), 2);
-        let alpha = records.iter().find(|r| r.id == "alpha").ok_or("missing alpha")?;
+        let alpha = records
+            .iter()
+            .find(|r| r.id == "alpha")
+            .ok_or("missing alpha")?;
         assert_eq!(alpha.version, "2.0.0");
         Ok(())
     }
@@ -231,7 +232,7 @@ mod tests {
 
         upsert_record(&path, rec("alpha")).await?;
         remove_record(&path, "alpha").await?;
-        remove_record(&path, "alpha").await?;  // no-op
+        remove_record(&path, "alpha").await?; // no-op
 
         let records = load_state(&path).await?;
         assert!(records.is_empty());

@@ -13,9 +13,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use bitrouter_config::acp::{
-    DEFAULT_REGISTRY_URL, REGISTRY_URL_ENV, RegistryIndex,
-};
+use bitrouter_config::acp::{DEFAULT_REGISTRY_URL, REGISTRY_URL_ENV, RegistryIndex};
 use serde::{Deserialize, Serialize};
 
 use super::state::now_unix_seconds;
@@ -261,7 +259,9 @@ mod tests {
     async fn corrupt_cache_is_ignored() -> Result<(), String> {
         let dir = TempDir::new().map_err(|e| e.to_string())?;
         let path = dir.path().join("cache.json");
-        tokio::fs::write(&path, b"not json").await.map_err(|e| e.to_string())?;
+        tokio::fs::write(&path, b"not json")
+            .await
+            .map_err(|e| e.to_string())?;
         assert!(read_cache(&path).await.is_none());
         Ok(())
     }

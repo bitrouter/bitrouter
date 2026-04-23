@@ -23,7 +23,10 @@ pub fn run_list(config: &BitrouterConfig) -> Result<(), Box<dyn std::error::Erro
 
     for name in names {
         let provider = &config.providers[name];
-        let api_base = provider.api_base.as_deref().unwrap_or("(derives from base)");
+        let api_base = provider
+            .api_base
+            .as_deref()
+            .unwrap_or("(derives from base)");
         let key_status = if provider.api_key.is_some() {
             "\u{2713} key set"
         } else if provider.auth.is_some() {
