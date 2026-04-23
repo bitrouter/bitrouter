@@ -6,6 +6,7 @@ pub type Result<T> = std::result::Result<T, RuntimeError>;
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
+    #[cfg(feature = "cli")]
     #[error("daemon error: {0}")]
     Daemon(String),
     #[error(transparent)]

@@ -4,7 +4,7 @@
 //! (`tokens.json`) within the BitRouter home directory.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,7 @@ pub struct OAuthToken {
 
 /// Persistent OAuth token store backed by a JSON file.
 pub struct TokenStore {
+    #[cfg(any(feature = "cli", test))]
     path: PathBuf,
     tokens: HashMap<String, OAuthToken>,
 }
@@ -33,7 +34,11 @@ impl TokenStore {
     pub fn load(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let tokens = Self::read_file(&path).unwrap_or_default();
-        Self { path, tokens }
+        Self {
+            #[cfg(any(feature = "cli", test))]
+            path,
+            tokens,
+        }
     }
 
     /// Look up a token by provider name.
@@ -54,6 +59,7 @@ impl TokenStore {
     }
 
     /// Store a token for the given provider and persist to disk.
+    #[cfg(any(feature = "cli", test))]
     pub fn set(
         &mut self,
         provider: &str,
@@ -63,11 +69,12 @@ impl TokenStore {
         self.write_file()
     }
 
-    fn read_file(path: &Path) -> Option<HashMap<String, OAuthToken>> {
+    fn read_file(path: &PathBuf) -> Option<HashMap<String, OAuthToken>> {
         let data = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&data).ok()
     }
 
+    #[cfg(any(feature = "cli", test))]
     fn write_file(&self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;

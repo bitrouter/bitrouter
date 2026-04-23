@@ -6,7 +6,9 @@ compile_error!(
 );
 
 mod auth;
+#[cfg(feature = "cli")]
 mod cli;
+#[cfg(feature = "cli")]
 mod init;
 mod runtime;
 
@@ -60,53 +62,65 @@ enum Command {
     /// Start the API server (foreground)
     Serve,
     /// Start as background daemon
+    #[cfg(feature = "cli")]
     Start,
     /// Stop the daemon
+    #[cfg(feature = "cli")]
     Stop,
     /// Show runtime status
+    #[cfg(feature = "cli")]
     Status,
     /// Restart the daemon
+    #[cfg(feature = "cli")]
     Restart,
     /// Hot-reload the configuration file
+    #[cfg(feature = "cli")]
     Reload,
 
     /// Manage runtime routes (requires a running daemon)
+    #[cfg(feature = "cli")]
     Route {
         #[command(subcommand)]
         action: RouteAction,
     },
 
     /// Manage OWS wallets
+    #[cfg(feature = "cli")]
     Wallet {
         #[command(subcommand)]
         action: WalletAction,
     },
 
     /// Manage OWS API keys for agent access
+    #[cfg(feature = "cli")]
     Key {
         #[command(subcommand)]
         action: KeyAction,
     },
 
     /// Inspect MCP tools on a running daemon
+    #[cfg(feature = "cli")]
     Tools {
         #[command(subcommand)]
         action: ToolsAction,
     },
 
     /// List routable models
+    #[cfg(feature = "cli")]
     Models {
         #[command(subcommand)]
         action: ModelsAction,
     },
 
     /// List available ACP agents
+    #[cfg(feature = "cli")]
     Agents {
         #[command(subcommand)]
         action: AgentsAction,
     },
 
     /// Run as ACP stdio proxy for a configured agent
+    #[cfg(feature = "cli")]
     #[command(name = "agent-proxy")]
     AgentProxy {
         /// Agent name to proxy (must be configured and enabled)
@@ -118,21 +132,25 @@ enum Command {
     },
 
     /// Manage spend-limit policies for OWS wallet signing
+    #[cfg(feature = "cli")]
     Policy {
         #[command(subcommand)]
         action: PolicyAction,
     },
 
     /// Manage provider authentication
+    #[cfg(feature = "cli")]
     Auth {
         #[command(subcommand)]
         action: AuthAction,
     },
 
     /// Reset configuration and re-run setup
+    #[cfg(feature = "cli")]
     Reset,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Subcommand)]
 enum RouteAction {
     /// List all routes (config-defined + dynamic)
@@ -395,11 +413,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
+    #[cfg(feature = "cli")]
     let update_check = tokio::spawn(cli::update_check::check_for_update());
 
     let result = run_cli(cli).await;
 
     // Print update notice (if available) after the command finishes.
+    #[cfg(feature = "cli")]
     if let Ok(Ok(Some(msg))) =
         tokio::time::timeout(std::time::Duration::from_secs(2), update_check).await
     {
@@ -421,29 +441,39 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let paths = overrides.apply(paths);
 
     // Handle reset: confirm, wipe config, re-run onboarding, auto-launch TUI.
+    #[cfg(feature = "cli")]
     if matches!(cli.command, Some(Command::Reset)) {
         return run_reset(&paths, cli.no_tui).await;
     }
 
-    // Bare `bitrouter` (no subcommand): onboard if unconfigured, else show help/status.
+    // Bare `bitrouter` (no subcommand): with `cli`, run onboarding/help.
+    // Without `cli`, the only valid invocation is `bitrouter serve`.
     if cli.command.is_none() {
-        let config_exists = paths.config_file.exists()
-            && std::fs::read_to_string(&paths.config_file)
-                .map(|s| !s.trim_start().starts_with('#'))
-                .unwrap_or(false);
+        #[cfg(feature = "cli")]
+        {
+            let config_exists = paths.config_file.exists()
+                && std::fs::read_to_string(&paths.config_file)
+                    .map(|s| !s.trim_start().starts_with('#'))
+                    .unwrap_or(false);
 
-        if !config_exists {
-            let outcome = init::run_init(&paths)?;
-            if outcome == init::InitOutcome::Configured {
-                return launch_after_init(&paths, cli.no_tui).await;
+            if !config_exists {
+                let outcome = init::run_init(&paths)?;
+                if outcome == init::InitOutcome::Configured {
+                    return launch_after_init(&paths, cli.no_tui).await;
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
 
-        return run_help_status(&paths);
+            return run_help_status(&paths);
+        }
+        #[cfg(not(feature = "cli"))]
+        {
+            return Err("no subcommand given; use `bitrouter serve` to start the server".into());
+        }
     }
 
     // Handle wallet and key management — these only need the OWS vault, not a runtime.
+    #[cfg(feature = "cli")]
     match cli.command {
         Some(Command::Wallet { action }) => {
             match action {
@@ -634,7 +664,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // When an OWS wallet is configured and OWS_PASSPHRASE is not already set,
     // prompt interactively (if a TTY is attached) or warn the user.
-    if matches!(cli.command, Some(Command::Serve | Command::Start))
+    if is_server_command(&cli.command)
         && let Err(e) = ensure_ows_passphrase(&runtime.config)
     {
         eprintln!("wallet passphrase error: {e}");
@@ -687,8 +717,11 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             .with_token_store(paths.token_store_file.clone());
             runtime.serve_with_reload(db, model_router).await?
         }
+        #[cfg(feature = "cli")]
         Some(Command::Start) => runtime.start().await?,
+        #[cfg(feature = "cli")]
         Some(Command::Stop) => runtime.stop().await?,
+        #[cfg(feature = "cli")]
         Some(Command::Status) => {
             let status = runtime.status();
             match status.daemon_pid {
@@ -704,16 +737,30 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("models:    {}", status.models.join(", "));
             }
         }
+        #[cfg(feature = "cli")]
         Some(Command::Restart) => runtime.restart().await?,
+        #[cfg(feature = "cli")]
         Some(Command::Reload) => runtime.reload()?,
         _ => {
-            // All other commands (None, Reset, Route, Wallet, Key, Tools, Models, Agents)
-            // are handled above and return early.
+            // All other commands are handled above and return early.
             unreachable!()
         }
     }
 
     Ok(())
+}
+
+/// Returns true for commands that start (or restart) the server and therefore
+/// need the OWS wallet passphrase resolved up front.
+fn is_server_command(cmd: &Option<Command>) -> bool {
+    #[cfg(feature = "cli")]
+    {
+        matches!(cmd, Some(Command::Serve | Command::Start))
+    }
+    #[cfg(not(feature = "cli"))]
+    {
+        matches!(cmd, Some(Command::Serve))
+    }
 }
 
 /// Load config from disk, warning on stderr if the file exists but fails to
@@ -758,6 +805,7 @@ fn print_first_run_guidance(runtime: &DefaultRuntime) {
 }
 
 /// Show help/status when config exists and no subcommand is given.
+#[cfg(feature = "cli")]
 fn run_help_status(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>> {
     let runtime: DefaultRuntime = load_or_warn_scaffold(paths);
     let status = runtime.status();
@@ -798,6 +846,7 @@ fn run_help_status(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error
 }
 
 /// Reset configuration and re-run the setup wizard.
+#[cfg(feature = "cli")]
 async fn run_reset(paths: &RuntimePaths, no_tui: bool) -> Result<(), Box<dyn std::error::Error>> {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err("`bitrouter reset` requires an interactive terminal.".into());
@@ -835,6 +884,7 @@ async fn run_reset(paths: &RuntimePaths, no_tui: bool) -> Result<(), Box<dyn std
 }
 
 /// After successful onboarding, launch the TUI (if enabled and not skipped).
+#[cfg(feature = "cli")]
 async fn launch_after_init(
     paths: &RuntimePaths,
     no_tui: bool,
@@ -895,15 +945,27 @@ fn ensure_ows_passphrase(
         .into());
     }
 
-    let passphrase = dialoguer::Password::with_theme(&dialoguer::theme::ColorfulTheme::default())
-        .with_prompt(format!("OWS passphrase for wallet '{}'", wallet.name))
-        .allow_empty_password(true)
-        .interact()?;
+    #[cfg(feature = "cli")]
+    {
+        let passphrase =
+            dialoguer::Password::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                .with_prompt(format!("OWS passphrase for wallet '{}'", wallet.name))
+                .allow_empty_password(true)
+                .interact()?;
 
-    // SAFETY: single-threaded at this point (before tokio runtime enters serve).
-    unsafe { std::env::set_var("OWS_PASSPHRASE", passphrase) };
+        // SAFETY: single-threaded at this point (before tokio runtime enters serve).
+        unsafe { std::env::set_var("OWS_PASSPHRASE", passphrase) };
 
-    Ok(())
+        Ok(())
+    }
+    #[cfg(not(feature = "cli"))]
+    {
+        Err(format!(
+            "wallet '{}' configured but OWS_PASSPHRASE is not set; this binary was built without `cli`, so interactive prompting is unavailable",
+            wallet.name,
+        )
+        .into())
+    }
 }
 
 fn has_removed_headless_flag<I, S>(args: I) -> bool

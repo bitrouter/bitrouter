@@ -48,6 +48,7 @@ pub fn anthropic_api_base(provider_api_base: Option<&str>) -> String {
 ///
 /// Returns `(device_auth_url, token_url, api_base)` for the given domain.
 /// For `github.com` (the default), the standard public endpoints are returned.
+#[cfg(any(feature = "cli", test))]
 pub fn enterprise_urls(domain: &str) -> (String, String, String) {
     if domain == "github.com" || domain.is_empty() {
         return (
