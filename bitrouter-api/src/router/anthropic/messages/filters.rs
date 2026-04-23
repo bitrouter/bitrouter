@@ -140,7 +140,7 @@ where
 }
 
 /// Creates a warp filter for `/v1/messages` with MPP payment gating.
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 pub fn messages_filter_with_mpp<T, R, A>(
     table: Arc<T>,
     router: Arc<R>,
@@ -165,7 +165,7 @@ where
         .and_then(handle_messages_with_mpp)
 }
 
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_messages_with_mpp<T, R>(
     caller: CallerContext,
     mpp_state: Arc<crate::mpp::MppState>,

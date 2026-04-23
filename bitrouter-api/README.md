@@ -34,8 +34,8 @@ Optional companion-crate facades:
 
 Payment middleware:
 
-- `mpp-tempo` — Tempo-chain MPP server payment integration.
-- `mpp-solana` — Solana-chain MPP server payment integration.
+- `payments-tempo` — Tempo-chain MPP server payment integration.
+- `payments-solana` — Solana-chain MPP server payment integration.
 
 [`bitrouter-accounts`]: https://crates.io/crates/bitrouter-accounts
 [`bitrouter-observe`]: https://crates.io/crates/bitrouter-observe

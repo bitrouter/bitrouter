@@ -10,8 +10,8 @@ readme = "README.md"
 
 [features]
 default = []
-mpp-tempo = []
-mpp-solana = []
+payments-tempo = []
+payments-solana = []
 
 [dependencies]
 bitrouter-core.workspace = true

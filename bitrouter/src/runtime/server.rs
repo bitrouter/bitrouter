@@ -22,22 +22,22 @@ use crate::runtime::error::Result;
 
 /// Conditional bound: when MPP features are enabled, the routing table must
 /// also implement `PricingLookup` so that handlers can compute per-request costs.
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 pub(crate) trait ServerTableBound:
     AdminRoutingTable + ModelRegistry + bitrouter_api::mpp::PricingLookup
 {
 }
 
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 impl<T: AdminRoutingTable + ModelRegistry + bitrouter_api::mpp::PricingLookup> ServerTableBound
     for T
 {
 }
 
-#[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+#[cfg(not(any(feature = "payments-tempo", feature = "payments-solana")))]
 pub(crate) trait ServerTableBound: AdminRoutingTable + ModelRegistry {}
 
-#[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+#[cfg(not(any(feature = "payments-tempo", feature = "payments-solana")))]
 impl<T: AdminRoutingTable + ModelRegistry> ServerTableBound for T {}
 
 pub struct ServerPlan<T, R> {
@@ -155,7 +155,7 @@ where
     /// 1. OWS wallet (if `wallet` config present)
     /// 2. Hex private key from `tempo.close_signer`
     /// 3. None (close signing disabled)
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(feature = "payments-tempo")]
     fn resolve_close_signer(
         tempo: &bitrouter_config::TempoMppConfig,
         config: &BitrouterConfig,
@@ -355,7 +355,7 @@ where
         // Model API routes with observation.
         // When MPP is enabled, payment-gated filters replace the standard
         // auth-gated filters. We use .boxed() to unify the filter types.
-        #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+        #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
         let mpp_state: Option<Arc<bitrouter_api::mpp::MppState>> = {
             match self.config.mpp.as_ref().filter(|c| c.enabled) {
                 Some(mpp_config) => {
@@ -363,7 +363,7 @@ where
                     let secret_key = mpp_config.secret_key.as_deref();
                     let mut state = bitrouter_api::mpp::MppState::new(realm);
 
-                    #[cfg(feature = "mpp-tempo")]
+                    #[cfg(feature = "payments-tempo")]
                     if let Some(tempo) = mpp_config.networks.tempo.as_ref() {
                         let close_signer: Option<Arc<dyn mpp::Signer + Send + Sync>> =
                             match Self::resolve_close_signer(tempo, &self.config) {
@@ -385,7 +385,7 @@ where
                         tracing::info!("MPP Tempo backend enabled");
                     }
 
-                    #[cfg(feature = "mpp-solana")]
+                    #[cfg(feature = "payments-solana")]
                     if let Some(solana) = mpp_config.networks.solana.as_ref() {
                         state.add_solana(solana, secret_key).map_err(|e| {
                             bitrouter_config::ConfigError::ConfigParse(format!(
@@ -406,7 +406,7 @@ where
             }
         };
 
-        #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+        #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
         let (chat, messages, responses, generate_content) = if let Some(ref mpp) = mpp_state {
             (
                 openai::chat::filters::chat_completions_filter_with_mpp(
@@ -483,28 +483,28 @@ where
             )
         };
 
-        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+        #[cfg(not(any(feature = "payments-tempo", feature = "payments-solana")))]
         let chat = openai::chat::filters::chat_completions_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
-        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+        #[cfg(not(any(feature = "payments-tempo", feature = "payments-solana")))]
         let messages = anthropic::messages::filters::messages_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             anthropic_account_filter,
         );
-        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+        #[cfg(not(any(feature = "payments-tempo", feature = "payments-solana")))]
         let responses = openai::responses::filters::responses_filter_with_observe(
             self.table.clone(),
             guarded_router.clone(),
             observer.clone(),
             account_filter.clone(),
         );
-        #[cfg(not(any(feature = "mpp-tempo", feature = "mpp-solana")))]
+        #[cfg(not(any(feature = "payments-tempo", feature = "payments-solana")))]
         let generate_content =
             google::generate_content::filters::generate_content_filter_with_observe(
                 self.table.clone(),
@@ -898,7 +898,7 @@ async fn handle_auth_rejection(
         )) as Box<dyn warp::Reply>);
     }
 
-    #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+    #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
     if let Some(challenge) = rejection.find::<bitrouter_api::mpp::MppChallenge>() {
         match warp::http::Response::builder()
             .status(warp::http::StatusCode::PAYMENT_REQUIRED)
@@ -918,7 +918,7 @@ async fn handle_auth_rejection(
         }
     }
 
-    #[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+    #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
     if let Some(err) = rejection.find::<bitrouter_api::mpp::MppVerificationFailed>() {
         let json = warp::reply::json(&serde_json::json!({
             "error": {

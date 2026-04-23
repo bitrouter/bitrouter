@@ -1,6 +1,6 @@
 pub mod router;
 
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 pub mod mpp;
 
 #[cfg(feature = "accounts")]

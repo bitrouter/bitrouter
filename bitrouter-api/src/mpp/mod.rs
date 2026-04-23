@@ -5,13 +5,13 @@ mod payment_gate;
 mod pricing;
 mod state;
 
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 pub mod solana_channel_store;
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 pub mod solana_session_method;
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 pub mod solana_types;
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 pub mod solana_voucher;
 
 pub use close_guard::SessionCloseGuard;

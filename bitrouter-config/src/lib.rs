@@ -8,7 +8,7 @@ pub mod routing;
 pub mod writer;
 
 pub use bitrouter_core::routers::routing_table::ApiProtocol;
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 pub use config::SolanaMppConfig;
 pub use config::{
     AgentA2aConfig, AgentConfig, AgentProtocol, AgentSessionConfig, AuthConfig, BinaryArchive,

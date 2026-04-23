@@ -818,7 +818,7 @@ struct McpObserveContext {
 /// short-circuit and return the management response with a payment receipt.
 ///
 /// `GET /mcp/sse` is served without payment verification (notification-only).
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 pub fn mcp_server_filter_with_payment_gate<T, A>(
     server: Option<Arc<T>>,
     tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
@@ -840,7 +840,7 @@ where
     .or(mcp_sse_filter(server))
 }
 
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 fn mcp_jsonrpc_filter_with_payment_gate<T, A>(
     server: Option<Arc<T>>,
     tool_call_handler: Option<Arc<dyn ToolCallHandler>>,
@@ -865,7 +865,7 @@ where
         .and_then(handle_mcp_jsonrpc_with_gate::<T>)
 }
 
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_mcp_jsonrpc_with_gate<T: McpServer>(
     caller: CallerContext,
     payment_gate: Arc<dyn crate::mpp::PaymentGate>,

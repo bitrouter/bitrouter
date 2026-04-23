@@ -13,7 +13,7 @@ default = []
 accounts = ["dep:bitrouter-accounts"]
 observe = ["dep:bitrouter-observe"]
 guardrails = ["dep:bitrouter-guardrails"]
-mpp-tempo = [
+payments-tempo = [
     "dep:mpp",
     "mpp/tempo",
     "mpp/server",
@@ -23,11 +23,11 @@ mpp-tempo = [
     "dep:tempo-alloy",
     "dep:tempo-contracts",
 ]
-mpp-solana = [
+payments-solana = [
     "dep:mpp",
     "mpp/server",
     "dep:bitrouter-config",
-    "bitrouter-config/mpp-solana",
+    "bitrouter-config/payments-solana",
     "dep:ed25519-dalek",
     "dep:bs58",
     "dep:time",

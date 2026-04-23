@@ -144,7 +144,7 @@ where
     handle_chat_completion(request, table, hooked).await
 }
 
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_chat_completion_with_mpp<T, R>(
     caller: CallerContext,
     mpp_state: Arc<crate::mpp::MppState>,
@@ -171,7 +171,7 @@ where
     .await
 }
 
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_chat_completion_with_gate<T, R>(
     caller: CallerContext,
     payment_gate: Arc<dyn crate::mpp::PaymentGate>,
@@ -417,7 +417,7 @@ where
 /// Requires JWT authentication. The JWT `chain` claim selects the payment
 /// backend. Requests must also carry a `Payment` credential in the
 /// `Authorization` header.
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 pub fn chat_completions_filter_with_mpp<T, R, A>(
     table: Arc<T>,
     router: Arc<R>,
@@ -449,7 +449,7 @@ where
 /// [`crate::mpp::MppState`] directly. This allows downstream crates to
 /// provide custom payment logic (e.g. charge-based balance management)
 /// while reusing the full routing, streaming, and observation pipeline.
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 pub fn chat_completions_filter_with_payment_gate<T, R, A>(
     table: Arc<T>,
     router: Arc<R>,

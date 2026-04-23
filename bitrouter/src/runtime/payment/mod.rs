@@ -9,7 +9,7 @@
 //! - **Tempo charge** — signs a one-time TIP-20 transfer transaction
 //! - **Solana charge** — builds and broadcasts an SPL token transfer (feature-gated)
 
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 pub mod solana_charge;
 
 use std::path::Path;
@@ -25,7 +25,7 @@ use crate::runtime::ows_signer::OwsSigner;
 const DEFAULT_TEMPO_RPC_URL: &str = "https://rpc.moderato.tempo.xyz";
 
 /// Default Solana RPC URL (mainnet-beta).
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 const DEFAULT_SOLANA_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 
 /// reqwest-middleware 0.5 adapter that wraps an `mpp::client::MultiProvider`.
@@ -168,7 +168,7 @@ pub fn build_payment_middleware(
     multi.add(tempo_session);
 
     // Solana charge provider (behind feature flag).
-    #[cfg(feature = "mpp-solana")]
+    #[cfg(feature = "payments-solana")]
     {
         let solana_rpc = payment_config
             .solana_rpc_url
