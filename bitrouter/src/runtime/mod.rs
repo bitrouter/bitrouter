@@ -7,10 +7,9 @@ pub mod daemon;
 pub mod error;
 pub mod mcp_client;
 pub mod migration;
-#[cfg(feature = "payments-tempo")]
+#[cfg(feature = "tempo")]
 pub mod ows_signer;
 pub mod paths;
-#[cfg(feature = "payments-tempo")]
 pub mod payment;
 pub mod router;
 pub mod server;
