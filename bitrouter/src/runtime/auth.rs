@@ -15,8 +15,8 @@
 //! | Anthropic  | `x-api-key: <token>` or `Authorization: Bearer` |
 //! | Management | `Authorization: Bearer <token>`                 |
 //!
-//! When no database is configured, auth is disabled and all requests are
-//! allowed through (open proxy mode).
+//! Authentication is always enforced — the bitrouter binary requires a
+//! database connection at startup.
 
 use std::sync::Arc;
 
@@ -34,7 +34,7 @@ use bitrouter_core::auth::token as jwt_token;
 #[derive(Clone)]
 pub struct JwtAuthContext {
     /// Database connection for account lookups (auto-creation).
-    db: Option<DatabaseConnection>,
+    db: DatabaseConnection,
     /// The operator's CAIP-10 identity resolved from wallet config at startup.
     /// When set, JWTs must have `iss` matching this identity.
     operator_caip10: Option<String>,
@@ -44,7 +44,7 @@ pub struct JwtAuthContext {
 }
 
 impl JwtAuthContext {
-    pub fn new(db: Option<DatabaseConnection>, operator_caip10: Option<String>) -> Self {
+    pub fn new(db: DatabaseConnection, operator_caip10: Option<String>) -> Self {
         Self {
             db,
             operator_caip10,
@@ -56,11 +56,6 @@ impl JwtAuthContext {
     pub fn with_revocation_set(mut self, set: Arc<dyn KeyRevocationSet>) -> Self {
         self.revocation_set = Some(set);
         self
-    }
-
-    /// Returns `true` when no database is configured (open proxy mode).
-    pub fn is_open(&self) -> bool {
-        self.db.is_none()
     }
 }
 
@@ -169,13 +164,7 @@ async fn resolve_jwt_identity(
     let chain = Caip10::parse(&claims.iss).ok().map(|c| c.chain.caip2());
 
     // 5. Resolve account from DB using CAIP-10 iss.
-    let Some(ref db) = ctx.db else {
-        return Err(warp::reject::custom(Unauthorized(
-            "authentication requires a database",
-        )));
-    };
-
-    let svc = AccountService::new(db);
+    let svc = AccountService::new(&ctx.db);
     let account = svc
         .find_or_create_by_pubkey(&claims.iss)
         .await
@@ -210,14 +199,9 @@ async fn resolve_jwt_identity(
 // ── composite auth filters ────────────────────────────────────
 
 /// Build an auth filter for OpenAI-protocol routes (`Authorization: Bearer`).
-///
-/// When auth is disabled (no DB), returns a passthrough identity.
 pub fn openai_auth(
     ctx: Arc<JwtAuthContext>,
 ) -> impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone {
-    if ctx.is_open() {
-        return open_identity().boxed();
-    }
     let ctx = ctx.clone();
     bearer_credential()
         .and(warp::any().map(move || ctx.clone()))
@@ -231,14 +215,10 @@ pub fn openai_auth(
 ///
 /// Accepts credentials from either `x-api-key` (standard Anthropic) or
 /// `Authorization: Bearer` (used by clients like Claude Code that set
-/// `ANTHROPIC_AUTH_TOKEN`). When auth is disabled (no DB), returns a
-/// passthrough identity.
+/// `ANTHROPIC_AUTH_TOKEN`).
 pub fn anthropic_auth(
     ctx: Arc<JwtAuthContext>,
 ) -> impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone {
-    if ctx.is_open() {
-        return open_identity().boxed();
-    }
     let ctx = ctx.clone();
     any_credential()
         .and(warp::any().map(move || ctx.clone()))
@@ -249,14 +229,9 @@ pub fn anthropic_auth(
 }
 
 /// Build an auth filter for management routes. Accepts both Bearer and x-api-key.
-///
-/// When auth is disabled (no DB), returns a passthrough identity.
 pub fn management_auth(
     ctx: Arc<JwtAuthContext>,
 ) -> impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone {
-    if ctx.is_open() {
-        return open_identity().boxed();
-    }
     let ctx = ctx.clone();
     any_credential()
         .and(warp::any().map(move || ctx.clone()))
@@ -264,27 +239,6 @@ pub fn management_auth(
             resolve_identity(&credential, &ctx).await
         })
         .boxed()
-}
-
-/// Passthrough filter when auth is disabled — produces an anonymous admin identity.
-///
-/// Uses a deterministic all-zero UUID so open-mode spend logs are consistently
-/// attributable rather than scattered across random IDs.
-fn open_identity() -> impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone {
-    warp::any().and_then(|| async {
-        Ok::<_, warp::Rejection>(Identity {
-            account_id: AccountId(uuid::Uuid::nil()),
-            scope: Scope::Admin,
-            key_id: None,
-            chain: None,
-            models: None,
-            budget: None,
-            budget_scope: None,
-            issued_at: None,
-            key: None,
-            policy_id: None,
-        })
-    })
 }
 
 // ── rejection types ───────────────────────────────────────────

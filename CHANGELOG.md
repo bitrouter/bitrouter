@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ Breaking Changes
 
+- DB-backed accounts, sessions, JWT auth, and persistent spend tracking are now **baked into the `bitrouter` binary unconditionally**. The previous "open proxy mode" (no database = no auth) has been removed. The `bitrouter` binary now requires a reachable database at startup; failures to connect or migrate are fatal. The `sqlite` / `postgres` / `mysql` Cargo features remain only as the storage-backend selector (default: `sqlite`). The default feature set no longer includes `postgres` — enable it explicitly if you need it. `JwtAuthContext::is_open` and the open-proxy passthrough have been removed.
 - Renamed Cargo features `mpp-tempo` / `mpp-solana` to `payments-tempo` / `payments-solana` on the `bitrouter`, `bitrouter-api`, and `bitrouter-config` crates. Downstream users selecting these features in `Cargo.toml` must update the names. The implementation module remains `mpp` since it still wraps the MPP protocol.
 
 ## [0.25.0](https://github.com/bitrouter/bitrouter/compare/v0.24.4...v0.25.0)

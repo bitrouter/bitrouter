@@ -6,6 +6,7 @@ mod init;
 mod runtime;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::runtime::{AppRuntime, PathOverrides, RuntimePaths, resolve_home};
 use clap::{Parser, Subcommand};
@@ -624,31 +625,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // All remaining commands need tracing and a loaded runtime.
     init_tracing();
 
-    let mut runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
-
-    // Connect to database for commands that start the server.
-    if matches!(cli.command, Some(Command::Serve)) {
-        let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
-        let db_url = crate::runtime::resolve_database_url(
-            cli.database_url.as_deref(),
-            &runtime.config,
-            &paths.home_dir,
-            env_file,
-        );
-        let mut db_opts = sea_orm::ConnectOptions::new(&db_url);
-        db_opts.sqlx_logging_level(tracing::log::LevelFilter::Debug);
-        match sea_orm::Database::connect(db_opts).await {
-            Ok(db) => {
-                if let Err(e) = crate::runtime::migrate(&db).await {
-                    tracing::warn!("database migration failed: {e}");
-                }
-                runtime.db = Some(std::sync::Arc::new(db));
-            }
-            Err(e) => {
-                tracing::warn!("database connection failed ({db_url}): {e}");
-            }
-        }
-    }
+    let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
 
     // When an OWS wallet is configured and OWS_PASSPHRASE is not already set,
     // prompt interactively (if a TTY is attached) or warn the user.
@@ -661,6 +638,31 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Some(Command::Serve) => {
+            // Connect to database. Accounts, sessions, JWT auth, and persistent
+            // spend tracking are baked in unconditionally — startup fails fast
+            // if the database is unreachable or migrations cannot apply.
+            let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
+            let db_url = crate::runtime::resolve_database_url(
+                cli.database_url.as_deref(),
+                &runtime.config,
+                &paths.home_dir,
+                env_file,
+            );
+            let mut db_opts = sea_orm::ConnectOptions::new(&db_url);
+            db_opts.sqlx_logging_level(tracing::log::LevelFilter::Debug);
+            let db = sea_orm::Database::connect(db_opts).await.map_err(|e| {
+                crate::runtime::error::RuntimeError::Other(format!(
+                    "database connection failed: {e}. Check `database.url` in {} or BITROUTER_DATABASE_URL.",
+                    paths.config_file.display()
+                ))
+            })?;
+            crate::runtime::migrate(&db).await.map_err(|e| {
+                crate::runtime::error::RuntimeError::Other(format!(
+                    "database migration failed: {e}"
+                ))
+            })?;
+            let db = Arc::new(db);
+
             print_first_run_guidance(&runtime);
             let base_client = reqwest::Client::new();
             let client_builder = reqwest_middleware::ClientBuilder::new(base_client);
@@ -679,7 +681,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 runtime.config.providers.clone(),
             )
             .with_token_store(paths.token_store_file.clone());
-            runtime.serve_with_reload(model_router).await?
+            runtime.serve_with_reload(db, model_router).await?
         }
         Some(Command::Start) => runtime.start().await?,
         Some(Command::Stop) => runtime.stop().await?,

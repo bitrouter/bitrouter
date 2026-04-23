@@ -12,4 +12,6 @@ pub enum RuntimeError {
     Config(#[from] bitrouter_config::ConfigError),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
+    #[error("{0}")]
+    Other(String),
 }
