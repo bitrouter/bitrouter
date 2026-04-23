@@ -52,7 +52,7 @@ On first launch, BitRouter runs an interactive setup wizard with two modes:
 
 After setup, the TUI and API server start at `http://localhost:8787`.
 
-You can re-run the wizard at any time with `bitrouter init`.
+You can re-run the wizard at any time with `bitrouter reset`.
 
 ### BYOK (bring your own keys)
 
