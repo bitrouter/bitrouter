@@ -47,7 +47,7 @@ The rule keeps the workspace small by default and pushes new integrations into c
 - `bitrouter-tui` — pulls `ratatui`, `crossterm`, and the ACP stack; clearly its own crate.
 - `bitrouter-config` — owns YAML loading and the built-in provider registry; not a heavy integration but a natural seam between transport-neutral types and runtime composition.
 
-A feature on `bitrouter-api` that would satisfy this rule today: anything pulling a new optional dep on a companion crate (`accounts`, `observe`, `guardrails`, `payments-*`).
+A feature on `bitrouter-api` that would satisfy this rule today: anything pulling a new optional dep on a companion crate (e.g. `bitrouter-accounts`, `bitrouter-observe`, `bitrouter-guardrails`).
 
 ### Feature rule
 
@@ -59,7 +59,7 @@ The rule applies equally to the `bitrouter` binary and every library crate. Rati
 - A feature must therefore correspond to either an `optional` dependency, a sub-tree selected through a transitive crate's features, or a meaningfully different set of system-level deps.
 - Sub-flag choices that swap between mutually exclusive sub-trees (e.g. `sqlx-sqlite` vs `sqlx-postgres`, or chain-specific MPP signing stacks) satisfy the rule and remain valid features even when always-on at the top level.
 
-In `bitrouter` (the binary), features describe **bundles of capability** the user opts into (`cli`, `tui`, …) rather than backend toggles. Capabilities considered core to the product (DB-backed accounts and 402/MPP payments) are baked in unconditionally because they are not optional from a product standpoint.
+In `bitrouter` (the binary), features describe **bundles of capability** the user opts into (for example `tui`) rather than backend toggles. Capabilities considered core to the product should not be feature-gated at the binary level: they are part of every build regardless of feature selection. Backend choices that pick between mutually exclusive sub-trees (e.g. database driver, payment chain) remain features, but are always-on as defaults.
 
 ## Request Flow
 
