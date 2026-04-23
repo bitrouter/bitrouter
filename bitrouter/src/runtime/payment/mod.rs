@@ -9,9 +9,10 @@
 //! - **Tempo charge** — signs a one-time TIP-20 transfer transaction
 //! - **Solana charge** — builds and broadcasts an SPL token transfer (feature-gated)
 
-#[cfg(feature = "payments-solana")]
+#[cfg(feature = "solana")]
 pub mod solana_charge;
 
+#[cfg(feature = "tempo")]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -19,13 +20,15 @@ use bitrouter_config::config::BitrouterConfig;
 use reqwest::{Request, Response, StatusCode, header::WWW_AUTHENTICATE};
 use reqwest_middleware::{Middleware, Next};
 
+#[cfg(feature = "tempo")]
 use crate::runtime::ows_signer::OwsSigner;
 
 /// Default Tempo RPC URL (Moderato testnet).
+#[cfg(feature = "tempo")]
 const DEFAULT_TEMPO_RPC_URL: &str = "https://rpc.moderato.tempo.xyz";
 
 /// Default Solana RPC URL (mainnet-beta).
-#[cfg(feature = "payments-solana")]
+#[cfg(feature = "solana")]
 const DEFAULT_SOLANA_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 
 /// reqwest-middleware 0.5 adapter that wraps an `mpp::client::MultiProvider`.
@@ -134,41 +137,44 @@ pub fn build_payment_middleware(
     };
 
     let credential = std::env::var("OWS_PASSPHRASE").unwrap_or_default();
-    let vault_path = wallet.vault_path.as_deref().map(Path::new);
-
-    let tempo_rpc = payment_config
-        .tempo_rpc_url
-        .as_deref()
-        .or_else(|| resolve_tempo_rpc_from_mpp(config))
-        .unwrap_or(DEFAULT_TEMPO_RPC_URL);
 
     let mut multi = mpp::client::MultiProvider::new();
 
-    // Tempo charge provider.
-    let charge_signer = OwsSigner::new(&wallet.name, &credential, None, vault_path, None)
-        .map_err(PaymentSetupError::Signer)?;
-    let charge_addr = alloy::signers::Signer::address(&charge_signer);
-    let tempo_charge = mpp::client::TempoProvider::new(charge_signer, tempo_rpc)
-        .map_err(|e| PaymentSetupError::Provider(e.to_string()))?
-        .with_client_id("bitrouter");
-    multi.add(tempo_charge);
+    // Tempo charge + session providers (require EVM signer via OWS wallet).
+    #[cfg(feature = "tempo")]
+    let charge_addr = {
+        let vault_path = wallet.vault_path.as_deref().map(Path::new);
+        let tempo_rpc = payment_config
+            .tempo_rpc_url
+            .as_deref()
+            .or_else(|| resolve_tempo_rpc_from_mpp(config))
+            .unwrap_or(DEFAULT_TEMPO_RPC_URL);
 
-    // Tempo session provider.
-    let session_signer = OwsSigner::new(&wallet.name, &credential, None, vault_path, None)
-        .map_err(PaymentSetupError::Signer)?;
-    let mut tempo_session = mpp::client::TempoSessionProvider::new(session_signer, tempo_rpc)
-        .map_err(|e| PaymentSetupError::Provider(e.to_string()))?;
+        let charge_signer = OwsSigner::new(&wallet.name, &credential, None, vault_path, None)
+            .map_err(PaymentSetupError::Signer)?;
+        let charge_addr = alloy::signers::Signer::address(&charge_signer);
+        let tempo_charge = mpp::client::TempoProvider::new(charge_signer, tempo_rpc)
+            .map_err(|e| PaymentSetupError::Provider(e.to_string()))?
+            .with_client_id("bitrouter");
+        multi.add(tempo_charge);
 
-    if let Some(max) = payment_config.session_max_deposit {
-        tempo_session = tempo_session.with_max_deposit(max);
-    }
-    if let Some(default) = payment_config.session_default_deposit {
-        tempo_session = tempo_session.with_default_deposit(default);
-    }
-    multi.add(tempo_session);
+        let session_signer = OwsSigner::new(&wallet.name, &credential, None, vault_path, None)
+            .map_err(PaymentSetupError::Signer)?;
+        let mut tempo_session = mpp::client::TempoSessionProvider::new(session_signer, tempo_rpc)
+            .map_err(|e| PaymentSetupError::Provider(e.to_string()))?;
+
+        if let Some(max) = payment_config.session_max_deposit {
+            tempo_session = tempo_session.with_max_deposit(max);
+        }
+        if let Some(default) = payment_config.session_default_deposit {
+            tempo_session = tempo_session.with_default_deposit(default);
+        }
+        multi.add(tempo_session);
+        charge_addr
+    };
 
     // Solana charge provider (behind feature flag).
-    #[cfg(feature = "payments-solana")]
+    #[cfg(feature = "solana")]
     {
         let solana_rpc = payment_config
             .solana_rpc_url
@@ -183,10 +189,16 @@ pub fn build_payment_middleware(
         multi.add(solana_provider);
     }
 
+    #[cfg(feature = "tempo")]
     tracing::info!(
         wallet = %wallet.name,
         address = %charge_addr,
         "payment client enabled (Tempo session + charge)",
+    );
+    #[cfg(not(feature = "tempo"))]
+    tracing::info!(
+        wallet = %wallet.name,
+        "payment client enabled",
     );
 
     Ok(Some(PaymentLayer {
@@ -195,6 +207,7 @@ pub fn build_payment_middleware(
 }
 
 /// Try to resolve the Tempo RPC URL from the server-side MPP config.
+#[cfg(feature = "tempo")]
 fn resolve_tempo_rpc_from_mpp(config: &BitrouterConfig) -> Option<&str> {
     config
         .mpp
@@ -206,6 +219,7 @@ fn resolve_tempo_rpc_from_mpp(config: &BitrouterConfig) -> Option<&str> {
 /// Errors during payment middleware setup.
 #[derive(Debug, thiserror::Error)]
 pub enum PaymentSetupError {
+    #[cfg(feature = "tempo")]
     #[error("OWS signer: {0}")]
     Signer(crate::runtime::ows_signer::OwsSignerError),
 

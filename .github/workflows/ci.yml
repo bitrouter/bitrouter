@@ -58,14 +58,14 @@ jobs:
       matrix:
         include:
           - crate: bitrouter
-            feature_set: no-features
-            cargo_args: --no-default-features
+            feature_set: tempo-only
+            cargo_args: --no-default-features --features tempo
           - crate: bitrouter
-            feature_set: payments-tempo
-            cargo_args: --no-default-features --features payments-tempo
+            feature_set: solana-only
+            cargo_args: --no-default-features --features solana
           - crate: bitrouter
             feature_set: tui
-            cargo_args: --no-default-features --features tui
+            cargo_args: --no-default-features --features tui,tempo
           - crate: bitrouter
             feature_set: all-features
             cargo_args: --all-features

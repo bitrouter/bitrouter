@@ -1,5 +1,10 @@
 #![recursion_limit = "256"]
 
+#[cfg(not(any(feature = "tempo", feature = "solana")))]
+compile_error!(
+    "bitrouter requires at least one payment chain feature: enable `tempo` and/or `solana`"
+);
+
 mod auth;
 mod cli;
 mod init;
@@ -666,7 +671,6 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             print_first_run_guidance(&runtime);
             let base_client = reqwest::Client::new();
             let client_builder = reqwest_middleware::ClientBuilder::new(base_client);
-            #[cfg(feature = "payments-tempo")]
             let client_builder =
                 match crate::runtime::payment::build_payment_middleware(&runtime.config) {
                     Ok(Some(mw)) => client_builder.with(mw),
