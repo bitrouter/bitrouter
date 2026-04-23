@@ -11,6 +11,7 @@ readme = "README.md"
 
 [features]
 default = [
+    "cli",
     "tui",
     "sqlite",
     "tempo",
@@ -19,7 +20,13 @@ default = [
 ]
 rest = ["bitrouter-providers/rest"]
 mcp = ["bitrouter-providers/mcp"]
-tui = ["dep:bitrouter-tui", "bitrouter-providers/acp"]
+# Operator CLI surface: subcommands beyond `serve` (Wallet, Key, Route,
+# Status, Start, Stop, Restart, Reload, Tools, Models, Agents, Policy,
+# Auth, Reset, AgentProxy, the setup wizard, the daemon manager).
+# Without `cli`, the binary exposes only `serve` (foreground) and is
+# significantly smaller.
+cli = ["dep:dialoguer", "dep:libc"]
+tui = ["cli", "dep:bitrouter-tui", "bitrouter-providers/acp"]
 # Database driver selection. Exactly one driver must be enabled (default: sqlite).
 # Accounts, sessions, JWT auth, and persistent spend tracking are baked into the
 # binary unconditionally — these features only choose the storage backend.
@@ -54,7 +61,7 @@ bitrouter-providers = { workspace = true, features = ["agentskills"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
-dialoguer = "0.12"
+dialoguer = { version = "0.12", optional = true }
 
 # Runtime
 dirs = "6"
@@ -114,4 +121,4 @@ async-trait = { version = "0.1" }
 tempfile = { version = "3" }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = { version = "0.2", optional = true }

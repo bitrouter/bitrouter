@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "cli")]
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_config::BitrouterConfig;
@@ -36,6 +38,7 @@ pub struct AppRuntime<R> {
 }
 
 impl<R: ServerTableBound + Send + Sync + 'static> AppRuntime<R> {
+    #[cfg(feature = "cli")]
     pub fn status(&self) -> RuntimeStatus {
         let daemon_pid = crate::runtime::daemon::DaemonManager::new(self.paths.clone())
             .is_running()
@@ -52,6 +55,7 @@ impl<R: ServerTableBound + Send + Sync + 'static> AppRuntime<R> {
         }
     }
 
+    #[cfg(feature = "cli")]
     pub async fn start(&self) -> Result<()> {
         let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
         let pid = dm.start().await?;
@@ -59,6 +63,7 @@ impl<R: ServerTableBound + Send + Sync + 'static> AppRuntime<R> {
         Ok(())
     }
 
+    #[cfg(feature = "cli")]
     pub async fn stop(&self) -> Result<()> {
         let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
         dm.stop().await?;
@@ -66,6 +71,7 @@ impl<R: ServerTableBound + Send + Sync + 'static> AppRuntime<R> {
         Ok(())
     }
 
+    #[cfg(feature = "cli")]
     pub async fn restart(&self) -> Result<()> {
         let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
         let pid = dm.restart().await?;
@@ -73,6 +79,7 @@ impl<R: ServerTableBound + Send + Sync + 'static> AppRuntime<R> {
         Ok(())
     }
 
+    #[cfg(feature = "cli")]
     pub fn reload(&self) -> Result<()> {
         let dm = crate::runtime::daemon::DaemonManager::new(self.paths.clone());
         dm.reload()?;
@@ -254,6 +261,7 @@ fn load_policy_cache(dir: &Path) -> bitrouter_core::policy::PolicyCache {
     }
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone)]
 pub struct RuntimeStatus {
     pub home_dir: PathBuf,
