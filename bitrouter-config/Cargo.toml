@@ -10,7 +10,6 @@ readme = "README.md"
 
 [features]
 default = []
-payments-tempo = []
 payments-solana = []
 
 [dependencies]

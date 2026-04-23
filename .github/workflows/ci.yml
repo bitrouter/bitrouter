@@ -57,6 +57,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # bitrouter binary — bundle scenarios.
           - crate: bitrouter
             feature_set: serve-only-tempo
             cargo_args: --no-default-features --features tempo,sqlite,mcp,rest
@@ -72,24 +73,89 @@ jobs:
           - crate: bitrouter
             feature_set: all-features
             cargo_args: --all-features
+          # bitrouter binary — per-feature stacked on `tempo` baseline.
+          - crate: bitrouter
+            feature_set: tempo+cli
+            cargo_args: --no-default-features --features tempo,cli
+          - crate: bitrouter
+            feature_set: tempo+sqlite
+            cargo_args: --no-default-features --features tempo,sqlite
+          - crate: bitrouter
+            feature_set: tempo+postgres
+            cargo_args: --no-default-features --features tempo,postgres
+          - crate: bitrouter
+            feature_set: tempo+mysql
+            cargo_args: --no-default-features --features tempo,mysql
+          - crate: bitrouter
+            feature_set: tempo+mcp
+            cargo_args: --no-default-features --features tempo,mcp
+          - crate: bitrouter
+            feature_set: tempo+rest
+            cargo_args: --no-default-features --features tempo,rest
+          # bitrouter-api — per-feature alone + bundles.
           - crate: bitrouter-api
             feature_set: no-features
             cargo_args: --no-default-features
           - crate: bitrouter-api
+            feature_set: accounts
+            cargo_args: --no-default-features --features accounts
+          - crate: bitrouter-api
+            feature_set: observe
+            cargo_args: --no-default-features --features observe
+          - crate: bitrouter-api
+            feature_set: guardrails
+            cargo_args: --no-default-features --features guardrails
+          - crate: bitrouter-api
             feature_set: payments-tempo
             cargo_args: --no-default-features --features payments-tempo
+          - crate: bitrouter-api
+            feature_set: payments-solana
+            cargo_args: --no-default-features --features payments-solana
           - crate: bitrouter-api
             feature_set: all-features
             cargo_args: --all-features
+          # bitrouter-config — per-feature alone + bundles.
           - crate: bitrouter-config
             feature_set: no-features
             cargo_args: --no-default-features
           - crate: bitrouter-config
-            feature_set: payments-tempo
-            cargo_args: --no-default-features --features payments-tempo
+            feature_set: payments-solana
+            cargo_args: --no-default-features --features payments-solana
           - crate: bitrouter-config
+            feature_set: all-features
+            cargo_args: --all-features
+          # bitrouter-accounts — per-driver.
+          - crate: bitrouter-accounts
             feature_set: no-features
             cargo_args: --no-default-features
+          - crate: bitrouter-accounts
+            feature_set: sqlite
+            cargo_args: --no-default-features --features sqlite
+          - crate: bitrouter-accounts
+            feature_set: postgres
+            cargo_args: --no-default-features --features postgres
+          - crate: bitrouter-accounts
+            feature_set: mysql
+            cargo_args: --no-default-features --features mysql
+          - crate: bitrouter-accounts
+            feature_set: all-features
+            cargo_args: --all-features
+          # bitrouter-observe — per-driver.
+          - crate: bitrouter-observe
+            feature_set: no-features
+            cargo_args: --no-default-features
+          - crate: bitrouter-observe
+            feature_set: sqlite
+            cargo_args: --no-default-features --features sqlite
+          - crate: bitrouter-observe
+            feature_set: postgres
+            cargo_args: --no-default-features --features postgres
+          - crate: bitrouter-observe
+            feature_set: mysql
+            cargo_args: --no-default-features --features mysql
+          - crate: bitrouter-observe
+            feature_set: all-features
+            cargo_args: --all-features
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -103,6 +169,23 @@ jobs:
 
       - name: Build crate
         run: cargo build -p ${{ matrix.crate }} ${{ matrix.cargo_args }}
+
+  feature-deps:
+    name: feature-deps regression
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check feature → dependency tree deltas
+        run: bash .github/scripts/check-feature-deps.sh
 
   test:
     name: test / ${{ matrix.os }}

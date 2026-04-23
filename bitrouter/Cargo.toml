@@ -39,7 +39,6 @@ mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
 # enabled; default is `tempo`.
 tempo = [
     "bitrouter-api/payments-tempo",
-    "bitrouter-config/payments-tempo",
     "mpp/tempo",
 ]
 solana = [
