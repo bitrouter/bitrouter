@@ -73,18 +73,6 @@ jobs:
             feature_set: no-features
             cargo_args: --no-default-features
           - crate: bitrouter-api
-            feature_set: openai
-            cargo_args: --no-default-features --features openai
-          - crate: bitrouter-api
-            feature_set: anthropic
-            cargo_args: --no-default-features --features anthropic
-          - crate: bitrouter-api
-            feature_set: google
-            cargo_args: --no-default-features --features google
-          - crate: bitrouter-api
-            feature_set: mcp
-            cargo_args: --no-default-features --features mcp
-          - crate: bitrouter-api
             feature_set: mpp-tempo
             cargo_args: --no-default-features --features mpp-tempo
           - crate: bitrouter-api

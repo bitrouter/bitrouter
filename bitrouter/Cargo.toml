@@ -20,7 +20,7 @@ default = [
     "rest",
 ]
 rest = ["bitrouter-providers/rest"]
-mcp = ["bitrouter-api/mcp", "bitrouter-providers/mcp"]
+mcp = ["bitrouter-providers/mcp"]
 tui = ["dep:bitrouter-tui", "bitrouter-providers/acp"]
 sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
 postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
@@ -43,11 +43,7 @@ mpp-solana = [
 [dependencies]
 # Internal crates
 bitrouter-accounts.workspace = true
-bitrouter-api = { workspace = true, features = [
-    "openai",
-    "anthropic",
-    "google",
-] }
+bitrouter-api = { workspace = true }
 bitrouter-config.workspace = true
 bitrouter-core.workspace = true
 bitrouter-guardrails.workspace = true

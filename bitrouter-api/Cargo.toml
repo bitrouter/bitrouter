@@ -9,11 +9,7 @@ repository = "https://github.com/bitrouter/bitrouter"
 readme = "README.md"
 
 [features]
-default = ["openai", "anthropic", "google", "mcp"]
-mcp = []
-openai = []
-anthropic = []
-google = []
+default = []
 mpp-tempo = [
     "dep:mpp",
     "mpp/tempo",
