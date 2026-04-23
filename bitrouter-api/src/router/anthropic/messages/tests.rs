@@ -555,6 +555,91 @@ async fn messages_tool_result_multi_turn() {
     assert_eq!(json["role"], "assistant");
 }
 
+/// Claude Code sends `tool_result.content` as an array of content blocks
+/// rather than a plain string. Regression test for the
+/// `data did not match any variant of untagged enum AnthropicMessageContent`
+/// 400 error reported against bitrouter v0.24.4.
+#[tokio::test]
+async fn messages_tool_result_array_content() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let filter = messages_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "user", "content": "What's the weather in NYC?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_abc", "name": "get_weather", "input": {"location": "NYC"}}
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_abc",
+                        "content": [
+                            {"type": "text", "text": "72°F"},
+                            {"type": "text", "text": "and sunny"}
+                        ]
+                    }
+                ]
+            }
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/messages")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    let json: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+    assert_eq!(json["role"], "assistant");
+}
+
+/// Claude Code echoes `thinking` / `redacted_thinking` blocks back to the
+/// server in assistant turns when extended thinking is enabled. These must
+/// deserialize successfully even though they are ignored downstream.
+#[tokio::test]
+async fn messages_assistant_thinking_blocks() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockRouter);
+    let filter = messages_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "let me think...", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "REDACTED"},
+                    {"type": "text", "text": "Hello!"}
+                ]
+            },
+            {"role": "user", "content": "How are you?"}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/messages")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+}
+
 #[tokio::test]
 async fn messages_stream_tool_calls() {
     let table = Arc::new(MockTable);

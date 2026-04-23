@@ -113,10 +113,58 @@ pub enum AnthropicContentBlock {
     ToolResult {
         tool_use_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        content: Option<String>,
+        content: Option<AnthropicToolResultContent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
     },
+    /// Extended-thinking block emitted by Claude when thinking is enabled and
+    /// echoed back by clients (e.g. Claude Code) on multi-turn requests.
+    Thinking {
+        thinking: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    /// Redacted variant of [`AnthropicContentBlock::Thinking`].
+    RedactedThinking {
+        data: String,
+    },
+}
+
+/// `tool_result` blocks may carry either a plain string or an array of
+/// nested content blocks (text or image). See the Anthropic Messages API
+/// reference: <https://platform.claude.com/docs/en/api/messages/create>.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AnthropicToolResultContent {
+    Text(String),
+    Blocks(Vec<AnthropicToolResultBlock>),
+}
+
+impl AnthropicToolResultContent {
+    /// Flatten the content into a single string for downstream use, joining
+    /// text segments with newlines and dropping non-text parts.
+    pub fn into_text(self) -> String {
+        match self {
+            Self::Text(s) => s,
+            Self::Blocks(blocks) => blocks
+                .into_iter()
+                .filter_map(|b| match b {
+                    AnthropicToolResultBlock::Text { text } => Some(text),
+                    AnthropicToolResultBlock::Image { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+}
+
+/// Subset of [`AnthropicContentBlock`] permitted inside a `tool_result.content`
+/// array per the Anthropic Messages API spec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AnthropicToolResultBlock {
+    Text { text: String },
+    Image { source: AnthropicImageSource },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -33,8 +33,8 @@ use tokio_util::sync::CancellationToken;
 
 use bitrouter_core::api::anthropic::messages::types::{
     AnthropicContentBlock, AnthropicImageSource, AnthropicMessage, AnthropicMessageContent,
-    AnthropicTool, AnthropicToolChoice, MessagesErrorEnvelope, MessagesRequest, MessagesResponse,
-    MessagesStreamDelta, MessagesStreamEvent, MessagesUsage,
+    AnthropicTool, AnthropicToolChoice, AnthropicToolResultContent, MessagesErrorEnvelope,
+    MessagesRequest, MessagesResponse, MessagesStreamDelta, MessagesStreamEvent, MessagesUsage,
 };
 
 // ── Default max tokens ──────────────────────────────────────────────────────
@@ -354,7 +354,10 @@ fn content_blocks_to_language_model_content(
                     provider_metadata,
                 })
             }
-            AnthropicContentBlock::Image { .. } | AnthropicContentBlock::ToolResult { .. } => {
+            AnthropicContentBlock::Image { .. }
+            | AnthropicContentBlock::ToolResult { .. }
+            | AnthropicContentBlock::Thinking { .. }
+            | AnthropicContentBlock::RedactedThinking { .. } => {
                 Err(BitrouterError::invalid_response(
                     Some(ANTHROPIC_PROVIDER_NAME),
                     "unexpected content block type in response",
@@ -375,7 +378,9 @@ fn content_blocks_to_language_model_content(
             }
             AnthropicContentBlock::ToolUse { .. }
             | AnthropicContentBlock::Image { .. }
-            | AnthropicContentBlock::ToolResult { .. } => {}
+            | AnthropicContentBlock::ToolResult { .. }
+            | AnthropicContentBlock::Thinking { .. }
+            | AnthropicContentBlock::RedactedThinking { .. } => {}
         }
     }
 
@@ -586,7 +591,7 @@ fn convert_tool_results(content: &[LanguageModelToolResult]) -> Result<Vec<Anthr
                 let (content_str, is_error) = stringify_tool_output(output)?;
                 blocks.push(AnthropicContentBlock::ToolResult {
                     tool_use_id: tool_call_id.clone(),
-                    content: Some(content_str),
+                    content: Some(AnthropicToolResultContent::Text(content_str)),
                     is_error,
                 });
             }
@@ -886,7 +891,9 @@ impl AnthropicStreamState {
                         entry.started = true;
                     }
                     AnthropicContentBlock::Image { .. }
-                    | AnthropicContentBlock::ToolResult { .. } => {}
+                    | AnthropicContentBlock::ToolResult { .. }
+                    | AnthropicContentBlock::Thinking { .. }
+                    | AnthropicContentBlock::RedactedThinking { .. } => {}
                 }
                 parts
             }

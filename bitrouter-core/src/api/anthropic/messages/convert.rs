@@ -285,9 +285,12 @@ fn convert_assistant_content(
                         provider_options: None,
                     })
                 }
-                AnthropicContentBlock::ToolResult { .. } | AnthropicContentBlock::Image { .. } => {
-                    None
-                }
+                // Thinking blocks are echoed back to BitRouter on multi-turn
+                // requests but not currently propagated to providers.
+                AnthropicContentBlock::ToolResult { .. }
+                | AnthropicContentBlock::Image { .. }
+                | AnthropicContentBlock::Thinking { .. }
+                | AnthropicContentBlock::RedactedThinking { .. } => None,
             })
             .collect(),
         None => vec![],
@@ -325,14 +328,16 @@ fn split_user_content(
                             tool_call_id: tool_use_id,
                             tool_name: String::new(),
                             output: LanguageModelToolResultOutput::Text {
-                                value: content.unwrap_or_default(),
+                                value: content.map(|c| c.into_text()).unwrap_or_default(),
                                 provider_options: None,
                             },
                             provider_options: None,
                         });
                     }
-                    AnthropicContentBlock::ToolUse { .. } | AnthropicContentBlock::Image { .. } => {
-                    }
+                    AnthropicContentBlock::ToolUse { .. }
+                    | AnthropicContentBlock::Image { .. }
+                    | AnthropicContentBlock::Thinking { .. }
+                    | AnthropicContentBlock::RedactedThinking { .. } => {}
                 }
             }
             (user_parts, tool_results)
