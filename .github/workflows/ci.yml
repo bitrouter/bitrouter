@@ -59,10 +59,10 @@ jobs:
         include:
           - crate: bitrouter
             feature_set: serve-only-tempo
-            cargo_args: --no-default-features --features tempo
+            cargo_args: --no-default-features --features tempo,sqlite,mcp,rest
           - crate: bitrouter
             feature_set: serve-only-solana
-            cargo_args: --no-default-features --features solana
+            cargo_args: --no-default-features --features solana,sqlite,mcp,rest
           - crate: bitrouter
             feature_set: cli-no-tui
             cargo_args: --no-default-features --features cli,tempo,sqlite,mcp,rest
