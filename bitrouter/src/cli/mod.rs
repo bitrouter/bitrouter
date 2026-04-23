@@ -4,6 +4,8 @@ pub mod agent_proxy;
 #[cfg(feature = "tui")]
 pub mod agents;
 pub mod auth;
+pub mod cloud_auth;
+pub mod cloud_credentials;
 pub mod key;
 pub mod models;
 pub mod policy;

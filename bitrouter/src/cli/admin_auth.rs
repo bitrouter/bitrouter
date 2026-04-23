@@ -118,6 +118,10 @@ fn ows_sign_admin_jwt(wallet: &bitrouter_config::config::WalletConfig) -> Result
         id: None, // Admin tokens are short-lived; no per-key tracking needed.
         key: None,
         pol: None,
+        jti: None,
+        aud: None,
+        sub: None,
+        host: None,
     };
 
     let signer = OwsJwtSigner::new(wallet)?;

@@ -22,6 +22,7 @@ regex = { version = "1.12" }
 schemars = { version = "1.2", default-features = false, features = ["std"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
+sha2 = { version = "0.10" }
 solana-keypair = { version = "3.1" }
 solana-pubkey = { version = "4.1" }
 solana-signature = { version = "3", features = ["verify"] }

@@ -1686,6 +1686,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "sha2",
  "solana-keypair",
  "solana-pubkey 4.2.0",
  "solana-signature",

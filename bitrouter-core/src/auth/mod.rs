@@ -9,6 +9,7 @@
 pub mod access;
 pub mod chain;
 pub mod claims;
+pub mod identity;
 pub mod keys;
 pub mod revocation;
 pub mod token;
@@ -40,4 +41,25 @@ pub enum JwtError {
     AddressMismatch,
     #[error("secp256k1 error: {0}")]
     Secp256k1(String),
+    /// `iss` claim does not parse as any known issuer shape (CAIP-10 or
+    /// RFC 7638 JWK thumbprint).
+    #[error("invalid issuer: {0}")]
+    InvalidIssuer(String),
+    /// Header `jwk` is missing on a host-thumbprint token where it is required.
+    #[error("missing jwk header on host-thumbprint token")]
+    MissingJwk,
+    /// Header `jwk` is present but malformed (wrong kty/crv, undecodable `x`).
+    #[error("invalid jwk header: {0}")]
+    InvalidJwk(String),
+    /// SHA-256 thumbprint of header `jwk` does not match the `iss` claim.
+    #[error("jwk thumbprint does not match iss")]
+    ThumbprintMismatch,
+    /// Header `alg` is incompatible with the parsed issuer kind (cross-alg
+    /// forgery attempt — e.g. `SOL_EDDSA` with a thumbprint `iss`, or
+    /// `EdDSA` with a CAIP-10 `iss`).
+    #[error("algorithm {alg} not permitted for {issuer_kind} issuer")]
+    AlgIssuerMismatch {
+        alg: &'static str,
+        issuer_kind: &'static str,
+    },
 }
