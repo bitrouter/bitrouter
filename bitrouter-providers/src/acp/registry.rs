@@ -10,10 +10,14 @@
 //! 2. `acp_registry_url` field in `bitrouter.yaml`
 //! 3. [`DEFAULT_REGISTRY_URL`]
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
-use bitrouter_config::acp::{DEFAULT_REGISTRY_URL, REGISTRY_URL_ENV, RegistryIndex};
+use bitrouter_config::AgentConfig;
+use bitrouter_config::acp::{
+    DEFAULT_REGISTRY_URL, REGISTRY_URL_ENV, RegistryIndex, registry_agent_to_config,
+};
 use serde::{Deserialize, Serialize};
 
 use super::state::now_unix_seconds;
@@ -92,6 +96,26 @@ pub async fn fetch_registry(
             Err(e)
         }
     }
+}
+
+/// Additively merge the registry into `agents`: for every registry
+/// entry whose id is *not* already present, insert the converted
+/// [`AgentConfig`].  Existing ids (from built-ins or user config) are
+/// left untouched so the user's on-disk configuration always wins.
+///
+/// Returns the number of new agents added.
+pub fn merge_registry_into_agents(
+    index: &RegistryIndex,
+    agents: &mut HashMap<String, AgentConfig>,
+) -> usize {
+    let mut added = 0;
+    for agent in &index.agents {
+        if !agents.contains_key(&agent.id) {
+            agents.insert(agent.id.clone(), registry_agent_to_config(agent));
+            added += 1;
+        }
+    }
+    added
 }
 
 /// Force-refresh: bypass the cache and hit the network.  On success the
@@ -252,6 +276,59 @@ mod tests {
         let loaded = read_cache(&path).await.ok_or("cache should be present")?;
         assert_eq!(loaded.fetched_at, 1_700_000_000);
         assert_eq!(loaded.index.agents.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn merge_preserves_existing_and_adds_new() -> Result<(), String> {
+        use bitrouter_config::{AgentConfig, AgentProtocol};
+
+        let mut agents: HashMap<String, AgentConfig> = HashMap::new();
+        agents.insert(
+            "alpha".to_owned(),
+            AgentConfig {
+                protocol: AgentProtocol::Acp,
+                binary: "user-custom-path".to_owned(),
+                args: Vec::new(),
+                enabled: true,
+                distribution: Vec::new(),
+                session: None,
+                a2a: None,
+            },
+        );
+
+        let index = make_index(); // contains only "alpha" → registry entry
+        let added = merge_registry_into_agents(&index, &mut agents);
+
+        // "alpha" already existed — user config wins, nothing added.
+        assert_eq!(added, 0);
+        assert_eq!(agents["alpha"].binary, "user-custom-path");
+
+        // Extend the registry with a brand-new agent.
+        let mut extended = index;
+        extended.agents.push(RegistryAgent {
+            id: "beta".to_owned(),
+            name: "Beta".to_owned(),
+            version: "0.2.0".to_owned(),
+            description: None,
+            repository: None,
+            website: None,
+            authors: Vec::new(),
+            license: None,
+            icon: None,
+            distribution: RegistryDistribution {
+                npx: Some(RegistryNpx {
+                    package: "beta@0.2.0".to_owned(),
+                    args: Vec::new(),
+                    env: Default::default(),
+                }),
+                uvx: None,
+                binary: Default::default(),
+            },
+        });
+        let added = merge_registry_into_agents(&extended, &mut agents);
+        assert_eq!(added, 1);
+        assert!(agents.contains_key("beta"));
         Ok(())
     }
 

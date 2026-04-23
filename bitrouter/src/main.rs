@@ -963,6 +963,33 @@ async fn launch_after_init(
                 cache_dir: paths.cache_dir.clone(),
             };
             let mut bitrouter_config = runtime.config.clone();
+
+            // Merge the ACP registry into the agent set so first-render
+            // discovery sees the full catalog.  A failed fetch falls
+            // through silently — the stale cache, then built-in agent
+            // defs, then user config remain as the backstop.
+            let cache_file = paths.cache_dir.join("acp-registry.json");
+            let registry_url = bitrouter_providers::acp::registry::resolve_registry_url(
+                bitrouter_config.acp_registry_url.as_deref(),
+            );
+            match bitrouter_providers::acp::registry::fetch_registry(
+                &cache_file,
+                bitrouter_providers::acp::registry::DEFAULT_TTL_SECS,
+                &registry_url,
+            )
+            .await
+            {
+                Ok(index) => {
+                    bitrouter_providers::acp::registry::merge_registry_into_agents(
+                        &index,
+                        &mut bitrouter_config.agents,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  note: ACP registry unavailable ({e}); using built-ins only");
+                }
+            }
+
             bitrouter_providers::acp::state::overlay_install_state_sync(
                 &mut bitrouter_config.agents,
                 &paths.agent_state_file,
