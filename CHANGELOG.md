@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.5](https://github.com/bitrouter/bitrouter/compare/v0.24.4...v0.24.5)
+
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#362](https://github.com/bitrouter/bitrouter/pull/362)) - ([35067ee](https://github.com/bitrouter/bitrouter/commit/35067ee032cc0d9694edc3d4940f88dea84cb0d7))
+
+
 ## [0.24.4](https://github.com/bitrouter/bitrouter/compare/v0.24.3...v0.24.4)
 
 
