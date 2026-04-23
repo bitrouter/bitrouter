@@ -66,7 +66,7 @@ cargo_tree() {
     if [ -n "$features" ]; then
         args+=(--features "$features")
     fi
-    cargo tree "${args[@]}" 2>/dev/null
+    cargo tree "${args[@]}"
 }
 
 for entry in "${CHECKS[@]}"; do
@@ -85,8 +85,20 @@ for entry in "${CHECKS[@]}"; do
 
     echo "::group::${label}"
 
+    set +e
     base_tree="$(cargo_tree "$crate" "$baseline")"
+    base_status=$?
     with_tree="$(cargo_tree "$crate" "$with")"
+    with_status=$?
+    set -e
+
+    if [ "$base_status" -ne 0 ] || [ "$with_status" -ne 0 ] \
+        || [ -z "$base_tree" ] || [ -z "$with_tree" ]; then
+        echo "::error::cargo tree failed for '${crate}' (baseline status=${base_status}, with status=${with_status})"
+        failures=$((failures + 1))
+        echo "::endgroup::"
+        continue
+    fi
 
     if [ "$base_tree" = "$with_tree" ]; then
         echo "::error::feature '${feature}' on '${crate}' produces no dep-tree delta over baseline '${baseline:-<none>}'"
