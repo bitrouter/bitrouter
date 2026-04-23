@@ -74,6 +74,12 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub agents: HashMap<String, AgentConfig>,
 
+    /// Optional override for the ACP registry URL.  When unset, consumers
+    /// fall back to the `BITROUTER_ACP_REGISTRY_URL` environment variable,
+    /// then to [`crate::acp::DEFAULT_REGISTRY_URL`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp_registry_url: Option<String>,
+
     /// Content-based auto-routing rules.
     ///
     /// Each key is a virtual model name (e.g. `"auto"`) that triggers

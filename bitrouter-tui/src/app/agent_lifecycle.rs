@@ -76,6 +76,7 @@ impl App {
 
         let agent_id_owned = agent_id.to_string();
         let event_tx = self.event_tx.clone();
+        let install_dir = self.state.config.agents_dir.join(&agent_id_owned);
 
         tokio::spawn(async move {
             let (progress_tx, mut progress_rx) = mpsc::channel(32);
@@ -121,7 +122,8 @@ impl App {
 
             // The forwarding task handles Done/Failed via InstallProgress,
             // so we only need to drive the install to completion here.
-            let _ = install_binary_agent(&agent_id_owned, &platforms, progress_tx).await;
+            let _ = install_binary_agent(&agent_id_owned, &install_dir, &platforms, progress_tx)
+                .await;
         });
     }
 
@@ -149,6 +151,26 @@ impl App {
             Some(c) => c.clone(),
             None => return,
         };
+
+        // Persist the resolved binary path so cold restarts can skip re-installing.
+        let state_file = self.state.config.agent_state_file.clone();
+        let agent_id_owned = agent_id.to_string();
+        let binary_path_owned = binary_path.clone();
+        tokio::spawn(async move {
+            use bitrouter_providers::acp::state::{
+                InstallMethod, InstallRecord, now_unix_seconds, upsert_record,
+            };
+            let record = InstallRecord {
+                id: agent_id_owned,
+                version: String::new(),
+                method: InstallMethod::Binary,
+                resolved_binary_path: Some(binary_path_owned),
+                installed_at: now_unix_seconds(),
+            };
+            // Best-effort persistence: failure here is non-fatal (we'll
+            // re-record on the next install or discover at next startup).
+            let _ = upsert_record(&state_file, record).await;
+        });
 
         agent.status = AgentStatus::Connecting;
         self.push_system_msg(&format!("{agent_id} installed, connecting..."));

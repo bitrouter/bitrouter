@@ -7,6 +7,8 @@ pub mod auth;
 pub mod key;
 pub mod models;
 pub mod policy;
+#[cfg(feature = "cli")]
+pub mod providers;
 pub mod route;
 pub mod tools;
 pub mod update_check;
