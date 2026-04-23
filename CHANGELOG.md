@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0](https://github.com/bitrouter/bitrouter/compare/v0.24.4...v0.25.0)
+
+
+### 🐛 Bug Fixes
+
+- Claude Code API compatibility issue ([#365](https://github.com/bitrouter/bitrouter/pull/365)) - ([dafb7d3](https://github.com/bitrouter/bitrouter/commit/dafb7d358e5de046e8aad96fecb9ac476f57f3cb))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#362](https://github.com/bitrouter/bitrouter/pull/362)) - ([35067ee](https://github.com/bitrouter/bitrouter/commit/35067ee032cc0d9694edc3d4940f88dea84cb0d7))
+
+
 ## [0.24.4](https://github.com/bitrouter/bitrouter/compare/v0.24.3...v0.24.4)
 
 
