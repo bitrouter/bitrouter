@@ -1,22 +1,22 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[cfg(feature = "mpp-tempo")]
+#[cfg(feature = "payments-tempo")]
 use bitrouter_config::TempoMppConfig;
-#[cfg(feature = "mpp-tempo")]
+#[cfg(feature = "payments-tempo")]
 use mpp::server::{
     Mpp, SessionMethodConfig, TempoChargeMethod, TempoConfig, TempoProvider, TempoSessionMethod,
 };
 
 use mpp::server::SessionChallengeOptions;
 
-#[cfg(feature = "mpp-tempo")]
+#[cfg(feature = "payments-tempo")]
 use mpp::protocol::methods::tempo::session_method::ChannelStore as TempoChannelStore;
 
-#[cfg(feature = "mpp-tempo")]
+#[cfg(feature = "payments-tempo")]
 use mpp::Address;
 
-#[cfg(feature = "mpp-tempo")]
+#[cfg(feature = "payments-tempo")]
 type TempoMpp = Mpp<TempoChargeMethod<TempoProvider>, TempoSessionMethod<TempoProvider>>;
 
 /// Wrapper that bridges `Arc<dyn mpp::Signer>` into `impl mpp::Signer`.
@@ -25,10 +25,10 @@ type TempoMpp = Mpp<TempoChargeMethod<TempoProvider>, TempoSessionMethod<TempoPr
 /// implements `Signer` but `Arc<dyn Signer>` does not. This newtype allows an
 /// `Arc`-shared signer to be passed to APIs that require `impl Signer + 'static`
 /// (such as `TempoSessionMethod::with_close_signer`).
-#[cfg(feature = "mpp-tempo")]
+#[cfg(feature = "payments-tempo")]
 struct ArcSigner(Arc<dyn mpp::Signer + Send + Sync>);
 
-#[cfg(feature = "mpp-tempo")]
+#[cfg(feature = "payments-tempo")]
 #[async_trait::async_trait]
 impl alloy::signers::Signer for ArcSigner {
     async fn sign_hash(
@@ -63,7 +63,7 @@ pub struct MppState {
 }
 
 enum MppBackend {
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(feature = "payments-tempo")]
     Tempo {
         mpp: TempoMpp,
         store: Arc<dyn TempoChannelStore>,
@@ -85,7 +85,7 @@ enum MppBackend {
         /// multiple channels close concurrently on the same signer.
         close_lock: tokio::sync::Mutex<()>,
     },
-    #[cfg(feature = "mpp-solana")]
+    #[cfg(feature = "payments-solana")]
     Solana(SolanaState),
 }
 
@@ -96,15 +96,15 @@ impl MppBackend {
     /// may differ from the CAIP-2 key used to register the backend.
     fn method_name(&self) -> &'static str {
         match self {
-            #[cfg(feature = "mpp-tempo")]
+            #[cfg(feature = "payments-tempo")]
             Self::Tempo { .. } => "tempo",
-            #[cfg(feature = "mpp-solana")]
+            #[cfg(feature = "payments-solana")]
             Self::Solana(_) => "solana",
         }
     }
 }
 
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 struct SolanaState {
     realm: String,
     secret_key: String,
@@ -131,7 +131,7 @@ impl MppState {
     /// `close_signer` is an optional trait-object signer for server-initiated
     /// channel close transactions. Callers provide any `alloy::signers::Signer`
     /// implementation (local key, KMS, hardware wallet, etc.) wrapped in `Arc`.
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(feature = "payments-tempo")]
     pub fn add_tempo(
         &mut self,
         tempo: &TempoMppConfig,
@@ -150,7 +150,7 @@ impl MppState {
     /// `close_signer` is an optional trait-object signer for server-initiated
     /// channel close transactions. Pass any `alloy::signers::Signer`
     /// implementation wrapped in `Arc`.
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(feature = "payments-tempo")]
     pub fn add_tempo_with_store(
         &mut self,
         tempo: &TempoMppConfig,
@@ -248,7 +248,7 @@ impl MppState {
     /// Add a Solana backend keyed by `"solana"`.
     ///
     /// Uses the default in-memory channel store.
-    #[cfg(feature = "mpp-solana")]
+    #[cfg(feature = "payments-solana")]
     pub fn add_solana(
         &mut self,
         solana: &bitrouter_config::SolanaMppConfig,
@@ -265,7 +265,7 @@ impl MppState {
     ///
     /// This allows injecting a custom (e.g. database-backed) store instead of
     /// the default in-memory store.
-    #[cfg(feature = "mpp-solana")]
+    #[cfg(feature = "payments-solana")]
     pub fn add_solana_with_store(
         &mut self,
         solana: &bitrouter_config::SolanaMppConfig,
@@ -418,14 +418,14 @@ impl MppState {
             mpp::server::VerificationError::new(format!("no backend for key: {backend_key}"))
         })?;
         match backend {
-            #[cfg(feature = "mpp-tempo")]
+            #[cfg(feature = "payments-tempo")]
             MppBackend::Tempo { store, .. } => {
                 mpp::protocol::methods::tempo::session_method::deduct_from_channel(
                     &**store, channel_id, amount,
                 )
                 .await?;
             }
-            #[cfg(feature = "mpp-solana")]
+            #[cfg(feature = "payments-solana")]
             MppBackend::Solana(state) => {
                 super::solana_channel_store::deduct_from_channel(
                     state.session_method.store(),
@@ -446,11 +446,11 @@ impl MppState {
             return;
         };
         match backend {
-            #[cfg(feature = "mpp-tempo")]
+            #[cfg(feature = "payments-tempo")]
             MppBackend::Tempo { store, .. } => {
                 store.wait_for_update(channel_id).await;
             }
-            #[cfg(feature = "mpp-solana")]
+            #[cfg(feature = "payments-solana")]
             MppBackend::Solana(state) => {
                 state
                     .session_method
@@ -472,12 +472,12 @@ impl MppState {
     ) -> Option<(u128, u128, u128)> {
         let (_key, backend) = self.backend_for_chain(backend_key)?;
         match backend {
-            #[cfg(feature = "mpp-tempo")]
+            #[cfg(feature = "payments-tempo")]
             MppBackend::Tempo { store, .. } => {
                 let ch = store.get_channel(channel_id).await.ok()??;
                 Some((ch.spent, ch.highest_voucher_amount, ch.deposit))
             }
-            #[cfg(feature = "mpp-solana")]
+            #[cfg(feature = "payments-solana")]
             MppBackend::Solana(state) => {
                 let ch = state
                     .session_method
@@ -508,7 +508,7 @@ impl MppState {
     /// them rather than propagate, since close failures do not affect the
     /// already-served response. The channel can be settled later if this fails.
     // TODO: implement server-side close for Solana sessions
-    #[cfg(feature = "mpp-tempo")]
+    #[cfg(feature = "payments-tempo")]
     pub async fn close_channel(&self, backend_key: &str, channel_id: &str) -> Result<(), String> {
         let (_key, backend) = self
             .backend_for_chain(backend_key)
@@ -538,7 +538,7 @@ impl MppState {
                         close_lock,
                     )
                 }
-                #[cfg(feature = "mpp-solana")]
+                #[cfg(feature = "payments-solana")]
                 MppBackend::Solana(_) => {
                     return Err("server-side close not implemented for Solana".into());
                 }
@@ -669,11 +669,11 @@ impl super::payment_gate::PaymentGate for MppState {
         backend_key: &'a str,
         channel_id: &'a str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
-        #[cfg(feature = "mpp-tempo")]
+        #[cfg(feature = "payments-tempo")]
         {
             Box::pin(self.close_channel(backend_key, channel_id))
         }
-        #[cfg(not(feature = "mpp-tempo"))]
+        #[cfg(not(feature = "payments-tempo"))]
         {
             let _ = (backend_key, channel_id);
             Box::pin(std::future::ready(Ok(())))
@@ -687,7 +687,7 @@ fn backend_session_challenge(
     options: SessionChallengeOptions<'_>,
 ) -> Result<mpp::PaymentChallenge, mpp::MppError> {
     match backend {
-        #[cfg(feature = "mpp-tempo")]
+        #[cfg(feature = "payments-tempo")]
         MppBackend::Tempo {
             mpp,
             suggested_deposit,
@@ -711,7 +711,7 @@ fn backend_session_challenge(
                 .ok_or_else(|| mpp::MppError::InvalidConfig("recipient not configured".into()))?;
             mpp.session_challenge_with_details(amount, currency, recipient, options)
         }
-        #[cfg(feature = "mpp-solana")]
+        #[cfg(feature = "payments-solana")]
         MppBackend::Solana(state) => solana_session_challenge(state, amount, options),
     }
 }
@@ -721,16 +721,16 @@ async fn backend_verify_session(
     credential: &mpp::PaymentCredential,
 ) -> Result<mpp::server::SessionVerifyResult, mpp::server::VerificationError> {
     match backend {
-        #[cfg(feature = "mpp-tempo")]
+        #[cfg(feature = "payments-tempo")]
         MppBackend::Tempo { mpp, .. } => mpp.verify_session(credential).await,
-        #[cfg(feature = "mpp-solana")]
+        #[cfg(feature = "payments-solana")]
         MppBackend::Solana(state) => solana_verify_session(state, credential).await,
     }
 }
 
 // ── Solana helpers ───────────────────────────────────────────────────
 
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 fn solana_session_challenge(
     state: &SolanaState,
     _amount: &str,
@@ -786,7 +786,7 @@ fn solana_session_challenge(
     })
 }
 
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 async fn solana_verify_session(
     state: &SolanaState,
     credential: &mpp::PaymentCredential,
@@ -861,7 +861,7 @@ async fn solana_verify_session(
 /// transaction on the Tempo escrow contract.
 ///
 /// Returns the transaction hash on success.
-#[cfg(feature = "mpp-tempo")]
+#[cfg(feature = "payments-tempo")]
 #[allow(clippy::too_many_arguments)]
 async fn submit_close_tx(
     provider: &TempoProvider,

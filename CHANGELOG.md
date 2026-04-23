@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠️ Breaking Changes
+
+- Renamed Cargo features `mpp-tempo` / `mpp-solana` to `payments-tempo` / `payments-solana` on the `bitrouter`, `bitrouter-api`, and `bitrouter-config` crates. Downstream users selecting these features in `Cargo.toml` must update the names. The implementation module remains `mpp` since it still wraps the MPP protocol.
+
 ## [0.25.0](https://github.com/bitrouter/bitrouter/compare/v0.24.4...v0.25.0)
 
 

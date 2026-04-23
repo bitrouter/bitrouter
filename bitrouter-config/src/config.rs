@@ -551,7 +551,7 @@ pub struct MppNetworksConfig {
     pub tempo: Option<TempoMppConfig>,
 
     /// Solana network configuration.
-    #[cfg(feature = "mpp-solana")]
+    #[cfg(feature = "payments-solana")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solana: Option<SolanaMppConfig>,
 }
@@ -590,7 +590,7 @@ pub struct TempoMppConfig {
 }
 
 /// Solana-specific MPP configuration.
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolanaMppConfig {
     /// Recipient address for payments (Solana base58 pubkey, required).
@@ -615,7 +615,7 @@ pub struct SolanaMppConfig {
 }
 
 /// Payment asset descriptor for Solana MPP.
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolanaAssetConfig {
     /// Asset kind: `"sol"` for native SOL, `"spl"` for an SPL token.
@@ -635,7 +635,7 @@ pub struct SolanaAssetConfig {
     pub symbol: Option<String>,
 }
 
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 impl Default for SolanaAssetConfig {
     fn default() -> Self {
         Self {
@@ -647,17 +647,17 @@ impl Default for SolanaAssetConfig {
     }
 }
 
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 fn default_solana_asset_kind() -> String {
     "sol".into()
 }
 
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 fn default_solana_asset_decimals() -> u8 {
     9
 }
 
-#[cfg(feature = "mpp-solana")]
+#[cfg(feature = "payments-solana")]
 fn default_solana_network() -> String {
     "mainnet-beta".into()
 }

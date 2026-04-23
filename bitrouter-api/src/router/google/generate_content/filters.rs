@@ -161,7 +161,7 @@ where
 }
 
 /// Creates a warp filter for `/v1beta/models/:model` with MPP payment gating.
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 pub fn generate_content_filter_with_mpp<T, R, A>(
     table: Arc<T>,
     router: Arc<R>,
@@ -198,7 +198,7 @@ where
         )
 }
 
-#[cfg(any(feature = "mpp-tempo", feature = "mpp-solana"))]
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_generate_content_with_mpp<T, R>(
     (model_action, request): (String, GenerateContentRequest),
     caller: CallerContext,

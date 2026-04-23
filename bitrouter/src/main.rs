@@ -664,7 +664,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             print_first_run_guidance(&runtime);
             let base_client = reqwest::Client::new();
             let client_builder = reqwest_middleware::ClientBuilder::new(base_client);
-            #[cfg(feature = "mpp-tempo")]
+            #[cfg(feature = "payments-tempo")]
             let client_builder =
                 match crate::runtime::payment::build_payment_middleware(&runtime.config) {
                     Ok(Some(mw)) => client_builder.with(mw),
