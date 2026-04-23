@@ -44,7 +44,7 @@ pub struct ServerPlan<T, R> {
     config: BitrouterConfig,
     table: Arc<T>,
     router: Arc<R>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Arc<DatabaseConnection>,
     paths: Option<crate::runtime::paths::RuntimePaths>,
     reload_fn: Option<Arc<dyn Fn() -> std::result::Result<(), String> + Send + Sync>>,
     /// Pre-built config-authoritative tool registry with policy enforcement.
@@ -77,23 +77,23 @@ where
     T: ServerTableBound + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
-    pub fn new(config: BitrouterConfig, table: Arc<T>, router: Arc<R>) -> Self {
+    pub fn new(
+        config: BitrouterConfig,
+        table: Arc<T>,
+        router: Arc<R>,
+        db: Arc<DatabaseConnection>,
+    ) -> Self {
         Self {
             config,
             table,
             router,
-            db: None,
+            db,
             paths: None,
             reload_fn: None,
             tool_registry: None,
             policy_resolver: None,
             revocation_set: None,
         }
-    }
-
-    pub fn with_db(mut self, db: Arc<DatabaseConnection>) -> Self {
-        self.db = Some(db);
-        self
     }
 
     pub fn with_paths(mut self, paths: crate::runtime::paths::RuntimePaths) -> Self {
@@ -221,10 +221,7 @@ where
                 .map_err(|e| tracing::warn!("could not resolve operator CAIP-10: {e}"))
                 .ok()
         });
-        let mut auth_ctx = JwtAuthContext::new(
-            self.db.as_ref().map(|db| db.as_ref().clone()),
-            operator_caip10,
-        );
+        let mut auth_ctx = JwtAuthContext::new(self.db.as_ref().clone(), operator_caip10);
         if let Some(revocation_set) = self.revocation_set.clone() {
             auth_ctx = auth_ctx.with_revocation_set(revocation_set);
         }
@@ -233,9 +230,7 @@ where
         // Build the observation stack: spend tracking + metrics for all service types.
         let mut observe_builder = ObserveStack::builder();
 
-        if let Some(ref db) = self.db {
-            observe_builder = observe_builder.with_db(db.as_ref());
-        }
+        observe_builder = observe_builder.with_db(self.db.as_ref());
 
         let providers = self.config.providers.clone();
         observe_builder = observe_builder.model_pricing(move |provider, model| {
@@ -321,12 +316,11 @@ where
                 .and_then(handle_key_revoke)
         };
 
-        // Build account filter that extracts caller context when auth is enabled,
-        // or returns a default (empty) caller context when no database is configured.
-        // When a database is connected, budget enforcement is chained after auth:
-        // accumulated spend is compared against the JWT `bgt` claim.
+        // Build account filter that extracts caller context (auth-gated) and
+        // chains budget enforcement: accumulated spend is compared against the
+        // JWT `bgt` claim.
         let spend_store = observe.spend_store.clone();
-        let account_filter = if self.db.is_some() {
+        let account_filter = {
             let auth_filter = auth::openai_auth(auth_ctx.clone());
             let ss = spend_store.clone();
             warp::any()
@@ -335,11 +329,9 @@ where
                 .and(warp::any().map(move || ss.clone()))
                 .and_then(crate::runtime::budget::check_budget)
                 .boxed()
-        } else {
-            warp::any().map(CallerContext::default).boxed()
         };
 
-        let anthropic_account_filter = if self.db.is_some() {
+        let anthropic_account_filter = {
             let auth_filter = auth::anthropic_auth(auth_ctx.clone());
             let ss = spend_store.clone();
             warp::any()
@@ -348,8 +340,6 @@ where
                 .and(warp::any().map(move || ss.clone()))
                 .and_then(crate::runtime::budget::check_budget)
                 .boxed()
-        } else {
-            warp::any().map(CallerContext::default).boxed()
         };
 
         // Model API routes with observation.
@@ -635,16 +625,10 @@ where
         #[cfg(feature = "mcp")]
         let admin_mcp_routes = {
             use bitrouter_api::router::mcp as mcp_api;
-            if self.db.is_some() {
-                auth::auth_gate(auth::management_auth(auth_ctx.clone()))
-                    .and(mcp_api::mcp_admin_filter(mcp_admin_registry))
-                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                    .boxed()
-            } else {
-                mcp_api::mcp_admin_filter(mcp_admin_registry)
-                    .map(|r| Box::new(r) as Box<dyn warp::Reply>)
-                    .boxed()
-            }
+            auth::auth_gate(auth::management_auth(auth_ctx.clone()))
+                .and(mcp_api::mcp_admin_filter(mcp_admin_registry))
+                .map(|r| Box::new(r) as Box<dyn warp::Reply>)
+                .boxed()
         };
         #[cfg(not(feature = "mcp"))]
         let admin_mcp_routes = warp::path!("mcp" / "admin" / ..)
@@ -740,41 +724,25 @@ where
         };
 
         // ── Serve ────────────────────────────────────────────────────
-        if let Some(ref db) = self.db {
-            let db_conn = db.as_ref().clone();
-            let mgmt_auth = auth::management_auth(auth_ctx.clone());
-            let acct =
-                bitrouter_accounts::filters::account_routes(db_conn.clone(), mgmt_auth.clone());
-            let sess = bitrouter_accounts::filters::session_routes(db_conn, mgmt_auth);
+        let db_conn = self.db.as_ref().clone();
+        let mgmt_auth = auth::management_auth(auth_ctx.clone());
+        let acct = bitrouter_accounts::filters::account_routes(db_conn.clone(), mgmt_auth.clone());
+        let sess = bitrouter_accounts::filters::session_routes(db_conn, mgmt_auth);
 
-            let all = all_routes
-                .or(acct)
-                .or(sess)
-                .recover(handle_auth_rejection)
-                .with(warp::trace::request());
+        let all = all_routes
+            .or(acct)
+            .or(sess)
+            .recover(handle_auth_rejection)
+            .with(warp::trace::request());
 
-            // Pre-check that the address is available (warp's bind panics on failure).
-            check_addr_available(addr)?;
-            tracing::info!(%addr, "server listening (JWT auth enabled)");
-            let server = warp::serve(all)
-                .bind(addr)
-                .await
-                .graceful(shutdown_signal());
-            server.run().await;
-        } else {
-            let all = all_routes
-                .recover(handle_auth_rejection)
-                .with(warp::trace::request());
-
-            // Pre-check that the address is available (warp's bind panics on failure).
-            check_addr_available(addr)?;
-            tracing::info!(%addr, "server listening (auth disabled — no database configured)");
-            let server = warp::serve(all)
-                .bind(addr)
-                .await
-                .graceful(shutdown_signal());
-            server.run().await;
-        }
+        // Pre-check that the address is available (warp's bind panics on failure).
+        check_addr_available(addr)?;
+        tracing::info!(%addr, "server listening (JWT auth enabled)");
+        let server = warp::serve(all)
+            .bind(addr)
+            .await
+            .graceful(shutdown_signal());
+        server.run().await;
 
         tracing::info!("server stopped");
         Ok(())

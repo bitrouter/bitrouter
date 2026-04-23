@@ -13,7 +13,6 @@ readme = "README.md"
 default = [
     "tui",
     "sqlite",
-    "postgres",
     "payments-tempo",
     "payments-solana",
     "mcp",
@@ -22,6 +21,9 @@ default = [
 rest = ["bitrouter-providers/rest"]
 mcp = ["bitrouter-providers/mcp"]
 tui = ["dep:bitrouter-tui", "bitrouter-providers/acp"]
+# Database driver selection. Exactly one driver must be enabled (default: sqlite).
+# Accounts, sessions, JWT auth, and persistent spend tracking are baked into the
+# binary unconditionally — these features only choose the storage backend.
 sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
 postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
 mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
@@ -42,12 +44,12 @@ payments-solana = [
 
 [dependencies]
 # Internal crates
-bitrouter-accounts.workspace = true
+bitrouter-accounts = { workspace = true }
 bitrouter-api = { workspace = true }
 bitrouter-config.workspace = true
 bitrouter-core.workspace = true
 bitrouter-guardrails.workspace = true
-bitrouter-observe.workspace = true
+bitrouter-observe = { workspace = true }
 bitrouter-providers = { workspace = true, features = ["agentskills"] }
 
 # CLI

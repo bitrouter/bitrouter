@@ -33,7 +33,6 @@ pub struct AppRuntime<R> {
     pub config: BitrouterConfig,
     pub paths: RuntimePaths,
     pub routing_table: R,
-    pub db: Option<Arc<DatabaseConnection>>,
 }
 
 impl<R: ServerTableBound + Send + Sync + 'static> AppRuntime<R> {
@@ -104,7 +103,6 @@ impl
             config,
             paths,
             routing_table,
-            db: None,
         })
     }
 
@@ -127,17 +125,23 @@ impl
             config,
             paths,
             routing_table,
-            db: None,
         }
     }
 
     /// Start the server with configuration hot-reload enabled.
     ///
+    /// Requires a connected database — accounts, sessions, JWT auth, and
+    /// persistent spend tracking are baked in unconditionally.
+    ///
     /// When the server receives a reload signal (SIGHUP on Unix, flag file on
     /// Windows), it re-reads the configuration file from disk and replaces the
     /// inner routing and tool tables without dropping in-flight requests or
     /// dynamic routes.
-    pub async fn serve_with_reload<M>(self, model_router: M) -> Result<()>
+    pub async fn serve_with_reload<M>(
+        self,
+        db: Arc<DatabaseConnection>,
+        model_router: M,
+    ) -> Result<()>
     where
         M: bitrouter_core::routers::router::LanguageModelRouter + Send + Sync + 'static,
     {
@@ -210,28 +214,22 @@ impl
             Ok(())
         };
 
-        let mut plan =
-            crate::runtime::server::ServerPlan::new(self.config, table, Arc::new(model_router))
-                .with_paths(paths)
-                .with_tool_registry(tool_registry)
-                .with_policy_resolver(shared_policy_resolver)
-                .with_reload(reload_fn);
+        let mut plan = crate::runtime::server::ServerPlan::new(
+            self.config,
+            table,
+            Arc::new(model_router),
+            db.clone(),
+        )
+        .with_paths(paths)
+        .with_tool_registry(tool_registry)
+        .with_policy_resolver(shared_policy_resolver)
+        .with_reload(reload_fn);
 
-        // Wire per-key revocation set. Use DB-backed persistence when a
-        // database is configured; fall back to in-memory (lost on restart).
+        // Wire DB-backed per-key revocation set.
         let revocation_set: Arc<dyn bitrouter_core::auth::revocation::KeyRevocationSet> =
-            if let Some(ref db) = self.db {
-                Arc::new(bitrouter_accounts::service::DbRevocationSet::new(
-                    db.clone(),
-                ))
-            } else {
-                Arc::new(bitrouter_core::auth::revocation::InMemoryRevocationSet::new())
-            };
+            Arc::new(bitrouter_accounts::service::DbRevocationSet::new(db));
         plan = plan.with_revocation_set(revocation_set);
 
-        if let Some(db) = self.db {
-            plan = plan.with_db(db);
-        }
         plan.serve().await
     }
 }
