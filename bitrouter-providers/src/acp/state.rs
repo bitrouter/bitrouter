@@ -10,6 +10,7 @@
 //! [`load_state`] returns an empty vector so callers can rebuild it.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -45,6 +46,16 @@ pub enum InstallMethod {
     Npx,
     Uvx,
     Binary,
+}
+
+impl fmt::Display for InstallMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Npx => "npx",
+            Self::Uvx => "uvx",
+            Self::Binary => "binary",
+        })
+    }
 }
 
 /// Return the current wall clock in Unix seconds.

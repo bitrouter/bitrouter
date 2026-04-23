@@ -125,13 +125,14 @@ impl App {
     fn slash_agents_list(&mut self, refresh: bool) {
         let cache_file = self.state.config.cache_dir.join("acp-registry.json");
         let state_file = self.state.config.agent_state_file.clone();
+        let registry_override = self.bitrouter_config.acp_registry_url.clone();
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
             use bitrouter_providers::acp::registry;
             use bitrouter_providers::acp::state;
 
-            let url = registry::resolve_registry_url(None);
+            let url = registry::resolve_registry_url(registry_override.as_deref());
             let fetch = if refresh {
                 registry::fetch_registry_fresh(&cache_file, &url).await
             } else {
@@ -139,7 +140,7 @@ impl App {
             };
 
             let mut lines: Vec<String> = Vec::new();
-            let records = state::load_state_sync(&state_file);
+            let records = state::load_state(&state_file).await.unwrap_or_default();
 
             match fetch {
                 Ok(index) => {
@@ -153,7 +154,7 @@ impl App {
                     for a in &agents {
                         let installed = records.iter().find(|r| r.id == a.id);
                         let mark = match installed {
-                            Some(r) => format!("[{}]", method_label(r.method)),
+                            Some(r) => format!("[{}]", r.method),
                             None => "[ ]".to_owned(),
                         };
                         lines.push(format!("  {mark} {:<22} v{}", a.id, a.version));
@@ -200,35 +201,9 @@ impl App {
             };
 
             let agent_config = registry_agent_to_config(agent);
-            let (tx, mut rx) = mpsc::channel(32);
+            let (tx, rx) = mpsc::channel(32);
 
-            let fwd_id = id.clone();
-            let fwd_tx = event_tx.clone();
-            let reporter = tokio::spawn(async move {
-                while let Some(p) = rx.recv().await {
-                    let evt = match p {
-                        InstallProgress::Downloading { .. } => AppEvent::InstallProgress {
-                            agent_id: fwd_id.clone(),
-                            percent: 0,
-                        },
-                        InstallProgress::Extracting => AppEvent::InstallProgress {
-                            agent_id: fwd_id.clone(),
-                            percent: 95,
-                        },
-                        InstallProgress::Done(path) => AppEvent::InstallComplete {
-                            agent_id: fwd_id.clone(),
-                            binary_path: path,
-                        },
-                        InstallProgress::Failed(msg) => AppEvent::InstallFailed {
-                            agent_id: fwd_id.clone(),
-                            message: msg,
-                        },
-                    };
-                    if fwd_tx.send(evt).await.is_err() {
-                        break;
-                    }
-                }
-            });
+            let reporter = spawn_progress_forwarder(rx, id.clone(), event_tx.clone());
 
             let result = eager::install_agent(
                 &id,
@@ -242,13 +217,10 @@ impl App {
             let _ = reporter.await;
 
             let line = match result {
-                Ok(installed) => {
-                    format!(
-                        "✓ {} installed via {}",
-                        installed.agent_id,
-                        method_label(installed.method)
-                    )
-                }
+                Ok(installed) => format!(
+                    "✓ {} installed via {}",
+                    installed.agent_id, installed.method
+                ),
                 Err(e) => format!("✗ install failed: {e}"),
             };
             send_system_lines(&event_tx, vec![line]).await;
@@ -271,6 +243,9 @@ impl App {
     }
 
     fn slash_agents_update(&mut self, id: Option<String>, bitrouter_config: &BitrouterConfig) {
+        // `load_state_sync` is acceptable here because we're already on
+        // the TUI's render/event-handling path (no active async ctx to
+        // block) and the file is a small JSON array.
         let state_file = self.state.config.agent_state_file.clone();
         let records = bitrouter_providers::acp::state::load_state_sync(&state_file);
         if records.is_empty() {
@@ -331,13 +306,49 @@ impl App {
     }
 }
 
-fn method_label(method: bitrouter_providers::acp::state::InstallMethod) -> &'static str {
-    use bitrouter_providers::acp::state::InstallMethod;
-    match method {
-        InstallMethod::Npx => "npx",
-        InstallMethod::Uvx => "uvx",
-        InstallMethod::Binary => "binary",
-    }
+/// Spawn a task that forwards [`InstallProgress`] events to the app's
+/// [`AppEvent`] channel with real-percent computation.  Shared by the
+/// slash-install path and (when invoked) the update path so progress
+/// semantics stay consistent with `agent_lifecycle::start_binary_install`.
+pub(super) fn spawn_progress_forwarder(
+    mut rx: mpsc::Receiver<InstallProgress>,
+    agent_id: String,
+    tx: mpsc::Sender<AppEvent>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(p) = rx.recv().await {
+            let evt = match p {
+                InstallProgress::Downloading {
+                    bytes_received,
+                    total,
+                } => {
+                    let percent = total
+                        .filter(|&t| t > 0)
+                        .map(|t| ((bytes_received * 100) / t) as u8)
+                        .unwrap_or(0);
+                    AppEvent::InstallProgress {
+                        agent_id: agent_id.clone(),
+                        percent,
+                    }
+                }
+                InstallProgress::Extracting => AppEvent::InstallProgress {
+                    agent_id: agent_id.clone(),
+                    percent: 95,
+                },
+                InstallProgress::Done(path) => AppEvent::InstallComplete {
+                    agent_id: agent_id.clone(),
+                    binary_path: path,
+                },
+                InstallProgress::Failed(msg) => AppEvent::InstallFailed {
+                    agent_id: agent_id.clone(),
+                    message: msg,
+                },
+            };
+            if tx.send(evt).await.is_err() {
+                break;
+            }
+        }
+    })
 }
 
 async fn send_system_lines(tx: &mpsc::Sender<AppEvent>, lines: Vec<String>) {

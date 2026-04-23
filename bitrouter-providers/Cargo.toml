@@ -23,6 +23,7 @@ acp = [
     "dep:flate2",
     "dep:tar",
     "dep:zip",
+    "tokio/fs",
     "tokio/process",
     "tokio/io-std",
 ]

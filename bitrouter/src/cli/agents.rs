@@ -14,25 +14,19 @@ use crate::runtime::paths::RuntimePaths;
 /// Run the `agents list` subcommand — prints every agent available
 /// across (a) the config, (b) the ACP registry, and (c) installed
 /// ledger, plus PATH availability.
-pub fn run_list(
+pub async fn run_list(
     config: &BitrouterConfig,
     paths: &RuntimePaths,
     refresh: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Registry (async, serialized onto the caller's runtime).
     let cache_file = paths.cache_dir.join("acp-registry.json");
     let registry_url = registry::resolve_registry_url(config.acp_registry_url.as_deref());
 
-    let registry_result = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            if refresh {
-                registry::fetch_registry_fresh(&cache_file, &registry_url).await
-            } else {
-                registry::fetch_registry(&cache_file, registry::DEFAULT_TTL_SECS, &registry_url)
-                    .await
-            }
-        })
-    });
+    let registry_result = if refresh {
+        registry::fetch_registry_fresh(&cache_file, &registry_url).await
+    } else {
+        registry::fetch_registry(&cache_file, registry::DEFAULT_TTL_SECS, &registry_url).await
+    };
 
     // Merge: registry > config > built-in.
     let mut known = bitrouter_config::builtin_agent_defs();
@@ -81,7 +75,7 @@ pub fn run_list(
         let on_path = discovered.iter().any(|d| &d.name == name);
         let installed = records.get(name);
         let status = match (installed, on_path) {
-            (Some(rec), _) => format!("\u{2713} installed ({})", method_label(rec.method)),
+            (Some(rec), _) => format!("\u{2713} installed ({})", rec.method),
             (None, true) => "\u{2713} on PATH".to_owned(),
             (None, false) => "\u{2717} not installed".to_owned(),
         };
@@ -94,14 +88,6 @@ pub fn run_list(
     println!();
 
     Ok(())
-}
-
-fn method_label(method: state::InstallMethod) -> &'static str {
-    match method {
-        state::InstallMethod::Npx => "npx",
-        state::InstallMethod::Uvx => "uvx",
-        state::InstallMethod::Binary => "binary",
-    }
 }
 
 /// Install an agent by id via the ACP registry.
@@ -168,8 +154,7 @@ pub async fn run_install(
     println!();
     println!(
         "  \u{2713} {} installed via {}",
-        installed.agent_id,
-        method_label(installed.method)
+        installed.agent_id, installed.method
     );
     Ok(())
 }

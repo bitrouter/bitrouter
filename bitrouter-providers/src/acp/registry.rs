@@ -192,17 +192,34 @@ async fn write_cache(cache_file: &Path, cached: &CachedRegistry) {
         return;
     }
 
-    match serde_json::to_vec_pretty(cached) {
-        Ok(bytes) => {
-            if let Err(e) = tokio::fs::write(cache_file, bytes).await {
-                tracing::warn!(
-                    path = %cache_file.display(),
-                    error = %e,
-                    "failed to write registry cache"
-                );
-            }
+    let bytes = match serde_json::to_vec_pretty(cached) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to serialise registry cache");
+            return;
         }
-        Err(e) => tracing::warn!(error = %e, "failed to serialise registry cache"),
+    };
+
+    // Atomic write: temp file + rename.  Matches `state::save_state` so
+    // a crash or disk-full mid-write leaves the previous cache intact
+    // rather than a truncated JSON blob that the next read has to
+    // discard.
+    let tmp = cache_file.with_extension("json.tmp");
+    if let Err(e) = tokio::fs::write(&tmp, &bytes).await {
+        tracing::warn!(
+            path = %tmp.display(),
+            error = %e,
+            "failed to write registry cache tmp"
+        );
+        return;
+    }
+    if let Err(e) = tokio::fs::rename(&tmp, cache_file).await {
+        tracing::warn!(
+            from = %tmp.display(),
+            to = %cache_file.display(),
+            error = %e,
+            "failed to rename registry cache"
+        );
     }
 }
 

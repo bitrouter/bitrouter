@@ -59,10 +59,19 @@ impl App {
         self.spawn_agent_provider(agent_id, &config);
     }
 
-    /// Spawn the async binary download task.
+    /// Spawn the async binary download task (click-connect path).
+    ///
+    /// State persistence happens here rather than in
+    /// [`handle_install_complete`] so the single install writer is the
+    /// task that produced the resolved path.  This avoids racing the
+    /// slash-install path (which persists via `eager::install_agent`
+    /// with a real registry version) with an empty-version overwrite.
     fn start_binary_install(&self, agent_id: &str, config: &bitrouter_config::AgentConfig) {
         use bitrouter_config::Distribution;
         use bitrouter_providers::acp::install::install_binary_agent;
+        use bitrouter_providers::acp::state::{
+            InstallMethod, InstallRecord, now_unix_seconds, upsert_record,
+        };
 
         let platforms = config.distribution.iter().find_map(|d| match d {
             Distribution::Binary { platforms } => Some(platforms.clone()),
@@ -77,53 +86,32 @@ impl App {
         let agent_id_owned = agent_id.to_string();
         let event_tx = self.event_tx.clone();
         let install_dir = self.state.config.agents_dir.join(&agent_id_owned);
+        let state_file = self.state.config.agent_state_file.clone();
 
         tokio::spawn(async move {
-            let (progress_tx, mut progress_rx) = mpsc::channel(32);
+            let (progress_tx, progress_rx) = mpsc::channel(32);
+            let reporter = super::slash::spawn_progress_forwarder(
+                progress_rx,
+                agent_id_owned.clone(),
+                event_tx.clone(),
+            );
 
-            // Forward progress to app events.
-            let fwd_tx = event_tx.clone();
-            let fwd_id = agent_id_owned.clone();
-            tokio::spawn(async move {
-                while let Some(p) = progress_rx.recv().await {
-                    use bitrouter_providers::acp::types::InstallProgress;
-                    let evt = match &p {
-                        InstallProgress::Downloading {
-                            bytes_received,
-                            total,
-                        } => {
-                            let percent = total
-                                .filter(|&t| t > 0)
-                                .map(|t| ((*bytes_received * 100) / t) as u8)
-                                .unwrap_or(0);
-                            AppEvent::InstallProgress {
-                                agent_id: fwd_id.clone(),
-                                percent,
-                            }
-                        }
-                        InstallProgress::Extracting => AppEvent::InstallProgress {
-                            agent_id: fwd_id.clone(),
-                            percent: 95,
-                        },
-                        InstallProgress::Done(path) => AppEvent::InstallComplete {
-                            agent_id: fwd_id.clone(),
-                            binary_path: path.clone(),
-                        },
-                        InstallProgress::Failed(msg) => AppEvent::InstallFailed {
-                            agent_id: fwd_id.clone(),
-                            message: msg.clone(),
-                        },
-                    };
-                    if fwd_tx.send(evt).await.is_err() {
-                        break;
-                    }
-                }
-            });
-
-            // The forwarding task handles Done/Failed via InstallProgress,
-            // so we only need to drive the install to completion here.
-            let _ =
+            let result =
                 install_binary_agent(&agent_id_owned, &install_dir, &platforms, progress_tx).await;
+            let _ = reporter.await;
+
+            if let Ok(path) = result {
+                let record = InstallRecord {
+                    id: agent_id_owned,
+                    version: String::new(),
+                    method: InstallMethod::Binary,
+                    resolved_binary_path: Some(path),
+                    installed_at: now_unix_seconds(),
+                };
+                // Best-effort persistence: failure is non-fatal — we re-record
+                // on the next install or rediscover at next startup.
+                let _ = upsert_record(&state_file, record).await;
+            }
         });
     }
 
@@ -152,25 +140,11 @@ impl App {
             None => return,
         };
 
-        // Persist the resolved binary path so cold restarts can skip re-installing.
-        let state_file = self.state.config.agent_state_file.clone();
-        let agent_id_owned = agent_id.to_string();
-        let binary_path_owned = binary_path.clone();
-        tokio::spawn(async move {
-            use bitrouter_providers::acp::state::{
-                InstallMethod, InstallRecord, now_unix_seconds, upsert_record,
-            };
-            let record = InstallRecord {
-                id: agent_id_owned,
-                version: String::new(),
-                method: InstallMethod::Binary,
-                resolved_binary_path: Some(binary_path_owned),
-                installed_at: now_unix_seconds(),
-            };
-            // Best-effort persistence: failure here is non-fatal (we'll
-            // re-record on the next install or discover at next startup).
-            let _ = upsert_record(&state_file, record).await;
-        });
+        // State persistence is the responsibility of the install task
+        // (either `start_binary_install` for the click-connect path or
+        // `eager::install_agent` for the slash path) so we don't race
+        // them here with an empty-version overwrite.
+        let _ = binary_path;
 
         agent.status = AgentStatus::Connecting;
         self.push_system_msg(&format!("{agent_id} installed, connecting..."));

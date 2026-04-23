@@ -661,7 +661,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             match action {
                 AgentsAction::List { refresh } => {
-                    cli::agents::run_list(&runtime.config, &paths, refresh)?
+                    cli::agents::run_list(&runtime.config, &paths, refresh).await?
                 }
                 AgentsAction::Check => cli::agents::run_check(&runtime.config)?,
                 AgentsAction::Install { id } => {

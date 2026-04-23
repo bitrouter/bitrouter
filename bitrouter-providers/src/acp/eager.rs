@@ -56,7 +56,11 @@ pub async fn install_agent(
     for dist in &config.distribution {
         match dist {
             Distribution::Npx { package, .. } => {
-                if which("npm").is_none() {
+                // Check for `npx` (what we invoke at launch), not `npm`:
+                // some installs ship only one of the two, and a package
+                // we can install but not launch is worse than a clean
+                // skip to the next distribution method.
+                if which("npx").is_none() {
                     continue;
                 }
                 run_install_command("npm", &["install", "-g", package], &progress_tx).await?;
@@ -78,7 +82,9 @@ pub async fn install_agent(
                 });
             }
             Distribution::Uvx { package, .. } => {
-                if which("uv").is_none() {
+                // See the `npx` comment above — we check the launch-time
+                // binary, not the install-time one.
+                if which("uvx").is_none() {
                     continue;
                 }
                 run_install_command("uv", &["tool", "install", package], &progress_tx).await?;
