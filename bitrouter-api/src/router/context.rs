@@ -3,13 +3,11 @@
 //! differ, but the resulting `RouteContext` is protocol-agnostic.
 
 /// Whether a string slice contains a fenced code block marker.
-#[cfg(any(feature = "openai", feature = "anthropic", feature = "google"))]
 fn has_code_fence(text: &str) -> bool {
     text.contains("```")
 }
 
 /// OpenAI Chat Completions context extraction.
-#[cfg(feature = "openai")]
 pub(crate) mod openai_chat {
     use super::*;
     use bitrouter_core::api::openai::chat::types::{
@@ -60,7 +58,6 @@ pub(crate) mod openai_chat {
 }
 
 /// OpenAI Responses API context extraction.
-#[cfg(feature = "openai")]
 pub(crate) mod openai_responses {
     use super::*;
     use bitrouter_core::api::openai::responses::types::{
@@ -127,7 +124,6 @@ pub(crate) mod openai_responses {
 }
 
 /// Anthropic Messages API context extraction.
-#[cfg(feature = "anthropic")]
 pub(crate) mod anthropic_messages {
     use super::*;
     use bitrouter_core::api::anthropic::messages::types::{
@@ -178,7 +174,6 @@ pub(crate) mod anthropic_messages {
 }
 
 /// Google GenerateContent API context extraction.
-#[cfg(feature = "google")]
 pub(crate) mod google_generate {
     use super::*;
     use bitrouter_core::api::google::generate_content::types::GenerateContentRequest;

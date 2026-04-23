@@ -1,20 +1,15 @@
 pub mod admin;
 pub mod agents;
 pub mod agentskills;
-#[cfg(feature = "anthropic")]
 pub mod anthropic;
 pub(crate) mod context;
-#[cfg(feature = "google")]
 pub mod google;
-#[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod models;
-#[cfg(feature = "openai")]
 pub mod openai;
 pub mod routes;
 pub mod tools;
 
-#[cfg(any(feature = "openai", feature = "anthropic", feature = "google"))]
 mod observe_ctx {
     use std::sync::Arc;
     use std::time::Instant;
@@ -35,5 +30,4 @@ mod observe_ctx {
     }
 }
 
-#[cfg(any(feature = "openai", feature = "anthropic", feature = "google"))]
 pub(crate) use observe_ctx::StreamObserveContext;
