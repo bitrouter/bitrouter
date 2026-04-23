@@ -34,6 +34,33 @@ The layering follows a strict bottom-up principle — each crate depends only on
 9. **bitrouter-tui** — Standalone TUI crate. Depends on `agent-client-protocol` for ACP integration and `ratatui`/`crossterm` for rendering. Provides the terminal UI for managing coding agent sessions via the Agent Client Protocol (JSON-RPC over stdio). Auto-discovers ACP-compatible agents on PATH and communicates with them on a dedicated thread using `LocalSet` (ACP types are `!Send`).
 10. **bitrouter** (binary) — The CLI product. Depends on all workspace crates. Assembles everything: resolves paths, loads config, and provides the user-facing commands (`serve`, `start`, `stop`, `status`, `restart`) and optional TUI.
 
+### Crate-creation rule
+
+> **Introduce a new `bitrouter-*` crate only if a feature plugged into the SDK would grow the SDK's dependency tree with new heavyweight integration crates.** Otherwise, the feature lives inside `bitrouter-api` (or `bitrouter-core`) behind a feature flag.
+
+The rule keeps the workspace small by default and pushes new integrations into companion crates only when they bring real dependency weight. How current crates satisfy it:
+
+- `bitrouter-accounts` and `bitrouter-observe` — both pull `sea-orm` + `sqlx` drivers; gating them as features on `bitrouter-api` would force every embedder to compile sea-orm.
+- `bitrouter-providers` — pulls provider SDKs and protocol clients (`rmcp`, ACP archive readers) that should not be paid for by SDK consumers who don't use them.
+- `bitrouter-guardrails` — kept as its own crate because the firewall is a distinct concern with room to grow its own dep surface (richer pattern engines, ML-based detectors, remote rule sources).
+- `bitrouter-blob` — kept as its own crate in anticipation of additional backends (`s3`, `gcs`, …) that will pull large SDK trees; avoids moving code in and out of the workspace.
+- `bitrouter-tui` — pulls `ratatui`, `crossterm`, and the ACP stack; clearly its own crate.
+- `bitrouter-config` — owns YAML loading and the built-in provider registry; not a heavy integration but a natural seam between transport-neutral types and runtime composition.
+
+A feature on `bitrouter-api` that would satisfy this rule today: anything pulling a new optional dep on a companion crate (e.g. `bitrouter-accounts`, `bitrouter-observe`, `bitrouter-guardrails`).
+
+### Feature rule
+
+> **A feature exists if and only if disabling it removes a non-trivial set of dependencies from the build.** Pure module-visibility toggles are not features — the module is always compiled.
+
+The rule applies equally to the `bitrouter` binary and every library crate. Rationale:
+
+- Features that don't shrink the dep tree only add `cfg` noise without delivering smaller binaries or faster builds.
+- A feature must therefore correspond to either an `optional` dependency, a sub-tree selected through a transitive crate's features, or a meaningfully different set of system-level deps.
+- Sub-flag choices that swap between mutually exclusive sub-trees (e.g. `sqlx-sqlite` vs `sqlx-postgres`, or chain-specific MPP signing stacks) satisfy the rule and remain valid features even when always-on at the top level.
+
+In `bitrouter` (the binary), features describe **bundles of capability** the user opts into (for example `tui`) rather than backend toggles. Capabilities considered core to the product should not be feature-gated at the binary level: they are part of every build regardless of feature selection. Backend choices that pick between mutually exclusive sub-trees (e.g. database driver, payment chain) remain features, but are always-on as defaults.
+
 ## Request Flow
 
 ### Model requests
