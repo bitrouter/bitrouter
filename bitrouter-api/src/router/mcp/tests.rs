@@ -296,7 +296,12 @@ async fn none_server_returns_404() {
 
 #[tokio::test]
 async fn malformed_json_returns_400() {
-    let filter = make_filter();
+    let filter = make_filter().recover(|err: warp::Rejection| async move {
+        match crate::error::handle_bitrouter_rejection(&err) {
+            Some(resp) => Ok::<_, warp::Rejection>(resp),
+            None => Err(err),
+        }
+    });
     let resp = warp::test::request()
         .method("POST")
         .path("/mcp")
@@ -305,6 +310,12 @@ async fn malformed_json_returns_400() {
         .reply(&filter)
         .await;
     assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = serde_json::from_slice(resp.body()).expect("parse response");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("not json"),
+        "expected request body preview in error message: {message}"
+    );
 }
 
 #[tokio::test]

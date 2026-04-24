@@ -40,6 +40,7 @@ bitrouter-accounts = { workspace = true, optional = true }
 bitrouter-observe = { workspace = true, optional = true }
 bitrouter-guardrails = { workspace = true, optional = true }
 async-trait = { version = "0.1" }
+bytes = { version = "1" }
 futures-core = { version = "0.3" }
 mpp = { package = "mpp-br", version = "0.9", default-features = false, features = [
     "reqwest-rustls-tls",

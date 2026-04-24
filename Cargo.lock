@@ -1629,6 +1629,7 @@ dependencies = [
  "bitrouter-guardrails",
  "bitrouter-observe",
  "bs58",
+ "bytes",
  "ed25519-dalek",
  "futures-core",
  "mpp-br",

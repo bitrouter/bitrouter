@@ -106,7 +106,7 @@ where
 {
     warp::path!("admin" / "mcp" / "servers" / String / "filter")
         .and(warp::put())
-        .and(warp::body::json::<FilterUpdateBody>())
+        .and(crate::body::json::<FilterUpdateBody>())
         .and(warp::any().map(move || registry.clone()))
         .and_then(handle_update_filter)
 }

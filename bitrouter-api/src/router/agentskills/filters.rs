@@ -102,7 +102,7 @@ where
 {
     warp::path!("v1" / "skills")
         .and(warp::post())
-        .and(warp::body::json::<CreateSkillRequest>())
+        .and(crate::body::json::<CreateSkillRequest>())
         .and(warp::any().map(move || service.clone()))
         .and_then(handle_create)
 }

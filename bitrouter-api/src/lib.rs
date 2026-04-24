@@ -10,5 +10,6 @@ pub mod guardrails;
 #[cfg(feature = "observe")]
 pub mod observe;
 
+mod body;
 pub mod error;
 mod util;
