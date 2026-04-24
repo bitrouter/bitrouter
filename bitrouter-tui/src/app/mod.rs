@@ -7,19 +7,18 @@ mod modals;
 mod mouse;
 mod search;
 pub(crate) mod session_store;
+mod session_system;
 mod sessions;
 mod slash;
 mod streaming;
 
 use session_store::SessionStore;
+use session_system::SessionSystem;
 
-use std::collections::HashMap;
 use std::io::Stdout;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use bitrouter_providers::acp::discovery::discover_agents;
-use bitrouter_providers::acp::provider::AcpAgentProvider;
 use bitrouter_providers::acp::types::AgentAvailability;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -111,15 +110,14 @@ impl AppState {
 pub struct App {
     pub running: bool,
     pub state: AppState,
-    /// Active agent providers, keyed by agent name.
-    agent_providers: HashMap<String, Arc<AcpAgentProvider>>,
-    /// Cloned event sender for spawning agent connections.
+    /// ACP session lifecycle: owns providers, launch cwd, and the four
+    /// spawn sites previously scattered across `agent_lifecycle.rs`.
+    pub(super) session_system: SessionSystem,
+    /// Cloned event sender for non-session work (install, misc background tasks).
     event_tx: mpsc::Sender<AppEvent>,
     /// Snapshot of the BitRouter config at TUI startup, used by slash
     /// commands that need provider/registry metadata.
     bitrouter_config: bitrouter_config::BitrouterConfig,
-    /// Absolute working directory every session is spawned in.
-    pub(super) launch_cwd: PathBuf,
 }
 
 impl App {
@@ -212,10 +210,9 @@ impl App {
                 search: None,
                 last_layout: None,
             },
-            agent_providers: HashMap::new(),
+            session_system: SessionSystem::new(event_tx.clone(), launch_cwd),
             event_tx,
             bitrouter_config: bitrouter_config.clone(),
-            launch_cwd,
         }
     }
 
@@ -276,7 +273,7 @@ pub async fn run_loop(
     }
 
     // Shutdown: drop all providers so agent threads exit cleanly.
-    app.agent_providers.clear();
+    app.session_system.shutdown();
 
     Ok(())
 }

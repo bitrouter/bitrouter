@@ -2,11 +2,9 @@ use bitrouter_core::agents::event::{
     PermissionOutcome, PermissionRequest, PermissionRequestId, PermissionResponse,
 };
 use bitrouter_providers::acp::discovery::discover_agents;
-use bitrouter_providers::acp::provider::AcpAgentProvider;
 use bitrouter_providers::acp::types::AgentAvailability;
 use tokio::sync::mpsc;
 
-use crate::event::AppEvent;
 use crate::model::{
     ActivityEntry, AgentStatus, EntryKind, PermissionEntry, SessionBadge, agent_color,
 };
@@ -16,7 +14,7 @@ use super::{App, InputMode};
 
 impl App {
     pub(super) fn connect_agent(&mut self, agent_id: &str) {
-        if self.agent_providers.contains_key(agent_id) {
+        if self.session_system.has_provider(agent_id) {
             return; // Already connected or connecting.
         }
 
@@ -172,52 +170,11 @@ impl App {
 
     /// Spawn an ACP agent provider, connect, and wire up event forwarding.
     fn spawn_agent_provider(&mut self, agent_id: &str, config: &bitrouter_config::AgentConfig) {
-        use bitrouter_core::agents::event::AgentEvent;
-        use bitrouter_core::agents::provider::AgentProvider;
-
-        let provider = AcpAgentProvider::new(agent_id.to_string(), config.clone());
-        let provider = std::sync::Arc::new(provider);
-        self.agent_providers
-            .insert(agent_id.to_string(), provider.clone());
-
-        let agent_id_owned = agent_id.to_string();
-        let app_event_tx = self.event_tx.clone();
-        let cwd = self.launch_cwd.clone();
-
-        // Connect on a background task.
-        tokio::spawn(async move {
-            match provider.connect(&cwd).await {
-                Ok(session_info) => {
-                    let _ = app_event_tx
-                        .send(AppEvent::AgentConnected {
-                            agent_id: agent_id_owned,
-                            session_id: session_info.session_id,
-                        })
-                        .await;
-                }
-                Err(e) => {
-                    let _ = app_event_tx
-                        .send(AppEvent::Agent(
-                            agent_id_owned,
-                            AgentEvent::Error {
-                                message: format!("{e}"),
-                            },
-                        ))
-                        .await;
-                }
-            }
-        });
+        self.session_system.spawn_connect(agent_id, config);
     }
 
     /// Send a prompt to an agent and spawn a forwarding task for the turn's events.
     pub(super) fn send_prompt_to_agent(&self, agent_id: &str, text: String) {
-        use bitrouter_core::agents::provider::AgentProvider;
-
-        let provider = match self.agent_providers.get(agent_id) {
-            Some(p) => p.clone(),
-            None => return,
-        };
-
         let session_id = self
             .state
             .agents
@@ -225,52 +182,18 @@ impl App {
             .find(|a| a.name == agent_id)
             .and_then(|a| a.session_id.clone())
             .unwrap_or_default();
-
-        let agent_id_owned = agent_id.to_string();
-        let app_event_tx = self.event_tx.clone();
-
-        tokio::spawn(async move {
-            match provider.submit(&session_id, text).await {
-                Ok(mut rx) => {
-                    while let Some(evt) = rx.recv().await {
-                        if app_event_tx
-                            .send(AppEvent::Agent(agent_id_owned.clone(), evt))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    let _ = app_event_tx
-                        .send(AppEvent::Agent(
-                            agent_id_owned,
-                            bitrouter_core::agents::event::AgentEvent::Error {
-                                message: format!("{e}"),
-                            },
-                        ))
-                        .await;
-                }
-            }
-        });
+        self.session_system.send_prompt(agent_id, &session_id, text);
     }
 
     pub(super) fn disconnect_agent(&mut self, agent_id: &str) {
-        use bitrouter_core::agents::provider::AgentProvider;
-
-        if let Some(provider) = self.agent_providers.remove(agent_id) {
-            let session_id = self
-                .state
-                .agents
-                .iter()
-                .find(|a| a.name == agent_id)
-                .and_then(|a| a.session_id.clone())
-                .unwrap_or_default();
-            tokio::spawn(async move {
-                let _ = provider.disconnect(&session_id).await;
-            });
-        }
+        let session_id = self
+            .state
+            .agents
+            .iter()
+            .find(|a| a.name == agent_id)
+            .and_then(|a| a.session_id.clone())
+            .unwrap_or_default();
+        self.session_system.disconnect(agent_id, &session_id);
         // The disconnect will trigger a Disconnected event from the agent thread.
     }
 
@@ -398,23 +321,20 @@ impl App {
                 return;
             };
 
-        // Send the response via the provider's respond_permission method.
-        if let Some(provider) = self.agent_providers.get(&agent_id) {
-            use bitrouter_core::agents::provider::AgentProvider;
-            let provider = provider.clone();
-            let session_id = self
-                .state
-                .agents
-                .iter()
-                .find(|a| a.name == agent_id)
-                .and_then(|a| a.session_id.clone())
-                .unwrap_or_default();
-            tokio::spawn(async move {
-                let _ = provider
-                    .respond_permission(&session_id, request_id, PermissionResponse { outcome })
-                    .await;
-            });
-        }
+        // Send the response via the session system.
+        let session_id = self
+            .state
+            .agents
+            .iter()
+            .find(|a| a.name == agent_id)
+            .and_then(|a| a.session_id.clone())
+            .unwrap_or_default();
+        self.session_system.respond_permission(
+            &agent_id,
+            &session_id,
+            request_id,
+            PermissionResponse { outcome },
+        );
 
         // Check if any other session has a pending permission — auto-switch to it.
         let next_perm_session =

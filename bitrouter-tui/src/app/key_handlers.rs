@@ -336,7 +336,7 @@ impl App {
                 let selected = self.state.agent_list_selected;
                 if let Some(agent) = self.state.agents.get(selected) {
                     let name = agent.name.clone();
-                    if !self.agent_providers.contains_key(&name) {
+                    if !self.session_system.has_provider(&name) {
                         self.connect_agent(&name);
                     }
                     // Switch to the agent's session.

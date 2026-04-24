@@ -61,7 +61,7 @@ impl App {
 
     fn handle_agent_disconnected(&mut self, agent_id: String) {
         // Clean up provider handle.
-        self.agent_providers.remove(&agent_id);
+        self.session_system.forget(&agent_id);
         if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
             // Only reset status if not already in Error state.
             if !matches!(agent.status, AgentStatus::Error(_)) {

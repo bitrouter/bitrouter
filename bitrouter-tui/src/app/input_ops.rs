@@ -184,7 +184,7 @@ impl App {
         // Send to each target agent.
         for agent_name in &targets {
             // Lazy-connect if needed.
-            if !self.agent_providers.contains_key(agent_name) {
+            if !self.session_system.has_provider(agent_name) {
                 self.connect_agent(agent_name);
             }
             // Reset streaming cursor for fresh response.
