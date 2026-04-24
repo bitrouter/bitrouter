@@ -76,6 +76,27 @@ pub struct BitrouterClaims {
     /// When absent, no policy restrictions apply (owner mode).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pol: Option<String>,
+
+    /// Standard JOSE `jti` — per-token unique identifier used for replay
+    /// protection and audit correlation. AAP-aligned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jti: Option<String>,
+
+    /// Standard JOSE `aud` — intended audience. Host-minted tokens set
+    /// this to the target service (e.g. `"bitrouter-node"`). AAP-aligned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aud: Option<String>,
+
+    /// Standard JOSE `sub` — subject (resource owner). For host-minted
+    /// tokens this is the authenticated user id that the custodial
+    /// signer is acting on behalf of. AAP-aligned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub: Option<String>,
+
+    /// AAP `host` claim — identifier of the key custodian host (e.g.
+    /// the console service that minted a HostThumbprint token).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 impl BitrouterClaims {

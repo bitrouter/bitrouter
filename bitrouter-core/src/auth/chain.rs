@@ -175,13 +175,23 @@ impl fmt::Display for Caip10 {
     }
 }
 
-/// JWT algorithm identifiers for web3 wallet signing.
+/// JWT algorithm identifiers.
+///
+/// `SolEdDsa` and `Eip191K` are the BitRouter-native wallet schemes whose
+/// `iss` is a CAIP-10 address. `EdDsa` is the standard JOSE Ed25519 variant
+/// (RFC 8037) used by host-custodied tokens whose `iss` is an RFC 7638
+/// JWK thumbprint. The header string `"EdDSA"` is distinct from
+/// `"SOL_EDDSA"` — the wire-level algorithm is the only thing
+/// separating the two Ed25519-based paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JwtAlgorithm {
-    /// Solana Ed25519 signing (raw message bytes).
+    /// Solana Ed25519 signing (raw message bytes), `alg = "SOL_EDDSA"`.
     SolEdDsa,
-    /// EVM EIP-191 prefixed secp256k1 signing.
+    /// EVM EIP-191 prefixed secp256k1 signing, `alg = "EIP191K"`.
     Eip191K,
+    /// Standard JOSE Ed25519 signing (RFC 8037), `alg = "EdDSA"`.
+    /// Used by host-minted tokens whose `iss` is a JWK thumbprint.
+    EdDsa,
 }
 
 impl JwtAlgorithm {
@@ -190,6 +200,7 @@ impl JwtAlgorithm {
         match self {
             Self::SolEdDsa => "SOL_EDDSA",
             Self::Eip191K => "EIP191K",
+            Self::EdDsa => "EdDSA",
         }
     }
 
@@ -203,6 +214,7 @@ impl JwtAlgorithm {
         match s {
             "SOL_EDDSA" => Ok(Self::SolEdDsa),
             "EIP191K" => Ok(Self::Eip191K),
+            "EdDSA" => Ok(Self::EdDsa),
             other => Err(JwtError::UnsupportedAlgorithm(other.to_string())),
         }
     }
@@ -328,7 +340,11 @@ mod tests {
 
     #[test]
     fn jwt_algorithm_roundtrip() {
-        for alg in [JwtAlgorithm::SolEdDsa, JwtAlgorithm::Eip191K] {
+        for alg in [
+            JwtAlgorithm::SolEdDsa,
+            JwtAlgorithm::Eip191K,
+            JwtAlgorithm::EdDsa,
+        ] {
             let parsed = JwtAlgorithm::from_header(alg.as_str()).expect("parse");
             assert_eq!(parsed, alg);
         }
@@ -337,5 +353,15 @@ mod tests {
     #[test]
     fn jwt_algorithm_rejects_unknown() {
         assert!(JwtAlgorithm::from_header("RS256").is_err());
+    }
+
+    #[test]
+    fn eddsa_and_sol_eddsa_have_distinct_header_strings() {
+        // Critical: standard JOSE `"EdDSA"` must never collide with the
+        // BitRouter-native `"SOL_EDDSA"` — they denote different auth paths.
+        assert_ne!(
+            JwtAlgorithm::EdDsa.as_str(),
+            JwtAlgorithm::SolEdDsa.as_str()
+        );
     }
 }

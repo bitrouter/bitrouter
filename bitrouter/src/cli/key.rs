@@ -177,6 +177,10 @@ pub fn sign(
         id: Some(key_id),
         key: ows_key.map(String::from),
         pol: policy.map(String::from),
+        jti: None,
+        aud: None,
+        sub: None,
+        host: None,
     };
 
     // 6. Prompt passphrase and sign.

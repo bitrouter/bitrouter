@@ -145,6 +145,19 @@ enum Command {
         action: AuthAction,
     },
 
+    /// Sign in to BitRouter Cloud and persist a `brk_*` API key
+    Login {
+        /// Cloud base URL (overrides `BITROUTER_CLOUD_URL`)
+        #[arg(long)]
+        url: Option<String>,
+    },
+
+    /// Remove stored BitRouter Cloud credentials
+    Logout,
+
+    /// Show the currently stored BitRouter Cloud identity
+    Whoami,
+
     /// Reset configuration and re-run setup
     #[cfg(feature = "cli")]
     Reset,
@@ -588,6 +601,21 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 AuthAction::Status => cli::auth::run_status(&runtime.config, &paths),
             })?;
+            return Ok(());
+        }
+        Some(Command::Login { url }) => {
+            // `reqwest::blocking` inside a Tokio worker — bracket with
+            // `block_in_place` to match the Auth branch above.
+            let base = cli::cloud_auth::resolve_cloud_url(url.as_deref());
+            tokio::task::block_in_place(|| cli::cloud_auth::run_login(&paths.home_dir, &base))?;
+            return Ok(());
+        }
+        Some(Command::Logout) => {
+            cli::cloud_auth::run_logout(&paths.home_dir)?;
+            return Ok(());
+        }
+        Some(Command::Whoami) => {
+            cli::cloud_auth::run_whoami(&paths.home_dir)?;
             return Ok(());
         }
         Some(Command::Tools { action }) => {
