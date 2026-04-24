@@ -727,7 +727,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let db = Arc::new(db);
 
             print_first_run_guidance(&runtime);
-            let base_client = reqwest::Client::new();
+            let base_client = crate::runtime::http_client::build_upstream_client();
             let client_builder = reqwest_middleware::ClientBuilder::new(base_client);
             let client_builder =
                 match crate::runtime::payment::build_payment_middleware(&runtime.config) {
