@@ -5,10 +5,13 @@
 //! runtime and `LocalSet`.
 
 pub mod discovery;
+pub mod eager;
 pub mod install;
 pub mod platform;
 pub mod provider;
 pub mod proxy;
+pub mod registry;
+pub mod state;
 pub mod types;
 
 mod client;

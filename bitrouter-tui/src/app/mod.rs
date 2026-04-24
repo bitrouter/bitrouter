@@ -6,6 +6,7 @@ mod key_handlers;
 mod modals;
 mod mouse;
 mod search;
+mod slash;
 mod streaming;
 mod tabs;
 
@@ -102,6 +103,9 @@ pub struct App {
     agent_providers: HashMap<String, Arc<AcpAgentProvider>>,
     /// Cloned event sender for spawning agent connections.
     event_tx: mpsc::Sender<AppEvent>,
+    /// Snapshot of the BitRouter config at TUI startup, used by slash
+    /// commands that need provider/registry metadata.
+    bitrouter_config: bitrouter_config::BitrouterConfig,
 }
 
 impl App {
@@ -194,6 +198,7 @@ impl App {
             },
             agent_providers: HashMap::new(),
             event_tx,
+            bitrouter_config: bitrouter_config.clone(),
         }
     }
 
@@ -227,6 +232,9 @@ impl App {
                     agent.status = AgentStatus::Error(message.clone());
                 }
                 self.push_system_msg(&format!("[{agent_id}] Install failed: {message}"));
+            }
+            AppEvent::SystemMessage { text } => {
+                self.push_system_msg(&text);
             }
         }
     }

@@ -119,6 +119,13 @@ enum Command {
         action: AgentsAction,
     },
 
+    /// Manage configured LLM providers
+    #[cfg(feature = "cli")]
+    Providers {
+        #[command(subcommand)]
+        action: ProvidersAction,
+    },
+
     /// Run as ACP stdio proxy for a configured agent
     #[cfg(feature = "cli")]
     #[command(name = "agent-proxy")]
@@ -280,9 +287,39 @@ enum ModelsAction {
 #[derive(Debug, Subcommand)]
 enum AgentsAction {
     /// List all available agents
-    List,
+    List {
+        /// Bypass the registry cache and fetch fresh data
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Check that agent routing through BitRouter is working
     Check,
+    /// Install an agent from the ACP registry
+    Install {
+        /// Agent id (e.g. `claude-acp`, `codex-acp`)
+        id: String,
+    },
+    /// Uninstall a previously installed agent
+    Uninstall {
+        /// Agent id
+        id: String,
+    },
+    /// Update one or all installed agents to the current registry version
+    Update {
+        /// Agent id (omit to update every installed agent)
+        id: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProvidersAction {
+    /// List configured providers
+    List,
+    /// Switch between bundled BitRouter Cloud defaults and BYOK
+    Use {
+        /// `default` (BitRouter Cloud) or `byok` (Bring Your Own Keys)
+        mode: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -651,14 +688,32 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Agents { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             match action {
-                AgentsAction::List => cli::agents::run_list(&runtime.config)?,
+                AgentsAction::List { refresh } => {
+                    cli::agents::run_list(&runtime.config, &paths, refresh).await?
+                }
                 AgentsAction::Check => cli::agents::run_check(&runtime.config)?,
+                AgentsAction::Install { id } => {
+                    cli::agents::run_install(&id, &runtime.config, &paths).await?
+                }
+                AgentsAction::Uninstall { id } => cli::agents::run_uninstall(&id, &paths).await?,
+                AgentsAction::Update { id } => {
+                    cli::agents::run_update(id.as_deref(), &runtime.config, &paths).await?
+                }
             }
             return Ok(());
         }
         #[cfg(not(feature = "tui"))]
         Some(Command::Agents { .. }) => {
             return Err("agent management requires the `tui` feature".into());
+        }
+        #[cfg(feature = "cli")]
+        Some(Command::Providers { action }) => {
+            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
+            match action {
+                ProvidersAction::List => cli::providers::run_list(&runtime.config)?,
+                ProvidersAction::Use { mode } => cli::providers::run_use(&mode, &runtime.config)?,
+            }
+            return Ok(());
         }
         Some(Command::Route { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
@@ -931,8 +986,42 @@ async fn launch_after_init(
                 providers: vec![],
                 route_count: 0,
                 daemon_pid: status.daemon_pid,
+                agents_dir: paths.agents_dir.clone(),
+                agent_state_file: paths.agent_state_file.clone(),
+                cache_dir: paths.cache_dir.clone(),
             };
-            let bitrouter_config = runtime.config.clone();
+            let mut bitrouter_config = runtime.config.clone();
+
+            // Merge the ACP registry into the agent set so first-render
+            // discovery sees the full catalog.  A failed fetch falls
+            // through silently — the stale cache, then built-in agent
+            // defs, then user config remain as the backstop.
+            let cache_file = paths.cache_dir.join("acp-registry.json");
+            let registry_url = bitrouter_providers::acp::registry::resolve_registry_url(
+                bitrouter_config.acp_registry_url.as_deref(),
+            );
+            match bitrouter_providers::acp::registry::fetch_registry(
+                &cache_file,
+                bitrouter_providers::acp::registry::DEFAULT_TTL_SECS,
+                &registry_url,
+            )
+            .await
+            {
+                Ok(index) => {
+                    bitrouter_providers::acp::registry::merge_registry_into_agents(
+                        &index,
+                        &mut bitrouter_config.agents,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  note: ACP registry unavailable ({e}); using built-ins only");
+                }
+            }
+
+            bitrouter_providers::acp::state::overlay_install_state_sync(
+                &mut bitrouter_config.agents,
+                &paths.agent_state_file,
+            );
             bitrouter_tui::run(tui_config, &bitrouter_config).await?;
             return Ok(());
         }
