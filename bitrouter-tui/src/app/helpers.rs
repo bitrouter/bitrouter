@@ -5,7 +5,7 @@ use super::App;
 impl App {
     /// Push a system message to a specific session.
     pub(super) fn push_system_msg_to_session(&mut self, session_idx: usize, text: &str) {
-        if let Some(session) = self.state.sessions.get_mut(session_idx) {
+        if let Some(session) = self.state.session_store.active.get_mut(session_idx) {
             let id = session.scrollback.next_id();
             session.scrollback.push_entry(ActivityEntry {
                 id,

@@ -30,7 +30,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
 
     // Empty-state hints (rendered directly, no caching needed).
     let mut empty_lines: Vec<Line> = Vec::new();
-    if !has_scrollback && state.input.is_empty() && state.sessions.is_empty() {
+    if !has_scrollback && state.input.is_empty() && state.session_store.active.is_empty() {
         let half = area.height / 2;
         for _ in 0..half {
             empty_lines.push(Line::raw(""));
@@ -456,7 +456,11 @@ fn render_agent_row(lines: &mut Vec<Line>, state: &AppState, i: usize) {
         })
         .unwrap_or_default();
 
-    let has_tab = state.sessions.iter().any(|s| s.agent_id == agent.name);
+    let has_tab = state
+        .session_store
+        .active
+        .iter()
+        .any(|s| s.agent_id == agent.name);
     let tab_indicator = if has_tab { " [tab]" } else { "" };
 
     let row_style = if is_selected {

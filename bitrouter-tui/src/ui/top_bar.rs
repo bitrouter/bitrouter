@@ -10,7 +10,7 @@ use crate::model::{AgentStatus, SessionBadge};
 pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
     let mut spans: Vec<Span> = Vec::new();
 
-    for (i, session) in state.sessions.iter().enumerate() {
+    for (i, session) in state.session_store.active.iter().enumerate() {
         let is_active = i == state.active_session;
 
         // Look up the agent for status + color.
@@ -72,7 +72,7 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
     }
 
     // If no sessions, show a hint.
-    if state.sessions.is_empty() {
+    if state.session_store.active.is_empty() {
         spans.push(Span::styled(
             "No sessions — Alt+A to connect an agent",
             Style::default().fg(Color::DarkGray),
@@ -81,7 +81,7 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
 
     // Right-aligned hints.
     let left_width: usize = spans.iter().map(|s| s.width()).sum();
-    let right_text = "Alt+T tabs  Alt+A agents  Ctrl+P cmd  ? help";
+    let right_text = "Ctrl+B sidebar  Alt+T tabs  Alt+A agents  Ctrl+P cmd  ? help";
     let padding = (area.width as usize).saturating_sub(left_width + right_text.len() + 1);
     if padding > 0 {
         spans.push(Span::raw(" ".repeat(padding)));

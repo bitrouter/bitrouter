@@ -70,6 +70,14 @@ pub enum AgentStatus {
 
 // ── Session ─────────────────────────────────────────────────────────────
 
+/// Monotonic identifier for a TUI session, allocated by `SessionStore`.
+///
+/// Distinct from the ACP-assigned `session_id` on `Agent`, which is not
+/// stable across reconnect. Lookups keyed by `SessionId` survive the
+/// session's ACP lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SessionId(pub u64);
+
 /// Badge indicator shown on a session entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionBadge {
@@ -88,6 +96,8 @@ pub enum SessionBadge {
 /// are semantically distinct (registry id vs display name) but happen to
 /// hold the same string today.
 pub struct Session {
+    /// Stable local identifier allocated by `SessionStore`.
+    pub id: SessionId,
     /// Registry id of the agent backing this session.
     pub agent_id: String,
     /// Display name of the agent.

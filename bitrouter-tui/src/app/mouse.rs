@@ -45,7 +45,7 @@ impl App {
 
     fn handle_session_bar_click(&mut self, col: u16) {
         let mut x: u16 = 0;
-        for (i, session) in self.state.sessions.iter().enumerate() {
+        for (i, session) in self.state.session_store.active.iter().enumerate() {
             if i > 0 {
                 x += 3; // " | " separator
             }

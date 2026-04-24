@@ -324,7 +324,7 @@ impl App {
         request: PermissionRequest,
     ) {
         let session_idx = self.ensure_session_for_agent(&agent_id);
-        let sb = &mut self.state.sessions[session_idx].scrollback;
+        let sb = &mut self.state.session_store.active[session_idx].scrollback;
 
         let id = sb.next_id();
         sb.push_entry(ActivityEntry {
@@ -344,11 +344,11 @@ impl App {
         if self.state.mode == InputMode::Permission {
             // Already handling a permission — just badge this session, don't switch.
             if session_idx != self.state.active_session {
-                self.state.sessions[session_idx].badge = SessionBadge::Permission;
+                self.state.session_store.active[session_idx].badge = SessionBadge::Permission;
             }
         } else {
             if session_idx != self.state.active_session {
-                self.state.sessions[session_idx].badge = SessionBadge::Permission;
+                self.state.session_store.active[session_idx].badge = SessionBadge::Permission;
                 self.switch_session(session_idx);
             }
             self.state.mode = InputMode::Permission;
@@ -416,13 +416,19 @@ impl App {
         }
 
         // Check if any other session has a pending permission — auto-switch to it.
-        let next_perm_session = self.state.sessions.iter().enumerate().find(|(_, session)| {
-            session
-                .scrollback
-                .entries
+        let next_perm_session =
+            self.state
+                .session_store
+                .active
                 .iter()
-                .any(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved))
-        });
+                .enumerate()
+                .find(|(_, session)| {
+                    session
+                        .scrollback
+                        .entries
+                        .iter()
+                        .any(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved))
+                });
         if let Some((idx, _)) = next_perm_session {
             self.switch_session(idx);
             self.state.mode = InputMode::Permission;

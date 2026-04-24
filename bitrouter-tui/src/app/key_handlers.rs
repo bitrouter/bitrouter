@@ -31,6 +31,10 @@ impl App {
                     self.open_observability();
                     return;
                 }
+                KeyCode::Char('b') => {
+                    self.state.sidebar_visible = !self.state.sidebar_visible;
+                    return;
+                }
                 _ => {}
             }
         }
@@ -272,7 +276,7 @@ impl App {
     }
 
     fn handle_tab_mode_key(&mut self, key: KeyEvent) {
-        let session_count = self.state.sessions.len();
+        let session_count = self.state.session_store.active.len();
         match key.code {
             KeyCode::Char('h') | KeyCode::Left
                 if session_count > 0 && self.state.active_session > 0 =>

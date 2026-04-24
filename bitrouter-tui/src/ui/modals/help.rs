@@ -119,6 +119,10 @@ pub fn render(frame: &mut Frame) {
             Span::styled("Quick switch tab", desc_style),
         ]),
         Line::from(vec![
+            Span::styled("  Ctrl+B        ", key_style),
+            Span::styled("Toggle threads sidebar", desc_style),
+        ]),
+        Line::from(vec![
             Span::styled("  Ctrl+O        ", key_style),
             Span::styled("Observability", desc_style),
         ]),

@@ -129,7 +129,7 @@ impl App {
         }
 
         // Session commands.
-        for session in &self.state.sessions {
+        for session in &self.state.session_store.active {
             cmds.push(PaletteCommand {
                 label: format!("Switch to tab: {}", session.agent_name),
                 action: CommandAction::SwitchTab(session.agent_name.clone()),
@@ -139,7 +139,7 @@ impl App {
             label: "New tab...".to_string(),
             action: CommandAction::NewTab,
         });
-        if !self.state.sessions.is_empty() {
+        if !self.state.session_store.active.is_empty() {
             cmds.push(PaletteCommand {
                 label: "Close current tab".to_string(),
                 action: CommandAction::CloseTab,

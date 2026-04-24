@@ -154,7 +154,7 @@ impl App {
         // Push user prompt to each target session's scrollback.
         for agent_name in &targets {
             let session_idx = self.ensure_session_for_agent(agent_name);
-            let sb = &mut self.state.sessions[session_idx].scrollback;
+            let sb = &mut self.state.session_store.active[session_idx].scrollback;
             let id = sb.next_id();
             sb.push_entry(ActivityEntry {
                 id,
