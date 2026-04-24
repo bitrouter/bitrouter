@@ -123,7 +123,10 @@ pub async fn run_install(
                     total,
                 } => {
                     if let Some(t) = total {
-                        let pct = if t > 0 { (bytes_received * 100) / t } else { 0 };
+                        let pct = (t > 0)
+                            .then(|| bytes_received.saturating_mul(100).checked_div(t))
+                            .flatten()
+                            .unwrap_or(0);
                         println!("  [{id_copy}] downloading: {pct}%");
                     } else {
                         println!("  [{id_copy}] downloading...");
