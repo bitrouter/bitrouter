@@ -54,6 +54,8 @@ impl SpendStore for SeaOrmSpendStore {
             let service_type_str = log.service_type.to_string();
             let service_name_str = log.service_name.clone();
             let success = log.success;
+            let latency_ms_log = latency_ms;
+            let error_info_log = log.error_info.clone();
 
             let active = spend_log::ActiveModel {
                 id: Set(log.id),
@@ -79,6 +81,8 @@ impl SpendStore for SeaOrmSpendStore {
                     service_type = %service_type_str,
                     service_name = %service_name_str,
                     success = success,
+                    latency_ms = latency_ms_log,
+                    error_info = error_info_log.as_deref().unwrap_or(""),
                     "spend log recorded",
                 );
             }
