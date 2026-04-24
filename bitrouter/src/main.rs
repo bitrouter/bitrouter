@@ -994,7 +994,8 @@ async fn launch_after_init(
                 &mut bitrouter_config.agents,
                 &paths.agent_state_file,
             );
-            bitrouter_tui::run(tui_config, &bitrouter_config).await?;
+            let launch_cwd = std::env::current_dir()?;
+            bitrouter_tui::run(tui_config, &bitrouter_config, launch_cwd).await?;
             return Ok(());
         }
     }

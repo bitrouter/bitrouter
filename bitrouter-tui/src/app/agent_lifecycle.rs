@@ -182,10 +182,11 @@ impl App {
 
         let agent_id_owned = agent_id.to_string();
         let app_event_tx = self.event_tx.clone();
+        let cwd = self.launch_cwd.clone();
 
         // Connect on a background task.
         tokio::spawn(async move {
-            match provider.connect().await {
+            match provider.connect(&cwd).await {
                 Ok(session_info) => {
                     let _ = app_event_tx
                         .send(AppEvent::AgentConnected {

@@ -8,6 +8,7 @@ mod render;
 mod ui;
 
 use std::io::{self, stdout};
+use std::path::PathBuf;
 
 use crossterm::{
     ExecutableCommand,
@@ -21,15 +22,21 @@ pub use config::TuiConfig;
 pub use error::TuiError;
 
 /// Run the TUI. Blocks until the user quits.
+///
+/// `launch_cwd` is the absolute working directory that sessions spawned
+/// from this TUI process will be rooted at. Import flows (PR 9+) may
+/// override it per-session, but the default is the cwd the user ran
+/// `bitrouter` from.
 pub async fn run(
     config: TuiConfig,
     bitrouter_config: &bitrouter_config::BitrouterConfig,
+    launch_cwd: PathBuf,
 ) -> Result<(), TuiError> {
     enable_raw_mode()?;
 
     // From this point on, restore_terminal must always run — even if the
     // remaining setup steps fail.
-    let result = run_inner(config, bitrouter_config).await;
+    let result = run_inner(config, bitrouter_config, launch_cwd).await;
     restore_terminal();
     result
 }
@@ -37,12 +44,13 @@ pub async fn run(
 async fn run_inner(
     config: TuiConfig,
     bitrouter_config: &bitrouter_config::BitrouterConfig,
+    launch_cwd: PathBuf,
 ) -> Result<(), TuiError> {
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
-    app::run_loop(&mut terminal, config, bitrouter_config).await
+    app::run_loop(&mut terminal, config, bitrouter_config, launch_cwd).await
 }
 
 fn restore_terminal() {

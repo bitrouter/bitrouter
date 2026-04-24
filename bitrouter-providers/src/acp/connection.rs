@@ -26,10 +26,13 @@ pub(crate) struct HandshakeResult {
 ///
 /// Returns a thread handle. The `handshake_tx` oneshot resolves once
 /// the ACP initialize + new_session handshake completes (or fails).
+/// `cwd` is used both as the subprocess's working directory and as the
+/// `cwd` advertised in the ACP `session/new` request.
 pub(crate) fn spawn_agent_thread(
     agent_name: String,
     bin_path: PathBuf,
     args: Vec<String>,
+    cwd: PathBuf,
     handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
@@ -45,7 +48,13 @@ pub(crate) fn spawn_agent_thread(
         };
 
         let local = tokio::task::LocalSet::new();
-        rt.block_on(local.run_until(agent_task_local(agent_name, bin_path, args, handshake_tx)));
+        rt.block_on(local.run_until(agent_task_local(
+            agent_name,
+            bin_path,
+            args,
+            cwd,
+            handshake_tx,
+        )));
     })
 }
 
@@ -53,9 +62,11 @@ async fn agent_task_local(
     agent_name: String,
     bin_path: PathBuf,
     args: Vec<String>,
+    cwd: PathBuf,
     handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) {
-    if let Err(msg) = run_agent_connection(&agent_name, &bin_path, &args, handshake_tx).await {
+    if let Err(msg) = run_agent_connection(&agent_name, &bin_path, &args, &cwd, handshake_tx).await
+    {
         tracing::error!(agent = %agent_name, "agent connection error: {msg}");
     }
 }
@@ -64,11 +75,15 @@ async fn run_agent_connection(
     agent_name: &str,
     bin_path: &PathBuf,
     args: &[String],
+    cwd: &std::path::Path,
     handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) -> Result<(), String> {
-    // 1. Spawn subprocess
+    // 1. Spawn subprocess — inherit the caller's requested cwd so that
+    //    filesystem tools (which use relative paths against the process
+    //    cwd) agree with the `cwd` advertised to the agent below.
     let mut child = tokio::process::Command::new(bin_path)
         .args(args)
+        .current_dir(cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -112,9 +127,8 @@ async fn run_agent_connection(
     .map_err(|e| format!("{agent_name} initialize failed: {e}"))?;
 
     // 4. Create session
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let session_resp = conn
-        .new_session(acp::NewSessionRequest::new(cwd))
+        .new_session(acp::NewSessionRequest::new(cwd.to_path_buf()))
         .await
         .map_err(|e| format!("{agent_name} new_session failed: {e}"))?;
 

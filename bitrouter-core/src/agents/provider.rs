@@ -4,6 +4,7 @@
 //! for models and [`ToolProvider`](crate::tools::provider::ToolProvider) for tools.
 //! Each implementation manages one agent subprocess or remote connection.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use dynosaur::dynosaur;
@@ -41,7 +42,12 @@ pub trait AgentProvider: Send + Sync {
     fn protocol_name(&self) -> &str;
 
     /// Establish the agent session (spawn subprocess, handshake).
-    fn connect(&self) -> impl Future<Output = Result<AgentSessionInfo>> + Send;
+    ///
+    /// `cwd` is the working directory advertised to the agent in the ACP
+    /// `session/new` request; it is also used as the spawned subprocess's
+    /// current dir so filesystem tools resolve relative paths the same way
+    /// the agent sees them. Callers must pass an absolute path.
+    fn connect(&self, cwd: &Path) -> impl Future<Output = Result<AgentSessionInfo>> + Send;
 
     /// Submit a prompt and receive a per-turn event stream.
     ///
@@ -79,8 +85,8 @@ impl<T: AgentProvider> AgentProvider for Arc<T> {
         (**self).protocol_name()
     }
 
-    async fn connect(&self) -> Result<AgentSessionInfo> {
-        (**self).connect().await
+    async fn connect(&self, cwd: &Path) -> Result<AgentSessionInfo> {
+        (**self).connect(cwd).await
     }
 
     async fn submit(&self, session_id: &str, text: String) -> Result<mpsc::Receiver<AgentEvent>> {

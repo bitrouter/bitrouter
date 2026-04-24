@@ -10,7 +10,7 @@
 //! session ID and tracked with a last-active timestamp for idle cleanup.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -139,7 +139,14 @@ impl AgentProvider for AcpAgentProvider {
         "acp"
     }
 
-    async fn connect(&self) -> Result<AgentSessionInfo> {
+    async fn connect(&self, cwd: &Path) -> Result<AgentSessionInfo> {
+        if !cwd.is_absolute() {
+            return Err(BitrouterError::transport(
+                Some(&self.agent_name),
+                format!("connect cwd must be absolute: {}", cwd.display()),
+            ));
+        }
+
         // Atomically reserve a concurrency slot. The permit is held for
         // the lifetime of the session (stored in SessionEntry) and
         // released when the session is removed.
@@ -160,6 +167,7 @@ impl AgentProvider for AcpAgentProvider {
             self.agent_name.clone(),
             launch.binary,
             launch.args,
+            cwd.to_path_buf(),
             handshake_tx,
         );
 
@@ -408,6 +416,26 @@ mod tests {
             .submit("nonexistent-session", "hello".to_owned())
             .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn connect_rejects_relative_cwd() {
+        let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
+        let result = provider
+            .connect(std::path::Path::new("relative/path"))
+            .await;
+        let err = result.expect_err("relative cwd must error");
+        assert!(
+            format!("{err}").contains("absolute"),
+            "expected error to mention absolute, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_rejects_empty_cwd() {
+        let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
+        let result = provider.connect(std::path::Path::new("")).await;
+        assert!(result.is_err(), "empty cwd must error");
     }
 
     #[tokio::test]

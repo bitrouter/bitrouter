@@ -15,6 +15,7 @@ use session_store::SessionStore;
 
 use std::collections::HashMap;
 use std::io::Stdout;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_providers::acp::discovery::discover_agents;
@@ -117,6 +118,8 @@ pub struct App {
     /// Snapshot of the BitRouter config at TUI startup, used by slash
     /// commands that need provider/registry metadata.
     bitrouter_config: bitrouter_config::BitrouterConfig,
+    /// Absolute working directory every session is spawned in.
+    pub(super) launch_cwd: PathBuf,
 }
 
 impl App {
@@ -124,6 +127,7 @@ impl App {
         config: TuiConfig,
         bitrouter_config: &bitrouter_config::BitrouterConfig,
         event_tx: mpsc::Sender<AppEvent>,
+        launch_cwd: PathBuf,
     ) -> Self {
         // Discover all agents (on PATH + distributable).
         let discovered = discover_agents(&bitrouter_config.agents);
@@ -211,6 +215,7 @@ impl App {
             agent_providers: HashMap::new(),
             event_tx,
             bitrouter_config: bitrouter_config.clone(),
+            launch_cwd,
         }
     }
 
@@ -256,9 +261,10 @@ pub async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     config: TuiConfig,
     bitrouter_config: &bitrouter_config::BitrouterConfig,
+    launch_cwd: PathBuf,
 ) -> Result<(), TuiError> {
     let mut events = EventHandler::new();
-    let mut app = App::new(config, bitrouter_config, events.sender());
+    let mut app = App::new(config, bitrouter_config, events.sender(), launch_cwd);
 
     while app.running {
         terminal.draw(|frame| ui::render(frame, &mut app.state))?;
