@@ -68,11 +68,11 @@ pub enum AgentStatus {
     Error(String),
 }
 
-// ── Tab ─────────────────────────────────────────────────────────────────
+// ── Session ─────────────────────────────────────────────────────────────
 
-/// Badge indicator shown on a tab label.
+/// Badge indicator shown on a session entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TabBadge {
+pub enum SessionBadge {
     /// No badge.
     None,
     /// Unread activity count.
@@ -81,14 +81,21 @@ pub enum TabBadge {
     Permission,
 }
 
-/// A single tab in the TUI, bound to one agent session.
-pub struct Tab {
-    /// The agent name this tab is bound to.
+/// A single session in the TUI, bound to one ACP conversation.
+///
+/// Currently constrained to at most one session per agent; lookups by
+/// `agent_id` therefore return a unique match. `agent_id` and `agent_name`
+/// are semantically distinct (registry id vs display name) but happen to
+/// hold the same string today.
+pub struct Session {
+    /// Registry id of the agent backing this session.
+    pub agent_id: String,
+    /// Display name of the agent.
     pub agent_name: String,
-    /// Per-tab scrollback history.
+    /// Per-session scrollback history.
     pub scrollback: ScrollbackState,
-    /// Badge shown on the tab label for background activity.
-    pub badge: TabBadge,
+    /// Badge shown on the session entry for background activity.
+    pub badge: SessionBadge,
 }
 
 // ── Entry types ────────────────────────────────────────────────────────

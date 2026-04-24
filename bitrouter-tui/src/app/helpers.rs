@@ -3,11 +3,11 @@ use crate::model::{ActivityEntry, ContentBlock, EntryKind, SystemNotice};
 use super::App;
 
 impl App {
-    /// Push a system message to a specific tab.
-    pub(super) fn push_system_msg_to_tab(&mut self, tab_idx: usize, text: &str) {
-        if let Some(tab) = self.state.tabs.get_mut(tab_idx) {
-            let id = tab.scrollback.next_id();
-            tab.scrollback.push_entry(ActivityEntry {
+    /// Push a system message to a specific session.
+    pub(super) fn push_system_msg_to_session(&mut self, session_idx: usize, text: &str) {
+        if let Some(session) = self.state.sessions.get_mut(session_idx) {
+            let id = session.scrollback.next_id();
+            session.scrollback.push_entry(ActivityEntry {
                 id,
                 kind: EntryKind::System(SystemNotice {
                     text: text.to_string(),
@@ -17,10 +17,10 @@ impl App {
         }
     }
 
-    /// Push a system message to the active tab (no-op if no tabs).
+    /// Push a system message to the active session (no-op if no sessions).
     pub(super) fn push_system_msg(&mut self, text: &str) {
-        let idx = self.state.active_tab;
-        self.push_system_msg_to_tab(idx, text);
+        let idx = self.state.active_session;
+        self.push_system_msg_to_session(idx, text);
     }
 }
 

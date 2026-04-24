@@ -1,7 +1,7 @@
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
-use crate::model::TabBadge;
+use crate::model::SessionBadge;
 
 use super::{App, InputMode};
 
@@ -29,7 +29,7 @@ impl App {
                 let col = event.column;
                 let row = event.row;
                 if rect_contains(layout.top_bar, col, row) {
-                    self.handle_tab_bar_click(col);
+                    self.handle_session_bar_click(col);
                 } else if rect_contains(layout.scrollback, col, row)
                     && self.state.mode != InputMode::Permission
                 {
@@ -43,29 +43,29 @@ impl App {
         }
     }
 
-    fn handle_tab_bar_click(&mut self, col: u16) {
+    fn handle_session_bar_click(&mut self, col: u16) {
         let mut x: u16 = 0;
-        for (i, tab) in self.state.tabs.iter().enumerate() {
+        for (i, session) in self.state.sessions.iter().enumerate() {
             if i > 0 {
                 x += 3; // " | " separator
             }
             // dot + space
             x += 2;
-            let name_width = tab.agent_name.chars().count() as u16;
-            let badge_width = match &tab.badge {
-                TabBadge::None => 0,
-                TabBadge::Unread(n) => format!(" [{n}]").chars().count() as u16,
-                TabBadge::Permission => 2, // " !"
+            let name_width = session.agent_name.chars().count() as u16;
+            let badge_width = match &session.badge {
+                SessionBadge::None => 0,
+                SessionBadge::Unread(n) => format!(" [{n}]").chars().count() as u16,
+                SessionBadge::Permission => 2, // " !"
             };
-            let tab_end = x + name_width + badge_width;
-            if col >= x && col < tab_end {
-                self.switch_tab(i);
+            let session_end = x + name_width + badge_width;
+            if col >= x && col < session_end {
+                self.switch_session(i);
                 if self.state.mode == InputMode::Tab {
                     self.state.mode = InputMode::Normal;
                 }
                 return;
             }
-            x = tab_end;
+            x = session_end;
         }
     }
 }

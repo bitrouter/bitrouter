@@ -35,7 +35,7 @@ pub fn render(frame: &mut Frame, state: &AppState, modal: &ObservabilityState) {
             AgentStatus::Busy => ("busy", Color::Yellow),
             AgentStatus::Error(_) => ("error", Color::Red),
         };
-        let has_tab = state.tabs.iter().any(|t| t.agent_name == agent.name);
+        let has_tab = state.sessions.iter().any(|s| s.agent_id == agent.name);
         let tab_mark = if has_tab { " ●" } else { "" };
         lines.push(Line::from(vec![
             Span::styled(

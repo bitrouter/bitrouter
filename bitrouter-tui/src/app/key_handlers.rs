@@ -35,14 +35,14 @@ impl App {
             }
         }
 
-        // Alt+1..9 or Ctrl+1..9: direct tab switch from any mode (except Permission).
+        // Alt+1..9 or Ctrl+1..9: direct session switch from any mode (except Permission).
         if self.state.mode != InputMode::Permission
             && (key.modifiers.contains(KeyModifiers::ALT)
                 || key.modifiers.contains(KeyModifiers::CONTROL))
             && let KeyCode::Char(c @ '1'..='9') = key.code
         {
             let idx = (c as usize) - ('1' as usize);
-            self.switch_tab(idx);
+            self.switch_session(idx);
             if self.state.mode == InputMode::Tab {
                 self.state.mode = InputMode::Normal;
             }
@@ -147,7 +147,7 @@ impl App {
                 if self.state.autocomplete.is_some() {
                     self.close_autocomplete();
                 } else {
-                    // Enter scroll mode on the active tab.
+                    // Enter scroll mode on the active session.
                     if let Some(sb) = self.state.active_scrollback_mut() {
                         sb.follow = false;
                         // Place cursor at last entry.
@@ -272,30 +272,32 @@ impl App {
     }
 
     fn handle_tab_mode_key(&mut self, key: KeyEvent) {
-        let tab_count = self.state.tabs.len();
+        let session_count = self.state.sessions.len();
         match key.code {
-            KeyCode::Char('h') | KeyCode::Left if tab_count > 0 && self.state.active_tab > 0 => {
-                let idx = self.state.active_tab - 1;
-                self.switch_tab(idx);
+            KeyCode::Char('h') | KeyCode::Left
+                if session_count > 0 && self.state.active_session > 0 =>
+            {
+                let idx = self.state.active_session - 1;
+                self.switch_session(idx);
             }
             KeyCode::Char('l') | KeyCode::Right
-                if tab_count > 0 && self.state.active_tab + 1 < tab_count =>
+                if session_count > 0 && self.state.active_session + 1 < session_count =>
             {
-                let idx = self.state.active_tab + 1;
-                self.switch_tab(idx);
+                let idx = self.state.active_session + 1;
+                self.switch_session(idx);
             }
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as usize) - ('1' as usize);
-                self.switch_tab(idx);
+                self.switch_session(idx);
                 self.state.mode = InputMode::Normal;
             }
             KeyCode::Char('n') => {
-                // New tab → enter Agent mode to pick agent.
+                // New session → enter Agent mode to pick agent.
                 self.state.mode = InputMode::Agent;
             }
             KeyCode::Char('x') => {
-                if tab_count > 0 {
-                    self.close_current_tab();
+                if session_count > 0 {
+                    self.close_current_session();
                 }
                 self.state.mode = InputMode::Normal;
             }
@@ -333,9 +335,9 @@ impl App {
                     if !self.agent_providers.contains_key(&name) {
                         self.connect_agent(&name);
                     }
-                    // Switch to the agent's tab.
-                    let tab_idx = self.ensure_tab(&name);
-                    self.switch_tab(tab_idx);
+                    // Switch to the agent's session.
+                    let session_idx = self.ensure_session_for_agent(&name);
+                    self.switch_session(session_idx);
                     self.state.mode = InputMode::Normal;
                 }
             }
@@ -388,7 +390,7 @@ impl App {
     }
 
     fn handle_permission_key(&mut self, key: KeyEvent) {
-        // Find the unresolved permission entry in the active tab.
+        // Find the unresolved permission entry in the active session.
         let perm_idx = self.state.active_scrollback().and_then(|sb| {
             sb.entries
                 .iter()
@@ -396,7 +398,7 @@ impl App {
         });
 
         let Some(perm_idx) = perm_idx else {
-            // No pending permission in active tab — return to Normal.
+            // No pending permission in active session — return to Normal.
             self.state.mode = InputMode::Normal;
             return;
         };

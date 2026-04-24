@@ -7,7 +7,9 @@ use bitrouter_providers::acp::types::AgentAvailability;
 use tokio::sync::mpsc;
 
 use crate::event::AppEvent;
-use crate::model::{ActivityEntry, AgentStatus, EntryKind, PermissionEntry, TabBadge, agent_color};
+use crate::model::{
+    ActivityEntry, AgentStatus, EntryKind, PermissionEntry, SessionBadge, agent_color,
+};
 
 use super::helpers::{PermissionChoice, needs_binary_install};
 use super::{App, InputMode};
@@ -45,7 +47,7 @@ impl App {
         // Binary-only distribution: need to download first.
         if agent.status == AgentStatus::Available && needs_binary_install(&config) {
             agent.status = AgentStatus::Installing { percent: 0 };
-            self.ensure_tab(agent_id);
+            self.ensure_session_for_agent(agent_id);
             self.push_system_msg(&format!("Installing {agent_id}..."));
             self.start_binary_install(agent_id, &config);
             return;
@@ -53,8 +55,8 @@ impl App {
 
         agent.status = AgentStatus::Connecting;
 
-        // Ensure a tab exists for this agent.
-        self.ensure_tab(agent_id);
+        // Ensure a session exists for this agent.
+        self.ensure_session_for_agent(agent_id);
 
         self.spawn_agent_provider(agent_id, &config);
     }
@@ -321,8 +323,8 @@ impl App {
         request_id: PermissionRequestId,
         request: PermissionRequest,
     ) {
-        let tab_idx = self.ensure_tab(&agent_id);
-        let sb = &mut self.state.tabs[tab_idx].scrollback;
+        let session_idx = self.ensure_session_for_agent(&agent_id);
+        let sb = &mut self.state.sessions[session_idx].scrollback;
 
         let id = sb.next_id();
         sb.push_entry(ActivityEntry {
@@ -338,16 +340,16 @@ impl App {
         // Re-pin to bottom so user sees the permission prompt.
         sb.follow = true;
 
-        // Auto-switch only if we're not already resolving a permission on another tab.
+        // Auto-switch only if we're not already resolving a permission on another session.
         if self.state.mode == InputMode::Permission {
-            // Already handling a permission — just badge this tab, don't switch.
-            if tab_idx != self.state.active_tab {
-                self.state.tabs[tab_idx].badge = TabBadge::Permission;
+            // Already handling a permission — just badge this session, don't switch.
+            if session_idx != self.state.active_session {
+                self.state.sessions[session_idx].badge = SessionBadge::Permission;
             }
         } else {
-            if tab_idx != self.state.active_tab {
-                self.state.tabs[tab_idx].badge = TabBadge::Permission;
-                self.switch_tab(tab_idx);
+            if session_idx != self.state.active_session {
+                self.state.sessions[session_idx].badge = SessionBadge::Permission;
+                self.switch_session(session_idx);
             }
             self.state.mode = InputMode::Permission;
         }
@@ -413,15 +415,16 @@ impl App {
             });
         }
 
-        // Check if any other tab has a pending permission — auto-switch to it.
-        let next_perm_tab = self.state.tabs.iter().enumerate().find(|(_, tab)| {
-            tab.scrollback
+        // Check if any other session has a pending permission — auto-switch to it.
+        let next_perm_session = self.state.sessions.iter().enumerate().find(|(_, session)| {
+            session
+                .scrollback
                 .entries
                 .iter()
                 .any(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved))
         });
-        if let Some((idx, _)) = next_perm_tab {
-            self.switch_tab(idx);
+        if let Some((idx, _)) = next_perm_session {
+            self.switch_session(idx);
             self.state.mode = InputMode::Permission;
         } else {
             self.state.mode = InputMode::Normal;

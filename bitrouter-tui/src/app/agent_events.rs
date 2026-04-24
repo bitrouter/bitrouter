@@ -50,8 +50,8 @@ impl App {
             agent.status = AgentStatus::Connected;
             agent.session_id = Some(session_id);
         }
-        let tab_idx = self.ensure_tab(&agent_id);
-        self.push_system_msg_to_tab(tab_idx, &format!("Connected to {agent_id}"));
+        let session_idx = self.ensure_session_for_agent(&agent_id);
+        self.push_system_msg_to_session(session_idx, &format!("Connected to {agent_id}"));
         self.state.obs_log.push(ObsEvent {
             agent_id,
             kind: ObsEventKind::Connected,
@@ -92,8 +92,8 @@ impl App {
             sb.streaming_entry.remove(&agent_id);
         }
 
-        if let Some(tab_idx) = self.tab_for_agent(&agent_id) {
-            self.push_system_msg_to_tab(tab_idx, &format!("Disconnected from {agent_id}"));
+        if let Some(session_idx) = self.session_for_agent(&agent_id) {
+            self.push_system_msg_to_session(session_idx, &format!("Disconnected from {agent_id}"));
         }
         self.state.obs_log.push(ObsEvent {
             agent_id,
@@ -109,8 +109,8 @@ impl App {
         if let Some(sb) = self.scrollback_for_agent(&agent_id) {
             sb.streaming_entry.remove(&agent_id);
         }
-        let tab_idx = self.ensure_tab(&agent_id);
-        self.push_system_msg_to_tab(tab_idx, &format!("[{agent_id}] Error: {message}"));
+        let session_idx = self.ensure_session_for_agent(&agent_id);
+        self.push_system_msg_to_session(session_idx, &format!("[{agent_id}] Error: {message}"));
         self.state.obs_log.push(ObsEvent {
             agent_id,
             kind: ObsEventKind::Error { message },

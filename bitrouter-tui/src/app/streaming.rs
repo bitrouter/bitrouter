@@ -11,9 +11,9 @@ use super::App;
 
 impl App {
     pub(super) fn apply_agent_message_chunk(&mut self, agent_id: &str, text: String) {
-        self.badge_background_tab(agent_id);
-        let tab_idx = self.ensure_tab(agent_id);
-        let sb = &mut self.state.tabs[tab_idx].scrollback;
+        self.badge_background_session(agent_id);
+        let session_idx = self.ensure_session_for_agent(agent_id);
+        let sb = &mut self.state.sessions[session_idx].scrollback;
 
         // Try to extend existing streaming entry for this agent.
         if let Some(&entry_id) = sb.streaming_entry.get(agent_id)
@@ -48,9 +48,9 @@ impl App {
     }
 
     pub(super) fn apply_non_text_content(&mut self, agent_id: &str, desc: String) {
-        self.badge_background_tab(agent_id);
-        let tab_idx = self.ensure_tab(agent_id);
-        let sb = &mut self.state.tabs[tab_idx].scrollback;
+        self.badge_background_session(agent_id);
+        let session_idx = self.ensure_session_for_agent(agent_id);
+        let sb = &mut self.state.sessions[session_idx].scrollback;
 
         // Append as an Other block to the current streaming entry, or create new.
         if let Some(&entry_id) = sb.streaming_entry.get(agent_id)
@@ -76,9 +76,9 @@ impl App {
     }
 
     pub(super) fn apply_thought_chunk(&mut self, agent_id: &str, text: String) {
-        self.badge_background_tab(agent_id);
-        let tab_idx = self.ensure_tab(agent_id);
-        let sb = &mut self.state.tabs[tab_idx].scrollback;
+        self.badge_background_session(agent_id);
+        let session_idx = self.ensure_session_for_agent(agent_id);
+        let sb = &mut self.state.sessions[session_idx].scrollback;
 
         // Try to extend existing streaming thinking entry.
         if let Some(&entry_id) = sb.streaming_entry.get(agent_id)
@@ -114,9 +114,9 @@ impl App {
         title: String,
         status: ToolCallStatus,
     ) {
-        self.badge_background_tab(agent_id);
-        let tab_idx = self.ensure_tab(agent_id);
-        let sb = &mut self.state.tabs[tab_idx].scrollback;
+        self.badge_background_session(agent_id);
+        let session_idx = self.ensure_session_for_agent(agent_id);
+        let sb = &mut self.state.sessions[session_idx].scrollback;
 
         let id = sb.next_id();
         sb.push_entry(ActivityEntry {
@@ -146,8 +146,8 @@ impl App {
         new_title: Option<String>,
         new_status: Option<ToolCallStatus>,
     ) {
-        let tab_idx = self.ensure_tab(agent_id);
-        let sb = &mut self.state.tabs[tab_idx].scrollback;
+        let session_idx = self.ensure_session_for_agent(agent_id);
+        let sb = &mut self.state.sessions[session_idx].scrollback;
 
         // Find the tool call entry by ID and update it.
         for (idx, entry) in sb.entries.iter_mut().enumerate().rev() {

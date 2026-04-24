@@ -128,18 +128,18 @@ impl App {
             }
         }
 
-        // Tab commands.
-        for tab in &self.state.tabs {
+        // Session commands.
+        for session in &self.state.sessions {
             cmds.push(PaletteCommand {
-                label: format!("Switch to tab: {}", tab.agent_name),
-                action: CommandAction::SwitchTab(tab.agent_name.clone()),
+                label: format!("Switch to tab: {}", session.agent_name),
+                action: CommandAction::SwitchTab(session.agent_name.clone()),
             });
         }
         cmds.push(PaletteCommand {
             label: "New tab...".to_string(),
             action: CommandAction::NewTab,
         });
-        if !self.state.tabs.is_empty() {
+        if !self.state.sessions.is_empty() {
             cmds.push(PaletteCommand {
                 label: "Close current tab".to_string(),
                 action: CommandAction::CloseTab,
@@ -198,8 +198,8 @@ impl App {
             }
             Some(CommandAction::ConnectAgent(name)) => {
                 self.connect_agent(&name);
-                let tab_idx = self.ensure_tab(&name);
-                self.switch_tab(tab_idx);
+                let session_idx = self.ensure_session_for_agent(&name);
+                self.switch_session(session_idx);
                 true
             }
             Some(CommandAction::DisconnectAgent(name)) => {
@@ -218,12 +218,12 @@ impl App {
                 false
             }
             Some(CommandAction::CloseTab) => {
-                self.close_current_tab();
+                self.close_current_session();
                 true
             }
             Some(CommandAction::SwitchTab(name)) => {
-                if let Some(idx) = self.tab_for_agent(&name) {
-                    self.switch_tab(idx);
+                if let Some(idx) = self.session_for_agent(&name) {
+                    self.switch_session(idx);
                 }
                 true
             }

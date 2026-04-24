@@ -103,11 +103,11 @@ impl App {
         // Resolve target agent(s).
         let targets: Vec<String> = match &target {
             InputTarget::Default => {
-                // Route to active tab's agent, or find first available.
+                // Route to active session's agent, or find first available.
                 if let Some(name) = self.state.active_agent_name() {
                     vec![name.to_string()]
                 } else {
-                    // No active tab — try first connected agent.
+                    // No active session — try first connected agent.
                     match self
                         .state
                         .agents
@@ -151,10 +151,10 @@ impl App {
             return;
         }
 
-        // Push user prompt to each target tab's scrollback.
+        // Push user prompt to each target session's scrollback.
         for agent_name in &targets {
-            let tab_idx = self.ensure_tab(agent_name);
-            let sb = &mut self.state.tabs[tab_idx].scrollback;
+            let session_idx = self.ensure_session_for_agent(agent_name);
+            let sb = &mut self.state.sessions[session_idx].scrollback;
             let id = sb.next_id();
             sb.push_entry(ActivityEntry {
                 id,
@@ -171,11 +171,11 @@ impl App {
         self.state.input_target = InputTarget::Default;
         self.close_autocomplete();
 
-        // Switch to the first target's tab.
+        // Switch to the first target's session.
         if let Some(first_target) = targets.first()
-            && let Some(tab_idx) = self.tab_for_agent(first_target)
+            && let Some(session_idx) = self.session_for_agent(first_target)
         {
-            self.switch_tab(tab_idx);
+            self.switch_session(session_idx);
             if let Some(sb) = self.state.active_scrollback_mut() {
                 sb.follow = true;
             }

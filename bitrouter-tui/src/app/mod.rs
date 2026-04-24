@@ -6,9 +6,9 @@ mod key_handlers;
 mod modals;
 mod mouse;
 mod search;
+mod sessions;
 mod slash;
 mod streaming;
-mod tabs;
 
 use std::collections::HashMap;
 use std::io::Stdout;
@@ -26,7 +26,7 @@ use crate::error::TuiError;
 use crate::event::{AppEvent, EventHandler};
 use crate::model::{
     AgentStatus, AutocompleteState, InlineInput, InputTarget, Modal, ObsLog, ScrollbackState,
-    SearchState, Tab, agent_color,
+    SearchState, Session, agent_color,
 };
 use crate::ui;
 
@@ -55,10 +55,10 @@ pub struct AppState {
     pub mode: InputMode,
     /// Agent registry: all known/discovered agents (not necessarily connected).
     pub agents: Vec<crate::model::Agent>,
-    /// Tabs: one per active agent session.
-    pub tabs: Vec<Tab>,
-    /// Index of the currently focused tab.
-    pub active_tab: usize,
+    /// Sessions: one per active ACP conversation.
+    pub sessions: Vec<Session>,
+    /// Index of the currently focused session.
+    pub active_session: usize,
     /// Global input bar.
     pub input: InlineInput,
     pub input_target: InputTarget,
@@ -76,23 +76,25 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Get the active tab's scrollback, if any tab exists.
+    /// Get the active session's scrollback, if any session exists.
     pub fn active_scrollback(&self) -> Option<&ScrollbackState> {
-        self.tabs.get(self.active_tab).map(|t| &t.scrollback)
+        self.sessions
+            .get(self.active_session)
+            .map(|s| &s.scrollback)
     }
 
-    /// Get the active tab's scrollback mutably, if any tab exists.
+    /// Get the active session's scrollback mutably, if any session exists.
     pub fn active_scrollback_mut(&mut self) -> Option<&mut ScrollbackState> {
-        self.tabs
-            .get_mut(self.active_tab)
-            .map(|t| &mut t.scrollback)
+        self.sessions
+            .get_mut(self.active_session)
+            .map(|s| &mut s.scrollback)
     }
 
-    /// Get the active tab's agent name, if any tab exists.
+    /// Get the active session's agent id, if any session exists.
     pub fn active_agent_name(&self) -> Option<&str> {
-        self.tabs
-            .get(self.active_tab)
-            .map(|t| t.agent_name.as_str())
+        self.sessions
+            .get(self.active_session)
+            .map(|s| s.agent_id.as_str())
     }
 }
 
@@ -184,8 +186,8 @@ impl App {
             state: AppState {
                 mode: InputMode::Normal,
                 agents,
-                tabs: Vec::new(),
-                active_tab: 0,
+                sessions: Vec::new(),
+                active_session: 0,
                 input: InlineInput::new(),
                 input_target: InputTarget::Default,
                 autocomplete: None,
