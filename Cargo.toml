@@ -3,18 +3,18 @@ resolver = "3"
 members = ["bitrouter", "bitrouter-*"]
 
 [workspace.package]
-version = "0.25.0"
+version = "0.26.0"
 
 [workspace.dependencies]
-bitrouter-accounts = { path = "bitrouter-accounts", version = "0.25", default-features = false }
-bitrouter-api = { path = "bitrouter-api", version = "0.25", default-features = false }
-bitrouter-blob = { path = "bitrouter-blob", version = "0.25" }
-bitrouter-config = { path = "bitrouter-config", version = "0.25" }
-bitrouter-core = { path = "bitrouter-core", version = "0.25" }
-bitrouter-guardrails = { path = "bitrouter-guardrails", version = "0.25" }
-bitrouter-observe = { path = "bitrouter-observe", version = "0.25", default-features = false }
-bitrouter-providers = { path = "bitrouter-providers", version = "0.25" }
-bitrouter-tui = { path = "bitrouter-tui", version = "0.25" }
+bitrouter-accounts = { path = "bitrouter-accounts", version = "0.26", default-features = false }
+bitrouter-api = { path = "bitrouter-api", version = "0.26", default-features = false }
+bitrouter-blob = { path = "bitrouter-blob", version = "0.26" }
+bitrouter-config = { path = "bitrouter-config", version = "0.26" }
+bitrouter-core = { path = "bitrouter-core", version = "0.26" }
+bitrouter-guardrails = { path = "bitrouter-guardrails", version = "0.26" }
+bitrouter-observe = { path = "bitrouter-observe", version = "0.26", default-features = false }
+bitrouter-providers = { path = "bitrouter-providers", version = "0.26" }
+bitrouter-tui = { path = "bitrouter-tui", version = "0.26" }
 
 # The profile that 'dist' will build with
 [profile.dist]

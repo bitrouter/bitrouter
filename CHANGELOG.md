@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0](https://github.com/bitrouter/bitrouter/compare/v0.25.0...v0.26.0)
+
+
+### ⛰️ Features
+
+- *(api)* Include target type and body preview in deserialization errors ([#391](https://github.com/bitrouter/bitrouter/pull/391)) - ([193edd5](https://github.com/bitrouter/bitrouter/commit/193edd527fe9262956383093ad1f098f212b1721))
+- *(auth)* Cloud login with device flow and host-minted JWTs ([#388](https://github.com/bitrouter/bitrouter/pull/388)) - ([08203ad](https://github.com/bitrouter/bitrouter/commit/08203adb2967a5c1c0ee4eedd0bb41e59e60543d))
+
+### 🐛 Bug Fixes
+
+- *(runtime)* Add timeouts to upstream HTTP client ([#394](https://github.com/bitrouter/bitrouter/pull/394)) - ([583764f](https://github.com/bitrouter/bitrouter/commit/583764f011978f2db5c9e36c9a9d74297a1d77c4))
+
+### 🚜 Refactor
+
+- *(bitrouter)* Gate operator CLI behind `cli` feature ([#386](https://github.com/bitrouter/bitrouter/pull/386)) - ([0b996a8](https://github.com/bitrouter/bitrouter/commit/0b996a8d9241a51eddfc7224c381bef5c1af9869))
+- *(bitrouter)* Bake payments in; rename chain features to tempo/solana ([#385](https://github.com/bitrouter/bitrouter/pull/385)) - ([e399b33](https://github.com/bitrouter/bitrouter/commit/e399b33b7c8b5f8792f9a8417797e6a347ecbb4d))
+- *(bitrouter)* Bake accounts in as core feature ([#384](https://github.com/bitrouter/bitrouter/pull/384)) - ([3842cd6](https://github.com/bitrouter/bitrouter/commit/3842cd66c6d44e79eed6aceed4f0617c07af622a))
+- *(bitrouter-api)* Drop no-op feature gates ([#380](https://github.com/bitrouter/bitrouter/pull/380)) - ([fc775f1](https://github.com/bitrouter/bitrouter/commit/fc775f1734a49a255f76e6a8e1351996052b7eba))
+- *(bitrouter-api)* Add accounts/observe/guardrails features ([#381](https://github.com/bitrouter/bitrouter/pull/381)) - ([e19de4e](https://github.com/bitrouter/bitrouter/commit/e19de4e174966ce0dcbec8087b30fb02181e25bf))
+- Rename mpp-* features to payments-* ([#383](https://github.com/bitrouter/bitrouter/pull/383)) - ([c990df1](https://github.com/bitrouter/bitrouter/commit/c990df15eb0433503ca9dbb05c2a1482d1c6d52d))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#392](https://github.com/bitrouter/bitrouter/pull/392)) - ([749c4c9](https://github.com/bitrouter/bitrouter/commit/749c4c97c308f123168d7fbd11eb33ccebdca17f))
+- Add per-feature build matrix and dep-tree regression check ([#387](https://github.com/bitrouter/bitrouter/pull/387)) - ([2055c2a](https://github.com/bitrouter/bitrouter/commit/2055c2a49d34e926db930b0d609b8a65960ca32f))
+
+
 ### ⚠️ Breaking Changes
 
 - DB-backed accounts, sessions, JWT auth, and persistent spend tracking are now **baked into the `bitrouter` binary unconditionally**. The previous "open proxy mode" (no database = no auth) has been removed. The `bitrouter` binary now requires a reachable database at startup; failures to connect or migrate are fatal. The `sqlite` / `postgres` / `mysql` Cargo features remain only as the storage-backend selector (default: `sqlite`). The default feature set no longer includes `postgres` — enable it explicitly if you need it. `JwtAuthContext::is_open` and the open-proxy passthrough have been removed.
