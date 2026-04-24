@@ -124,7 +124,7 @@ where
 {
     warp::path!("admin" / "routes")
         .and(warp::post())
-        .and(warp::body::json::<DynamicRoute>())
+        .and(crate::body::json::<DynamicRoute>())
         .and(warp::any().map(move || table.clone()))
         .map(handle_create_route)
 }

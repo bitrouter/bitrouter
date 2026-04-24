@@ -35,7 +35,7 @@ where
 {
     warp::path!("v1" / "messages")
         .and(warp::post())
-        .and(warp::body::json::<MessagesRequest>())
+        .and(crate::body::json::<MessagesRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
         .and_then(handle_messages)
@@ -58,7 +58,7 @@ where
 {
     warp::path!("v1" / "messages")
         .and(warp::post())
-        .and(warp::body::json::<MessagesRequest>())
+        .and(crate::body::json::<MessagesRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
         .and(hooks_filter)
@@ -79,7 +79,7 @@ where
 {
     warp::path!("v1" / "messages")
         .and(warp::post())
-        .and(warp::body::json::<MessagesRequest>())
+        .and(crate::body::json::<MessagesRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
         .and(warp::any().map(move || observer.clone()))
@@ -158,7 +158,7 @@ where
         .and(account_filter)
         .and(warp::any().map(move || mpp_state.clone()))
         .and(warp::header::optional::<String>("authorization"))
-        .and(warp::body::json::<MessagesRequest>())
+        .and(crate::body::json::<MessagesRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
         .and(warp::any().map(move || observer.clone()))
