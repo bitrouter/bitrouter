@@ -6,6 +6,7 @@ pub mod copilot;
 #[cfg(feature = "cli")]
 pub mod daemon;
 pub mod error;
+pub mod http_client;
 pub mod mcp_client;
 pub mod migration;
 #[cfg(feature = "tempo")]

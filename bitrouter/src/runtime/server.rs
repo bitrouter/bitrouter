@@ -527,7 +527,7 @@ where
             self.config.providers.clone(),
             #[cfg(feature = "mcp")]
             Arc::new(mcp_connections),
-            Arc::new(reqwest::Client::new()),
+            Arc::new(crate::runtime::http_client::build_upstream_client()),
         ));
 
         if lazy_tool_router.has_providers() {
