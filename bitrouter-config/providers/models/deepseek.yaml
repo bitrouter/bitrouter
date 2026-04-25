@@ -20,3 +20,21 @@ models:
         cache_read: 0.028
       output_tokens:
         text: 0.42
+  deepseek-v4-flash:
+    max_input_tokens: 1000000
+    max_output_tokens: 384000
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
+  deepseek-v4-pro:
+    max_input_tokens: 1000000
+    max_output_tokens: 384000
+    pricing:
+      input_tokens:
+        no_cache: 1.74
+        cache_read: 0.145
+      output_tokens:
+        text: 3.48
