@@ -63,22 +63,26 @@ pub fn render(frame: &mut Frame) {
             Span::styled("Search scrollback", desc_style),
         ]),
         Line::raw(""),
-        Line::from(Span::styled("  Tab Mode (Alt+T)", header_style)),
+        Line::from(Span::styled("  Session Mode (Alt+T)", header_style)),
         Line::from(vec![
             Span::styled("  h / l         ", key_style),
-            Span::styled("Switch tab left/right", desc_style),
+            Span::styled("Switch session left/right", desc_style),
         ]),
         Line::from(vec![
             Span::styled("  1-9           ", key_style),
-            Span::styled("Jump to tab by number", desc_style),
+            Span::styled("Jump to session by number", desc_style),
         ]),
         Line::from(vec![
             Span::styled("  n             ", key_style),
-            Span::styled("New tab (opens agent list)", desc_style),
+            Span::styled("New session (opens agent list)", desc_style),
         ]),
         Line::from(vec![
             Span::styled("  x             ", key_style),
-            Span::styled("Close current tab", desc_style),
+            Span::styled("Close current session", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  /             ", key_style),
+            Span::styled("Filter sessions by title/agent", desc_style),
         ]),
         Line::raw(""),
         Line::from(Span::styled("  Agent Mode (Alt+A)", header_style)),
@@ -116,7 +120,15 @@ pub fn render(frame: &mut Frame) {
         Line::from(Span::styled("  Global", header_style)),
         Line::from(vec![
             Span::styled("  Alt+1..9      ", key_style),
-            Span::styled("Quick switch tab", desc_style),
+            Span::styled("Quick switch session", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+Tab      ", key_style),
+            Span::styled("MRU session cycle (older)", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+Shift+Tab", key_style),
+            Span::styled("MRU session cycle (newer)", desc_style),
         ]),
         Line::from(vec![
             Span::styled("  Ctrl+B        ", key_style),

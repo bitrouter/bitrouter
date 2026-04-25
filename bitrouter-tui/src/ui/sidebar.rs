@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use crate::app::AppState;
+use crate::app::{AppState, InputMode};
 use crate::model::{Agent, AgentStatus, Session, SessionBadge};
 
 /// Render the threads sidebar.
@@ -16,12 +16,39 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // When the session-search filter is active, render the filtered
+    // view with the search affordance up top; otherwise the full list.
+    let view = match (&state.mode, state.session_search.as_ref()) {
+        (InputMode::SessionSearch, Some(search)) => SidebarView::Filtered {
+            query: search.query.as_str(),
+            matches: &search.matches,
+            selected: search.selected,
+        },
+        _ => SidebarView::Full,
+    };
+
     let lines = build_lines(
         &state.session_store.active,
         &state.agents,
         state.active_session,
+        view,
     );
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// What the sidebar should display this frame.
+#[derive(Clone, Copy)]
+enum SidebarView<'a> {
+    /// Default — all active sessions.
+    Full,
+    /// Filtered by the [`SessionSearchState`] query. `matches` are
+    /// indices into the session store; `selected` is the position
+    /// within `matches` that the cycle cursor is on.
+    Filtered {
+        query: &'a str,
+        matches: &'a [usize],
+        selected: usize,
+    },
 }
 
 /// Build the sidebar's line list. Extracted for unit-testing.
@@ -29,6 +56,7 @@ fn build_lines(
     sessions: &[Session],
     agents: &[Agent],
     active_session: usize,
+    view: SidebarView,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
 
@@ -40,31 +68,87 @@ fn build_lines(
     )));
     lines.push(Line::raw(""));
 
-    if sessions.is_empty() {
-        lines.push(Line::from(Span::styled(
-            " (no sessions)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        for (i, session) in sessions.iter().enumerate() {
-            lines.push(session_line(session, agents, i == active_session));
+    match view {
+        SidebarView::Full => {
+            if sessions.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    " (no sessions)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for (i, session) in sessions.iter().enumerate() {
+                    lines.push(session_line(session, agents, i == active_session, false));
+                }
+            }
+        }
+        SidebarView::Filtered {
+            query,
+            matches,
+            selected,
+        } => {
+            // Search prompt at the top of the filtered list.
+            lines.push(Line::from(vec![
+                Span::styled(" /", Style::default().fg(Color::Blue)),
+                Span::styled(
+                    query.to_string(),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("▌", Style::default().fg(Color::Blue)),
+            ]));
+            lines.push(Line::raw(""));
+
+            if matches.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    " (no matches)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for (pos, &idx) in matches.iter().enumerate() {
+                    if let Some(session) = sessions.get(idx) {
+                        let is_cursor = pos == selected;
+                        lines.push(session_line(
+                            session,
+                            agents,
+                            idx == active_session,
+                            is_cursor,
+                        ));
+                    }
+                }
+            }
         }
     }
 
     lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled(
-        " [+ new]   [↓ import]",
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(Span::styled(
-        " Ctrl-B hide",
-        Style::default().fg(Color::DarkGray),
-    )));
+    match view {
+        SidebarView::Full => {
+            lines.push(Line::from(Span::styled(
+                " [+ new]   [↓ import]",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(Span::styled(
+                " Ctrl-B hide",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        SidebarView::Filtered { .. } => {
+            lines.push(Line::from(Span::styled(
+                " ↑↓ select  Enter  Esc",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
 
     lines
 }
 
-fn session_line(session: &Session, agents: &[Agent], is_active: bool) -> Line<'static> {
+fn session_line(
+    session: &Session,
+    agents: &[Agent],
+    is_active: bool,
+    is_cursor: bool,
+) -> Line<'static> {
     let agent = agents.iter().find(|a| a.name == session.agent_id);
     let (dot, dot_color) = status_dot(agent.map(|a| &a.status));
 
@@ -88,7 +172,16 @@ fn session_line(session: &Session, agents: &[Agent], is_active: bool) -> Line<'s
     } else {
         Style::default().fg(session.color)
     };
-    let marker = if is_active { "▸ " } else { "  " };
+    // Cursor marker takes precedence over active marker — during a
+    // session-search the cursor may sit on a non-active row that the
+    // user is about to commit with Enter.
+    let marker = if is_cursor {
+        "» "
+    } else if is_active {
+        "▸ "
+    } else {
+        "  "
+    };
 
     Line::from(vec![
         Span::styled(marker, Style::default().fg(Color::Cyan)),
@@ -148,7 +241,7 @@ mod tests {
 
     #[test]
     fn empty_sessions_shows_placeholder() {
-        let lines = build_lines(&[], &[], 0);
+        let lines = build_lines(&[], &[], 0, SidebarView::Full);
         let joined: String = lines.iter().map(join_line).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("Threads"));
         assert!(joined.contains("(no sessions)"));
@@ -158,7 +251,7 @@ mod tests {
     fn single_session_shows_id_tag_and_name() {
         let sessions = vec![mk_session(0, "claude-code")];
         let agents = vec![mk_agent("claude-code")];
-        let lines = build_lines(&sessions, &agents, 0);
+        let lines = build_lines(&sessions, &agents, 0, SidebarView::Full);
         let joined: String = lines.iter().map(join_line).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("#0"));
         assert!(joined.contains("claude-code"));
@@ -178,7 +271,7 @@ mod tests {
             mk_agent("codex"),
             mk_agent("gemini-cli"),
         ];
-        let lines = build_lines(&sessions, &agents, 1);
+        let lines = build_lines(&sessions, &agents, 1, SidebarView::Full);
         let joined: String = lines.iter().map(join_line).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("#0"));
         assert!(joined.contains("#1"));
@@ -189,7 +282,7 @@ mod tests {
     fn session_title_replaces_agent_id_when_present() {
         let mut sess = mk_session(0, "claude-code");
         sess.title = Some("refactor router".to_string());
-        let lines = build_lines(&[sess], &[mk_agent("claude-code")], 0);
+        let lines = build_lines(&[sess], &[mk_agent("claude-code")], 0, SidebarView::Full);
         let joined: String = lines.iter().map(join_line).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("refactor router"));
         // agent_id no longer shown when title takes its slot
@@ -200,7 +293,7 @@ mod tests {
     fn permission_badge_rendered() {
         let mut sess = mk_session(0, "claude-code");
         sess.badge = SessionBadge::Permission;
-        let lines = build_lines(&[sess], &[mk_agent("claude-code")], 0);
+        let lines = build_lines(&[sess], &[mk_agent("claude-code")], 0, SidebarView::Full);
         let joined: String = lines.iter().map(join_line).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("⚠"));
     }
@@ -209,8 +302,49 @@ mod tests {
     fn unread_badge_rendered() {
         let mut sess = mk_session(0, "claude-code");
         sess.badge = SessionBadge::Unread(5);
-        let lines = build_lines(&[sess], &[mk_agent("claude-code")], 0);
+        let lines = build_lines(&[sess], &[mk_agent("claude-code")], 0, SidebarView::Full);
         let joined: String = lines.iter().map(join_line).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("[5]"));
+    }
+
+    #[test]
+    fn filtered_view_shows_query_and_only_matches() {
+        let sessions = vec![
+            mk_session(0, "claude-code"),
+            mk_session(1, "codex"),
+            mk_session(2, "gemini-cli"),
+        ];
+        let agents: Vec<Agent> = sessions.iter().map(|s| mk_agent(&s.agent_id)).collect();
+        let matches = vec![1usize];
+        let view = SidebarView::Filtered {
+            query: "codex",
+            matches: &matches,
+            selected: 0,
+        };
+        let lines = build_lines(&sessions, &agents, 0, view);
+        let joined: String = lines.iter().map(join_line).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("/codex"));
+        assert!(joined.contains("codex"));
+        // Cursor marker on the (only) filtered entry.
+        assert!(joined.contains("» "));
+        // Non-matching sessions are absent.
+        assert!(!joined.contains("claude-code"));
+        assert!(!joined.contains("gemini-cli"));
+    }
+
+    #[test]
+    fn filtered_view_with_no_matches_renders_placeholder() {
+        let sessions = vec![mk_session(0, "claude-code")];
+        let agents = vec![mk_agent("claude-code")];
+        let matches: Vec<usize> = Vec::new();
+        let view = SidebarView::Filtered {
+            query: "zzz",
+            matches: &matches,
+            selected: 0,
+        };
+        let lines = build_lines(&sessions, &agents, 0, view);
+        let joined: String = lines.iter().map(join_line).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("/zzz"));
+        assert!(joined.contains("(no matches)"));
     }
 }

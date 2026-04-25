@@ -64,7 +64,7 @@ impl App {
             let session_end = x + name_width + badge_width;
             if col >= x && col < session_end {
                 self.switch_session(i);
-                if self.state.mode == InputMode::Tab {
+                if self.state.mode == InputMode::Session {
                     self.state.mode = InputMode::Normal;
                 }
                 return;

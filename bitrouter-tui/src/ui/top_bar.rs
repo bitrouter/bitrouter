@@ -78,7 +78,7 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
 
     // Right-aligned hints.
     let left_width: usize = spans.iter().map(|s| s.width()).sum();
-    let right_text = "Ctrl+B sidebar  Alt+T tabs  Alt+A agents  Ctrl+P cmd  ? help";
+    let right_text = "Ctrl+B sidebar  Ctrl+Tab MRU  Alt+T sessions  Alt+A agents  Ctrl+P cmd";
     let padding = (area.width as usize).saturating_sub(left_width + right_text.len() + 1);
     if padding > 0 {
         spans.push(Span::raw(" ".repeat(padding)));

@@ -859,6 +859,17 @@ pub struct SearchState {
     pub current_match: usize,
 }
 
+/// State for incremental sidebar (session-list) search. Distinct from
+/// [`SearchState`], which scopes to the active session's scrollback —
+/// this filters the visible session list by `title || agent_id`.
+pub struct SessionSearchState {
+    pub query: String,
+    /// Indices into `SessionStore.active` that match `query`.
+    pub matches: Vec<usize>,
+    /// Position within `matches` of the highlighted entry.
+    pub selected: usize,
+}
+
 // ── Modals ──────────────────────────────────────────────────────────────
 
 /// At most one modal overlay is open at a time.

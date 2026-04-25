@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::model::{EntryKind, Modal, SearchState};
+use crate::model::{EntryKind, Modal, SearchState, SessionSearchState};
 
 use super::helpers::PermissionChoice;
 use super::{App, InputMode};
@@ -12,6 +12,27 @@ impl App {
             self.running = false;
             return;
         }
+
+        // Ctrl-Tab / Ctrl-Shift-Tab: MRU session cycle. Handled before
+        // any "commit cycle on non-cycle key" logic so repeated presses
+        // can walk through `focus_history` without committing.
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && self.state.mode != InputMode::Permission
+            && self.state.mode != InputMode::SessionSearch
+        {
+            // Crossterm reports Ctrl-Shift-Tab as `BackTab` on most
+            // terminals; some emit `Tab` with CTRL|SHIFT. Accept both.
+            let is_back_tab = key.code == KeyCode::BackTab
+                || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT));
+            let is_tab = key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT);
+            if is_tab || is_back_tab {
+                self.cycle_focus(is_tab);
+                return;
+            }
+        }
+
+        // Any non-cycle key commits the in-progress Ctrl-Tab cycle.
+        self.commit_cycle_if_active();
 
         // If a modal is open, route all keys to modal handler.
         if self.state.modal.is_some() {
@@ -55,7 +76,7 @@ impl App {
         {
             let idx = (c as usize) - ('1' as usize);
             self.switch_session(idx);
-            if self.state.mode == InputMode::Tab {
+            if self.state.mode == InputMode::Session {
                 self.state.mode = InputMode::Normal;
             }
             return;
@@ -65,7 +86,10 @@ impl App {
         if key.code == KeyCode::Char('?')
             && !matches!(
                 self.state.mode,
-                InputMode::Normal | InputMode::Search | InputMode::Permission
+                InputMode::Normal
+                    | InputMode::Search
+                    | InputMode::SessionSearch
+                    | InputMode::Permission
             )
         {
             self.state.modal = Some(Modal::Help);
@@ -76,7 +100,8 @@ impl App {
         match self.state.mode {
             InputMode::Normal => self.handle_normal_key(key),
             InputMode::Scroll => self.handle_scroll_key(key),
-            InputMode::Tab => self.handle_tab_mode_key(key),
+            InputMode::Session => self.handle_session_mode_key(key),
+            InputMode::SessionSearch => self.handle_session_search_key(key),
             InputMode::Agent => self.handle_agent_mode_key(key),
             InputMode::Search => self.handle_search_mode_key(key),
             InputMode::Permission => self.handle_permission_key(key),
@@ -84,11 +109,11 @@ impl App {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) {
-        // Alt+T or Ctrl+T enters Tab mode.
+        // Alt+T or Ctrl+T enters Session mode.
         if (key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('t'))
             || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t'))
         {
-            self.state.mode = InputMode::Tab;
+            self.state.mode = InputMode::Session;
             return;
         }
         // Alt+A enters Agent mode (Ctrl+A is now readline home).
@@ -283,7 +308,7 @@ impl App {
         }
     }
 
-    fn handle_tab_mode_key(&mut self, key: KeyEvent) {
+    fn handle_session_mode_key(&mut self, key: KeyEvent) {
         let session_count = self.state.session_store.active.len();
         match key.code {
             KeyCode::Char('h') | KeyCode::Left
@@ -313,11 +338,92 @@ impl App {
                 }
                 self.state.mode = InputMode::Normal;
             }
+            KeyCode::Char('/') => {
+                self.enter_session_search();
+            }
             KeyCode::Esc => {
                 self.state.mode = InputMode::Normal;
             }
             _ => {}
         }
+    }
+
+    fn handle_session_search_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.exit_session_search();
+            }
+            KeyCode::Enter => {
+                // Commit selection (if any) and exit search.
+                let target = self
+                    .state
+                    .session_search
+                    .as_ref()
+                    .and_then(|s| s.matches.get(s.selected).copied());
+                if let Some(idx) = target {
+                    self.switch_session(idx);
+                }
+                self.exit_session_search();
+            }
+            KeyCode::Down => {
+                if let Some(s) = self.state.session_search.as_mut()
+                    && !s.matches.is_empty()
+                {
+                    s.selected = (s.selected + 1) % s.matches.len();
+                }
+            }
+            KeyCode::Up => {
+                if let Some(s) = self.state.session_search.as_mut()
+                    && !s.matches.is_empty()
+                {
+                    s.selected = if s.selected == 0 {
+                        s.matches.len() - 1
+                    } else {
+                        s.selected - 1
+                    };
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(s) = self.state.session_search.as_mut() {
+                    s.query.pop();
+                }
+                self.recompute_session_search();
+            }
+            KeyCode::Char(c) => {
+                if let Some(s) = self.state.session_search.as_mut() {
+                    s.query.push(c);
+                }
+                self.recompute_session_search();
+            }
+            _ => {}
+        }
+    }
+
+    fn enter_session_search(&mut self) {
+        let mut state = SessionSearchState {
+            query: String::new(),
+            matches: Vec::new(),
+            selected: 0,
+        };
+        // Empty query matches everything — seed with all sessions so the
+        // user sees the full list and can narrow it from there.
+        state.matches = (0..self.state.session_store.active.len()).collect();
+        // Anchor the selection on the currently-active session if it's
+        // present in the unfiltered match list.
+        if let Some(pos) = state
+            .matches
+            .iter()
+            .position(|&i| i == self.state.active_session)
+        {
+            state.selected = pos;
+        }
+        self.state.session_search = Some(state);
+        self.state.mode = InputMode::SessionSearch;
+    }
+
+    fn exit_session_search(&mut self) {
+        self.state.session_search = None;
+        self.state.mode = InputMode::Session;
     }
 
     fn handle_agent_mode_key(&mut self, key: KeyEvent) {

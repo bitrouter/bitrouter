@@ -29,7 +29,7 @@ use crate::error::TuiError;
 use crate::event::{AppEvent, EventHandler};
 use crate::model::{
     AgentStatus, AutocompleteState, InlineInput, InputTarget, Modal, ObsLog, ScrollbackState,
-    SearchState, agent_color,
+    SearchState, SessionSearchState, agent_color,
 };
 use crate::ui;
 
@@ -42,8 +42,13 @@ pub enum InputMode {
     Normal,
     /// Scroll mode: user is browsing scrollback history.
     Scroll,
-    /// Tab mode: switching/managing tabs.
-    Tab,
+    /// Session mode: switching/managing sessions in the sidebar.
+    /// Renamed from `Tab` in PR 6 — the mode's purpose visibly broadens
+    /// once `/` enters [`Self::SessionSearch`].
+    Session,
+    /// Sidebar incremental filter — typing builds a query, j/k navigate
+    /// the filtered list, Enter selects, Esc cancels back to `Session`.
+    SessionSearch,
     /// Agent mode: inline agent list for connect/disconnect.
     Agent,
     /// Search mode: incremental scrollback search.
@@ -77,6 +82,15 @@ pub struct AppState {
     pub agent_list_selected: usize,
     /// Incremental search state.
     pub search: Option<SearchState>,
+    /// Sidebar incremental filter — `Some` while in
+    /// [`InputMode::SessionSearch`], `None` otherwise. The sidebar reads
+    /// this to render only matching sessions.
+    pub session_search: Option<SessionSearchState>,
+    /// Position in [`SessionStore::focus_history`] during an active
+    /// `Ctrl-Tab` cycle. `None` when not cycling. Reset by any non-cycle
+    /// key, at which point the current session is recorded as
+    /// most-recent so the next cycle starts fresh.
+    pub cycle_pos: Option<usize>,
     /// Cached layout from the last render pass (for mouse hit-testing).
     pub last_layout: Option<crate::ui::layout::AppLayout>,
 }
@@ -206,6 +220,8 @@ impl App {
                 config,
                 agent_list_selected: 0,
                 search: None,
+                session_search: None,
+                cycle_pos: None,
                 last_layout: None,
             },
             session_system: SessionSystem::new(event_tx.clone(), launch_cwd),

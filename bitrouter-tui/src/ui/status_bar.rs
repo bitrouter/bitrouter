@@ -59,18 +59,36 @@ fn mode_hints(state: &AppState) -> (&'static str, Color, String) {
         InputMode::Normal => (
             "NORMAL",
             Color::Cyan,
-            "Enter: send │ @agent: mention │ Esc: scroll │ ^T: tabs │ ^A: agents".to_string(),
+            "Enter: send │ @agent: mention │ Esc: scroll │ ^T: sessions │ ^Tab: MRU │ ^A: agents"
+                .to_string(),
         ),
         InputMode::Scroll => (
             "SCROLL",
             Color::Yellow,
             "j/k: scroll │ c: fold │ G: bottom │ /: search │ i: input │ Esc: back".to_string(),
         ),
-        InputMode::Tab => (
-            "TAB",
+        InputMode::Session => (
+            "SESSION",
             Color::Magenta,
-            "h/l: switch │ 1-9: jump │ n: new │ x: close │ Esc: back".to_string(),
+            "h/l: switch │ 1-9: jump │ n: new │ x: close │ /: filter │ Esc: back".to_string(),
         ),
+        InputMode::SessionSearch => {
+            let query = state
+                .session_search
+                .as_ref()
+                .map(|s| s.query.as_str())
+                .unwrap_or("");
+            let count = state
+                .session_search
+                .as_ref()
+                .map(|s| s.matches.len())
+                .unwrap_or(0);
+            (
+                "FILTER",
+                Color::Blue,
+                format!("/{query}  {count} match │ ↑↓: select │ Enter: switch │ Esc: cancel"),
+            )
+        }
         InputMode::Agent => (
             "AGENT",
             Color::Green,
