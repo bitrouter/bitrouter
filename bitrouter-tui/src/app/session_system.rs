@@ -196,7 +196,9 @@ mod tests {
 
     fn mk_system() -> (SessionSystem, mpsc::Receiver<AppEvent>) {
         let (tx, rx) = mpsc::channel(16);
-        let cwd = std::env::current_dir().expect("cwd available");
+        // Tests don't actually spawn subprocesses, so any absolute
+        // path works — picking `/` keeps the helper infallible.
+        let cwd = std::path::PathBuf::from("/");
         (SessionSystem::new(tx, cwd), rx)
     }
 

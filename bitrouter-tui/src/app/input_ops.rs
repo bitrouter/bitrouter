@@ -154,29 +154,32 @@ impl App {
         // For each target, find or create a session and push the user prompt
         // into that session's scrollback. Routing always goes through the
         // active session for `Default`, never an arbitrary first match.
-        let active_session_id = self
+        // For Default routing, the first target should land in the
+        // currently-active session — but only when that session is
+        // actually for the right agent. Compute the candidate index
+        // once here so we don't double-look-up inside the loop.
+        let active_idx_for_default = self
             .state
             .session_store
             .active
             .get(self.state.active_session)
-            .map(|s| s.id);
+            .map(|s| (s.id, s.agent_id.clone()));
         let mut target_session_ids = Vec::with_capacity(targets.len());
 
         for (i, agent_name) in targets.iter().enumerate() {
-            let session_idx = match (&target, i, active_session_id) {
-                // For Default routing, the first target uses the active session.
-                (InputTarget::Default, 0, Some(active_id))
-                    if self
-                        .state
-                        .session_store
-                        .index_of(active_id)
-                        .map(|idx| self.state.session_store.active[idx].agent_id == *agent_name)
-                        .unwrap_or(false) =>
+            let session_idx = match (&target, i, &active_idx_for_default) {
+                (InputTarget::Default, 0, Some((active_id, active_agent)))
+                    if active_agent == agent_name =>
                 {
+                    // We already know `active_id` is in the store
+                    // because we read it from the active slot above.
+                    // Fall back to ensure_session_for_agent if the
+                    // store mutated between then and now (it can't
+                    // today, but defensive code is cheap).
                     self.state
                         .session_store
-                        .index_of(active_id)
-                        .expect("active id checked above")
+                        .index_of(*active_id)
+                        .unwrap_or_else(|| self.ensure_session_for_agent(agent_name))
                 }
                 // Otherwise, find the first session for that agent or create one.
                 _ => self.ensure_session_for_agent(agent_name),

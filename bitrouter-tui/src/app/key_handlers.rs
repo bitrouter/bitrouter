@@ -346,9 +346,15 @@ impl App {
                     let name = agent.name.clone();
                     // Always spawn a fresh session for the chosen agent.
                     // (Use Alt+1..9 to switch back to existing ones.)
+                    // `connect_agent` may early-return without creating
+                    // a session (already installing, no config) — only
+                    // switch when a new entry actually appeared.
+                    let len_before = self.state.session_store.active.len();
                     self.connect_agent(&name);
-                    let new_idx = self.state.session_store.active.len() - 1;
-                    self.switch_session(new_idx);
+                    let len_after = self.state.session_store.active.len();
+                    if len_after > len_before {
+                        self.switch_session(len_after - 1);
+                    }
                     self.state.mode = InputMode::Normal;
                 }
             }

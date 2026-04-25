@@ -81,14 +81,20 @@ impl App {
             sb.streaming_entry.remove(&agent_id);
         }
 
-        // If this was the agent's last session, drop the provider and
-        // bounce the agent's status back to Idle/Available.
-        let still_has_sessions = self
-            .state
-            .session_store
-            .active
-            .iter()
-            .any(|s| s.agent_id == agent_id && s.id != session_id);
+        // If this was the agent's last LIVE session, drop the provider
+        // and bounce the agent's status back to Idle/Available. Sessions
+        // already in Disconnected/Error don't keep the provider alive —
+        // otherwise an agent crash that fans out to N sessions would
+        // never trigger forget_provider (each disconnect sees the others
+        // still in active, but already-dead).
+        let still_has_sessions = self.state.session_store.active.iter().any(|s| {
+            s.agent_id == agent_id
+                && s.id != session_id
+                && !matches!(
+                    s.status,
+                    SessionStatus::Disconnected | SessionStatus::Error(_)
+                )
+        });
         if !still_has_sessions {
             self.session_system.forget_provider(&agent_id);
             if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id)

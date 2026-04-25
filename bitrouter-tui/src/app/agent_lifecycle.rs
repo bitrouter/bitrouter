@@ -5,6 +5,7 @@ use bitrouter_providers::acp::discovery::discover_agents;
 use bitrouter_providers::acp::types::AgentAvailability;
 use tokio::sync::mpsc;
 
+use crate::event::AppEvent;
 use crate::model::{
     ActivityEntry, AgentStatus, EntryKind, PermissionEntry, SessionBadge, SessionId, SessionStatus,
     agent_color,
@@ -93,15 +94,28 @@ impl App {
                 install_binary_agent(&agent_id_owned, &install_dir, &platforms, progress_tx).await;
             let _ = reporter.await;
 
-            if let Ok(path) = result {
-                let record = InstallRecord {
-                    id: agent_id_owned,
-                    version: String::new(),
-                    method: InstallMethod::Binary,
-                    resolved_binary_path: Some(path),
-                    installed_at: now_unix_seconds(),
-                };
-                let _ = upsert_record(&state_file, record).await;
+            match result {
+                Ok(path) => {
+                    let record = InstallRecord {
+                        id: agent_id_owned,
+                        version: String::new(),
+                        method: InstallMethod::Binary,
+                        resolved_binary_path: Some(path),
+                        installed_at: now_unix_seconds(),
+                    };
+                    let _ = upsert_record(&state_file, record).await;
+                }
+                Err(e) => {
+                    // Surface the failure so the placeholder session
+                    // doesn't leak in `Connecting` and the agent
+                    // doesn't stay in `Installing` forever.
+                    let _ = event_tx
+                        .send(AppEvent::InstallFailed {
+                            agent_id: agent_id_owned,
+                            message: e.to_string(),
+                        })
+                        .await;
+                }
             }
         });
     }
@@ -285,49 +299,66 @@ impl App {
         let acp_session_id = session.acp_session_id.clone();
         let sb = &mut session.scrollback;
 
-        let (request_id, outcome) =
-            if let EntryKind::Permission(perm) = &mut sb.entries[entry_idx].kind {
-                let outcome = match choice {
-                    PermissionChoice::Yes => {
-                        if let Some(opt) = perm.request.options.first() {
-                            PermissionOutcome::Allowed {
-                                selected_option: opt.id.clone(),
-                            }
-                        } else {
-                            PermissionOutcome::Denied
+        // Compute outcome WITHOUT marking the entry resolved yet — we
+        // only commit if we can actually deliver the response.
+        let (request_id, outcome) = if let EntryKind::Permission(perm) = &sb.entries[entry_idx].kind
+        {
+            let outcome = match choice {
+                PermissionChoice::Yes => {
+                    if let Some(opt) = perm.request.options.first() {
+                        PermissionOutcome::Allowed {
+                            selected_option: opt.id.clone(),
                         }
+                    } else {
+                        PermissionOutcome::Denied
                     }
-                    PermissionChoice::Always => {
-                        let always_opt = perm
-                            .request
-                            .options
-                            .iter()
-                            .find(|o| o.id.to_lowercase().contains("always"));
-                        if let Some(opt) = always_opt.or(perm.request.options.first()) {
-                            PermissionOutcome::Allowed {
-                                selected_option: opt.id.clone(),
-                            }
-                        } else {
-                            PermissionOutcome::Denied
+                }
+                PermissionChoice::Always => {
+                    let always_opt = perm
+                        .request
+                        .options
+                        .iter()
+                        .find(|o| o.id.to_lowercase().contains("always"));
+                    if let Some(opt) = always_opt.or(perm.request.options.first()) {
+                        PermissionOutcome::Allowed {
+                            selected_option: opt.id.clone(),
                         }
+                    } else {
+                        PermissionOutcome::Denied
                     }
-                    PermissionChoice::No => PermissionOutcome::Denied,
-                };
-
-                perm.resolved = true;
-                (perm.request_id, outcome)
-            } else {
-                return;
+                }
+                PermissionChoice::No => PermissionOutcome::Denied,
             };
 
-        if let Some(acp_id) = acp_session_id {
-            self.session_system.respond_permission(
-                &agent_id,
-                &acp_id,
-                request_id,
-                PermissionResponse { outcome },
+            (perm.request_id, outcome)
+        } else {
+            return;
+        };
+
+        let Some(acp_id) = acp_session_id else {
+            // Session not yet connected — can't deliver the response.
+            // Leave the entry unresolved so the user can retry once
+            // SessionConnected lands.
+            self.push_system_msg_to_session(
+                active_idx,
+                "Cannot respond: session not yet connected — try again in a moment.",
             );
+            return;
+        };
+
+        // Mark resolved and dispatch.
+        if let Some(perm_session) = self.state.session_store.active.get_mut(active_idx)
+            && let EntryKind::Permission(perm) =
+                &mut perm_session.scrollback.entries[entry_idx].kind
+        {
+            perm.resolved = true;
         }
+        self.session_system.respond_permission(
+            &agent_id,
+            &acp_id,
+            request_id,
+            PermissionResponse { outcome },
+        );
 
         // Check if any other session has a pending permission — auto-switch to it.
         let next_perm_session =
