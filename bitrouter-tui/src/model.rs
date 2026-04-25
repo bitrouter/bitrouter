@@ -40,12 +40,16 @@ pub trait Renderable {
 // ── Agent ───────────────────────────────────────────────────────────────
 
 /// An agent harness that can be connected via ACP.
+///
+/// `Agent.status` reflects the underlying provider's reachability
+/// (e.g. binary on PATH, install in progress); per-session lifecycle
+/// state lives on [`Session::status`] so multiple sessions on the
+/// same agent can be in different states.
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub name: String,
     pub config: Option<bitrouter_config::AgentConfig>,
     pub status: AgentStatus,
-    pub session_id: Option<String>,
     pub color: Color,
 }
 
@@ -89,19 +93,40 @@ pub enum SessionBadge {
     Permission,
 }
 
+/// Per-session lifecycle state. Each session evolves independently:
+/// two sessions on the same agent can be in different states at once
+/// (one connecting, one busy responding to a prompt).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionStatus {
+    /// Spawn requested, waiting for ACP handshake.
+    Connecting,
+    /// Ready for prompts.
+    Connected,
+    /// Awaiting `TurnDone` for an in-flight prompt.
+    Busy,
+    /// Connection ended (subprocess exited or `disconnect` sent).
+    Disconnected,
+    /// Connection failed or crashed.
+    Error(String),
+}
+
 /// A single session in the TUI, bound to one ACP conversation.
 ///
-/// Currently constrained to at most one session per agent; lookups by
-/// `agent_id` therefore return a unique match. `agent_id` and `agent_name`
-/// are semantically distinct (registry id vs display name) but happen to
-/// hold the same string today.
+/// Multiple sessions per agent are allowed; each carries its own
+/// `acp_session_id` once the handshake completes. Display name is
+/// looked up via `Agent.name`, not stored on the session, to avoid
+/// drift if an agent is later renamed.
 pub struct Session {
     /// Stable local identifier allocated by `SessionStore`.
     pub id: SessionId,
     /// Registry id of the agent backing this session.
     pub agent_id: String,
-    /// Display name of the agent.
-    pub agent_name: String,
+    /// ACP-assigned session id, set on first `AgentConnected` for this
+    /// session. Used to route prompts/permissions back to the correct
+    /// upstream conversation.
+    pub acp_session_id: Option<String>,
+    /// Per-session lifecycle state.
+    pub status: SessionStatus,
     /// Per-session scrollback history.
     pub scrollback: ScrollbackState,
     /// Badge shown on the session entry for background activity.

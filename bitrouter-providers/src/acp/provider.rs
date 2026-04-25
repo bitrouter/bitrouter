@@ -384,9 +384,9 @@ mod tests {
     }
 
     #[test]
-    fn provider_defaults_to_single_session() {
+    fn provider_defaults_to_eight_concurrent_sessions() {
         let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
-        assert_eq!(provider.max_concurrent(), 1);
+        assert_eq!(provider.max_concurrent(), 8);
         assert_eq!(provider.idle_timeout(), Duration::from_secs(600));
         assert_eq!(provider.session_count(), 0);
     }

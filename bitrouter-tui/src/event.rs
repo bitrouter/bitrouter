@@ -5,6 +5,8 @@ use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent, MouseEven
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
+use crate::model::SessionId;
+
 /// All events the app loop consumes.
 #[derive(Debug)]
 pub enum AppEvent {
@@ -16,12 +18,18 @@ pub enum AppEvent {
     Resize { _width: u16, _height: u16 },
     /// Tick / ignored terminal event.
     Tick,
-    /// An event from an ACP agent provider, tagged with the agent name.
-    Agent(String, AgentEvent),
-    /// Agent connection established (from the connect handshake).
-    AgentConnected {
+    /// An event from an ACP session, tagged with both the local
+    /// `SessionId` (for routing) and `agent_id` (for display/observability).
+    Session {
+        session_id: SessionId,
         agent_id: String,
-        session_id: String,
+        event: AgentEvent,
+    },
+    /// Session handshake completed; the ACP-assigned id is now known.
+    SessionConnected {
+        session_id: SessionId,
+        agent_id: String,
+        acp_session_id: String,
     },
     /// Binary agent install progress update.
     InstallProgress { agent_id: String, percent: u8 },

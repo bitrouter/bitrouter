@@ -4,36 +4,39 @@ use bitrouter_core::agents::event::ToolCallStatus;
 
 use crate::model::{
     ActivityEntry, AgentResponse, ContentBlock, EntryKind, ObsEvent, ObsEventKind, ScrollbackState,
-    ThinkingEntry, ToolCallEntry,
+    SessionId, ThinkingEntry, ToolCallEntry,
 };
 
 use super::App;
 
 impl App {
-    pub(super) fn apply_agent_message_chunk(&mut self, agent_id: &str, text: String) {
-        self.badge_background_session(agent_id);
-        let session_idx = self.ensure_session_for_agent(agent_id);
-        let sb = &mut self.state.session_store.active[session_idx].scrollback;
+    pub(super) fn apply_agent_message_chunk(
+        &mut self,
+        session_id: SessionId,
+        agent_id: &str,
+        text: String,
+    ) {
+        let Some(idx) = self.state.session_store.index_of(session_id) else {
+            return;
+        };
+        self.badge_background_session(idx);
+        let sb = &mut self.state.session_store.active[idx].scrollback;
 
-        // Try to extend existing streaming entry for this agent.
         if let Some(&entry_id) = sb.streaming_entry.get(agent_id)
-            && let Some(idx) = sb.index_of(entry_id)
-            && let EntryKind::AgentResponse(resp) = &mut sb.entries[idx].kind
+            && let Some(eidx) = sb.index_of(entry_id)
+            && let EntryKind::AgentResponse(resp) = &mut sb.entries[eidx].kind
         {
-            // Extend last text block or push new one.
             if let Some(ContentBlock::Text(existing)) = resp.blocks.last_mut() {
                 existing.push_str(&text);
             } else {
                 resp.blocks.push(ContentBlock::Text(text));
             }
-            sb.invalidate_entry(idx);
+            sb.invalidate_entry(eidx);
             return;
         }
 
-        // Finalize any previous streaming entry before starting new.
         Self::finalize_streaming_in(sb, agent_id);
 
-        // Start a new agent message entry.
         let id = sb.next_id();
         sb.push_entry(ActivityEntry {
             id,
@@ -47,18 +50,24 @@ impl App {
         sb.streaming_entry.insert(agent_id.to_string(), id);
     }
 
-    pub(super) fn apply_non_text_content(&mut self, agent_id: &str, desc: String) {
-        self.badge_background_session(agent_id);
-        let session_idx = self.ensure_session_for_agent(agent_id);
-        let sb = &mut self.state.session_store.active[session_idx].scrollback;
+    pub(super) fn apply_non_text_content(
+        &mut self,
+        session_id: SessionId,
+        agent_id: &str,
+        desc: String,
+    ) {
+        let Some(idx) = self.state.session_store.index_of(session_id) else {
+            return;
+        };
+        self.badge_background_session(idx);
+        let sb = &mut self.state.session_store.active[idx].scrollback;
 
-        // Append as an Other block to the current streaming entry, or create new.
         if let Some(&entry_id) = sb.streaming_entry.get(agent_id)
-            && let Some(idx) = sb.index_of(entry_id)
-            && let EntryKind::AgentResponse(resp) = &mut sb.entries[idx].kind
+            && let Some(eidx) = sb.index_of(entry_id)
+            && let EntryKind::AgentResponse(resp) = &mut sb.entries[eidx].kind
         {
             resp.blocks.push(ContentBlock::Other(desc));
-            sb.invalidate_entry(idx);
+            sb.invalidate_entry(eidx);
             return;
         }
 
@@ -75,23 +84,28 @@ impl App {
         sb.streaming_entry.insert(agent_id.to_string(), id);
     }
 
-    pub(super) fn apply_thought_chunk(&mut self, agent_id: &str, text: String) {
-        self.badge_background_session(agent_id);
-        let session_idx = self.ensure_session_for_agent(agent_id);
-        let sb = &mut self.state.session_store.active[session_idx].scrollback;
+    pub(super) fn apply_thought_chunk(
+        &mut self,
+        session_id: SessionId,
+        agent_id: &str,
+        text: String,
+    ) {
+        let Some(idx) = self.state.session_store.index_of(session_id) else {
+            return;
+        };
+        self.badge_background_session(idx);
+        let sb = &mut self.state.session_store.active[idx].scrollback;
 
-        // Try to extend existing streaming thinking entry.
         if let Some(&entry_id) = sb.streaming_entry.get(agent_id)
-            && let Some(idx) = sb.index_of(entry_id)
-            && let EntryKind::Thinking(th) = &mut sb.entries[idx].kind
+            && let Some(eidx) = sb.index_of(entry_id)
+            && let EntryKind::Thinking(th) = &mut sb.entries[eidx].kind
             && th.is_streaming
         {
             th.text.push_str(&text);
-            sb.invalidate_entry(idx);
+            sb.invalidate_entry(eidx);
             return;
         }
 
-        // Finalize any previous streaming entry before starting new.
         Self::finalize_streaming_in(sb, agent_id);
 
         let id = sb.next_id();
@@ -109,14 +123,17 @@ impl App {
 
     pub(super) fn apply_tool_call(
         &mut self,
+        session_id: SessionId,
         agent_id: &str,
         tool_call_id: String,
         title: String,
         status: ToolCallStatus,
     ) {
-        self.badge_background_session(agent_id);
-        let session_idx = self.ensure_session_for_agent(agent_id);
-        let sb = &mut self.state.session_store.active[session_idx].scrollback;
+        let Some(idx) = self.state.session_store.index_of(session_id) else {
+            return;
+        };
+        self.badge_background_session(idx);
+        let sb = &mut self.state.session_store.active[idx].scrollback;
 
         let id = sb.next_id();
         sb.push_entry(ActivityEntry {
@@ -129,7 +146,6 @@ impl App {
             }),
             collapsed: false,
         });
-        // Tool calls break the streaming cursor — next message chunk starts fresh.
         sb.streaming_entry.remove(agent_id);
 
         self.state.obs_log.push(ObsEvent {
@@ -141,16 +157,18 @@ impl App {
 
     pub(super) fn apply_tool_call_update(
         &mut self,
+        session_id: SessionId,
         agent_id: &str,
         tool_call_id: String,
         new_title: Option<String>,
         new_status: Option<ToolCallStatus>,
     ) {
-        let session_idx = self.ensure_session_for_agent(agent_id);
-        let sb = &mut self.state.session_store.active[session_idx].scrollback;
+        let Some(idx) = self.state.session_store.index_of(session_id) else {
+            return;
+        };
+        let sb = &mut self.state.session_store.active[idx].scrollback;
 
-        // Find the tool call entry by ID and update it.
-        for (idx, entry) in sb.entries.iter_mut().enumerate().rev() {
+        for (eidx, entry) in sb.entries.iter_mut().enumerate().rev() {
             if let EntryKind::ToolCall(tc) = &mut entry.kind
                 && tc.agent_id == agent_id
                 && tc.tool_call_id == tool_call_id
@@ -160,18 +178,18 @@ impl App {
                 }
                 if let Some(s) = new_status {
                     tc.status = s;
-                    // Auto-collapse completed/failed tool calls.
                     if matches!(s, ToolCallStatus::Completed | ToolCallStatus::Failed) {
                         entry.collapsed = true;
                     }
                 }
-                sb.invalidate_entry(idx);
+                sb.invalidate_entry(eidx);
                 return;
             }
         }
 
         // If not found, create from update (fallback).
         self.apply_tool_call(
+            session_id,
             agent_id,
             tool_call_id,
             new_title.unwrap_or_default(),

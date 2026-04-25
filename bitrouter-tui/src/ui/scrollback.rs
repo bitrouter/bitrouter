@@ -444,24 +444,19 @@ fn render_agent_row(lines: &mut Vec<Line>, state: &AppState, i: usize) {
         status_str.to_string()
     };
 
-    let session_str = agent
-        .session_id
-        .as_ref()
-        .map(|s| {
-            if s.len() > 12 {
-                format!("session: {}…", &s[..12])
-            } else {
-                format!("session: {s}")
-            }
-        })
-        .unwrap_or_default();
-
-    let has_tab = state
+    let session_count = state
         .session_store
         .active
         .iter()
-        .any(|s| s.agent_id == agent.name);
-    let tab_indicator = if has_tab { " [tab]" } else { "" };
+        .filter(|s| s.agent_id == agent.name)
+        .count();
+    let session_str = match session_count {
+        0 => String::new(),
+        1 => "1 session".to_string(),
+        n => format!("{n} sessions"),
+    };
+
+    let tab_indicator = if session_count > 0 { " [active]" } else { "" };
 
     let row_style = if is_selected {
         Style::default().add_modifier(Modifier::REVERSED)

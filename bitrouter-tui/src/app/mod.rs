@@ -156,7 +156,6 @@ impl App {
                     name: name.clone(),
                     config: Some(ac.clone()),
                     status,
-                    session_id: None,
                     color: agent_color(i),
                 }
             })
@@ -186,7 +185,6 @@ impl App {
                         a2a: None,
                     }),
                     status,
-                    session_id: None,
                     color: agent_color(idx),
                 });
             }
@@ -221,14 +219,19 @@ impl App {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Mouse(mouse_event) => self.handle_mouse(mouse_event),
             AppEvent::Resize { .. } | AppEvent::Tick => {}
-            AppEvent::Agent(agent_id, agent_event) => {
-                self.handle_agent_event(agent_id, agent_event);
-            }
-            AppEvent::AgentConnected {
-                agent_id,
+            AppEvent::Session {
                 session_id,
+                agent_id,
+                event,
             } => {
-                self.handle_agent_connected(agent_id, session_id);
+                self.handle_session_event(session_id, agent_id, event);
+            }
+            AppEvent::SessionConnected {
+                session_id,
+                agent_id,
+                acp_session_id,
+            } => {
+                self.handle_session_connected(session_id, agent_id, acp_session_id);
             }
             AppEvent::InstallProgress { agent_id, percent } => {
                 if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {

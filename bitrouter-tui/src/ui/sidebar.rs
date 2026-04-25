@@ -89,7 +89,7 @@ fn session_line(session: &Session, agents: &[Agent], is_active: bool) -> Line<'s
         Span::styled(marker, Style::default().fg(Color::Cyan)),
         Span::styled(format!("{dot} "), Style::default().fg(dot_color)),
         Span::styled(id_tag, Style::default().fg(Color::DarkGray)),
-        Span::styled(session.agent_name.clone(), name_style),
+        Span::styled(session.agent_id.clone(), name_style),
         Span::styled(badge, Style::default().fg(badge_color)),
     ])
 }
@@ -110,13 +110,14 @@ fn status_dot(status: Option<&AgentStatus>) -> (&'static str, Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ScrollbackState, SessionId};
+    use crate::model::{ScrollbackState, SessionId, SessionStatus};
 
     fn mk_session(id: u64, agent_id: &str) -> Session {
         Session {
             id: SessionId(id),
             agent_id: agent_id.to_string(),
-            agent_name: agent_id.to_string(),
+            acp_session_id: None,
+            status: SessionStatus::Connected,
             scrollback: ScrollbackState::new(),
             badge: SessionBadge::None,
         }
@@ -127,7 +128,6 @@ mod tests {
             name: name.to_string(),
             config: None,
             status: AgentStatus::Connected,
-            session_id: None,
             color: Color::Green,
         }
     }

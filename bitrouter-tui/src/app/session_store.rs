@@ -31,22 +31,29 @@ impl SessionStore {
     pub fn find_by_agent(&self, agent_id: &str) -> Option<usize> {
         self.active.iter().position(|s| s.agent_id == agent_id)
     }
+
+    /// Find the index of a session by its [`SessionId`].
+    pub fn index_of(&self, id: SessionId) -> Option<usize> {
+        self.active.iter().position(|s| s.id == id)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ScrollbackState, Session, SessionBadge};
+    use crate::model::{ScrollbackState, Session, SessionBadge, SessionStatus};
 
-    fn mk_session(store: &mut SessionStore, agent_id: &str) {
+    fn mk_session(store: &mut SessionStore, agent_id: &str) -> SessionId {
         let id = store.allocate_id();
         store.active.push(Session {
             id,
             agent_id: agent_id.to_string(),
-            agent_name: agent_id.to_string(),
+            acp_session_id: None,
+            status: SessionStatus::Connecting,
             scrollback: ScrollbackState::new(),
             badge: SessionBadge::None,
         });
+        id
     }
 
     #[test]
@@ -67,5 +74,27 @@ mod tests {
         mk_session(&mut store, "codex");
         assert_eq!(store.find_by_agent("codex"), Some(1));
         assert_eq!(store.find_by_agent("missing"), None);
+    }
+
+    #[test]
+    fn index_of_round_trips() {
+        let mut store = SessionStore::new();
+        let first = mk_session(&mut store, "claude-code");
+        let second = mk_session(&mut store, "codex");
+        assert_eq!(store.index_of(first), Some(0));
+        assert_eq!(store.index_of(second), Some(1));
+        assert_eq!(store.index_of(SessionId(999)), None);
+    }
+
+    #[test]
+    fn allows_multiple_sessions_per_agent() {
+        let mut store = SessionStore::new();
+        let first = mk_session(&mut store, "claude-code");
+        let second = mk_session(&mut store, "claude-code");
+        assert_ne!(first, second);
+        assert_eq!(store.active.len(), 2);
+        // find_by_agent returns the FIRST one — callers that need a
+        // specific session must look it up by SessionId.
+        assert_eq!(store.find_by_agent("claude-code"), Some(0));
     }
 }

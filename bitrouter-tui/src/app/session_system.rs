@@ -1,11 +1,11 @@
 //! Session-lifecycle facade.
 //!
 //! Centralizes the four ACP lifecycle operations (connect, prompt,
-//! disconnect, respond-permission) and owns the per-agent provider
-//! handles. Previously these were four scattered `tokio::spawn` sites
-//! across `agent_lifecycle.rs`; routing through `SessionSystem` gives
-//! us one place to add SessionId-keyed dispatch when PR 4 introduces
-//! multiple sessions per agent.
+//! disconnect, respond-permission). Routing is keyed by the local
+//! [`SessionId`] so that multiple sessions on the same agent can run
+//! independently — each one has its own ACP-assigned `acp_session_id`
+//! and its own scrollback. The agent-level provider handle is shared
+//! across all of an agent's sessions.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,6 +18,7 @@ use bitrouter_providers::acp::provider::AcpAgentProvider;
 use tokio::sync::mpsc;
 
 use crate::event::AppEvent;
+use crate::model::SessionId;
 
 /// Owns active ACP providers and the async work that drives them.
 pub(crate) struct SessionSystem {
@@ -39,17 +40,19 @@ impl SessionSystem {
         self.providers.contains_key(agent_id)
     }
 
-    /// Spawn a fresh ACP provider for `agent_id` and drive the handshake
-    /// on a background task. Returns `false` if a provider is already
-    /// registered (the caller should not double-connect).
-    pub fn spawn_connect(&mut self, agent_id: &str, config: &AgentConfig) -> bool {
-        if self.providers.contains_key(agent_id) {
-            return false;
-        }
-
-        let provider = Arc::new(AcpAgentProvider::new(agent_id.to_string(), config.clone()));
-        self.providers
-            .insert(agent_id.to_string(), provider.clone());
+    /// Open a fresh ACP session against the agent's provider. Emits
+    /// `SessionConnected` on success or a `Session` event with
+    /// `AgentEvent::Error` on failure. The provider for `agent_id` is
+    /// constructed lazily (one provider per agent, shared across that
+    /// agent's sessions).
+    pub fn spawn_session(&mut self, session_id: SessionId, agent_id: &str, config: &AgentConfig) {
+        let provider = self
+            .providers
+            .entry(agent_id.to_string())
+            .or_insert_with(|| {
+                Arc::new(AcpAgentProvider::new(agent_id.to_string(), config.clone()))
+            })
+            .clone();
 
         let agent_id_owned = agent_id.to_string();
         let event_tx = self.event_tx.clone();
@@ -59,43 +62,54 @@ impl SessionSystem {
             match provider.connect(&cwd).await {
                 Ok(info) => {
                     let _ = event_tx
-                        .send(AppEvent::AgentConnected {
+                        .send(AppEvent::SessionConnected {
+                            session_id,
                             agent_id: agent_id_owned,
-                            session_id: info.session_id,
+                            acp_session_id: info.session_id,
                         })
                         .await;
                 }
                 Err(e) => {
                     let _ = event_tx
-                        .send(AppEvent::Agent(
-                            agent_id_owned,
-                            AgentEvent::Error {
+                        .send(AppEvent::Session {
+                            session_id,
+                            agent_id: agent_id_owned,
+                            event: AgentEvent::Error {
                                 message: format!("{e}"),
                             },
-                        ))
+                        })
                         .await;
                 }
             }
         });
-        true
     }
 
-    /// Send a prompt to an existing session and forward the turn's
-    /// stream of `AgentEvent`s to the app.
-    pub fn send_prompt(&self, agent_id: &str, session_id: &str, text: String) {
+    /// Submit a prompt to an existing session and forward the turn's
+    /// stream of `AgentEvent`s back, tagged with `session_id`.
+    pub fn send_prompt(
+        &self,
+        session_id: SessionId,
+        agent_id: &str,
+        acp_session_id: &str,
+        text: String,
+    ) {
         let Some(provider) = self.providers.get(agent_id).cloned() else {
             return;
         };
         let agent_id_owned = agent_id.to_string();
-        let session_id_owned = session_id.to_string();
+        let acp_id_owned = acp_session_id.to_string();
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
-            match provider.submit(&session_id_owned, text).await {
+            match provider.submit(&acp_id_owned, text).await {
                 Ok(mut rx) => {
                     while let Some(evt) = rx.recv().await {
                         if event_tx
-                            .send(AppEvent::Agent(agent_id_owned.clone(), evt))
+                            .send(AppEvent::Session {
+                                session_id,
+                                agent_id: agent_id_owned.clone(),
+                                event: evt,
+                            })
                             .await
                             .is_err()
                         {
@@ -105,33 +119,35 @@ impl SessionSystem {
                 }
                 Err(e) => {
                     let _ = event_tx
-                        .send(AppEvent::Agent(
-                            agent_id_owned,
-                            AgentEvent::Error {
+                        .send(AppEvent::Session {
+                            session_id,
+                            agent_id: agent_id_owned,
+                            event: AgentEvent::Error {
                                 message: format!("{e}"),
                             },
-                        ))
+                        })
                         .await;
                 }
             }
         });
     }
 
-    /// Send `disconnect` and drop the provider handle. The agent thread
-    /// will emit `AgentDisconnected` once the subprocess exits.
-    pub fn disconnect(&mut self, agent_id: &str, session_id: &str) {
-        if let Some(provider) = self.providers.remove(agent_id) {
-            let session_id_owned = session_id.to_string();
-            tokio::spawn(async move {
-                let _ = provider.disconnect(&session_id_owned).await;
-            });
-        }
+    /// Tear down a single session. The provider stays alive for the
+    /// agent's other sessions; it is only dropped on shutdown.
+    pub fn disconnect_session(&self, agent_id: &str, acp_session_id: &str) {
+        let Some(provider) = self.providers.get(agent_id).cloned() else {
+            return;
+        };
+        let acp_id_owned = acp_session_id.to_string();
+        tokio::spawn(async move {
+            let _ = provider.disconnect(&acp_id_owned).await;
+        });
     }
 
-    /// Drop the provider handle without sending `disconnect`. Used after
-    /// the agent reports `AgentDisconnected` on its own (process exit,
-    /// crash, etc.) so we don't race a no-op disconnect on the way out.
-    pub fn forget(&mut self, agent_id: &str) {
+    /// Drop the provider handle for `agent_id` outright. Used after the
+    /// agent reports a hard disconnect (process exit, crash) so we
+    /// don't race a no-op `disconnect` on the way out.
+    pub fn forget_provider(&mut self, agent_id: &str) {
         self.providers.remove(agent_id);
     }
 
@@ -139,23 +155,23 @@ impl SessionSystem {
     pub fn respond_permission(
         &self,
         agent_id: &str,
-        session_id: &str,
+        acp_session_id: &str,
         request_id: PermissionRequestId,
         response: PermissionResponse,
     ) {
         let Some(provider) = self.providers.get(agent_id).cloned() else {
             return;
         };
-        let session_id_owned = session_id.to_string();
+        let acp_id_owned = acp_session_id.to_string();
         tokio::spawn(async move {
             let _ = provider
-                .respond_permission(&session_id_owned, request_id, response)
+                .respond_permission(&acp_id_owned, request_id, response)
                 .await;
         });
     }
 
-    /// Drop all providers (shutdown path). Agent threads exit when their
-    /// command-tx senders drop.
+    /// Drop all providers (shutdown path). Agent threads exit when
+    /// their command-tx senders drop.
     pub fn shutdown(&mut self) {
         self.providers.clear();
     }
@@ -191,32 +207,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_connect_inserts_provider_and_is_idempotent() {
+    async fn spawn_session_lazily_creates_provider() {
         let (mut sys, _rx) = mk_system();
-        let first = sys.spawn_connect("claude-code", &mk_config());
-        assert!(first, "first spawn_connect should initiate");
+        sys.spawn_session(SessionId(0), "claude-code", &mk_config());
         assert!(sys.has_provider("claude-code"));
-
-        let second = sys.spawn_connect("claude-code", &mk_config());
-        assert!(!second, "second spawn_connect on same agent should noop");
     }
 
     #[tokio::test]
-    async fn forget_removes_provider() {
+    async fn spawn_session_reuses_provider_for_same_agent() {
         let (mut sys, _rx) = mk_system();
-        sys.spawn_connect("claude-code", &mk_config());
+        sys.spawn_session(SessionId(0), "claude-code", &mk_config());
+        sys.spawn_session(SessionId(1), "claude-code", &mk_config());
+        // Only one provider regardless of how many sessions point at it.
+        assert_eq!(sys.providers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn forget_provider_removes() {
+        let (mut sys, _rx) = mk_system();
+        sys.spawn_session(SessionId(0), "claude-code", &mk_config());
         assert!(sys.has_provider("claude-code"));
-        sys.forget("claude-code");
+        sys.forget_provider("claude-code");
         assert!(!sys.has_provider("claude-code"));
     }
 
     #[tokio::test]
     async fn shutdown_clears_all_providers() {
         let (mut sys, _rx) = mk_system();
-        sys.spawn_connect("claude-code", &mk_config());
-        sys.spawn_connect("codex", &mk_config());
-        assert!(sys.has_provider("claude-code"));
-        assert!(sys.has_provider("codex"));
+        sys.spawn_session(SessionId(0), "claude-code", &mk_config());
+        sys.spawn_session(SessionId(1), "codex", &mk_config());
         sys.shutdown();
         assert!(!sys.has_provider("claude-code"));
         assert!(!sys.has_provider("codex"));
@@ -225,14 +244,12 @@ mod tests {
     #[tokio::test]
     async fn send_prompt_without_provider_is_noop() {
         let (sys, _rx) = mk_system();
-        // Should not panic or block; just silently drop.
-        sys.send_prompt("unknown", "session-id", "hello".to_owned());
+        sys.send_prompt(SessionId(0), "unknown", "acp-id", "hello".to_owned());
     }
 
     #[tokio::test]
     async fn disconnect_unknown_agent_is_noop() {
-        let (mut sys, _rx) = mk_system();
-        sys.disconnect("unknown", "session-id");
-        assert!(!sys.has_provider("unknown"));
+        let (sys, _rx) = mk_system();
+        sys.disconnect_session("unknown", "acp-id");
     }
 }

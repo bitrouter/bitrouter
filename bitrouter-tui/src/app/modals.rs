@@ -131,8 +131,8 @@ impl App {
         // Session commands.
         for session in &self.state.session_store.active {
             cmds.push(PaletteCommand {
-                label: format!("Switch to tab: {}", session.agent_name),
-                action: CommandAction::SwitchTab(session.agent_name.clone()),
+                label: format!("Switch to tab: #{} {}", session.id.0, session.agent_id),
+                action: CommandAction::SwitchTab(session.agent_id.clone()),
             });
         }
         cmds.push(PaletteCommand {

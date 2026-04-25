@@ -46,7 +46,7 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
                 Style::default().fg(dot_color),
             ));
             spans.push(Span::styled(
-                session.agent_name.clone(),
+                session.agent_id.clone(),
                 Style::default()
                     .fg(agent_color)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -57,7 +57,7 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
                 Style::default().fg(dot_color),
             ));
             spans.push(Span::styled(
-                session.agent_name.clone(),
+                session.agent_id.clone(),
                 Style::default().fg(agent_color),
             ));
         }

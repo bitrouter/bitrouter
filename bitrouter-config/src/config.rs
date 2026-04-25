@@ -263,7 +263,8 @@ pub struct AgentSessionConfig {
     pub idle_timeout_secs: u64,
 
     /// Maximum number of concurrent sessions for this agent.
-    /// Default: 1.
+    /// Default: 8 — covers the multi-session TUI use case while
+    /// still bounding fork bombs from runaway code.
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: usize,
 }
@@ -273,7 +274,7 @@ fn default_idle_timeout_secs() -> u64 {
 }
 
 fn default_max_concurrent() -> usize {
-    1
+    8
 }
 
 impl Default for AgentSessionConfig {

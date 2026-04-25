@@ -1,7 +1,7 @@
 use crate::input;
 use crate::model::{
     ActivityEntry, AgentStatus, AutocompleteState, EntryKind, InputTarget, ObsEvent, ObsEventKind,
-    UserPrompt,
+    SessionStatus, UserPrompt,
 };
 
 use std::time::Instant;
@@ -151,9 +151,39 @@ impl App {
             return;
         }
 
-        // Push user prompt to each target session's scrollback.
-        for agent_name in &targets {
-            let session_idx = self.ensure_session_for_agent(agent_name);
+        // For each target, find or create a session and push the user prompt
+        // into that session's scrollback. Routing always goes through the
+        // active session for `Default`, never an arbitrary first match.
+        let active_session_id = self
+            .state
+            .session_store
+            .active
+            .get(self.state.active_session)
+            .map(|s| s.id);
+        let mut target_session_ids = Vec::with_capacity(targets.len());
+
+        for (i, agent_name) in targets.iter().enumerate() {
+            let session_idx = match (&target, i, active_session_id) {
+                // For Default routing, the first target uses the active session.
+                (InputTarget::Default, 0, Some(active_id))
+                    if self
+                        .state
+                        .session_store
+                        .index_of(active_id)
+                        .map(|idx| self.state.session_store.active[idx].agent_id == *agent_name)
+                        .unwrap_or(false) =>
+                {
+                    self.state
+                        .session_store
+                        .index_of(active_id)
+                        .expect("active id checked above")
+                }
+                // Otherwise, find the first session for that agent or create one.
+                _ => self.ensure_session_for_agent(agent_name),
+            };
+            let session_id = self.state.session_store.active[session_idx].id;
+            target_session_ids.push((session_id, session_idx));
+
             let sb = &mut self.state.session_store.active[session_idx].scrollback;
             let id = sb.next_id();
             sb.push_entry(ActivityEntry {
@@ -172,27 +202,50 @@ impl App {
         self.close_autocomplete();
 
         // Switch to the first target's session.
-        if let Some(first_target) = targets.first()
-            && let Some(session_idx) = self.session_for_agent(first_target)
-        {
-            self.switch_session(session_idx);
+        if let Some(&(_, first_idx)) = target_session_ids.first() {
+            self.switch_session(first_idx);
             if let Some(sb) = self.state.active_scrollback_mut() {
                 sb.follow = true;
             }
         }
 
-        // Send to each target agent.
-        for agent_name in &targets {
-            // Lazy-connect if needed.
-            if !self.session_system.has_provider(agent_name) {
-                self.connect_agent(agent_name);
-            }
-            // Reset streaming cursor for fresh response.
-            if let Some(sb) = self.scrollback_for_agent(agent_name) {
-                sb.streaming_entry.remove(agent_name);
+        // Send to each target session.
+        for (i, agent_name) in targets.iter().enumerate() {
+            let (session_id, session_idx) = target_session_ids[i];
+
+            // If the session has no acp_session_id yet, kick off connect.
+            let acp_id_present = self.state.session_store.active[session_idx]
+                .acp_session_id
+                .is_some();
+            if !acp_id_present {
+                if !self.session_system.has_provider(agent_name) {
+                    // No provider yet: spawn one bound to this existing session.
+                    let config = self
+                        .state
+                        .agents
+                        .iter()
+                        .find(|a| a.name == *agent_name)
+                        .and_then(|a| a.config.clone());
+                    if let Some(cfg) = config {
+                        self.session_system
+                            .spawn_session(session_id, agent_name, &cfg);
+                    }
+                }
+                // Prompt will fail until SessionConnected lands; queue would be
+                // a future enhancement. For now, surface a hint and skip.
+                self.push_system_msg_to_session(
+                    session_idx,
+                    "Session still connecting — try again in a moment.",
+                );
+                continue;
             }
 
-            // Mark as busy.
+            // Reset streaming cursor on this session's scrollback for fresh response.
+            let sb = &mut self.state.session_store.active[session_idx].scrollback;
+            sb.streaming_entry.remove(agent_name);
+
+            // Mark session + agent as busy.
+            self.state.session_store.active[session_idx].status = SessionStatus::Busy;
             if let Some(agent) = self.state.agents.iter_mut().find(|a| &a.name == agent_name)
                 && matches!(agent.status, AgentStatus::Connected)
             {
@@ -200,7 +253,7 @@ impl App {
             }
 
             // Send prompt via provider (async via background task).
-            self.send_prompt_to_agent(agent_name, clean_text.clone());
+            self.send_prompt_to_session(session_id, clean_text.clone());
             self.state.obs_log.push(ObsEvent {
                 agent_id: agent_name.clone(),
                 kind: ObsEventKind::PromptSent,

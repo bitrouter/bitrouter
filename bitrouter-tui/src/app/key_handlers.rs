@@ -35,6 +35,14 @@ impl App {
                     self.state.sidebar_visible = !self.state.sidebar_visible;
                     return;
                 }
+                KeyCode::Char('n') => {
+                    // New session: open the agent picker. The picker
+                    // existed before for connect/disconnect; in the
+                    // multi-session world Enter on a chosen agent
+                    // always spawns a fresh session.
+                    self.state.mode = InputMode::Agent;
+                    return;
+                }
                 _ => {}
             }
         }
@@ -336,12 +344,11 @@ impl App {
                 let selected = self.state.agent_list_selected;
                 if let Some(agent) = self.state.agents.get(selected) {
                     let name = agent.name.clone();
-                    if !self.session_system.has_provider(&name) {
-                        self.connect_agent(&name);
-                    }
-                    // Switch to the agent's session.
-                    let session_idx = self.ensure_session_for_agent(&name);
-                    self.switch_session(session_idx);
+                    // Always spawn a fresh session for the chosen agent.
+                    // (Use Alt+1..9 to switch back to existing ones.)
+                    self.connect_agent(&name);
+                    let new_idx = self.state.session_store.active.len() - 1;
+                    self.switch_session(new_idx);
                     self.state.mode = InputMode::Normal;
                 }
             }

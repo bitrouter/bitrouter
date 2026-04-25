@@ -1,22 +1,13 @@
-use crate::model::{ScrollbackState, Session, SessionBadge};
+use crate::model::{ScrollbackState, Session, SessionBadge, SessionStatus};
 
 use super::{App, InputMode};
 
 impl App {
-    /// Find the session index for a given agent id. Unique under the
-    /// current one-session-per-agent invariant.
+    /// Find the session index for a given agent id. Returns the FIRST
+    /// match — callers that may have multiple sessions per agent must
+    /// look up by [`SessionId`](crate::model::SessionId) instead.
     pub(super) fn session_for_agent(&self, agent_id: &str) -> Option<usize> {
         self.state.session_store.find_by_agent(agent_id)
-    }
-
-    /// Get a mutable reference to an agent's first session scrollback.
-    pub(super) fn scrollback_for_agent(&mut self, agent_id: &str) -> Option<&mut ScrollbackState> {
-        self.state
-            .session_store
-            .active
-            .iter_mut()
-            .find(|s| s.agent_id == agent_id)
-            .map(|s| &mut s.scrollback)
     }
 
     /// Switch to a session by index, clearing its badge and resetting search.
@@ -34,53 +25,77 @@ impl App {
         }
     }
 
-    /// Create a session for an agent if one doesn't already exist. Returns the session index.
+    /// Find or create a session for an agent. Returns the session index.
+    /// Used by event handlers that need to surface a message even when
+    /// no session exists yet for the agent (e.g. error toasts).
     pub(super) fn ensure_session_for_agent(&mut self, agent_id: &str) -> usize {
         if let Some(idx) = self.session_for_agent(agent_id) {
             return idx;
         }
+        self.create_session_for_agent(agent_id)
+    }
+
+    /// Always create a new session for an agent, even if one already
+    /// exists. Returns the index of the new session.
+    pub(super) fn create_session_for_agent(&mut self, agent_id: &str) -> usize {
         let id = self.state.session_store.allocate_id();
         self.state.session_store.active.push(Session {
             id,
             agent_id: agent_id.to_string(),
-            agent_name: agent_id.to_string(),
+            acp_session_id: None,
+            status: SessionStatus::Connecting,
             scrollback: ScrollbackState::new(),
             badge: SessionBadge::None,
         });
         self.state.session_store.active.len() - 1
     }
 
-    /// Increment unread badge on a background session.
-    pub(super) fn badge_background_session(&mut self, agent_id: &str) {
-        if let Some(idx) = self.session_for_agent(agent_id)
-            && idx != self.state.active_session
-        {
-            let session = &mut self.state.session_store.active[idx];
-            session.badge = match &session.badge {
-                SessionBadge::None => SessionBadge::Unread(1),
-                SessionBadge::Unread(n) => SessionBadge::Unread(n + 1),
-                SessionBadge::Permission => SessionBadge::Permission, // Don't downgrade
-            };
+    /// Increment unread badge on a background session, addressed by index.
+    pub(super) fn badge_background_session(&mut self, session_idx: usize) {
+        if session_idx == self.state.active_session {
+            return;
         }
+        let Some(session) = self.state.session_store.active.get_mut(session_idx) else {
+            return;
+        };
+        session.badge = match &session.badge {
+            SessionBadge::None => SessionBadge::Unread(1),
+            SessionBadge::Unread(n) => SessionBadge::Unread(n + 1),
+            SessionBadge::Permission => SessionBadge::Permission, // Don't downgrade
+        };
     }
 
-    /// Close the current session and disconnect its agent.
+    /// Close the current session. Sends a per-session disconnect to the
+    /// provider; the agent's other sessions (if any) are unaffected.
     pub(super) fn close_current_session(&mut self) {
         if self.state.session_store.active.is_empty() {
             return;
         }
         let idx = self.state.active_session;
-        let agent_id = self.state.session_store.active[idx].agent_id.clone();
+        let session = &self.state.session_store.active[idx];
+        let agent_id = session.agent_id.clone();
+        let acp_session_id = session.acp_session_id.clone();
 
-        // Disconnect the agent if connected.
-        self.disconnect_agent(&agent_id);
+        if let Some(acp_id) = acp_session_id {
+            self.session_system.disconnect_session(&agent_id, &acp_id);
+        }
 
         self.state.session_store.active.remove(idx);
-        // Immediately clamp active_session to valid range.
         self.state.active_session = if self.state.session_store.active.is_empty() {
             0
         } else {
             idx.min(self.state.session_store.active.len() - 1)
         };
+
+        // If no sessions remain on this agent, drop the provider too.
+        let agent_still_has_sessions = self
+            .state
+            .session_store
+            .active
+            .iter()
+            .any(|s| s.agent_id == agent_id);
+        if !agent_still_has_sessions {
+            self.session_system.forget_provider(&agent_id);
+        }
     }
 }

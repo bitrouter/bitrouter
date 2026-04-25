@@ -51,7 +51,7 @@ impl App {
             }
             // dot + space
             x += 2;
-            let name_width = session.agent_name.chars().count() as u16;
+            let name_width = session.agent_id.chars().count() as u16;
             let badge_width = match &session.badge {
                 SessionBadge::None => 0,
                 SessionBadge::Unread(n) => format!(" [{n}]").chars().count() as u16,
