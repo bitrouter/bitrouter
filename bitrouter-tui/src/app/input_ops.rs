@@ -1,7 +1,7 @@
 use crate::input;
 use crate::model::{
     ActivityEntry, AgentStatus, AutocompleteState, EntryKind, InputTarget, ObsEvent, ObsEventKind,
-    SessionStatus, UserPrompt,
+    SessionStatus, UserPrompt, title_from_prompt,
 };
 
 use std::time::Instant;
@@ -184,7 +184,13 @@ impl App {
             let session_id = self.state.session_store.active[session_idx].id;
             target_session_ids.push((session_id, session_idx));
 
-            let sb = &mut self.state.session_store.active[session_idx].scrollback;
+            // Auto-set the session's title from the first user prompt.
+            let session = &mut self.state.session_store.active[session_idx];
+            if session.title.is_none() {
+                session.title = title_from_prompt(&clean_text);
+            }
+
+            let sb = &mut session.scrollback;
             let id = sb.next_id();
             sb.push_entry(ActivityEntry {
                 id,

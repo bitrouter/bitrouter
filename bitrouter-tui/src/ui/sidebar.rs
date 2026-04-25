@@ -67,7 +67,6 @@ fn build_lines(
 fn session_line(session: &Session, agents: &[Agent], is_active: bool) -> Line<'static> {
     let agent = agents.iter().find(|a| a.name == session.agent_id);
     let (dot, dot_color) = status_dot(agent.map(|a| &a.status));
-    let agent_color = agent.map(|a| a.color).unwrap_or(Color::White);
 
     let (badge, badge_color) = match &session.badge {
         SessionBadge::None => (String::new(), Color::DarkGray),
@@ -75,13 +74,19 @@ fn session_line(session: &Session, agents: &[Agent], is_active: bool) -> Line<'s
         SessionBadge::Permission => (" ⚠".to_string(), Color::Yellow),
     };
 
+    // Per-session display: prefer title (auto-derived from first
+    // prompt), fall back to agent_id when the session is fresh.
+    let label = session
+        .title
+        .clone()
+        .unwrap_or_else(|| session.agent_id.clone());
     let id_tag = format!("#{} ", session.id.0);
     let name_style = if is_active {
         Style::default()
-            .fg(agent_color)
+            .fg(session.color)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(agent_color)
+        Style::default().fg(session.color)
     };
     let marker = if is_active { "▸ " } else { "  " };
 
@@ -89,7 +94,7 @@ fn session_line(session: &Session, agents: &[Agent], is_active: bool) -> Line<'s
         Span::styled(marker, Style::default().fg(Color::Cyan)),
         Span::styled(format!("{dot} "), Style::default().fg(dot_color)),
         Span::styled(id_tag, Style::default().fg(Color::DarkGray)),
-        Span::styled(session.agent_id.clone(), name_style),
+        Span::styled(label, name_style),
         Span::styled(badge, Style::default().fg(badge_color)),
     ])
 }
@@ -116,6 +121,8 @@ mod tests {
         Session {
             id: SessionId(id),
             agent_id: agent_id.to_string(),
+            title: None,
+            color: Color::Green,
             acp_session_id: None,
             status: SessionStatus::Connected,
             scrollback: ScrollbackState::new(),
@@ -176,6 +183,17 @@ mod tests {
         assert!(joined.contains("#0"));
         assert!(joined.contains("#1"));
         assert!(joined.contains("#2"));
+    }
+
+    #[test]
+    fn session_title_replaces_agent_id_when_present() {
+        let mut sess = mk_session(0, "claude-code");
+        sess.title = Some("refactor router".to_string());
+        let lines = build_lines(&[sess], &[mk_agent("claude-code")], 0);
+        let joined: String = lines.iter().map(join_line).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("refactor router"));
+        // agent_id no longer shown when title takes its slot
+        assert!(!joined.contains("claude-code"));
     }
 
     #[test]

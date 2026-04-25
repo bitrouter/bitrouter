@@ -121,6 +121,13 @@ pub struct Session {
     pub id: SessionId,
     /// Registry id of the agent backing this session.
     pub agent_id: String,
+    /// User-visible title. `None` until the first user prompt, at
+    /// which point it is auto-derived from the prompt text. May be
+    /// overwritten by the rename UI in a later PR.
+    pub title: Option<String>,
+    /// Per-session palette color. Two sessions on the same agent get
+    /// different colors so they're visually distinct in the sidebar.
+    pub color: Color,
     /// ACP-assigned session id, set on first `AgentConnected` for this
     /// session. Used to route prompts/permissions back to the correct
     /// upstream conversation.
@@ -131,6 +138,26 @@ pub struct Session {
     pub scrollback: ScrollbackState,
     /// Badge shown on the session entry for background activity.
     pub badge: SessionBadge,
+}
+
+/// Maximum length of an auto-derived session title.
+pub const SESSION_TITLE_MAX: usize = 40;
+
+/// Derive a session title from the first user prompt. Trims, collapses
+/// whitespace, and truncates to [`SESSION_TITLE_MAX`] characters with
+/// an ellipsis when the source is longer.
+pub fn title_from_prompt(text: &str) -> Option<String> {
+    let trimmed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.chars().count() <= SESSION_TITLE_MAX {
+        Some(trimmed)
+    } else {
+        let mut out: String = trimmed.chars().take(SESSION_TITLE_MAX - 1).collect();
+        out.push('…');
+        Some(out)
+    }
 }
 
 // ── Entry types ────────────────────────────────────────────────────────
@@ -927,7 +954,37 @@ fn tool_status_icon(status: &ToolCallStatus) -> (&'static str, Color) {
 
 #[cfg(test)]
 mod tests {
-    use super::InlineInput;
+    use super::{InlineInput, SESSION_TITLE_MAX, title_from_prompt};
+
+    #[test]
+    fn title_from_prompt_returns_short_text_verbatim() {
+        assert_eq!(
+            title_from_prompt("refactor router"),
+            Some("refactor router".to_string())
+        );
+    }
+
+    #[test]
+    fn title_from_prompt_collapses_whitespace() {
+        assert_eq!(
+            title_from_prompt("  refactor   router\n\nplease  "),
+            Some("refactor router please".to_string())
+        );
+    }
+
+    #[test]
+    fn title_from_prompt_truncates_with_ellipsis() {
+        let long = "a".repeat(SESSION_TITLE_MAX + 20);
+        let title = title_from_prompt(&long).expect("non-empty");
+        assert_eq!(title.chars().count(), SESSION_TITLE_MAX);
+        assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn title_from_prompt_returns_none_for_blank() {
+        assert_eq!(title_from_prompt(""), None);
+        assert_eq!(title_from_prompt("   \n\t"), None);
+    }
 
     fn input_with(text: &str, col: usize) -> InlineInput {
         InlineInput {

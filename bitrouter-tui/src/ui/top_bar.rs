@@ -13,10 +13,12 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
     for (i, session) in state.session_store.active.iter().enumerate() {
         let is_active = i == state.active_session;
 
-        // Look up the agent for status + color.
-        let agent = state.agents.iter().find(|a| a.name == session.agent_id);
-        let agent_status = agent.map(|a| &a.status);
-        let agent_color = agent.map(|a| a.color).unwrap_or(Color::White);
+        // Status comes from the agent (provider reachability).
+        let agent_status = state
+            .agents
+            .iter()
+            .find(|a| a.name == session.agent_id)
+            .map(|a| &a.status);
 
         let (dot, dot_color) = match agent_status {
             Some(AgentStatus::Idle) => ("○", Color::DarkGray),
@@ -40,27 +42,22 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
             spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
         }
 
-        if is_active {
-            spans.push(Span::styled(
-                format!("{dot} "),
-                Style::default().fg(dot_color),
-            ));
-            spans.push(Span::styled(
-                session.agent_id.clone(),
-                Style::default()
-                    .fg(agent_color)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            ));
+        let label = session
+            .title
+            .clone()
+            .unwrap_or_else(|| session.agent_id.clone());
+        let style = if is_active {
+            Style::default()
+                .fg(session.color)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
-            spans.push(Span::styled(
-                format!("{dot} "),
-                Style::default().fg(dot_color),
-            ));
-            spans.push(Span::styled(
-                session.agent_id.clone(),
-                Style::default().fg(agent_color),
-            ));
-        }
+            Style::default().fg(session.color)
+        };
+        spans.push(Span::styled(
+            format!("{dot} "),
+            Style::default().fg(dot_color),
+        ));
+        spans.push(Span::styled(label, style));
 
         if !badge_str.is_empty() {
             let badge_color = match &session.badge {

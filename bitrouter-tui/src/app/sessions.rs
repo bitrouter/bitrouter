@@ -1,4 +1,4 @@
-use crate::model::{ScrollbackState, Session, SessionBadge, SessionStatus};
+use crate::model::{ScrollbackState, Session, SessionBadge, SessionStatus, agent_color};
 
 use super::{App, InputMode};
 
@@ -39,9 +39,15 @@ impl App {
     /// exists. Returns the index of the new session.
     pub(super) fn create_session_for_agent(&mut self, agent_id: &str) -> usize {
         let id = self.state.session_store.allocate_id();
+        // Per-session color: round-robin through the palette indexed
+        // by the SessionId so two sessions on the same agent are
+        // visually distinct in the sidebar.
+        let color = agent_color(id.0 as usize);
         self.state.session_store.active.push(Session {
             id,
             agent_id: agent_id.to_string(),
+            title: None,
+            color,
             acp_session_id: None,
             status: SessionStatus::Connecting,
             scrollback: ScrollbackState::new(),
