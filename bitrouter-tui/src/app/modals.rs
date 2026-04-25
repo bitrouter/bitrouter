@@ -1,8 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::model::{
-    AgentStatus, CommandAction, CommandPaletteState, Modal, ObservabilityState, PaletteCommand,
-    ScrollbackState,
+    AgentStatus, CommandAction, CommandPaletteState, ImportEntry, Modal, ObservabilityState,
+    PaletteCommand, ScrollbackState,
 };
 
 use super::App;
@@ -13,6 +13,7 @@ impl App {
             Some(Modal::Observability(_)) => 0,
             Some(Modal::CommandPalette(_)) => 1,
             Some(Modal::Help) => 2,
+            Some(Modal::ImportThreads(_)) => 3,
             None => return,
         };
 
@@ -22,8 +23,83 @@ impl App {
             2 if (key.code == KeyCode::Esc || key.code == KeyCode::Char('?')) => {
                 self.state.modal = None;
             }
+            3 => self.handle_import_modal_key(key),
             _ => {}
         }
+    }
+
+    fn handle_import_modal_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.dismiss_import_modal();
+            }
+            KeyCode::Enter => {
+                self.confirm_import_modal();
+            }
+            KeyCode::Char(' ') => {
+                self.toggle_import_selection_at_cursor();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.move_import_cursor(1);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.move_import_cursor(-1);
+            }
+            // 'a' selects every visible item; 'n' clears selections.
+            KeyCode::Char('a') => self.select_all_import_items(),
+            KeyCode::Char('n') => self.clear_import_selections(),
+            _ => {}
+        }
+    }
+
+    fn toggle_import_selection_at_cursor(&mut self) {
+        let Some(Modal::ImportThreads(state)) = self.state.modal.as_mut() else {
+            return;
+        };
+        let idx = state.cursor;
+        if !matches!(state.entries.get(idx), Some(ImportEntry::Item(_))) {
+            return;
+        }
+        if !state.selected.insert(idx) {
+            state.selected.remove(&idx);
+        }
+    }
+
+    fn move_import_cursor(&mut self, delta: i32) {
+        let Some(Modal::ImportThreads(state)) = self.state.modal.as_mut() else {
+            return;
+        };
+        if state.entries.is_empty() {
+            return;
+        }
+        let len = state.entries.len() as i32;
+        let mut next = state.cursor as i32;
+        // Step until we land on a selectable item or wrap back to start.
+        for _ in 0..len {
+            next = (next + delta).rem_euclid(len);
+            if matches!(state.entries.get(next as usize), Some(ImportEntry::Item(_))) {
+                state.cursor = next as usize;
+                return;
+            }
+        }
+    }
+
+    fn select_all_import_items(&mut self) {
+        let Some(Modal::ImportThreads(state)) = self.state.modal.as_mut() else {
+            return;
+        };
+        for (idx, entry) in state.entries.iter().enumerate() {
+            if matches!(entry, ImportEntry::Item(_)) {
+                state.selected.insert(idx);
+            }
+        }
+    }
+
+    fn clear_import_selections(&mut self) {
+        let Some(Modal::ImportThreads(state)) = self.state.modal.as_mut() else {
+            return;
+        };
+        state.selected.clear();
     }
 
     fn handle_observability_key(&mut self, key: KeyEvent) {

@@ -933,6 +933,9 @@ pub enum Modal {
     Observability(ObservabilityState),
     CommandPalette(CommandPaletteState),
     Help,
+    /// Import-existing-sessions picker, opened by `Ctrl-I` when one or
+    /// more on-disk sessions for the launch cwd were discovered.
+    ImportThreads(ImportState),
 }
 
 pub struct ObservabilityState {
@@ -975,6 +978,43 @@ impl ObsLog {
         }
         self.events.push_back(event);
     }
+}
+
+// ── Import modal ───────────────────────────────────────────────────────
+
+/// Snapshot of one on-disk session for the import modal. Mirrors
+/// [`bitrouter_providers::acp::session_import::DiscoveredSession`] but
+/// is owned and `Clone` so the modal can outlive the scan task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportCandidate {
+    pub agent_id: String,
+    pub external_session_id: String,
+    pub title_hint: Option<String>,
+    pub last_active_at: i64,
+    pub source_path: PathBuf,
+}
+
+/// State backing [`Modal::ImportThreads`].
+///
+/// `entries` is the flat list rendered (group headers + items, in
+/// agent-then-mtime order). `cursor` indexes into `entries`; `selected`
+/// is a set of `entries` indices that point at items the user wants to
+/// import. Group headers can't be selected.
+pub struct ImportState {
+    /// Pre-flattened list: header rows interleaved with item rows.
+    pub entries: Vec<ImportEntry>,
+    /// Current cursor position in `entries`. Always lands on a row
+    /// that the user can interact with — moves skip group headers.
+    pub cursor: usize,
+    /// Indices into `entries` of items the user has toggled on.
+    pub selected: std::collections::HashSet<usize>,
+}
+
+/// One row in the modal's flattened list — either a group header
+/// (rendered as a static label) or a selectable session candidate.
+pub enum ImportEntry {
+    Group { agent_id: String, count: usize },
+    Item(ImportCandidate),
 }
 
 // ── Command palette ─────────────────────────────────────────────────────

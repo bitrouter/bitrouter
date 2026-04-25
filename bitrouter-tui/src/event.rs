@@ -43,6 +43,11 @@ pub enum AppEvent {
     /// A system message raised by a background task (e.g. slash command
     /// output).  Rendered into the active tab's scrollback.
     SystemMessage { text: String },
+    /// Result of the startup `session_import::scan_for_cwd` task.
+    /// Empty when the scan found nothing or `$HOME` was unset.
+    ImportScanResult {
+        sessions: Vec<crate::model::ImportCandidate>,
+    },
 }
 
 /// Multiplexes terminal events and agent events into a single channel.

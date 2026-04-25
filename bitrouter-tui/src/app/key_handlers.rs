@@ -64,6 +64,12 @@ impl App {
                     self.state.mode = InputMode::Agent;
                     return;
                 }
+                KeyCode::Char('i') => {
+                    // Open the import modal. No-op if the startup
+                    // scan turned up nothing — no modal to show.
+                    self.open_import_modal();
+                    return;
+                }
                 _ => {}
             }
         }

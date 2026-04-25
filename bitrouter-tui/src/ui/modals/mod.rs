@@ -1,5 +1,6 @@
 mod command_palette;
 mod help;
+mod import;
 mod observability;
 
 use ratatui::Frame;
@@ -18,5 +19,6 @@ pub fn render_modal(frame: &mut Frame, state: &AppState) {
         Modal::Observability(s) => observability::render(frame, state, s),
         Modal::CommandPalette(s) => command_palette::render(frame, state, s),
         Modal::Help => help::render(frame),
+        Modal::ImportThreads(s) => import::render(frame, s),
     }
 }

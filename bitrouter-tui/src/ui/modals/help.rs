@@ -143,6 +143,10 @@ pub fn render(frame: &mut Frame) {
             Span::styled("Command palette", desc_style),
         ]),
         Line::from(vec![
+            Span::styled("  Ctrl+I        ", key_style),
+            Span::styled("Import existing threads (when discovered)", desc_style),
+        ]),
+        Line::from(vec![
             Span::styled("  ?             ", key_style),
             Span::styled("Toggle this help", desc_style),
         ]),

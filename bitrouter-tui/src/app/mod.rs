@@ -1,6 +1,7 @@
 mod agent_events;
 mod agent_lifecycle;
 mod helpers;
+mod import_modal;
 mod input_ops;
 mod key_handlers;
 mod modals;
@@ -28,8 +29,8 @@ use crate::TuiConfig;
 use crate::error::TuiError;
 use crate::event::{AppEvent, EventHandler};
 use crate::model::{
-    AgentStatus, AutocompleteState, InlineInput, InputTarget, Modal, ObsLog, ScrollbackState,
-    SearchState, SessionSearchState, agent_color,
+    AgentStatus, AutocompleteState, ImportCandidate, InlineInput, InputTarget, Modal, ObsLog,
+    ScrollbackState, SearchState, SessionSearchState, agent_color,
 };
 use crate::ui;
 
@@ -93,6 +94,13 @@ pub struct AppState {
     pub cycle_pos: Option<usize>,
     /// Cached layout from the last render pass (for mouse hit-testing).
     pub last_layout: Option<crate::ui::layout::AppLayout>,
+    /// On-disk sessions discovered by the startup scan, available for
+    /// import via `Ctrl-I`. Empty until the scan task delivers
+    /// [`AppEvent::ImportScanResult`].
+    pub discovered_sessions: Vec<ImportCandidate>,
+    /// Whether the first-launch nag toast has been shown for this
+    /// process. We only emit it once, after the scan resolves.
+    pub import_nag_shown: bool,
 }
 
 impl AppState {
@@ -204,6 +212,21 @@ impl App {
             }
         }
 
+        // Kick off the import scan on a blocking-pool thread so the
+        // synchronous file I/O doesn't tie up an async worker. Result
+        // arrives as `AppEvent::ImportScanResult` once the event loop
+        // is running.
+        spawn_import_scan(
+            event_tx.clone(),
+            launch_cwd.clone(),
+            bitrouter_config
+                .agents
+                .iter()
+                .filter(|(_, c)| c.enabled)
+                .map(|(name, _)| name.clone())
+                .collect(),
+        );
+
         Self {
             running: true,
             state: AppState {
@@ -223,6 +246,8 @@ impl App {
                 session_search: None,
                 cycle_pos: None,
                 last_layout: None,
+                discovered_sessions: Vec::new(),
+                import_nag_shown: false,
             },
             session_system: SessionSystem::new(event_tx.clone(), launch_cwd),
             event_tx,
@@ -269,8 +294,38 @@ impl App {
             AppEvent::SystemMessage { text } => {
                 self.push_system_msg(&text);
             }
+            AppEvent::ImportScanResult { sessions } => {
+                self.handle_import_scan_result(sessions);
+            }
         }
     }
+}
+
+/// Run the on-disk session-import scan on a blocking-pool thread and
+/// deliver the result to the event loop. Empty results are still sent
+/// so the handler can decide whether to surface a first-launch toast.
+fn spawn_import_scan(tx: mpsc::Sender<AppEvent>, cwd: PathBuf, agent_ids: Vec<String>) {
+    if agent_ids.is_empty() {
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return;
+        };
+        let discovered =
+            bitrouter_providers::acp::session_import::scan_for_cwd(&home, &cwd, &agent_ids);
+        let sessions: Vec<ImportCandidate> = discovered
+            .into_iter()
+            .map(|d| ImportCandidate {
+                agent_id: d.agent_id,
+                external_session_id: d.external_session_id,
+                title_hint: d.title_hint,
+                last_active_at: d.last_active_at,
+                source_path: d.source_path,
+            })
+            .collect();
+        let _ = tx.blocking_send(AppEvent::ImportScanResult { sessions });
+    });
 }
 
 pub async fn run_loop(
