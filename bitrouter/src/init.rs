@@ -321,10 +321,7 @@ pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error:
     let agent_summary = if discovered_agent_names.is_empty() {
         "none detected".to_owned()
     } else if agent_routing_configured {
-        format!(
-            "{} (routing via env vars)",
-            discovered_agent_names.join(", ")
-        )
+        format!("{} (routing via shims)", discovered_agent_names.join(", "))
     } else {
         format!(
             "{} detected, routing not configured",
@@ -623,7 +620,10 @@ fn run_agent_step(
         .collect();
 
     let configure = Confirm::with_theme(theme)
-        .with_prompt("Configure agents to route through BitRouter? (sets env vars)")
+        .with_prompt(
+            "Install routing shims for detected agents? \
+             (auto-falls-back when BitRouter is off)",
+        )
         .default(true)
         .interact()?;
 
@@ -631,91 +631,76 @@ fn run_agent_step(
         return Ok((all_names, false));
     }
 
-    let env_vars = routing_env_vars(listen_str);
+    let listen: std::net::SocketAddr = listen_str
+        .parse()
+        .map_err(|e| format!("invalid listen addr {listen_str}: {e}"))?;
+    let shim_dir = dirs::home_dir()
+        .ok_or("could not determine home directory")?
+        .join(".local")
+        .join("bin");
+    let platform = bitrouter_providers::acp::shim::Platform::current();
 
     println!();
-    println!("  The following env vars route agent traffic through BitRouter:");
-    for (var, val) in &env_vars {
-        println!("    export {var}={val}");
-    }
-    println!();
 
-    let write_profile = Confirm::with_theme(theme)
-        .with_prompt("Add these to your shell profile?")
-        .default(false)
-        .interact()?;
+    let mut installed = 0usize;
+    let mut conflicts: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
 
-    if write_profile {
-        match append_to_shell_profile(&env_vars) {
-            Ok(path) => println!("  ✓ Appended to {path}"),
-            Err(e) => eprintln!("  Warning: could not write shell profile: {e}"),
+    for name in &all_names {
+        let Some(env) = bitrouter_providers::acp::shim::shim_env_for(name, listen) else {
+            skipped.push(format!("{name} (no env mapping)"));
+            continue;
+        };
+        let Some(real) = bitrouter_providers::acp::shim::locate_real_binary(name, &shim_dir) else {
+            skipped.push(format!("{name} (binary not on PATH)"));
+            continue;
+        };
+        let shim_path = bitrouter_providers::acp::shim::shim_path_for(platform, &shim_dir, name);
+        match bitrouter_providers::acp::shim::install_shim(
+            platform, &shim_path, &real, listen, &env,
+        ) {
+            Ok(bitrouter_providers::acp::shim::ShimAction::Created)
+            | Ok(bitrouter_providers::acp::shim::ShimAction::Updated) => {
+                installed += 1;
+                println!("  ✓ {name}: shim → {}", shim_path.display());
+            }
+            Ok(bitrouter_providers::acp::shim::ShimAction::SkippedConflict) => {
+                conflicts.push(shim_path.display().to_string());
+            }
+            Err(e) => eprintln!("  Warning: {name}: {e}"),
         }
-    } else {
-        println!("  Copy the exports above into your shell profile to activate.");
+    }
+
+    if !conflicts.is_empty() {
+        println!();
+        println!("  These paths already exist and were left alone (move or delete to install):");
+        for c in &conflicts {
+            println!("    {c}");
+        }
+    }
+    if !skipped.is_empty() {
+        println!();
+        println!("  Skipped: {}", skipped.join(", "));
+    }
+
+    let path_has_shim_dir = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d == shim_dir))
+        .unwrap_or(false);
+
+    if installed > 0 && !path_has_shim_dir {
+        println!();
+        println!("  Note: {} is not on your PATH.", shim_dir.display());
+        if cfg!(windows) {
+            println!("  Add it via: setx PATH \"%USERPROFILE%\\.local\\bin;%PATH%\"");
+        } else {
+            println!("  Add to your shell rc: export PATH=\"$HOME/.local/bin:$PATH\"");
+        }
     }
 
     println!();
     println!("  To verify agent routing:");
-    println!("    1. source ~/.zshrc   (or open a new terminal)");
-    println!("    2. bitrouter serve   (start the proxy)");
-    println!("    3. bitrouter agents check");
+    println!("    1. bitrouter serve   (start the proxy)");
+    println!("    2. bitrouter agents check");
 
-    Ok((all_names, true))
-}
-
-/// Build the set of env vars that point agents at a BitRouter instance.
-#[cfg(feature = "tui")]
-fn routing_env_vars(listen_str: &str) -> Vec<(String, String)> {
-    let base = format!("http://{listen_str}");
-    vec![
-        ("OPENAI_BASE_URL".to_owned(), format!("{base}/v1")),
-        ("ANTHROPIC_BASE_URL".to_owned(), format!("{base}/v1")),
-        ("GOOGLE_AI_BASE_URL".to_owned(), format!("{base}/v1beta")),
-    ]
-}
-
-/// Detect the user's shell and append env var exports to the appropriate rc file.
-///
-/// Returns the path that was written to.
-#[cfg(feature = "tui")]
-fn append_to_shell_profile(
-    vars: &[(String, String)],
-) -> Result<String, Box<dyn std::error::Error>> {
-    let home = dirs::home_dir().ok_or("could not determine home directory")?;
-
-    let shell = std::env::var("SHELL").unwrap_or_default();
-    let rc_file = if shell.ends_with("zsh") {
-        home.join(".zshrc")
-    } else if shell.ends_with("fish") {
-        // fish uses a different export syntax — fall back to .bashrc-style
-        // in a fish-compatible universal var file.
-        home.join(".config/fish/conf.d/bitrouter.fish")
-    } else {
-        home.join(".bashrc")
-    };
-
-    let is_fish = shell.ends_with("fish");
-
-    let mut snippet = String::from("\n# BitRouter agent routing\n");
-    for (var, val) in vars {
-        if is_fish {
-            snippet.push_str(&format!("set -gx {var} {val}\n"));
-        } else {
-            snippet.push_str(&format!("export {var}={val}\n"));
-        }
-    }
-
-    // Ensure parent directory exists (relevant for fish conf.d)
-    if let Some(parent) = rc_file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&rc_file)?;
-    file.write_all(snippet.as_bytes())?;
-
-    Ok(rc_file.display().to_string())
+    Ok((all_names, installed > 0))
 }

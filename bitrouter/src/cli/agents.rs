@@ -208,53 +208,60 @@ pub async fn run_update(
 /// BitRouter is properly configured and working.
 ///
 /// Checks three things:
-/// 1. Routing env vars are set in the current shell
+/// 1. Routing shims are installed at `~/.local/bin/<agent>`
 /// 2. BitRouter is reachable at the configured listen address
 /// 3. Agents are discovered on PATH or distributable
 pub fn run_check(config: &BitrouterConfig) -> Result<(), Box<dyn std::error::Error>> {
     let listen = config.server.listen;
-    let base = format!("http://{listen}");
 
     println!();
     println!("  Agent Routing Check");
     println!("  ───────────────────");
     println!();
 
-    // 1. Check env vars
-    let env_checks = [
-        ("OPENAI_BASE_URL", format!("{base}/v1")),
-        ("ANTHROPIC_BASE_URL", format!("{base}/v1")),
-        ("GOOGLE_AI_BASE_URL", format!("{base}/v1beta")),
-    ];
+    // 1. Discover agents and check shim presence per agent.
+    let mut known = bitrouter_config::builtin_agent_defs();
+    for (name, agent_config) in &config.agents {
+        known.insert(name.clone(), agent_config.clone());
+    }
+    let discovered = bitrouter_providers::acp::discovery::discover_agents(&known);
 
-    let mut env_ok = true;
-    for (var, expected) in &env_checks {
-        match std::env::var(var) {
-            Ok(val) if val == *expected => {
-                println!("  \u{2713} {var} = {val}");
-            }
-            Ok(val) => {
-                println!("  \u{26a0} {var} = {val}  (expected {expected})");
-                env_ok = false;
-            }
-            Err(_) => {
-                println!("  \u{2717} {var} not set  (expected {expected})");
-                env_ok = false;
-            }
+    let shim_dir = dirs::home_dir()
+        .map(|h| h.join(".local").join("bin"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".local/bin"));
+    let platform = bitrouter_providers::acp::shim::Platform::current();
+
+    let mut needs_shim: Vec<String> = Vec::new();
+    let mut shim_count = 0usize;
+
+    for entry in &discovered {
+        if bitrouter_providers::acp::shim::shim_env_for(&entry.name, listen).is_none() {
+            continue;
+        }
+        let shim_path =
+            bitrouter_providers::acp::shim::shim_path_for(platform, &shim_dir, &entry.name);
+        if bitrouter_providers::acp::shim::is_installed(&shim_path) {
+            println!("  \u{2713} {} shim → {}", entry.name, shim_path.display());
+            shim_count += 1;
+        } else {
+            println!("  \u{2717} {} shim not installed", entry.name);
+            needs_shim.push(entry.name.clone());
         }
     }
 
-    if !env_ok {
-        println!();
-        println!("  Env vars missing or mismatched. To fix, add to your shell profile:");
-        for (var, expected) in &env_checks {
-            println!("    export {var}={expected}");
-        }
-        println!();
-        println!("  Then run: source ~/.zshrc  (or open a new terminal)");
+    if shim_count == 0 && needs_shim.is_empty() {
+        println!("  (no agents with a known routing mapping discovered)");
     }
 
-    // 2. Check BitRouter is reachable (TCP connect probe)
+    if !needs_shim.is_empty() {
+        println!();
+        println!(
+            "  Run `bitrouter init` to install shims for: {}",
+            needs_shim.join(", ")
+        );
+    }
+
+    // 2. Check BitRouter is reachable (TCP connect probe).
     println!();
     match std::net::TcpStream::connect_timeout(&listen, std::time::Duration::from_secs(2)) {
         Ok(_) => {
@@ -266,15 +273,8 @@ pub fn run_check(config: &BitrouterConfig) -> Result<(), Box<dyn std::error::Err
         }
     }
 
-    // 3. Check agent discovery
+    // 3. Surface agent discovery summary.
     println!();
-    let mut known = bitrouter_config::builtin_agent_defs();
-    for (name, agent_config) in &config.agents {
-        known.insert(name.clone(), agent_config.clone());
-    }
-
-    let discovered = bitrouter_providers::acp::discovery::discover_agents(&known);
-
     if discovered.is_empty() {
         println!("  \u{2717} No ACP agents discovered");
     } else {
