@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 use bitrouter_config::{AgentConfig, AgentSessionConfig, Distribution};
 use bitrouter_core::agents::event::{AgentEvent, PermissionRequestId, PermissionResponse};
 use bitrouter_core::agents::provider::AgentProvider;
-use bitrouter_core::agents::session::AgentSessionInfo;
+use bitrouter_core::agents::session::{AgentCapabilities, AgentSessionInfo};
 use bitrouter_core::errors::{BitrouterError, Result};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
-use super::connection::{HandshakeResult, spawn_agent_thread};
+use super::connection::{HandshakeResult, InitMode, spawn_agent_thread};
 use super::types::AgentCommand;
 
 /// Resolved launch command for an agent subprocess.
@@ -59,6 +59,12 @@ pub struct AcpAgentProvider {
     /// Limits concurrent sessions. Initialized with `max_concurrent`
     /// permits; each active session (and in-flight connect) holds one.
     connect_semaphore: Arc<Semaphore>,
+    /// Most recently observed capability set, captured from the agent's
+    /// `initialize` response. `None` until the first successful
+    /// handshake; the `capabilities()` accessor returns
+    /// `Default::default()` (all flags false) in that window so callers
+    /// can gate import flows without special-casing the cold start.
+    cached_capabilities: Mutex<Option<AgentCapabilities>>,
 }
 
 impl AcpAgentProvider {
@@ -75,7 +81,91 @@ impl AcpAgentProvider {
             session_config,
             sessions: Mutex::new(HashMap::new()),
             connect_semaphore,
+            cached_capabilities: Mutex::new(None),
         }
+    }
+
+    /// Persist the capabilities observed at handshake time. Called from
+    /// `connect` and `load_session` once the ACP `initialize` response
+    /// has been parsed.
+    fn record_capabilities(&self, caps: &AgentCapabilities) {
+        if let Ok(mut slot) = self.cached_capabilities.lock() {
+            *slot = Some(caps.clone());
+        }
+    }
+
+    /// Spawn a fresh agent thread, run the initialize handshake, and
+    /// register the resulting session in the pool. Used by both
+    /// `connect` (`InitMode::New`) and `load_session`
+    /// (`InitMode::Load`); the only difference is the second ACP call
+    /// and any replay-stream wiring, both handled inside the thread.
+    async fn spawn_initialised_session(
+        &self,
+        cwd: &Path,
+        init_mode: InitMode,
+    ) -> Result<AgentSessionInfo> {
+        if !cwd.is_absolute() {
+            return Err(BitrouterError::transport(
+                Some(&self.agent_name),
+                format!("cwd must be absolute: {}", cwd.display()),
+            ));
+        }
+
+        // Atomically reserve a concurrency slot. The permit is held for
+        // the lifetime of the session (stored in SessionEntry) and
+        // released when the session is removed.
+        let permit = Arc::clone(&self.connect_semaphore)
+            .try_acquire_owned()
+            .map_err(|_| {
+                let max = self.session_config.max_concurrent;
+                BitrouterError::transport(
+                    Some(&self.agent_name),
+                    format!("max concurrent sessions ({max}) reached"),
+                )
+            })?;
+
+        let launch = resolve_launch(&self.config);
+        let (handshake_tx, handshake_rx) = tokio::sync::oneshot::channel();
+
+        let thread_handle = spawn_agent_thread(
+            self.agent_name.clone(),
+            launch.binary,
+            launch.args,
+            cwd.to_path_buf(),
+            init_mode,
+            handshake_tx,
+        );
+
+        let handshake = handshake_rx.await.map_err(|_| {
+            BitrouterError::transport(
+                Some(&self.agent_name),
+                "agent thread exited before handshake",
+            )
+        })?;
+
+        let HandshakeResult {
+            session_info,
+            command_tx,
+        } = handshake.map_err(|msg| BitrouterError::transport(Some(&self.agent_name), msg))?;
+
+        self.record_capabilities(&session_info.capabilities);
+
+        {
+            let mut sessions = self.sessions.lock().map_err(|_| {
+                BitrouterError::transport(Some(&self.agent_name), "session lock poisoned")
+            })?;
+            sessions.insert(
+                session_info.session_id.clone(),
+                SessionEntry {
+                    command_tx,
+                    _thread_handle: thread_handle,
+                    last_active: Instant::now(),
+                    _permit: permit,
+                },
+            );
+        }
+
+        Ok(session_info)
     }
 
     /// Returns the configured idle timeout for sessions.
@@ -140,65 +230,45 @@ impl AgentProvider for AcpAgentProvider {
     }
 
     async fn connect(&self, cwd: &Path) -> Result<AgentSessionInfo> {
-        if !cwd.is_absolute() {
+        self.spawn_initialised_session(cwd, InitMode::New).await
+    }
+
+    async fn load_session(
+        &self,
+        cwd: &Path,
+        external_id: &str,
+    ) -> Result<(AgentSessionInfo, mpsc::Receiver<AgentEvent>)> {
+        // Cold-start guard: we only have cached capabilities after the
+        // first successful handshake. If the cache is empty we let the
+        // load_session attempt go through — the agent will reject with
+        // method_not_found if it doesn't actually support load.
+        let caps = self.capabilities();
+        let caps_known = self
+            .cached_capabilities
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
+        if caps_known && !caps.load_session {
             return Err(BitrouterError::transport(
                 Some(&self.agent_name),
-                format!("connect cwd must be absolute: {}", cwd.display()),
+                "agent does not advertise session/load capability",
             ));
         }
+        let (replay_tx, replay_rx) = mpsc::channel(64);
+        let mode = InitMode::Load {
+            external_id: external_id.to_string(),
+            replay_tx,
+        };
+        let info = self.spawn_initialised_session(cwd, mode).await?;
+        Ok((info, replay_rx))
+    }
 
-        // Atomically reserve a concurrency slot. The permit is held for
-        // the lifetime of the session (stored in SessionEntry) and
-        // released when the session is removed.
-        let permit = Arc::clone(&self.connect_semaphore)
-            .try_acquire_owned()
-            .map_err(|_| {
-                let max = self.session_config.max_concurrent;
-                BitrouterError::transport(
-                    Some(&self.agent_name),
-                    format!("max concurrent sessions ({max}) reached"),
-                )
-            })?;
-
-        let launch = resolve_launch(&self.config);
-        let (handshake_tx, handshake_rx) = tokio::sync::oneshot::channel();
-
-        let thread_handle = spawn_agent_thread(
-            self.agent_name.clone(),
-            launch.binary,
-            launch.args,
-            cwd.to_path_buf(),
-            handshake_tx,
-        );
-
-        let handshake = handshake_rx.await.map_err(|_| {
-            BitrouterError::transport(
-                Some(&self.agent_name),
-                "agent thread exited before handshake",
-            )
-        })?;
-
-        let HandshakeResult {
-            session_info,
-            command_tx,
-        } = handshake.map_err(|msg| BitrouterError::transport(Some(&self.agent_name), msg))?;
-
-        {
-            let mut sessions = self.sessions.lock().map_err(|_| {
-                BitrouterError::transport(Some(&self.agent_name), "session lock poisoned")
-            })?;
-            sessions.insert(
-                session_info.session_id.clone(),
-                SessionEntry {
-                    command_tx,
-                    _thread_handle: thread_handle,
-                    last_active: Instant::now(),
-                    _permit: permit,
-                },
-            );
-        }
-
-        Ok(session_info)
+    fn capabilities(&self) -> AgentCapabilities {
+        self.cached_capabilities
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_default()
     }
 
     async fn submit(&self, session_id: &str, text: String) -> Result<mpsc::Receiver<AgentEvent>> {
@@ -451,5 +521,30 @@ mod tests {
         let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
         let cleaned = provider.cleanup_idle_sessions().await;
         assert_eq!(cleaned, 0);
+    }
+
+    #[test]
+    fn capabilities_default_to_all_false_before_handshake() {
+        let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
+        let caps = provider.capabilities();
+        assert!(!caps.load_session);
+        assert!(!caps.prompt_image);
+        assert!(!caps.prompt_audio);
+    }
+
+    #[tokio::test]
+    async fn load_session_fails_when_capability_known_false() {
+        let provider = AcpAgentProvider::new("test".to_owned(), make_config(None));
+        // Force a known-but-empty capability set so load_session
+        // takes the fast-fail branch instead of trying to spawn.
+        provider.record_capabilities(&AgentCapabilities::default());
+        let result = provider
+            .load_session(std::path::Path::new("/tmp"), "ext-id")
+            .await;
+        let err = result.expect_err("load without capability must fail");
+        assert!(
+            format!("{err}").contains("session/load"),
+            "expected error to mention session/load, got: {err}"
+        );
     }
 }

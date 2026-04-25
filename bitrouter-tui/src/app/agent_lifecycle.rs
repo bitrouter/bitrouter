@@ -59,6 +59,44 @@ impl App {
             .spawn_session(session_id, agent_id, &config);
     }
 
+    /// Import an existing on-disk session via `session/load`. Creates
+    /// a fresh `Session` entry tagged as imported, then dispatches the
+    /// replay through `SessionSystem::import_session`. The session
+    /// stays in `Connecting` until the replay's `HistoryReplayDone`
+    /// event fences the imported history with a separator.
+    pub(super) fn import_session(
+        &mut self,
+        agent_id: &str,
+        external_session_id: String,
+        source_path: std::path::PathBuf,
+        title_hint: Option<String>,
+    ) -> Option<SessionId> {
+        let agent = self.state.agents.iter_mut().find(|a| a.name == agent_id)?;
+        if matches!(agent.status, AgentStatus::Installing { .. }) {
+            self.push_system_msg(&format!("{agent_id} is installing — try again shortly."));
+            return None;
+        }
+        let config = match &agent.config {
+            Some(c) => c.clone(),
+            None => {
+                self.push_system_msg(&format!("No ACP adapter configured for {agent_id}."));
+                return None;
+            }
+        };
+        agent.status = AgentStatus::Connecting;
+
+        let session_idx = self.create_imported_session(
+            agent_id,
+            external_session_id.clone(),
+            source_path,
+            title_hint,
+        );
+        let session_id = self.state.session_store.active[session_idx].id;
+        self.session_system
+            .import_session(session_id, agent_id, &config, external_session_id);
+        Some(session_id)
+    }
+
     /// Spawn the async binary download task (click-connect path).
     fn start_binary_install(&self, agent_id: &str, config: &bitrouter_config::AgentConfig) {
         use bitrouter_config::Distribution;

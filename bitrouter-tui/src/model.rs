@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use bitrouter_core::agents::event::{PermissionRequest, PermissionRequestId, ToolCallStatus};
@@ -110,6 +111,21 @@ pub enum SessionStatus {
     Error(String),
 }
 
+/// Where a session originated. Native sessions were spawned fresh via
+/// `session/new`; imported sessions were replayed via `session/load`
+/// from an agent's on-disk history (see `bitrouter_providers::acp::
+/// session_import`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionSource {
+    Native,
+    Imported {
+        /// Path to the on-disk session artifact the import was sourced
+        /// from. Useful for "imported from" display and for
+        /// disambiguating duplicate `external_session_id`s.
+        source_path: PathBuf,
+    },
+}
+
 /// A single session in the TUI, bound to one ACP conversation.
 ///
 /// Multiple sessions per agent are allowed; each carries its own
@@ -138,6 +154,12 @@ pub struct Session {
     pub scrollback: ScrollbackState,
     /// Badge shown on the session entry for background activity.
     pub badge: SessionBadge,
+    /// How this session originated.
+    pub source: SessionSource,
+    /// Agent-native id the session was imported from, when applicable.
+    /// For native sessions this is `None`; for imports it's the same
+    /// value passed to `session/load`.
+    pub external_session_id: Option<String>,
 }
 
 /// Maximum length of an auto-derived session title.
@@ -181,6 +203,9 @@ pub enum EntryKind {
     Thinking(ThinkingEntry),
     Permission(PermissionEntry),
     System(SystemNotice),
+    /// Visual divider, used by the import flow to mark the end of
+    /// replayed history.
+    Separator(SeparatorEntry),
 }
 
 impl Renderable for EntryKind {
@@ -192,6 +217,7 @@ impl Renderable for EntryKind {
             Self::Thinking(e) => e.render_lines(width, collapsed, ctx),
             Self::Permission(e) => e.render_lines(width, collapsed, ctx),
             Self::System(e) => e.render_lines(width, collapsed, ctx),
+            Self::Separator(e) => e.render_lines(width, collapsed, ctx),
         }
     }
 }
@@ -458,6 +484,36 @@ impl Renderable for PermissionEntry {
         }
 
         lines
+    }
+}
+
+// ── SeparatorEntry ─────────────────────────────────────────────────────
+
+/// A horizontal divider with optional inline label, used to visually
+/// fence sections of the scrollback (e.g. end of imported history).
+pub struct SeparatorEntry {
+    pub label: String,
+}
+
+impl Renderable for SeparatorEntry {
+    fn render_lines(
+        &self,
+        width: u16,
+        _collapsed: bool,
+        _ctx: &RenderContext,
+    ) -> Vec<Line<'static>> {
+        let label = format!(" {} ", self.label);
+        let label_chars = label.chars().count();
+        let total = (width as usize).saturating_sub(2); // leading "  "
+        let label_chars = label_chars.min(total);
+        let dashes = total.saturating_sub(label_chars);
+        let left = dashes / 2;
+        let right = dashes - left;
+        let line = format!("  {}{}{}", "─".repeat(left), label, "─".repeat(right),);
+        vec![
+            Line::from(Span::styled(line, Style::default().fg(Color::DarkGray))),
+            Line::raw(""),
+        ]
     }
 }
 
@@ -965,7 +1021,11 @@ fn tool_status_icon(status: &ToolCallStatus) -> (&'static str, Color) {
 
 #[cfg(test)]
 mod tests {
-    use super::{InlineInput, SESSION_TITLE_MAX, title_from_prompt};
+    use super::{
+        InlineInput, RenderContext, Renderable, SESSION_TITLE_MAX, SeparatorEntry,
+        title_from_prompt,
+    };
+    use std::collections::HashMap;
 
     #[test]
     fn title_from_prompt_returns_short_text_verbatim() {
@@ -1056,5 +1116,28 @@ mod tests {
         input.delete_to_line_end();
         assert_eq!(input.lines[0], "hello");
         assert_eq!(input.cursor.1, 5);
+    }
+
+    #[test]
+    fn separator_renders_centered_label_with_dashes() {
+        let entry = SeparatorEntry {
+            label: "imported history".to_string(),
+        };
+        let ctx = RenderContext {
+            agent_colors: HashMap::new(),
+        };
+        let lines = entry.render_lines(50, false, &ctx);
+        // Two lines: divider + trailing blank.
+        assert_eq!(lines.len(), 2);
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert!(
+            text.contains("imported history"),
+            "expected label, got: {text:?}"
+        );
+        assert!(text.contains('─'), "expected divider dashes, got: {text:?}");
     }
 }

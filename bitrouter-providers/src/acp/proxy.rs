@@ -249,6 +249,11 @@ impl ProxyAgent {
                             .await;
                     }
                 }
+                AgentEvent::HistoryReplayDone => {
+                    // Only emitted on the load_session replay receiver,
+                    // never on the per-turn submit() stream the proxy
+                    // pumps. Ignore defensively rather than fail.
+                }
             }
         }
 

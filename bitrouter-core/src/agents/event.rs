@@ -61,6 +61,12 @@ pub enum AgentEvent {
     },
     /// The prompt turn completed.
     TurnDone { stop_reason: StopReason },
+    /// History replay finished after a `session/load` import.
+    /// Emitted exactly once on the receiver returned by
+    /// [`AgentProvider::load_session`](super::provider::AgentProvider::load_session)
+    /// after the agent has streamed all prior `session/update`
+    /// notifications and the request itself has resolved.
+    HistoryReplayDone,
 }
 
 /// Status of an agent tool call.

@@ -1,4 +1,8 @@
-use crate::model::{ScrollbackState, Session, SessionBadge, SessionStatus, agent_color};
+use std::path::PathBuf;
+
+use crate::model::{
+    ScrollbackState, Session, SessionBadge, SessionSource, SessionStatus, agent_color,
+};
 
 use super::{App, InputMode};
 
@@ -58,6 +62,41 @@ impl App {
             status: SessionStatus::Connecting,
             scrollback: ScrollbackState::new(),
             badge: SessionBadge::None,
+            source: SessionSource::Native,
+            external_session_id: None,
+        });
+        self.state.session_store.active.len() - 1
+    }
+
+    /// Create a session entry for an in-progress import. The session is
+    /// in `Connecting` state until the agent finishes the
+    /// `session/load` handshake; replay events stream in via the same
+    /// `AppEvent::Session` path used for live prompts.
+    ///
+    /// `source_path` records the artifact the import was sourced from
+    /// (a `.jsonl` for Claude/Codex). It's stored on the `Session` so
+    /// the UI can label imported sessions and so duplicate imports of
+    /// the same `external_id` don't silently merge.
+    pub(super) fn create_imported_session(
+        &mut self,
+        agent_id: &str,
+        external_session_id: String,
+        source_path: PathBuf,
+        title_hint: Option<String>,
+    ) -> usize {
+        let id = self.state.session_store.allocate_id();
+        let color = agent_color(id.0 as usize);
+        self.state.session_store.active.push(Session {
+            id,
+            agent_id: agent_id.to_string(),
+            title: title_hint,
+            color,
+            acp_session_id: None,
+            status: SessionStatus::Connecting,
+            scrollback: ScrollbackState::new(),
+            badge: SessionBadge::None,
+            source: SessionSource::Imported { source_path },
+            external_session_id: Some(external_session_id),
         });
         self.state.session_store.active.len() - 1
     }

@@ -16,23 +16,37 @@ use bitrouter_core::agents::session::{AgentCapabilities, AgentSessionInfo};
 use super::client::{AcpClient, PermissionBridge, convert_stop_reason};
 use super::types::AgentCommand;
 
-/// Result of the agent handshake, sent back to the caller of `connect`.
+/// Result of the agent handshake, sent back to the caller of `connect`
+/// or `load_session`.
 pub(crate) struct HandshakeResult {
     pub session_info: AgentSessionInfo,
     pub command_tx: mpsc::Sender<AgentCommand>,
 }
 
+/// How the spawned agent thread should establish its session: a fresh
+/// `session/new` call, or a `session/load` against an existing
+/// agent-native session id whose replay events are streamed into
+/// `replay_tx`.
+pub(crate) enum InitMode {
+    New,
+    Load {
+        external_id: String,
+        replay_tx: mpsc::Sender<AgentEvent>,
+    },
+}
+
 /// Spawn an agent subprocess on a dedicated OS thread.
 ///
 /// Returns a thread handle. The `handshake_tx` oneshot resolves once
-/// the ACP initialize + new_session handshake completes (or fails).
-/// `cwd` is used both as the subprocess's working directory and as the
-/// `cwd` advertised in the ACP `session/new` request.
+/// the ACP initialize + new_session/load_session handshake completes
+/// (or fails). `cwd` is used both as the subprocess's working
+/// directory and as the `cwd` advertised in the ACP request.
 pub(crate) fn spawn_agent_thread(
     agent_name: String,
     bin_path: PathBuf,
     args: Vec<String>,
     cwd: PathBuf,
+    init_mode: InitMode,
     handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
@@ -53,6 +67,7 @@ pub(crate) fn spawn_agent_thread(
             bin_path,
             args,
             cwd,
+            init_mode,
             handshake_tx,
         )));
     })
@@ -63,9 +78,11 @@ async fn agent_task_local(
     bin_path: PathBuf,
     args: Vec<String>,
     cwd: PathBuf,
+    init_mode: InitMode,
     handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) {
-    if let Err(msg) = run_agent_connection(&agent_name, &bin_path, &args, &cwd, handshake_tx).await
+    if let Err(msg) =
+        run_agent_connection(&agent_name, &bin_path, &args, &cwd, init_mode, handshake_tx).await
     {
         tracing::error!(agent = %agent_name, "agent connection error: {msg}");
     }
@@ -76,6 +93,7 @@ async fn run_agent_connection(
     bin_path: &PathBuf,
     args: &[String],
     cwd: &std::path::Path,
+    init_mode: InitMode,
     handshake_tx: tokio::sync::oneshot::Sender<Result<HandshakeResult, String>>,
 ) -> Result<(), String> {
     // 1. Spawn subprocess — inherit the caller's requested cwd so that
@@ -117,22 +135,52 @@ async fn run_agent_connection(
         let _ = io_future.await;
     });
 
-    // 3. Initialize
-    conn.initialize(
-        acp::InitializeRequest::new(acp::ProtocolVersion::V1).client_info(
-            acp::Implementation::new("bitrouter", env!("CARGO_PKG_VERSION")).title("BitRouter"),
-        ),
-    )
-    .await
-    .map_err(|e| format!("{agent_name} initialize failed: {e}"))?;
-
-    // 4. Create session
-    let session_resp = conn
-        .new_session(acp::NewSessionRequest::new(cwd.to_path_buf()))
+    // 3. Initialize — capture the response so we can read declared
+    //    `agentCapabilities` and store them on the session info.
+    let init_resp = conn
+        .initialize(
+            acp::InitializeRequest::new(acp::ProtocolVersion::V1).client_info(
+                acp::Implementation::new("bitrouter", env!("CARGO_PKG_VERSION")).title("BitRouter"),
+            ),
+        )
         .await
-        .map_err(|e| format!("{agent_name} new_session failed: {e}"))?;
+        .map_err(|e| format!("{agent_name} initialize failed: {e}"))?;
+    let capabilities = capabilities_from_initialize(&init_resp);
 
-    let session_id = session_resp.session_id.to_string();
+    // 4. Establish the session — fresh `session/new` or replay-style
+    //    `session/load` based on `init_mode`. For Load, the replay
+    //    receiver is installed on the client BEFORE the call so
+    //    streamed `session/update` notifications route into it during
+    //    replay; we emit a synthetic `HistoryReplayDone` once the
+    //    request resolves so the caller can detect end-of-replay.
+    let session_id_acp: acp::SessionId = match &init_mode {
+        InitMode::New => {
+            let resp = conn
+                .new_session(acp::NewSessionRequest::new(cwd.to_path_buf()))
+                .await
+                .map_err(|e| format!("{agent_name} new_session failed: {e}"))?;
+            resp.session_id
+        }
+        InitMode::Load {
+            external_id,
+            replay_tx,
+        } => {
+            *reply_tx_slot.borrow_mut() = Some(replay_tx.clone());
+            let id = acp::SessionId::new(external_id.clone());
+            let result = conn
+                .load_session(acp::LoadSessionRequest::new(id.clone(), cwd.to_path_buf()))
+                .await;
+            // Emit HistoryReplayDone before clearing the slot so the
+            // caller sees a clean end-of-stream marker even if the
+            // load_session call itself errored AFTER streaming part
+            // of the history.
+            let _ = replay_tx.send(AgentEvent::HistoryReplayDone).await;
+            *reply_tx_slot.borrow_mut() = None;
+            result.map_err(|e| format!("{agent_name} load_session failed: {e}"))?;
+            id
+        }
+    };
+    let session_id = session_id_acp.to_string();
 
     // 5. Send handshake result back to the caller
     let (command_tx, mut command_rx) = mpsc::channel::<AgentCommand>(32);
@@ -140,10 +188,7 @@ async fn run_agent_connection(
     let session_info = AgentSessionInfo {
         session_id: session_id.clone(),
         agent_name: agent_name.to_string(),
-        capabilities: AgentCapabilities {
-            supports_permissions: true,
-            supports_thinking: true,
-        },
+        capabilities,
     };
 
     if handshake_tx
@@ -165,7 +210,7 @@ async fn run_agent_connection(
 
                 let result = conn
                     .prompt(acp::PromptRequest::new(
-                        session_resp.session_id.clone(),
+                        session_id_acp.clone(),
                         vec![text.into()],
                     ))
                     .await;
@@ -204,4 +249,19 @@ async fn run_agent_connection(
     }
 
     Ok(())
+}
+
+/// Read the bitrouter-side capability flags out of an ACP
+/// `InitializeResponse`. `supports_permissions` and `supports_thinking`
+/// don't have direct ACP wire equivalents — they're left at the
+/// historical defaults (true) so existing behaviour is unchanged.
+fn capabilities_from_initialize(resp: &acp::InitializeResponse) -> AgentCapabilities {
+    let agent = &resp.agent_capabilities;
+    AgentCapabilities {
+        supports_permissions: true,
+        supports_thinking: true,
+        load_session: agent.load_session,
+        prompt_image: agent.prompt_capabilities.image,
+        prompt_audio: agent.prompt_capabilities.audio,
+    }
 }

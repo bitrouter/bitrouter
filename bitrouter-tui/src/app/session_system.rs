@@ -40,6 +40,12 @@ impl SessionSystem {
         self.providers.contains_key(agent_id)
     }
 
+    /// The cwd recorded at startup, used when launching new ACP
+    /// sessions or scanning agent storage for imports.
+    pub fn launch_cwd(&self) -> &std::path::Path {
+        &self.launch_cwd
+    }
+
     /// Open a fresh ACP session against the agent's provider. Emits
     /// `SessionConnected` on success or a `Session` event with
     /// `AgentEvent::Error` on failure. The provider for `agent_id` is
@@ -79,6 +85,88 @@ impl SessionSystem {
                             },
                         })
                         .await;
+                }
+            }
+        });
+    }
+
+    /// Import an existing session by replaying its history via
+    /// `session/load`. Like [`Self::spawn_session`] this is
+    /// fire-and-forget — events stream back through the same
+    /// `AppEvent::Session` channel as live prompts. The replay ends
+    /// with a `HistoryReplayDone` event, after which the TUI can mark
+    /// the session ready for new prompts.
+    ///
+    /// `external_id` is the agent-native session id (Claude `.jsonl`
+    /// stem, Codex `payload.id`, etc.). Capability gating happens
+    /// inside the provider — `load_session` errors out cleanly if the
+    /// agent doesn't advertise `loadSession` in its initialize
+    /// response.
+    pub fn import_session(
+        &mut self,
+        session_id: SessionId,
+        agent_id: &str,
+        config: &AgentConfig,
+        external_id: String,
+    ) {
+        let provider = self
+            .providers
+            .entry(agent_id.to_string())
+            .or_insert_with(|| {
+                Arc::new(AcpAgentProvider::new(agent_id.to_string(), config.clone()))
+            })
+            .clone();
+
+        let agent_id_owned = agent_id.to_string();
+        let event_tx = self.event_tx.clone();
+        let cwd = self.launch_cwd.clone();
+
+        tokio::spawn(async move {
+            let load = provider.load_session(&cwd, &external_id).await;
+            let (info, mut replay_rx) = match load {
+                Ok(pair) => pair,
+                Err(e) => {
+                    let _ = event_tx
+                        .send(AppEvent::Session {
+                            session_id,
+                            agent_id: agent_id_owned,
+                            event: AgentEvent::Error {
+                                message: format!("{e}"),
+                            },
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            // Tell the TUI the ACP id is bound — same shape as the
+            // post-`session/new` SessionConnected event.
+            if event_tx
+                .send(AppEvent::SessionConnected {
+                    session_id,
+                    agent_id: agent_id_owned.clone(),
+                    acp_session_id: info.session_id,
+                })
+                .await
+                .is_err()
+            {
+                return;
+            }
+
+            // Replay events until HistoryReplayDone (or the channel
+            // closes for any reason — connection.rs always emits the
+            // sentinel before closing the slot).
+            while let Some(evt) = replay_rx.recv().await {
+                if event_tx
+                    .send(AppEvent::Session {
+                        session_id,
+                        agent_id: agent_id_owned.clone(),
+                        event: evt,
+                    })
+                    .await
+                    .is_err()
+                {
+                    break;
                 }
             }
         });

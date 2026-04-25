@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 use crate::app::{AppState, InputMode};
-use crate::model::{Agent, AgentStatus, Session, SessionBadge};
+use crate::model::{Agent, AgentStatus, Session, SessionBadge, SessionSource};
 
 /// Render the threads sidebar.
 pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
@@ -164,6 +164,10 @@ fn session_line(
         .title
         .clone()
         .unwrap_or_else(|| session.agent_id.clone());
+    let imported_tag = match &session.source {
+        SessionSource::Native => "",
+        SessionSource::Imported { .. } => "↓ ",
+    };
     let id_tag = format!("#{} ", session.id.0);
     let name_style = if is_active {
         Style::default()
@@ -187,6 +191,7 @@ fn session_line(
         Span::styled(marker, Style::default().fg(Color::Cyan)),
         Span::styled(format!("{dot} "), Style::default().fg(dot_color)),
         Span::styled(id_tag, Style::default().fg(Color::DarkGray)),
+        Span::styled(imported_tag, Style::default().fg(Color::Blue)),
         Span::styled(label, name_style),
         Span::styled(badge, Style::default().fg(badge_color)),
     ])
@@ -208,7 +213,7 @@ fn status_dot(status: Option<&AgentStatus>) -> (&'static str, Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ScrollbackState, SessionId, SessionStatus};
+    use crate::model::{ScrollbackState, SessionId, SessionSource, SessionStatus};
 
     fn mk_session(id: u64, agent_id: &str) -> Session {
         Session {
@@ -220,6 +225,8 @@ mod tests {
             status: SessionStatus::Connected,
             scrollback: ScrollbackState::new(),
             badge: SessionBadge::None,
+            source: SessionSource::Native,
+            external_session_id: None,
         }
     }
 

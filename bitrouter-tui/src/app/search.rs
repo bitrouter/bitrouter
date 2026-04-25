@@ -100,7 +100,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::session_matches_query;
-    use crate::model::{ScrollbackState, Session, SessionBadge, SessionId, SessionStatus};
+    use crate::model::{
+        ScrollbackState, Session, SessionBadge, SessionId, SessionSource, SessionStatus,
+    };
     use ratatui::style::Color;
 
     fn mk_session(id: u64, agent_id: &str, title: Option<&str>) -> Session {
@@ -113,6 +115,8 @@ mod tests {
             status: SessionStatus::Connected,
             scrollback: ScrollbackState::new(),
             badge: SessionBadge::None,
+            source: SessionSource::Native,
+            external_session_id: None,
         }
     }
 

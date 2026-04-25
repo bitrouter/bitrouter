@@ -72,7 +72,9 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ScrollbackState, Session, SessionBadge, SessionStatus, agent_color};
+    use crate::model::{
+        ScrollbackState, Session, SessionBadge, SessionSource, SessionStatus, agent_color,
+    };
 
     fn mk_session(store: &mut SessionStore, agent_id: &str) -> SessionId {
         let id = store.allocate_id();
@@ -85,6 +87,8 @@ mod tests {
             status: SessionStatus::Connecting,
             scrollback: ScrollbackState::new(),
             badge: SessionBadge::None,
+            source: SessionSource::Native,
+            external_session_id: None,
         });
         id
     }

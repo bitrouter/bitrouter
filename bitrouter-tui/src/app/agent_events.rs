@@ -2,7 +2,10 @@ use std::time::Instant;
 
 use bitrouter_core::agents::event::AgentEvent;
 
-use crate::model::{AgentStatus, EntryKind, ObsEvent, ObsEventKind, SessionId, SessionStatus};
+use crate::model::{
+    ActivityEntry, AgentStatus, EntryKind, ObsEvent, ObsEventKind, SeparatorEntry, SessionId,
+    SessionStatus,
+};
 
 use super::App;
 
@@ -47,7 +50,34 @@ impl App {
             AgentEvent::TurnDone { .. } => {
                 self.handle_prompt_done(session_id, agent_id);
             }
+            AgentEvent::HistoryReplayDone => {
+                self.handle_history_replay_done(session_id, agent_id);
+            }
         }
+    }
+
+    /// Mark an imported session as ready for new prompts and fence the
+    /// replayed history with a visual separator. Called when the
+    /// `session/load` replay stream emits its terminating
+    /// `HistoryReplayDone` event.
+    fn handle_history_replay_done(&mut self, session_id: SessionId, agent_id: String) {
+        if let Some(idx) = self.state.session_store.index_of(session_id) {
+            let session = &mut self.state.session_store.active[idx];
+            session.status = SessionStatus::Connected;
+            let id = session.scrollback.next_id();
+            session.scrollback.push_entry(ActivityEntry {
+                id,
+                kind: EntryKind::Separator(SeparatorEntry {
+                    label: "imported history".to_string(),
+                }),
+                collapsed: false,
+            });
+        }
+        self.state.obs_log.push(ObsEvent {
+            agent_id,
+            kind: ObsEventKind::PromptDone,
+            timestamp: Instant::now(),
+        });
     }
 
     pub(super) fn handle_session_connected(

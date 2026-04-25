@@ -18,12 +18,27 @@ use super::App;
 /// Structured form of a recognised slash command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SlashCommand {
-    AgentsList { refresh: bool },
-    AgentsInstall { id: String },
-    AgentsUninstall { id: String },
-    AgentsUpdate { id: Option<String> },
+    AgentsList {
+        refresh: bool,
+    },
+    AgentsInstall {
+        id: String,
+    },
+    AgentsUninstall {
+        id: String,
+    },
+    AgentsUpdate {
+        id: Option<String>,
+    },
     ProvidersList,
-    ProvidersUse { mode: String },
+    ProvidersUse {
+        mode: String,
+    },
+    /// `/import` — list discoverable sessions for the launch cwd.
+    /// `/import <agent_id> <external_id>` — replay a specific session.
+    Import {
+        target: Option<(String, String)>,
+    },
     Login,
     Logout,
     Whoami,
@@ -67,6 +82,17 @@ pub(super) fn parse_slash(line: &str) -> Option<SlashCommand> {
                 .map(|m| SlashCommand::ProvidersUse { mode: m.to_owned() }),
             _ => None,
         },
+        "import" => {
+            let agent = parts.next();
+            let external = parts.next();
+            let target = match (agent, external) {
+                (Some(a), Some(e)) => Some((a.to_owned(), e.to_owned())),
+                (None, None) => None,
+                // Single-arg form is ambiguous — reject.
+                _ => return None,
+            };
+            Some(SlashCommand::Import { target })
+        }
         "login" => Some(SlashCommand::Login),
         "logout" => Some(SlashCommand::Logout),
         "whoami" => Some(SlashCommand::Whoami),
@@ -97,6 +123,7 @@ impl App {
             SlashCommand::AgentsUpdate { id } => self.slash_agents_update(id, bitrouter_config),
             SlashCommand::ProvidersList => self.slash_providers_list(bitrouter_config),
             SlashCommand::ProvidersUse { mode } => self.slash_providers_use(mode),
+            SlashCommand::Import { target } => self.slash_import(target),
             SlashCommand::Login => self.push_system_msg(
                 "Device-flow login runs in the CLI. Exit the TUI (Ctrl+Q) and run: bitrouter login",
             ),
@@ -293,6 +320,84 @@ impl App {
         }
     }
 
+    fn slash_import(&mut self, target: Option<(String, String)>) {
+        // No-arg form: list discoverable sessions for the launch cwd.
+        // Two-arg form: import the named session immediately.
+        if let Some((agent_id, external_id)) = target {
+            // Refuse a second import of the same external_session_id —
+            // switch to the existing one instead so duplicate
+            // /import calls are idempotent.
+            if let Some(idx) = self.state.session_store.active.iter().position(|s| {
+                s.agent_id == agent_id && s.external_session_id.as_deref() == Some(&external_id)
+            }) {
+                self.switch_session(idx);
+                self.push_system_msg(&format!(
+                    "Already imported {agent_id}/{external_id}; switched to it."
+                ));
+                return;
+            }
+
+            let home = match std::env::var_os("HOME").map(std::path::PathBuf::from) {
+                Some(h) => h,
+                None => {
+                    self.push_system_msg("$HOME is unset; cannot resolve agent storage.");
+                    return;
+                }
+            };
+            let cwd = self.session_system.launch_cwd().to_path_buf();
+            let scanned = bitrouter_providers::acp::session_import::scan_for_cwd(
+                &home,
+                &cwd,
+                std::slice::from_ref(&agent_id),
+            );
+            let hit = scanned
+                .iter()
+                .find(|s| s.external_session_id == external_id);
+            let (source_path, title_hint) = match hit {
+                Some(s) => (s.source_path.clone(), s.title_hint.clone()),
+                None => {
+                    self.push_system_msg(&format!(
+                        "No on-disk session '{external_id}' for {agent_id} in this cwd."
+                    ));
+                    return;
+                }
+            };
+            if self
+                .import_session(&agent_id, external_id.clone(), source_path, title_hint)
+                .is_some()
+            {
+                self.push_system_msg(&format!("Importing {agent_id} session {external_id}..."));
+            }
+            return;
+        }
+
+        // List discoverable sessions for all enabled agents.
+        let home = match std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            Some(h) => h,
+            None => {
+                self.push_system_msg("$HOME is unset; cannot resolve agent storage.");
+                return;
+            }
+        };
+        let cwd = self.session_system.launch_cwd().to_path_buf();
+        let agent_ids: Vec<String> = self.state.agents.iter().map(|a| a.name.clone()).collect();
+        let scanned =
+            bitrouter_providers::acp::session_import::scan_for_cwd(&home, &cwd, &agent_ids);
+        if scanned.is_empty() {
+            self.push_system_msg("No on-disk sessions found for this cwd.");
+            return;
+        }
+        self.push_system_msg(&format!("Found {n} on-disk session(s):", n = scanned.len()));
+        for s in scanned.iter().take(20) {
+            let label = s.title_hint.as_deref().unwrap_or("(no title)");
+            self.push_system_msg(&format!(
+                "  /import {agent} {id}  — {label}",
+                agent = s.agent_id,
+                id = s.external_session_id,
+            ));
+        }
+    }
+
     fn slash_providers_use(&mut self, mode: String) {
         let mode = mode.trim().to_lowercase();
         match mode.as_str() {
@@ -434,5 +539,28 @@ mod tests {
         assert_eq!(parse_slash("hello world"), None);
         assert_eq!(parse_slash("/bogus"), None);
         assert_eq!(parse_slash(""), None);
+    }
+
+    #[test]
+    fn parses_import_no_args_lists() {
+        assert_eq!(
+            parse_slash("/import"),
+            Some(SlashCommand::Import { target: None })
+        );
+    }
+
+    #[test]
+    fn parses_import_with_agent_and_external_id() {
+        assert_eq!(
+            parse_slash("/import claude-code abc-123"),
+            Some(SlashCommand::Import {
+                target: Some(("claude-code".to_owned(), "abc-123".to_owned()))
+            })
+        );
+    }
+
+    #[test]
+    fn parses_import_single_arg_is_rejected_as_ambiguous() {
+        assert_eq!(parse_slash("/import claude-code"), None);
     }
 }
