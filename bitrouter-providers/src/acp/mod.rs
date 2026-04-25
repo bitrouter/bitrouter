@@ -11,6 +11,7 @@ pub mod platform;
 pub mod provider;
 pub mod proxy;
 pub mod registry;
+pub mod session_import;
 pub mod shim;
 pub mod state;
 pub mod types;
