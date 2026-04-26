@@ -4,8 +4,8 @@ mod helpers;
 mod import_modal;
 mod input_ops;
 mod key_handlers;
-mod modals;
 mod mouse;
+mod pickers;
 mod search;
 pub(crate) mod session_store;
 mod session_system;
@@ -29,33 +29,29 @@ use crate::TuiConfig;
 use crate::error::TuiError;
 use crate::event::{AppEvent, EventHandler};
 use crate::model::{
-    AgentStatus, AutocompleteState, ImportCandidate, InlineInput, InputTarget, Modal, ObsLog,
-    ScrollbackState, SearchState, SessionSearchState, agent_color,
+    AgentStatus, AutocompleteState, ImportCandidate, InlineInput, InputTarget, ObsLog,
+    ScrollbackState, SearchState, agent_color,
 };
 use crate::ui;
 
-// ── Input mode (Zellij-style) ──────────────────────────────────────────
+// ── Input mode ─────────────────────────────────────────────────────────
 
-/// Which mode the TUI is in.
+/// Which mode the TUI is in. Intentionally minimal — see the product
+/// doc (`specs/bitrouter-tui-product.md` §4) for rationale.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputMode {
-    /// Normal mode: inline prompt has focus, scrollback auto-follows.
+    /// Normal: input bar has focus, scrollback auto-follows.
     Normal,
-    /// Scroll mode: user is browsing scrollback history.
+    /// Scroll: user is browsing scrollback history.
     Scroll,
-    /// Session mode: switching/managing sessions in the sidebar.
-    /// Renamed from `Tab` in PR 6 — the mode's purpose visibly broadens
-    /// once `/` enters [`Self::SessionSearch`].
-    Session,
-    /// Sidebar incremental filter — typing builds a query, j/k navigate
-    /// the filtered list, Enter selects, Esc cancels back to `Session`.
-    SessionSearch,
-    /// Agent mode: inline agent list for connect/disconnect.
-    Agent,
-    /// Search mode: incremental scrollback search.
+    /// Search: incremental scrollback search (entered from Scroll via `/`).
     Search,
-    /// Permission mode: awaiting y/n/a for a permission request.
+    /// Permission: awaiting y/n/a for an inline permission request.
     Permission,
+    /// Picker: an inline scrollback picker (agent / session /
+    /// import-multiselect) is active. The actual picker state lives on
+    /// the active session's scrollback as a [`PickerEntry`].
+    Picker,
 }
 
 /// All mutable TUI state, separated from `App` so the borrow checker allows
@@ -69,29 +65,14 @@ pub struct AppState {
     pub session_store: SessionStore,
     /// Index into `session_store.active` of the currently focused session.
     pub active_session: usize,
-    /// Whether the threads sidebar is drawn.
-    pub sidebar_visible: bool,
     /// Global input bar.
     pub input: InlineInput,
     pub input_target: InputTarget,
     pub autocomplete: Option<AutocompleteState>,
-    /// Modal overlays (Help, Observability, CommandPalette).
-    pub modal: Option<Modal>,
     pub obs_log: ObsLog,
     pub config: TuiConfig,
-    /// Cursor position in Agent mode's inline list.
-    pub agent_list_selected: usize,
-    /// Incremental search state.
+    /// Incremental scrollback search state (Scroll mode `/`).
     pub search: Option<SearchState>,
-    /// Sidebar incremental filter — `Some` while in
-    /// [`InputMode::SessionSearch`], `None` otherwise. The sidebar reads
-    /// this to render only matching sessions.
-    pub session_search: Option<SessionSearchState>,
-    /// Position in [`SessionStore::focus_history`] during an active
-    /// `Ctrl-Tab` cycle. `None` when not cycling. Reset by any non-cycle
-    /// key, at which point the current session is recorded as
-    /// most-recent so the next cycle starts fresh.
-    pub cycle_pos: Option<usize>,
     /// Cached layout from the last render pass (for mouse hit-testing).
     pub last_layout: Option<crate::ui::layout::AppLayout>,
     /// On-disk sessions discovered by the startup scan, available for
@@ -234,17 +215,12 @@ impl App {
                 agents,
                 session_store: SessionStore::new(),
                 active_session: 0,
-                sidebar_visible: true,
                 input: InlineInput::new(),
                 input_target: InputTarget::Default,
                 autocomplete: None,
-                modal: None,
                 obs_log: ObsLog::new(),
                 config,
-                agent_list_selected: 0,
                 search: None,
-                session_search: None,
-                cycle_pos: None,
                 last_layout: None,
                 discovered_sessions: Vec::new(),
                 import_nag_shown: false,

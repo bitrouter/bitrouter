@@ -206,6 +206,9 @@ pub enum EntryKind {
     /// Visual divider, used by the import flow to mark the end of
     /// replayed history.
     Separator(SeparatorEntry),
+    /// Inline picker — agent / session / import multiselect.
+    /// Interactive while `outcome == Open`, frozen otherwise.
+    Picker(PickerEntry),
 }
 
 impl Renderable for EntryKind {
@@ -218,6 +221,7 @@ impl Renderable for EntryKind {
             Self::Permission(e) => e.render_lines(width, collapsed, ctx),
             Self::System(e) => e.render_lines(width, collapsed, ctx),
             Self::Separator(e) => e.render_lines(width, collapsed, ctx),
+            Self::Picker(e) => e.render_lines(width, collapsed, ctx),
         }
     }
 }
@@ -514,6 +518,159 @@ impl Renderable for SeparatorEntry {
             Line::from(Span::styled(line, Style::default().fg(Color::DarkGray))),
             Line::raw(""),
         ]
+    }
+}
+
+// ── PickerEntry ────────────────────────────────────────────────────────
+
+/// One row in an inline picker.
+pub struct PickerItem {
+    /// Headline text, e.g. `claude-code` or `refactor router`.
+    pub label: String,
+    /// Optional dim subtitle, e.g. `(session abc-123)` or `connected`.
+    pub subtitle: Option<String>,
+    /// Whether this row is selectable. Group headers in the import
+    /// picker are non-selectable.
+    pub selectable: bool,
+}
+
+/// What to do once the user confirms a picker. Carries the original
+/// option list so the dispatcher can resolve indices back to choices
+/// without consulting any other state.
+#[derive(Clone)]
+pub enum PickerAction {
+    /// Spawn a new session against the chosen agent.
+    NewSession { agents: Vec<String> },
+    /// Switch to the chosen active session by id.
+    SwitchSession { ids: Vec<SessionId> },
+    /// Import the chosen on-disk session(s).
+    Import { candidates: Vec<ImportCandidate> },
+}
+
+/// State of a picker entry.
+pub enum PickerOutcome {
+    /// Interactive — `InputMode::Picker` is active.
+    Open,
+    /// Frozen, user picked these item indices.
+    Confirmed { indices: Vec<usize> },
+    /// Frozen, user dismissed.
+    Cancelled,
+}
+
+pub struct PickerEntry {
+    pub title: String,
+    pub items: Vec<PickerItem>,
+    pub cursor: usize,
+    pub selected: std::collections::HashSet<usize>,
+    pub multiselect: bool,
+    pub action: PickerAction,
+    pub outcome: PickerOutcome,
+}
+
+impl Renderable for PickerEntry {
+    fn render_lines(
+        &self,
+        _width: u16,
+        _collapsed: bool,
+        _ctx: &RenderContext,
+    ) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+
+        // Title bar.
+        let title_style = match self.outcome {
+            PickerOutcome::Open => Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            _ => Style::default().fg(Color::DarkGray),
+        };
+        out.push(Line::from(Span::styled(
+            format!("  {}", self.title),
+            title_style,
+        )));
+
+        match &self.outcome {
+            PickerOutcome::Open => {
+                for (i, item) in self.items.iter().enumerate() {
+                    let cursor_marker = if i == self.cursor && item.selectable {
+                        "▸ "
+                    } else {
+                        "  "
+                    };
+                    let checkbox = if self.multiselect && item.selectable {
+                        if self.selected.contains(&i) {
+                            "[x] "
+                        } else {
+                            "[ ] "
+                        }
+                    } else {
+                        ""
+                    };
+                    let label_style = if !item.selectable {
+                        Style::default().fg(Color::DarkGray)
+                    } else if i == self.cursor {
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    let mut spans: Vec<Span<'static>> = vec![
+                        Span::raw("  "),
+                        Span::styled(cursor_marker, Style::default().fg(Color::Cyan)),
+                        Span::styled(
+                            checkbox.to_string(),
+                            if self.multiselect && self.selected.contains(&i) {
+                                Style::default().fg(Color::Green)
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
+                        ),
+                        Span::styled(item.label.clone(), label_style),
+                    ];
+                    if let Some(sub) = &item.subtitle {
+                        spans.push(Span::styled(
+                            format!("  {sub}"),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                    out.push(Line::from(spans));
+                }
+                out.push(Line::raw(""));
+                let hint = if self.multiselect {
+                    "  ↑↓ select · Space toggle · Enter confirm · Esc cancel"
+                } else {
+                    "  ↑↓ select · Enter confirm · Esc cancel"
+                };
+                out.push(Line::from(Span::styled(
+                    hint,
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            PickerOutcome::Confirmed { indices } => {
+                let chosen: Vec<String> = indices
+                    .iter()
+                    .filter_map(|&i| self.items.get(i).map(|it| it.label.clone()))
+                    .collect();
+                let summary = if chosen.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    chosen.join(", ")
+                };
+                out.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("✓ ", Style::default().fg(Color::Green)),
+                    Span::styled(summary, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+            PickerOutcome::Cancelled => {
+                out.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("✗ cancelled", Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+        out.push(Line::raw(""));
+        out
     }
 }
 
@@ -892,16 +1049,39 @@ pub enum InputTarget {
     Default,
     /// One or more specific agents.
     Specific(Vec<String>),
-    /// Broadcast to all connected agents.
-    All,
 }
 
-/// Autocomplete state for @-mentions in the input bar.
+/// Whether the autocomplete popup is for `@`-mentions or for
+/// `/`-slash commands. The two share rendering & navigation but
+/// differ in what gets inserted on accept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutocompleteKind {
+    AtMention,
+    SlashCommand,
+}
+
+/// One row in the autocomplete popup.
+#[derive(Debug, Clone)]
+pub struct AutocompleteCandidate {
+    /// The literal text that gets inserted into the input on accept.
+    /// For `@`-mention this is the agent name; for `/`-command this
+    /// is the full command (`/session new`).
+    pub value: String,
+    /// Optional dim subtitle. For `/`-commands this is the one-line
+    /// description; for `@`-mention it's `None`.
+    pub description: Option<String>,
+}
+
+/// Autocomplete state for `@`-mentions or `/`-commands.
 pub struct AutocompleteState {
-    /// The prefix typed after `@` (e.g. `"cl"` for `@cl`).
+    pub kind: AutocompleteKind,
+    /// The prefix typed after `@` (or after `/`) — the chars the user
+    /// has typed so far that the popup is filtering against. Includes
+    /// the leading sigil only for slash (e.g. `/se` for filtering
+    /// commands; `cl` for filtering agents).
     pub prefix: String,
-    /// Matching agent names (filtered).
-    pub candidates: Vec<String>,
+    /// Filtered candidates.
+    pub candidates: Vec<AutocompleteCandidate>,
     /// Index of the highlighted candidate.
     pub selected: usize,
 }
@@ -915,34 +1095,10 @@ pub struct SearchState {
     pub current_match: usize,
 }
 
-/// State for incremental sidebar (session-list) search. Distinct from
-/// [`SearchState`], which scopes to the active session's scrollback —
-/// this filters the visible session list by `title || agent_id`.
-pub struct SessionSearchState {
-    pub query: String,
-    /// Indices into `SessionStore.active` that match `query`.
-    pub matches: Vec<usize>,
-    /// Position within `matches` of the highlighted entry.
-    pub selected: usize,
-}
+// ── Observability log ──────────────────────────────────────────────────
 
-// ── Modals ──────────────────────────────────────────────────────────────
-
-/// At most one modal overlay is open at a time.
-pub enum Modal {
-    Observability(ObservabilityState),
-    CommandPalette(CommandPaletteState),
-    Help,
-    /// Import-existing-sessions picker, opened by `Ctrl-I` when one or
-    /// more on-disk sessions for the launch cwd were discovered.
-    ImportThreads(ImportState),
-}
-
-pub struct ObservabilityState {
-    pub scroll_offset: usize,
-}
-
-/// A recorded event for the observability panel.
+/// A recorded event for the observability log (rendered inline by
+/// `/obs`).
 pub struct ObsEvent {
     pub agent_id: String,
     pub kind: ObsEventKind,
@@ -980,11 +1136,11 @@ impl ObsLog {
     }
 }
 
-// ── Import modal ───────────────────────────────────────────────────────
+// ── Import candidate ───────────────────────────────────────────────────
 
-/// Snapshot of one on-disk session for the import modal. Mirrors
-/// [`bitrouter_providers::acp::session_import::DiscoveredSession`] but
-/// is owned and `Clone` so the modal can outlive the scan task.
+/// Snapshot of one on-disk session discovered by the startup scan.
+/// Mirrors [`bitrouter_providers::acp::session_import::DiscoveredSession`]
+/// but is owned and `Clone` so it can be passed into pickers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportCandidate {
     pub agent_id: String,
@@ -994,54 +1150,11 @@ pub struct ImportCandidate {
     pub source_path: PathBuf,
 }
 
-/// State backing [`Modal::ImportThreads`].
-///
-/// `entries` is the flat list rendered (group headers + items, in
-/// agent-then-mtime order). `cursor` indexes into `entries`; `selected`
-/// is a set of `entries` indices that point at items the user wants to
-/// import. Group headers can't be selected.
-pub struct ImportState {
-    /// Pre-flattened list: header rows interleaved with item rows.
-    pub entries: Vec<ImportEntry>,
-    /// Current cursor position in `entries`. Always lands on a row
-    /// that the user can interact with — moves skip group headers.
-    pub cursor: usize,
-    /// Indices into `entries` of items the user has toggled on.
-    pub selected: std::collections::HashSet<usize>,
-}
-
-/// One row in the modal's flattened list — either a group header
-/// (rendered as a static label) or a selectable session candidate.
+/// One row in the import-picker list — either a group header (shown
+/// as a static label) or a selectable session candidate.
 pub enum ImportEntry {
     Group { agent_id: String, count: usize },
     Item(ImportCandidate),
-}
-
-// ── Command palette ─────────────────────────────────────────────────────
-
-pub struct CommandPaletteState {
-    pub query: String,
-    pub all_commands: Vec<PaletteCommand>,
-    /// Indices into `all_commands` that match the current query.
-    pub filtered: Vec<usize>,
-    pub selected: usize,
-}
-
-pub struct PaletteCommand {
-    pub label: String,
-    pub action: CommandAction,
-}
-
-#[derive(Debug, Clone)]
-pub enum CommandAction {
-    ConnectAgent(String),
-    DisconnectAgent(String),
-    ToggleObservability,
-    ClearConversation,
-    ShowHelp,
-    NewTab,
-    CloseTab,
-    SwitchTab(String),
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

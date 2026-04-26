@@ -64,12 +64,17 @@ impl App {
             let session_end = x + name_width + badge_width;
             if col >= x && col < session_end {
                 self.switch_session(i);
-                if self.state.mode == InputMode::Session {
-                    self.state.mode = InputMode::Normal;
-                }
                 return;
             }
             x = session_end;
+        }
+
+        // Trailing `+` button: opens the agent picker via slash.
+        // The top-bar render writes "  +" after the last tab, so the
+        // glyph lives at `x + 2`. Be generous with the hit area.
+        let plus_x = x + 2;
+        if col >= plus_x && col < plus_x + 2 {
+            self.slash_session_new_via_mouse();
         }
     }
 }

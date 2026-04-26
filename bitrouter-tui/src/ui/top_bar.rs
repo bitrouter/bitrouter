@@ -71,22 +71,20 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
     // If no sessions, show a hint.
     if state.session_store.active.is_empty() {
         spans.push(Span::styled(
-            "No sessions — Alt+A to connect an agent",
+            "No sessions — type /session new to spawn one",
             Style::default().fg(Color::DarkGray),
         ));
+    } else {
+        // Trailing `+` button to spawn a new session (mouse hit-tested
+        // by app::mouse).
+        spans.push(Span::styled("  ", Style::default()));
+        spans.push(Span::styled(
+            "+",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
-
-    // Right-aligned hints.
-    let left_width: usize = spans.iter().map(|s| s.width()).sum();
-    let right_text = "Ctrl+B sidebar  Ctrl+Tab MRU  Alt+T sessions  Alt+A agents  Ctrl+P cmd";
-    let padding = (area.width as usize).saturating_sub(left_width + right_text.len() + 1);
-    if padding > 0 {
-        spans.push(Span::raw(" ".repeat(padding)));
-    }
-    spans.push(Span::styled(
-        right_text,
-        Style::default().fg(Color::DarkGray),
-    ));
 
     let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line), area);

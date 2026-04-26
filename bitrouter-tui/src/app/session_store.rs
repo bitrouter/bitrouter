@@ -63,7 +63,7 @@ impl SessionStore {
         self.focus_history.retain(|x| *x != id);
     }
 
-    /// Read-only view of the focus history. Front is most-recently-focused.
+    #[cfg(test)]
     pub fn focus_history(&self) -> &VecDeque<SessionId> {
         &self.focus_history
     }

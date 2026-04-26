@@ -44,6 +44,8 @@ pub(super) fn entry_contains_text(kind: &EntryKind, query: &str) -> bool {
         EntryKind::Permission(p) => p.request.title.to_lowercase().contains(query),
         EntryKind::System(s) => s.text.to_lowercase().contains(query),
         EntryKind::Separator(s) => s.label.to_lowercase().contains(query),
+        // Pickers are interactive UI — never match.
+        EntryKind::Picker(_) => false,
     }
 }
 

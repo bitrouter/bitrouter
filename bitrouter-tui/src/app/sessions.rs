@@ -15,9 +15,7 @@ impl App {
     }
 
     /// Switch to a session by index, clearing its badge and resetting search.
-    /// Records the focus in the MRU `focus_history`. Cycle commands use
-    /// [`Self::cycle_focus`] instead so they can navigate without
-    /// reordering history.
+    /// Records the focus in the MRU `focus_history`.
     pub(super) fn switch_session(&mut self, idx: usize) {
         if idx >= self.state.session_store.active.len() {
             return;
@@ -134,14 +132,13 @@ impl App {
 
         self.state.session_store.active.remove(idx);
         self.state.session_store.forget(session_id);
-        self.state.cycle_pos = None;
         self.state.active_session = if self.state.session_store.active.is_empty() {
             0
         } else {
             idx.min(self.state.session_store.active.len() - 1)
         };
         // Record the new active session as most-recently-focused so the
-        // next Ctrl-Tab cycle starts from a sensible place.
+        // next focus event starts from a sensible place.
         if let Some(new_active) = self
             .state
             .session_store
@@ -164,69 +161,25 @@ impl App {
         }
     }
 
-    /// Advance the MRU cycle cursor and switch to the session under it.
-    /// `forward = true` walks toward older entries (Ctrl-Tab); `forward
-    /// = false` walks toward newer ones (Ctrl-Shift-Tab). Wraps at the
-    /// ends of `focus_history` so the cycle is closed.
+    /// Cycle the active session tab in left-to-right order.
+    /// `forward = true` moves to the next tab; `false` moves to the
+    /// previous. Wraps at the ends. No-op when there are fewer than
+    /// two active sessions.
     ///
-    /// Unlike [`Self::switch_session`], this does NOT call `record_focus`
-    /// — doing so would collapse the history into a constant toggle
-    /// between two entries. The cursor stays live until any non-cycle
-    /// key event hits [`Self::commit_cycle_if_active`].
-    pub(super) fn cycle_focus(&mut self, forward: bool) {
-        let history = self.state.session_store.focus_history();
-        if history.len() < 2 {
+    /// This is the `Tab` / `Shift+Tab` cycle from the product doc.
+    /// Unlike the older MRU-based `Ctrl+Tab`, this is plain
+    /// tab-order: predictable and shallow. Records the new focus in
+    /// `focus_history` so the cycle isn't recursive.
+    pub(super) fn cycle_session_tab(&mut self, forward: bool) {
+        let len = self.state.session_store.active.len();
+        if len < 2 {
             return;
         }
-        let len = history.len();
-        let next_pos = match self.state.cycle_pos {
-            None => {
-                if forward {
-                    1
-                } else {
-                    len - 1
-                }
-            }
-            Some(p) => {
-                if forward {
-                    (p + 1) % len
-                } else {
-                    (p + len - 1) % len
-                }
-            }
+        let next = if forward {
+            (self.state.active_session + 1) % len
+        } else {
+            (self.state.active_session + len - 1) % len
         };
-        let target_id = history[next_pos];
-        let Some(idx) = self.state.session_store.index_of(target_id) else {
-            return;
-        };
-        self.state.active_session = idx;
-        self.state.session_store.active[idx].badge = SessionBadge::None;
-        if self.state.search.is_some() {
-            self.state.search = None;
-            if self.state.mode == InputMode::Search {
-                self.state.mode = InputMode::Normal;
-            }
-        }
-        self.state.cycle_pos = Some(next_pos);
-    }
-
-    /// If a Ctrl-Tab cycle was in progress, commit it: clear the cursor
-    /// and front-load the now-active session in `focus_history`. Called
-    /// at the top of `handle_key` for any key that isn't itself a cycle
-    /// command, so the next cycle starts from the latest focus.
-    pub(super) fn commit_cycle_if_active(&mut self) {
-        if self.state.cycle_pos.is_none() {
-            return;
-        }
-        self.state.cycle_pos = None;
-        if let Some(active) = self
-            .state
-            .session_store
-            .active
-            .get(self.state.active_session)
-        {
-            let id = active.id;
-            self.state.session_store.record_focus(id);
-        }
+        self.switch_session(next);
     }
 }

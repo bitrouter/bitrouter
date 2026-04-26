@@ -10,17 +10,11 @@ use ratatui::widgets::{
 };
 
 use crate::app::{AppState, InputMode};
-use crate::model::{AgentStatus, RenderContext, Renderable};
+use crate::model::{RenderContext, Renderable};
 
 const PROMPT_PREFIX: &str = "› ";
 
 pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
-    // Agent mode: render inline agent list instead of scrollback.
-    if state.mode == InputMode::Agent {
-        render_agent_list(frame, state, area);
-        return;
-    }
-
     let width = area.width;
     let ctx = build_render_context(state);
 
@@ -160,7 +154,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let prompt_global_start = empty_count + entry_total;
     if vp_end > prompt_global_start {
         let mut prompt_lines_vec: Vec<Line> = Vec::new();
-        render_inline_prompt(state, &mut prompt_lines_vec);
+        render_inline_prompt(state, &mut prompt_lines_vec, width);
         let local_start = vp_start.saturating_sub(prompt_global_start);
         let local_end = (vp_end - prompt_global_start).min(prompt_lines_vec.len());
         if local_start < local_end {
@@ -176,11 +170,13 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let para = Paragraph::new(lines);
     frame.render_widget(para, area);
 
-    // Cursor positioning for inline input.
+    // Cursor positioning for inline input. The 3-line prompt header
+    // (blank + cwd label + divider) sits before the input rows, so
+    // we offset by 3.
     if state.mode == InputMode::Normal {
         let total = empty_count + entry_total + prompt_line_count(state);
         let prompt_start_line = total.saturating_sub(prompt_line_count(state));
-        let cursor_line = prompt_start_line + state.input.cursor.0;
+        let cursor_line = prompt_start_line + 3 + state.input.cursor.0;
         let cursor_col = if state.input.cursor.0 == 0 {
             PROMPT_PREFIX.len() + state.input.cursor.1
         } else {
@@ -250,7 +246,20 @@ fn apply_cursor_highlight(lines: &mut [Line<'static>]) {
     }
 }
 
-fn render_inline_prompt(state: &AppState, lines: &mut Vec<Line<'static>>) {
+fn render_inline_prompt(state: &AppState, lines: &mut Vec<Line<'static>>, width: u16) {
+    // Cwd label + horizontal divider above the input. The cwd is
+    // displayed home-relative when possible.
+    let cwd = format_cwd(&state.config);
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {cwd}"),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        "─".repeat(width as usize),
+        Style::default().fg(Color::DarkGray),
+    )));
+
     let input_lines = &state.input.lines;
     let focused = state.mode == InputMode::Normal;
 
@@ -274,18 +283,49 @@ fn render_inline_prompt(state: &AppState, lines: &mut Vec<Line<'static>>) {
     }
 }
 
+/// Total rendered rows for the input region:
+/// 1 blank + 1 cwd label + 1 divider + N input lines.
 fn prompt_line_count(state: &AppState) -> usize {
-    state.input.lines.len()
+    3 + state.input.lines.len()
+}
+
+/// Format the current working directory for display in the input
+/// area. Substitutes `~` for `$HOME` when applicable.
+fn format_cwd(_config: &crate::TuiConfig) -> String {
+    use std::path::PathBuf;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Ok(home) = std::env::var("HOME")
+        && let Ok(stripped) = cwd.strip_prefix(&home)
+    {
+        if stripped.as_os_str().is_empty() {
+            return "~".to_string();
+        }
+        return format!("~/{}", stripped.display());
+    }
+    cwd.display().to_string()
 }
 
 fn render_autocomplete(frame: &mut Frame, state: &AppState, area: Rect) {
+    use crate::model::AutocompleteKind;
+
     let ac = match &state.autocomplete {
         Some(ac) if state.mode == InputMode::Normal && !ac.candidates.is_empty() => ac,
         _ => return,
     };
 
-    let popup_height = (ac.candidates.len() as u16 + 2).min(8);
-    let popup_width = 24u16.min(area.width);
+    let popup_height = (ac.candidates.len() as u16 + 2).min(10);
+    // Width: longest candidate (label + optional description) plus
+    // border + padding, capped to the available area.
+    let max_label = ac
+        .candidates
+        .iter()
+        .map(|c| {
+            let desc = c.description.as_deref().map(str::len).unwrap_or(0);
+            c.value.chars().count() + desc + 6
+        })
+        .max()
+        .unwrap_or(20);
+    let popup_width = (max_label as u16 + 4).min(area.width).max(20);
 
     // Anchor above the prompt (bottom of scrollback area).
     let popup_y = (area.y + area.height)
@@ -294,11 +334,16 @@ fn render_autocomplete(frame: &mut Frame, state: &AppState, area: Rect) {
     let popup_x = area.x + PROMPT_PREFIX.len() as u16;
     let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
 
+    let title = match ac.kind {
+        AutocompleteKind::AtMention => "@mention",
+        AutocompleteKind::SlashCommand => "/command",
+    };
+
     let items: Vec<ListItem> = ac
         .candidates
         .iter()
         .enumerate()
-        .map(|(i, name)| {
+        .map(|(i, cand)| {
             let style = if i == ac.selected {
                 Style::default()
                     .fg(Color::Cyan)
@@ -307,7 +352,18 @@ fn render_autocomplete(frame: &mut Frame, state: &AppState, area: Rect) {
                 Style::default().fg(Color::White)
             };
             let marker = if i == ac.selected { "▸ " } else { "  " };
-            ListItem::new(Line::from(Span::styled(format!("{marker}@{name}"), style)))
+            let head = match ac.kind {
+                AutocompleteKind::AtMention => format!("{marker}@{}", cand.value),
+                AutocompleteKind::SlashCommand => format!("{marker}{}", cand.value),
+            };
+            let mut spans = vec![Span::styled(head, style)];
+            if let Some(desc) = &cand.description {
+                spans.push(Span::styled(
+                    format!("  {desc}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
@@ -315,165 +371,11 @@ fn render_autocomplete(frame: &mut Frame, state: &AppState, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
-            .title("@mention"),
+            .title(title),
     );
 
     frame.render_widget(Clear, popup_area);
     frame.render_widget(list, popup_area);
-}
-
-fn render_agent_list(frame: &mut Frame, state: &AppState, area: Rect) {
-    let mut lines: Vec<Line> = Vec::new();
-
-    lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled(
-        "  Agents",
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  ─────────────────────────────────────────────",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    // Partition agents into tiers for display (keeping original indices for selection).
-    let connected: Vec<usize> = state
-        .agents
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| {
-            matches!(
-                a.status,
-                AgentStatus::Connected | AgentStatus::Busy | AgentStatus::Connecting
-            )
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    let installed: Vec<usize> = state
-        .agents
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| matches!(a.status, AgentStatus::Idle | AgentStatus::Error(_)))
-        .map(|(i, _)| i)
-        .collect();
-
-    let available: Vec<usize> = state
-        .agents
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| {
-            matches!(
-                a.status,
-                AgentStatus::Available | AgentStatus::Installing { .. }
-            )
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    if !connected.is_empty() {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(Span::styled(
-            "  CONNECTED",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for &i in &connected {
-            render_agent_row(&mut lines, state, i);
-        }
-    }
-
-    if !installed.is_empty() {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(Span::styled(
-            "  INSTALLED",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for &i in &installed {
-            render_agent_row(&mut lines, state, i);
-        }
-    }
-
-    if !available.is_empty() {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(Span::styled(
-            "  AVAILABLE",
-            Style::default()
-                .fg(Color::Blue)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for &i in &available {
-            render_agent_row(&mut lines, state, i);
-        }
-    }
-
-    if state.agents.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  No agents discovered. Ensure an ACP agent is on PATH.",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    let para = Paragraph::new(lines);
-    frame.render_widget(para, area);
-}
-
-fn render_agent_row(lines: &mut Vec<Line>, state: &AppState, i: usize) {
-    let agent = &state.agents[i];
-    let is_selected = i == state.agent_list_selected;
-    let marker = if is_selected { "▸" } else { " " };
-
-    let (status_str, status_color) = match &agent.status {
-        AgentStatus::Idle => ("disconnected", Color::DarkGray),
-        AgentStatus::Available => ("available", Color::Blue),
-        AgentStatus::Installing { .. } => ("installing", Color::Cyan),
-        AgentStatus::Connecting => ("connecting", Color::Cyan),
-        AgentStatus::Connected => ("connected", Color::Green),
-        AgentStatus::Busy => ("busy", Color::Yellow),
-        AgentStatus::Error(_) => ("error", Color::Red),
-    };
-
-    // Build a more descriptive status for Installing.
-    let status_display = if let AgentStatus::Installing { percent } = &agent.status {
-        format!("installing {percent}%")
-    } else {
-        status_str.to_string()
-    };
-
-    let session_count = state
-        .session_store
-        .active
-        .iter()
-        .filter(|s| s.agent_id == agent.name)
-        .count();
-    let session_str = match session_count {
-        0 => String::new(),
-        1 => "1 session".to_string(),
-        n => format!("{n} sessions"),
-    };
-
-    let tab_indicator = if session_count > 0 { " [active]" } else { "" };
-
-    let row_style = if is_selected {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default()
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(format!("  {marker} "), row_style),
-        Span::styled(format!("{:<14}", agent.name), row_style.fg(agent.color)),
-        Span::styled(
-            format!(" {:<16}", status_display),
-            row_style.fg(status_color),
-        ),
-        Span::styled(format!(" {session_str}"), row_style.fg(Color::DarkGray)),
-        Span::styled(tab_indicator, row_style.fg(Color::Cyan)),
-    ]));
 }
 
 fn build_render_context(state: &AppState) -> RenderContext {
