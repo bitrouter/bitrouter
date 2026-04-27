@@ -290,6 +290,17 @@ models:
         no_cache: 0.0
       output_tokens:
         text: 0.0
+  gpt-5.5:
+    max_input_tokens: 272000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
   grok-code-fast-1:
     max_input_tokens: 128000
     max_output_tokens: 64000
