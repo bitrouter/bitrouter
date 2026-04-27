@@ -308,6 +308,24 @@ models:
         no_cache: 0.27
       output_tokens:
         text: 0.41
+  deepseek/deepseek-v4-flash:
+    max_input_tokens: 1048576
+    max_output_tokens: 393216
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
+  deepseek/deepseek-v4-pro:
+    max_input_tokens: 1048576
+    max_output_tokens: 393216
+    pricing:
+      input_tokens:
+        no_cache: 1.74
+        cache_read: 0.145
+      output_tokens:
+        text: 3.48
   google/gemini-2.0-flash-001:
     max_input_tokens: 1048576
     max_output_tokens: 8192
@@ -1297,6 +1315,19 @@ models:
         cache_read: 30.0
       output_tokens:
         text: 180.0
+  openai/gpt-5.5:
+    max_input_tokens: 922000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 5.0
+        cache_read: 0.5
+      output_tokens:
+        text: 30.0
   openai/gpt-oss-120b:
     max_input_tokens: 131072
     max_output_tokens: 32768
@@ -1722,6 +1753,30 @@ models:
   xiaomi/mimo-v2-pro:
     max_input_tokens: 1048576
     max_output_tokens: 65536
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.2
+      output_tokens:
+        text: 3.0
+  xiaomi/mimo-v2.5:
+    max_input_tokens: 1048576
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.08
+      output_tokens:
+        text: 2.0
+  xiaomi/mimo-v2.5-pro:
+    max_input_tokens: 1048576
+    max_output_tokens: 131072
+    input_modalities:
+      - text
+      - image
+      - audio
+      - video
+      - file
     pricing:
       input_tokens:
         no_cache: 1.0
