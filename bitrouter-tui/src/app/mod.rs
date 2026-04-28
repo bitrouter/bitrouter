@@ -4,7 +4,6 @@ mod helpers;
 mod import_modal;
 mod input_ops;
 mod key_handlers;
-mod mouse;
 mod pickers;
 mod search;
 pub(crate) mod session_store;
@@ -29,7 +28,7 @@ use crate::TuiConfig;
 use crate::error::TuiError;
 use crate::event::{AppEvent, EventHandler};
 use crate::model::{
-    AgentStatus, AutocompleteState, ImportCandidate, InlineInput, InputTarget, ObsLog,
+    AgentStatus, AutocompleteState, ImportCandidate, InlineInput, InputTarget, ObsLog, PickerState,
     ScrollbackState, SearchState, agent_color,
 };
 use crate::ui;
@@ -48,9 +47,9 @@ pub enum InputMode {
     Search,
     /// Permission: awaiting y/n/a for an inline permission request.
     Permission,
-    /// Picker: an inline scrollback picker (agent / session /
-    /// import-multiselect) is active. The actual picker state lives on
-    /// the active session's scrollback as a [`PickerEntry`].
+    /// Picker: a floating picker popup (agent / session /
+    /// import-multiselect) is open above the input bar. Live state
+    /// lives in [`AppState::picker`]; confirm/cancel close the popup.
     Picker,
 }
 
@@ -69,12 +68,12 @@ pub struct AppState {
     pub input: InlineInput,
     pub input_target: InputTarget,
     pub autocomplete: Option<AutocompleteState>,
+    /// Open picker popup, when [`InputMode::Picker`] is active.
+    pub picker: Option<PickerState>,
     pub obs_log: ObsLog,
     pub config: TuiConfig,
     /// Incremental scrollback search state (Scroll mode `/`).
     pub search: Option<SearchState>,
-    /// Cached layout from the last render pass (for mouse hit-testing).
-    pub last_layout: Option<crate::ui::layout::AppLayout>,
     /// On-disk sessions discovered by the startup scan, available for
     /// import via `Ctrl-I`. Empty until the scan task delivers
     /// [`AppEvent::ImportScanResult`].
@@ -218,10 +217,10 @@ impl App {
                 input: InlineInput::new(),
                 input_target: InputTarget::Default,
                 autocomplete: None,
+                picker: None,
                 obs_log: ObsLog::new(),
                 config,
                 search: None,
-                last_layout: None,
                 discovered_sessions: Vec::new(),
                 import_nag_shown: false,
             },
@@ -234,7 +233,6 @@ impl App {
     fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
-            AppEvent::Mouse(mouse_event) => self.handle_mouse(mouse_event),
             AppEvent::Resize { .. } | AppEvent::Tick => {}
             AppEvent::Session {
                 session_id,

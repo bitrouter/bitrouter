@@ -612,12 +612,6 @@ impl App {
         }
     }
 
-    /// Opens the same agent picker as `/session new` — used by the
-    /// `+` tab-bar click in the top bar.
-    pub(super) fn slash_session_new_via_mouse(&mut self) {
-        self.slash_session_new(None);
-    }
-
     /// `/session new [<agent>]` — pick an agent inline (or use the
     /// arg) and spawn a fresh session against it.
     fn slash_session_new(&mut self, agent: Option<String>) {

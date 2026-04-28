@@ -206,9 +206,6 @@ pub enum EntryKind {
     /// Visual divider, used by the import flow to mark the end of
     /// replayed history.
     Separator(SeparatorEntry),
-    /// Inline picker — agent / session / import multiselect.
-    /// Interactive while `outcome == Open`, frozen otherwise.
-    Picker(PickerEntry),
 }
 
 impl Renderable for EntryKind {
@@ -221,7 +218,6 @@ impl Renderable for EntryKind {
             Self::Permission(e) => e.render_lines(width, collapsed, ctx),
             Self::System(e) => e.render_lines(width, collapsed, ctx),
             Self::Separator(e) => e.render_lines(width, collapsed, ctx),
-            Self::Picker(e) => e.render_lines(width, collapsed, ctx),
         }
     }
 }
@@ -229,13 +225,19 @@ impl Renderable for EntryKind {
 // ── Gutter constants ───────────────────────────────────────────────────
 
 const GUTTER: &str = "⎿  ";
+/// Opener gutter for agent responses — a filled circle marks the
+/// start of a turn. Subsequent body lines align under the text after
+/// it (using [`AGENT_CONT`]) rather than repeating the marker. Tool
+/// calls, thinking, and permission entries still use [`GUTTER`] (`⎿`)
+/// so the visual vocabulary is preserved.
+const AGENT_OPEN: &str = "⏺ ";
+const AGENT_CONT: &str = "  ";
 const PROMPT_PREFIX: &str = "› ";
 
 // ── UserPrompt ─────────────────────────────────────────────────────────
 
 pub struct UserPrompt {
     pub text: String,
-    pub targets: Vec<String>,
 }
 
 impl Renderable for UserPrompt {
@@ -247,12 +249,6 @@ impl Renderable for UserPrompt {
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let text_width = (width as usize).saturating_sub(PROMPT_PREFIX.len());
-
-        let target_suffix = if self.targets.is_empty() {
-            String::new()
-        } else {
-            format!(" → {}", self.targets.join(", "))
-        };
 
         for (i, raw_line) in self.text.lines().enumerate() {
             for (j, segment) in hard_wrap(raw_line, text_width).into_iter().enumerate() {
@@ -266,18 +262,7 @@ impl Renderable for UserPrompt {
                 } else {
                     Span::raw("  ")
                 };
-
-                let mut spans = vec![prefix, Span::raw(segment)];
-
-                // Add target suffix on the first line only.
-                if i == 0 && j == 0 && !target_suffix.is_empty() {
-                    spans.push(Span::styled(
-                        target_suffix.clone(),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-
-                lines.push(Line::from(spans));
+                lines.push(Line::from(vec![prefix, Span::raw(segment)]));
             }
         }
 
@@ -302,29 +287,36 @@ impl Renderable for AgentResponse {
             .get(&self.agent_id)
             .copied()
             .unwrap_or(Color::White);
-        let text_width = (width as usize).saturating_sub(GUTTER.len());
+        let text_width = (width as usize).saturating_sub(AGENT_CONT.chars().count());
         let mut lines = Vec::new();
 
-        // Agent name header.
-        lines.push(Line::from(Span::styled(
-            format!("  {}", self.agent_id),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )));
+        let opened = std::cell::Cell::new(false);
+        let agent_gutter = || -> Span<'static> {
+            if !opened.get() {
+                opened.set(true);
+                Span::styled(
+                    AGENT_OPEN.to_string(),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::raw(AGENT_CONT.to_string())
+            }
+        };
 
         if collapsed {
             lines.push(Line::from(vec![
-                gutter_span(color),
+                agent_gutter(),
                 Span::styled("[collapsed]", Style::default().fg(Color::DarkGray)),
             ]));
         } else {
             for block in &self.blocks {
                 match block {
                     ContentBlock::Text(text) => {
-                        lines.extend(render_markdown(text, text_width, || gutter_span(color)));
+                        lines.extend(render_markdown(text, text_width, agent_gutter));
                     }
                     ContentBlock::Other(desc) => {
                         lines.push(Line::from(vec![
-                            gutter_span(color),
+                            agent_gutter(),
                             Span::styled(desc.clone(), Style::default().fg(Color::DarkGray)),
                         ]));
                     }
@@ -332,7 +324,7 @@ impl Renderable for AgentResponse {
             }
             if self.is_streaming {
                 lines.push(Line::from(vec![
-                    gutter_span(color),
+                    agent_gutter(),
                     Span::styled("▌", Style::default().fg(Color::Cyan)),
                 ]));
             }
@@ -521,9 +513,9 @@ impl Renderable for SeparatorEntry {
     }
 }
 
-// ── PickerEntry ────────────────────────────────────────────────────────
+// ── Picker ────────────────────────────────────────────────────────────
 
-/// One row in an inline picker.
+/// One row in a picker popup.
 pub struct PickerItem {
     /// Headline text, e.g. `claude-code` or `refactor router`.
     pub label: String,
@@ -547,131 +539,17 @@ pub enum PickerAction {
     Import { candidates: Vec<ImportCandidate> },
 }
 
-/// State of a picker entry.
-pub enum PickerOutcome {
-    /// Interactive — `InputMode::Picker` is active.
-    Open,
-    /// Frozen, user picked these item indices.
-    Confirmed { indices: Vec<usize> },
-    /// Frozen, user dismissed.
-    Cancelled,
-}
-
-pub struct PickerEntry {
+/// Live state of an open picker popup. There is at most one open at a
+/// time; while present, [`crate::app::InputMode::Picker`] is active.
+/// Confirm/cancel close the popup and (optionally) leave a one-line
+/// breadcrumb in the active scrollback.
+pub struct PickerState {
     pub title: String,
     pub items: Vec<PickerItem>,
     pub cursor: usize,
     pub selected: std::collections::HashSet<usize>,
     pub multiselect: bool,
     pub action: PickerAction,
-    pub outcome: PickerOutcome,
-}
-
-impl Renderable for PickerEntry {
-    fn render_lines(
-        &self,
-        _width: u16,
-        _collapsed: bool,
-        _ctx: &RenderContext,
-    ) -> Vec<Line<'static>> {
-        let mut out: Vec<Line<'static>> = Vec::new();
-
-        // Title bar.
-        let title_style = match self.outcome {
-            PickerOutcome::Open => Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            _ => Style::default().fg(Color::DarkGray),
-        };
-        out.push(Line::from(Span::styled(
-            format!("  {}", self.title),
-            title_style,
-        )));
-
-        match &self.outcome {
-            PickerOutcome::Open => {
-                for (i, item) in self.items.iter().enumerate() {
-                    let cursor_marker = if i == self.cursor && item.selectable {
-                        "▸ "
-                    } else {
-                        "  "
-                    };
-                    let checkbox = if self.multiselect && item.selectable {
-                        if self.selected.contains(&i) {
-                            "[x] "
-                        } else {
-                            "[ ] "
-                        }
-                    } else {
-                        ""
-                    };
-                    let label_style = if !item.selectable {
-                        Style::default().fg(Color::DarkGray)
-                    } else if i == self.cursor {
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    let mut spans: Vec<Span<'static>> = vec![
-                        Span::raw("  "),
-                        Span::styled(cursor_marker, Style::default().fg(Color::Cyan)),
-                        Span::styled(
-                            checkbox.to_string(),
-                            if self.multiselect && self.selected.contains(&i) {
-                                Style::default().fg(Color::Green)
-                            } else {
-                                Style::default().fg(Color::DarkGray)
-                            },
-                        ),
-                        Span::styled(item.label.clone(), label_style),
-                    ];
-                    if let Some(sub) = &item.subtitle {
-                        spans.push(Span::styled(
-                            format!("  {sub}"),
-                            Style::default().fg(Color::DarkGray),
-                        ));
-                    }
-                    out.push(Line::from(spans));
-                }
-                out.push(Line::raw(""));
-                let hint = if self.multiselect {
-                    "  ↑↓ select · Space toggle · Enter confirm · Esc cancel"
-                } else {
-                    "  ↑↓ select · Enter confirm · Esc cancel"
-                };
-                out.push(Line::from(Span::styled(
-                    hint,
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            PickerOutcome::Confirmed { indices } => {
-                let chosen: Vec<String> = indices
-                    .iter()
-                    .filter_map(|&i| self.items.get(i).map(|it| it.label.clone()))
-                    .collect();
-                let summary = if chosen.is_empty() {
-                    "(none)".to_string()
-                } else {
-                    chosen.join(", ")
-                };
-                out.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled("✓ ", Style::default().fg(Color::Green)),
-                    Span::styled(summary, Style::default().fg(Color::DarkGray)),
-                ]));
-            }
-            PickerOutcome::Cancelled => {
-                out.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled("✗ cancelled", Style::default().fg(Color::DarkGray)),
-                ]));
-            }
-        }
-        out.push(Line::raw(""));
-        out
-    }
 }
 
 // ── SystemNotice ───────────────────────────────────────────────────────

@@ -12,7 +12,6 @@ use std::path::PathBuf;
 
 use crossterm::{
     ExecutableCommand,
-    event::{DisableMouseCapture, EnableMouseCapture},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::Terminal;
@@ -46,15 +45,17 @@ async fn run_inner(
     bitrouter_config: &bitrouter_config::BitrouterConfig,
     launch_cwd: PathBuf,
 ) -> Result<(), TuiError> {
+    // Mouse capture is intentionally NOT enabled: it would intercept
+    // click+drag and break the terminal's native text selection. The
+    // TUI is fully keyboard-driven (see `specs/bitrouter-tui-product.md`
+    // §6), matching the Codex TUI's approach.
     stdout().execute(EnterAlternateScreen)?;
-    stdout().execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     app::run_loop(&mut terminal, config, bitrouter_config, launch_cwd).await
 }
 
 fn restore_terminal() {
-    let _ = io::stdout().execute(DisableMouseCapture);
     let _ = disable_raw_mode();
     let _ = io::stdout().execute(LeaveAlternateScreen);
 }

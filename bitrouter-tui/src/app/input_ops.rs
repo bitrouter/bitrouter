@@ -171,34 +171,21 @@ impl App {
             return;
         }
 
-        // Resolve target agent(s).
+        // Resolve target agent(s). Default routing requires an active
+        // session — we never auto-pick "the first available agent",
+        // because the order of `state.agents` is not stable across
+        // restarts and silently spawning a random agent on the user's
+        // first message is a footgun.
         let targets: Vec<String> = match &target {
-            InputTarget::Default => {
-                // Route to active session's agent, or find first available.
-                if let Some(name) = self.state.active_agent_name() {
-                    vec![name.to_string()]
-                } else {
-                    // No active session — try first connected agent.
-                    match self
-                        .state
-                        .agents
-                        .iter()
-                        .find(|a| matches!(a.status, AgentStatus::Connected | AgentStatus::Busy))
-                    {
-                        Some(a) => vec![a.name.clone()],
-                        None => {
-                            // Try first available agent (will lazy-connect).
-                            match self.state.agents.iter().find(|a| a.config.is_some()) {
-                                Some(a) => vec![a.name.clone()],
-                                None => {
-                                    self.push_system_msg("No agents available. Install an ACP agent and ensure it's on PATH.");
-                                    return;
-                                }
-                            }
-                        }
-                    }
+            InputTarget::Default => match self.state.active_agent_name() {
+                Some(name) => vec![name.to_string()],
+                None => {
+                    self.push_system_msg(
+                        "No active session — run /session new or address an agent with @<name>.",
+                    );
+                    return;
                 }
-            }
+            },
             InputTarget::Specific(names) => names.clone(),
         };
 
@@ -255,7 +242,6 @@ impl App {
                 id,
                 kind: EntryKind::UserPrompt(UserPrompt {
                     text: raw_text.clone(),
-                    targets: targets.clone(),
                 }),
                 collapsed: false,
             });

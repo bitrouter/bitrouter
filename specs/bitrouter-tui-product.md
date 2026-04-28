@@ -1,28 +1,57 @@
 # BitRouter TUI — Product Documentation
 
-> Draft v4 (target design). Reflects the redesign decisions:
+> v6 — refines v5 with these product polish changes:
+>   • agent responses drop the `<agent-name>` header line and use a
+>     leading `⏺` opener (the agent name is already on the status bar);
+>   • the inline input **floats with content** — it sits right under
+>     the welcome banner when empty, moves down as entries arrive, and
+>     stays at the bottom once entries fill the area. Crucially the
+>     mid-screen padding from v5 is gone, so empty ↔ typing no longer
+>     causes a jump;
+>   • autocomplete (`@`-mention, `/`-command) and pickers (agent /
+>     session / import) render **inline as plain scrollback rows**
+>     between the entries and the input — no bordered popup, no
+>     `Clear` overlay (matches Codex's TUI style);
+>   • mouse capture is off, so terminal-native click+drag selection
+>     works for copy/paste.
+>
+> The design pillars below are now in code; later edits should keep
+> this doc and `bitrouter-tui/src/` in sync.
+>
 > 1. No broadcast (`@all` removed) — explicit routing only.
-> 2. Input bar fixed at the bottom; thin status bar below it.
+> 2. **Inline floating input.** The input bar (cwd label + divider +
+>    prompt rows) is rendered inline at the end of the scrollback
+>    flow. It floats with content: with no entries it sits right
+>    under the welcome banner; as entries arrive it slides down; once
+>    the entries fill the area it stays at the bottom while older
+>    entries scroll above. There is no mid-screen padding — the
+>    empty ↔ typing transition does not move the prompt.
 > 3. **Session = thread.** One live agent process bound to one
 >    conversation. Multiple sessions can coexist for the same or
 >    different agents. Top-bar tabs show active sessions.
 > 4. **No modals.** Every former modal flow (help, observability,
->    command palette, import) becomes a slash command that renders
->    into scrollback.
+>    command palette, import) is a slash command that renders into
+>    scrollback or opens a floating popup picker.
 > 5. **Keybindings are minimal.** If a behavior can be done via slash
->    command + inline picker, it has no keyboard shortcut — with two
+>    command + popup picker, it has no keyboard shortcut — with two
 >    intentional exceptions: `Tab` / `Shift+Tab` cycle the active
->    session (because tab-cycling is a tab UI convention users
->    already have muscle memory for), and `?` invokes `/help`
->    (because help has to be one keystroke from a blank prompt).
-> 6. **Live slash autocomplete.** Typing `/` opens a filter-as-you-type
->    command popup, just like `@`-mentions.
+>    session (tab-cycling muscle memory), and `?` invokes `/help`
+>    (help is one keystroke from a blank prompt).
+> 6. **Live slash autocomplete and pickers render inline.** Typing
+>    `/` opens a filter-as-you-type list of commands; `/session new`
+>    (or any picker-using command) opens a list of choices. Both
+>    render as plain scrollback rows between the entries and the
+>    inline input — no bordered popup, no overlay. The list scrolls
+>    its own window so the cursor stays visible.
 > 7. **Subtle activity indicator** on the status bar's agent/model
 >    slot when a turn is in flight.
+> 8. **Keyboard-only; no mouse capture.** The TUI does not enable
+>    crossterm's mouse capture, so click+drag goes to the terminal
+>    emulator and native text selection / copy / paste keep working.
+>    Scrolling is `Esc` → `j/k` / `PageUp` / `PageDown` (see §6),
+>    matching the Codex TUI's keyboard-only model.
 >
-> Source of truth for the *current* implementation is the code in
-> `bitrouter-tui/src/`; this doc is the target the implementation will
-> converge on. Sections marked *(NYI)* differ from today's code.
+> Source of truth for behavior is the code in `bitrouter-tui/src/`.
 
 ## 1. Overview
 
@@ -128,31 +157,36 @@ prompt body before it goes over the wire. `Tab` completes the
 │                                                                 │
 │   › refactor the router                                         │
 │                                                                 │
-│   claude-code                                                   │
-│   ⎿  Sure — let's start by reading the current routing module.  │
+│   ⏺ Sure — let's start by reading the current routing module.   │
 │   ⎿  ⠋ read_file(src/router.rs)                                 │
-│   ⎿  …                                                          │
+│     …                                                           │
 │                                                                 │
-│  ~/Documents/Code/bitrouter                                     │  ← cwd label
+│  ~/Documents/Code/bitrouter                                     │  ← cwd label (inline)
 │  ───────────────────────────────────────────────────────────────│  ← input divider
-│  › ▌                                                            │  ← input bar (fixed)
+│  › ▌                                                            │  ← inline input
 ├─────────────────────────────────────────────────────────────────┤
 │  /  commands  ·  ?  help                  claude-code · sonnet  │  ← status bar (1 row)
 ╰─────────────────────────────────────────────────────────────────╯
 ```
 
-The TUI has exactly **four regions**, top to bottom:
+The TUI has exactly **three regions**, top to bottom:
 
 1. **Top bar (1 row)** — session tabs.
-2. **Scrollback (fills available height)** — message history.
-3. **Input bar (1+ rows, fixed at bottom)** — multi-line prompt
-   input.
-4. **Status bar (1 row, fixed at bottom)** — slash/help affordance
+2. **Scrollback (fills available height)** — message history,
+   empty-state hints (top-aligned, no centering padding), and the
+   **inline input bar** (cwd label + divider + N prompt rows). The
+   input floats below content: it sits right under the welcome
+   banner when no entries exist, slides down as entries are appended,
+   and stays at the bottom of the region once entries fill the area.
+3. **Status bar (1 row, fixed at bottom)** — slash/help affordance
    left, active agent + model right.
 
-There is **no sidebar**. There are **no modal overlays**.
+There is **no sidebar** and **no floating popups**. Autocomplete and
+picker rows are inline scrollback content — they sit between the last
+message and the cwd label, push everything else up, and disappear
+when dismissed.
 
-### 3.1 Top bar — session tabs *(NYI)*
+### 3.1 Top bar — session tabs
 
 The top bar lists every active **session** as a horizontal tab strip.
 Each tab shows:
@@ -173,7 +207,6 @@ The active tab is bold-underlined. Switch tabs by:
   left-to-right order (wraps at the ends). Scoped to **active
   sessions only** — tabs are the only thing `Tab` cycles, so
   importable-but-not-loaded sessions are never in the cycle.
-- **Mouse** — click the tab.
 - **`/session switch [<id>]`** — slash command, with an inline picker
   when called without an argument.
 
@@ -191,12 +224,18 @@ Entries (top → bottom, oldest → newest):
 | Kind | Visual |
 |---|---|
 | User prompt | `› <text>` cyan prefix |
-| Agent response | `  <agent-name>` header + `⎿  <markdown>` body in agent color |
+| Agent response | `⏺ <markdown>` opener (agent color), continuation lines aligned underneath. No `<agent-name>` header — the active agent is shown on the status bar. |
 | Tool call | `⎿  <icon> <title>` — `○` pending, `⠋` in-progress, `✓` done, `✗` failed |
 | Thinking | `⎿  ◌ Thinking…` block, dimmed grey, collapsible |
 | Permission | `⎿  ⚠ <title>` + inline prompt `(y)es / (n)o / (a)lways` |
-| System | dim grey single line — install progress, errors, slash-command output, inline pickers |
+| System | dim grey single line — install progress, errors, slash-command output, picker breadcrumbs |
 | Separator | horizontal divider with optional centered label |
+
+**Visual vocabulary.** `⏺` opens an agent turn (one per response).
+`⎿` is the continuation gutter for tool calls, thinking, and
+permission requests, anchored under the response that produced them.
+The two glyphs together let the eye find a turn boundary without
+scanning for a name.
 
 Markdown in agent responses is rendered with code fences, headings,
 emphasis, and lists. Per-agent color coding is used in the gutter and
@@ -206,20 +245,35 @@ A live cursor (`▌`) marks the current streaming entry. Tool calls
 auto-collapse when they complete or fail; thinking blocks
 auto-collapse when the turn ends.
 
-### 3.3 Cwd label and input bar
+### 3.3 Cwd label and inline input
 
-Just above the input bar, a single dim line shows the current working
-directory (e.g. `~/Documents/Code/bitrouter`) — it's a quiet reminder
-that everything you type is rooted here.
+The input is rendered **inline** as the last block of the scrollback
+area:
 
-A horizontal rule separates the cwd line from the input. The input
-bar itself is **always fixed at the bottom** of the scrollback area
-and grows upward as the user types multiple lines; the scrollback
-above it shrinks to compensate. Multi-line input is supported
-(`Shift/Alt/Ctrl + Enter` inserts a line; `Enter` alone submits).
+```
+~/Documents/Code/bitrouter           ← dim cwd label
+─────────────────────────────────    ← divider
+› ▌                                  ← input row(s)
+```
 
-A small `@mention` autocomplete popup floats above the prompt while
-the user is typing an `@`-token, listing matching agent names.
+- The cwd line and divider always render with the prompt, so the
+  block is a fixed-shape unit that floats with content.
+- With no entries, the input block sits directly under the welcome
+  banner (at the top of the area). As entries are appended, the
+  block moves downward. Once entries fill the area, the block stays
+  at the bottom and older entries scroll off the top. There is no
+  mid-screen centering padding — the empty ↔ typing transition
+  does **not** move the prompt.
+- Multi-line input is supported (`Shift/Alt/Ctrl + Enter` inserts a
+  line; `Enter` alone submits). Each new input row grows the block
+  by one row; the entries above are pushed up as needed.
+
+When the user is typing an `@`-mention or a `/`-command, the
+matching candidates render as **inline rows** just above the cwd
+label — same flow as messages, no border or `Clear` overlay. The
+selected row uses cyan-bold; others are plain. The list caps at ~8
+rows and scrolls its own window. The same pattern handles pickers
+(`/session new`, `/session switch`, `/session import`) — see §5.2.
 
 ### 3.4 Status bar (bottom)
 
@@ -236,19 +290,29 @@ A single, low-density row at the very bottom. **Two elements only:**
   to the agent slot, e.g. `⠹ claude-code · sonnet-4.6`. The glyph
   disappears the moment the agent emits `TurnDone`.
 
+> **Today** the resolved model id isn't piped through from the
+> session system, so the model slot reads a placeholder (`default`).
+> See `bitrouter-tui/src/ui/status_bar.rs::build_right` for the wire
+> point — replacing the placeholder is a follow-up.
+
 No mode label, no hint clutter, no listen-address. Mode is implied
 by where focus is (typing in the input bar = Normal; everything else
 is a transient state that's clear from on-screen cues).
 
 ## 4. Input modes
 
-The TUI is intentionally near-modeless. Three modes total:
+The TUI is intentionally near-modeless. Five modes total — only
+`Normal`, `Scroll`, and `Permission` are user-visible top-level
+states; `Search` and `Picker` are transient sub-states reached from
+within `Scroll` or via slash commands.
 
 | Mode | Enter via | What it does |
 |---|---|---|
 | **Normal** | default | Type a prompt or slash command; Enter sends. |
 | **Scroll** | `Esc` from Normal | Browse scrollback (`j/k`, `G`); fold entries (`c`); search (`/`); back to input (`i`/`G`). |
+| **Search** | `/` from Scroll | Incremental scrollback search; Enter cycles matches, Esc returns to Scroll. |
 | **Permission** | auto, on incoming permission request | `y/n/a` to allow / deny / always. Steals focus, auto-switches sessions on multi-pending requests. |
+| **Picker** | a slash command opens an inline picker | `↑↓`/`j/k` navigate, `Enter` confirm, `Esc` cancel, `Space` toggle (in multi-select pickers). See §5.2. |
 
 Everything else (managing sessions, agents, observability, help)
 runs through **slash commands** (§5).
@@ -287,19 +351,26 @@ filter-as-you-type ergonomics as `@`-mentions.
 
 Several commands need the user to choose from a list (pick an agent,
 pick a session to switch to, pick on-disk sessions to import). The
-TUI handles this **without a modal**:
+picker renders **inline as plain scrollback rows** between the last
+message and the input — same flow as everything else, no border, no
+overlay. This is Codex's slash-autocomplete style; the visual
+vocabulary matches the autocomplete popup so the user doesn't have
+to learn a second pattern.
 
-1. The command renders the list as a system entry into the
-   scrollback.
-2. The TUI enters a **picker micro-mode**: `j/k` move the cursor,
-   `Enter` confirms, `Esc` cancels. The cursor is shown by `▸`.
-3. On confirm, the entry collapses to a single `✓ <choice>` line in
-   the scrollback. On cancel it collapses to `✗ cancelled`.
-4. While the picker is open, normal input is suspended; the input
-   bar shows a hint like `↑↓ select · Enter confirm · Esc cancel`.
-
-This is the only "modal-feeling" interaction in the TUI, and it is
-spatially co-located with the command that produced it.
+1. The command emits a title row (cyan, bold, e.g. `agent to spawn`),
+   then one row per option, then a hint row.
+2. The TUI enters a **picker micro-mode**: `↑↓` / `j/k` move the
+   cursor (shown by `▸`), `Enter` confirms, `Esc` cancels, `Space`
+   toggles selection in multiselect pickers.
+3. The list shows up to ~12 items at once with the cursor centered;
+   if there are more, the window scrolls within the inline block as
+   the cursor moves.
+4. On confirm or cancel, the rows disappear. The active scrollback
+   gets a single-line breadcrumb (`✓ <choice>` or `✗ <title>
+   cancelled`) so the conversation has a record of what happened.
+5. While the picker is open, normal input is suspended; the hint row
+   reads `↑↓ select · Enter confirm · Esc cancel` (or includes
+   `Space toggle` in multiselect mode).
 
 ### 5.3 Sessions
 
@@ -312,7 +383,7 @@ spatially co-located with the command that produced it.
 | `/session rename <title>` | Rename the active session's tab. |
 | `/session import` | List on-disk sessions; opens an inline picker for multi-select import. |
 | `/session import <agent> <id>` | Import a specific on-disk session by agent + external id. |
-| `/session prev` / `/session next` | MRU navigation across the focus history. |
+| `/session prev` / `/session next` | Cycle session tabs in left-to-right order (same as `Tab` / `Shift+Tab`). |
 | `/session clear` | Clear the active session's scrollback (does **not** end the session). |
 
 ### 5.4 Agents
@@ -469,8 +540,18 @@ EventHandler (mpsc<AppEvent>)
 - Session lifecycle (spawn / load / submit / disconnect / respond
   permission) is centralized in `SessionSystem`.
 - Render is split per-region: `top_bar` (session tabs), `scrollback`
-  (with inline cwd label + input bar), `status_bar`. **No sidebar
-  module**, **no modals module** — both are deleted in v3.
+  (entries + inline overlay rows for autocomplete/picker + inline
+  cwd label + inline input), `status_bar`. There is **no sidebar
+  module** and **no modals module** — both were deleted in v5;
+  v6 dropped the mid-screen padding so the inline input floats with
+  content, and re-inlined the autocomplete/picker so they render as
+  plain scrollback rows instead of bordered popups.
+- App-side modules: `pickers` (popup-picker state and dispatch),
+  `slash` (parse + dispatch), `input_ops` (input bar, autocomplete,
+  submit), plus the existing `agent_*`, `session_*`, `streaming`,
+  `search` helpers. **No mouse module** — the TUI is fully
+  keyboard-driven and does not enable crossterm's mouse capture, so
+  the terminal's native click+drag selection works for copy/paste.
 
 ## 10. Scope and non-goals
 
@@ -491,23 +572,29 @@ EventHandler (mpsc<AppEvent>)
 - Cross-cwd session import.
 - Top-bar token/cost meter (planned, see `specs/multi-session-tui.md`
   PRs 11–13). The status bar's agent slot may extend to show usage
-  later, but is intentionally minimal in v3.
+  later, but is intentionally minimal today.
 - Broadcast prompting (`@all`) — explicitly out of scope.
-- Keyboard shortcuts for any operation that has a slash equivalent.
+- Keyboard shortcuts for any operation that has a slash equivalent
+  (only `Tab`/`Shift+Tab` and `?`-on-empty are exempt).
 
 ## 11. First-launch experience
 
 1. User runs `bitrouter` in a project directory.
 2. The TUI opens with **no active sessions**. The top bar shows just
-   the `+` tab. The scrollback is empty except for a one-screen
-   onboarding system message:
+   the `+` tab. The scrollback area shows a quiet welcome banner at
+   the top — not centered, not modal — and the inline input sits
+   directly below it:
    ```
    Welcome to BitRouter.
 
    Try:
-     /session new          — spawn a session (opens agent picker)
-     /agents               — see what's installed / available
-     /help                 — full command reference
+     /session new   — spawn a session (opens agent picker)
+     /agents        — see what's installed / available
+     /help          — full command reference
+
+   ~/Documents/Code/bitrouter
+   ─────────────────────────────────
+   › ▌
    ```
 3. In parallel, the TUI scans agent storage for sessions matching the
    launch cwd. If any are found, a one-time toast appends:
@@ -516,26 +603,48 @@ EventHandler (mpsc<AppEvent>)
    ```
    The toast is suppressed on subsequent launches via a per-cwd
    marker file under the cache dir.
+4. Once a session exists but the user hasn't typed yet, the welcome
+   banner is replaced by a single dim hint at the top of scrollback:
+   `Connected to <agent> — type a message to start`. The inline
+   input stays directly below the hint.
 
-## 12. Open questions (for review)
+## 12. Known follow-ups and open questions
+
+### Known follow-ups (shipped but incomplete)
+
+- **Resolved-model display.** The status bar's right slot reads
+  `default` instead of the actual resolved model id. The session
+  system doesn't yet surface the post-handshake model. See
+  `bitrouter-tui/src/ui/status_bar.rs::build_right`.
+- **Cwd label source.** The label currently calls
+  `std::env::current_dir()` per-frame instead of using the
+  `launch_cwd` recorded at startup. Functionally identical until
+  someone introduces a process-cwd change; consider routing through
+  `SessionSystem::launch_cwd()` to be safe.
+
+### Open design questions
 
 - **Mode disclosure for Scroll.** With no mode label, Scroll mode
   needs a visual cue. Options: tint the input prefix grey, show a
   scroll-position chip (`12/34`) above the input, or do nothing and
   trust that the user remembers they hit `Esc`.
 - **`?`-when-empty corner cases.** "Run `/help` when input is empty"
-  is unambiguous for a fresh prompt, but what about when the input
-  is empty *after* a multi-line edit was just cleared, or after a
-  paste that resolved to whitespace? Trim before the empty check, or
-  strict-empty?
+  is unambiguous for a fresh prompt; the current implementation
+  uses strict-empty (`InlineInput::is_empty`). Should we trim
+  whitespace before the check so a stray space-only line still
+  triggers help?
 - **`Tab` order vs MRU.** `Tab` cycles in left-to-right tab order
   today. For users with 4+ tabs that toggle between two of them
-  often, MRU would be faster. Worth a follow-up if this proves
-  awkward in practice — keep as tab-order for v1.
-- **Slash autocomplete trigger position.** The popup currently
-  triggers on `/` only when it's the first character of the line.
-  Should it also trigger on `/` mid-line (e.g. inside a paste) or
-  stay strictly at the start?
+  often, MRU would be faster. Revisit if it proves awkward in
+  practice.
+- **Slash autocomplete trigger position.** The popup triggers on `/`
+  only when it's the first non-whitespace character of the first
+  line. Should it also trigger on `/` mid-line (e.g. inside a
+  paste) or stay strictly at the start?
+- **Picker breadcrumb verbosity.** Closing a popup picker pushes a
+  one-line `✓ <choice>` / `✗ <title> cancelled` system notice into
+  the active scrollback. For noisy import flows this can produce
+  many similar lines; revisit if it gets repetitive in practice.
 
 ---
 

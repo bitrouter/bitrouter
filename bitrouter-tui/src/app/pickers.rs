@@ -1,26 +1,27 @@
-//! Inline picker micro-mode.
+//! Picker popup micro-mode.
 //!
 //! When a slash command needs the user to choose from a list (an
 //! agent for `/session new`, a session for `/session switch`,
-//! on-disk sessions for `/session import`), the TUI renders the list
-//! as a [`PickerEntry`] inside the active session's scrollback and
-//! enters [`InputMode::Picker`]. While the picker is open `j/k`,
-//! Enter, Esc, and Space are scoped to it; other input is suspended.
+//! on-disk sessions for `/session import`), the TUI opens a floating
+//! popup anchored above the input bar (rendered by
+//! [`crate::ui::scrollback::render`]) and switches to
+//! [`InputMode::Picker`]. While the picker is open `j/k`, Enter, Esc,
+//! and Space are scoped to it; other input is suspended. Confirm or
+//! cancel closes the popup and leaves a one-line breadcrumb in the
+//! active scrollback.
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::model::{ActivityEntry, EntryKind, PickerAction, PickerEntry, PickerOutcome};
+use crate::model::{PickerAction, PickerItem, PickerState};
 
 use super::{App, InputMode};
 
 /// Move the picker cursor by `delta` (1 forward, -1 backward),
-/// skipping non-selectable rows. Wraps at the ends. Returns whether
-/// the cursor actually moved (always true unless there are no
-/// selectable items at all).
-fn step_picker_cursor(picker: &mut PickerEntry, delta: i32) -> bool {
+/// skipping non-selectable rows. Wraps at the ends.
+fn step_picker_cursor(picker: &mut PickerState, delta: i32) {
     let len = picker.items.len();
     if len == 0 {
-        return false;
+        return;
     }
     let mut next = picker.cursor as i32;
     for _ in 0..len as i32 {
@@ -29,82 +30,49 @@ fn step_picker_cursor(picker: &mut PickerEntry, delta: i32) -> bool {
             && it.selectable
         {
             picker.cursor = next as usize;
-            return true;
+            return;
         }
     }
-    false
 }
 
 impl App {
-    /// Open a picker entry on the active session's scrollback.
-    /// Switches to [`InputMode::Picker`].
+    /// Open a picker popup. Switches to [`InputMode::Picker`] until
+    /// the user confirms or cancels.
     pub(super) fn open_picker(
         &mut self,
         title: String,
-        items: Vec<crate::model::PickerItem>,
+        items: Vec<PickerItem>,
         action: PickerAction,
         multiselect: bool,
     ) {
-        let Some(sb) = self.state.active_scrollback_mut() else {
-            return;
-        };
-        // Anchor the cursor on the first selectable row so j/k from
-        // the start always lands the user on a usable item.
-        let cursor = items.iter().position(|it| it.selectable).unwrap_or(0);
         if items.is_empty() || !items.iter().any(|it| it.selectable) {
-            let id = sb.next_id();
-            sb.push_entry(ActivityEntry {
-                id,
-                kind: EntryKind::System(crate::model::SystemNotice {
-                    text: format!("{title}: (nothing to pick)"),
-                }),
-                collapsed: false,
-            });
+            self.push_system_msg(&format!("{title}: (nothing to pick)"));
             return;
         }
-        let id = sb.next_id();
-        sb.push_entry(ActivityEntry {
-            id,
-            kind: EntryKind::Picker(PickerEntry {
-                title,
-                items,
-                cursor,
-                selected: std::collections::HashSet::new(),
-                multiselect,
-                action,
-                outcome: PickerOutcome::Open,
-            }),
-            collapsed: false,
+        let cursor = items.iter().position(|it| it.selectable).unwrap_or(0);
+        self.state.picker = Some(PickerState {
+            title,
+            items,
+            cursor,
+            selected: std::collections::HashSet::new(),
+            multiselect,
+            action,
         });
-        sb.follow = true;
         self.state.mode = InputMode::Picker;
     }
 
     pub(super) fn handle_picker_key(&mut self, key: KeyEvent) {
-        // Locate the open picker on the active scrollback.
-        let active_idx = self.state.active_session;
-        let Some(session) = self.state.session_store.active.get_mut(active_idx) else {
-            self.state.mode = InputMode::Normal;
-            return;
-        };
-        let sb = &mut session.scrollback;
-        let entry_idx = sb.entries.iter().rposition(
-            |e| matches!(&e.kind, EntryKind::Picker(p) if matches!(p.outcome, PickerOutcome::Open)),
-        );
-        let Some(entry_idx) = entry_idx else {
-            self.state.mode = InputMode::Normal;
-            return;
-        };
-        let EntryKind::Picker(picker) = &mut sb.entries[entry_idx].kind else {
+        let Some(picker) = self.state.picker.as_mut() else {
             self.state.mode = InputMode::Normal;
             return;
         };
 
         match key.code {
             KeyCode::Esc => {
-                picker.outcome = PickerOutcome::Cancelled;
-                sb.invalidate_entry(entry_idx);
+                let title = picker.title.clone();
+                self.state.picker = None;
                 self.state.mode = InputMode::Normal;
+                self.push_system_msg(&format!("✗ {title} cancelled"));
             }
             KeyCode::Enter => {
                 let chosen: Vec<usize> = if picker.multiselect {
@@ -115,29 +83,25 @@ impl App {
                     vec![picker.cursor]
                 };
                 let action = picker.action.clone();
-                picker.outcome = PickerOutcome::Confirmed {
-                    indices: chosen.clone(),
-                };
-                sb.invalidate_entry(entry_idx);
+                let summary = picker_summary(picker, &chosen);
+                self.state.picker = None;
                 self.state.mode = InputMode::Normal;
                 self.dispatch_picker_action(action, chosen);
+                if let Some(text) = summary {
+                    self.push_system_msg(&format!("✓ {text}"));
+                }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if step_picker_cursor(picker, 1) {
-                    sb.invalidate_entry(entry_idx);
-                }
+                step_picker_cursor(picker, 1);
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if step_picker_cursor(picker, -1) {
-                    sb.invalidate_entry(entry_idx);
-                }
+                step_picker_cursor(picker, -1);
             }
             KeyCode::Char(' ') if picker.multiselect => {
                 let cur = picker.cursor;
                 if !picker.selected.insert(cur) {
                     picker.selected.remove(&cur);
                 }
-                sb.invalidate_entry(entry_idx);
             }
             _ => {}
         }
@@ -184,5 +148,20 @@ impl App {
                 let _ = self.write_import_marker();
             }
         }
+    }
+}
+
+/// One-line breadcrumb for the active scrollback after a picker
+/// confirms. Returns `None` when the picker had no chosen items so we
+/// don't push an empty `✓` line.
+fn picker_summary(picker: &PickerState, indices: &[usize]) -> Option<String> {
+    let chosen: Vec<String> = indices
+        .iter()
+        .filter_map(|&i| picker.items.get(i).map(|it| it.label.clone()))
+        .collect();
+    if chosen.is_empty() {
+        None
+    } else {
+        Some(chosen.join(", "))
     }
 }

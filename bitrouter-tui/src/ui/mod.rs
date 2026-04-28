@@ -10,7 +10,6 @@ use crate::app::AppState;
 /// Top-level render: computes the layout and delegates to each region.
 pub fn render(frame: &mut Frame, state: &mut AppState) {
     let layout = layout::AppLayout::compute(frame.area());
-    state.last_layout = Some(layout);
 
     top_bar::render(frame, state, layout.top_bar);
     scrollback::render(frame, state, layout.scrollback);
