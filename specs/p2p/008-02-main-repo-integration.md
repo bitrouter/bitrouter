@@ -31,8 +31,8 @@ p2p = ["dep:bitrouter-p2p", "tempo", "bitrouter-api/payments-tempo"]
 4. 第一阶段只做 Direct Leg A；Leg B / PGW 后置。
 5. Leg A 第一阶段支持 OpenAI-compatible Chat Completions 与 Anthropic-compatible Messages。
 6. `Payment-Receipt` fallback 使用数据库持久化。
-7. Registry client 指向 [`bitrouter-registry`](./008-03-bitrouter-registry.md) 的 GitHub raw `registry.json`；Registry 是去中心化状态源的 v0 公开静态替代，不做服务端查询或准入。
-8. Provider 侧 CLI 只导出可提交 PR 的 signed registry file item / tombstone；不调用 publish API，也不支付 registry mutation gas fee。
+7. Registry client 指向 [`bitrouter-registry`](./008-03-bitrouter-registry.md) 仓库中 committed `/v0/registry.json` 的 GitHub raw URL；Registry 是去中心化状态源的 v0 公开静态替代，不做服务端查询或准入。
+8. Provider 侧 CLI 只导出可提交 PR 的 signed registry node item / tombstone；不调用 publish API，也不支付 registry mutation gas fee。
 
 ---
 
@@ -195,7 +195,7 @@ p2p:
     key_file: p2p/identity.key
 
   registry:
-    raw_url: https://raw.githubusercontent.com/bitrouter/bitrouter-registry/main/registry/v0/registry.json
+    raw_url: https://raw.githubusercontent.com/bitrouter/bitrouter-registry/main/v0/registry.json
     cache_dir: p2p/registry-cache
     refresh_interval_secs: 300
 
@@ -260,14 +260,14 @@ P2P Provider 不定义第二套支付配置。
 
 Registry 在主仓库集成中被视为“去中心化状态的公开静态替代”：
 
-1. Registry 数据由 `bitrouter-registry` public GitHub repository 中的 signed node item 与 committed aggregate `registry/v0/registry.json` 表达。
-2. `bitrouter-p2p` Consumer client 只读取 raw `registry.json`，本地验证 schema、Provider proof、`seq`、`valid_until`、status、pricing 与 endpoint 格式。
+1. Registry 数据由 `bitrouter-registry` public GitHub repository 中的 `nodes/*.json`、`tombstones/*.json` 与 committed generated `/v0/registry.json` 表达。
+2. `bitrouter-p2p` Consumer client 只读取 `/v0/registry.json`，本地验证结构、Provider proof、`seq`、`valid_until`、status、pricing 与 endpoint 格式。
 3. Registry **不做准入**：不判断某 Provider 是否“被允许经营”、是否 KYC、是否有商业合同、是否进入 curated set。
 4. 准入、商业关系、风控、发票、客户入口等放到未来 BitRouter Cloud PGW 或其他 PGW 中完成。
 5. Consumer 从 Registry 得到“provider 自签并通过公开 PR 合并的广告状态”；是否信任该 Provider，由本地策略、PGW、allowlist、reputation 或未来机制决定。
 6. Registry 实现见 [`008-03`](./008-03-bitrouter-registry.md)：v0 不使用 Supabase、Next.js、Vercel、HTTP publish API 或 query API。
 
-### 4.1 Raw fetch / cache
+### 4.1 Static fetch / cache
 
 客户端行为：
 
@@ -290,7 +290,7 @@ bitrouter p2p registry tombstone export
 
 1. CLI 从本地 P2P identity 与 provider config 生成 node item。
 2. CLI 使用 Provider root key 对 canonical JSON 签名。
-3. 运营方把输出文件放入 `bitrouter-registry/registry/v0/nodes/` 并提交 PR。
+3. 运营方把输出文件放入 `bitrouter-registry/nodes/`，或使用 registry repo 的 `manage.ts add/update/tombstone` 写入正确路径，然后提交 PR。
 4. 修改 node 时提高 `seq` 并重新签名。
 5. shutdown 可以导出 `status: disabled` item 或 signed tombstone。
 
@@ -455,6 +455,6 @@ Consumer 校验：
 | INT-7 | receipt fallback 使用数据库表持久化 |
 | INT-8 | P2P Provider 复用现有 `LanguageModelRouter`，不复制 provider adapter |
 | INT-9 | P2P payment 复用 `mpp-br` / OWS / Tempo backend |
-| INT-10 | Registry client 可读取 raw `registry.json`、验证 proof / `valid_until` / status，并本地筛选 endpoint |
+| INT-10 | Registry client 可读取 `/v0/registry.json`、验证 proof / `valid_until` / status，并本地筛选 endpoint |
 | INT-11 | Provider CLI 可导出 signed node item / tombstone；主仓库不实现 Registry publish API 或 mutation gas fee |
 | INT-12 | `cargo fmt -- --check`、`cargo clippy --all-features`、`cargo test --all-features` 通过 |

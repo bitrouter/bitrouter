@@ -67,10 +67,10 @@ Examples:
 
 ### 1.1 Read endpoint
 
-Consumer reads the full Registry artifact as a raw file:
+Consumer reads the full Registry artifact as a static JSON file:
 
 ```http
-GET https://raw.githubusercontent.com/bitrouter/bitrouter-registry/main/registry/v0/registry.json
+GET https://raw.githubusercontent.com/bitrouter/bitrouter-registry/main/v0/registry.json
 Accept: application/json
 ```
 
@@ -81,7 +81,7 @@ No GitHub API token, Registry API key, publish credential, or mutation fee is re
 ```jsonc
 {
   "type": "bitrouter/registry/0",
-  "generated_at": "2026-04-28T00:00:00Z",
+  "updated_at": "2026-04-28T00:00:00Z",
   "source": {
     "repository": "github.com/bitrouter/bitrouter-registry",
     "branch": "main",
@@ -111,7 +111,7 @@ No GitHub API token, Registry API key, publish credential, or mutation fee is re
 Source file path:
 
 ```text
-registry/v0/nodes/ed25519_<base58btc>.json
+nodes/ed25519_<base58btc>.json
 ```
 
 Minimal shape:
