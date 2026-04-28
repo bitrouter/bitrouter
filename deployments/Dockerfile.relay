@@ -1,4 +1,4 @@
-ARG RUST_VERSION=1.89
+ARG RUST_VERSION=1.95
 ARG IROH_RELAY_VERSION=0.98.0
 
 FROM rust:${RUST_VERSION}-bookworm AS builder
@@ -24,7 +24,6 @@ WORKDIR /var/lib/iroh-relay
 ENV RUST_LOG=info
 
 EXPOSE 80 443 3340 7824 9090
-VOLUME ["/etc/iroh-relay", "/var/lib/iroh-relay"]
 STOPSIGNAL SIGINT
 
 ENTRYPOINT ["/usr/local/bin/iroh-relay"]
