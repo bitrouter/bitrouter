@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0](https://github.com/bitrouter/bitrouter/compare/v0.26.0...v0.27.0)
+
+
+### ⛰️ Features
+
+- *(agents)* ACP registry install manager + TUI slash commands ([#389](https://github.com/bitrouter/bitrouter/pull/389)) - ([0de6983](https://github.com/bitrouter/bitrouter/commit/0de69833d6630fe731e5c6104e56e1b02b002717))
+
+
 ## [0.26.0](https://github.com/bitrouter/bitrouter/compare/v0.25.0...v0.26.0)
 
 
