@@ -1,6 +1,6 @@
 # 008-02 — 主 `bitrouter` 仓库 P2P Direct 集成 PRD
 
-> 状态：**v0.4 — Provider / Consumer 公网 relay MVP PRD**。
+> 状态：**v0.5 — Provider / Consumer 本地 relay MVP PRD**。
 >
 > 本文负责主仓库 [`bitrouter/bitrouter`](https://github.com/bitrouter/bitrouter) 的 P2P 代码集成、阶段拆分与验收标准。正式环境部署见 [`008-01`](./008-01-network-deployment.md)；公开 Registry 数据仓库见 [`008-03`](./008-03-bitrouter-registry.md)；协议编码、签名与错误对象见 [`001-03`](./001-03-protocol-conventions.md)。
 
@@ -10,7 +10,7 @@
 
 主仓库 P2P MVP 的目标是：
 
-> **一个 Provider node 可以接入 BitRouter P2P 网络；一个 Consumer node 可以通过 P2P 网络正确请求到该 Provider node。P2P 网络通过公网正式部署的 relay 节点运行：`https://ap-southeast-1.relay.v0.bitrouter.ai`。**
+> **一个 Provider node 可以接入 BitRouter P2P 网络；一个 Consumer node 可以通过 P2P 网络正确请求到该 Provider node。第一阶段先使用本地 `iroh-relay --dev` 跑通，不要求必须使用远程 relay。**
 
 第一阶段不先做完整 Registry、MPP、Tempo lifecycle 或 PGW Session，而是先开发 `bitrouter-p2p::primitives` 模块。该模块必须把 v3 原型已经验证过的 base58btc 编解码、Ed25519 身份、JCS payload hash、签名、验签和 signed envelope proof 机制沉淀成主仓库可复用的基础能力，并提供完备的、自举的单元测试和集成测试。
 
@@ -19,13 +19,13 @@
 | Phase | 目标 | 是否本 PRD 阻塞 |
 |---|---|---|
 | 0 | `bitrouter-p2p::primitives`：base58btc、identity、digest、JCS、sign、verify、signed envelope | **是，第一交付** |
-| 1 | `bitrouter-p2p` crate skeleton、feature wiring、config schema、public relay config | 是 |
-| 2 | Provider node 通过 iroh endpoint 接入公网 relay，并导出可验证 node descriptor / registry item | 是 |
-| 3 | Consumer node 读取目标 Provider descriptor，经过公网 relay 建立 Direct P2P HTTP/3 连接 | 是 |
+| 1 | `bitrouter-p2p` crate skeleton、feature wiring、config schema、本地 relay config | 是 |
+| 2 | Provider node 通过 iroh endpoint 接入本地 relay，并导出可验证 node descriptor / registry item | 是 |
+| 3 | Consumer node 读取目标 Provider descriptor，经过本地 relay 建立 Direct P2P HTTP/3 连接 | 是 |
 | 4 | Consumer 对 Provider 发起 OpenAI-compatible chat request，并收到正确 response stream / body | 是 |
-| 5 | Registry `/v0/registry.json`、MPP / Tempo payment、receipt envelope、Anthropic surface | 后续增强，不阻塞最小公网 relay MVP |
+| 5 | 远程 relay、Registry `/v0/registry.json`、MPP / Tempo payment、receipt envelope、Anthropic surface | 后续增强，不阻塞最小本地 relay MVP |
 
-本 PRD 将 Phase 0 写成详细工程规格和验收标准；后续 Phase 1-4 给出主仓库 MVP 的明确边界，保证 primitives 开发不会偏离最终 provider/consumer 公网连通目标。
+本 PRD 将 Phase 0 写成详细工程规格和验收标准；后续 Phase 1-4 给出主仓库 MVP 的明确边界，保证 primitives 开发不会偏离最终 provider/consumer 本地 relay 连通目标。远程 relay `https://ap-southeast-1.relay.v0.bitrouter.ai` 保留为后续 staging / production 验收目标。
 
 ---
 
@@ -44,13 +44,13 @@
 | JCS | payload hash 和 proof signing input 使用 RFC 8785 JSON Canonicalization Scheme |
 | Signed envelope | 支持 `{ type, payload, proofs[] }` 与 `bitrouter/proof/ed25519-jcs/0` |
 | 自举测试 | 单元 / 集成测试不依赖网络、不依赖外部 registry、不依赖外部二进制生成 fixture |
-| 公网 relay MVP | Provider 与 Consumer 默认使用 `https://ap-southeast-1.relay.v0.bitrouter.ai` 作为第一条 production relay |
+| 本地 relay MVP | Provider 与 Consumer 默认使用本地 `iroh-relay --dev`，relay URL 为 `http://localhost:3340` |
 | Direct request | Consumer 可以通过 P2P Direct path 请求 Provider 的 OpenAI-compatible `/v1/chat/completions` |
 
 ### 1.2 非目标
 
 - 不在第一阶段实现 PGW Session path。
-- 不在第一阶段实现完整 MPP / Tempo 支付闭环；支付对象必须保留协议设计位置，但不阻塞公网 relay 连通 MVP。
+- 不在第一阶段实现完整 MPP / Tempo 支付闭环；支付对象必须保留协议设计位置，但不阻塞本地 relay 连通 MVP。
 - 不在第一阶段实现 Registry public repo 的 PR / CI / generator；该规范已由 [`008-03`](./008-03-bitrouter-registry.md) 固化，主仓库后续只实现 client / export 能力。
 - 不把 `bitrouter-p2p::primitives` 拆成单独 crate；先保留在 `bitrouter-p2p` 内部模块。
 - 不在 `bitrouter-core` 中引入 iroh / h3 / network runtime 重依赖。
@@ -64,7 +64,7 @@ MVP 网络拓扑：
 
 ```mermaid
 flowchart LR
-    Relay["Production relay<br/>https://ap-southeast-1.relay.v0.bitrouter.ai"]
+    Relay["Local relay<br/>iroh-relay --dev<br/>http://localhost:3340"]
     Provider["bitrouter Provider node<br/>p2p.provider.enabled = true"]
     Consumer["bitrouter Consumer node<br/>api_protocol: p2p"]
     Upstream["Configured upstream LLM<br/>existing provider adapter"]
@@ -77,8 +77,8 @@ flowchart LR
 
 验收时至少要证明：
 
-1. Provider node 使用本地 Ed25519 identity 启动 iroh endpoint。
-2. Provider node 使用 `https://ap-southeast-1.relay.v0.bitrouter.ai` 作为 relay URL。
+1. 本地启动 `iroh-relay --dev`，relay HTTP URL 为 `http://localhost:3340`。
+2. Provider node 使用本地 Ed25519 identity 启动 iroh endpoint，并配置本地 relay。
 3. Consumer node 能使用 Provider 的 node descriptor / endpoint info 进行 dial。
 4. Direct connection 使用 ALPN `bitrouter/direct/0`。
 5. Consumer 能发出一个 OpenAI-compatible chat request。
@@ -318,8 +318,8 @@ p2p:
     key_file: p2p/identity.ed25519
   relay:
     urls:
-      - https://ap-southeast-1.relay.v0.bitrouter.ai
-    force_relay: false
+      - http://localhost:3340
+    force_relay: true
   registry:
     raw_url: https://raw.githubusercontent.com/bitrouter/bitrouter-registry/main/v0/registry.json
     cache_dir: p2p/registry-cache
@@ -334,10 +334,11 @@ p2p:
 
 Rules：
 
-1. `relay.urls` 默认至少包含 `https://ap-southeast-1.relay.v0.bitrouter.ai`。
-2. `force_relay: true` 用于验收与故障复现：Provider descriptor 不暴露 direct addresses，Consumer 必须经 relay 成功连接。
+1. 本地 MVP 的 `relay.urls` 默认使用 `http://localhost:3340`，由 `iroh-relay --dev` 提供。
+2. `force_relay: true` 用于验收与故障复现：Provider descriptor 不暴露 direct addresses，Consumer 必须经本地 relay 成功连接。
 3. identity 文件生成、加载、权限检查、public identity 导出必须使用 `primitives` 的 Ed25519 wire format。
 4. 配置层只保存 serde data，不直接依赖 iroh / h3 heavy runtime。
+5. `https://ap-southeast-1.relay.v0.bitrouter.ai` 是后续 staging / production relay 示例，不是第一阶段本地 MVP 的阻塞条件。
 
 ### 5.2 Provider target
 
@@ -351,7 +352,7 @@ providers:
       provider_id: ed25519:...
       endpoint_id: ed25519:...
       relay_urls:
-        - https://ap-southeast-1.relay.v0.bitrouter.ai
+        - http://localhost:3340
       model: claude-3-5-sonnet-20241022
       api_surface: openai_chat_completions
 
@@ -375,7 +376,7 @@ Provider node 是启用 `p2p.provider.enabled = true` 的 `bitrouter` 进程：
 
 1. 加载 Ed25519 identity。
 2. 启动 iroh endpoint。
-3. 配置 relay map，默认包含 `https://ap-southeast-1.relay.v0.bitrouter.ai`。
+3. 配置 relay map，默认包含 `http://localhost:3340`。
 4. 监听 ALPN `bitrouter/direct/0`。
 5. 在 HTTP/3 request 到达后复用主仓库既有 `LanguageModelRouter`。
 6. 返回 OpenAI-compatible response。
@@ -396,8 +397,8 @@ Provider node descriptor 最低字段：
       {
         "endpoint_id": "ed25519:<base58btc>",
         "status": "active",
-        "region": "geo:ap-southeast-1",
-        "relay_urls": ["https://ap-southeast-1.relay.v0.bitrouter.ai"],
+        "region": "local",
+        "relay_urls": ["http://localhost:3340"],
         "direct_addrs": [],
         "api_surfaces": ["openai_chat_completions"]
       }
@@ -477,7 +478,7 @@ MVP 错误分层：
 2. signing API 不应把 secret key 暴露给 consumer / provider runtime 的普通业务对象。
 3. 所有 verifier 默认 fail closed。
 4. 不允许 broad `catch` / silent fallback 接受旧格式。
-5. Provider descriptor 中的 relay URL 必须是 URL parse 后的 HTTPS URL；MVP production relay 为 `https://ap-southeast-1.relay.v0.bitrouter.ai`。
+5. Provider descriptor 中的 relay URL 必须是 URL parse 后的 URL；本地 MVP relay 为 `http://localhost:3340`。进入 staging / production 后再要求 HTTPS relay URL，例如 `https://ap-southeast-1.relay.v0.bitrouter.ai`。
 6. `force_relay` 验收必须避免 direct address 偶然成功掩盖 relay 问题。
 7. Public relay 不承载业务鉴权；Provider 仍必须在应用层保留后续 payment / auth middleware 插入点。
 
@@ -506,19 +507,19 @@ MVP 错误分层：
 |---|---|
 | P1-1 | workspace 可在启用 `p2p` feature 时编译 `bitrouter-p2p` |
 | P1-2 | 禁用 `p2p` feature 时不编译 iroh / h3 heavy dependency |
-| P1-3 | config 支持 `p2p.relay.urls`，默认或示例包含 `https://ap-southeast-1.relay.v0.bitrouter.ai` |
+| P1-3 | config 支持 `p2p.relay.urls`，本地 MVP 默认或示例包含 `http://localhost:3340` |
 | P1-4 | `api_protocol: p2p` 可被配置层解析；未启用 feature 时运行时错误明确 |
 | P1-5 | identity generate / load / display 使用 `primitives` wire format |
 
-### 10.3 Phase 2-4：公网 relay MVP 验收
+### 10.3 Phase 2-4：本地 relay MVP 验收
 
 | 编号 | 标准 |
 |---|---|
 | P2-1 | Provider node 启动后输出 provider_id、endpoint_id、relay_urls |
-| P2-2 | Provider node descriptor 中 relay URL 为 `https://ap-southeast-1.relay.v0.bitrouter.ai` |
+| P2-2 | Provider node descriptor 中 relay URL 为 `http://localhost:3340` |
 | P2-3 | Consumer node 能使用显式 P2P target dial Provider |
 | P2-4 | Direct connection ALPN 为 `bitrouter/direct/0` |
-| P2-5 | forced-relay smoke 通过，测试不依赖 direct_addrs |
+| P2-5 | 本地 `iroh-relay --dev` forced-relay smoke 通过，测试不依赖 direct_addrs |
 | P2-6 | Consumer 对 Provider 发起 `/v1/chat/completions` 并收到正确 response |
 | P2-7 | Provider 复用主仓库 `LanguageModelRouter` / provider adapter，不复制上游模型调用逻辑 |
 | P2-8 | relay unavailable / wrong endpoint / wrong identity 时错误可诊断 |
@@ -539,7 +540,7 @@ MVP 错误分层：
 8. 接入 iroh endpoint、relay URL config、ALPN `bitrouter/direct/0`。
 9. 实现 Provider HTTP/3 listener 与 Consumer HTTP/3 client。
 10. 添加 two-process local smoke。
-11. 添加 `https://ap-southeast-1.relay.v0.bitrouter.ai` forced-relay smoke。
+11. 添加本地 `iroh-relay --dev` forced-relay smoke。
 12. 后续再接 Registry `/v0/registry.json` client、MPP / Tempo payment 与 receipt envelope。
 
 ---
@@ -552,4 +553,4 @@ v3 原型已经证明：
 2. Static Registry `/v0/registry.json` 模型已经在 `008-03` 规范化。
 3. Direct receipt、Tempo voucher wrapper、BitRouter error object 等对象格式已经收敛。
 
-主仓库不应把原型代码逐字搬运成长期架构；但应复用其已经验证的协议边界。`bitrouter-p2p::primitives` 是把这些边界沉淀到主仓库的第一步。只有 primitives 稳定且测试自举后，Provider / Consumer 公网 relay MVP 才能避免在 transport、registry、payment 中重复实现编码与验签逻辑。
+主仓库不应把原型代码逐字搬运成长期架构；但应复用其已经验证的协议边界。`bitrouter-p2p::primitives` 是把这些边界沉淀到主仓库的第一步。只有 primitives 稳定且测试自举后，Provider / Consumer 本地 relay MVP 才能避免在 transport、registry、payment 中重复实现编码与验签逻辑；远程 relay 验收应在本地链路稳定后再进入 staging / production 阶段。
