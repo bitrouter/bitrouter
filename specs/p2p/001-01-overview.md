@@ -137,7 +137,7 @@ Provider 条目的概念形态（v0 字段详见 [`003 §2.2`](./003-l3-design.m
           "protocol": "mpp",
           "method":   "tempo",
           "currency": "0x20c0000000000000000000000000000000000000",
-          "methodDetails": { "chainId": 4217 },
+          "method_details": { "chain_id": 4217 },
           "intent":   "session"
         }
       ]
@@ -160,7 +160,7 @@ v0 Registry 的形态：
 - Registry **只接受** `scheme: "token"` + `intent: "session"` 的 entry 用于 LLM token-based 模型；具体校验规则见 [`004-02 §3.5`](./004-02-payment-protocol.md)。
 - 即使 Provider 的**底层实际成本**是订阅制（Claude Max / ChatGPT Plus）、包月、本地 GPU 电费，它在网络中仍必须折算成 token 单价对外报价。"把真实成本换算成 token 单价"是 Provider 自己的定价责任与风险。
 - 这样 Consumer 侧的价格比较、结算、争议都以唯一尺度（token）进行，可直接和 OpenAI / Anthropic 等官方定价对齐；Local Router 也能用同一把尺子比较本地 upstream 和 P2P 候选（见 §2 原则 2）。
-- Schema 的 `pricing` 是一个**平铺的 PaymentRequirements 列表**，每条 entry 由 `(scheme, protocol, method, intent, currency, methodDetails, recipient, rates)` 等字段组成（type-first Rust + serde，权威定义在 [`004-02 §3.2`](./004-02-payment-protocol.md)），刻意为 `request` / `duration` / `bandwidth` 等未来 scheme 与 mpp 之外的协议预留扩展位，v0 先只用 `(token, mpp, tempo, session)` 一条。
+- Schema 的 `pricing` 是一个**平铺的 PaymentRequirements 列表**，每条 entry 由 `(scheme, protocol, method, intent, currency, method_details, recipient, rates)` 等字段组成（type-first Rust + serde，权威定义在 [`004-02 §3.2`](./004-02-payment-protocol.md)），刻意为 `request` / `duration` / `bandwidth` 等未来 scheme 与 mpp 之外的协议预留扩展位，v0 先只用 `(token, mpp, tempo, session)` 一条。
 
 v1 / 后续演进路径（不在本稿展开）：
 

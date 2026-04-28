@@ -14,7 +14,7 @@
 - **Tempo session voucher 使用 EIP-712 + secp256k1 EOA**：`source = did:pkh:eip155:4217:0x...`；voucher 位于 `payload.tempo.voucher`，金额字段是 TIP-20 base units integer string / EIP-712 `uint256`。
 - **SSE body 严格保持 OpenAI v1 chat completions shape**：匿名 `data: <json>` 帧、最终 usage chunk、最后 `data: [DONE]`；SSE body 不携任何 BitRouter-specific 字段。
 - **结算回执走 `Payment-Receipt` trailer + GET fallback**：receipt schema 对齐 MPP `/protocol/receipts`，外加 BitRouter `order` 扩展；由 Provider ed25519 重新签名。
-- **订单上下文是 MPP credential 的 `payload.order` 扩展**：PGW path on Leg A 时可存在；Direct path 无 PGW 时整体省略，由 Provider 自生成 `orderId`。
+- **订单上下文是 MPP credential 的 `payload.order` 扩展**：PGW path on Leg A 时可存在；Direct path 无 PGW 时整体省略，由 Provider 自生成 `order_id`。
 
 ---
 
@@ -171,10 +171,10 @@ Rules:
 
 ```jsonc
 {
-  "challengeId": "<challenge.id>",
+  "challenge_id": "<challenge.id>",
   "method": "tempo",
   "intent": "session",
-  "reference": "0x<channelId>",
+  "reference": "0x<channel_id>",
   "settlement": {
     "amount": "123456",
     "currency": "0x20c0000000000000000000000000000000000000"
@@ -182,27 +182,27 @@ Rules:
   "status": "succeeded",
   "timestamp": "2026-04-27T00:00:30Z",
   "order": {
-    "orderId": "01J...",
-    "providerId": "ed25519:<provider_id>",
-    "pgwId": "ed25519:<pgw_id>",
+    "order_id": "01J...",
+    "provider_id": "ed25519:<provider_id>",
+    "pgw_id": "ed25519:<pgw_id>",
     "model": "openai/gpt-4o-mini",
-    "pricingPolicyHash": "sha256:...",
-    "maxInputTokens": 1024,
-    "maxOutputTokens": 2048,
-    "grossQuoteBaseUnits": "130000",
-    "providerShareBaseUnits": "123500",
-    "gatewayShareBaseUnits": "6500"
+    "pricing_policy_hash": "sha256:...",
+    "max_input_tokens": 1024,
+    "max_output_tokens": 2048,
+    "gross_quote_base_units": "130000",
+    "provider_share_base_units": "123500",
+    "gateway_share_base_units": "6500"
   }
 }
 ```
 
 Rules:
 
-- `challengeId` 必须等于本次 challenge `id`。
-- `reference` 在 Tempo session intent 下等于 channelId（bytes32 hex）。
+- `challenge_id` 必须等于本次 challenge `id`。
+- `reference` 在 Tempo session intent 下等于 channel_id（bytes32 hex）。
 - `settlement.amount` 与所有 `*BaseUnits` 字段均为 TIP-20 base units integer string；禁止 decimal、科学计数法、前导零（`"0"` 除外）。
 - `settlement.currency` 使用 MPP / Tempo method 的支付资产标识。
-- `order` 扩展按 §8；Direct path 无 PGW 时可由 Provider 自生成最小 `{orderId, providerId, model}`，也可省略 PGW 相关字段。
+- `order` 扩展按 §8；Direct path 无 PGW 时可由 Provider 自生成最小 `{order_id, provider_id, model}`，也可省略 PGW 相关字段。
 
 ### 6.2 Trailer 主通道
 
@@ -257,20 +257,20 @@ EIP-712 domain:
 }
 ```
 
-testnet chainId 为 `42431`。Primary type:
+testnet `chainId` 为 `42431`。Primary type:
 
 ```jsonc
 {
   "Voucher": [
-    { "name": "channelId", "type": "bytes32" },
-    { "name": "cumulativeAmount", "type": "uint256" },
+    { "name": "channel_id", "type": "bytes32" },
+    { "name": "cumulative_amount", "type": "uint256" },
     { "name": "nonce", "type": "uint256" },
     { "name": "action", "type": "string" }
   ]
 }
 ```
 
-`action ∈ {"open","topUp","voucher","close"}`。`cumulativeAmount` 是 TIP-20 base units，对应 JSON 中的整数字符串；进入 EIP-712 typed data 时作为 `uint256`。Signer 是 Consumer secp256k1 EOA，DID 形式见 §5 `source`。具体 method details 与 Rust 类型复用见 [`004-02`](./004-02-payment-protocol.md)。
+`action ∈ {"open","top_up","voucher","close"}`。`cumulative_amount` 是 TIP-20 base units，对应 BitRouter JSON 投影中的整数字符串；进入 EIP-712 typed data 时作为 `uint256`。Signer 是 Consumer secp256k1 EOA，DID 形式见 §5 `source`。具体 method details 与 Rust 类型复用见 [`004-02`](./004-02-payment-protocol.md)。EIP-712 typed data 的标准字段（如 `chainId`、`verifyingContract`、`primaryType`）保留外部标准命名，不纳入 BitRouter JSON 字段命名规则。
 
 ---
 
@@ -280,27 +280,27 @@ PGW 参与 Leg A MPP credential 构造时，订单上下文放入 `payload.order
 
 ```jsonc
 {
-  "orderId": "01J...",
-  "providerId": "ed25519:<provider_id>",
-  "pgwId": "ed25519:<pgw_id>",
+  "order_id": "01J...",
+  "provider_id": "ed25519:<provider_id>",
+  "pgw_id": "ed25519:<pgw_id>",
   "model": "openai/gpt-4o-mini",
-  "pricingPolicyHash": "sha256:<hash>",
-  "maxInputTokens": 1024,
-  "maxOutputTokens": 2048,
-  "grossQuoteBaseUnits": "130000",
-  "providerShareBaseUnits": "123500",
-  "gatewayShareBaseUnits": "6500",
-  "orderSig": "<base64url(ed25519_sig_by_pgw)>"
+  "pricing_policy_hash": "sha256:<hash>",
+  "max_input_tokens": 1024,
+  "max_output_tokens": 2048,
+  "gross_quote_base_units": "130000",
+  "provider_share_base_units": "123500",
+  "gateway_share_base_units": "6500",
+  "order_sig": "<base64url(ed25519_sig_by_pgw)>"
 }
 ```
 
 Rules:
 
-1. Direct path（无 PGW）下 `payload.order` 整体省略；Provider 自生成 `orderId` 并在 receipt 中反映。
-2. `orderSig` 是 PGW `pgwId` 对 JCS(order object without `orderSig`) 的 ed25519 签名。
-3. `grossQuoteBaseUnits == providerShareBaseUnits + gatewayShareBaseUnits` 必须在 integer domain 严格成立。
-4. `pricingPolicyHash` 必须命中 Provider 当前有效 pricing policy。
-5. `maxInputTokens` / `maxOutputTokens` 是 Provider 服务上限；实际 usage 不得超过，超出前应截断或 streaming 前拒绝。
+1. Direct path（无 PGW）下 `payload.order` 整体省略；Provider 自生成 `order_id` 并在 receipt 中反映。
+2. `order_sig` 是 PGW `pgw_id` 对 JCS(order object without `order_sig`) 的 ed25519 签名。
+3. `gross_quote_base_units == provider_share_base_units + gateway_share_base_units` 必须在 integer domain 严格成立。
+4. `pricing_policy_hash` 必须命中 Provider 当前有效 pricing policy。
+5. `max_input_tokens` / `max_output_tokens` 是 Provider 服务上限；实际 usage 不得超过，超出前应截断或 streaming 前拒绝。
 
 旧订单信封 HTTP 头不再存在；任何实现不得同时支持两种订单上下文来源。
 
@@ -340,12 +340,12 @@ Leg A Provider 必须至少执行：
 |---|---|---|
 | C5 | Tempo voucher channel、nonce、cumulative、collateral 有效 | 402 + 新 challenge |
 | C6 | Direct path credential `source` 与付款身份一致；无 PGW 时不得伪造 `payload.order` | 402 / problem+json |
-| C7 | `Payment-Receipt.challengeId == challenge.id`，`reference == channelId`，`order.orderId` 与 credential `payload.order.orderId` 一致 | `receipt.*` error |
+| C7 | `Payment-Receipt.challenge_id == challenge.id`，`reference == channel_id`，`order.order_id` 与 credential `payload.order.order_id` 一致 | `receipt.*` error |
 | C8 | `Payment-Receipt-Sig` 必须由 Provider 自身 ed25519 key 签名 | `receipt.signature_invalid` |
 | C9 | challenge `digest` 等于实际 request body SHA-256 | 402 + 新 challenge |
 | C10 | challenge `expires` 未过期且时钟漂移在 Provider policy 范围内 | 402 + 新 challenge |
-| C11 | `payload.order.pricingPolicyHash` 命中当前 pricing policy（存在 PGW order 时） | problem+json `pricing.policy_unknown` |
-| C12 | 实际 token 用量 ≤ `maxInputTokens` / `maxOutputTokens` | 截断或 problem+json `quota.exceeded` |
+| C11 | `payload.order.pricing_policy_hash` 命中当前 pricing policy（存在 PGW order 时） | problem+json `pricing.policy_unknown` |
+| C12 | 实际 token 用量 ≤ `max_input_tokens` / `max_output_tokens` | 截断或 problem+json `quota.exceeded` |
 | C13 | fee split 等式在 base-unit integer domain 成立 | problem+json `order.fee_split_invalid` |
 
 完整 Direct + PGW 合并表见 [`004-03 §6`](./004-03-pgw-provider-link.md#6-provider-必检项normative)。
@@ -356,12 +356,12 @@ Leg A Provider 必须至少执行：
 
 所有结算金额字段使用 token 原生 atomic unit 的 JSON string：
 
-- `payload.tempo.voucher.cumulativeAmount`
+- `payload.tempo.voucher.cumulative_amount`
 - `Payment-Receipt.settlement.amount`
-- `payload.order.grossQuoteBaseUnits`
-- `payload.order.providerShareBaseUnits`
-- `payload.order.gatewayShareBaseUnits`
-- future `topUp.amount` / `collateralBaseUnits`
+- `payload.order.gross_quote_base_units`
+- `payload.order.provider_share_base_units`
+- `payload.order.gateway_share_base_units`
+- future `top_up.amount` / `collateral_base_units`
 
 整数表示规则：
 

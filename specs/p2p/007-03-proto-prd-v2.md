@@ -57,7 +57,7 @@
 | L1/L2 网络  | 真实 iroh Endpoint；真实中继节点；支持自定义中继 URL；至少一个公网中继预发配置                                                                                       |
 | HTTP/3    | Leg A `bitrouter/p2p/0` 上承载 HTTP/3；Leg B 数据连接标准 `h3`；控制连接独立 QUIC ALPN `bitrouter/payctl/1`                                             |
 | Tempo     | Docker 本地测试网为开发 / CI 主路径；JSON-RPC 可配置；faucet 自动给测试 EOA 发 TIP-20                                                                        |
-| 钱包        | CLI / node 使用真实 secp256k1 EOA 私钥；EIP-712 signing；DID PKH `did:pkh:eip155:<chainId>:0x...`                                              |
+| 钱包        | CLI / node 使用真实 secp256k1 EOA 私钥；EIP-712 signing；DID PKH `did:pkh:eip155:<chain_id>:0x...`                                              |
 | MPP SDK   | 优先接入上游 SDK（`mppx` 或 `mpp-rs`）；若不满足协议细节，fork + patch；禁止继续扩展自写 MPP core 为主路径                                                             |
 | 删除重复造轮子模块 | 删除第一版中替代 MPP、Tempo、HTTP/3、QUIC framing、voucher、payment auth 的自研模块；新代码只能作为上游库适配、配置、状态编排或测试夹具存在                                          |
 | Leg A     | Direct Consumer↔Provider：MPP challenge / credential / Tempo voucher / OpenAI-compatible SSE / `Payment-Receipt` trailer + GET fallback |
@@ -103,7 +103,7 @@
    - BitRouter `payload.order` extension type；
    - Tempo local Docker chain config；
    - receipt GET fallback helper；
-   - `source = did:pkh:eip155:<chainId>:0x...` 与 base-unit string 的 strict schema。
+   - `source = did:pkh:eip155:<chain_id>:0x...` 与 base-unit string 的 strict schema。
 3. **禁止方向**：不得继续把 `crates/bitrouter-mpp` 扩成长期 MPP core；不得在 `bitrouter-tempo` 中实现替代 Tempo SDK / 合约协议；不得在 `bitrouter-h3` 中实现替代 HTTP/3 协议栈；不得继续维护自定义 Payment Auth、JWS voucher、mock ledger 或 QUIC request/response framing。
 
 所有 fork patch 必须：
@@ -235,8 +235,8 @@ Leg B 必须完全按 [`004-03`](./004-03-pgw-provider-link.md)：
 
 1. PGW 启动后读取 Registry，找到 curated Provider。
 2. PGW 与 Provider 建 Control Connection，发送 `channel-open-request`。
-3. PGW 用真实 Tempo EOA 在 Tempo localnet 锁 collateral；链下 Leg B channel 记录 `channelId` / `asset` / `collateralBaseUnits`。
-4. Consumer 从 Leg C 调 PGW；PGW 生成 `orderRef`，在 Data Connection 发 HTTP/3 request：
+3. PGW 用真实 Tempo EOA 在 Tempo localnet 锁 collateral；链下 Leg B channel 记录 `channel_id` / `asset` / `collateral_base_units`。
+4. Consumer 从 Leg C 调 PGW；PGW 生成 `order_ref`，在 Data Connection 发 HTTP/3 request：
 
    ```http
    POST /v1/chat/completions HTTP/3
@@ -249,15 +249,15 @@ Leg B 必须完全按 [`004-03`](./004-03-pgw-provider-link.md)：
    {
      "type": "payment-stream-completed",
      "payload": {
-       "orderRef": "01J...",
-       "providerShareBaseUnits": "123456",
-       "usage": { "inputTokens": 12, "outputTokens": 34, "totalTokens": 46 },
-       "completedAt": "..."
+       "order_ref": "01J...",
+       "provider_share_base_units": "123456",
+       "usage": { "input_tokens": 12, "output_tokens": 34, "total_tokens": 46 },
+       "completed_at": "..."
      }
    }
    ```
 
-6. PGW 按 epoch / threshold 推送 `payment-voucher`，由 PGW ed25519 签 JCS `{channelId, cumulativeAmount, nonce}`。
+6. PGW 按 epoch / threshold 推送 `payment-voucher`，由 PGW ed25519 签 JCS `{channel_id, cumulative_amount, nonce}`。
 7. Provider 校验 nonce / cumulative / collateral / signature；超阈值则拒绝新的数据 stream。
 
 Leg B 主路径不使用 MPP per-request challenge；仅作为 fallback / 调试配置。
@@ -283,7 +283,7 @@ Leg C 不定义为 BitRouter 协议，但原型需要一个最小可用入口：
   - `provider_id` / `pgw_id`: ed25519 root key，签 snapshot / receipt / Leg B voucher；
   - `endpoint_id`: iroh EndpointId，连接身份；
   - snapshot 内 root sig 覆盖 endpoint 列表。
-- Tempo payment identity 是 secp256k1 EOA：`did:pkh:eip155:<chainId>:0x...`，与 BitRouter ed25519 identity 解耦。
+- Tempo payment identity 是 secp256k1 EOA：`did:pkh:eip155:<chain_id>:0x...`，与 BitRouter ed25519 identity 解耦。
 
 ### 6.2 金额
 
@@ -337,7 +337,7 @@ Provider / PGW snapshot 必须更新到最新协议形态：
 | Leg B data client | HTTP/3 `h3` connection pool；每请求带 `BR-Order-Ref` |
 | Leg B control client | 独立 QUIC Control Connection；long-lived channel；cumulative voucher state |
 | Channel manager | pending / committed / rolled-back 状态；持久化 nonce/cumulative；crash recovery |
-| Ledger | 记录 `orderRef -> usage -> providerShareBaseUnits -> voucher epoch` |
+| Ledger | 记录 `order_ref -> usage -> provider_share_base_units -> voucher epoch` |
 | 可观测性 | per-leg latency、voucher lag、collateral remaining、control reconnect count |
 
 ### 7.3 `bitrouter-cli`
@@ -607,7 +607,7 @@ services:
 ### 11.3 通过条件
 
 - 成功率 ≥ 99%，失败必须有结构化 `error.code`，不得出现 silent drop。
-- PGW 路径不得出现 nonce race、cumulative amount 回退、重复 voucher、orderRef 串单。
+- PGW 路径不得出现 nonce race、cumulative amount 回退、重复 voucher、order_ref 串单。
 - Direct 路径不得出现 challenge / credential / receipt 交叉污染。
 - SSE body 必须保持 OpenAI-compatible，压测时仍以 `[DONE]` 结束。
 - trailer 缺失时，GET receipt fallback 成功率 ≥ 99%。

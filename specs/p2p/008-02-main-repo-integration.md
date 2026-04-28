@@ -1,8 +1,8 @@
 # 008-02 — P2P 协议集成到主 `bitrouter` 仓库
 
-> 状态：**v0.2 — 主仓库正式集成设计**。
+> 状态：**v0.3 — 主仓库静态 Registry 集成设计**。
 >
-> 本文负责主仓库 [`bitrouter/bitrouter`](https://github.com/bitrouter/bitrouter) 的代码集成。正式环境部署见 [`008-01`](./008-01-network-deployment.md)；中心化 Registry 新仓库见 [`008-03`](./008-03-bitrouter-registry.md)。
+> 本文负责主仓库 [`bitrouter/bitrouter`](https://github.com/bitrouter/bitrouter) 的代码集成。正式环境部署见 [`008-01`](./008-01-network-deployment.md)；公开 Registry 数据仓库见 [`008-03`](./008-03-bitrouter-registry.md)。
 
 ---
 
@@ -31,8 +31,8 @@ p2p = ["dep:bitrouter-p2p", "tempo", "bitrouter-api/payments-tempo"]
 4. 第一阶段只做 Direct Leg A；Leg B / PGW 后置。
 5. Leg A 第一阶段支持 OpenAI-compatible Chat Completions 与 Anthropic-compatible Messages。
 6. `Payment-Receipt` fallback 使用数据库持久化。
-7. Provider Registry client 指向 [`bitrouter-registry`](./008-03-bitrouter-registry.md) 中心化服务；Registry 是去中心化状态源的 v0 中心化替代，只验签和保存状态，不做准入。
-8. 所有会改变 Registry 数据库状态的请求可按“公链 gas fee”模型收取一小笔 MPP 费用，用于反滥用和覆盖状态写入成本。
+7. Registry client 指向 [`bitrouter-registry`](./008-03-bitrouter-registry.md) 的 GitHub raw `registry.json`；Registry 是去中心化状态源的 v0 公开静态替代，不做服务端查询或准入。
+8. Provider 侧 CLI 只导出可提交 PR 的 signed registry file item / tombstone；不调用 publish API，也不支付 registry mutation gas fee。
 
 ---
 
@@ -195,13 +195,9 @@ p2p:
     key_file: p2p/identity.key
 
   registry:
-    url: https://registry.bitrouter.ai
+    raw_url: https://raw.githubusercontent.com/bitrouter/bitrouter-registry/main/registry/v0/registry.json
     cache_dir: p2p/registry-cache
     refresh_interval_secs: 300
-    mutation_fee:
-      enabled: true
-      method: mpp
-      max_amount_base_units: "10000"
 
   consumer:
     enabled: true
@@ -262,55 +258,43 @@ P2P Provider 不定义第二套支付配置。
 
 ## 4. Registry client 语义
 
-Registry 在主仓库集成中被视为“去中心化状态的中心化替代”：
+Registry 在主仓库集成中被视为“去中心化状态的公开静态替代”：
 
-1. Registry 保存 Provider signed snapshot、endpoint、model、pricing 等网络状态。
-2. Registry 对状态写入请求只做格式校验、签名校验、`seq` / `valid_until` 等状态机校验。
+1. Registry 数据由 `bitrouter-registry` public GitHub repository 中的 signed node item 与 committed aggregate `registry/v0/registry.json` 表达。
+2. `bitrouter-p2p` Consumer client 只读取 raw `registry.json`，本地验证 schema、Provider signature、`seq`、`valid_until`、status、pricing 与 endpoint 格式。
 3. Registry **不做准入**：不判断某 Provider 是否“被允许经营”、是否 KYC、是否有商业合同、是否进入 curated set。
 4. 准入、商业关系、风控、发票、客户入口等放到未来 BitRouter Cloud PGW 或其他 PGW 中完成。
-5. Consumer 查询 Registry 只得到“该 provider 自签并提交过什么状态，以及 Registry 当前保存的最新状态”；Consumer 是否信任该 Provider，可由本地策略、PGW、allowlist、reputation 或未来机制决定。
-6. Registry 服务实现见 [`008-03`](./008-03-bitrouter-registry.md)：v0 使用 Supabase + TypeScript + Next.js / Vercel 薄包装，但主仓库 `bitrouter-p2p` registry client 只依赖稳定 HTTP API，不依赖 Supabase SDK，也不持有 Supabase key。
+5. Consumer 从 Registry 得到“provider 自签并通过公开 PR 合并的广告状态”；是否信任该 Provider，由本地策略、PGW、allowlist、reputation 或未来机制决定。
+6. Registry 实现见 [`008-03`](./008-03-bitrouter-registry.md)：v0 不使用 Supabase、Next.js、Vercel、HTTP publish API 或 query API。
 
-### 4.1 状态变更 gas fee
-
-为了避免攻击者通过大量 snapshot publish / endpoint update / retire / metadata update 请求放大数据库写入、索引、校验和缓存刷新成本，所有会改变 Registry 数据库状态的请求都可以要求附带一小笔 MPP 支付，语义类似公链 gas fee。
-
-适用请求：
-
-| 请求 | 是否收费 | 说明 |
-|---|---:|---|
-| `POST /v1/providers` | 是 | 创建 Provider root state |
-| `POST /v1/providers/{provider_id}/snapshots` | 是 | 提交新 snapshot / 新 `seq` |
-| `POST /v1/providers/{provider_id}/retire` | 是 | 写状态机终态 |
-| `GET /v1/providers/...` | 否 | 普通查询不收费，必要时只做 rate limit |
-| `GET /v1/models/.../providers` | 否 | Consumer 查询不收费，避免破坏发现体验 |
-
-MPP gas fee 规则：
-
-1. Registry 对 mutation request 先返回 `402 Payment Required` + `WWW-Authenticate: Payment ...`。
-2. `bitrouter-p2p` registry client 使用主仓库已有 OWS / MPP client 能力支付。
-3. 重试请求携带 `Authorization: Payment ...` 与原始 mutation body。
-4. Registry 验证 payment credential 后才执行签名校验与数据库写入。
-5. fee 是固定小额或按 mutation 类型配置的 base-unit integer string，不与 Provider 未来收入或 LLM pricing 绑定。
-6. 该费用不是“准入费”，也不代表 Registry endorse Provider；它只是状态写入的反滥用成本。
-
-示例配置：
-
-```yaml
-p2p:
-  registry:
-    mutation_fee:
-      enabled: true
-      method: mpp
-      max_amount_base_units: "10000"
-```
+### 4.1 Raw fetch / cache
 
 客户端行为：
 
-- 如果 Registry 返回 402，client 自动支付并重试。
-- 如果本地未配置可支付 wallet，mutation command 明确失败并提示用户配置 wallet。
-- `max_amount_base_units` 是本地安全上限；Registry quote 超过该值时拒绝自动支付。
-- 查询请求不得自动支付。
+1. 对 `p2p.registry.raw_url` 发起普通 HTTP GET。
+2. 使用 `ETag` / `Last-Modified` 做 conditional request。
+3. 下载后先完整校验，再替换本地 last-known-good cache。
+4. 校验失败时保留旧 cache 并显式告警。
+5. 所有 model / region / pricing / trust policy 查询都在本地完成。
+
+### 4.2 Provider item export
+
+Provider 侧命令只生成文件，不发布到服务：
+
+```bash
+bitrouter p2p registry item export
+bitrouter p2p registry tombstone export
+```
+
+典型流程：
+
+1. CLI 从本地 P2P identity 与 provider config 生成 node item。
+2. CLI 使用 Provider root key 对 canonical JSON 签名。
+3. 运营方把输出文件放入 `bitrouter-registry/registry/v0/nodes/` 并提交 PR。
+4. 修改 node 时提高 `seq` 并重新签名。
+5. shutdown 可以导出 `status: disabled` item 或 signed tombstone。
+
+主仓库不实现 `registry login`、`registry publish`、registry mutation 402 支付或 Registry 服务端 credential 管理。
 
 ---
 
@@ -410,7 +394,7 @@ GET /v1/payments/receipts/{challenge_id}
 | 标识 | 计算 / 来源 | 用途 |
 |---|---|---|
 | `challenge_id` | MPP challenge `id` | lookup key |
-| `receiptHash` | `sha256(JCS(receipt_json))`，表示为 `sha256:<hex>` | 内容完整性、幂等缓存、日志关联 |
+| `receipt_hash` | `sha256(JCS(receipt_json))`，表示为 `sha256:<hex>` | 内容完整性、幂等缓存、日志关联 |
 | `Payment-Receipt-Sig` | Provider `provider_id` 对 `JCS(receipt_json)` 的 ed25519 签名 | 真实性与不可抵赖性 |
 
 数据库表建议：
@@ -439,9 +423,9 @@ Consumer 校验：
 
 1. 解析 body / header 中的 receipt。
 2. 重新计算 `sha256(JCS(receipt_json))`。
-3. 校验 `receipt.challengeId == challenge_id`。
+3. 校验 `receipt.challenge_id == challenge_id`。
 4. 用 Provider snapshot 中的 `provider_id` 验证 `Payment-Receipt-Sig`。
-5. 校验 channelId、settlement amount、status。
+5. 校验 channel_id、settlement amount、status。
 
 ---
 
@@ -452,7 +436,7 @@ Consumer 校验：
 | 0 | `ApiProtocol::P2p`、config schema、feature wiring、禁用 feature 错误 |
 | 1 | `bitrouter-p2p` Consumer adapter |
 | 2 | P2P Provider listener + Direct Leg A |
-| 3 | Registry client + publish/sync CLI + mutation MPP gas fee |
+| 3 | Static Registry raw client + item export/sync/verify CLI |
 | 4 | Tempo localnet + two-node E2E |
 | 5 | Leg B / PGW Control Connection |
 
@@ -471,6 +455,6 @@ Consumer 校验：
 | INT-7 | receipt fallback 使用数据库表持久化 |
 | INT-8 | P2P Provider 复用现有 `LanguageModelRouter`，不复制 provider adapter |
 | INT-9 | P2P payment 复用 `mpp-br` / OWS / Tempo backend |
-| INT-10 | Registry mutation client 支持 MPP gas fee：402 → payment credential → retry mutation |
-| INT-11 | Registry client 不把 gas fee 视为准入；准入逻辑不在 Registry client 内实现 |
+| INT-10 | Registry client 可读取 raw `registry.json`、验证 signature / `valid_until` / status，并本地筛选 endpoint |
+| INT-11 | Provider CLI 可导出 signed node item / tombstone；主仓库不实现 Registry publish API 或 mutation gas fee |
 | INT-12 | `cargo fmt -- --check`、`cargo clippy --all-features`、`cargo test --all-features` 通过 |

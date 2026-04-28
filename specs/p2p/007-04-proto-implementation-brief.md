@@ -87,7 +87,7 @@ Provider 在接受 `AcceptedSessionAction::Open` 后：
 
 1. 调用 `eth_sendRawTransaction`。
 2. 调用 `wait_for_transaction_receipt(tx_hash, 120, 500ms)`。
-3. 如果 receipt 缺失、timeout 或 status=false，返回结构化 `tempo.open_failed`，并在可用时包含 `txHash`。
+3. 如果 receipt 缺失、timeout 或 status=false，返回结构化 `tempo.open_failed`，并在可用时包含 `tx_hash`。
 
 对应代码：`crates/bitrouter-node/src/provider/server.rs` 的 `validate_direct_session_action`。
 

@@ -21,7 +21,7 @@
 - Registry v0：**Provider 名册是一份签入 git 仓库的"快照"集合**——每个 provider 一份 root key 签名的 snapshot，原子替换、自包含、可离线验证。==**v0 中心化 Registry 的语义 = "未上线合约的物化视图"==**；任何 client 都不依赖 Registry 服务的可信性，仅依赖 root sig。详见 §8。
 - 应用协议：在 ALPN `bitrouter/p2p/0` 的 QUIC connection 上跑 **HTTP/3**。每个请求是一条 HTTP/3 request stream。
 - L3 协议版本通过 HTTP 头协商，与 ALPN 解耦——L1 不感知。
-- 计费：v0 全网统一 per-token（即 `scheme: "token"`）。本文只定到"Provider 在 snapshot 中声明每模型的 pricing[] 列表"为止；==**完整 pricing schema（含 protocol / method / intent / methodDetails 等字段、type-first Rust + serde 定义）见 [`004-02 §3.2`](./004-02-payment-protocol.md)；wire-level 预付/结算/退款见 [`005`](005-l3-payment.md)；auth 见 006。**==
+- 计费：v0 全网统一 per-token（即 `scheme: "token"`）。本文只定到"Provider 在 snapshot 中声明每模型的 pricing[] 列表"为止；==**完整 pricing schema（含 protocol / method / intent / method_details 等字段、type-first Rust + serde 定义）见 [`004-02 §3.2`](./004-02-payment-protocol.md)；wire-level 预付/结算/退款见 [`005`](005-l3-payment.md)；auth 见 006。**==
 - 信任：snapshot 由 `provider_id` root key 签名 → 任何节点离线可验。v0 把 git 仓库当 KV 存储，v1+ 把同一 snapshot 模式搬到链上（§8.4）。
 
 ## 1. 范围
@@ -162,7 +162,7 @@ v0 Registry 是 git 仓库里一份手工维护的"snapshot 集合"。==**关键
           "protocol": "mpp",
           "method":   "tempo",
           "currency": "0x20c0000000000000000000000000000000000000",
-          "methodDetails": { "chainId": 4217 },
+          "method_details": { "chain_id": 4217 },
           "intent":   "session",
           "min_increment": "1"
         }
@@ -629,7 +629,7 @@ flowchart TB
 
 ### 1. 支付 / 鉴权类错误 → 402 + MPP
 
-- 触发条件：缺凭据 / 凭据过期 / 余额不足 / 通道未开 / 通道 nonce 反序 / `methodDetails` 不接受 / `(protocol, method, intent, currency)` 未公告 / receipt 校验失败等。
+- 触发条件：缺凭据 / 凭据过期 / 余额不足 / 通道未开 / 通道 nonce 反序 / `method_details` 不接受 / `(protocol, method, intent, currency)` 未公告 / receipt 校验失败等。
 - HTTP 响应：**`402 Payment Required`** + `WWW-Authenticate: Payment ...`（按 [`005 §2`](./005-l3-payment.md) / R8 的 challenge wire 格式：`id` / `realm` / `method` / `intent` / `request` / `expires` / `digest` / `opaque`）。
 - ==同时**禁止**在 body 内塞 RFC 9457 problem+json==——402 永远是 MPP 的语义槽，不与 problem+json 复用。
 - 详细错误代码（如 `protocol_not_offered`、`method_not_offered`、`intent_not_supported_for_scheme`、`currency_not_supported`、`method_details_invalid`、`channel_voucher_invalid`）通过 `WWW-Authenticate` 的 `request` 子对象内的 method-specific error code + 可选 `error_description` 参数表达。

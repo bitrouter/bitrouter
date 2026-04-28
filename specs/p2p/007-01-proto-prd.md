@@ -194,7 +194,7 @@
           "method":   "tempo",
           "currency": "0x20c0000000000000000000000000000000000000",
           "recipient": "0xabcDef0123456789abcDef0123456789abcDef01",
-          "methodDetails": { "chainId": 4217, "feePayer": true },
+          "method_details": { "chain_id": 4217, "fee_payer": true },
           "intent":   "session",
           "min_increment": "0.000001"
         }

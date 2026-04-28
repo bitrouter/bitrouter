@@ -7,7 +7,7 @@
 > 1. 把 `inference payment protocol` 升格为一个**与 LLM 解耦**的、独立的**自动支付 API 协议**：用来让任何"按调用计费、需要随用随付"的 API Provider 公告自己接受哪些自动支付方式。
 > 2. **新的 `scheme`** 专门表达 "API 计费方式"（token / weighted_request / duration / ...），与 x402 的 `scheme` 概念无关。
 > 3. **新的 `method`** 用 `<上游协议>/<上游协议内的 variant>` 命名（如 `mpp/session`、`x402/v2/upto`、`mpp/charge`、`x402/v2/exact`），与 MPP 自身的 `method`（=`tempo`/`stripe`/...）也无关——后者下沉到 `method_details` 里。
-> 4. **彻底干掉"`(scheme, protocol, method, intent, currency, methodDetails identity 子集)` 六元组"做主键**。改用**命名 offers**：每个 offer 是一个自包含、有名字的 bundle，uniqueness 就是 `name` unique。
+> 4. **彻底干掉"`(scheme, protocol, method, intent, currency, method_details identity 子集)` 六元组"做主键**。改用**命名 offers**：每个 offer 是一个自包含、有名字的 bundle，uniqueness 就是 `name` unique。
 > 5. **预留 provider 自定义计费空间**——通过 `scheme = "custom"` + 一个 self-describing 的小 DSL；但不试图覆盖订阅 / 包月这种"非随用随付"模型。
 > 6. **GitHub-Copilot-式 "premium request" 加权计费**用 `weighted_request` scheme 一等公民支持。
 
@@ -17,8 +17,8 @@
 
 `004-02` 的现有 schema 有三个让人不舒服的地方，需要换骨：
 
-1. **6 元组主键** + per-method "identity 子集 of `methodDetails`" 是规范里最丑的角落——既难记、又难写 CI、也无法在 JSON 里直观看出"这两条是同一个 offer 的不同表达还是两条不同的 offer"。
-2. **`protocol` 和 `method` 两个 tag 的语义混杂**：`protocol = "mpp"` + `method = "tempo"` + `intent = "session"`，但 MPP 自己的"method"概念是支付通道（tempo / stripe / lightning），跟 BitRouter 公告里的"method"是同一个词同一个意思——而我们想让 `method` 成为一个**协议层抽象**（"这是 mpp/session 还是 x402/upto"），把"tempo / stripe"压回 `methodDetails`。
+1. **6 元组主键** + per-method "identity 子集 of `method_details`" 是规范里最丑的角落——既难记、又难写 CI、也无法在 JSON 里直观看出"这两条是同一个 offer 的不同表达还是两条不同的 offer"。
+2. **`protocol` 和 `method` 两个 tag 的语义混杂**：`protocol = "mpp"` + `method = "tempo"` + `intent = "session"`，但 MPP 自己的"method"概念是支付通道（tempo / stripe / lightning），跟 BitRouter 公告里的"method"是同一个词同一个意思——而我们想让 `method` 成为一个**协议层抽象**（"这是 mpp/session 还是 x402/upto"），把"tempo / stripe"压回 `method_details`。
 3. **跟 LLM 推理强耦合**：`Scheme::Token` / Token-only-session 规则、`models[].pricing`、"Solana session 不存在 → 整个 token-based 不可用"……这些都是把"LLM 计费的特殊性"硬编进了协议核心。Embeddings、TTS、image gen、未来的 vector search、agent tool calls，全都需要近似的 "API + 自动支付" 协议，没必要每个垂直领域重新发明一套。
 
 新协议要做的是：**把"按调用计费 + 自动支付"这件事从 LLM 中抽出来，做成一个最小、可扩展、好看的协议**，让 LLM 推理只是它的第一个落地场景。
@@ -95,7 +95,7 @@ AAP 把"一次付费 API 调用"拆成三个完全正交的层：
 | `method` 字段                           | `"tempo"` / `"stripe"`（=MPP 内部 method） | `"mpp/session"` / `"x402/v2/upto"` 等 |
 | `intent` 字段                           | `"session"` / `"charge"`               | **删除**——并入 `method`                  |
 | MPP 内部 method（tempo/stripe/lightning） | 是 top-level tag                        | 沉到 `method_details.mpp_method`       |
-| chain ID / network ID 等               | 散落 `methodDetails`                     | 仍在 `method_details`（rail-specific）   |
+| chain ID / network ID 等               | 散落 `method_details`                     | 仍在 `method_details`（rail-specific）   |
 
 ### 3.2 新 method 命名空间
 
@@ -206,7 +206,7 @@ offers:
 |---|---|
 | 6 元组主键，per-method identity 子集 | 单字段 `name` unique，CI 一行 `assert_unique(o.name for o in offers)` |
 | `(protocol, method, intent)` 三段拼 | `rail.method` 一段字符串 |
-| `methodDetails` 既是配置又是主键 | `method_details` **只**是配置，主键是 `name` |
+| `method_details` 既是配置又是主键 | `method_details` **只**是配置，主键是 `name` |
 | `currency` 揉在 rail 里，跨 rail 表达困难 | `currency` 升级为顶层字段，跟 rail 平级 |
 | Token-only-session 规则需要扫所有 entry | Token-only-`<某些 method>` 规则在 `scheme: token` 校验时直接 lookup `rail.method` 是否在 streaming-capable 集合内 |
 | "同 model 多 entry 但其实是同一个 offer 的不同 quote" 不可能 | 可以为同一 offer 给多个名字（如果有需要）；或一个 name 一个 offer 一目了然 |
@@ -412,7 +412,7 @@ Wire 层（payment-wire-spec）规定 receipt 里必须返回 `consumed: { metri
 -     "method":   "tempo",
 -     "currency": "0x20c0000000000000000000000000000000000000",
 -     "recipient": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
--     "methodDetails": { "chainId": 4217, "feePayer": true },
+-     "method_details": { "chain_id": 4217, "fee_payer": true },
 -     "intent":   "session",
 -     "min_increment": "0.000001"
 -   }
@@ -438,9 +438,9 @@ Wire 层（payment-wire-spec）规定 receipt 里必须返回 `consumed: { metri
 
 ### 8.1 不再 1:1 镜像 MPP wire 字段名
 
-旧规范追求 `currency` / `recipient` / `methodDetails` 等字段名"零拷贝塞进 MPP wire"。AAP 放弃这条原则，因为：
+旧规范追求 `currency` / `recipient` / `method_details` 等字段名"零拷贝塞进 MPP wire"。AAP 放弃这条原则，因为：
 
-- AAP 是**多协议**的（MPP 只是其中之一），强行让 AAP 字段名跟某一个上游对齐，反而会跟其他上游（x402）冲突（x402 用 `network` / `asset` / `payTo`）。
+- AAP 是**多协议**的（MPP 只是其中之一），强行让 AAP 字段名跟某一个上游对齐，反而会跟其他上游（x402）冲突（x402 用 `network` / `asset` / `pay_to`）。
 - "零拷贝"本来就只是一个 `serde_json::to_value(...)` 调用的开销，不重要。
 - AAP 引入了 `rail` 抽象——MPP-side 的字段全部归入 `rail.method_details` 子对象，与 x402-side 的字段在结构上隔离。这本身就是一种 namespace。
 
@@ -593,7 +593,7 @@ LLM 推理 specifically 的内容（"为什么 token 必须 streaming"、"Solana
 | 范围 | HTTP 单次请求级支付 | API 公告 + 自动支付协商 |
 | 计费模型 | `exact` / `upto` 两种金额上限模型 | 完整的 `scheme` 系列（token/weighted/duration/...） |
 | 支付协议 | 内置的 EVM "exact"/"upto" + 可扩展 | 通过 `rail.method` 引用任意上游协议（含 x402 自身） |
-| 数据 envelope | `paymentRequirements` 数组 | `offers[]` named bundle |
+| 数据 envelope | `payment_requirements` 数组 | `offers[]` named bundle |
 | `scheme` 含义 | 支付协议的 variant（`exact` / `upto`）| API 计费方式（`token` / `request` / ...） |
 | Wire 形态 | `WWW-Authenticate: x-payment-required` | 委托给 `rail` spec（多协议） |
 
