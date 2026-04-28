@@ -82,6 +82,7 @@ pub fn to_call_options(request: ResponsesRequest) -> LanguageModelCallOptions {
         abort_signal: None,
         headers: None,
         provider_options: None,
+        trace_context: None,
     }
 }
 

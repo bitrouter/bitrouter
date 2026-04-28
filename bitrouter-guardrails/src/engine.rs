@@ -1011,6 +1011,7 @@ mod tests {
             abort_signal: None,
             headers: None,
             provider_options: None,
+            trace_context: None,
         }
     }
 }

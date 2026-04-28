@@ -15,6 +15,7 @@ use bitrouter_core::{
 };
 
 use crate::router::context::openai_chat;
+use crate::router::session;
 use warp::Filter;
 
 use crate::error::{BadRequest, BitrouterRejection};
@@ -84,6 +85,7 @@ where
 {
     warp::path!("v1" / "chat" / "completions")
         .and(warp::post())
+        .and(warp::header::headers_cloned())
         .and(crate::body::json::<ChatCompletionRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
@@ -493,6 +495,7 @@ where
 }
 
 async fn handle_chat_completion_with_observe<T, R>(
+    headers: warp::http::HeaderMap,
     request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
@@ -531,7 +534,9 @@ where
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
     let model_id = model.model_id().to_owned();
-    let options = convert::to_call_options(request);
+    let trace_context = session::extract_trace_context(&headers, caller.account_id.clone());
+    let mut options = convert::to_call_options(request);
+    options.trace_context = trace_context;
     let start = Instant::now();
 
     if is_stream {

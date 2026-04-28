@@ -14,6 +14,7 @@ use crate::registry::{
     builtin_agent_defs, builtin_providers, builtin_tool_provider_defs, merge_provider,
     resolve_providers,
 };
+use crate::telemetry::TelemetryConfig;
 
 fn default_true() -> bool {
     true
@@ -88,6 +89,14 @@ pub struct BitrouterConfig {
     /// defined in the `models` section.
     #[serde(default)]
     pub routing: HashMap<String, RoutingRuleConfig>,
+
+    /// OpenTelemetry GenAI export configuration.
+    ///
+    /// When absent or with no destinations, the telemetry exporter is
+    /// fully inactive. There is no implicit "default-on" for cloud users
+    /// in v1 — opt-in only. See [`crate::telemetry`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<TelemetryConfig>,
 }
 
 impl BitrouterConfig {
@@ -1329,6 +1338,88 @@ providers:
                 Some("https://github.com/login/oauth/access_token")
             );
         }
+    }
+
+    #[test]
+    fn load_with_telemetry_block() {
+        let yaml = r#"
+telemetry:
+  capture_tier: capture
+  destinations:
+    - name: bitrouter-cloud
+      endpoint: "https://console.bitrouter.io/otlp/v1/traces"
+      headers:
+        authorization: "Bearer test-token"
+      sampling:
+        rate: 0.5
+        by: "gen_ai.conversation.id"
+    - name: honeycomb
+      endpoint: "https://api.honeycomb.io/v1/traces"
+      sampling:
+        rate: 0.1
+      redact:
+        - "gen_ai.input.messages"
+        - "gen_ai.output.messages"
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        let tel = config.telemetry.as_ref().expect("telemetry missing");
+        assert_eq!(tel.capture_tier, crate::telemetry::CaptureTier::Capture);
+        assert_eq!(tel.destinations.len(), 2);
+
+        let cloud = &tel.destinations[0];
+        assert_eq!(cloud.name, "bitrouter-cloud");
+        assert_eq!(
+            cloud.endpoint,
+            "https://console.bitrouter.io/otlp/v1/traces"
+        );
+        assert_eq!(
+            cloud
+                .headers
+                .as_ref()
+                .unwrap()
+                .get("authorization")
+                .unwrap(),
+            "Bearer test-token"
+        );
+        assert!((cloud.sampling.rate - 0.5).abs() < f64::EPSILON);
+
+        let hc = &tel.destinations[1];
+        assert_eq!(hc.name, "honeycomb");
+        assert!((hc.sampling.rate - 0.1).abs() < f64::EPSILON);
+        assert_eq!(hc.redact.len(), 2);
+        assert!(hc.headers.is_none());
+
+        // Validation passes — `capture` tier needs no env gate.
+        tel.validate_with_audit_gate(false).unwrap();
+    }
+
+    #[test]
+    fn load_telemetry_substitutes_env_var_in_token() {
+        // Verify the existing ${VAR} interpolation runs over telemetry strings too.
+        let yaml = r#"
+telemetry:
+  destinations:
+    - name: cloud
+      endpoint: "https://example.com/v1/traces"
+      headers:
+        authorization: "Bearer ${TELEMETRY_TEST_TOKEN}"
+"#;
+        // load_env() reads .env then process env; pre-set the var in this process.
+        // SAFETY: env var mutation is racy across threads; this var name is unique
+        // to this test so it doesn't conflict with other tests.
+        unsafe { std::env::set_var("TELEMETRY_TEST_TOKEN", "abc123") };
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        unsafe { std::env::remove_var("TELEMETRY_TEST_TOKEN") };
+        let tel = config.telemetry.as_ref().unwrap();
+        assert_eq!(
+            tel.destinations[0]
+                .headers
+                .as_ref()
+                .unwrap()
+                .get("authorization")
+                .unwrap(),
+            "Bearer abc123"
+        );
     }
 
     #[test]

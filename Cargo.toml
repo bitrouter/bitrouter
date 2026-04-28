@@ -16,6 +16,15 @@ bitrouter-observe = { path = "bitrouter-observe", version = "0.27", default-feat
 bitrouter-providers = { path = "bitrouter-providers", version = "0.27" }
 bitrouter-tui = { path = "bitrouter-tui", version = "0.27" }
 
+# OpenTelemetry — used by the optional `bitrouter-observe/otlp` feature.
+# Pinned at the workspace level so the SDK version stays in lockstep across
+# crates that consume telemetry types. The actual exporter wiring (HTTP
+# transport, BatchSpanProcessor) lands in a follow-up commit.
+opentelemetry = { version = "0.27", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.27", default-features = false, features = ["trace", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["http-proto", "reqwest-client", "trace"] }
+opentelemetry-semantic-conventions = { version = "0.27" }
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
