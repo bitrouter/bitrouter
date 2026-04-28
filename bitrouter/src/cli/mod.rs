@@ -8,6 +8,8 @@ pub mod cloud_auth;
 pub mod cloud_credentials;
 pub mod key;
 pub mod models;
+#[cfg(feature = "p2p")]
+pub mod p2p;
 pub mod policy;
 pub mod route;
 pub mod tools;

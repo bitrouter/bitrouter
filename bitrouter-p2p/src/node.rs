@@ -14,6 +14,8 @@ use tracing::{debug, info, warn};
 use crate::identity_store::{IdentityStoreError, load_or_create_secret_key};
 use crate::primitives::types::ALPN_DIRECT;
 
+pub type PeerAddr = NodeAddr;
+
 #[derive(Debug, Clone)]
 pub struct P2pConfig {
     pub data_dir: PathBuf,
@@ -177,6 +179,25 @@ impl P2pNode {
 
     pub async fn node_addr(&self) -> NodeAddr {
         self.endpoint.node_addr().initialized().await
+    }
+
+    pub async fn relay_node_addr(&self) -> Option<NodeAddr> {
+        let mut home_relay = self.endpoint.home_relay();
+        for _ in 0..40 {
+            if let Some(relay) = home_relay.get().into_iter().next() {
+                return Some(NodeAddr::from_parts(
+                    self.endpoint.node_id(),
+                    Some(relay),
+                    std::iter::empty(),
+                ));
+            }
+            match timeout(Duration::from_millis(250), home_relay.updated()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) => return None,
+                Err(_) => {}
+            }
+        }
+        None
     }
 
     pub async fn connect_addr(&self, addr: NodeAddr) -> Result<P2pConnection, ConnectError> {

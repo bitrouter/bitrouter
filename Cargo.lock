@@ -1645,6 +1645,7 @@ dependencies = [
  "bitrouter-core",
  "bitrouter-guardrails",
  "bitrouter-observe",
+ "bitrouter-p2p",
  "bitrouter-providers",
  "bitrouter-tui",
  "bs58",
