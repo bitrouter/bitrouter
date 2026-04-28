@@ -74,6 +74,12 @@ pub struct BitrouterConfig {
     #[serde(default)]
     pub agents: HashMap<String, AgentConfig>,
 
+    /// Optional override for the ACP registry URL.  When unset, consumers
+    /// fall back to the `BITROUTER_ACP_REGISTRY_URL` environment variable,
+    /// then to [`crate::acp::DEFAULT_REGISTRY_URL`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp_registry_url: Option<String>,
+
     /// Content-based auto-routing rules.
     ///
     /// Each key is a virtual model name (e.g. `"auto"`) that triggers
@@ -257,7 +263,8 @@ pub struct AgentSessionConfig {
     pub idle_timeout_secs: u64,
 
     /// Maximum number of concurrent sessions for this agent.
-    /// Default: 1.
+    /// Default: 8 — covers the multi-session TUI use case while
+    /// still bounding fork bombs from runaway code.
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: usize,
 }
@@ -267,7 +274,7 @@ fn default_idle_timeout_secs() -> u64 {
 }
 
 fn default_max_concurrent() -> usize {
-    1
+    8
 }
 
 impl Default for AgentSessionConfig {

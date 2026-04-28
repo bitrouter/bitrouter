@@ -4,23 +4,26 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState,
-};
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
+use crate::TuiConfig;
 use crate::app::{AppState, InputMode};
-use crate::model::{AgentStatus, RenderContext, Renderable};
+use crate::model::{AutocompleteKind, AutocompleteState, PickerState, RenderContext, Renderable};
 
 const PROMPT_PREFIX: &str = "› ";
 
+/// How many autocomplete candidates we render inline at once. The
+/// cursor row is kept inside the window — extra candidates scroll.
+const AUTOCOMPLETE_INLINE_ROWS: usize = 8;
+
+/// How many picker items we render inline at once. Same scrolling
+/// rule as autocomplete.
+const PICKER_INLINE_ROWS: usize = 12;
+
 pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
-    // Agent mode: render inline agent list instead of scrollback.
-    if state.mode == InputMode::Agent {
-        render_agent_list(frame, state, area);
+    if area.width == 0 || area.height == 0 {
         return;
     }
-
     let width = area.width;
     let ctx = build_render_context(state);
 
@@ -28,42 +31,20 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
         .active_scrollback()
         .is_some_and(|sb| !sb.entries.is_empty());
 
-    // Empty-state hints (rendered directly, no caching needed).
-    let mut empty_lines: Vec<Line> = Vec::new();
-    if !has_scrollback && state.input.is_empty() && state.tabs.is_empty() {
-        let half = area.height / 2;
-        for _ in 0..half {
-            empty_lines.push(Line::raw(""));
-        }
-        empty_lines.push(Line::from(Span::styled(
-            "  Type a message to start — use @agent to address a specific agent",
-            Style::default().fg(Color::DarkGray),
-        )));
-        empty_lines.push(Line::from(Span::styled(
-            "  Press Alt+A to connect an agent",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else if !has_scrollback && state.input.is_empty() {
-        let half = area.height / 2;
-        for _ in 0..half {
-            empty_lines.push(Line::raw(""));
-        }
-        let agent_name = state.active_agent_name().unwrap_or("agent");
-        empty_lines.push(Line::from(Span::styled(
-            format!("  Connected to {agent_name} — type a message to start"),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
+    // Empty-state hints render at the top of the region.
+    let empty_lines = build_empty_lines(state, has_scrollback);
 
-    // Fill line-count cache for all entries.
+    // Autocomplete / picker overlay. Rendered inline between the
+    // entries and the prompt block — same flow as messages, no
+    // floating bordered popup. (Codex's slash-autocomplete style.)
+    let overlay_lines = build_overlay_lines(state);
+
     if let Some(sb) = state.active_scrollback_mut() {
-        // Invalidate all on width change.
         if sb.cached_width != width {
             sb.invalidate_all();
             sb.cached_width = width;
         }
 
-        // Fill uncached slots.
         for i in 0..sb.entries.len() {
             if sb.line_counts.get(i).copied().flatten().is_none() {
                 let count = sb.entries[i]
@@ -77,13 +58,10 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
         }
 
         let total_entry_lines = sb.rebuild_offsets();
-
-        // Prompt lines.
         let prompt_lines = prompt_line_count(state);
-        let total = empty_lines.len() + total_entry_lines + prompt_lines;
+        let total = empty_lines.len() + total_entry_lines + overlay_lines.len() + prompt_lines;
         let visible = area.height as usize;
 
-        // Update total_rendered_lines and clamp scroll.
         if let Some(sb) = state.active_scrollback_mut() {
             sb.total_rendered_lines = total;
             let max_scroll = total.saturating_sub(visible);
@@ -95,7 +73,6 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
         }
     }
 
-    // Now build the visible lines using viewport math.
     let visible = area.height as usize;
     let scroll_offset = state
         .active_scrollback()
@@ -104,18 +81,18 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Figure out what's visible: empty_lines first, then entries, then prompt.
     let empty_count = empty_lines.len();
     let entry_total = state
         .active_scrollback()
         .map(|sb| sb.line_offsets.last().copied().unwrap_or(0))
         .unwrap_or(0);
+    let overlay_count = overlay_lines.len();
+    let prompt_count = prompt_line_count(state);
 
-    // Viewport range in the global line space.
     let vp_start = scroll_offset;
     let vp_end = scroll_offset + visible;
 
-    // 1. Empty-state lines (if visible).
+    // 1. Empty-state lines.
     if !empty_lines.is_empty() && vp_start < empty_count {
         let start = vp_start;
         let end = vp_end.min(empty_count);
@@ -125,7 +102,6 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
     // 2. Entry lines (viewport-aware).
     if entry_total > 0 {
         let entry_global_start = empty_count;
-        // Only render entries overlapping the viewport.
         if vp_end > entry_global_start && vp_start < entry_global_start + entry_total {
             let local_vp_start = vp_start.saturating_sub(entry_global_start);
             let local_vp_end = (vp_end - entry_global_start).min(entry_total);
@@ -139,14 +115,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
                     if let Some(entry) = sb.entries.get(entry_idx) {
                         let mut entry_lines = entry.kind.render_lines(width, entry.collapsed, &ctx);
 
-                        // Apply scroll cursor highlight.
                         if scroll_cursor == Some(entry_idx) {
                             apply_cursor_highlight(&mut entry_lines);
                         }
 
                         let entry_start = sb.line_offsets.get(entry_idx).copied().unwrap_or(0);
 
-                        // Clip entry lines to viewport.
                         let skip = local_vp_start.saturating_sub(entry_start);
                         let take = local_vp_end.saturating_sub(entry_start.max(local_vp_start));
                         lines.extend(entry_lines.into_iter().skip(skip).take(take));
@@ -156,11 +130,26 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
         }
     }
 
-    // 3. Inline prompt lines.
-    let prompt_global_start = empty_count + entry_total;
+    // 3. Inline overlay (autocomplete or picker).
+    if !overlay_lines.is_empty() {
+        let overlay_global_start = empty_count + entry_total;
+        if vp_end > overlay_global_start && vp_start < overlay_global_start + overlay_count {
+            let local_start = vp_start.saturating_sub(overlay_global_start);
+            let local_end = (vp_end - overlay_global_start).min(overlay_count);
+            lines.extend(
+                overlay_lines
+                    .into_iter()
+                    .skip(local_start)
+                    .take(local_end - local_start),
+            );
+        }
+    }
+
+    // 4. Inline prompt — floats below content.
+    let prompt_global_start = empty_count + entry_total + overlay_count;
     if vp_end > prompt_global_start {
         let mut prompt_lines_vec: Vec<Line> = Vec::new();
-        render_inline_prompt(state, &mut prompt_lines_vec);
+        render_inline_prompt(state, &mut prompt_lines_vec, width);
         let local_start = vp_start.saturating_sub(prompt_global_start);
         let local_end = (vp_end - prompt_global_start).min(prompt_lines_vec.len());
         if local_start < local_end {
@@ -176,13 +165,14 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let para = Paragraph::new(lines);
     frame.render_widget(para, area);
 
-    // Cursor positioning for inline input.
+    // Cursor: 3 prompt header rows (blank + cwd + divider) precede
+    // the input rows.
     if state.mode == InputMode::Normal {
-        let total = empty_count + entry_total + prompt_line_count(state);
-        let prompt_start_line = total.saturating_sub(prompt_line_count(state));
-        let cursor_line = prompt_start_line + state.input.cursor.0;
+        let total = empty_count + entry_total + overlay_count + prompt_count;
+        let prompt_start_line = total.saturating_sub(prompt_count);
+        let cursor_line = prompt_start_line + 3 + state.input.cursor.0;
         let cursor_col = if state.input.cursor.0 == 0 {
-            PROMPT_PREFIX.len() + state.input.cursor.1
+            PROMPT_PREFIX.chars().count() + state.input.cursor.1
         } else {
             2 + state.input.cursor.1
         };
@@ -196,8 +186,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
         }
     }
 
-    // Scrollbar.
-    let total = empty_count + entry_total + prompt_line_count(state);
+    let total = empty_count + entry_total + overlay_count + prompt_count;
     let max_scroll = total.saturating_sub(visible);
     if max_scroll > 0 {
         let mut scroll_state = ScrollbarState::new(max_scroll).position(scroll_offset);
@@ -210,25 +199,200 @@ pub fn render(frame: &mut Frame, state: &mut AppState, area: Rect) {
         );
         frame.render_stateful_widget(scrollbar, sb_area, &mut scroll_state);
     }
-
-    // Autocomplete popup.
-    render_autocomplete(frame, state, area);
 }
 
-/// Returns (first_entry_idx, last_entry_idx_exclusive) that overlap the viewport.
+fn build_empty_lines(state: &AppState, has_scrollback: bool) -> Vec<Line<'static>> {
+    let mut empty_lines: Vec<Line<'static>> = Vec::new();
+    if has_scrollback {
+        return empty_lines;
+    }
+    if state.session_store.active.is_empty() {
+        empty_lines.push(Line::raw(""));
+        empty_lines.push(Line::from(Span::styled(
+            "  Welcome to BitRouter.",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )));
+        empty_lines.push(Line::raw(""));
+        empty_lines.push(Line::from(Span::styled(
+            "  Try:",
+            Style::default().fg(Color::DarkGray),
+        )));
+        empty_lines.push(Line::from(Span::styled(
+            "    /session new   — spawn a session (opens agent picker)",
+            Style::default().fg(Color::DarkGray),
+        )));
+        empty_lines.push(Line::from(Span::styled(
+            "    /agents        — see what's installed / available",
+            Style::default().fg(Color::DarkGray),
+        )));
+        empty_lines.push(Line::from(Span::styled(
+            "    /help          — full command reference",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        let agent_name = state.active_agent_name().unwrap_or("agent");
+        empty_lines.push(Line::raw(""));
+        empty_lines.push(Line::from(Span::styled(
+            format!("  Connected to {agent_name} — type a message to start"),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    empty_lines
+}
+
+/// Render the active autocomplete or picker as inline rows, to be
+/// placed between the entries and the prompt block. Returns an empty
+/// vec when neither is active. Both look like ordinary scrollback
+/// content — no border, no `Clear`.
+fn build_overlay_lines(state: &AppState) -> Vec<Line<'static>> {
+    if state.mode == InputMode::Picker
+        && let Some(picker) = &state.picker
+    {
+        return render_picker_inline(picker);
+    }
+    if state.mode == InputMode::Normal
+        && let Some(ac) = &state.autocomplete
+        && !ac.candidates.is_empty()
+    {
+        return render_autocomplete_inline(ac);
+    }
+    Vec::new()
+}
+
+fn render_autocomplete_inline(ac: &AutocompleteState) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let total = ac.candidates.len();
+    let visible = AUTOCOMPLETE_INLINE_ROWS.min(total);
+    let start = window_start(ac.selected, visible, total);
+    let end = (start + visible).min(total);
+
+    lines.push(Line::raw(""));
+    for i in start..end {
+        let cand = &ac.candidates[i];
+        let selected = i == ac.selected;
+        let marker = if selected { "▸ " } else { "  " };
+        let value_style = if selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let head = match ac.kind {
+            AutocompleteKind::AtMention => format!("  {marker}@{}", cand.value),
+            AutocompleteKind::SlashCommand => format!("  {marker}{}", cand.value),
+        };
+        let mut spans = vec![Span::styled(head, value_style)];
+        if let Some(desc) = &cand.description {
+            spans.push(Span::styled(
+                format!("  {desc}"),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
+fn render_picker_inline(picker: &PickerState) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let total = picker.items.len();
+    let visible = PICKER_INLINE_ROWS.min(total);
+    let start = window_start(picker.cursor, visible, total);
+    let end = (start + visible).min(total);
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", picker.title),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    for i in start..end {
+        let item = &picker.items[i];
+        let cursor_marker = if i == picker.cursor && item.selectable {
+            "▸ "
+        } else {
+            "  "
+        };
+        let checkbox = if picker.multiselect && item.selectable {
+            if picker.selected.contains(&i) {
+                "[x] "
+            } else {
+                "[ ] "
+            }
+        } else {
+            ""
+        };
+        let label_style = if !item.selectable {
+            Style::default().fg(Color::DarkGray)
+        } else if i == picker.cursor {
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let mut spans: Vec<Span<'static>> = vec![
+            Span::raw("  "),
+            Span::styled(cursor_marker, Style::default().fg(Color::Cyan)),
+            Span::styled(
+                checkbox.to_string(),
+                if picker.multiselect && picker.selected.contains(&i) {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ),
+            Span::styled(item.label.clone(), label_style),
+        ];
+        if let Some(sub) = &item.subtitle {
+            spans.push(Span::styled(
+                format!("  {sub}"),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let hint = if picker.multiselect {
+        "  ↑↓ select · Space toggle · Enter confirm · Esc cancel"
+    } else {
+        "  ↑↓ select · Enter confirm · Esc cancel"
+    };
+    lines.push(Line::from(Span::styled(
+        hint,
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
+/// Pick the start of a `visible`-sized window over `total` items so
+/// `cursor` is roughly centered. Returns 0 when everything fits.
+fn window_start(cursor: usize, visible: usize, total: usize) -> usize {
+    if total <= visible || cursor < visible / 2 {
+        0
+    } else if cursor + visible / 2 >= total {
+        total.saturating_sub(visible)
+    } else {
+        cursor.saturating_sub(visible / 2)
+    }
+}
+
 fn visible_entry_range(line_offsets: &[usize], vp_start: usize, vp_end: usize) -> (usize, usize) {
     if line_offsets.len() < 2 {
         return (0, 0);
     }
     let entry_count = line_offsets.len() - 1;
 
-    // First visible entry: last entry whose offset <= vp_start.
     let first = line_offsets
         .partition_point(|&o| o <= vp_start)
         .saturating_sub(1)
         .min(entry_count.saturating_sub(1));
 
-    // Last visible entry: first entry whose offset >= vp_end.
     let last = line_offsets
         .partition_point(|&o| o < vp_end)
         .min(entry_count);
@@ -236,7 +400,6 @@ fn visible_entry_range(line_offsets: &[usize], vp_start: usize, vp_end: usize) -
     (first, last)
 }
 
-/// Apply a visual highlight to the first line of the cursor entry.
 fn apply_cursor_highlight(lines: &mut [Line<'static>]) {
     if let Some(first_line) = lines.first_mut() {
         let mut new_spans = vec![Span::styled(
@@ -250,10 +413,19 @@ fn apply_cursor_highlight(lines: &mut [Line<'static>]) {
     }
 }
 
-fn render_inline_prompt(state: &AppState, lines: &mut Vec<Line<'static>>) {
-    let input_lines = &state.input.lines;
-    let focused = state.mode == InputMode::Normal;
+fn render_inline_prompt(state: &AppState, lines: &mut Vec<Line<'static>>, width: u16) {
+    let cwd = format_cwd(&state.config);
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {cwd}"),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        "─".repeat(width as usize),
+        Style::default().fg(Color::DarkGray),
+    )));
 
+    let focused = state.mode == InputMode::Normal;
     let prompt_style = if focused {
         Style::default()
             .fg(Color::Cyan)
@@ -262,7 +434,7 @@ fn render_inline_prompt(state: &AppState, lines: &mut Vec<Line<'static>>) {
         Style::default().fg(Color::DarkGray)
     };
 
-    for (i, line) in input_lines.iter().enumerate() {
+    for (i, line) in state.input.lines.iter().enumerate() {
         if i == 0 {
             lines.push(Line::from(vec![
                 Span::styled(PROMPT_PREFIX.to_string(), prompt_style),
@@ -274,207 +446,24 @@ fn render_inline_prompt(state: &AppState, lines: &mut Vec<Line<'static>>) {
     }
 }
 
+/// Total rows the inline prompt block occupies: 1 blank spacer + 1
+/// cwd label + 1 divider + N input rows.
 fn prompt_line_count(state: &AppState) -> usize {
-    state.input.lines.len()
+    3 + state.input.lines.len()
 }
 
-fn render_autocomplete(frame: &mut Frame, state: &AppState, area: Rect) {
-    let ac = match &state.autocomplete {
-        Some(ac) if state.mode == InputMode::Normal && !ac.candidates.is_empty() => ac,
-        _ => return,
-    };
-
-    let popup_height = (ac.candidates.len() as u16 + 2).min(8);
-    let popup_width = 24u16.min(area.width);
-
-    // Anchor above the prompt (bottom of scrollback area).
-    let popup_y = (area.y + area.height)
-        .saturating_sub(prompt_line_count(state) as u16)
-        .saturating_sub(popup_height);
-    let popup_x = area.x + PROMPT_PREFIX.len() as u16;
-    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
-
-    let items: Vec<ListItem> = ac
-        .candidates
-        .iter()
-        .enumerate()
-        .map(|(i, name)| {
-            let style = if i == ac.selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let marker = if i == ac.selected { "▸ " } else { "  " };
-            ListItem::new(Line::from(Span::styled(format!("{marker}@{name}"), style)))
-        })
-        .collect();
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("@mention"),
-    );
-
-    frame.render_widget(Clear, popup_area);
-    frame.render_widget(list, popup_area);
-}
-
-fn render_agent_list(frame: &mut Frame, state: &AppState, area: Rect) {
-    let mut lines: Vec<Line> = Vec::new();
-
-    lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled(
-        "  Agents",
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  ─────────────────────────────────────────────",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    // Partition agents into tiers for display (keeping original indices for selection).
-    let connected: Vec<usize> = state
-        .agents
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| {
-            matches!(
-                a.status,
-                AgentStatus::Connected | AgentStatus::Busy | AgentStatus::Connecting
-            )
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    let installed: Vec<usize> = state
-        .agents
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| matches!(a.status, AgentStatus::Idle | AgentStatus::Error(_)))
-        .map(|(i, _)| i)
-        .collect();
-
-    let available: Vec<usize> = state
-        .agents
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| {
-            matches!(
-                a.status,
-                AgentStatus::Available | AgentStatus::Installing { .. }
-            )
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    if !connected.is_empty() {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(Span::styled(
-            "  CONNECTED",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for &i in &connected {
-            render_agent_row(&mut lines, state, i);
+fn format_cwd(_config: &TuiConfig) -> String {
+    use std::path::PathBuf;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Ok(home) = std::env::var("HOME")
+        && let Ok(stripped) = cwd.strip_prefix(&home)
+    {
+        if stripped.as_os_str().is_empty() {
+            return "~".to_string();
         }
+        return format!("~/{}", stripped.display());
     }
-
-    if !installed.is_empty() {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(Span::styled(
-            "  INSTALLED",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for &i in &installed {
-            render_agent_row(&mut lines, state, i);
-        }
-    }
-
-    if !available.is_empty() {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(Span::styled(
-            "  AVAILABLE",
-            Style::default()
-                .fg(Color::Blue)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for &i in &available {
-            render_agent_row(&mut lines, state, i);
-        }
-    }
-
-    if state.agents.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  No agents discovered. Ensure an ACP agent is on PATH.",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    let para = Paragraph::new(lines);
-    frame.render_widget(para, area);
-}
-
-fn render_agent_row(lines: &mut Vec<Line>, state: &AppState, i: usize) {
-    let agent = &state.agents[i];
-    let is_selected = i == state.agent_list_selected;
-    let marker = if is_selected { "▸" } else { " " };
-
-    let (status_str, status_color) = match &agent.status {
-        AgentStatus::Idle => ("disconnected", Color::DarkGray),
-        AgentStatus::Available => ("available", Color::Blue),
-        AgentStatus::Installing { .. } => ("installing", Color::Cyan),
-        AgentStatus::Connecting => ("connecting", Color::Cyan),
-        AgentStatus::Connected => ("connected", Color::Green),
-        AgentStatus::Busy => ("busy", Color::Yellow),
-        AgentStatus::Error(_) => ("error", Color::Red),
-    };
-
-    // Build a more descriptive status for Installing.
-    let status_display = if let AgentStatus::Installing { percent } = &agent.status {
-        format!("installing {percent}%")
-    } else {
-        status_str.to_string()
-    };
-
-    let session_str = agent
-        .session_id
-        .as_ref()
-        .map(|s| {
-            if s.len() > 12 {
-                format!("session: {}…", &s[..12])
-            } else {
-                format!("session: {s}")
-            }
-        })
-        .unwrap_or_default();
-
-    let has_tab = state.tabs.iter().any(|t| t.agent_name == agent.name);
-    let tab_indicator = if has_tab { " [tab]" } else { "" };
-
-    let row_style = if is_selected {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default()
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(format!("  {marker} "), row_style),
-        Span::styled(format!("{:<14}", agent.name), row_style.fg(agent.color)),
-        Span::styled(
-            format!(" {:<16}", status_display),
-            row_style.fg(status_color),
-        ),
-        Span::styled(format!(" {session_str}"), row_style.fg(Color::DarkGray)),
-        Span::styled(tab_indicator, row_style.fg(Color::Cyan)),
-    ]));
+    cwd.display().to_string()
 }
 
 fn build_render_context(state: &AppState) -> RenderContext {

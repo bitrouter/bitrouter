@@ -2,32 +2,32 @@ use bitrouter_core::agents::event::{
     PermissionOutcome, PermissionRequest, PermissionRequestId, PermissionResponse,
 };
 use bitrouter_providers::acp::discovery::discover_agents;
-use bitrouter_providers::acp::provider::AcpAgentProvider;
 use bitrouter_providers::acp::types::AgentAvailability;
 use tokio::sync::mpsc;
 
 use crate::event::AppEvent;
-use crate::model::{ActivityEntry, AgentStatus, EntryKind, PermissionEntry, TabBadge, agent_color};
+use crate::model::{
+    ActivityEntry, AgentStatus, EntryKind, PermissionEntry, SessionBadge, SessionId, SessionStatus,
+    agent_color,
+};
 
 use super::helpers::{PermissionChoice, needs_binary_install};
 use super::{App, InputMode};
 
 impl App {
+    /// User chose an agent to spin up. Always creates a fresh session
+    /// (multiple sessions per agent are allowed). Reuses the existing
+    /// provider if one is already live.
     pub(super) fn connect_agent(&mut self, agent_id: &str) {
-        if self.agent_providers.contains_key(agent_id) {
-            return; // Already connected or connecting.
-        }
-
         let agent = match self.state.agents.iter_mut().find(|a| a.name == agent_id) {
             Some(a) => a,
             None => return,
         };
 
-        // Don't interrupt an install or connection already in progress.
-        if matches!(
-            agent.status,
-            AgentStatus::Connecting | AgentStatus::Installing { .. }
-        ) {
+        // Don't kick off a fresh install/connect for the agent itself
+        // while one is already in progress (any session would inherit
+        // the same provider once it lands).
+        if matches!(agent.status, AgentStatus::Installing { .. }) {
             return;
         }
 
@@ -45,7 +45,7 @@ impl App {
         // Binary-only distribution: need to download first.
         if agent.status == AgentStatus::Available && needs_binary_install(&config) {
             agent.status = AgentStatus::Installing { percent: 0 };
-            self.ensure_tab(agent_id);
+            self.create_session_for_agent(agent_id);
             self.push_system_msg(&format!("Installing {agent_id}..."));
             self.start_binary_install(agent_id, &config);
             return;
@@ -53,16 +53,57 @@ impl App {
 
         agent.status = AgentStatus::Connecting;
 
-        // Ensure a tab exists for this agent.
-        self.ensure_tab(agent_id);
-
-        self.spawn_agent_provider(agent_id, &config);
+        let session_idx = self.create_session_for_agent(agent_id);
+        let session_id = self.state.session_store.active[session_idx].id;
+        self.session_system
+            .spawn_session(session_id, agent_id, &config);
     }
 
-    /// Spawn the async binary download task.
+    /// Import an existing on-disk session via `session/load`. Creates
+    /// a fresh `Session` entry tagged as imported, then dispatches the
+    /// replay through `SessionSystem::import_session`. The session
+    /// stays in `Connecting` until the replay's `HistoryReplayDone`
+    /// event fences the imported history with a separator.
+    pub(super) fn import_session(
+        &mut self,
+        agent_id: &str,
+        external_session_id: String,
+        source_path: std::path::PathBuf,
+        title_hint: Option<String>,
+    ) -> Option<SessionId> {
+        let agent = self.state.agents.iter_mut().find(|a| a.name == agent_id)?;
+        if matches!(agent.status, AgentStatus::Installing { .. }) {
+            self.push_system_msg(&format!("{agent_id} is installing — try again shortly."));
+            return None;
+        }
+        let config = match &agent.config {
+            Some(c) => c.clone(),
+            None => {
+                self.push_system_msg(&format!("No ACP adapter configured for {agent_id}."));
+                return None;
+            }
+        };
+        agent.status = AgentStatus::Connecting;
+
+        let session_idx = self.create_imported_session(
+            agent_id,
+            external_session_id.clone(),
+            source_path,
+            title_hint,
+        );
+        let session_id = self.state.session_store.active[session_idx].id;
+        self.session_system
+            .import_session(session_id, agent_id, &config, external_session_id);
+        Some(session_id)
+    }
+
+    /// Spawn the async binary download task (click-connect path).
     fn start_binary_install(&self, agent_id: &str, config: &bitrouter_config::AgentConfig) {
         use bitrouter_config::Distribution;
         use bitrouter_providers::acp::install::install_binary_agent;
+        use bitrouter_providers::acp::state::{
+            InstallMethod, InstallRecord, now_unix_seconds, upsert_record,
+        };
 
         let platforms = config.distribution.iter().find_map(|d| match d {
             Distribution::Binary { platforms } => Some(platforms.clone()),
@@ -76,56 +117,50 @@ impl App {
 
         let agent_id_owned = agent_id.to_string();
         let event_tx = self.event_tx.clone();
+        let install_dir = self.state.config.agents_dir.join(&agent_id_owned);
+        let state_file = self.state.config.agent_state_file.clone();
 
         tokio::spawn(async move {
-            let (progress_tx, mut progress_rx) = mpsc::channel(32);
+            let (progress_tx, progress_rx) = mpsc::channel(32);
+            let reporter = super::slash::spawn_progress_forwarder(
+                progress_rx,
+                agent_id_owned.clone(),
+                event_tx.clone(),
+            );
 
-            // Forward progress to app events.
-            let fwd_tx = event_tx.clone();
-            let fwd_id = agent_id_owned.clone();
-            tokio::spawn(async move {
-                while let Some(p) = progress_rx.recv().await {
-                    use bitrouter_providers::acp::types::InstallProgress;
-                    let evt = match &p {
-                        InstallProgress::Downloading {
-                            bytes_received,
-                            total,
-                        } => {
-                            let percent = total
-                                .filter(|&t| t > 0)
-                                .map(|t| ((*bytes_received * 100) / t) as u8)
-                                .unwrap_or(0);
-                            AppEvent::InstallProgress {
-                                agent_id: fwd_id.clone(),
-                                percent,
-                            }
-                        }
-                        InstallProgress::Extracting => AppEvent::InstallProgress {
-                            agent_id: fwd_id.clone(),
-                            percent: 95,
-                        },
-                        InstallProgress::Done(path) => AppEvent::InstallComplete {
-                            agent_id: fwd_id.clone(),
-                            binary_path: path.clone(),
-                        },
-                        InstallProgress::Failed(msg) => AppEvent::InstallFailed {
-                            agent_id: fwd_id.clone(),
-                            message: msg.clone(),
-                        },
+            let result =
+                install_binary_agent(&agent_id_owned, &install_dir, &platforms, progress_tx).await;
+            let _ = reporter.await;
+
+            match result {
+                Ok(path) => {
+                    let record = InstallRecord {
+                        id: agent_id_owned,
+                        version: String::new(),
+                        method: InstallMethod::Binary,
+                        resolved_binary_path: Some(path),
+                        installed_at: now_unix_seconds(),
                     };
-                    if fwd_tx.send(evt).await.is_err() {
-                        break;
-                    }
+                    let _ = upsert_record(&state_file, record).await;
                 }
-            });
-
-            // The forwarding task handles Done/Failed via InstallProgress,
-            // so we only need to drive the install to completion here.
-            let _ = install_binary_agent(&agent_id_owned, &platforms, progress_tx).await;
+                Err(e) => {
+                    // Surface the failure so the placeholder session
+                    // doesn't leak in `Connecting` and the agent
+                    // doesn't stay in `Installing` forever.
+                    let _ = event_tx
+                        .send(AppEvent::InstallFailed {
+                            agent_id: agent_id_owned,
+                            message: e.to_string(),
+                        })
+                        .await;
+                }
+            }
         });
     }
 
-    /// Handle a completed binary install by spawning the agent connection.
+    /// Handle a completed binary install by spawning the connection on
+    /// the most-recent waiting session (the one created in
+    /// `connect_agent` above).
     pub(super) fn handle_install_complete(
         &mut self,
         agent_id: &str,
@@ -136,10 +171,8 @@ impl App {
             None => return,
         };
 
-        // Update config to use the installed binary path and archive args.
         if let Some(config) = &mut agent.config {
             config.binary = binary_path.to_string_lossy().into_owned();
-            // If the binary archive specifies args, use those.
             if let Some(archive_args) = Self::binary_archive_args(config) {
                 config.args = archive_args;
             }
@@ -150,12 +183,25 @@ impl App {
             None => return,
         };
 
+        let _ = binary_path;
+
         agent.status = AgentStatus::Connecting;
         self.push_system_msg(&format!("{agent_id} installed, connecting..."));
-        self.spawn_agent_provider(agent_id, &config);
+
+        // Re-use the placeholder session created in connect_agent if
+        // it still exists; otherwise allocate a fresh one.
+        let session_idx = self
+            .state
+            .session_store
+            .active
+            .iter()
+            .position(|s| s.agent_id == agent_id && s.acp_session_id.is_none())
+            .unwrap_or_else(|| self.create_session_for_agent(agent_id));
+        let session_id = self.state.session_store.active[session_idx].id;
+        self.session_system
+            .spawn_session(session_id, agent_id, &config);
     }
 
-    /// Extract args from the binary archive matching the current platform.
     fn binary_archive_args(config: &bitrouter_config::AgentConfig) -> Option<Vec<String>> {
         use bitrouter_config::Distribution;
         use bitrouter_providers::acp::platform::current_platform;
@@ -172,105 +218,31 @@ impl App {
         None
     }
 
-    /// Spawn an ACP agent provider, connect, and wire up event forwarding.
-    fn spawn_agent_provider(&mut self, agent_id: &str, config: &bitrouter_config::AgentConfig) {
-        use bitrouter_core::agents::event::AgentEvent;
-        use bitrouter_core::agents::provider::AgentProvider;
-
-        let provider = AcpAgentProvider::new(agent_id.to_string(), config.clone());
-        let provider = std::sync::Arc::new(provider);
-        self.agent_providers
-            .insert(agent_id.to_string(), provider.clone());
-
-        let agent_id_owned = agent_id.to_string();
-        let app_event_tx = self.event_tx.clone();
-
-        // Connect on a background task.
-        tokio::spawn(async move {
-            match provider.connect().await {
-                Ok(session_info) => {
-                    let _ = app_event_tx
-                        .send(AppEvent::AgentConnected {
-                            agent_id: agent_id_owned,
-                            session_id: session_info.session_id,
-                        })
-                        .await;
-                }
-                Err(e) => {
-                    let _ = app_event_tx
-                        .send(AppEvent::Agent(
-                            agent_id_owned,
-                            AgentEvent::Error {
-                                message: format!("{e}"),
-                            },
-                        ))
-                        .await;
-                }
-            }
-        });
-    }
-
-    /// Send a prompt to an agent and spawn a forwarding task for the turn's events.
-    pub(super) fn send_prompt_to_agent(&self, agent_id: &str, text: String) {
-        use bitrouter_core::agents::provider::AgentProvider;
-
-        let provider = match self.agent_providers.get(agent_id) {
-            Some(p) => p.clone(),
-            None => return,
+    /// Send a prompt to a specific session.
+    pub(super) fn send_prompt_to_session(&self, session_id: SessionId, text: String) {
+        let Some(idx) = self.state.session_store.index_of(session_id) else {
+            return;
         };
-
-        let session_id = self
-            .state
-            .agents
-            .iter()
-            .find(|a| a.name == agent_id)
-            .and_then(|a| a.session_id.clone())
-            .unwrap_or_default();
-
-        let agent_id_owned = agent_id.to_string();
-        let app_event_tx = self.event_tx.clone();
-
-        tokio::spawn(async move {
-            match provider.submit(&session_id, text).await {
-                Ok(mut rx) => {
-                    while let Some(evt) = rx.recv().await {
-                        if app_event_tx
-                            .send(AppEvent::Agent(agent_id_owned.clone(), evt))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    let _ = app_event_tx
-                        .send(AppEvent::Agent(
-                            agent_id_owned,
-                            bitrouter_core::agents::event::AgentEvent::Error {
-                                message: format!("{e}"),
-                            },
-                        ))
-                        .await;
-                }
-            }
-        });
+        let session = &self.state.session_store.active[idx];
+        let Some(acp_id) = session.acp_session_id.as_deref() else {
+            return; // session not yet connected
+        };
+        self.session_system
+            .send_prompt(session_id, &session.agent_id, acp_id, text);
     }
 
+    /// Disconnect every session bound to `agent_id`.
     pub(super) fn disconnect_agent(&mut self, agent_id: &str) {
-        use bitrouter_core::agents::provider::AgentProvider;
-
-        if let Some(provider) = self.agent_providers.remove(agent_id) {
-            let session_id = self
-                .state
-                .agents
-                .iter()
-                .find(|a| a.name == agent_id)
-                .and_then(|a| a.session_id.clone())
-                .unwrap_or_default();
-            tokio::spawn(async move {
-                let _ = provider.disconnect(&session_id).await;
-            });
+        let to_close: Vec<String> = self
+            .state
+            .session_store
+            .active
+            .iter()
+            .filter(|s| s.agent_id == agent_id)
+            .filter_map(|s| s.acp_session_id.clone())
+            .collect();
+        for acp_id in to_close {
+            self.session_system.disconnect_session(agent_id, &acp_id);
         }
         // The disconnect will trigger a Disconnected event from the agent thread.
     }
@@ -286,7 +258,6 @@ impl App {
             };
 
             if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == da.name) {
-                // Update status for idle/available agents (don't touch connected ones).
                 if matches!(
                     agent.status,
                     AgentStatus::Idle | AgentStatus::Available | AgentStatus::Error(_)
@@ -294,7 +265,6 @@ impl App {
                     agent.status = new_status;
                 }
             } else {
-                // New agent not yet in list.
                 let idx = self.state.agents.len();
                 let distribution = known
                     .get(&da.name)
@@ -312,7 +282,6 @@ impl App {
                         a2a: None,
                     }),
                     status: new_status,
-                    session_id: None,
                     color: agent_color(idx),
                 });
             }
@@ -321,12 +290,17 @@ impl App {
 
     pub(super) fn handle_permission_request(
         &mut self,
-        agent_id: String,
+        session_id: SessionId,
         request_id: PermissionRequestId,
         request: PermissionRequest,
     ) {
-        let tab_idx = self.ensure_tab(&agent_id);
-        let sb = &mut self.state.tabs[tab_idx].scrollback;
+        let Some(session_idx) = self.state.session_store.index_of(session_id) else {
+            return;
+        };
+        let agent_id = self.state.session_store.active[session_idx]
+            .agent_id
+            .clone();
+        let sb = &mut self.state.session_store.active[session_idx].scrollback;
 
         let id = sb.next_id();
         sb.push_entry(ActivityEntry {
@@ -339,96 +313,117 @@ impl App {
             }),
             collapsed: false,
         });
-        // Re-pin to bottom so user sees the permission prompt.
         sb.follow = true;
 
-        // Auto-switch only if we're not already resolving a permission on another tab.
         if self.state.mode == InputMode::Permission {
-            // Already handling a permission — just badge this tab, don't switch.
-            if tab_idx != self.state.active_tab {
-                self.state.tabs[tab_idx].badge = TabBadge::Permission;
+            if session_idx != self.state.active_session {
+                self.state.session_store.active[session_idx].badge = SessionBadge::Permission;
             }
         } else {
-            if tab_idx != self.state.active_tab {
-                self.state.tabs[tab_idx].badge = TabBadge::Permission;
-                self.switch_tab(tab_idx);
+            if session_idx != self.state.active_session {
+                self.state.session_store.active[session_idx].badge = SessionBadge::Permission;
+                self.switch_session(session_idx);
             }
             self.state.mode = InputMode::Permission;
         }
     }
 
     pub(super) fn resolve_permission(&mut self, entry_idx: usize, choice: PermissionChoice) {
-        let sb = match self.state.active_scrollback_mut() {
-            Some(sb) => sb,
-            None => return,
+        let active_idx = self.state.active_session;
+        let Some(session) = self.state.session_store.active.get_mut(active_idx) else {
+            return;
         };
+        let agent_id = session.agent_id.clone();
+        let acp_session_id = session.acp_session_id.clone();
+        let sb = &mut session.scrollback;
 
-        let (agent_id, request_id, outcome) =
-            if let EntryKind::Permission(perm) = &mut sb.entries[entry_idx].kind {
-                let outcome = match choice {
-                    PermissionChoice::Yes => {
-                        if let Some(opt) = perm.request.options.first() {
-                            PermissionOutcome::Allowed {
-                                selected_option: opt.id.clone(),
-                            }
-                        } else {
-                            PermissionOutcome::Denied
+        // Compute outcome WITHOUT marking the entry resolved yet — we
+        // only commit if we can actually deliver the response.
+        let (request_id, outcome) = if let EntryKind::Permission(perm) = &sb.entries[entry_idx].kind
+        {
+            let outcome = match choice {
+                PermissionChoice::Yes => {
+                    if let Some(opt) = perm.request.options.first() {
+                        PermissionOutcome::Allowed {
+                            selected_option: opt.id.clone(),
                         }
+                    } else {
+                        PermissionOutcome::Denied
                     }
-                    PermissionChoice::Always => {
-                        // Pick the "always" option if it exists, else first option.
-                        let always_opt = perm
-                            .request
-                            .options
-                            .iter()
-                            .find(|o| o.id.to_lowercase().contains("always"));
-                        if let Some(opt) = always_opt.or(perm.request.options.first()) {
-                            PermissionOutcome::Allowed {
-                                selected_option: opt.id.clone(),
-                            }
-                        } else {
-                            PermissionOutcome::Denied
+                }
+                PermissionChoice::Always => {
+                    let always_opt = perm
+                        .request
+                        .options
+                        .iter()
+                        .find(|o| o.id.to_lowercase().contains("always"));
+                    if let Some(opt) = always_opt.or(perm.request.options.first()) {
+                        PermissionOutcome::Allowed {
+                            selected_option: opt.id.clone(),
                         }
+                    } else {
+                        PermissionOutcome::Denied
                     }
-                    PermissionChoice::No => PermissionOutcome::Denied,
-                };
-
-                perm.resolved = true;
-                (perm.agent_id.clone(), perm.request_id, outcome)
-            } else {
-                return;
+                }
+                PermissionChoice::No => PermissionOutcome::Denied,
             };
 
-        // Send the response via the provider's respond_permission method.
-        if let Some(provider) = self.agent_providers.get(&agent_id) {
-            use bitrouter_core::agents::provider::AgentProvider;
-            let provider = provider.clone();
-            let session_id = self
-                .state
-                .agents
-                .iter()
-                .find(|a| a.name == agent_id)
-                .and_then(|a| a.session_id.clone())
-                .unwrap_or_default();
-            tokio::spawn(async move {
-                let _ = provider
-                    .respond_permission(&session_id, request_id, PermissionResponse { outcome })
-                    .await;
-            });
-        }
+            (perm.request_id, outcome)
+        } else {
+            return;
+        };
 
-        // Check if any other tab has a pending permission — auto-switch to it.
-        let next_perm_tab = self.state.tabs.iter().enumerate().find(|(_, tab)| {
-            tab.scrollback
-                .entries
+        let Some(acp_id) = acp_session_id else {
+            // Session not yet connected — can't deliver the response.
+            // Leave the entry unresolved so the user can retry once
+            // SessionConnected lands.
+            self.push_system_msg_to_session(
+                active_idx,
+                "Cannot respond: session not yet connected — try again in a moment.",
+            );
+            return;
+        };
+
+        // Mark resolved and dispatch.
+        if let Some(perm_session) = self.state.session_store.active.get_mut(active_idx)
+            && let EntryKind::Permission(perm) =
+                &mut perm_session.scrollback.entries[entry_idx].kind
+        {
+            perm.resolved = true;
+        }
+        self.session_system.respond_permission(
+            &agent_id,
+            &acp_id,
+            request_id,
+            PermissionResponse { outcome },
+        );
+
+        // Check if any other session has a pending permission — auto-switch to it.
+        let next_perm_session =
+            self.state
+                .session_store
+                .active
                 .iter()
-                .any(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved))
-        });
-        if let Some((idx, _)) = next_perm_tab {
-            self.switch_tab(idx);
+                .enumerate()
+                .find(|(_, session)| {
+                    session
+                        .scrollback
+                        .entries
+                        .iter()
+                        .any(|e| matches!(&e.kind, EntryKind::Permission(p) if !p.resolved))
+                });
+        if let Some((idx, _)) = next_perm_session {
+            self.switch_session(idx);
             self.state.mode = InputMode::Permission;
         } else {
             self.state.mode = InputMode::Normal;
+        }
+    }
+
+    /// Internal helper: set the per-session status.
+    pub(super) fn set_session_status(&mut self, session_id: SessionId, status: SessionStatus) {
+        if let Some(idx) = self.state.session_store.index_of(session_id) {
+            self.state.session_store.active[idx].status = status;
         }
     }
 }

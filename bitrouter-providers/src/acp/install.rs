@@ -9,20 +9,16 @@ use tokio::sync::mpsc;
 use super::platform::current_platform;
 use super::types::InstallProgress;
 
-/// Default install directory for downloaded agent binaries.
-fn install_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_owned())?;
-    Ok(PathBuf::from(home).join(".local").join("bin"))
-}
-
 /// Install a binary-distributed agent for the current platform.
 ///
 /// Downloads the archive, extracts it, and places the binary in
-/// `~/.local/bin/`. Sends progress updates via `progress_tx`.
+/// `install_dir` (the caller chooses — typically `<home>/agents/<id>/`).
+/// Sends progress updates via `progress_tx`.
 ///
 /// Returns the absolute path to the installed binary on success.
 pub async fn install_binary_agent(
     agent_name: &str,
+    install_dir: &Path,
     platforms: &std::collections::HashMap<String, BinaryArchive>,
     progress_tx: mpsc::Sender<InstallProgress>,
 ) -> Result<PathBuf, String> {
@@ -33,8 +29,7 @@ pub async fn install_binary_agent(
         .get(platform)
         .ok_or_else(|| format!("no binary available for platform {platform}"))?;
 
-    let dest_dir = install_dir()?;
-    tokio::fs::create_dir_all(&dest_dir)
+    tokio::fs::create_dir_all(install_dir)
         .await
         .map_err(|e| format!("failed to create install directory: {e}"))?;
 
@@ -71,7 +66,7 @@ pub async fn install_binary_agent(
     let _ = progress_tx.send(InstallProgress::Extracting).await;
 
     let cmd_name = archive_info.cmd.trim_start_matches("./");
-    let dest_binary = dest_dir.join(agent_name);
+    let dest_binary = install_dir.join(agent_name);
 
     let url = &archive_info.archive;
     if url.ends_with(".zip") {

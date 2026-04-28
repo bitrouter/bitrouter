@@ -1,3 +1,4 @@
+pub mod acp;
 pub mod config;
 pub mod content_routing;
 pub mod detect;

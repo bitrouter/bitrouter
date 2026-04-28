@@ -3,40 +3,32 @@ use crate::model::InputTarget;
 /// Parse @-mentions from input text and resolve them against known agent names.
 ///
 /// Rules:
-/// - `@all` → `InputTarget::All`
 /// - `@claude @codex` → `InputTarget::Specific(["claude", "codex"])`
 /// - No @-mentions → `InputTarget::Default`
-/// - Unrecognised @-names are silently ignored.
+/// - Unrecognised @-names (including `@all`) are silently ignored.
 pub fn parse_mentions(text: &str, agent_names: &[String]) -> InputTarget {
     let mut found: Vec<String> = Vec::new();
-    let mut has_all = false;
 
     for token in text.split_whitespace() {
         if let Some(name) = token.strip_prefix('@') {
             let lower = name.to_lowercase();
-            if lower == "all" {
-                has_all = true;
-            } else if agent_names.iter().any(|a| a.to_lowercase() == lower)
+            if agent_names.iter().any(|a| a.to_lowercase() == lower)
                 && !found.iter().any(|f| f.to_lowercase() == lower)
+                && let Some(canonical) = agent_names.iter().find(|a| a.to_lowercase() == lower)
             {
-                // Preserve the canonical agent name casing.
-                if let Some(canonical) = agent_names.iter().find(|a| a.to_lowercase() == lower) {
-                    found.push(canonical.clone());
-                }
+                found.push(canonical.clone());
             }
         }
     }
 
-    if has_all {
-        InputTarget::All
-    } else if found.is_empty() {
+    if found.is_empty() {
         InputTarget::Default
     } else {
         InputTarget::Specific(found)
     }
 }
 
-/// Strip all `@name` and `@all` mention tokens from the text, leaving the
+/// Strip all `@name` mention tokens from the text, leaving the
 /// clean prompt for sending to agents.
 pub fn strip_mentions(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
@@ -97,21 +89,14 @@ fn char_to_byte(s: &str, char_idx: usize) -> usize {
         .map_or(s.len(), |(byte_idx, _)| byte_idx)
 }
 
-/// Filter agent names by prefix (case-insensitive). Also includes `"all"`
-/// if it matches the prefix.
+/// Filter agent names by prefix (case-insensitive).
 pub fn filter_candidates(prefix: &str, agent_names: &[String]) -> Vec<String> {
     let lower = prefix.to_lowercase();
-    let mut result: Vec<String> = agent_names
+    agent_names
         .iter()
         .filter(|name| name.to_lowercase().starts_with(&lower))
         .cloned()
-        .collect();
-
-    if "all".starts_with(&lower) {
-        result.push("all".to_string());
-    }
-
-    result
+        .collect()
 }
 
 #[cfg(test)]
@@ -153,18 +138,12 @@ mod tests {
     }
 
     #[test]
-    fn all_mention() {
+    fn at_all_no_longer_broadcasts() {
+        // @all is intentionally unsupported — it falls through as an
+        // unknown mention and the prompt routes by default.
         assert_eq!(
             parse_mentions("@all run tests", &agents()),
-            InputTarget::All
-        );
-    }
-
-    #[test]
-    fn all_overrides_specific() {
-        assert_eq!(
-            parse_mentions("@claude @all run tests", &agents()),
-            InputTarget::All
+            InputTarget::Default
         );
     }
 
@@ -200,11 +179,6 @@ mod tests {
             strip_mentions("@claude @codex refactor the auth"),
             "refactor the auth"
         );
-    }
-
-    #[test]
-    fn strip_removes_all() {
-        assert_eq!(strip_mentions("@all run tests"), "run tests");
     }
 
     #[test]
@@ -264,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_empty_returns_all_plus_all() {
+    fn filter_empty_returns_all_agents() {
         let result = filter_candidates("", &agents());
         assert_eq!(
             result,
@@ -272,14 +246,7 @@ mod tests {
                 "claude".to_string(),
                 "codex".to_string(),
                 "opencode".to_string(),
-                "all".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn filter_a_includes_all() {
-        let result = filter_candidates("a", &agents());
-        assert!(result.contains(&"all".to_string()));
     }
 }

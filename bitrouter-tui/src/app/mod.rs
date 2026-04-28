@@ -1,20 +1,24 @@
 mod agent_events;
 mod agent_lifecycle;
 mod helpers;
+mod import_modal;
 mod input_ops;
 mod key_handlers;
-mod modals;
-mod mouse;
+mod pickers;
 mod search;
+pub(crate) mod session_store;
+mod session_system;
+mod sessions;
+mod slash;
 mod streaming;
-mod tabs;
 
-use std::collections::HashMap;
+use session_store::SessionStore;
+use session_system::SessionSystem;
+
 use std::io::Stdout;
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use bitrouter_providers::acp::discovery::discover_agents;
-use bitrouter_providers::acp::provider::AcpAgentProvider;
 use bitrouter_providers::acp::types::AgentAvailability;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -24,28 +28,29 @@ use crate::TuiConfig;
 use crate::error::TuiError;
 use crate::event::{AppEvent, EventHandler};
 use crate::model::{
-    AgentStatus, AutocompleteState, InlineInput, InputTarget, Modal, ObsLog, ScrollbackState,
-    SearchState, Tab, agent_color,
+    AgentStatus, AutocompleteState, ImportCandidate, InlineInput, InputTarget, ObsLog, PickerState,
+    ScrollbackState, SearchState, agent_color,
 };
 use crate::ui;
 
-// ── Input mode (Zellij-style) ──────────────────────────────────────────
+// ── Input mode ─────────────────────────────────────────────────────────
 
-/// Which mode the TUI is in.
+/// Which mode the TUI is in. Intentionally minimal — see the product
+/// doc (`specs/bitrouter-tui-product.md` §4) for rationale.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputMode {
-    /// Normal mode: inline prompt has focus, scrollback auto-follows.
+    /// Normal: input bar has focus, scrollback auto-follows.
     Normal,
-    /// Scroll mode: user is browsing scrollback history.
+    /// Scroll: user is browsing scrollback history.
     Scroll,
-    /// Tab mode: switching/managing tabs.
-    Tab,
-    /// Agent mode: inline agent list for connect/disconnect.
-    Agent,
-    /// Search mode: incremental scrollback search.
+    /// Search: incremental scrollback search (entered from Scroll via `/`).
     Search,
-    /// Permission mode: awaiting y/n/a for a permission request.
+    /// Permission: awaiting y/n/a for an inline permission request.
     Permission,
+    /// Picker: a floating picker popup (agent / session /
+    /// import-multiselect) is open above the input bar. Live state
+    /// lives in [`AppState::picker`]; confirm/cancel close the popup.
+    Picker,
 }
 
 /// All mutable TUI state, separated from `App` so the borrow checker allows
@@ -54,54 +59,67 @@ pub struct AppState {
     pub mode: InputMode,
     /// Agent registry: all known/discovered agents (not necessarily connected).
     pub agents: Vec<crate::model::Agent>,
-    /// Tabs: one per active agent session.
-    pub tabs: Vec<Tab>,
-    /// Index of the currently focused tab.
-    pub active_tab: usize,
+    /// All sessions (active + id allocator). Callers usually touch
+    /// `session_store.active` directly for iteration/indexed access.
+    pub session_store: SessionStore,
+    /// Index into `session_store.active` of the currently focused session.
+    pub active_session: usize,
     /// Global input bar.
     pub input: InlineInput,
     pub input_target: InputTarget,
     pub autocomplete: Option<AutocompleteState>,
-    /// Modal overlays (Help, Observability, CommandPalette).
-    pub modal: Option<Modal>,
+    /// Open picker popup, when [`InputMode::Picker`] is active.
+    pub picker: Option<PickerState>,
     pub obs_log: ObsLog,
     pub config: TuiConfig,
-    /// Cursor position in Agent mode's inline list.
-    pub agent_list_selected: usize,
-    /// Incremental search state.
+    /// Incremental scrollback search state (Scroll mode `/`).
     pub search: Option<SearchState>,
-    /// Cached layout from the last render pass (for mouse hit-testing).
-    pub last_layout: Option<crate::ui::layout::AppLayout>,
+    /// On-disk sessions discovered by the startup scan, available for
+    /// import via `Ctrl-I`. Empty until the scan task delivers
+    /// [`AppEvent::ImportScanResult`].
+    pub discovered_sessions: Vec<ImportCandidate>,
+    /// Whether the first-launch nag toast has been shown for this
+    /// process. We only emit it once, after the scan resolves.
+    pub import_nag_shown: bool,
 }
 
 impl AppState {
-    /// Get the active tab's scrollback, if any tab exists.
+    /// Get the active session's scrollback, if any session exists.
     pub fn active_scrollback(&self) -> Option<&ScrollbackState> {
-        self.tabs.get(self.active_tab).map(|t| &t.scrollback)
+        self.session_store
+            .active
+            .get(self.active_session)
+            .map(|s| &s.scrollback)
     }
 
-    /// Get the active tab's scrollback mutably, if any tab exists.
+    /// Get the active session's scrollback mutably, if any session exists.
     pub fn active_scrollback_mut(&mut self) -> Option<&mut ScrollbackState> {
-        self.tabs
-            .get_mut(self.active_tab)
-            .map(|t| &mut t.scrollback)
+        self.session_store
+            .active
+            .get_mut(self.active_session)
+            .map(|s| &mut s.scrollback)
     }
 
-    /// Get the active tab's agent name, if any tab exists.
+    /// Get the active session's agent id, if any session exists.
     pub fn active_agent_name(&self) -> Option<&str> {
-        self.tabs
-            .get(self.active_tab)
-            .map(|t| t.agent_name.as_str())
+        self.session_store
+            .active
+            .get(self.active_session)
+            .map(|s| s.agent_id.as_str())
     }
 }
 
 pub struct App {
     pub running: bool,
     pub state: AppState,
-    /// Active agent providers, keyed by agent name.
-    agent_providers: HashMap<String, Arc<AcpAgentProvider>>,
-    /// Cloned event sender for spawning agent connections.
+    /// ACP session lifecycle: owns providers, launch cwd, and the four
+    /// spawn sites previously scattered across `agent_lifecycle.rs`.
+    pub(super) session_system: SessionSystem,
+    /// Cloned event sender for non-session work (install, misc background tasks).
     event_tx: mpsc::Sender<AppEvent>,
+    /// Snapshot of the BitRouter config at TUI startup, used by slash
+    /// commands that need provider/registry metadata.
+    bitrouter_config: bitrouter_config::BitrouterConfig,
 }
 
 impl App {
@@ -109,6 +127,7 @@ impl App {
         config: TuiConfig,
         bitrouter_config: &bitrouter_config::BitrouterConfig,
         event_tx: mpsc::Sender<AppEvent>,
+        launch_cwd: PathBuf,
     ) -> Self {
         // Discover all agents (on PATH + distributable).
         let discovered = discover_agents(&bitrouter_config.agents);
@@ -139,7 +158,6 @@ impl App {
                     name: name.clone(),
                     config: Some(ac.clone()),
                     status,
-                    session_id: None,
                     color: agent_color(i),
                 }
             })
@@ -169,47 +187,66 @@ impl App {
                         a2a: None,
                     }),
                     status,
-                    session_id: None,
                     color: agent_color(idx),
                 });
             }
         }
+
+        // Kick off the import scan on a blocking-pool thread so the
+        // synchronous file I/O doesn't tie up an async worker. Result
+        // arrives as `AppEvent::ImportScanResult` once the event loop
+        // is running.
+        spawn_import_scan(
+            event_tx.clone(),
+            launch_cwd.clone(),
+            bitrouter_config
+                .agents
+                .iter()
+                .filter(|(_, c)| c.enabled)
+                .map(|(name, _)| name.clone())
+                .collect(),
+        );
 
         Self {
             running: true,
             state: AppState {
                 mode: InputMode::Normal,
                 agents,
-                tabs: Vec::new(),
-                active_tab: 0,
+                session_store: SessionStore::new(),
+                active_session: 0,
                 input: InlineInput::new(),
                 input_target: InputTarget::Default,
                 autocomplete: None,
-                modal: None,
+                picker: None,
                 obs_log: ObsLog::new(),
                 config,
-                agent_list_selected: 0,
                 search: None,
-                last_layout: None,
+                discovered_sessions: Vec::new(),
+                import_nag_shown: false,
             },
-            agent_providers: HashMap::new(),
+            session_system: SessionSystem::new(event_tx.clone(), launch_cwd),
             event_tx,
+            bitrouter_config: bitrouter_config.clone(),
         }
     }
 
     fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
-            AppEvent::Mouse(mouse_event) => self.handle_mouse(mouse_event),
             AppEvent::Resize { .. } | AppEvent::Tick => {}
-            AppEvent::Agent(agent_id, agent_event) => {
-                self.handle_agent_event(agent_id, agent_event);
-            }
-            AppEvent::AgentConnected {
-                agent_id,
+            AppEvent::Session {
                 session_id,
+                agent_id,
+                event,
             } => {
-                self.handle_agent_connected(agent_id, session_id);
+                self.handle_session_event(session_id, agent_id, event);
+            }
+            AppEvent::SessionConnected {
+                session_id,
+                agent_id,
+                acp_session_id,
+            } => {
+                self.handle_session_connected(session_id, agent_id, acp_session_id);
             }
             AppEvent::InstallProgress { agent_id, percent } => {
                 if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
@@ -228,17 +265,51 @@ impl App {
                 }
                 self.push_system_msg(&format!("[{agent_id}] Install failed: {message}"));
             }
+            AppEvent::SystemMessage { text } => {
+                self.push_system_msg(&text);
+            }
+            AppEvent::ImportScanResult { sessions } => {
+                self.handle_import_scan_result(sessions);
+            }
         }
     }
+}
+
+/// Run the on-disk session-import scan on a blocking-pool thread and
+/// deliver the result to the event loop. Empty results are still sent
+/// so the handler can decide whether to surface a first-launch toast.
+fn spawn_import_scan(tx: mpsc::Sender<AppEvent>, cwd: PathBuf, agent_ids: Vec<String>) {
+    if agent_ids.is_empty() {
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return;
+        };
+        let discovered =
+            bitrouter_providers::acp::session_import::scan_for_cwd(&home, &cwd, &agent_ids);
+        let sessions: Vec<ImportCandidate> = discovered
+            .into_iter()
+            .map(|d| ImportCandidate {
+                agent_id: d.agent_id,
+                external_session_id: d.external_session_id,
+                title_hint: d.title_hint,
+                last_active_at: d.last_active_at,
+                source_path: d.source_path,
+            })
+            .collect();
+        let _ = tx.blocking_send(AppEvent::ImportScanResult { sessions });
+    });
 }
 
 pub async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     config: TuiConfig,
     bitrouter_config: &bitrouter_config::BitrouterConfig,
+    launch_cwd: PathBuf,
 ) -> Result<(), TuiError> {
     let mut events = EventHandler::new();
-    let mut app = App::new(config, bitrouter_config, events.sender());
+    let mut app = App::new(config, bitrouter_config, events.sender(), launch_cwd);
 
     while app.running {
         terminal.draw(|frame| ui::render(frame, &mut app.state))?;
@@ -250,7 +321,7 @@ pub async fn run_loop(
     }
 
     // Shutdown: drop all providers so agent threads exit cleanly.
-    app.agent_providers.clear();
+    app.session_system.shutdown();
 
     Ok(())
 }

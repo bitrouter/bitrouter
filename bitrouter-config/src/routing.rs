@@ -1555,7 +1555,7 @@ a2a:
     fn agent_session_config_defaults() {
         let config = crate::config::AgentSessionConfig::default();
         assert_eq!(config.idle_timeout_secs, 600);
-        assert_eq!(config.max_concurrent, 1);
+        assert_eq!(config.max_concurrent, 8);
     }
 
     #[test]
@@ -1564,7 +1564,7 @@ a2a:
         let config: crate::config::AgentSessionConfig =
             serde_saphyr::from_str(yaml).expect("should parse");
         assert_eq!(config.idle_timeout_secs, 120);
-        assert_eq!(config.max_concurrent, 1); // default
+        assert_eq!(config.max_concurrent, 8); // default
     }
 
     #[test]

@@ -249,6 +249,11 @@ impl ProxyAgent {
                             .await;
                     }
                 }
+                AgentEvent::HistoryReplayDone => {
+                    // Only emitted on the load_session replay receiver,
+                    // never on the per-turn submit() stream the proxy
+                    // pumps. Ignore defensively rather than fail.
+                }
             }
         }
 
@@ -341,7 +346,7 @@ impl acp::Agent for ProxyAgent {
 
     async fn new_session(
         &self,
-        _args: acp::NewSessionRequest,
+        args: acp::NewSessionRequest,
     ) -> acp::Result<acp::NewSessionResponse> {
         if !*self.authenticated.borrow() {
             return Err(acp::Error::new(
@@ -351,7 +356,9 @@ impl acp::Agent for ProxyAgent {
         }
 
         // Connect to upstream agent (spawns subprocess, performs handshake).
-        let session_info = self.provider.connect().await.map_err(|e| {
+        // Forward the consumer's requested cwd verbatim — the proxy is a
+        // transparent passthrough.
+        let session_info = self.provider.connect(&args.cwd).await.map_err(|e| {
             acp::Error::new(
                 i32::from(acp::ErrorCode::InternalError),
                 format!("upstream connect failed: {e}"),

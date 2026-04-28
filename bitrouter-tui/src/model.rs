@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use bitrouter_core::agents::event::{PermissionRequest, PermissionRequestId, ToolCallStatus};
@@ -40,12 +41,16 @@ pub trait Renderable {
 // ── Agent ───────────────────────────────────────────────────────────────
 
 /// An agent harness that can be connected via ACP.
+///
+/// `Agent.status` reflects the underlying provider's reachability
+/// (e.g. binary on PATH, install in progress); per-session lifecycle
+/// state lives on [`Session::status`] so multiple sessions on the
+/// same agent can be in different states.
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub name: String,
     pub config: Option<bitrouter_config::AgentConfig>,
     pub status: AgentStatus,
-    pub session_id: Option<String>,
     pub color: Color,
 }
 
@@ -68,11 +73,19 @@ pub enum AgentStatus {
     Error(String),
 }
 
-// ── Tab ─────────────────────────────────────────────────────────────────
+// ── Session ─────────────────────────────────────────────────────────────
 
-/// Badge indicator shown on a tab label.
+/// Monotonic identifier for a TUI session, allocated by `SessionStore`.
+///
+/// Distinct from the ACP-assigned `session_id` on `Agent`, which is not
+/// stable across reconnect. Lookups keyed by `SessionId` survive the
+/// session's ACP lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SessionId(pub u64);
+
+/// Badge indicator shown on a session entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TabBadge {
+pub enum SessionBadge {
     /// No badge.
     None,
     /// Unread activity count.
@@ -81,14 +94,92 @@ pub enum TabBadge {
     Permission,
 }
 
-/// A single tab in the TUI, bound to one agent session.
-pub struct Tab {
-    /// The agent name this tab is bound to.
-    pub agent_name: String,
-    /// Per-tab scrollback history.
+/// Per-session lifecycle state. Each session evolves independently:
+/// two sessions on the same agent can be in different states at once
+/// (one connecting, one busy responding to a prompt).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionStatus {
+    /// Spawn requested, waiting for ACP handshake.
+    Connecting,
+    /// Ready for prompts.
+    Connected,
+    /// Awaiting `TurnDone` for an in-flight prompt.
+    Busy,
+    /// Connection ended (subprocess exited or `disconnect` sent).
+    Disconnected,
+    /// Connection failed or crashed.
+    Error(String),
+}
+
+/// Where a session originated. Native sessions were spawned fresh via
+/// `session/new`; imported sessions were replayed via `session/load`
+/// from an agent's on-disk history (see `bitrouter_providers::acp::
+/// session_import`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionSource {
+    Native,
+    Imported {
+        /// Path to the on-disk session artifact the import was sourced
+        /// from. Useful for "imported from" display and for
+        /// disambiguating duplicate `external_session_id`s.
+        source_path: PathBuf,
+    },
+}
+
+/// A single session in the TUI, bound to one ACP conversation.
+///
+/// Multiple sessions per agent are allowed; each carries its own
+/// `acp_session_id` once the handshake completes. Display name is
+/// looked up via `Agent.name`, not stored on the session, to avoid
+/// drift if an agent is later renamed.
+pub struct Session {
+    /// Stable local identifier allocated by `SessionStore`.
+    pub id: SessionId,
+    /// Registry id of the agent backing this session.
+    pub agent_id: String,
+    /// User-visible title. `None` until the first user prompt, at
+    /// which point it is auto-derived from the prompt text. May be
+    /// overwritten by the rename UI in a later PR.
+    pub title: Option<String>,
+    /// Per-session palette color. Two sessions on the same agent get
+    /// different colors so they're visually distinct in the sidebar.
+    pub color: Color,
+    /// ACP-assigned session id, set on first `AgentConnected` for this
+    /// session. Used to route prompts/permissions back to the correct
+    /// upstream conversation.
+    pub acp_session_id: Option<String>,
+    /// Per-session lifecycle state.
+    pub status: SessionStatus,
+    /// Per-session scrollback history.
     pub scrollback: ScrollbackState,
-    /// Badge shown on the tab label for background activity.
-    pub badge: TabBadge,
+    /// Badge shown on the session entry for background activity.
+    pub badge: SessionBadge,
+    /// How this session originated.
+    pub source: SessionSource,
+    /// Agent-native id the session was imported from, when applicable.
+    /// For native sessions this is `None`; for imports it's the same
+    /// value passed to `session/load`.
+    pub external_session_id: Option<String>,
+}
+
+/// Maximum length of an auto-derived session title.
+pub const SESSION_TITLE_MAX: usize = 40;
+
+/// Derive a session title from the first user prompt. Trims, collapses
+/// whitespace, and truncates to [`SESSION_TITLE_MAX`] characters with
+/// an ellipsis when the source is longer.
+pub fn title_from_prompt(text: &str) -> Option<String> {
+    let trimmed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.chars().count() <= SESSION_TITLE_MAX {
+        Some(trimmed)
+    } else {
+        let mut out: String = trimmed.chars().take(SESSION_TITLE_MAX - 1).collect();
+        out.push('…');
+        Some(out)
+    }
 }
 
 // ── Entry types ────────────────────────────────────────────────────────
@@ -112,6 +203,9 @@ pub enum EntryKind {
     Thinking(ThinkingEntry),
     Permission(PermissionEntry),
     System(SystemNotice),
+    /// Visual divider, used by the import flow to mark the end of
+    /// replayed history.
+    Separator(SeparatorEntry),
 }
 
 impl Renderable for EntryKind {
@@ -123,6 +217,7 @@ impl Renderable for EntryKind {
             Self::Thinking(e) => e.render_lines(width, collapsed, ctx),
             Self::Permission(e) => e.render_lines(width, collapsed, ctx),
             Self::System(e) => e.render_lines(width, collapsed, ctx),
+            Self::Separator(e) => e.render_lines(width, collapsed, ctx),
         }
     }
 }
@@ -130,13 +225,19 @@ impl Renderable for EntryKind {
 // ── Gutter constants ───────────────────────────────────────────────────
 
 const GUTTER: &str = "⎿  ";
+/// Opener gutter for agent responses — a filled circle marks the
+/// start of a turn. Subsequent body lines align under the text after
+/// it (using [`AGENT_CONT`]) rather than repeating the marker. Tool
+/// calls, thinking, and permission entries still use [`GUTTER`] (`⎿`)
+/// so the visual vocabulary is preserved.
+const AGENT_OPEN: &str = "⏺ ";
+const AGENT_CONT: &str = "  ";
 const PROMPT_PREFIX: &str = "› ";
 
 // ── UserPrompt ─────────────────────────────────────────────────────────
 
 pub struct UserPrompt {
     pub text: String,
-    pub targets: Vec<String>,
 }
 
 impl Renderable for UserPrompt {
@@ -148,12 +249,6 @@ impl Renderable for UserPrompt {
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let text_width = (width as usize).saturating_sub(PROMPT_PREFIX.len());
-
-        let target_suffix = if self.targets.is_empty() {
-            String::new()
-        } else {
-            format!(" → {}", self.targets.join(", "))
-        };
 
         for (i, raw_line) in self.text.lines().enumerate() {
             for (j, segment) in hard_wrap(raw_line, text_width).into_iter().enumerate() {
@@ -167,18 +262,7 @@ impl Renderable for UserPrompt {
                 } else {
                     Span::raw("  ")
                 };
-
-                let mut spans = vec![prefix, Span::raw(segment)];
-
-                // Add target suffix on the first line only.
-                if i == 0 && j == 0 && !target_suffix.is_empty() {
-                    spans.push(Span::styled(
-                        target_suffix.clone(),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-
-                lines.push(Line::from(spans));
+                lines.push(Line::from(vec![prefix, Span::raw(segment)]));
             }
         }
 
@@ -203,29 +287,36 @@ impl Renderable for AgentResponse {
             .get(&self.agent_id)
             .copied()
             .unwrap_or(Color::White);
-        let text_width = (width as usize).saturating_sub(GUTTER.len());
+        let text_width = (width as usize).saturating_sub(AGENT_CONT.chars().count());
         let mut lines = Vec::new();
 
-        // Agent name header.
-        lines.push(Line::from(Span::styled(
-            format!("  {}", self.agent_id),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )));
+        let opened = std::cell::Cell::new(false);
+        let agent_gutter = || -> Span<'static> {
+            if !opened.get() {
+                opened.set(true);
+                Span::styled(
+                    AGENT_OPEN.to_string(),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::raw(AGENT_CONT.to_string())
+            }
+        };
 
         if collapsed {
             lines.push(Line::from(vec![
-                gutter_span(color),
+                agent_gutter(),
                 Span::styled("[collapsed]", Style::default().fg(Color::DarkGray)),
             ]));
         } else {
             for block in &self.blocks {
                 match block {
                     ContentBlock::Text(text) => {
-                        lines.extend(render_markdown(text, text_width, || gutter_span(color)));
+                        lines.extend(render_markdown(text, text_width, agent_gutter));
                     }
                     ContentBlock::Other(desc) => {
                         lines.push(Line::from(vec![
-                            gutter_span(color),
+                            agent_gutter(),
                             Span::styled(desc.clone(), Style::default().fg(Color::DarkGray)),
                         ]));
                     }
@@ -233,7 +324,7 @@ impl Renderable for AgentResponse {
             }
             if self.is_streaming {
                 lines.push(Line::from(vec![
-                    gutter_span(color),
+                    agent_gutter(),
                     Span::styled("▌", Style::default().fg(Color::Cyan)),
                 ]));
             }
@@ -390,6 +481,75 @@ impl Renderable for PermissionEntry {
 
         lines
     }
+}
+
+// ── SeparatorEntry ─────────────────────────────────────────────────────
+
+/// A horizontal divider with optional inline label, used to visually
+/// fence sections of the scrollback (e.g. end of imported history).
+pub struct SeparatorEntry {
+    pub label: String,
+}
+
+impl Renderable for SeparatorEntry {
+    fn render_lines(
+        &self,
+        width: u16,
+        _collapsed: bool,
+        _ctx: &RenderContext,
+    ) -> Vec<Line<'static>> {
+        let label = format!(" {} ", self.label);
+        let label_chars = label.chars().count();
+        let total = (width as usize).saturating_sub(2); // leading "  "
+        let label_chars = label_chars.min(total);
+        let dashes = total.saturating_sub(label_chars);
+        let left = dashes / 2;
+        let right = dashes - left;
+        let line = format!("  {}{}{}", "─".repeat(left), label, "─".repeat(right),);
+        vec![
+            Line::from(Span::styled(line, Style::default().fg(Color::DarkGray))),
+            Line::raw(""),
+        ]
+    }
+}
+
+// ── Picker ────────────────────────────────────────────────────────────
+
+/// One row in a picker popup.
+pub struct PickerItem {
+    /// Headline text, e.g. `claude-code` or `refactor router`.
+    pub label: String,
+    /// Optional dim subtitle, e.g. `(session abc-123)` or `connected`.
+    pub subtitle: Option<String>,
+    /// Whether this row is selectable. Group headers in the import
+    /// picker are non-selectable.
+    pub selectable: bool,
+}
+
+/// What to do once the user confirms a picker. Carries the original
+/// option list so the dispatcher can resolve indices back to choices
+/// without consulting any other state.
+#[derive(Clone)]
+pub enum PickerAction {
+    /// Spawn a new session against the chosen agent.
+    NewSession { agents: Vec<String> },
+    /// Switch to the chosen active session by id.
+    SwitchSession { ids: Vec<SessionId> },
+    /// Import the chosen on-disk session(s).
+    Import { candidates: Vec<ImportCandidate> },
+}
+
+/// Live state of an open picker popup. There is at most one open at a
+/// time; while present, [`crate::app::InputMode::Picker`] is active.
+/// Confirm/cancel close the popup and (optionally) leave a one-line
+/// breadcrumb in the active scrollback.
+pub struct PickerState {
+    pub title: String,
+    pub items: Vec<PickerItem>,
+    pub cursor: usize,
+    pub selected: std::collections::HashSet<usize>,
+    pub multiselect: bool,
+    pub action: PickerAction,
 }
 
 // ── SystemNotice ───────────────────────────────────────────────────────
@@ -767,16 +927,39 @@ pub enum InputTarget {
     Default,
     /// One or more specific agents.
     Specific(Vec<String>),
-    /// Broadcast to all connected agents.
-    All,
 }
 
-/// Autocomplete state for @-mentions in the input bar.
+/// Whether the autocomplete popup is for `@`-mentions or for
+/// `/`-slash commands. The two share rendering & navigation but
+/// differ in what gets inserted on accept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutocompleteKind {
+    AtMention,
+    SlashCommand,
+}
+
+/// One row in the autocomplete popup.
+#[derive(Debug, Clone)]
+pub struct AutocompleteCandidate {
+    /// The literal text that gets inserted into the input on accept.
+    /// For `@`-mention this is the agent name; for `/`-command this
+    /// is the full command (`/session new`).
+    pub value: String,
+    /// Optional dim subtitle. For `/`-commands this is the one-line
+    /// description; for `@`-mention it's `None`.
+    pub description: Option<String>,
+}
+
+/// Autocomplete state for `@`-mentions or `/`-commands.
 pub struct AutocompleteState {
-    /// The prefix typed after `@` (e.g. `"cl"` for `@cl`).
+    pub kind: AutocompleteKind,
+    /// The prefix typed after `@` (or after `/`) — the chars the user
+    /// has typed so far that the popup is filtering against. Includes
+    /// the leading sigil only for slash (e.g. `/se` for filtering
+    /// commands; `cl` for filtering agents).
     pub prefix: String,
-    /// Matching agent names (filtered).
-    pub candidates: Vec<String>,
+    /// Filtered candidates.
+    pub candidates: Vec<AutocompleteCandidate>,
     /// Index of the highlighted candidate.
     pub selected: usize,
 }
@@ -790,20 +973,10 @@ pub struct SearchState {
     pub current_match: usize,
 }
 
-// ── Modals ──────────────────────────────────────────────────────────────
+// ── Observability log ──────────────────────────────────────────────────
 
-/// At most one modal overlay is open at a time.
-pub enum Modal {
-    Observability(ObservabilityState),
-    CommandPalette(CommandPaletteState),
-    Help,
-}
-
-pub struct ObservabilityState {
-    pub scroll_offset: usize,
-}
-
-/// A recorded event for the observability panel.
+/// A recorded event for the observability log (rendered inline by
+/// `/obs`).
 pub struct ObsEvent {
     pub agent_id: String,
     pub kind: ObsEventKind,
@@ -841,31 +1014,25 @@ impl ObsLog {
     }
 }
 
-// ── Command palette ─────────────────────────────────────────────────────
+// ── Import candidate ───────────────────────────────────────────────────
 
-pub struct CommandPaletteState {
-    pub query: String,
-    pub all_commands: Vec<PaletteCommand>,
-    /// Indices into `all_commands` that match the current query.
-    pub filtered: Vec<usize>,
-    pub selected: usize,
+/// Snapshot of one on-disk session discovered by the startup scan.
+/// Mirrors [`bitrouter_providers::acp::session_import::DiscoveredSession`]
+/// but is owned and `Clone` so it can be passed into pickers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportCandidate {
+    pub agent_id: String,
+    pub external_session_id: String,
+    pub title_hint: Option<String>,
+    pub last_active_at: i64,
+    pub source_path: PathBuf,
 }
 
-pub struct PaletteCommand {
-    pub label: String,
-    pub action: CommandAction,
-}
-
-#[derive(Debug, Clone)]
-pub enum CommandAction {
-    ConnectAgent(String),
-    DisconnectAgent(String),
-    ToggleObservability,
-    ClearConversation,
-    ShowHelp,
-    NewTab,
-    CloseTab,
-    SwitchTab(String),
+/// One row in the import-picker list — either a group header (shown
+/// as a static label) or a selectable session candidate.
+pub enum ImportEntry {
+    Group { agent_id: String, count: usize },
+    Item(ImportCandidate),
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -885,7 +1052,41 @@ fn tool_status_icon(status: &ToolCallStatus) -> (&'static str, Color) {
 
 #[cfg(test)]
 mod tests {
-    use super::InlineInput;
+    use super::{
+        InlineInput, RenderContext, Renderable, SESSION_TITLE_MAX, SeparatorEntry,
+        title_from_prompt,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn title_from_prompt_returns_short_text_verbatim() {
+        assert_eq!(
+            title_from_prompt("refactor router"),
+            Some("refactor router".to_string())
+        );
+    }
+
+    #[test]
+    fn title_from_prompt_collapses_whitespace() {
+        assert_eq!(
+            title_from_prompt("  refactor   router\n\nplease  "),
+            Some("refactor router please".to_string())
+        );
+    }
+
+    #[test]
+    fn title_from_prompt_truncates_with_ellipsis() {
+        let long = "a".repeat(SESSION_TITLE_MAX + 20);
+        let title = title_from_prompt(&long).expect("non-empty");
+        assert_eq!(title.chars().count(), SESSION_TITLE_MAX);
+        assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn title_from_prompt_returns_none_for_blank() {
+        assert_eq!(title_from_prompt(""), None);
+        assert_eq!(title_from_prompt("   \n\t"), None);
+    }
 
     fn input_with(text: &str, col: usize) -> InlineInput {
         InlineInput {
@@ -946,5 +1147,28 @@ mod tests {
         input.delete_to_line_end();
         assert_eq!(input.lines[0], "hello");
         assert_eq!(input.cursor.1, 5);
+    }
+
+    #[test]
+    fn separator_renders_centered_label_with_dashes() {
+        let entry = SeparatorEntry {
+            label: "imported history".to_string(),
+        };
+        let ctx = RenderContext {
+            agent_colors: HashMap::new(),
+        };
+        let lines = entry.render_lines(50, false, &ctx);
+        // Two lines: divider + trailing blank.
+        assert_eq!(lines.len(), 2);
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert!(
+            text.contains("imported history"),
+            "expected label, got: {text:?}"
+        );
+        assert!(text.contains('─'), "expected divider dashes, got: {text:?}");
     }
 }

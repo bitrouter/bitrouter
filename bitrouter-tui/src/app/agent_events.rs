@@ -2,56 +2,101 @@ use std::time::Instant;
 
 use bitrouter_core::agents::event::AgentEvent;
 
-use crate::model::{AgentStatus, EntryKind, ObsEvent, ObsEventKind};
+use crate::model::{
+    ActivityEntry, AgentStatus, EntryKind, ObsEvent, ObsEventKind, SeparatorEntry, SessionId,
+    SessionStatus,
+};
 
 use super::App;
 
 impl App {
-    pub(super) fn handle_agent_event(&mut self, agent_id: String, event: AgentEvent) {
+    pub(super) fn handle_session_event(
+        &mut self,
+        session_id: SessionId,
+        agent_id: String,
+        event: AgentEvent,
+    ) {
         match event {
-            AgentEvent::Disconnected => self.handle_agent_disconnected(agent_id),
+            AgentEvent::Disconnected => self.handle_session_disconnected(session_id, agent_id),
             AgentEvent::Error { message } => {
-                self.handle_agent_error(agent_id, message);
+                self.handle_session_error(session_id, agent_id, message);
             }
             AgentEvent::MessageChunk { text } => {
-                self.apply_agent_message_chunk(&agent_id, text);
+                self.apply_agent_message_chunk(session_id, &agent_id, text);
             }
             AgentEvent::NonTextContent { description } => {
-                self.apply_non_text_content(&agent_id, description);
+                self.apply_non_text_content(session_id, &agent_id, description);
             }
             AgentEvent::ThoughtChunk { text } => {
-                self.apply_thought_chunk(&agent_id, text);
+                self.apply_thought_chunk(session_id, &agent_id, text);
             }
             AgentEvent::ToolCall {
                 tool_call_id,
                 title,
                 status,
             } => {
-                self.apply_tool_call(&agent_id, tool_call_id, title, status);
+                self.apply_tool_call(session_id, &agent_id, tool_call_id, title, status);
             }
             AgentEvent::ToolCallUpdate {
                 tool_call_id,
                 title,
                 status,
             } => {
-                self.apply_tool_call_update(&agent_id, tool_call_id, title, status);
+                self.apply_tool_call_update(session_id, &agent_id, tool_call_id, title, status);
             }
             AgentEvent::PermissionRequest { id, request } => {
-                self.handle_permission_request(agent_id, id, request);
+                self.handle_permission_request(session_id, id, request);
             }
             AgentEvent::TurnDone { .. } => {
-                self.handle_prompt_done(agent_id);
+                self.handle_prompt_done(session_id, agent_id);
+            }
+            AgentEvent::HistoryReplayDone => {
+                self.handle_history_replay_done(session_id, agent_id);
             }
         }
     }
 
-    pub(super) fn handle_agent_connected(&mut self, agent_id: String, session_id: String) {
+    /// Mark an imported session as ready for new prompts and fence the
+    /// replayed history with a visual separator. Called when the
+    /// `session/load` replay stream emits its terminating
+    /// `HistoryReplayDone` event.
+    fn handle_history_replay_done(&mut self, session_id: SessionId, agent_id: String) {
+        if let Some(idx) = self.state.session_store.index_of(session_id) {
+            let session = &mut self.state.session_store.active[idx];
+            session.status = SessionStatus::Connected;
+            let id = session.scrollback.next_id();
+            session.scrollback.push_entry(ActivityEntry {
+                id,
+                kind: EntryKind::Separator(SeparatorEntry {
+                    label: "imported history".to_string(),
+                }),
+                collapsed: false,
+            });
+        }
+        self.state.obs_log.push(ObsEvent {
+            agent_id,
+            kind: ObsEventKind::PromptDone,
+            timestamp: Instant::now(),
+        });
+    }
+
+    pub(super) fn handle_session_connected(
+        &mut self,
+        session_id: SessionId,
+        agent_id: String,
+        acp_session_id: String,
+    ) {
+        if let Some(idx) = self.state.session_store.index_of(session_id) {
+            let session = &mut self.state.session_store.active[idx];
+            session.acp_session_id = Some(acp_session_id);
+            session.status = SessionStatus::Connected;
+        }
         if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
             agent.status = AgentStatus::Connected;
-            agent.session_id = Some(session_id);
         }
-        let tab_idx = self.ensure_tab(&agent_id);
-        self.push_system_msg_to_tab(tab_idx, &format!("Connected to {agent_id}"));
+        if let Some(idx) = self.state.session_store.index_of(session_id) {
+            self.push_system_msg_to_session(idx, &format!("Connected to {agent_id}"));
+        }
         self.state.obs_log.push(ObsEvent {
             agent_id,
             kind: ObsEventKind::Connected,
@@ -59,13 +104,32 @@ impl App {
         });
     }
 
-    fn handle_agent_disconnected(&mut self, agent_id: String) {
-        // Clean up provider handle.
-        self.agent_providers.remove(&agent_id);
-        if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
-            // Only reset status if not already in Error state.
-            if !matches!(agent.status, AgentStatus::Error(_)) {
-                // Agents without a binary on PATH go back to Available.
+    fn handle_session_disconnected(&mut self, session_id: SessionId, agent_id: String) {
+        self.set_session_status(session_id, SessionStatus::Disconnected);
+        if let Some(idx) = self.state.session_store.index_of(session_id) {
+            let sb = &mut self.state.session_store.active[idx].scrollback;
+            sb.streaming_entry.remove(&agent_id);
+        }
+
+        // If this was the agent's last LIVE session, drop the provider
+        // and bounce the agent's status back to Idle/Available. Sessions
+        // already in Disconnected/Error don't keep the provider alive —
+        // otherwise an agent crash that fans out to N sessions would
+        // never trigger forget_provider (each disconnect sees the others
+        // still in active, but already-dead).
+        let still_has_sessions = self.state.session_store.active.iter().any(|s| {
+            s.agent_id == agent_id
+                && s.id != session_id
+                && !matches!(
+                    s.status,
+                    SessionStatus::Disconnected | SessionStatus::Error(_)
+                )
+        });
+        if !still_has_sessions {
+            self.session_system.forget_provider(&agent_id);
+            if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id)
+                && !matches!(agent.status, AgentStatus::Error(_))
+            {
                 let on_path = agent
                     .config
                     .as_ref()
@@ -85,15 +149,10 @@ impl App {
                     AgentStatus::Available
                 };
             }
-            agent.session_id = None;
-        }
-        // Clear streaming cursor for this agent.
-        if let Some(sb) = self.scrollback_for_agent(&agent_id) {
-            sb.streaming_entry.remove(&agent_id);
         }
 
-        if let Some(tab_idx) = self.tab_for_agent(&agent_id) {
-            self.push_system_msg_to_tab(tab_idx, &format!("Disconnected from {agent_id}"));
+        if let Some(idx) = self.state.session_store.index_of(session_id) {
+            self.push_system_msg_to_session(idx, &format!("Disconnected from {agent_id}"));
         }
         self.state.obs_log.push(ObsEvent {
             agent_id,
@@ -102,15 +161,16 @@ impl App {
         });
     }
 
-    fn handle_agent_error(&mut self, agent_id: String, message: String) {
+    fn handle_session_error(&mut self, session_id: SessionId, agent_id: String, message: String) {
+        self.set_session_status(session_id, SessionStatus::Error(message.clone()));
         if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id) {
             agent.status = AgentStatus::Error(message.clone());
         }
-        if let Some(sb) = self.scrollback_for_agent(&agent_id) {
+        if let Some(idx) = self.state.session_store.index_of(session_id) {
+            let sb = &mut self.state.session_store.active[idx].scrollback;
             sb.streaming_entry.remove(&agent_id);
+            self.push_system_msg_to_session(idx, &format!("[{agent_id}] Error: {message}"));
         }
-        let tab_idx = self.ensure_tab(&agent_id);
-        self.push_system_msg_to_tab(tab_idx, &format!("[{agent_id}] Error: {message}"));
         self.state.obs_log.push(ObsEvent {
             agent_id,
             kind: ObsEventKind::Error { message },
@@ -118,26 +178,34 @@ impl App {
         });
     }
 
-    pub(super) fn handle_prompt_done(&mut self, agent_id: String) {
-        if let Some(sb) = self.scrollback_for_agent(&agent_id) {
-            // Mark the streaming entry as complete.
+    pub(super) fn handle_prompt_done(&mut self, session_id: SessionId, agent_id: String) {
+        if let Some(idx) = self.state.session_store.index_of(session_id) {
+            let sb = &mut self.state.session_store.active[idx].scrollback;
             if let Some(entry_id) = sb.streaming_entry.remove(&agent_id)
-                && let Some(idx) = sb.index_of(entry_id)
+                && let Some(eidx) = sb.index_of(entry_id)
             {
-                match &mut sb.entries[idx].kind {
+                match &mut sb.entries[eidx].kind {
                     EntryKind::AgentResponse(resp) => resp.is_streaming = false,
                     EntryKind::Thinking(th) => {
                         th.is_streaming = false;
-                        // Auto-collapse completed thinking entries.
-                        sb.entries[idx].collapsed = true;
+                        sb.entries[eidx].collapsed = true;
                     }
                     _ => {}
                 }
-                sb.invalidate_entry(idx);
+                sb.invalidate_entry(eidx);
             }
         }
-        // Update agent status.
-        if let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id)
+        self.set_session_status(session_id, SessionStatus::Connected);
+        // Reflect activity in the agent's aggregate status when no
+        // other session is currently busy on this agent.
+        let any_busy = self
+            .state
+            .session_store
+            .active
+            .iter()
+            .any(|s| s.agent_id == agent_id && s.status == SessionStatus::Busy);
+        if !any_busy
+            && let Some(agent) = self.state.agents.iter_mut().find(|a| a.name == agent_id)
             && matches!(agent.status, AgentStatus::Busy)
         {
             agent.status = AgentStatus::Connected;

@@ -4,6 +4,7 @@
 //! for models and [`ToolProvider`](crate::tools::provider::ToolProvider) for tools.
 //! Each implementation manages one agent subprocess or remote connection.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use dynosaur::dynosaur;
@@ -12,7 +13,7 @@ use tokio::sync::mpsc;
 use crate::errors::Result;
 
 use super::event::{AgentEvent, PermissionRequestId, PermissionResponse};
-use super::session::AgentSessionInfo;
+use super::session::{AgentCapabilities, AgentSessionInfo};
 
 /// A provider that manages an interactive agent session.
 ///
@@ -41,7 +42,34 @@ pub trait AgentProvider: Send + Sync {
     fn protocol_name(&self) -> &str;
 
     /// Establish the agent session (spawn subprocess, handshake).
-    fn connect(&self) -> impl Future<Output = Result<AgentSessionInfo>> + Send;
+    ///
+    /// `cwd` is the working directory advertised to the agent in the ACP
+    /// `session/new` request; it is also used as the spawned subprocess's
+    /// current dir so filesystem tools resolve relative paths the same way
+    /// the agent sees them. Callers must pass an absolute path.
+    fn connect(&self, cwd: &Path) -> impl Future<Output = Result<AgentSessionInfo>> + Send;
+
+    /// Load an existing session by its agent-native id and replay its
+    /// history. Returns the new [`AgentSessionInfo`] (the same
+    /// `external_id` round-tripped) and a receiver that yields
+    /// [`AgentEvent`]s for every replayed `session/update` notification,
+    /// terminating with [`AgentEvent::HistoryReplayDone`].
+    ///
+    /// Only meaningful when [`capabilities`](Self::capabilities)
+    /// reports `load_session = true`. Implementations should error
+    /// otherwise; callers should gate at the call site.
+    fn load_session(
+        &self,
+        cwd: &Path,
+        external_id: &str,
+    ) -> impl Future<Output = Result<(AgentSessionInfo, mpsc::Receiver<AgentEvent>)>> + Send;
+
+    /// Capability flags advertised by the agent. Returns the cached
+    /// value from the most recent successful handshake; before any
+    /// [`connect`](Self::connect) or [`load_session`](Self::load_session)
+    /// has succeeded the result is `Default::default()` (all flags
+    /// false), per the ACP spec's defaults for unknown agents.
+    fn capabilities(&self) -> AgentCapabilities;
 
     /// Submit a prompt and receive a per-turn event stream.
     ///
@@ -79,8 +107,20 @@ impl<T: AgentProvider> AgentProvider for Arc<T> {
         (**self).protocol_name()
     }
 
-    async fn connect(&self) -> Result<AgentSessionInfo> {
-        (**self).connect().await
+    async fn connect(&self, cwd: &Path) -> Result<AgentSessionInfo> {
+        (**self).connect(cwd).await
+    }
+
+    async fn load_session(
+        &self,
+        cwd: &Path,
+        external_id: &str,
+    ) -> Result<(AgentSessionInfo, mpsc::Receiver<AgentEvent>)> {
+        (**self).load_session(cwd, external_id).await
+    }
+
+    fn capabilities(&self) -> AgentCapabilities {
+        (**self).capabilities()
     }
 
     async fn submit(&self, session_id: &str, text: String) -> Result<mpsc::Receiver<AgentEvent>> {

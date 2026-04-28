@@ -1,7 +1,7 @@
 use crate::input;
 use crate::model::{
-    ActivityEntry, AgentStatus, AutocompleteState, EntryKind, InputTarget, ObsEvent, ObsEventKind,
-    UserPrompt,
+    ActivityEntry, AgentStatus, AutocompleteCandidate, AutocompleteKind, AutocompleteState,
+    EntryKind, InputTarget, ObsEvent, ObsEventKind, SessionStatus, UserPrompt, title_from_prompt,
 };
 
 use std::time::Instant;
@@ -27,6 +27,29 @@ impl App {
             }
         };
 
+        // Slash autocomplete: trigger when the cursor is inside the
+        // first token of the first line and that token starts with
+        // `/`. Multi-line inputs don't get slash autocomplete.
+        if row == 0
+            && let Some(slash_prefix) = slash_autocomplete_prefix(line, col)
+        {
+            let cmds = filter_slash_commands(&slash_prefix);
+            if !cmds.is_empty() {
+                self.state.autocomplete = Some(AutocompleteState {
+                    kind: AutocompleteKind::SlashCommand,
+                    prefix: slash_prefix,
+                    candidates: cmds,
+                    selected: 0,
+                });
+                return;
+            }
+            // Even when no commands match, suppress the @-popup —
+            // user is clearly typing a slash command.
+            self.state.autocomplete = None;
+            return;
+        }
+
+        // @-mention autocomplete.
         let prefix = match input::autocomplete_prefix(line, col) {
             Some(p) => p,
             None => {
@@ -36,11 +59,19 @@ impl App {
         };
 
         let agent_names: Vec<String> = self.state.agents.iter().map(|a| a.name.clone()).collect();
-        let candidates = input::filter_candidates(&prefix, &agent_names);
+        let candidates: Vec<AutocompleteCandidate> =
+            input::filter_candidates(&prefix, &agent_names)
+                .into_iter()
+                .map(|name| AutocompleteCandidate {
+                    value: name,
+                    description: None,
+                })
+                .collect();
         if candidates.is_empty() {
             self.state.autocomplete = None;
         } else {
             self.state.autocomplete = Some(AutocompleteState {
+                kind: AutocompleteKind::AtMention,
                 prefix,
                 candidates,
                 selected: 0,
@@ -49,20 +80,33 @@ impl App {
     }
 
     pub(super) fn accept_autocomplete(&mut self) {
-        let chosen = match &self.state.autocomplete {
-            Some(ac) => ac.candidates.get(ac.selected).cloned(),
-            None => None,
+        let snapshot = self.state.autocomplete.as_ref().map(|ac| {
+            (
+                ac.kind.clone(),
+                ac.prefix.clone(),
+                ac.candidates.get(ac.selected).cloned(),
+            )
+        });
+        let Some((kind, prefix, Some(chosen))) = snapshot else {
+            self.close_autocomplete();
+            return;
         };
-        let prefix_len = self
-            .state
-            .autocomplete
-            .as_ref()
-            .map_or(0, |ac| ac.prefix.len());
 
-        if let Some(name) = chosen {
-            self.state.input.delete_before(prefix_len);
-            self.state.input.insert_str(&name);
-            self.state.input.insert_char(' ');
+        match kind {
+            AutocompleteKind::AtMention => {
+                // Replace just the typed prefix; we leave the leading `@`.
+                self.state.input.delete_before(prefix.chars().count());
+                self.state.input.insert_str(&chosen.value);
+                self.state.input.insert_char(' ');
+            }
+            AutocompleteKind::SlashCommand => {
+                // Replace the whole typed `/<prefix>` with the full command
+                // (which already includes the leading `/`) plus a trailing
+                // space so the user can start typing arguments.
+                self.state.input.delete_before(prefix.chars().count() + 1);
+                self.state.input.insert_str(&chosen.value);
+                self.state.input.insert_char(' ');
+            }
         }
 
         self.close_autocomplete();
@@ -73,9 +117,49 @@ impl App {
         self.state.autocomplete = None;
     }
 
+    pub(super) fn autocomplete_next(&mut self) {
+        if let Some(ac) = self.state.autocomplete.as_mut()
+            && !ac.candidates.is_empty()
+        {
+            ac.selected = (ac.selected + 1) % ac.candidates.len();
+        }
+    }
+
+    pub(super) fn autocomplete_prev(&mut self) {
+        if let Some(ac) = self.state.autocomplete.as_mut()
+            && !ac.candidates.is_empty()
+        {
+            ac.selected = if ac.selected == 0 {
+                ac.candidates.len() - 1
+            } else {
+                ac.selected - 1
+            };
+        }
+    }
+
     pub(super) fn submit_input(&mut self) {
         let raw_text = self.state.input.text();
         if raw_text.trim().is_empty() {
+            return;
+        }
+
+        // Slash commands take precedence over agent routing. Unknown
+        // `/...` input prints a "(no such command)" hint instead of
+        // being sent verbatim to an agent — this matches the v3 doc
+        // and avoids accidentally leaking a typo into the model's
+        // context.
+        if raw_text.trim_start().starts_with('/') {
+            let cfg = self.bitrouter_config.clone();
+            let handled = self.try_handle_slash(&raw_text, &cfg);
+            self.state.input.clear();
+            self.state.input_target = InputTarget::Default;
+            self.close_autocomplete();
+            if !handled {
+                let cmd = raw_text.trim().to_string();
+                self.push_system_msg(&format!(
+                    "(no such command: {cmd}) — type / for available commands"
+                ));
+            }
             return;
         }
 
@@ -87,50 +171,22 @@ impl App {
             return;
         }
 
-        // Resolve target agent(s).
+        // Resolve target agent(s). Default routing requires an active
+        // session — we never auto-pick "the first available agent",
+        // because the order of `state.agents` is not stable across
+        // restarts and silently spawning a random agent on the user's
+        // first message is a footgun.
         let targets: Vec<String> = match &target {
-            InputTarget::Default => {
-                // Route to active tab's agent, or find first available.
-                if let Some(name) = self.state.active_agent_name() {
-                    vec![name.to_string()]
-                } else {
-                    // No active tab — try first connected agent.
-                    match self
-                        .state
-                        .agents
-                        .iter()
-                        .find(|a| matches!(a.status, AgentStatus::Connected | AgentStatus::Busy))
-                    {
-                        Some(a) => vec![a.name.clone()],
-                        None => {
-                            // Try first available agent (will lazy-connect).
-                            match self.state.agents.iter().find(|a| a.config.is_some()) {
-                                Some(a) => vec![a.name.clone()],
-                                None => {
-                                    self.push_system_msg("No agents available. Install an ACP agent and ensure it's on PATH.");
-                                    return;
-                                }
-                            }
-                        }
-                    }
+            InputTarget::Default => match self.state.active_agent_name() {
+                Some(name) => vec![name.to_string()],
+                None => {
+                    self.push_system_msg(
+                        "No active session — run /session new or address an agent with @<name>.",
+                    );
+                    return;
                 }
-            }
+            },
             InputTarget::Specific(names) => names.clone(),
-            InputTarget::All => self
-                .state
-                .agents
-                .iter()
-                .filter(|a| {
-                    matches!(
-                        a.status,
-                        AgentStatus::Connected
-                            | AgentStatus::Busy
-                            | AgentStatus::Idle
-                            | AgentStatus::Available
-                    ) && a.config.is_some()
-                })
-                .map(|a| a.name.clone())
-                .collect(),
         };
 
         if targets.is_empty() {
@@ -138,16 +194,54 @@ impl App {
             return;
         }
 
-        // Push user prompt to each target tab's scrollback.
-        for agent_name in &targets {
-            let tab_idx = self.ensure_tab(agent_name);
-            let sb = &mut self.state.tabs[tab_idx].scrollback;
+        // For each target, find or create a session and push the user prompt
+        // into that session's scrollback. Routing always goes through the
+        // active session for `Default`, never an arbitrary first match.
+        // For Default routing, the first target should land in the
+        // currently-active session — but only when that session is
+        // actually for the right agent. Compute the candidate index
+        // once here so we don't double-look-up inside the loop.
+        let active_idx_for_default = self
+            .state
+            .session_store
+            .active
+            .get(self.state.active_session)
+            .map(|s| (s.id, s.agent_id.clone()));
+        let mut target_session_ids = Vec::with_capacity(targets.len());
+
+        for (i, agent_name) in targets.iter().enumerate() {
+            let session_idx = match (&target, i, &active_idx_for_default) {
+                (InputTarget::Default, 0, Some((active_id, active_agent)))
+                    if active_agent == agent_name =>
+                {
+                    // We already know `active_id` is in the store
+                    // because we read it from the active slot above.
+                    // Fall back to ensure_session_for_agent if the
+                    // store mutated between then and now (it can't
+                    // today, but defensive code is cheap).
+                    self.state
+                        .session_store
+                        .index_of(*active_id)
+                        .unwrap_or_else(|| self.ensure_session_for_agent(agent_name))
+                }
+                // Otherwise, find the first session for that agent or create one.
+                _ => self.ensure_session_for_agent(agent_name),
+            };
+            let session_id = self.state.session_store.active[session_idx].id;
+            target_session_ids.push((session_id, session_idx));
+
+            // Auto-set the session's title from the first user prompt.
+            let session = &mut self.state.session_store.active[session_idx];
+            if session.title.is_none() {
+                session.title = title_from_prompt(&clean_text);
+            }
+
+            let sb = &mut session.scrollback;
             let id = sb.next_id();
             sb.push_entry(ActivityEntry {
                 id,
                 kind: EntryKind::UserPrompt(UserPrompt {
                     text: raw_text.clone(),
-                    targets: targets.clone(),
                 }),
                 collapsed: false,
             });
@@ -158,28 +252,51 @@ impl App {
         self.state.input_target = InputTarget::Default;
         self.close_autocomplete();
 
-        // Switch to the first target's tab.
-        if let Some(first_target) = targets.first()
-            && let Some(tab_idx) = self.tab_for_agent(first_target)
-        {
-            self.switch_tab(tab_idx);
+        // Switch to the first target's session.
+        if let Some(&(_, first_idx)) = target_session_ids.first() {
+            self.switch_session(first_idx);
             if let Some(sb) = self.state.active_scrollback_mut() {
                 sb.follow = true;
             }
         }
 
-        // Send to each target agent.
-        for agent_name in &targets {
-            // Lazy-connect if needed.
-            if !self.agent_providers.contains_key(agent_name) {
-                self.connect_agent(agent_name);
-            }
-            // Reset streaming cursor for fresh response.
-            if let Some(sb) = self.scrollback_for_agent(agent_name) {
-                sb.streaming_entry.remove(agent_name);
+        // Send to each target session.
+        for (i, agent_name) in targets.iter().enumerate() {
+            let (session_id, session_idx) = target_session_ids[i];
+
+            // If the session has no acp_session_id yet, kick off connect.
+            let acp_id_present = self.state.session_store.active[session_idx]
+                .acp_session_id
+                .is_some();
+            if !acp_id_present {
+                if !self.session_system.has_provider(agent_name) {
+                    // No provider yet: spawn one bound to this existing session.
+                    let config = self
+                        .state
+                        .agents
+                        .iter()
+                        .find(|a| a.name == *agent_name)
+                        .and_then(|a| a.config.clone());
+                    if let Some(cfg) = config {
+                        self.session_system
+                            .spawn_session(session_id, agent_name, &cfg);
+                    }
+                }
+                // Prompt will fail until SessionConnected lands; queue would be
+                // a future enhancement. For now, surface a hint and skip.
+                self.push_system_msg_to_session(
+                    session_idx,
+                    "Session still connecting — try again in a moment.",
+                );
+                continue;
             }
 
-            // Mark as busy.
+            // Reset streaming cursor on this session's scrollback for fresh response.
+            let sb = &mut self.state.session_store.active[session_idx].scrollback;
+            sb.streaming_entry.remove(agent_name);
+
+            // Mark session + agent as busy.
+            self.state.session_store.active[session_idx].status = SessionStatus::Busy;
             if let Some(agent) = self.state.agents.iter_mut().find(|a| &a.name == agent_name)
                 && matches!(agent.status, AgentStatus::Connected)
             {
@@ -187,12 +304,121 @@ impl App {
             }
 
             // Send prompt via provider (async via background task).
-            self.send_prompt_to_agent(agent_name, clean_text.clone());
+            self.send_prompt_to_session(session_id, clean_text.clone());
             self.state.obs_log.push(ObsEvent {
                 agent_id: agent_name.clone(),
                 kind: ObsEventKind::PromptSent,
                 timestamp: Instant::now(),
             });
         }
+    }
+}
+
+/// Static catalog of slash commands surfaced by the `/`-autocomplete
+/// popup. Order here is the visual order in the popup. Values must be
+/// in sync with the parser in `slash::parse_slash`.
+const SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("/help", "show keyboard reference"),
+    ("/session", "list active and importable sessions"),
+    ("/session new", "spawn a new session (opens agent picker)"),
+    ("/session switch", "switch active session (opens picker)"),
+    ("/session close", "close the active session"),
+    ("/session rename", "rename the active session's tab"),
+    (
+        "/session import",
+        "import an on-disk session (opens picker)",
+    ),
+    ("/session prev", "switch to the previous session tab"),
+    ("/session next", "switch to the next session tab"),
+    ("/session clear", "clear the active session's scrollback"),
+    ("/agents", "list registry agents"),
+    ("/agents install", "install an agent (with id)"),
+    ("/agents uninstall", "uninstall an agent (with id)"),
+    ("/agents update", "update one (or all) installed agents"),
+    ("/agents discover", "rescan PATH for agents"),
+    ("/agents disconnect", "disconnect an agent's sessions"),
+    ("/providers", "show configured LLM providers"),
+    ("/obs", "observability summary"),
+    ("/login", "login (CLI flow)"),
+    ("/logout", "logout (CLI flow)"),
+    ("/whoami", "show current identity (CLI flow)"),
+];
+
+/// Detect a slash autocomplete prefix on the current input line.
+/// Returns the chars typed *after* the leading `/` (so `/se` returns
+/// `Some("se")`). Triggers only when the input line starts with `/`
+/// and the cursor is inside or at the end of the first token.
+fn slash_autocomplete_prefix(line: &str, cursor_col: usize) -> Option<String> {
+    let trimmed = line.trim_start();
+    let leading_ws = line.len() - trimmed.len();
+    if !trimmed.starts_with('/') {
+        return None;
+    }
+    // Cursor position in chars; slash autocomplete is line-prefix-only.
+    if cursor_col == 0 {
+        return None;
+    }
+    // Find the end of the typed prefix: the first whitespace boundary
+    // after the leading `/`. If the cursor is past that, the user has
+    // moved on to typing arguments — suppress the popup.
+    let chars: Vec<char> = line.chars().collect();
+    // Find slash position (in chars).
+    let slash_char_pos = leading_ws; // 1 byte == 1 char for ASCII whitespace
+    if cursor_col <= slash_char_pos {
+        return None;
+    }
+    // Walk forward from the slash; stop at whitespace.
+    let mut end = slash_char_pos + 1;
+    while end < chars.len() && !chars[end].is_whitespace() {
+        end += 1;
+    }
+    if cursor_col > end {
+        return None;
+    }
+    let prefix: String = chars[(slash_char_pos + 1)..cursor_col].iter().collect();
+    Some(prefix)
+}
+
+fn filter_slash_commands(prefix: &str) -> Vec<AutocompleteCandidate> {
+    let lower = prefix.to_lowercase();
+    SLASH_COMMANDS
+        .iter()
+        .filter(|(cmd, _)| cmd[1..].to_lowercase().starts_with(&lower))
+        .map(|(cmd, desc)| AutocompleteCandidate {
+            value: cmd.to_string(),
+            description: Some(desc.to_string()),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod slash_ac_tests {
+    use super::*;
+
+    #[test]
+    fn prefix_detected_at_start() {
+        assert_eq!(slash_autocomplete_prefix("/", 1).as_deref(), Some(""));
+        assert_eq!(slash_autocomplete_prefix("/s", 2).as_deref(), Some("s"));
+        assert_eq!(
+            slash_autocomplete_prefix("/session", 8).as_deref(),
+            Some("session")
+        );
+    }
+
+    #[test]
+    fn prefix_suppressed_after_first_token() {
+        assert_eq!(slash_autocomplete_prefix("/session new", 12), None);
+    }
+
+    #[test]
+    fn no_prefix_for_non_slash_lines() {
+        assert_eq!(slash_autocomplete_prefix("hello", 5), None);
+    }
+
+    #[test]
+    fn filter_starts_with() {
+        let r = filter_slash_commands("se");
+        assert!(r.iter().any(|c| c.value == "/session"));
+        assert!(!r.iter().any(|c| c.value == "/agents"));
     }
 }
