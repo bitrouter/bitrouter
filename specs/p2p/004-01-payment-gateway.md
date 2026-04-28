@@ -130,7 +130,7 @@ PGW 至少做这些事：
     { "endpoint_id": "ed25519:<...>", "region": "geo:eu-west-1", "node_addr": {...} }
   ],
   "models": [...],
-  "accepted_payment_gateways": [
+  "accepted_pgws": [
     {
       "pgw_id": "ed25519:<root pubkey>",       // PGW 长期身份（root pubkey），不是 endpoint_id
       "settlement_contract": "ipfs://...",     // 链下合约 hash 或链上 ref
@@ -144,7 +144,7 @@ PGW 至少做这些事：
       ]
     }
   ],
-  "sig": "ed25519:<root sig over snapshot>"
+  "proofs": [{ "...": "bitrouter/proof/ed25519-jcs/0 over the Registry payload" }]
 }
 ```
 
@@ -228,7 +228,7 @@ PGW↔Provider 不必遵守这一条。可以是：
 
 > 如果 PGW 不被 L3 协议层认知，PGW↔Provider 的优化就只能靠"约定俗成"或私有扩展，无法标准化。
 >
-> 把 PGW 立成协议层角色后，可以在 L3 spec 里定义 `bitrouter/pgw/0` 这条专用 ALPN（与 `bitrouter/p2p/0` 并列），跑一套 PGW-flavor 的轻量化协议。
+> 把 PGW 立成协议层角色后，可以在 L3 spec 里定义 `bitrouter/pgw/0` 这条专用 ALPN（与 `bitrouter/direct/0` 并列），跑一套 PGW-flavor 的轻量化协议。
 
 ---
 

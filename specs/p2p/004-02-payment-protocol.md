@@ -723,7 +723,7 @@ testnet 使用 `did:pkh:eip155:42431:0x...`。`payload.tempo.voucher` 必须是 
 
 - **§2.3 preamble**：`Authorization: Payment` 头新增 `protocol`、`method`、`intent`、`currency`、`recipient` 字段，语义与值格式沿用 [`mpp::ChargeRequest`](https://github.com/tempoxyz/mpp-rs/blob/main/src/protocol/intents/charge.rs) / `mpp::SessionRequest` / `mpp::PaymentChallenge` 字段——005 直接通过上游类型序列化进 wire，**不再自己重定义 wire 字段**。
 - **§2.4 challenge**：Challenge JSON 直接是 [`mpp::PaymentChallenge`](https://github.com/tempoxyz/mpp-rs/blob/main/src/protocol/core/challenge.rs) 的序列化产物（`request` 子字段 = `mpp::Base64UrlJson<ChargeRequest|SessionRequest>`）。005 必须 echo 回 `(protocol, method, intent, currency)` 让 Consumer 校验；echo 字段直接读上游 struct。
-- **§2.5 `Payment-Receipt` trailer**：直接序列化 MPP `Receipt`，并按 005 追加 Provider ed25519 `Payment-Receipt-Sig`。
+- **§2.5 `Payment-Receipt` trailer**：直接承载 005 定义的 `bitrouter/payment/receipt/0` signed envelope；envelope `payload` 对齐 MPP `Receipt`，`proofs[]` 由 Provider ed25519 root key 生成。
 - **§2.6 错误码**：新增 `protocol_not_offered`、`method_not_offered`、`intent_not_supported_for_scheme`、`currency_not_supported`、`method_details_invalid`（最后一项对应上游 method-specific 类型反序列化失败）。
 - **§4 (method × intent) 实现状态详解**：把 §4 表格替换为本文 §5 矩阵的 reference 链接，避免两处维护。
 - ==**Cargo 依赖**==：005 文档应当明确节点实现侧 `Cargo.toml` 依赖 `mpp = "0.10"`（与本文 §3.7 一致），并强调 wire 层"零重复"——任何 wire 字段都不在 BitRouter 仓库中重新定义。

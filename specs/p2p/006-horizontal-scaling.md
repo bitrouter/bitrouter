@@ -92,8 +92,7 @@
     { "endpoint_id": "ed25519:<...>", "region": "geo:us-east-1", /* ... */ }
   ],
   "models": [...],                               // provider 级共享
-  "accepted_pgws": {...},                        // provider 级共享
-  "sig": "ed25519:<root sig>"                    // 覆盖整份 snapshot
+  "accepted_pgws": {...}                         // provider 级共享；外层 signed envelope 的 proofs[] 覆盖整份 payload
 }
 ```
 
@@ -110,7 +109,7 @@ Local Router（[`003`](./003-l3-design.md) §5.2）在选 Provider 候选时：
 
 ### 2.5 一致性约束（自动满足）
 
-==**snapshot 的原子性已经天然保证**==——`pricing[]` / `models[]` / `accepted_pgws` 是 provider 级字段，被同一份 root sig 覆盖，根本不存在"多 endpoint 字段不一致"这种状态（这是相比旧"多 entry + logical_id"模型的关键简化）。CI 无需额外校验。
+==**snapshot 的原子性已经天然保证**==——`pricing[]` / `models[]` / `accepted_pgws` 是 provider 级字段，被同一份 root proof 覆盖，根本不存在"多 endpoint 字段不一致"这种状态（这是相比旧"多 entry + logical_id"模型的关键简化）。CI 无需额外校验。
 
 ---
 
@@ -292,5 +291,5 @@ PGW ep_P (gP)   ch_{P,1}       ch_{P,2}       ...  ch_{P,Q}
 
 - **`pgw_id` 在链上声誉 / 抵押聚合**：当 `pgw_id` 在 4.1 trust_anchors 中需要展示 collateral 时，是公告"所有子密钥的总锁仓"还是"root key 单独抵押"？snapshot 内可声明一个 anchor 聚合公式。
 - **同 `pgw_id` 子密钥旋转 / 撤销**：HD 派生子密钥被泄露时如何在 snapshot 标"已撤销"——机制已有（直接发新 snapshot 替换 `endpoints[]` / `chain_addrs[]`），但子密钥与 endpoint_id 的绑定关系是否需要一个独立的 `revoked_chain_addrs[]` 字段以保留历史可审计性？
-- **canonical hash 算法**：[`003 §8.1`](./003-l3-design.md) 已规定为 `sha256(canonical_json(snapshot))`；canonical JSON 序列化（字段顺序、数字格式）的具体规范待定（建议 RFC 8785 JCS）。
+- **canonical hash 算法**：[`001-03`](./001-03-protocol-conventions.md) 已规定为 `sha256(JCS(payload))`，字符串形式为 `sha256:<base58btc>`。
 - **Local Router 区域感知数据来源**：client 的"地理位置"如何评估？（IP geoIP / 用户配置 / 上次连接 RTT 学习）——超出 P2P 范围，留给 BitRouter 主仓产品决策。

@@ -108,7 +108,7 @@ bitrouter-p2p/
 
 - `ApiProtocol::P2p`；
 - P2P provider route target 的 transport-neutral 标识；
-- root identity 字符串解析（若主仓库其他模块也要验证 `ed25519:<z-base32>`）。
+- root identity 字符串解析（若主仓库其他模块也要验证 `ed25519:<base58btc>`）。
 
 不进入 `bitrouter-core`：
 
@@ -261,7 +261,7 @@ P2P Provider 不定义第二套支付配置。
 Registry 在主仓库集成中被视为“去中心化状态的公开静态替代”：
 
 1. Registry 数据由 `bitrouter-registry` public GitHub repository 中的 signed node item 与 committed aggregate `registry/v0/registry.json` 表达。
-2. `bitrouter-p2p` Consumer client 只读取 raw `registry.json`，本地验证 schema、Provider signature、`seq`、`valid_until`、status、pricing 与 endpoint 格式。
+2. `bitrouter-p2p` Consumer client 只读取 raw `registry.json`，本地验证 schema、Provider proof、`seq`、`valid_until`、status、pricing 与 endpoint 格式。
 3. Registry **不做准入**：不判断某 Provider 是否“被允许经营”、是否 KYC、是否有商业合同、是否进入 curated set。
 4. 准入、商业关系、风控、发票、客户入口等放到未来 BitRouter Cloud PGW 或其他 PGW 中完成。
 5. Consumer 从 Registry 得到“provider 自签并通过公开 PR 合并的广告状态”；是否信任该 Provider，由本地策略、PGW、allowlist、reputation 或未来机制决定。
@@ -321,7 +321,7 @@ Authorization: Payment <base64url(JCS(credential_json))>
 
 共同规则：
 
-1. ALPN 固定为 `bitrouter/p2p/0`，内容是标准 HTTP/3。
+1. ALPN 固定为 `bitrouter/direct/0`，内容是标准 HTTP/3。
 2. 第一次请求可以不带 `Authorization: Payment`；Provider 返回 `402 + WWW-Authenticate: Payment ...`。
 3. Consumer 用同一个 request body 生成 / 绑定 MPP credential 后重发。
 4. `BR-Protocol-Version` 是 L3 版本协商头；缺省按 `0` 处理。
@@ -394,8 +394,8 @@ GET /v1/payments/receipts/{challenge_id}
 | 标识 | 计算 / 来源 | 用途 |
 |---|---|---|
 | `challenge_id` | MPP challenge `id` | lookup key |
-| `receipt_hash` | `sha256(JCS(receipt_json))`，表示为 `sha256:<hex>` | 内容完整性、幂等缓存、日志关联 |
-| `Payment-Receipt-Sig` | Provider `provider_id` 对 `JCS(receipt_json)` 的 ed25519 签名 | 真实性与不可抵赖性 |
+| `receipt_hash` | `sha256(JCS(receipt_envelope_json))`，表示为 `sha256:<base58btc>` | 内容完整性、幂等缓存、日志关联 |
+| `Payment-Receipt.proofs[]` | Provider `provider_id` 对 receipt envelope 的 ed25519-JCS proof | 真实性与不可抵赖性 |
 
 数据库表建议：
 
@@ -406,9 +406,9 @@ p2p_payment_receipts
 ├── endpoint_id TEXT NULL
 ├── channel_id TEXT NULL
 ├── receipt_hash TEXT NOT NULL
-├── receipt_json JSON/TEXT NOT NULL
-├── receipt_jcs_b64 TEXT NOT NULL
-├── receipt_sig_b64 TEXT NOT NULL
+├── receipt_envelope_json JSON/TEXT NOT NULL
+├── receipt_envelope_jcs_b64 TEXT NOT NULL
+├── receipt_proof JSON/TEXT NOT NULL
 ├── created_at TIMESTAMP NOT NULL
 └── expires_at TIMESTAMP NOT NULL
 ```
@@ -422,9 +422,9 @@ p2p_payment_receipts
 Consumer 校验：
 
 1. 解析 body / header 中的 receipt。
-2. 重新计算 `sha256(JCS(receipt_json))`。
-3. 校验 `receipt.challenge_id == challenge_id`。
-4. 用 Provider snapshot 中的 `provider_id` 验证 `Payment-Receipt-Sig`。
+2. 重新计算 `sha256(JCS(receipt_envelope_json))`。
+3. 校验 `receipt.payload.challenge_id == challenge_id`。
+4. 用 Provider snapshot 中的 `provider_id` 验证 `Payment-Receipt.proofs[]`。
 5. 校验 channel_id、settlement amount、status。
 
 ---
@@ -455,6 +455,6 @@ Consumer 校验：
 | INT-7 | receipt fallback 使用数据库表持久化 |
 | INT-8 | P2P Provider 复用现有 `LanguageModelRouter`，不复制 provider adapter |
 | INT-9 | P2P payment 复用 `mpp-br` / OWS / Tempo backend |
-| INT-10 | Registry client 可读取 raw `registry.json`、验证 signature / `valid_until` / status，并本地筛选 endpoint |
+| INT-10 | Registry client 可读取 raw `registry.json`、验证 proof / `valid_until` / status，并本地筛选 endpoint |
 | INT-11 | Provider CLI 可导出 signed node item / tombstone；主仓库不实现 Registry publish API 或 mutation gas fee |
 | INT-12 | `cargo fmt -- --check`、`cargo clippy --all-features`、`cargo test --all-features` 通过 |

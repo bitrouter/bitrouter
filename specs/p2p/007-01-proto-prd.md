@@ -64,7 +64,7 @@
 | AC-3 | Consumer CLI 一行命令完成 PGW 路径推理调用 | `bitrouter-cli chat --via-pgw ...` 退出码 0 |
 | AC-4 | Direct 与 PGW 两条路径各跑 100 次连续调用，0 错误 | 自动化脚本 + 退出码统计 |
 | AC-5 | PGW 路径下，账目可对：Σ`gross_quote` = Σ`provider_share` + Σ`gateway_share`，并且 Tempo channel 上链余额 = 累计 voucher delta | 财务对账脚本 |
-| AC-6 | Provider snapshot CI 全规则通过（Schema lint + sig + seq + pricing 校验） | GitHub Actions 全绿 |
+| AC-6 | Provider snapshot CI 全规则通过（Schema lint + proof + seq + pricing 校验） | GitHub Actions 全绿 |
 | AC-7 | Registry 服务从冷启动到对外可查 < 5 秒 | 运维测量 |
 | AC-8 | Provider 或 PGW 离线时，Consumer 拨号失败有清晰错误码（不卡死） | 故障注入测试 |
 
@@ -75,7 +75,7 @@
 ```
                         ┌────────────────────────────────────────┐
                         │   bitrouter-registry (git repo, 私有)  │
-                        │   PR + CI 强制 schema/sig/seq 校验     │
+                        │   PR + CI 强制 schema/proof/seq 校验     │
                         └────────────────┬───────────────────────┘
                                          │  pull (定时 / webhook)
                                          ▼
@@ -87,7 +87,7 @@
                         │  GET /v0/pgws (list)                   │
                         └─────┬───────────────────────┬──────────┘
                               │ HTTPS                 │ HTTPS
-                              │ (snapshot+sig)        │ (snapshot+sig)
+                              │ (signed snapshot+proof)        │ (signed snapshot+proof)
                               ▼                       ▼
               ┌──────────────────┐        ┌──────────────────┐
               │  consumer-cli    │        │  pgw-node        │
@@ -141,8 +141,8 @@
 - 所有 JSON 使用 RFC 8785 JCS canonical 序列化做哈希 / 签名。
 - 所有时间 RFC 3339 UTC（如 `2026-04-01T00:00:00Z`）。
 - 所有金额十进制字符串（如 `"3.00"`、`"0.000001"`），单位标注于同级字段（`currency`）。
-- 所有 ed25519 公钥编码为 `ed25519:<z-base32>` 字符串。
-- 所有 ed25519 签名编码为 `ed25519:<z-base32>` 字符串。
+- 所有 ed25519 公钥编码为 `ed25519:<base58btc>` 字符串。
+- 所有 ed25519 签名编码为 `ed25519:<base58btc>` 字符串。
 - 所有 EVM 地址使用 EIP-55 checksum。
 - 所有链上资产用 CAIP-10：`eip155:4217/erc20:0x20c0000000000000000000000000000000000000`。
 
@@ -159,7 +159,7 @@
 
   "seq": 1,
   "valid_until": "2026-07-01T00:00:00Z",
-  "snapshot_hash_alg": "sha256-canonical-json",
+  "payload_hash": "sha256:<base58btc>",
 
   "endpoints": [
     {
@@ -173,7 +173,7 @@
         { "chain": "tempo", "addr": "eip155:4217:0xabcDef0123456789abcDef0123456789abcDef01" }
       ],
       "capacity": { "concurrent_requests": 4 },
-      "alpn": "bitrouter/p2p/0",
+      "alpn": "bitrouter/direct/0",
       "min_l3_version": 0,
       "max_l3_version": 0,
       "added_at": "2026-04-01"
@@ -214,7 +214,7 @@
     "whitelist": ["ed25519:<bitrouter-cloud pgw_id>"]
   },
 
-  "sig": "ed25519:<root sig over canonical_json(snapshot \\ sig)>"
+  "proofs": [{ "...": "bitrouter/proof/ed25519-jcs/0" }]
 }
 ```
 
@@ -241,7 +241,7 @@
 
   "seq": 1,
   "valid_until": "2026-07-01T00:00:00Z",
-  "snapshot_hash_alg": "sha256-canonical-json",
+  "payload_hash": "sha256:<base58btc>",
 
   "endpoints": [
     {
@@ -255,7 +255,7 @@
         { "chain": "tempo", "addr": "eip155:4217:0x123456789aBcDef0123456789aBcDef012345678" }
       ],
       "capacity": { "concurrent_requests": 32 },
-      "alpn": "bitrouter/p2p/0",
+      "alpn": "bitrouter/direct/0",
       "min_l3_version": 0,
       "max_l3_version": 0,
       "added_at": "2026-04-01"
@@ -274,7 +274,7 @@
     "onboarding_endpoint": "/v1/_pgw/onboard"
   },
 
-  "sig": "ed25519:<root sig over canonical_json(snapshot \\ sig)>"
+  "proofs": [{ "...": "bitrouter/proof/ed25519-jcs/0" }]
 }
 ```
 
@@ -290,7 +290,7 @@
 HTTP header（PGW 转发请求时附加；v0 完整字段）：
 
 ```
-Order-Envelope: <base64url(canonical_json(envelope))>
+Order-Envelope: <base64url(JCS(order_envelope))>
 ```
 
 ```jsonc
@@ -299,8 +299,8 @@ Order-Envelope: <base64url(canonical_json(envelope))>
   "order_id": "<uuid v4>",
   "provider_id": "ed25519:abc...xyz",
   "pgw_id": "ed25519:def...uvw",
-  "provider_pricing_policy_hash": "sha256:<hex>",   // sha256(provider snapshot canonical_json)
-  "consumer_request_hash": "sha256:<hex>",          // sha256(inbound HTTP request body)
+  "provider_pricing_policy_hash": "sha256:<base58btc>",   // sha256(provider snapshot signed envelope JCS)
+  "consumer_request_hash": "sha256:<base58btc>",          // sha256(inbound HTTP request body)
   "model": "claude-3-5-sonnet-20241022",
   "max_input_tokens": 1024,
   "max_output_tokens": 2048,
@@ -312,7 +312,7 @@ Order-Envelope: <base64url(canonical_json(envelope))>
   "intent": "session",
   "session_id": "<channel_id>",
   "expires_at": "<RFC 3339, now + 30s>",
-  "sig": "ed25519:<pgw_id root sig>"
+  "proofs": [{ "...": "bitrouter/proof/ed25519-jcs/0 signed by pgw_id" }]
 }
 ```
 
@@ -384,7 +384,7 @@ Content-Type: application/json
   "actual_amount": "0.001432",
   "voucher_nonce": 1235,
   "voucher_cumulative_amount": "0.159832",
-  "provider_sig": "ed25519:<provider_id sig over above fields>"
+  "provider_proof": { "...": "bitrouter/proof/ed25519-jcs/0 signed by provider_id" }
 }
 ```
 
@@ -416,7 +416,7 @@ bitrouter-registry/
 | # | 规则 | 失败码 |
 |---|---|---|
 | R-1 | JSON Schema lint（按 `schema/*.schema.json`） | `schema_invalid` |
-| R-2 | `sig` 验证：`verify_ed25519(canonical_json(snapshot \ sig), provider_id 或 pgw_id, sig)` | `bad_signature` |
+| R-2 | `proofs[]` 验证：`verify_ed25519(signed envelope JCS(signed envelope payload), provider_id 或 pgw_id, proof)` | `bad_signature` |
 | R-3 | `seq` 严格单调：同 `provider_id`/`pgw_id`，新 snapshot 的 `seq` 必须 == 旧 + 1 | `seq_not_monotonic` |
 | R-4 | `valid_until` 在 `[now + 7d, now + 365d]` 范围 | `valid_until_out_of_range` |
 | R-5 | `endpoints[]` 长度 == 1（v0 限制） | `multi_endpoint_not_allowed_in_v0` |
@@ -431,16 +431,16 @@ bitrouter-registry/
 | Path | 返回 |
 |---|---|
 | `GET /v0/providers` | `[ { "provider_id": "...", "models": [...], "status": "active" } ]`（精简列表，便于发现） |
-| `GET /v0/providers/{provider_id}` | 完整 snapshot JSON + sig（原文件） |
+| `GET /v0/providers/{provider_id}` | 完整 snapshot JSON  + proof（原文件） |
 | `GET /v0/pgws` | 同上精简列表 |
-| `GET /v0/pgws/{pgw_id}` | 完整 snapshot JSON + sig |
+| `GET /v0/pgws/{pgw_id}` | 完整 snapshot JSON  + proof |
 | `GET /v0/healthz` | `{ "status": "ok", "git_head": "<sha>", "loaded_at": "<RFC 3339>" }` |
 
 服务实现要点：
 
 - 启动时 `git clone --depth=1`，加载到内存。
 - 每 60 秒 `git pull`；HEAD 变更 → 重建内存索引。
-- ==**服务自身被假设为不可信**==——客户端必须验证返回 snapshot 的 `sig` 才能信任内容。
+- ==**服务自身被假设为不可信**==——客户端必须验证返回 snapshot 的 `proofs[]` 才能信任内容。
 
 ---
 
@@ -453,7 +453,7 @@ CLI：`bitrouter-node --role=provider --config=provider.toml`
 | 模块 | 行为 |
 |---|---|
 | Identity | 启动时加载 / 生成 ed25519 keypair；密钥文件本地持久化。`provider_id == endpoint_id`（v0） |
-| L1/L2 | iroh `Endpoint`（ALPN `bitrouter/p2p/0`）；relay = 自托管 |
+| L1/L2 | iroh `Endpoint`（ALPN `bitrouter/direct/0`）；relay = 自托管 |
 | Snapshot 发布 | CLI 子命令 `bitrouter-cli snapshot prepare --provider --models=... --pricing=...`，输出 JSON；运维拷贝到 git 仓库提 PR |
 | 路由 | 接收 QUIC 连接 → 解析 HTTP `/v1/chat/completions` |
 | Direct 路径 | 无 `Order-Envelope` header → 走 402 Challenge → 等 Consumer 出 Credential 开 channel → 校验 → 推理 |
@@ -491,8 +491,8 @@ bitrouter-cli wallet balance
 
 | 模式 | 行为 |
 |---|---|
-| Direct | 1) Registry 拉 provider snapshot 验 sig；2) iroh dial `endpoint_id`；3) HTTP `POST /v1/chat/completions`；4) 收 402 → 用本地钱包开 / 复用 channel → 出 Credential → 重试；5) 解析 SSE 流 + Settlement |
-| via-pgw | 1) Registry 拉 pgw snapshot 验 sig；2) HTTPS POST `<consumer_endpoint>/v1/chat/completions` + API Key；3) 收响应（PGW 已对 Consumer 隐藏 envelope/voucher） |
+| Direct | 1) Registry 拉 provider snapshot 验 proof；2) iroh dial `endpoint_id`；3) HTTP `POST /v1/chat/completions`；4) 收 402 → 用本地钱包开 / 复用 channel → 出 Credential → 重试；5) 解析 SSE 流 + Settlement |
+| via-pgw | 1) Registry 拉 pgw snapshot 验 proof；2) HTTPS POST `<consumer_endpoint>/v1/chat/completions` + API Key；3) 收响应（PGW 已对 Consumer 隐藏 envelope/voucher） |
 
 ### 5.4 `registry-svc`
 
@@ -511,8 +511,8 @@ bitrouter-cli wallet balance
 ```
 1. consumer-cli: bitrouter-cli chat --direct --provider P --model claude-3-5-sonnet-20241022 -m "你好"
 2. consumer-cli → registry-svc: GET /v0/providers/P
-3. registry-svc → consumer-cli: 200 + provider snapshot + sig
-4. consumer-cli: verify_ed25519(snapshot, P, sig) → ok
+3. registry-svc → consumer-cli: 200 + provider snapshot  + proof
+4. consumer-cli: verify_ed25519(snapshot, P, proof) → ok
 5. consumer-cli: iroh dial(endpoint_id = P) → QUIC 连接
 6. consumer-cli → provider-node: POST /v1/chat/completions { model, messages }
 7. provider-node → consumer-cli: 402 + WWW-Authenticate (challenge)
@@ -528,7 +528,7 @@ bitrouter-cli wallet balance
 
 ```
 1. consumer-cli: bitrouter-cli chat --via-pgw --pgw G --model claude-3-5-sonnet-20241022 -m "你好"
-2. consumer-cli → registry-svc: GET /v0/pgws/G → 验 sig → 取 consumer_endpoint
+2. consumer-cli → registry-svc: GET /v0/pgws/G → 验 proof → 取 consumer_endpoint
 3. consumer-cli → pgw-node (HTTPS): POST /v1/chat/completions
                   + X-API-Key + body
 4. pgw-node:
@@ -574,7 +574,7 @@ bitrouter-registry/              # 独立 git repo（团队私有）
 
 | 类别 | 项 |
 |---|---|
-| 单元测试 | snapshot canonical_json + sig 往返；voucher nonce/amount 不变量；envelope 校验 |
+| 单元测试 | snapshot signed envelope JCS  + proof 往返；voucher nonce/amount 不变量；envelope 校验 |
 | 集成测试 | 两个 provider-node + 一个 pgw-node + registry-svc + 模拟 LLM upstream，全本地起，跑 `direct-e2e.sh` / `pgw-e2e.sh` |
 | 负载 | `load-100x.sh` 对 Direct 与 PGW 各跑 100 并发 1 串行的混合场景 |
 | 故障注入 | (a) Provider 中途下线；(b) Voucher nonce 倒序；(c) Envelope 签名错误；(d) Registry 服务 5xx；分别期望对应错误码 |

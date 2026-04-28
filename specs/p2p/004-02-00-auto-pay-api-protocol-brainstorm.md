@@ -569,7 +569,7 @@ LLM 推理 specifically 的内容（"为什么 token 必须 streaming"、"Solana
 5. **`custom` scheme 滥用风险**：是否要求 `custom_url` 指向的文档必须有某种 schema header（如机器可读的 OpenAPI extension）？
 6. **多 currency 同 offer**：要不要支持 "这个 offer 接受 USDC 或 USDT，by consumer choice"？v0 倾向不支持（用多个 offers 表达）。
 7. **Rail capability 声明**：Provider 怎么告诉客户端"我支持 mpp/session 但只接受 tempo 不接受 stripe"？目前靠 `rail.method_details.mpp_method` 隐式表达，是否需要显式 `rail.capabilities` 字段？
-8. **协议版本号**：AAP 自己要不要 `version: 1` 字段？还是跟 `bitrouter/p2p/0` 走？
+8. **协议版本号**：AAP 自己要不要 `version: 1` 字段？还是跟 `bitrouter/direct/0` 走？
 9. **签名范围**：snapshot-level 签名覆盖 `offers[]` 即可，还是每个 offer 也允许独立签名（让多 issuer 共同 endorse 一个 endpoint）？
 10. **跨 endpoint 共享 offers**：常见的 case 是 provider 对所有 model 给同一套 payment offers，要不要支持 endpoint-level `default_offers` + model-level `offer_overrides`？v1+ 考虑。
 11. **跟 `models[]` 的耦合**：一个 endpoint 的 `offers` 是否一定要 per-model？还是允许 endpoint-level 一套 offers 覆盖所有 model（节省 snapshot 空间）？

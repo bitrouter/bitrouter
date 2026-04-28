@@ -14,7 +14,7 @@ v0 正式网络采用“公开静态 Registry 数据仓库 + 自托管 relay fle
 flowchart LR
     subgraph Control["公开控制面"]
         Registry["bitrouter-registry<br/>GitHub repo + raw registry.json"]
-        CI["GitHub Actions<br/>schema + signature validation"]
+        CI["GitHub Actions<br/>schema + proof validation"]
         Metrics["Observability<br/>logs / metrics / traces"]
     end
 
@@ -68,7 +68,7 @@ local 环境用于开发验证，不要求公网可达：
 - Relay 使用单实例 dev relay。
 - Tempo 使用 Docker localnet。
 - Provider / Consumer 使用不同 `BITROUTER_HOME` 在同机运行。
-- 验收 Direct Leg A 的 402、credential、SSE、receipt、registry raw cache 与 signature verification。
+- 验收 Direct Leg A 的 402、credential、SSE、receipt、registry raw cache 与 proof verification。
 
 ### 1.2 staging
 
@@ -76,7 +76,7 @@ staging 环境模拟正式网络；早期可使用团队控制节点做稳定性
 
 - Registry 使用 staging branch、fork 或独立 test registry raw URL。
 - Relay 至少两个 region，以验证跨 region relay 选择与故障切换。
-- Provider node item 必须走真实 signature / schema / aggregate validation 流程。
+- Provider node item 必须走真实 proof / schema / aggregate validation 流程。
 - 支持 forced-relay 压测：Provider 不暴露 direct addr，仅使用 relay。
 
 ### 1.3 production
@@ -107,7 +107,7 @@ production 面向真实 Provider 与 Consumer：
 
 - 不代理 LLM 请求。
 - 不托管 Provider 私钥。
-- 不替代 Provider root signature。
+- 不替代 Provider root proof。
 - 不作为支付 ledger。
 - 不做 Provider 准入；准入、KYC、商业关系和 curated set 留给未来 BitRouter Cloud PGW。
 - 不提供 query API、publish API、admin API 或数据库服务。
@@ -138,10 +138,10 @@ Provider 是启用 `p2p.provider.enabled = true` 的 `bitrouter`：
 Consumer 是启用 `p2p.consumer.enabled = true` 的 `bitrouter`：
 
 - 拉取 raw `registry.json`。
-- 验证 node item signature、status、`valid_until`、pricing 与 endpoint。
+- 验证 node item proof、status、`valid_until`、pricing 与 endpoint。
 - 将 `api_protocol: p2p` provider 路由为远端 P2P Provider。
 - 自动处理 MPP 402 / credential retry。
-- 校验 `Payment-Receipt` 与 `Payment-Receipt-Sig`。
+- 校验 `Payment-Receipt` signed envelope 与 Provider proof。
 
 ### 2.5 Tempo / RPC
 
@@ -202,7 +202,7 @@ Consumer 访问 Registry 的基本流程：
 
 1. 拉取 raw `registry.json`。
 2. 校验 aggregate schema。
-3. 对每个 node item 验证 root signature。
+3. 对每个 node item 验证 root proof。
 4. 过滤 `status == active`、`valid_until > now`、model、region、payment method、`api_surface`。
 5. 按本地 trust policy 选择 endpoint。
 6. 建立 Direct Leg A。
@@ -260,12 +260,12 @@ Registry 不运行服务，因此不产生 API / DB 指标。需要关注：
 
 ## 7. 安全与运营边界
 
-1. Provider registry item 必须验证 root signature。
+1. Provider registry item 必须验证 root proof。
 2. 删除 item 必须有 signed tombstone 或其他公开可审计授权证明。
 3. Relay 不应成为中心化业务状态依赖；relay outage 只影响连接可达性。
 4. GitHub repository history 是 v0 的公开审计源，但 Consumer 最终只信任通过签名验证的 Provider advertisement。
 5. Provider 私钥不进入 Registry。
-6. Consumer 不信任 raw file 本身；必须本地验证 signature、status、`valid_until` 与 pricing。
+6. Consumer 不信任 raw file 本身；必须本地验证 proof、status、`valid_until` 与 pricing。
 7. abuse / spam 控制在 PR review、CI validation、schema limits、GitHub spam controls、relay rate limit 五层处理；不得把反滥用机制演变成维护者准入许可。
 
 ---
@@ -279,6 +279,6 @@ Registry 不运行服务，因此不产生 API / DB 指标。需要关注：
 | DEP-3 | Provider 提交合法 signed node item PR → merge 后进入 raw registry → Consumer sync / verify / dial 全链路通过 |
 | DEP-4 | Tempo localnet / staging payment lifecycle 验收通过 |
 | DEP-5 | Registry raw fetch、Relay、Provider、Consumer 关键指标可观测 |
-| DEP-6 | Registry validation CI 拒绝 invalid schema / signature / seq / pricing / aggregate mismatch |
+| DEP-6 | Registry validation CI 拒绝 invalid schema / proof / seq / pricing / aggregate mismatch |
 | DEP-7 | Provider shutdown 通过 `status: disabled` 或 signed tombstone 删除后，Consumer 下次 sync 不再选择该 node |
 | DEP-8 | relay region 故障时，Consumer 可切换到其他 relay 或明确失败 |

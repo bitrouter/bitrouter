@@ -1,6 +1,6 @@
 # P2P Intelligence Router — 概念性设计 v0.5
 
-> 状态：**概念设计 — v0.5**。本文只做概念与拓扑层面的勾勒；协议细节见 002 / 003 / 004 / 005 / 006。所有跨文档术语 / 中英文 / 代码命名对照见 [`001-02-terms.md`](./001-02-terms.md)。
+> 状态：**概念设计 — v0.5**。本文只做概念与拓扑层面的勾勒；协议细节见 002 / 003 / 004 / 005 / 006。所有跨文档术语 / 中英文 / 代码命名对照见 [`001-02-terms.md`](./001-02-terms.md)；协议版本、编码、签名约定见 [`001-03-protocol-conventions.md`](./001-03-protocol-conventions.md)；数据格式与请求响应示例见 [`001-04-api-reference-examples.md`](./001-04-api-reference-examples.md)。
 >
 > 变更（v0.4 → v0.5）：与 [`003 §2.1`](./003-l3-design.md) 两层身份模型对齐——Provider 条目主键改为 `provider_id`（ed25519 root pubkey），下挂 `endpoints[]` 数组（每条含 iroh `endpoint_id`）。L1/L2 中"`EndpointID`"是 iroh 原词，不变；L3 协议层"被许可身份"统一称 `provider_id`/`pgw_id`。
 >
@@ -228,7 +228,7 @@ flowchart TB
 1. **本地决策**：A 的 Local Router 在**本地 upstream + Registry 候选**组成的统一候选池中做路由；本次决策选中了一个 P2P Provider（而非某个本地 upstream）。
 2. **能力查询**：A 向 Registry 查询 `model + 价格上限 + 支付方式`，得到**被许可**的候选 `provider_id` 列表（含 `endpoints[]`）。
 3. **选择**：A 按自己的策略（v0：最便宜的、或上次成功过的）选中 Provider B 的 `pkB`。
-4. **拨号**：A 调 `endpoint.connect(pkB, ALPN="bitrouter/p2p/0")`。iroh 在后台完成打洞/relay，返回 QUIC 连接。
+4. **拨号**：A 调 `endpoint.connect(pkB, ALPN="bitrouter/direct/0")`。iroh 在后台完成打洞/relay，返回 QUIC 连接。
 5. **请求 + 付款**：A 在一条 bidi stream 上发起 HTTP 请求，头部携带鉴权与支付凭证（具体绑定见 005）。
 6. **兑现**：B 验证支付后，把请求交给自己的 Local Router 当成普通入站请求处理，结果流式返回 A；响应末尾携带结算凭证（见 005）。
 7. **回源**：A 把结果按正常响应返回给上层 Agent / 应用，上层调用方**对 P2P 无感**。
@@ -242,7 +242,7 @@ sequenceDiagram
     participant B as Provider B
     A->>R: lookup(model, ≤ $X, payment=mpp|x402)
     R-->>A: [pkB, pkC, pkD, ...] (仅许可节点)
-    Note over A,B: iroh.connect(pkB, ALPN="bitrouter/p2p/0")<br/>L2 解析 + L1 打洞/relay
+    Note over A,B: iroh.connect(pkB, ALPN="bitrouter/direct/0")<br/>L2 解析 + L1 打洞/relay
     A->>B: QUIC bidi stream 建立
     A->>B: POST /v1/chat/completions<br/>头部携带 auth+payment 凭证 (详见 005)
     B->>B: 本地 Local Router 处理<br/>(和普通入站请求一样)
@@ -268,7 +268,7 @@ flowchart TB
         end
         subgraph IrohBox["iroh Endpoint (pkA) — 单例"]
             direction LR
-            PS["P2P Server<br/>(Provider 角色)<br/>accept ALPN='bitrouter/p2p/0'"]
+            PS["P2P Server<br/>(Provider 角色)<br/>accept ALPN='bitrouter/direct/0'"]
         end
         RA["Registry Agent<br/>lookup"]
         PM["Auth & Payment Module<br/>(PGW: 004; MPP: 005)"]
