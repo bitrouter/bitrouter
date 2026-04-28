@@ -15,15 +15,15 @@ pub struct RuntimePaths {
     pub log_dir: PathBuf,
     /// OAuth token store file (`<home>/tokens.json`).
     pub token_store_file: PathBuf,
-    #[cfg(feature = "cli")]
+    #[cfg(feature = "tui")]
     /// On-disk cache root (`<home>/cache/`).  Used for the ACP registry
     /// snapshot and other short-lived artifacts safe to discard.
     pub cache_dir: PathBuf,
-    #[cfg(feature = "cli")]
+    #[cfg(feature = "tui")]
     /// Installed ACP agent root (`<home>/agents/`).  Per-agent install dirs
     /// are flat subdirectories keyed by agent id.
     pub agents_dir: PathBuf,
-    #[cfg(feature = "cli")]
+    #[cfg(feature = "tui")]
     /// ACP agent install-state ledger (`<home>/agents/state.json`).
     pub agent_state_file: PathBuf,
 }
@@ -32,7 +32,7 @@ impl RuntimePaths {
     /// Derive all paths from a resolved home directory.
     pub fn from_home(home: impl Into<PathBuf>) -> Self {
         let home = home.into();
-        #[cfg(feature = "cli")]
+        #[cfg(feature = "tui")]
         let agents_dir = home.join("agents");
         Self {
             config_file: home.join("bitrouter.yaml"),
@@ -40,17 +40,17 @@ impl RuntimePaths {
             runtime_dir: home.join("run"),
             log_dir: home.join("logs"),
             token_store_file: home.join("tokens.json"),
-            #[cfg(feature = "cli")]
+            #[cfg(feature = "tui")]
             cache_dir: home.join("cache"),
-            #[cfg(feature = "cli")]
+            #[cfg(feature = "tui")]
             agent_state_file: agents_dir.join("state.json"),
-            #[cfg(feature = "cli")]
+            #[cfg(feature = "tui")]
             agents_dir,
             home_dir: home,
         }
     }
 
-    #[cfg(feature = "cli")]
+    #[cfg(feature = "tui")]
     /// Return the flat install directory for the given agent id.
     pub fn agent_install_dir(&self, agent_id: &str) -> PathBuf {
         self.agents_dir.join(agent_id)

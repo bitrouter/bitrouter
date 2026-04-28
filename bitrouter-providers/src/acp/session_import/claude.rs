@@ -42,7 +42,7 @@ pub(super) fn scan(home: &Path, cwd: &Path) -> Vec<DiscoveredSession> {
         }
     }
     // Most-recent first.
-    out.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+    out.sort_by_key(|s| std::cmp::Reverse(s.last_active_at));
     out
 }
 

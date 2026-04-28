@@ -25,7 +25,7 @@ pub(super) fn scan(home: &Path, cwd: &Path) -> Vec<DiscoveredSession> {
     }
     let mut out: Vec<DiscoveredSession> = Vec::new();
     walk_rollouts(&root, &mut out, cwd);
-    out.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+    out.sort_by_key(|s| std::cmp::Reverse(s.last_active_at));
     out
 }
 
