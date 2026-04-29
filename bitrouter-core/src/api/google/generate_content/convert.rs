@@ -131,6 +131,7 @@ pub fn to_call_options(request: GenerateContentRequest) -> LanguageModelCallOpti
         abort_signal: None,
         headers: None,
         provider_options: None,
+        trace_context: None,
     }
 }
 

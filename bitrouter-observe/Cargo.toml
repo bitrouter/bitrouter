@@ -14,6 +14,13 @@ sqlite = ["sea-orm/sqlx-sqlite", "sea-orm-migration/sqlx-sqlite"]
 postgres = ["sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
 mysql = ["sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]
 
+# Enables the OTLP/HTTP exporter. The exporter emits OpenTelemetry GenAI
+# semantic-convention spans built from the existing observer callbacks.
+# In this layer the export step writes a structured `tracing` event per span;
+# the actual `opentelemetry-otlp` HTTP transport lands in a follow-up commit
+# so the API surface and pipeline can be reviewed and tested in isolation.
+otlp = []
+
 [dependencies]
 bitrouter-core.workspace = true
 sea-orm = { version = "1.1", default-features = false, features = [
@@ -31,3 +38,6 @@ serde_json = { version = "1.0" }
 tokio = { version = "1", features = ["sync"] }
 tracing = { version = "0.1" }
 uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

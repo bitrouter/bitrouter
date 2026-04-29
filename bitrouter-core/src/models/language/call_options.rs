@@ -4,6 +4,7 @@ use http::HeaderMap;
 use tokio_util::sync::CancellationToken;
 
 use crate::models::shared::{provider::ProviderOptions, types::JsonSchema};
+use crate::observe::TraceContext;
 
 use super::{
     prompt::LanguageModelPrompt, tool::LanguageModelTool, tool_choice::LanguageModelToolChoice,
@@ -47,6 +48,15 @@ pub struct LanguageModelCallOptions {
 
     /// Provider-specific options that can be used to pass additional information to the provider or control provider-specific behavior
     pub provider_options: Option<ProviderOptions>,
+
+    /// Distributed trace / session attribution for observability exporters.
+    ///
+    /// When present, the OTLP exporter constructs spans with the conversation
+    /// and user identifiers attached. When absent, exporters generate a fresh
+    /// trace ID and emit unparented spans. Populated by the API handler from
+    /// `X-Bitrouter-Session-Id` / `X-Bitrouter-User-Id` headers and the
+    /// OpenRouter-compatible `session_id` body field.
+    pub trace_context: Option<TraceContext>,
 }
 
 #[derive(Debug, Clone)]

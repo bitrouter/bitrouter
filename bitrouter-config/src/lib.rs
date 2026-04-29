@@ -6,6 +6,7 @@ pub mod env;
 pub mod error;
 pub mod registry;
 pub mod routing;
+pub mod telemetry;
 pub mod writer;
 
 pub use bitrouter_core::routers::routing_table::ApiProtocol;

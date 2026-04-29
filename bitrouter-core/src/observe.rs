@@ -12,6 +12,36 @@ use crate::auth::claims::BudgetScope;
 use crate::errors::BitrouterError;
 use crate::models::language::usage::LanguageModelUsage;
 
+/// Distributed trace context attached to a language-model or tool call.
+///
+/// This is a minimal POD type owned by `bitrouter-core`. It carries the
+/// W3C-compatible 16-byte trace ID (and optional 8-byte parent span ID)
+/// alongside the BitRouter-specific session/user/account identifiers needed
+/// for OpenTelemetry GenAI semconv attribution
+/// (`gen_ai.conversation.id`, `user.id`, `bitrouter.account_id`).
+///
+/// Carrying this through `LanguageModelCallOptions` lets the API handler
+/// build a `TraceContext` from request headers/body once and have the OTLP
+/// exporter (in `bitrouter-observe`) construct conforming spans without
+/// re-parsing per provider call. Core stays free of any OpenTelemetry SDK
+/// dependency — only the byte arrays and `String`s travel.
+#[derive(Debug, Clone, Default)]
+pub struct TraceContext {
+    /// W3C-compatible 16-byte trace identifier. `None` means the exporter
+    /// should generate a fresh trace ID at span construction time.
+    pub trace_id: Option<[u8; 16]>,
+    /// Parent span ID (8 bytes) when the request is a continuation of an
+    /// upstream trace.
+    pub parent_span_id: Option<[u8; 8]>,
+    /// Conversation / session identifier. Maps to `gen_ai.conversation.id`
+    /// and (for OpenRouter compat) duplicated as `session.id`.
+    pub conversation_id: Option<String>,
+    /// End-user identifier. Maps to `user.id`.
+    pub user_id: Option<String>,
+    /// BitRouter account identifier. Maps to `bitrouter.account_id`.
+    pub account_id: Option<String>,
+}
+
 /// Authenticated caller context extracted from JWT claims.
 ///
 /// Carries the account identifier and any claim-based permissions (budget,

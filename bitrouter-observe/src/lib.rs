@@ -15,5 +15,8 @@ pub mod metrics;
 pub mod migration;
 pub mod spend;
 
+#[cfg(feature = "otlp")]
+pub mod otlp;
+
 pub(crate) mod model_observer;
 pub(crate) mod tool_observer;
