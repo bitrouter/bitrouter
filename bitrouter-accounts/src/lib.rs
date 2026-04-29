@@ -9,7 +9,8 @@
 //!   [`migration::migrations()`](migration::migrations).
 //! - **Services** — [`AccountService`](service::AccountService),
 //!   [`SessionService`](service::SessionService), and
-//!   [`DbRevocationSet`](service::DbRevocationSet) for data operations.
+//!   [`DbRevocationSet`](service::DbRevocationSet),
+//!   [`VirtualKeyService`](service::VirtualKeyService) for data operations.
 //! - **Warp filter builders** — [`filters`] module exposes route constructors
 //!   parameterized by a caller-supplied auth filter.
 //!

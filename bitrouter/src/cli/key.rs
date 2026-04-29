@@ -105,6 +105,7 @@ pub fn sign(
     exp: Option<&str>,
     ows_key: Option<&str>,
     policy: Option<&str>,
+    virtual_key_target: Option<(&bitrouter_config::BitrouterConfig, std::net::SocketAddr)>,
 ) -> Result {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -198,7 +199,38 @@ pub fn sign(
 
     let jwt = token::sign(&claims, &signer).map_err(|e| format!("failed to sign JWT: {e}"))?;
 
-    println!("{jwt}");
+    if let Some((config, addr)) = virtual_key_target {
+        create_virtual_key_on_server(config, addr, &jwt)?;
+    } else {
+        println!("{jwt}");
+    }
+
+    Ok(())
+}
+
+/// Store a JWT on the running server and print the returned virtual key.
+pub fn create_virtual_key_on_server(
+    config: &bitrouter_config::BitrouterConfig,
+    addr: std::net::SocketAddr,
+    jwt: &str,
+) -> Result {
+    use bitrouter_accounts::service::{CreateVirtualKeyRequest, CreateVirtualKeyResponse};
+
+    let url = format!("http://{addr}/admin/keys/virtual");
+    let client = reqwest::blocking::Client::new();
+    let resp = crate::cli::admin_auth::request_with_admin_auth(config, client.post(&url))?
+        .json(&CreateVirtualKeyRequest {
+            jwt: jwt.to_owned(),
+        })
+        .send()?;
+
+    if resp.status().is_success() {
+        let body: CreateVirtualKeyResponse = resp.json()?;
+        println!("{}", body.key);
+    } else {
+        let msg = crate::cli::admin_auth::parse_error_message(resp)?;
+        return Err(format!("failed to create virtual key: {msg}").into());
+    }
 
     Ok(())
 }

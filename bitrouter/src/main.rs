@@ -449,6 +449,10 @@ enum KeyAction {
         /// Policy ID to embed in the token (evaluated at request time)
         #[arg(long)]
         policy: Option<String>,
+
+        /// Store the JWT on the server and print a short virtual key instead
+        #[arg(long = "virtual-key", visible_alias = "virtual")]
+        virtual_key: bool,
     },
 }
 
@@ -579,15 +583,33 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     exp,
                     ows_key,
                     policy,
-                } => cli::key::sign(
-                    &wallet,
-                    models.as_deref(),
-                    budget,
-                    budget_scope.as_deref(),
-                    exp.as_deref(),
-                    ows_key.as_deref(),
-                    policy.as_deref(),
-                )?,
+                    virtual_key,
+                } => {
+                    if virtual_key {
+                        let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
+                        cli::key::sign(
+                            &wallet,
+                            models.as_deref(),
+                            budget,
+                            budget_scope.as_deref(),
+                            exp.as_deref(),
+                            ows_key.as_deref(),
+                            policy.as_deref(),
+                            Some((&runtime.config, runtime.config.server.listen)),
+                        )?;
+                    } else {
+                        cli::key::sign(
+                            &wallet,
+                            models.as_deref(),
+                            budget,
+                            budget_scope.as_deref(),
+                            exp.as_deref(),
+                            ows_key.as_deref(),
+                            policy.as_deref(),
+                            None,
+                        )?;
+                    }
+                }
             }
             return Ok(());
         }

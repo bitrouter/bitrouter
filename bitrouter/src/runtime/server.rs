@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bitrouter_accounts::service::{CreateVirtualKeyRequest, VirtualKeyService};
 use bitrouter_api::router::{admin, agents, models, routes};
 use bitrouter_api::router::{anthropic, google, openai};
 use bitrouter_config::BitrouterConfig;
@@ -306,6 +307,19 @@ where
                 .and(warp::body::json::<KeyRevokeRequest>())
                 .and(warp::any().map(move || revocation_set.clone()))
                 .and_then(handle_key_revoke)
+        };
+
+        // Admin virtual-key endpoint — gated by management auth.
+        let admin_virtual_key_create = {
+            let db = self.db.clone();
+            let validation_ctx = auth_ctx.clone();
+            auth::auth_gate(auth::management_auth(auth_ctx.clone()))
+                .and(warp::path!("admin" / "keys" / "virtual"))
+                .and(warp::post())
+                .and(warp::body::json::<CreateVirtualKeyRequest>())
+                .and(warp::any().map(move || db.clone()))
+                .and(warp::any().map(move || validation_ctx.clone()))
+                .and_then(handle_virtual_key_create)
         };
 
         // Build account filter that extracts caller context (auth-gated) and
@@ -660,6 +674,7 @@ where
             .or(agent_list)
             .or(admin_routes)
             .or(admin_key_revoke)
+            .or(admin_virtual_key_create)
             .or(chat)
             .or(messages)
             .or(responses)
@@ -793,6 +808,39 @@ async fn handle_key_revoke(
         })),
         warp::http::StatusCode::OK,
     ))
+}
+
+/// Handle virtual key creation requests.
+async fn handle_virtual_key_create(
+    body: CreateVirtualKeyRequest,
+    db: Arc<DatabaseConnection>,
+    auth_ctx: Arc<JwtAuthContext>,
+) -> std::result::Result<impl warp::Reply, warp::Rejection> {
+    if let Err(e) = auth_ctx.verify_jwt_claims(&body.jwt) {
+        return Ok(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({
+                "error": { "message": e.0 }
+            })),
+            warp::http::StatusCode::BAD_REQUEST,
+        ));
+    }
+
+    let svc = VirtualKeyService::new(db.as_ref());
+    match svc.create(&body.jwt).await {
+        Ok(response) => Ok(warp::reply::with_status(
+            warp::reply::json(&response),
+            warp::http::StatusCode::OK,
+        )),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to create virtual key");
+            Ok(warp::reply::with_status(
+                warp::reply::json(&serde_json::json!({
+                    "error": { "message": "failed to create virtual key" }
+                })),
+                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ))
+        }
+    }
 }
 
 /// Rejection handler that turns [`Unauthorized`] into a JSON 401 response

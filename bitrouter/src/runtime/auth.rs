@@ -25,8 +25,9 @@ use warp::Filter;
 
 use bitrouter_accounts::identity::{AccountId, Identity, Scope};
 use bitrouter_accounts::service::AccountService;
+use bitrouter_accounts::service::VirtualKeyService;
 use bitrouter_core::auth::chain::Caip10;
-use bitrouter_core::auth::claims::TokenScope;
+use bitrouter_core::auth::claims::{BitrouterClaims, TokenScope};
 use bitrouter_core::auth::revocation::KeyRevocationSet;
 use bitrouter_core::auth::token as jwt_token;
 
@@ -56,6 +57,26 @@ impl JwtAuthContext {
     pub fn with_revocation_set(mut self, set: Arc<dyn KeyRevocationSet>) -> Self {
         self.revocation_set = Some(set);
         self
+    }
+
+    pub(crate) fn verify_jwt_claims(
+        &self,
+        credential: &str,
+    ) -> Result<BitrouterClaims, Unauthorized> {
+        let claims =
+            jwt_token::verify(credential).map_err(|_| Unauthorized("invalid JWT signature"))?;
+
+        jwt_token::check_expiration(&claims).map_err(|_| Unauthorized("JWT expired"))?;
+
+        if let Some(ref expected) = self.operator_caip10
+            && claims.iss != *expected
+        {
+            return Err(Unauthorized(
+                "JWT issuer does not match configured operator wallet",
+            ));
+        }
+
+        Ok(claims)
     }
 }
 
@@ -125,7 +146,24 @@ async fn resolve_identity(
     credential: &str,
     ctx: &JwtAuthContext,
 ) -> Result<Identity, warp::Rejection> {
-    resolve_jwt_identity(credential, ctx).await
+    let jwt = resolve_credential_jwt(credential, ctx).await?;
+    resolve_jwt_identity(&jwt, ctx).await
+}
+
+/// Resolve an inbound credential to the JWT that should be authenticated.
+async fn resolve_credential_jwt(
+    credential: &str,
+    ctx: &JwtAuthContext,
+) -> Result<String, warp::Rejection> {
+    if !bitrouter_accounts::service::is_virtual_key(credential) {
+        return Ok(credential.to_owned());
+    }
+
+    let svc = VirtualKeyService::new(&ctx.db);
+    svc.resolve(credential)
+        .await
+        .map_err(|_| warp::reject::custom(Unauthorized("virtual key lookup failed")))?
+        .ok_or_else(|| warp::reject::custom(Unauthorized("invalid virtual key")))
 }
 
 /// Resolve a JWT credential to an [`Identity`].
@@ -133,22 +171,10 @@ async fn resolve_jwt_identity(
     credential: &str,
     ctx: &JwtAuthContext,
 ) -> Result<Identity, warp::Rejection> {
-    // 1. Verify signature (detects algorithm from header, verifies against iss).
-    let claims = jwt_token::verify(credential)
-        .map_err(|_| warp::reject::custom(Unauthorized("invalid JWT signature")))?;
-
-    // 2. Check expiration.
-    jwt_token::check_expiration(&claims)
-        .map_err(|_| warp::reject::custom(Unauthorized("JWT expired")))?;
-
-    // 3. Verify iss matches the configured operator wallet (single trust root).
-    if let Some(ref expected) = ctx.operator_caip10
-        && claims.iss != *expected
-    {
-        return Err(warp::reject::custom(Unauthorized(
-            "JWT issuer does not match configured operator wallet",
-        )));
-    }
+    // 1-3. Verify signature, expiration, and configured operator issuer.
+    let claims = ctx
+        .verify_jwt_claims(credential)
+        .map_err(warp::reject::custom)?;
 
     // 3b. Check per-key revocation (if a revocation set is configured).
     if let Some(ref key_id) = claims.id
@@ -260,4 +286,70 @@ pub(crate) fn auth_gate(
     auth: impl Filter<Extract = (Identity,), Error = warp::Rejection> + Clone,
 ) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
     auth.map(|_| ()).untuple_one()
+}
+
+#[cfg(test)]
+mod tests {
+    use bitrouter_accounts::service::VirtualKeyService;
+    use bitrouter_core::auth::chain::Chain;
+    use bitrouter_core::auth::claims::{BitrouterClaims, TokenScope};
+    use bitrouter_core::auth::keys::MasterKeypair;
+    use bitrouter_core::auth::token;
+    use sea_orm::Database;
+    use sea_orm_migration::MigratorTrait;
+
+    use super::*;
+
+    async fn setup_test_db() -> Result<DatabaseConnection, Box<dyn std::error::Error>> {
+        let db = Database::connect("sqlite::memory:").await?;
+
+        struct TestMigrator;
+
+        impl MigratorTrait for TestMigrator {
+            fn migrations() -> Vec<Box<dyn sea_orm_migration::MigrationTrait>> {
+                bitrouter_accounts::migration::migrations()
+            }
+        }
+
+        TestMigrator::up(&db, None).await?;
+        Ok(db)
+    }
+
+    #[tokio::test]
+    async fn virtual_key_resolves_to_stored_jwt_identity() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let db = setup_test_db().await?;
+        let keypair = MasterKeypair::generate();
+        let caip10 = keypair.caip10(&Chain::solana_mainnet())?;
+        let key_id = "virtual-key-test-id".to_owned();
+        let claims = BitrouterClaims {
+            iss: caip10.format(),
+            iat: Some(1_700_000_000),
+            exp: None,
+            scp: Some(TokenScope::Api),
+            mdl: Some(vec!["openai:gpt-4o".to_owned()]),
+            bgt: Some(1_000_000),
+            bsc: None,
+            id: Some(key_id.clone()),
+            key: None,
+            pol: Some("default".to_owned()),
+            jti: None,
+            aud: None,
+            sub: None,
+            host: None,
+        };
+        let jwt = token::sign(&claims, &keypair)?;
+        let virtual_key = VirtualKeyService::new(&db).create(&jwt).await?.key;
+        let ctx = JwtAuthContext::new(db, None);
+
+        let identity = resolve_identity(&virtual_key, &ctx)
+            .await
+            .map_err(|_| std::io::Error::other("virtual key auth failed"))?;
+
+        assert_eq!(identity.key_id.as_deref(), Some(key_id.as_str()));
+        assert_eq!(identity.models, Some(vec!["openai:gpt-4o".to_owned()]));
+        assert_eq!(identity.budget, Some(1_000_000));
+        assert_eq!(identity.policy_id.as_deref(), Some("default"));
+        Ok(())
+    }
 }
