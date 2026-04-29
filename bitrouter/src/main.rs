@@ -420,7 +420,7 @@ enum KeyAction {
         #[arg(long)]
         id: String,
     },
-    /// Sign a JWT for agent access (operator mints tokens for agents)
+    /// Generate an agent access key (virtual by default)
     Sign {
         /// OWS wallet name to sign with (operator wallet)
         #[arg(long)]
@@ -450,9 +450,9 @@ enum KeyAction {
         #[arg(long)]
         policy: Option<String>,
 
-        /// Store the JWT on the server and print a short virtual key instead
-        #[arg(long = "virtual-key", visible_alias = "virtual")]
-        virtual_key: bool,
+        /// Print the raw JWT instead of storing it and returning a virtual key
+        #[arg(long)]
+        raw: bool,
     },
 }
 
@@ -583,13 +583,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     exp,
                     ows_key,
                     policy,
-                    virtual_key,
+                    raw,
                 } => {
-                    let runtime = if virtual_key {
-                        Some(load_or_warn_scaffold(&paths))
-                    } else {
-                        None
-                    };
+                    let runtime = (!raw).then(|| load_or_warn_scaffold(&paths));
                     let virtual_key_target = runtime.as_ref().map(|runtime: &DefaultRuntime| {
                         (&runtime.config, runtime.config.server.listen)
                     });

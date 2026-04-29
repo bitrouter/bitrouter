@@ -74,11 +74,11 @@ bitrouter wallet create --name default
 # Create an API key bound to a wallet
 bitrouter key create --name claude-agent --wallet default
 
-# Sign a JWT for agent access
+# Generate a short virtual key for agent access
 bitrouter key sign --wallet default --exp 30d --models openai:gpt-4o
 
-# Store the JWT on the running server and print a short virtual key instead
-bitrouter key sign --wallet default --exp 30d --models openai:gpt-4o --virtual-key
+# Print the raw JWT instead
+bitrouter key sign --wallet default --exp 30d --models openai:gpt-4o --raw
 
 # List and revoke keys
 bitrouter key list
