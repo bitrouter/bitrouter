@@ -26,7 +26,8 @@ feature.
 Optional companion-crate facades:
 
 - `accounts` — re-export [`bitrouter-accounts`] (account/session/key
-  Warp filter builders and services). Pulls `sea-orm`.
+  Warp filter builders, revocation, and virtual-key services). Pulls
+  `sea-orm`.
 - `observe` — re-export [`bitrouter-observe`] (`ObserveStack`, spend
   store, metrics). Pulls `sea-orm`.
 - `guardrails` — re-export [`bitrouter-guardrails`] (`Guardrail`,

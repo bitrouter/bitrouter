@@ -1604,13 +1604,16 @@ dependencies = [
 name = "bitrouter-accounts"
 version = "0.27.0"
 dependencies = [
+ "base64 0.22.1",
  "bitrouter-core",
  "chrono",
+ "rand 0.9.4",
  "sea-orm",
  "sea-orm-migration",
  "serde",
  "serde-saphyr",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "uuid",
