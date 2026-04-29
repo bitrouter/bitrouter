@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.2](https://github.com/bitrouter/bitrouter/compare/v0.27.1...v0.27.2)
+
+
+### ⛰️ Features
+
+- *(api)* Expose messages_filter_with_payment_gate ([#414](https://github.com/bitrouter/bitrouter/pull/414)) - ([cfec1a5](https://github.com/bitrouter/bitrouter/commit/cfec1a58722594db6bf23a8d0d9ee7b0a93abd45))
+
+
 ## [0.27.1](https://github.com/bitrouter/bitrouter/compare/v0.27.0...v0.27.1)
 
 
