@@ -1,0 +1,30 @@
+ARG RUST_VERSION=1.95
+ARG IROH_RELAY_VERSION=0.98.0
+
+FROM rust:${RUST_VERSION}-bookworm AS builder
+ARG IROH_RELAY_VERSION
+
+RUN cargo install iroh-relay \
+    --version "${IROH_RELAY_VERSION}" \
+    --features server \
+    --bin iroh-relay
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/cargo/bin/iroh-relay /usr/local/bin/iroh-relay
+
+RUN mkdir -p /etc/iroh-relay /var/lib/iroh-relay
+
+WORKDIR /var/lib/iroh-relay
+
+ENV RUST_LOG=info
+
+EXPOSE 80 443 3340 7824 9090
+STOPSIGNAL SIGINT
+
+ENTRYPOINT ["/usr/local/bin/iroh-relay"]
+CMD ["--config-path", "/etc/iroh-relay/config.toml"]

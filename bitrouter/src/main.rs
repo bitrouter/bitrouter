@@ -168,6 +168,74 @@ enum Command {
     /// Reset configuration and re-run setup
     #[cfg(feature = "cli")]
     Reset,
+
+    /// Run local P2P provider/consumer demo commands
+    #[cfg(all(feature = "cli", feature = "p2p"))]
+    P2p {
+        #[command(subcommand)]
+        action: P2pAction,
+    },
+}
+
+#[cfg(all(feature = "cli", feature = "p2p"))]
+#[derive(Debug, Subcommand)]
+enum P2pAction {
+    /// Run a P2P provider and print/write its node address descriptor
+    Provider {
+        /// Directory for the provider's P2P identity
+        #[arg(long)]
+        data_dir: PathBuf,
+
+        /// Write the provider node address JSON to this file
+        #[arg(long)]
+        addr_file: Option<PathBuf>,
+
+        /// Optional local relay URL, e.g. http://localhost:3340
+        #[arg(long)]
+        relay_url: Option<String>,
+    },
+
+    /// Send one OpenAI-compatible chat request to a P2P provider
+    Consumer {
+        /// Directory for the consumer's P2P identity
+        #[arg(long)]
+        data_dir: PathBuf,
+
+        /// Provider node address JSON produced by `bitrouter p2p provider`
+        #[arg(long)]
+        provider_addr_file: PathBuf,
+
+        /// Optional local relay URL, e.g. http://localhost:3340
+        #[arg(long)]
+        relay_url: Option<String>,
+
+        /// Model name to place in the demo request payload
+        #[arg(long, default_value = "local-p2p-demo")]
+        model: String,
+
+        /// User message to place in the demo request payload
+        #[arg(long, default_value = "hello from bitrouter p2p")]
+        prompt: String,
+    },
+
+    /// Validate fixed-price Solana charge settings for one request
+    #[command(name = "solana-charge")]
+    SolanaCharge {
+        #[arg(long, default_value = "devnet")]
+        network: String,
+
+        #[arg(long)]
+        recipient: String,
+
+        #[arg(long)]
+        currency: Option<String>,
+
+        #[arg(long)]
+        amount_base_units: String,
+
+        #[arg(long, default_value_t = 9)]
+        decimals: u8,
+    },
 }
 
 #[cfg(feature = "cli")]
@@ -653,6 +721,41 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Whoami) => {
             cli::cloud_auth::run_whoami(&paths.home_dir)?;
+            return Ok(());
+        }
+        #[cfg(all(feature = "cli", feature = "p2p"))]
+        Some(Command::P2p { action }) => {
+            init_tracing();
+            match action {
+                P2pAction::Provider {
+                    data_dir,
+                    addr_file,
+                    relay_url,
+                } => cli::p2p::run_provider(data_dir, addr_file, relay_url).await?,
+                P2pAction::Consumer {
+                    data_dir,
+                    provider_addr_file,
+                    relay_url,
+                    model,
+                    prompt,
+                } => {
+                    cli::p2p::run_consumer(data_dir, provider_addr_file, relay_url, model, prompt)
+                        .await?
+                }
+                P2pAction::SolanaCharge {
+                    network,
+                    recipient,
+                    currency,
+                    amount_base_units,
+                    decimals,
+                } => cli::p2p::validate_solana_charge(
+                    network,
+                    recipient,
+                    currency,
+                    amount_base_units,
+                    decimals,
+                )?,
+            }
             return Ok(());
         }
         Some(Command::Tools { action }) => {

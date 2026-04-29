@@ -27,6 +27,7 @@ mcp = ["bitrouter-providers/mcp"]
 # significantly smaller.
 cli = ["dep:dialoguer", "dep:libc"]
 tui = ["cli", "dep:bitrouter-tui", "bitrouter-providers/acp"]
+p2p = ["dep:bitrouter-p2p"]
 # Database driver selection. Exactly one driver must be enabled (default: sqlite).
 # Accounts, sessions, JWT auth, and persistent spend tracking are baked into the
 # binary unconditionally — these features only choose the storage backend.
@@ -56,6 +57,7 @@ bitrouter-config.workspace = true
 bitrouter-core.workspace = true
 bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true }
+bitrouter-p2p = { path = "../bitrouter-p2p", optional = true }
 bitrouter-providers = { workspace = true, features = ["agentskills"] }
 
 # CLI
