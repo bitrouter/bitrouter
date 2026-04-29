@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.1](https://github.com/bitrouter/bitrouter/compare/v0.27.0...v0.27.1)
+
+
+### ⛰️ Features
+
+- Add virtual keys ([#412](https://github.com/bitrouter/bitrouter/pull/412)) - ([95cfb37](https://github.com/bitrouter/bitrouter/commit/95cfb37c05d2ab48873b69fe9c5bfcfae9c7e08b))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#411](https://github.com/bitrouter/bitrouter/pull/411)) - ([05890b7](https://github.com/bitrouter/bitrouter/commit/05890b7e3045168ea0da4989c2fbcd8bb9dcd2b5))
+
+
 ## [0.27.0](https://github.com/bitrouter/bitrouter/compare/v0.26.0...v0.27.0)
 
 
