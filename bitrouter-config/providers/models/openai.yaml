@@ -406,6 +406,18 @@ models:
         cache_read: 0.5
       output_tokens:
         text: 30.0
+  gpt-5.5-pro:
+    max_input_tokens: 922000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 30.0
+      output_tokens:
+        text: 180.0
   o1:
     max_input_tokens: 200000
     max_output_tokens: 100000
