@@ -585,30 +585,24 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     policy,
                     virtual_key,
                 } => {
-                    if virtual_key {
-                        let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
-                        cli::key::sign(
-                            &wallet,
-                            models.as_deref(),
-                            budget,
-                            budget_scope.as_deref(),
-                            exp.as_deref(),
-                            ows_key.as_deref(),
-                            policy.as_deref(),
-                            Some((&runtime.config, runtime.config.server.listen)),
-                        )?;
+                    let runtime = if virtual_key {
+                        Some(load_or_warn_scaffold(&paths))
                     } else {
-                        cli::key::sign(
-                            &wallet,
-                            models.as_deref(),
-                            budget,
-                            budget_scope.as_deref(),
-                            exp.as_deref(),
-                            ows_key.as_deref(),
-                            policy.as_deref(),
-                            None,
-                        )?;
-                    }
+                        None
+                    };
+                    let virtual_key_target = runtime.as_ref().map(|runtime: &DefaultRuntime| {
+                        (&runtime.config, runtime.config.server.listen)
+                    });
+                    cli::key::sign(cli::key::SignOptions {
+                        wallet_name: &wallet,
+                        models: models.as_deref(),
+                        budget,
+                        budget_scope: budget_scope.as_deref(),
+                        exp: exp.as_deref(),
+                        ows_key: ows_key.as_deref(),
+                        policy: policy.as_deref(),
+                        virtual_key_target,
+                    })?;
                 }
             }
             return Ok(());

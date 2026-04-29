@@ -95,18 +95,22 @@ pub fn revoke_on_server(
     Ok(())
 }
 
+/// Options for signing a JWT or creating a virtual key.
+pub(crate) struct SignOptions<'a> {
+    pub(crate) wallet_name: &'a str,
+    pub(crate) models: Option<&'a [String]>,
+    pub(crate) budget: Option<u64>,
+    pub(crate) budget_scope: Option<&'a str>,
+    pub(crate) exp: Option<&'a str>,
+    pub(crate) ows_key: Option<&'a str>,
+    pub(crate) policy: Option<&'a str>,
+    pub(crate) virtual_key_target:
+        Option<(&'a bitrouter_config::BitrouterConfig, std::net::SocketAddr)>,
+}
+
 /// Sign a JWT for agent access — the operator mints tokens that agents
 /// present as bearer auth to the running BitRouter server.
-pub fn sign(
-    wallet_name: &str,
-    models: Option<&[String]>,
-    budget: Option<u64>,
-    budget_scope: Option<&str>,
-    exp: Option<&str>,
-    ows_key: Option<&str>,
-    policy: Option<&str>,
-    virtual_key_target: Option<(&bitrouter_config::BitrouterConfig, std::net::SocketAddr)>,
-) -> Result {
+pub(crate) fn sign(options: SignOptions<'_>) -> Result {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use base64::Engine;
@@ -118,14 +122,19 @@ pub fn sign(
     use sha2::{Digest, Sha256};
 
     // 1. Load wallet and resolve Solana address for CAIP-10 iss.
-    let info = ows_lib::get_wallet(wallet_name, None)
-        .map_err(|e| format!("failed to load wallet '{wallet_name}': {e}"))?;
+    let info = ows_lib::get_wallet(options.wallet_name, None)
+        .map_err(|e| format!("failed to load wallet '{}': {e}", options.wallet_name))?;
 
     let sol_account = info
         .accounts
         .iter()
         .find(|a| a.chain_id.starts_with("solana:"))
-        .ok_or_else(|| format!("wallet '{wallet_name}' has no Solana account — cannot sign JWT"))?;
+        .ok_or_else(|| {
+            format!(
+                "wallet '{}' has no Solana account — cannot sign JWT",
+                options.wallet_name
+            )
+        })?;
 
     let caip10 = Caip10 {
         chain: Chain::solana_mainnet(),
@@ -133,7 +142,7 @@ pub fn sign(
     };
 
     // 2. Parse optional budget scope.
-    let bsc = match budget_scope {
+    let bsc = match options.budget_scope {
         Some("session" | "ses") => Some(BudgetScope::Session),
         Some("account" | "act") => Some(BudgetScope::Account),
         Some(other) => {
@@ -147,7 +156,7 @@ pub fn sign(
     // 3. Parse expiration duration and compute absolute timestamp.
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
-    let exp_ts = match exp {
+    let exp_ts = match options.exp {
         Some(raw) => Some(now + parse_duration_secs(raw)?),
         None => None,
     };
@@ -155,7 +164,7 @@ pub fn sign(
     // 4. Generate API key identity (`id` claim).
     //    - OWS-backed keys: deterministically derived via SHA-256 of the key string.
     //    - Standalone keys: randomly generated 32-byte value.
-    let key_id = match ows_key {
+    let key_id = match options.ows_key {
         Some(key_str) => {
             let hash = Sha256::digest(key_str.as_bytes());
             URL_SAFE_NO_PAD.encode(hash)
@@ -172,12 +181,12 @@ pub fn sign(
         iat: Some(now),
         exp: exp_ts,
         scp: Some(TokenScope::Api),
-        mdl: models.map(|m| m.to_vec()),
-        bgt: budget,
+        mdl: options.models.map(|m| m.to_vec()),
+        bgt: options.budget,
         bsc,
         id: Some(key_id),
-        key: ows_key.map(String::from),
-        pol: policy.map(String::from),
+        key: options.ows_key.map(String::from),
+        pol: options.policy.map(String::from),
         jti: None,
         aud: None,
         sub: None,
@@ -192,14 +201,14 @@ pub fn sign(
         .interact()?;
 
     let signer = OwsJwtSigner {
-        wallet_name: wallet_name.to_owned(),
+        wallet_name: options.wallet_name.to_owned(),
         passphrase,
         vault_path: None,
     };
 
     let jwt = token::sign(&claims, &signer).map_err(|e| format!("failed to sign JWT: {e}"))?;
 
-    if let Some((config, addr)) = virtual_key_target {
+    if let Some((config, addr)) = options.virtual_key_target {
         create_virtual_key_on_server(config, addr, &jwt)?;
     } else {
         println!("{jwt}");
