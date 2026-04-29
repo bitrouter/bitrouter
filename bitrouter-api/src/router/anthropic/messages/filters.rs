@@ -165,6 +165,56 @@ where
         .and_then(handle_messages_with_mpp)
 }
 
+/// Creates a warp filter for `/v1/messages` with a custom [`PaymentGate`].
+///
+/// Like [`messages_filter_with_mpp`], but accepts any
+/// [`crate::mpp::PaymentGate`] implementation instead of requiring
+/// [`crate::mpp::MppState`] directly. This allows downstream crates to
+/// provide custom payment logic (e.g. charge-based balance management)
+/// while reusing the full routing, streaming, and observation pipeline.
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+pub fn messages_filter_with_payment_gate<T, R, A>(
+    table: Arc<T>,
+    router: Arc<R>,
+    observer: Arc<dyn ObserveCallback>,
+    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    account_filter: A,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
+    warp::path!("v1" / "messages")
+        .and(warp::post())
+        .and(account_filter)
+        .and(warp::any().map(move || payment_gate.clone()))
+        .and(warp::header::optional::<String>("authorization"))
+        .and(crate::body::json::<MessagesRequest>())
+        .and(warp::any().map(move || table.clone()))
+        .and(warp::any().map(move || router.clone()))
+        .and(warp::any().map(move || observer.clone()))
+        .and_then(
+            |caller: CallerContext,
+             gate: Arc<dyn crate::mpp::PaymentGate>,
+             auth_header: Option<String>,
+             request: MessagesRequest,
+             table: Arc<T>,
+             router: Arc<R>,
+             observer: Arc<dyn ObserveCallback>| {
+                handle_messages_with_gate(
+                    caller,
+                    gate,
+                    auth_header,
+                    request,
+                    table,
+                    router,
+                    observer,
+                )
+            },
+        )
+}
+
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_messages_with_mpp<T, R>(
     caller: CallerContext,
@@ -180,6 +230,32 @@ where
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     let payment_gate: Arc<dyn crate::mpp::PaymentGate> = mpp_state;
+    handle_messages_with_gate(
+        caller,
+        payment_gate,
+        auth_header,
+        request,
+        table,
+        router,
+        observer,
+    )
+    .await
+}
+
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+async fn handle_messages_with_gate<T, R>(
+    caller: CallerContext,
+    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    auth_header: Option<String>,
+    request: MessagesRequest,
+    table: Arc<T>,
+    router: Arc<R>,
+    observer: Arc<dyn ObserveCallback>,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection>
+where
+    T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
     let mpp_ctx = payment_gate
         .verify_payment(caller.chain.clone(), auth_header)
         .await?;
