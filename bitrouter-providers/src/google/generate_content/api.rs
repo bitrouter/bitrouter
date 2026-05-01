@@ -336,7 +336,7 @@ fn candidate_to_language_model_content(
     candidate: &GenerateContentCandidate,
     provider_metadata: Option<ProviderMetadata>,
     response_body: JsonValue,
-) -> Result<LanguageModelContent> {
+) -> Result<Vec<LanguageModelContent>> {
     let parts = candidate
         .content
         .as_ref()
@@ -357,9 +357,21 @@ fn candidate_to_language_model_content(
         ));
     }
 
-    // Look for function call first
+    let mut out: Vec<LanguageModelContent> = Vec::new();
+    let mut text_buf = String::new();
+
     for part in parts {
+        if let Some(text) = part.text.as_deref() {
+            text_buf.push_str(text);
+            continue;
+        }
         if let Some(fc) = &part.function_call {
+            if !text_buf.is_empty() {
+                out.push(LanguageModelContent::Text {
+                    text: std::mem::take(&mut text_buf),
+                    provider_metadata: provider_metadata.clone(),
+                });
+            }
             let input_str = fc
                 .args
                 .as_ref()
@@ -374,28 +386,33 @@ fn candidate_to_language_model_content(
                 })?
                 .unwrap_or_else(|| "{}".to_owned());
 
-            return Ok(LanguageModelContent::ToolCall {
+            out.push(LanguageModelContent::ToolCall {
                 tool_call_id: fc.name.clone(),
                 tool_name: fc.name.clone(),
                 tool_input: input_str,
                 provider_executed: None,
                 dynamic: None,
-                provider_metadata,
+                provider_metadata: provider_metadata.clone(),
             });
         }
     }
 
-    // Concatenate text parts
-    let text: String = parts
-        .iter()
-        .filter_map(|p| p.text.as_deref())
-        .collect::<Vec<_>>()
-        .join("");
+    if !text_buf.is_empty() {
+        out.push(LanguageModelContent::Text {
+            text: text_buf,
+            provider_metadata: provider_metadata.clone(),
+        });
+    }
 
-    Ok(LanguageModelContent::Text {
-        text,
-        provider_metadata,
-    })
+    if out.is_empty() {
+        // Preserve previous behavior: emit empty text rather than erroring.
+        out.push(LanguageModelContent::Text {
+            text: String::new(),
+            provider_metadata,
+        });
+    }
+
+    Ok(out)
 }
 
 // ── Prompt conversion ───────────────────────────────────────────────────────

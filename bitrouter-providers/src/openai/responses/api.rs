@@ -233,9 +233,9 @@ pub(crate) fn response_to_generate_result(
     response_headers: Option<HeaderMap>,
     response_body: JsonValue,
 ) -> Result<LanguageModelGenerateResult> {
-    let mut text_segments = Vec::new();
+    let mut blocks: Vec<LanguageModelContent> = Vec::new();
     let mut refusal: Option<String> = None;
-    let mut first_function_call: Option<(String, String, String)> = None;
+    let mut has_function_call = false;
 
     for item in &response.output {
         match item {
@@ -243,7 +243,10 @@ pub(crate) fn response_to_generate_result(
                 for part in content {
                     match part {
                         ResponsesOutputContent::OutputText { text } => {
-                            text_segments.push(text.clone());
+                            blocks.push(LanguageModelContent::Text {
+                                text: text.clone(),
+                                provider_metadata: None,
+                            });
                         }
                         ResponsesOutputContent::Refusal { refusal: value } => {
                             refusal = Some(value.clone());
@@ -258,9 +261,15 @@ pub(crate) fn response_to_generate_result(
                 arguments,
                 ..
             } => {
-                if first_function_call.is_none() {
-                    first_function_call = Some((call_id.clone(), name.clone(), arguments.clone()));
-                }
+                has_function_call = true;
+                blocks.push(LanguageModelContent::ToolCall {
+                    tool_call_id: call_id.clone(),
+                    tool_name: name.clone(),
+                    tool_input: arguments.clone(),
+                    provider_executed: None,
+                    dynamic: None,
+                    provider_metadata: None,
+                });
             }
             ResponsesOutputItem::Unknown => {}
         }
@@ -273,30 +282,38 @@ pub(crate) fn response_to_generate_result(
             .incomplete_details
             .as_ref()
             .and_then(|details| details.reason.as_deref()),
-        first_function_call.is_some(),
+        has_function_call,
     );
 
-    let content = if let Some((call_id, tool_name, tool_input)) = first_function_call {
-        LanguageModelContent::ToolCall {
-            tool_call_id: call_id,
-            tool_name,
-            tool_input,
-            provider_executed: None,
-            dynamic: None,
-            provider_metadata: provider_metadata.clone(),
-        }
-    } else if !text_segments.is_empty() {
-        LanguageModelContent::Text {
-            text: text_segments.join("\n"),
-            provider_metadata: provider_metadata.clone(),
-        }
-    } else {
+    if blocks.is_empty() {
         return Err(BitrouterError::invalid_response(
             Some(OPENAI_PROVIDER_NAME),
             "responses result did not contain text or function_call output",
             Some(response_body),
         ));
-    };
+    }
+
+    // Attach provider_metadata to the first block so callers can see refusal
+    // info without losing per-block ordering. Other blocks keep `None`.
+    if let Some(meta) = provider_metadata.clone()
+        && let Some(first) = blocks.first_mut()
+    {
+        match first {
+            LanguageModelContent::Text {
+                provider_metadata: m,
+                ..
+            }
+            | LanguageModelContent::ToolCall {
+                provider_metadata: m,
+                ..
+            } => {
+                *m = Some(meta);
+            }
+            _ => {}
+        }
+    }
+
+    let content = blocks;
 
     Ok(LanguageModelGenerateResult {
         content,
@@ -1290,9 +1307,10 @@ mod tests {
         let result = response_to_generate_result(response, None, json!({}), None, json!({}))
             .expect("conversion should succeed");
 
+        assert_eq!(result.content.len(), 1);
         assert!(matches!(
-            result.content,
-            LanguageModelContent::Text { ref text, .. } if text == "hello"
+            &result.content[0],
+            LanguageModelContent::Text { text, .. } if text == "hello"
         ));
         assert!(matches!(
             result.finish_reason,

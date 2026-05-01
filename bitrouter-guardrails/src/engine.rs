@@ -368,41 +368,43 @@ impl Guardrail {
 
         let mut all_violations = Vec::new();
 
-        match &mut result.content {
-            LanguageModelContent::Text { text, .. } => {
-                let inspection = self.inspect_downgoing_text(text);
-                if inspection.blocked {
-                    return Err(self.config.format_block_message(
-                        "downgoing text",
-                        &violation_descriptions(&inspection.violations),
-                    ));
+        for block in result.content.iter_mut() {
+            match block {
+                LanguageModelContent::Text { text, .. } => {
+                    let inspection = self.inspect_downgoing_text(text);
+                    if inspection.blocked {
+                        return Err(self.config.format_block_message(
+                            "downgoing text",
+                            &violation_descriptions(&inspection.violations),
+                        ));
+                    }
+                    *text = inspection.content;
+                    all_violations.extend(inspection.violations);
                 }
-                *text = inspection.content;
-                all_violations.extend(inspection.violations);
-            }
-            LanguageModelContent::Reasoning { text, .. } => {
-                let inspection = self.inspect_downgoing_text(text);
-                if inspection.blocked {
-                    return Err(self.config.format_block_message(
-                        "downgoing reasoning",
-                        &violation_descriptions(&inspection.violations),
-                    ));
+                LanguageModelContent::Reasoning { text, .. } => {
+                    let inspection = self.inspect_downgoing_text(text);
+                    if inspection.blocked {
+                        return Err(self.config.format_block_message(
+                            "downgoing reasoning",
+                            &violation_descriptions(&inspection.violations),
+                        ));
+                    }
+                    *text = inspection.content;
+                    all_violations.extend(inspection.violations);
                 }
-                *text = inspection.content;
-                all_violations.extend(inspection.violations);
-            }
-            LanguageModelContent::ToolCall { tool_input, .. } => {
-                let inspection = self.inspect_downgoing_text(tool_input);
-                if inspection.blocked {
-                    return Err(self.config.format_block_message(
-                        "downgoing tool call",
-                        &violation_descriptions(&inspection.violations),
-                    ));
+                LanguageModelContent::ToolCall { tool_input, .. } => {
+                    let inspection = self.inspect_downgoing_text(tool_input);
+                    if inspection.blocked {
+                        return Err(self.config.format_block_message(
+                            "downgoing tool call",
+                            &violation_descriptions(&inspection.violations),
+                        ));
+                    }
+                    *tool_input = inspection.content;
+                    all_violations.extend(inspection.violations);
                 }
-                *tool_input = inspection.content;
-                all_violations.extend(inspection.violations);
+                _ => {}
             }
-            _ => {}
         }
 
         Ok(all_violations)
@@ -689,14 +691,14 @@ mod tests {
         let g = Guardrail::new(config);
 
         let mut gen_result = LanguageModelGenerateResult {
-            content: LanguageModelContent::ToolCall {
+            content: vec![LanguageModelContent::ToolCall {
                 tool_call_id: "tc1".to_owned(),
                 tool_name: "bash".to_owned(),
                 tool_input: "rm -rf /".to_owned(),
                 provider_executed: None,
                 dynamic: None,
                 provider_metadata: None,
-            },
+            }],
             finish_reason: LanguageModelFinishReason::Stop,
             usage: default_usage(),
             provider_metadata: None,
@@ -936,14 +938,14 @@ mod tests {
         let g = Guardrail::new(config);
 
         let mut gen_result = LanguageModelGenerateResult {
-            content: LanguageModelContent::ToolCall {
+            content: vec![LanguageModelContent::ToolCall {
                 tool_call_id: "tc1".to_owned(),
                 tool_name: "bash".to_owned(),
                 tool_input: "rm -rf /".to_owned(),
                 provider_executed: None,
                 dynamic: None,
                 provider_metadata: None,
-            },
+            }],
             finish_reason: LanguageModelFinishReason::Stop,
             usage: default_usage(),
             provider_metadata: None,
@@ -968,14 +970,14 @@ mod tests {
         let g = Guardrail::new(config);
 
         let mut gen_result = LanguageModelGenerateResult {
-            content: LanguageModelContent::ToolCall {
+            content: vec![LanguageModelContent::ToolCall {
                 tool_call_id: "tc1".to_owned(),
                 tool_name: "bash".to_owned(),
                 tool_input: "rm -rf /".to_owned(),
                 provider_executed: None,
                 dynamic: None,
                 provider_metadata: None,
-            },
+            }],
             finish_reason: LanguageModelFinishReason::Stop,
             usage: default_usage(),
             provider_metadata: None,

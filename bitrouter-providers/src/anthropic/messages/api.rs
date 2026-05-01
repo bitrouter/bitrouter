@@ -314,7 +314,7 @@ fn content_blocks_to_language_model_content(
     blocks: Vec<AnthropicContentBlock>,
     provider_metadata: Option<ProviderMetadata>,
     response_body: JsonValue,
-) -> Result<LanguageModelContent> {
+) -> Result<Vec<LanguageModelContent>> {
     if blocks.is_empty() {
         return Err(BitrouterError::invalid_response(
             Some(ANTHROPIC_PROVIDER_NAME),
@@ -323,88 +323,56 @@ fn content_blocks_to_language_model_content(
         ));
     }
 
-    if blocks.len() == 1 {
-        // len() == 1 guarantees next() returns Some.
-        // The else branch is a defensive fallback that cannot be reached.
-        let Some(block) = blocks.into_iter().next() else {
-            return Err(BitrouterError::invalid_response(
-                Some(ANTHROPIC_PROVIDER_NAME),
-                "expected single content block but iterator was empty",
-                Some(response_body),
-            ));
-        };
-        return match block {
-            AnthropicContentBlock::Text { text } => Ok(LanguageModelContent::Text {
-                text,
-                provider_metadata,
-            }),
-            AnthropicContentBlock::ToolUse { id, name, input } => {
-                Ok(LanguageModelContent::ToolCall {
-                    tool_call_id: id,
-                    tool_name: name,
-                    tool_input: serde_json::to_string(&input).map_err(|error| {
-                        BitrouterError::invalid_response(
-                            Some(ANTHROPIC_PROVIDER_NAME),
-                            format!("failed to serialize tool call input: {error}"),
-                            Some(response_body.clone()),
-                        )
-                    })?,
-                    provider_executed: None,
-                    dynamic: None,
-                    provider_metadata,
-                })
-            }
-            AnthropicContentBlock::Image { .. }
-            | AnthropicContentBlock::ToolResult { .. }
-            | AnthropicContentBlock::Thinking { .. }
-            | AnthropicContentBlock::RedactedThinking { .. } => {
-                Err(BitrouterError::invalid_response(
-                    Some(ANTHROPIC_PROVIDER_NAME),
-                    "unexpected content block type in response",
-                    Some(response_body),
-                ))
-            }
-        };
-    }
-
-    // Multiple blocks: find the first tool_use or concatenate texts
-    let mut texts = Vec::new();
-    let mut tool_use = None;
+    let mut out: Vec<LanguageModelContent> = Vec::with_capacity(blocks.len());
     for block in blocks {
         match block {
-            AnthropicContentBlock::Text { text } => texts.push(text),
-            AnthropicContentBlock::ToolUse { id, name, input } if tool_use.is_none() => {
-                tool_use = Some((id, name, input));
+            AnthropicContentBlock::Text { text } => {
+                out.push(LanguageModelContent::Text {
+                    text,
+                    provider_metadata: provider_metadata.clone(),
+                });
             }
-            AnthropicContentBlock::ToolUse { .. }
+            AnthropicContentBlock::ToolUse { id, name, input } => {
+                let tool_input = serde_json::to_string(&input).map_err(|error| {
+                    BitrouterError::invalid_response(
+                        Some(ANTHROPIC_PROVIDER_NAME),
+                        format!("failed to serialize tool call input: {error}"),
+                        Some(response_body.clone()),
+                    )
+                })?;
+                out.push(LanguageModelContent::ToolCall {
+                    tool_call_id: id,
+                    tool_name: name,
+                    tool_input,
+                    provider_executed: None,
+                    dynamic: None,
+                    provider_metadata: provider_metadata.clone(),
+                });
+            }
+            AnthropicContentBlock::Thinking { thinking, .. } => {
+                out.push(LanguageModelContent::Reasoning {
+                    text: thinking,
+                    provider_metadata: provider_metadata.clone(),
+                });
+            }
+            AnthropicContentBlock::RedactedThinking { .. }
             | AnthropicContentBlock::Image { .. }
-            | AnthropicContentBlock::ToolResult { .. }
-            | AnthropicContentBlock::Thinking { .. }
-            | AnthropicContentBlock::RedactedThinking { .. } => {}
+            | AnthropicContentBlock::ToolResult { .. } => {
+                // Skip block types that have no representation in an assistant
+                // generate result (or that should never appear in responses).
+            }
         }
     }
 
-    if let Some((id, name, input)) = tool_use {
-        return Ok(LanguageModelContent::ToolCall {
-            tool_call_id: id,
-            tool_name: name,
-            tool_input: serde_json::to_string(&input).map_err(|error| {
-                BitrouterError::invalid_response(
-                    Some(ANTHROPIC_PROVIDER_NAME),
-                    format!("failed to serialize tool call input: {error}"),
-                    Some(response_body.clone()),
-                )
-            })?,
-            provider_executed: None,
-            dynamic: None,
-            provider_metadata,
-        });
+    if out.is_empty() {
+        return Err(BitrouterError::invalid_response(
+            Some(ANTHROPIC_PROVIDER_NAME),
+            "message response contained no representable content blocks",
+            Some(response_body),
+        ));
     }
 
-    Ok(LanguageModelContent::Text {
-        text: texts.join(""),
-        provider_metadata,
-    })
+    Ok(out)
 }
 
 // ── Prompt conversion ───────────────────────────────────────────────────────
@@ -1637,9 +1605,10 @@ mod tests {
             text: "Hello".to_owned(),
         }];
         let result = content_blocks_to_language_model_content(blocks, None, json!({}));
-        assert!(result.is_ok());
+        let out = result.expect("should be ok");
+        assert_eq!(out.len(), 1);
         assert!(matches!(
-            result.unwrap(),
+            &out[0],
             LanguageModelContent::Text { text, .. } if text == "Hello"
         ));
     }
@@ -1652,15 +1621,16 @@ mod tests {
             input: json!({"location": "Paris"}),
         }];
         let result = content_blocks_to_language_model_content(blocks, None, json!({}));
-        assert!(result.is_ok());
+        let out = result.expect("should be ok");
+        assert_eq!(out.len(), 1);
         assert!(matches!(
-            result.unwrap(),
+            &out[0],
             LanguageModelContent::ToolCall { tool_name, .. } if tool_name == "get_weather"
         ));
     }
 
     #[test]
-    fn multiple_text_blocks_concatenated() {
+    fn multiple_text_blocks_preserved_in_order() {
         let blocks = vec![
             AnthropicContentBlock::Text {
                 text: "Hello ".to_owned(),
@@ -1670,15 +1640,20 @@ mod tests {
             },
         ];
         let result = content_blocks_to_language_model_content(blocks, None, json!({}));
-        assert!(result.is_ok());
+        let out = result.expect("should be ok");
+        assert_eq!(out.len(), 2);
         assert!(matches!(
-            result.unwrap(),
-            LanguageModelContent::Text { text, .. } if text == "Hello world!"
+            &out[0],
+            LanguageModelContent::Text { text, .. } if text == "Hello "
+        ));
+        assert!(matches!(
+            &out[1],
+            LanguageModelContent::Text { text, .. } if text == "world!"
         ));
     }
 
     #[test]
-    fn text_and_tool_use_blocks_tool_wins() {
+    fn text_and_tool_use_blocks_both_preserved() {
         let blocks = vec![
             AnthropicContentBlock::Text {
                 text: "Let me look that up.".to_owned(),
@@ -1690,9 +1665,14 @@ mod tests {
             },
         ];
         let result = content_blocks_to_language_model_content(blocks, None, json!({}));
-        assert!(result.is_ok());
+        let out = result.expect("should be ok");
+        assert_eq!(out.len(), 2);
         assert!(matches!(
-            result.unwrap(),
+            &out[0],
+            LanguageModelContent::Text { text, .. } if text == "Let me look that up."
+        ));
+        assert!(matches!(
+            &out[1],
             LanguageModelContent::ToolCall { tool_name, .. } if tool_name == "search"
         ));
     }

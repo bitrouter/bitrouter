@@ -608,7 +608,7 @@ fn convert_to_assistant_content(
 /// Convert a bitrouter LLM result back to MCP format.
 #[cfg(feature = "mcp")]
 fn convert_generate_result(
-    content: LanguageModelContent,
+    blocks: Vec<LanguageModelContent>,
     finish_reason: LanguageModelFinishReason,
 ) -> (SamplingContent, String) {
     let stop_reason = match finish_reason {
@@ -620,22 +620,35 @@ fn convert_generate_result(
         LanguageModelFinishReason::Other(_) => "endTurn",
     };
 
-    let sampling_content = match content {
-        LanguageModelContent::Text { text, .. } => SamplingContent::Text { text },
-        LanguageModelContent::ToolCall {
-            tool_call_id,
-            tool_name,
-            tool_input,
-            ..
-        } => SamplingContent::ToolUse {
-            id: tool_call_id,
-            name: tool_name,
-            input: serde_json::from_str(&tool_input)
+    // MCP sampling/createMessage expects a single SamplingContent. Prefer the
+    // first tool call (matches the previous semantics for tool-use turns);
+    // otherwise fall back to concatenated assistant text.
+    let mut text_buf = String::new();
+    let mut tool_use: Option<(String, String, String)> = None;
+    for block in blocks {
+        match block {
+            LanguageModelContent::Text { text, .. } => text_buf.push_str(&text),
+            LanguageModelContent::ToolCall {
+                tool_call_id,
+                tool_name,
+                tool_input,
+                ..
+            } if tool_use.is_none() => {
+                tool_use = Some((tool_call_id, tool_name, tool_input));
+            }
+            _ => {}
+        }
+    }
+
+    let sampling_content = if let Some((id, name, input)) = tool_use {
+        SamplingContent::ToolUse {
+            id,
+            name,
+            input: serde_json::from_str(&input)
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
-        },
-        _ => SamplingContent::Text {
-            text: String::new(),
-        },
+        }
+    } else {
+        SamplingContent::Text { text: text_buf }
     };
 
     (sampling_content, stop_reason.to_owned())

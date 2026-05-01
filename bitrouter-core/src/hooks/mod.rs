@@ -82,10 +82,12 @@ mod tests {
 
     fn test_generate_result() -> LanguageModelGenerateResult {
         LanguageModelGenerateResult {
-            content: crate::models::language::content::LanguageModelContent::Text {
-                text: String::new(),
-                provider_metadata: None,
-            },
+            content: vec![
+                crate::models::language::content::LanguageModelContent::Text {
+                    text: String::new(),
+                    provider_metadata: None,
+                },
+            ],
             finish_reason: LanguageModelFinishReason::Stop,
             usage: test_usage(),
             provider_metadata: None,

@@ -78,10 +78,10 @@ impl LanguageModel for MockModel {
         _options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
         Ok(LanguageModelGenerateResult {
-            content: LanguageModelContent::Text {
+            content: vec![LanguageModelContent::Text {
                 text: "Hello from Google mock!".to_owned(),
                 provider_metadata: None,
-            },
+            }],
             finish_reason: LanguageModelFinishReason::Stop,
             usage: LanguageModelUsage {
                 input_tokens: LanguageModelInputTokens {
@@ -185,14 +185,14 @@ impl LanguageModel for MockToolModel {
         _options: LanguageModelCallOptions,
     ) -> Result<LanguageModelGenerateResult> {
         Ok(LanguageModelGenerateResult {
-            content: LanguageModelContent::ToolCall {
+            content: vec![LanguageModelContent::ToolCall {
                 tool_call_id: "call_abc123".to_owned(),
                 tool_name: "get_weather".to_owned(),
                 tool_input: r#"{"location":"NYC"}"#.to_owned(),
                 provider_executed: None,
                 dynamic: None,
                 provider_metadata: None,
-            },
+            }],
             finish_reason: LanguageModelFinishReason::FunctionCall,
             usage: mock_usage(),
             provider_metadata: None,
