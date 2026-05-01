@@ -381,32 +381,47 @@ fn input_content_to_parts(content: Option<ResponsesInputContent>) -> Vec<Languag
     }
 }
 
-fn extract_output_items(content: &LanguageModelContent) -> Vec<ResponsesOutputItem> {
-    match content {
-        LanguageModelContent::Text { text, .. } => {
-            vec![ResponsesOutputItem::Message {
+fn extract_output_items(blocks: &[LanguageModelContent]) -> Vec<ResponsesOutputItem> {
+    let mut out: Vec<ResponsesOutputItem> = Vec::new();
+    let mut pending_text: Vec<ResponsesOutputContent> = Vec::new();
+
+    let flush_text = |pending: &mut Vec<ResponsesOutputContent>,
+                      out: &mut Vec<ResponsesOutputItem>| {
+        if !pending.is_empty() {
+            out.push(ResponsesOutputItem::Message {
                 id: Some(format!("msg-{}", generate_id())),
                 role: Some("assistant".to_owned()),
-                content: vec![ResponsesOutputContent::OutputText { text: text.clone() }],
+                content: std::mem::take(pending),
                 status: Some("completed".to_owned()),
-            }]
+            });
         }
-        LanguageModelContent::ToolCall {
-            tool_call_id,
-            tool_name,
-            tool_input,
-            ..
-        } => {
-            vec![ResponsesOutputItem::FunctionCall {
-                id: Some(format!("fc-{}", generate_id())),
-                call_id: tool_call_id.clone(),
-                name: tool_name.clone(),
-                arguments: tool_input.clone(),
-                status: Some("completed".to_owned()),
-            }]
+    };
+
+    for block in blocks {
+        match block {
+            LanguageModelContent::Text { text, .. } => {
+                pending_text.push(ResponsesOutputContent::OutputText { text: text.clone() });
+            }
+            LanguageModelContent::ToolCall {
+                tool_call_id,
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                flush_text(&mut pending_text, &mut out);
+                out.push(ResponsesOutputItem::FunctionCall {
+                    id: Some(format!("fc-{}", generate_id())),
+                    call_id: tool_call_id.clone(),
+                    name: tool_name.clone(),
+                    arguments: tool_input.clone(),
+                    status: Some("completed".to_owned()),
+                });
+            }
+            _ => {}
         }
-        _ => vec![],
     }
+    flush_text(&mut pending_text, &mut out);
+    out
 }
 
 #[cfg(test)]
@@ -931,10 +946,10 @@ mod tests {
     #[test]
     fn from_generate_result_text() {
         let result = LanguageModelGenerateResult {
-            content: LanguageModelContent::Text {
+            content: vec![LanguageModelContent::Text {
                 text: "Hello world".to_owned(),
                 provider_metadata: None,
-            },
+            }],
             finish_reason: LanguageModelFinishReason::Stop,
             usage: make_usage(10, 5),
             provider_metadata: None,
@@ -976,14 +991,14 @@ mod tests {
     #[test]
     fn from_generate_result_tool_call() {
         let result = LanguageModelGenerateResult {
-            content: LanguageModelContent::ToolCall {
+            content: vec![LanguageModelContent::ToolCall {
                 tool_call_id: "call_xyz".to_owned(),
                 tool_name: "get_weather".to_owned(),
                 tool_input: r#"{"location":"NYC"}"#.to_owned(),
                 provider_executed: None,
                 dynamic: None,
                 provider_metadata: None,
-            },
+            }],
             finish_reason: LanguageModelFinishReason::FunctionCall,
             usage: make_usage(15, 20),
             provider_metadata: None,

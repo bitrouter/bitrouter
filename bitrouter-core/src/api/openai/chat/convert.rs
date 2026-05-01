@@ -341,28 +341,42 @@ fn convert_tool_choice(value: &ChatToolChoice) -> Option<LanguageModelToolChoice
 }
 
 fn extract_content_and_tool_calls(
-    content: &LanguageModelContent,
+    blocks: &[LanguageModelContent],
 ) -> (Option<String>, Option<Vec<ChatResponseToolCall>>) {
-    match content {
-        LanguageModelContent::Text { text, .. } => (Some(text.clone()), None),
-        LanguageModelContent::ToolCall {
-            tool_call_id,
-            tool_name,
-            tool_input,
-            ..
-        } => (
-            None,
-            Some(vec![ChatResponseToolCall {
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut tool_calls: Vec<ChatResponseToolCall> = Vec::new();
+
+    for block in blocks {
+        match block {
+            LanguageModelContent::Text { text, .. } => text_parts.push(text.clone()),
+            LanguageModelContent::ToolCall {
+                tool_call_id,
+                tool_name,
+                tool_input,
+                ..
+            } => tool_calls.push(ChatResponseToolCall {
                 id: tool_call_id.clone(),
                 r#type: "function".to_owned(),
                 function: ChatResponseToolCallFunction {
                     name: tool_name.clone(),
                     arguments: tool_input.clone(),
                 },
-            }]),
-        ),
-        _ => (None, None),
+            }),
+            _ => {}
+        }
     }
+
+    let content = if text_parts.is_empty() {
+        None
+    } else {
+        Some(text_parts.join(""))
+    };
+    let tool_calls = if tool_calls.is_empty() {
+        None
+    } else {
+        Some(tool_calls)
+    };
+    (content, tool_calls)
 }
 
 fn content_to_string(content: Option<ChatMessageContent>) -> String {
@@ -986,10 +1000,10 @@ mod tests {
     #[test]
     fn from_generate_result_text() {
         let result = LanguageModelGenerateResult {
-            content: LanguageModelContent::Text {
+            content: vec![LanguageModelContent::Text {
                 text: "Hello world".to_owned(),
                 provider_metadata: None,
-            },
+            }],
             finish_reason: LanguageModelFinishReason::Stop,
             usage: make_usage(10, 5),
             provider_metadata: None,
@@ -1016,14 +1030,14 @@ mod tests {
     #[test]
     fn from_generate_result_tool_call() {
         let result = LanguageModelGenerateResult {
-            content: LanguageModelContent::ToolCall {
+            content: vec![LanguageModelContent::ToolCall {
                 tool_call_id: "call_xyz".to_owned(),
                 tool_name: "get_weather".to_owned(),
                 tool_input: r#"{"location":"NYC"}"#.to_owned(),
                 provider_executed: None,
                 dynamic: None,
                 provider_metadata: None,
-            },
+            }],
             finish_reason: LanguageModelFinishReason::FunctionCall,
             usage: make_usage(15, 20),
             provider_metadata: None,
@@ -1044,6 +1058,49 @@ mod tests {
         assert_eq!(tc[0].r#type, "function");
         assert_eq!(tc[0].function.name, "get_weather");
         assert_eq!(tc[0].function.arguments, r#"{"location":"NYC"}"#);
+    }
+
+    // Regression test for issue #416: a generate result containing both
+    // assistant text and tool_call blocks must serialize as a single
+    // assistant choice with both `content` and `tool_calls` populated.
+    #[test]
+    fn from_generate_result_text_and_tool_calls() {
+        let result = LanguageModelGenerateResult {
+            content: vec![
+                LanguageModelContent::Text {
+                    text: "Let me check.".to_owned(),
+                    provider_metadata: None,
+                },
+                LanguageModelContent::ToolCall {
+                    tool_call_id: "call_a".to_owned(),
+                    tool_name: "get_weather".to_owned(),
+                    tool_input: r#"{"location":"NYC"}"#.to_owned(),
+                    provider_executed: None,
+                    dynamic: None,
+                    provider_metadata: None,
+                },
+            ],
+            finish_reason: LanguageModelFinishReason::FunctionCall,
+            usage: make_usage(10, 5),
+            provider_metadata: None,
+            request: None,
+            response_metadata: None,
+            warnings: None,
+        };
+        let resp = from_generate_result("gpt-4o", result);
+        assert_eq!(
+            resp.choices[0].message.content.as_deref(),
+            Some("Let me check.")
+        );
+        let tc = resp.choices[0]
+            .message
+            .tool_calls
+            .as_ref()
+            .expect("tool_calls missing");
+        assert_eq!(tc.len(), 1);
+        assert_eq!(tc[0].id, "call_a");
+        assert_eq!(tc[0].function.name, "get_weather");
+        assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("tool_calls"));
     }
 
     // ── Conversion: StreamConverter ─────────────────────────────────────

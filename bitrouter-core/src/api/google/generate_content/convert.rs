@@ -383,32 +383,36 @@ fn convert_tool_config(config: GoogleToolConfig) -> Option<LanguageModelToolChoi
     }
 }
 
-fn extract_response_parts(content: &LanguageModelContent) -> Vec<GooglePart> {
-    match content {
-        LanguageModelContent::Text { text, .. } => vec![GooglePart {
-            text: Some(text.clone()),
-            inline_data: None,
-            function_call: None,
-            function_response: None,
-        }],
-        LanguageModelContent::ToolCall {
-            tool_name,
-            tool_input,
-            ..
-        } => {
-            let args: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
-            vec![GooglePart {
-                text: None,
+fn extract_response_parts(blocks: &[LanguageModelContent]) -> Vec<GooglePart> {
+    let mut out: Vec<GooglePart> = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            LanguageModelContent::Text { text, .. } => out.push(GooglePart {
+                text: Some(text.clone()),
                 inline_data: None,
-                function_call: Some(GoogleFunctionCall {
-                    name: tool_name.clone(),
-                    args: Some(args),
-                }),
+                function_call: None,
                 function_response: None,
-            }]
+            }),
+            LanguageModelContent::ToolCall {
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                let args: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
+                out.push(GooglePart {
+                    text: None,
+                    inline_data: None,
+                    function_call: Some(GoogleFunctionCall {
+                        name: tool_name.clone(),
+                        args: Some(args),
+                    }),
+                    function_response: None,
+                });
+            }
+            _ => {}
         }
-        _ => vec![],
     }
+    out
 }
 
 fn map_finish_reason(reason: &LanguageModelFinishReason) -> String {

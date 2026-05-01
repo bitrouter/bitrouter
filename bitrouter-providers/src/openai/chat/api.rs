@@ -367,29 +367,20 @@ fn message_to_language_model_content(
     message: ChatCompletionChoiceMessage,
     provider_metadata: Option<ProviderMetadata>,
     response_body: JsonValue,
-) -> Result<LanguageModelContent> {
-    match (message.content, message.tool_calls) {
-        (Some(content), None) => Ok(LanguageModelContent::Text {
-            text: content,
-            provider_metadata,
-        }),
-        (None, Some(tool_calls)) => {
-            if tool_calls.len() != 1 {
-                return Err(BitrouterError::invalid_response(
-                    Some(OPENAI_PROVIDER_NAME),
-                    "chat completion returned multiple tool calls, but bitrouter-core generate_result can only represent one top-level content item",
-                    Some(response_body),
-                ));
-            }
-            // len() == 1 is guaranteed here because len() != 1 returns early above.
-            // The else branch is a defensive fallback that cannot be reached.
-            let Some(tool_call) = tool_calls.into_iter().next() else {
-                return Err(BitrouterError::invalid_response(
-                    Some(OPENAI_PROVIDER_NAME),
-                    "expected single tool call but iterator was empty",
-                    Some(response_body),
-                ));
-            };
+) -> Result<Vec<LanguageModelContent>> {
+    let mut blocks: Vec<LanguageModelContent> = Vec::new();
+
+    if let Some(text) = message.content
+        && !text.is_empty()
+    {
+        blocks.push(LanguageModelContent::Text {
+            text,
+            provider_metadata: provider_metadata.clone(),
+        });
+    }
+
+    if let Some(tool_calls) = message.tool_calls {
+        for tool_call in tool_calls {
             let tool_input = serde_json::from_str::<JsonValue>(&tool_call.function.arguments)
                 .map_err(|error| {
                     BitrouterError::invalid_response(
@@ -398,32 +389,33 @@ fn message_to_language_model_content(
                         Some(response_body.clone()),
                     )
                 })?;
-            Ok(LanguageModelContent::ToolCall {
+            let serialized = serde_json::to_string(&tool_input).map_err(|error| {
+                BitrouterError::invalid_response(
+                    Some(OPENAI_PROVIDER_NAME),
+                    format!("failed to re-serialize tool call arguments: {error}"),
+                    Some(response_body.clone()),
+                )
+            })?;
+            blocks.push(LanguageModelContent::ToolCall {
                 tool_call_id: tool_call.id,
                 tool_name: tool_call.function.name,
-                tool_input: serde_json::to_string(&tool_input).map_err(|error| {
-                    BitrouterError::invalid_response(
-                        Some(OPENAI_PROVIDER_NAME),
-                        format!("failed to re-serialize tool call arguments: {error}"),
-                        Some(response_body.clone()),
-                    )
-                })?,
+                tool_input: serialized,
                 provider_executed: None,
                 dynamic: None,
-                provider_metadata,
-            })
+                provider_metadata: provider_metadata.clone(),
+            });
         }
-        (Some(_), Some(_)) => Err(BitrouterError::invalid_response(
-            Some(OPENAI_PROVIDER_NAME),
-            "chat completion returned both assistant text and tool calls in one choice, which bitrouter-core generate_result cannot represent as a single content value",
-            Some(response_body),
-        )),
-        (None, None) => Err(BitrouterError::invalid_response(
+    }
+
+    if blocks.is_empty() {
+        return Err(BitrouterError::invalid_response(
             Some(OPENAI_PROVIDER_NAME),
             "chat completion returned neither content nor tool calls",
             Some(response_body),
-        )),
+        ));
     }
+
+    Ok(blocks)
 }
 
 fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ChatMessage>> {
@@ -1130,11 +1122,74 @@ fn next_sse_event_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitrouter_core::api::openai::chat::types::{
+        ChatResponseToolCall, ChatResponseToolCallFunction,
+    };
     use bitrouter_core::models::language::{
         call_options::LanguageModelCallOptions,
         data_content::LanguageModelDataContent,
         prompt::{LanguageModelMessage, LanguageModelUserContent},
     };
+
+    // Regression test for issue #416: a chat completion choice that includes
+    // both assistant text and one or more tool_calls must be preserved as
+    // multiple ordered content blocks instead of returning a 502.
+    #[test]
+    fn message_with_text_and_tool_calls_yields_multiple_blocks() {
+        let message = ChatCompletionChoiceMessage {
+            role: "assistant".to_owned(),
+            content: Some("Let me look that up.".to_owned()),
+            refusal: None,
+            tool_calls: Some(vec![
+                ChatResponseToolCall {
+                    id: "call_1".to_owned(),
+                    r#type: "function".to_owned(),
+                    function: ChatResponseToolCallFunction {
+                        name: "get_weather".to_owned(),
+                        arguments: r#"{"location":"NYC"}"#.to_owned(),
+                    },
+                },
+                ChatResponseToolCall {
+                    id: "call_2".to_owned(),
+                    r#type: "function".to_owned(),
+                    function: ChatResponseToolCallFunction {
+                        name: "get_time".to_owned(),
+                        arguments: r#"{"tz":"UTC"}"#.to_owned(),
+                    },
+                },
+            ]),
+        };
+
+        let blocks = message_to_language_model_content(message, None, json!({}))
+            .expect("mixed content should be accepted");
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(
+            &blocks[0],
+            LanguageModelContent::Text { text, .. } if text == "Let me look that up."
+        ));
+        assert!(matches!(
+            &blocks[1],
+            LanguageModelContent::ToolCall { tool_call_id, tool_name, .. }
+                if tool_call_id == "call_1" && tool_name == "get_weather"
+        ));
+        assert!(matches!(
+            &blocks[2],
+            LanguageModelContent::ToolCall { tool_call_id, tool_name, .. }
+                if tool_call_id == "call_2" && tool_name == "get_time"
+        ));
+    }
+
+    #[test]
+    fn message_with_no_content_or_tool_calls_errors() {
+        let message = ChatCompletionChoiceMessage {
+            role: "assistant".to_owned(),
+            content: None,
+            refusal: None,
+            tool_calls: None,
+        };
+        let err = message_to_language_model_content(message, None, json!({})).unwrap_err();
+        assert!(format!("{err}").contains("neither content nor tool calls"));
+    }
 
     #[test]
     fn parses_openai_error_body() {

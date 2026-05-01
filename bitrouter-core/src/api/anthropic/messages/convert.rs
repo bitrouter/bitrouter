@@ -356,26 +356,36 @@ fn convert_tool_choice(value: &AnthropicToolChoice) -> Option<LanguageModelToolC
     }
 }
 
-fn extract_response_content(content: &LanguageModelContent) -> Vec<AnthropicContentBlock> {
-    match content {
-        LanguageModelContent::Text { text, .. } => {
-            vec![AnthropicContentBlock::Text { text: text.clone() }]
+fn extract_response_content(blocks: &[LanguageModelContent]) -> Vec<AnthropicContentBlock> {
+    let mut out: Vec<AnthropicContentBlock> = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            LanguageModelContent::Text { text, .. } => {
+                out.push(AnthropicContentBlock::Text { text: text.clone() });
+            }
+            LanguageModelContent::ToolCall {
+                tool_call_id,
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                let input: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
+                out.push(AnthropicContentBlock::ToolUse {
+                    id: tool_call_id.clone(),
+                    name: tool_name.clone(),
+                    input,
+                });
+            }
+            LanguageModelContent::Reasoning { text, .. } => {
+                out.push(AnthropicContentBlock::Thinking {
+                    thinking: text.clone(),
+                    signature: None,
+                });
+            }
+            _ => {}
         }
-        LanguageModelContent::ToolCall {
-            tool_call_id,
-            tool_name,
-            tool_input,
-            ..
-        } => {
-            let input: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
-            vec![AnthropicContentBlock::ToolUse {
-                id: tool_call_id.clone(),
-                name: tool_name.clone(),
-                input,
-            }]
-        }
-        _ => vec![],
     }
+    out
 }
 
 fn map_finish_reason(reason: &LanguageModelFinishReason) -> String {

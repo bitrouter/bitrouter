@@ -12,8 +12,14 @@ use super::{
 /// Represents the result of a Language Model generation.
 #[derive(Debug, Clone)]
 pub struct LanguageModelGenerateResult {
-    /// The generated content
-    pub content: LanguageModelContent,
+    /// The generated content blocks, in the order returned by the provider.
+    ///
+    /// A single assistant turn may contain multiple ordered blocks, e.g.
+    /// explanatory text followed by one or more `tool-call` blocks. This is
+    /// required for compatibility with Anthropic Messages-style responses and
+    /// OpenAI-compatible chat completions that include both `message.content`
+    /// and `message.tool_calls` in the same choice.
+    pub content: Vec<LanguageModelContent>,
     /// The finish reason, if the generation is complete
     pub finish_reason: LanguageModelFinishReason,
     /// The usage information for this generation
