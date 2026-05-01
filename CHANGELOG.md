@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.3](https://github.com/bitrouter/bitrouter/compare/v0.27.2...v0.27.3)
+
+
+### 🐛 Bug Fixes
+
+- *(core)* Preserve mixed text and tool calls in generate result ([#417](https://github.com/bitrouter/bitrouter/pull/417)) - ([de45d0b](https://github.com/bitrouter/bitrouter/commit/de45d0bdebc74cf14ef4e946b771288dd4f568a9))
+
+
 ## [0.27.2](https://github.com/bitrouter/bitrouter/compare/v0.27.1...v0.27.2)
 
 
