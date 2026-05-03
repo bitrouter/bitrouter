@@ -1107,12 +1107,18 @@ where
 }
 
 fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init();
+    // warp 0.4 logs every hyper connection-level error at ERROR (see
+    // warp::server::run), including benign `IncompleteMessage` events that fire
+    // when a client closes a keep-alive HTTP/1.1 socket between requests.
+    // Downgrade that target to WARN so those benign errors don't clutter logs.
+    // Explicit user directives in RUST_LOG still take precedence because they
+    // are parsed first and the most specific match wins.
+    let mut filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    if let Ok(directive) = "warp::server::run=warn".parse() {
+        filter = filter.add_directive(directive);
+    }
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
 #[cfg(test)]
