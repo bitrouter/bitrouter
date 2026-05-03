@@ -1446,6 +1446,26 @@ models:
         no_cache: 0.0
       output_tokens:
         text: 0.0
+  poolside/laguna-m.1:free:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+        cache_read: 0.0
+        cache_write: 0.0
+      output_tokens:
+        text: 0.0
+  poolside/laguna-xs.2:free:
+    max_input_tokens: 131072
+    max_output_tokens: 8192
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+        cache_read: 0.0
+        cache_write: 0.0
+      output_tokens:
+        text: 0.0
   prime-intellect/intellect-3:
     max_input_tokens: 131072
     max_output_tokens: 8192
