@@ -637,6 +637,7 @@ impl super::payment_gate::PaymentGate for MppState {
         backend_key: &'a str,
         channel_id: &'a str,
         amount: u128,
+        request_id: Option<&'a str>,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<Output = Result<(), mpp::server::VerificationError>>
@@ -644,6 +645,7 @@ impl super::payment_gate::PaymentGate for MppState {
                 + 'a,
         >,
     > {
+        let _ = request_id;
         Box::pin(self.deduct(backend_key, channel_id, amount))
     }
 

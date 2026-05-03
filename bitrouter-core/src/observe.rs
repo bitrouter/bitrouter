@@ -55,6 +55,20 @@ pub struct RequestContext {
     pub caller: CallerContext,
     /// End-to-end request latency in milliseconds.
     pub latency_ms: u64,
+    /// Stable per-request correlation identifier.
+    ///
+    /// Generated once per inbound API request (typically a UUID v4) and
+    /// shared across observation events for that request, allowing
+    /// downstream stores to correlate streaming and non-streaming paths
+    /// with their billing rows.
+    pub request_id: String,
+    /// Extensible per-request metadata.
+    ///
+    /// Populated by upstream-defined hooks (see [`MetadataHook`]) so that
+    /// SDK consumers can attach opaque context (operator IDs, request
+    /// origin, custom tags) to billing/observation events without
+    /// modifying core types. Defaults to [`serde_json::Value::Null`].
+    pub metadata: serde_json::Value,
 }
 
 /// Event emitted when a request completes successfully.
@@ -64,6 +78,11 @@ pub struct RequestSuccessEvent {
     pub ctx: RequestContext,
     /// Token usage reported by the model.
     pub usage: LanguageModelUsage,
+    /// Whether the response was served as a streaming SSE response.
+    pub streamed: bool,
+    /// Wall-clock generation time in milliseconds, when measurable
+    /// distinctly from end-to-end latency. `None` when not available.
+    pub generation_time_ms: Option<u64>,
 }
 
 /// Event emitted when a request fails.
@@ -73,6 +92,19 @@ pub struct RequestFailureEvent {
     pub ctx: RequestContext,
     /// The error that caused the failure.
     pub error: BitrouterError,
+}
+
+/// Per-request hook that produces opaque metadata attached to [`RequestContext::metadata`].
+///
+/// The closure is invoked once per request inside the API handler, with the
+/// authenticated [`CallerContext`] and the optional `Origin` HTTP header.
+/// Upstream callers that don't need metadata pass [`default_metadata_hook`].
+pub type MetadataHook =
+    std::sync::Arc<dyn Fn(&CallerContext, &Option<String>) -> serde_json::Value + Send + Sync>;
+
+/// Returns a no-op [`MetadataHook`] that always yields `serde_json::Value::Null`.
+pub fn default_metadata_hook() -> MetadataHook {
+    std::sync::Arc::new(|_, _| serde_json::Value::Null)
 }
 
 /// Callback trait for observing completed API requests.

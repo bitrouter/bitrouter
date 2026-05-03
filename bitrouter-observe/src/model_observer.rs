@@ -154,6 +154,8 @@ mod tests {
                 ..CallerContext::default()
             },
             latency_ms: 250,
+            request_id: String::new(),
+            metadata: serde_json::Value::Null,
         }
     }
 
@@ -178,6 +180,8 @@ mod tests {
                 },
                 raw: None,
             },
+            streamed: false,
+            generation_time_ms: None,
         };
 
         observer.on_request_success(event).await;

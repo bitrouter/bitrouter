@@ -29,6 +29,8 @@ pub struct MeteredSseContext {
     pub backend_key: String,
     pub channel_id: String,
     pub tick_cost: u128,
+    /// Optional stable correlation id for the request this stream serves.
+    pub request_id: Option<String>,
 }
 
 impl MeteredSseContext {
@@ -49,7 +51,12 @@ impl MeteredSseContext {
         for _ in 0..MAX_NEED_VOUCHER_RETRIES {
             match self
                 .payment_gate
-                .deduct(&self.backend_key, &self.channel_id, self.tick_cost)
+                .deduct(
+                    &self.backend_key,
+                    &self.channel_id,
+                    self.tick_cost,
+                    self.request_id.as_deref(),
+                )
                 .await
             {
                 Ok(()) => return true,

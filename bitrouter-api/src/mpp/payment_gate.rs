@@ -33,11 +33,17 @@ pub trait PaymentGate: Send + Sync {
     ///
     /// For session-based flows this debits from the payment channel store.
     /// Custom implementations may debit from a centralized balance instead.
+    ///
+    /// `request_id` is the upstream-generated correlation ID for the
+    /// request that triggered this deduction. It is `None` for streaming
+    /// per-tick deductions where receipts are not tracked at the request
+    /// level. Implementations that don't track receipts may ignore it.
     fn deduct<'a>(
         &'a self,
         backend_key: &'a str,
         channel_id: &'a str,
         amount: u128,
+        request_id: Option<&'a str>,
     ) -> GateFuture<'a, Result<(), mpp::server::VerificationError>>;
 
     /// Wait for the next channel update on the given backend.
@@ -86,8 +92,9 @@ impl PaymentGate for Arc<dyn PaymentGate> {
         backend_key: &'a str,
         channel_id: &'a str,
         amount: u128,
+        request_id: Option<&'a str>,
     ) -> GateFuture<'a, Result<(), mpp::server::VerificationError>> {
-        (**self).deduct(backend_key, channel_id, amount)
+        (**self).deduct(backend_key, channel_id, amount, request_id)
     }
 
     fn wait_for_update<'a>(

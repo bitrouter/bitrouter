@@ -28,6 +28,10 @@ mod observe_ctx {
         pub target_model: String,
         pub caller: CallerContext,
         pub start: Instant,
+        /// Stable per-request correlation id.
+        pub request_id: String,
+        /// Opaque per-request metadata (see [`bitrouter_core::observe::MetadataHook`]).
+        pub metadata: serde_json::Value,
     }
 }
 
