@@ -14,10 +14,12 @@ use bitrouter_core::{
         CallerContext, ObserveCallback, RequestContext, RequestFailureEvent, RequestSuccessEvent,
     },
     routers::{
-        router::{DynTargetOverlay, LanguageModelRouter, TargetOverlay},
+        router::LanguageModelRouter,
         routing_table::RoutingTable,
     },
 };
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+use bitrouter_core::routers::router::{DynTargetOverlay, TargetOverlay};
 
 use crate::router::context::openai_chat;
 use warp::Filter;
