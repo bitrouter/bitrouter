@@ -67,6 +67,15 @@ impl LanguageModelRouter for MockToolStreamRouter {
     }
 }
 
+struct MockSlowStreamRouter;
+impl LanguageModelRouter for MockSlowStreamRouter {
+    async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+        Ok(DynLanguageModel::new_box(MockSlowStreamModel {
+            model_id: target.service_id,
+        }))
+    }
+}
+
 #[derive(Clone)]
 struct MockModel {
     model_id: String,
@@ -322,6 +331,69 @@ impl LanguageModel for MockToolStreamModel {
     }
 }
 
+#[derive(Clone)]
+struct MockSlowStreamModel {
+    model_id: String,
+}
+
+impl LanguageModel for MockSlowStreamModel {
+    fn provider_name(&self) -> &str {
+        "mock"
+    }
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+    async fn supported_urls(&self) -> HashMap<String, Regex> {
+        HashMap::new()
+    }
+    async fn generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult> {
+        Ok(LanguageModelGenerateResult {
+            content: vec![LanguageModelContent::Text {
+                text: "slow stream fallback".to_owned(),
+                provider_metadata: None,
+            }],
+            finish_reason: LanguageModelFinishReason::Stop,
+            usage: mock_usage(),
+            provider_metadata: None,
+            request: None,
+            response_metadata: None,
+            warnings: None,
+        })
+    }
+    async fn stream(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            let _ = tx
+                .send(LanguageModelStreamPart::TextDelta {
+                    id: "0".to_owned(),
+                    delta: "Hello".to_owned(),
+                    provider_metadata: None,
+                })
+                .await;
+            tokio::time::sleep(std::time::Duration::from_secs(16)).await;
+            let _ = tx
+                .send(LanguageModelStreamPart::Finish {
+                    usage: mock_usage(),
+                    finish_reason: LanguageModelFinishReason::Stop,
+                    provider_metadata: None,
+                })
+                .await;
+        });
+
+        Ok(LanguageModelStreamResult {
+            stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            request: None,
+            response: None,
+        })
+    }
+}
+
 fn parse_sse_body(body: &[u8]) -> Vec<(Option<String>, String)> {
     String::from_utf8_lossy(body)
         .replace("\r\n", "\n")
@@ -458,6 +530,41 @@ async fn messages_streaming_sends_sse_events() {
 
     assert_eq!(events[2].0, None);
     assert_eq!(events[2].1, "[DONE]");
+}
+
+#[tokio::test(start_paused = true)]
+async fn messages_streaming_sends_keep_alive_comments_during_idle_gap() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockSlowStreamRouter);
+    let filter = messages_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "stream": true,
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/messages")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+
+    let raw_body = String::from_utf8_lossy(res.body());
+    assert!(
+        raw_body.contains(":\n\n"),
+        "expected downstream SSE keep-alive comment in body: {raw_body}"
+    );
+
+    let events = parse_sse_body(res.body());
+    assert_eq!(events.last().map(|(_, data)| data.as_str()), Some("[DONE]"));
 }
 
 #[tokio::test]

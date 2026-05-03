@@ -21,6 +21,8 @@ use super::{convert, types::MessagesRequest};
 
 use crate::router::context::anthropic_messages;
 
+const SSE_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Creates a warp filter for the `/v1/messages` endpoint.
 ///
 /// This is the zero-observability variant. For spend tracking and metrics,
@@ -401,7 +403,7 @@ where
         });
 
         let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-        let reply = warp::sse::reply(sse_stream);
+        let reply = sse_reply(sse_stream);
         if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
             Ok(Box::new(warp::reply::with_header(
                 reply,
@@ -601,7 +603,7 @@ async fn handle_stream(
     });
 
     let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    Ok(Box::new(warp::sse::reply(sse_stream)))
+    Ok(Box::new(sse_reply(sse_stream)))
 }
 
 async fn handle_stream_with_observe(
@@ -698,5 +700,17 @@ async fn handle_stream_with_observe(
     });
 
     let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    Ok(Box::new(warp::sse::reply(sse_stream)))
+    Ok(Box::new(sse_reply(sse_stream)))
+}
+
+fn sse_reply<S>(sse_stream: S) -> impl warp::Reply
+where
+    S: futures_core::TryStream<Ok = warp::sse::Event> + Send + Sync + 'static,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
+    warp::sse::reply(
+        warp::sse::keep_alive()
+            .interval(SSE_KEEP_ALIVE_INTERVAL)
+            .stream(sse_stream),
+    )
 }
