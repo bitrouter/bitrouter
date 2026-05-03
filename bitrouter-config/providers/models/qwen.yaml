@@ -482,6 +482,16 @@ models:
         no_cache: 0.248
       output_tokens:
         text: 1.485
+  qwen3.6-max-preview:
+    max_input_tokens: 262144
+    max_output_tokens: 65536
+    pricing:
+      input_tokens:
+        no_cache: 1.3
+        cache_read: 0.13
+        cache_write: 1.625
+      output_tokens:
+        text: 7.8
   qwen3.6-plus:
     max_input_tokens: 1000000
     max_output_tokens: 65536
