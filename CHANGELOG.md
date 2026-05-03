@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0](https://github.com/bitrouter/bitrouter/compare/v0.28.0...v0.29.0)
+
+
+### ⛰️ Features
+
+- *(core,api)* [**breaking**] TargetOverlay + per-endpoint key overrides ([#425](https://github.com/bitrouter/bitrouter/pull/425)) - ([d72bdac](https://github.com/bitrouter/bitrouter/commit/d72bdacea7cd9bb1f53aaaa474b9fe46b3fdf2be))
+
+
 ## [0.28.0](https://github.com/bitrouter/bitrouter/compare/v0.27.3...v0.28.0)
 
 
