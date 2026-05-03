@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0](https://github.com/bitrouter/bitrouter/compare/v0.27.3...v0.28.0)
+
+
+### ⛰️ Features
+
+- *(observe)* [**breaking**] Add request_id, metadata, streamed to events ([#424](https://github.com/bitrouter/bitrouter/pull/424)) - ([f10742f](https://github.com/bitrouter/bitrouter/commit/f10742ff0aff4c40f4013e17635d6a43ef2ec55d))
+
+### 🐛 Bug Fixes
+
+- *(api)* Keep model SSE streams alive ([#423](https://github.com/bitrouter/bitrouter/pull/423)) - ([6701cc7](https://github.com/bitrouter/bitrouter/commit/6701cc7c90b1faf5166696ac5754590c114700ea))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#419](https://github.com/bitrouter/bitrouter/pull/419)) - ([d56df5d](https://github.com/bitrouter/bitrouter/commit/d56df5d403773278f172ee50862ac38c4f209a40))
+
+
 ## [0.27.3](https://github.com/bitrouter/bitrouter/compare/v0.27.2...v0.27.3)
 
 
