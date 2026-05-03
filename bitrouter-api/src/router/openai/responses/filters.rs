@@ -5,6 +5,8 @@ use std::time::Instant;
 
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 use bitrouter_core::observe::MetadataHook;
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+use bitrouter_core::routers::router::{DynTargetOverlay, TargetOverlay};
 use bitrouter_core::{
     auth::access::is_model_allowed,
     errors::BitrouterError,
@@ -13,13 +15,8 @@ use bitrouter_core::{
     observe::{
         CallerContext, ObserveCallback, RequestContext, RequestFailureEvent, RequestSuccessEvent,
     },
-    routers::{
-        router::LanguageModelRouter,
-        routing_table::RoutingTable,
-    },
+    routers::{router::LanguageModelRouter, routing_table::RoutingTable},
 };
-#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
-use bitrouter_core::routers::router::{DynTargetOverlay, TargetOverlay};
 use warp::Filter;
 
 use crate::error::BitrouterRejection;
