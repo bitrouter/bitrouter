@@ -3,6 +3,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+use bitrouter_core::observe::MetadataHook;
 use bitrouter_core::{
     auth::access::is_model_allowed,
     errors::BitrouterError,
@@ -176,6 +178,7 @@ pub fn responses_filter_with_payment_gate<T, R, A>(
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
     payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    metadata_hook: MetadataHook,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
@@ -188,27 +191,31 @@ where
         .and(account_filter)
         .and(warp::any().map(move || payment_gate.clone()))
         .and(warp::header::optional::<String>("authorization"))
+        .and(warp::header::optional::<String>("origin"))
         .and(crate::body::json::<ResponsesRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
         .and(warp::any().map(move || observer.clone()))
+        .and(warp::any().map(move || metadata_hook.clone()))
         .and_then(
             |caller: CallerContext,
              gate: Arc<dyn crate::mpp::PaymentGate>,
              auth_header: Option<String>,
+             origin: Option<String>,
              request: ResponsesRequest,
              table: Arc<T>,
              router: Arc<R>,
-             observer: Arc<dyn ObserveCallback>| {
-                handle_responses_with_gate(
+             observer: Arc<dyn ObserveCallback>,
+             metadata_hook: MetadataHook| {
+                let gate_ctx = crate::mpp::GateContext {
                     caller,
-                    gate,
+                    payment_gate: gate,
                     auth_header,
-                    request,
-                    table,
-                    router,
                     observer,
-                )
+                    metadata_hook,
+                    origin,
+                };
+                handle_responses_with_gate(gate_ctx, request, table, router)
             },
         )
 }
@@ -228,32 +235,36 @@ where
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     let payment_gate: Arc<dyn crate::mpp::PaymentGate> = mpp_state;
-    handle_responses_with_gate(
+    let gate_ctx = crate::mpp::GateContext {
         caller,
         payment_gate,
         auth_header,
-        request,
-        table,
-        router,
         observer,
-    )
-    .await
+        metadata_hook: bitrouter_core::observe::default_metadata_hook(),
+        origin: None,
+    };
+    handle_responses_with_gate(gate_ctx, request, table, router).await
 }
 
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_responses_with_gate<T, R>(
-    caller: CallerContext,
-    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
-    auth_header: Option<String>,
+    gate_ctx: crate::mpp::GateContext,
     request: ResponsesRequest,
     table: Arc<T>,
     router: Arc<R>,
-    observer: Arc<dyn ObserveCallback>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
 where
     T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
+    let crate::mpp::GateContext {
+        caller,
+        payment_gate,
+        auth_header,
+        observer,
+        metadata_hook,
+        origin,
+    } = gate_ctx;
     let mpp_ctx = payment_gate
         .verify_payment(caller.chain.clone(), auth_header)
         .await?;
@@ -300,6 +311,8 @@ where
     let model_id = model.model_id().to_owned();
     let options = convert::to_call_options(request);
     let start = Instant::now();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let metadata = metadata_hook(&caller, &origin);
 
     if is_stream {
         let stream_result = model
@@ -320,6 +333,7 @@ where
             backend_key: mpp_ctx.backend_key.clone(),
             channel_id: mpp_ctx.channel_id.clone(),
             tick_cost,
+            request_id: Some(request_id.clone()),
         };
 
         tokio::spawn(async move {
@@ -369,10 +383,17 @@ where
                 model: target_model_id,
                 caller,
                 latency_ms,
+                request_id,
+                metadata,
             };
             if let Some(usage) = usage {
                 observer
-                    .on_request_success(RequestSuccessEvent { ctx, usage })
+                    .on_request_success(RequestSuccessEvent {
+                        ctx,
+                        usage,
+                        streamed: true,
+                        generation_time_ms: None,
+                    })
                     .await;
             } else if client_disconnected {
                 observer
@@ -419,7 +440,12 @@ where
 
                 if micro_units > 0
                     && let Err(e) = payment_gate
-                        .deduct(&mpp_ctx.backend_key, &mpp_ctx.channel_id, micro_units)
+                        .deduct(
+                            &mpp_ctx.backend_key,
+                            &mpp_ctx.channel_id,
+                            micro_units,
+                            Some(request_id.as_str()),
+                        )
                         .await
                 {
                     tracing::warn!(
@@ -437,8 +463,12 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id,
+                        metadata,
                     },
                     usage: result.usage.clone(),
+                    streamed: false,
+                    generation_time_ms: None,
                 };
                 tokio::spawn(async move { observer.on_request_success(event).await });
 
@@ -463,6 +493,8 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id,
+                        metadata,
                     },
                     error: e.clone(),
                 };
@@ -526,6 +558,8 @@ where
                 target_model: target_model_id,
                 caller,
                 start,
+                request_id: uuid::Uuid::new_v4().to_string(),
+                metadata: serde_json::Value::Null,
             },
         )
         .await
@@ -540,8 +574,12 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        metadata: serde_json::Value::Null,
                     },
                     usage: result.usage.clone(),
+                    streamed: false,
+                    generation_time_ms: None,
                 };
                 tokio::spawn(async move { observer.on_request_success(event).await });
                 let response = convert::from_generate_result(&model_id, result);
@@ -555,6 +593,8 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        metadata: serde_json::Value::Null,
                     },
                     error: e.clone(),
                 };
@@ -621,6 +661,8 @@ async fn handle_stream_with_observe(
         target_model,
         caller,
         start,
+        request_id,
+        metadata,
     } = ctx;
 
     tokio::spawn(async move {
@@ -665,10 +707,17 @@ async fn handle_stream_with_observe(
             model: target_model,
             caller,
             latency_ms,
+            request_id,
+            metadata,
         };
         if let Some(usage) = usage {
             observer
-                .on_request_success(RequestSuccessEvent { ctx, usage })
+                .on_request_success(RequestSuccessEvent {
+                    ctx,
+                    usage,
+                    streamed: true,
+                    generation_time_ms: None,
+                })
                 .await;
         } else if client_disconnected {
             observer
