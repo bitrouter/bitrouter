@@ -349,7 +349,7 @@ where
         });
 
         let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-        let reply = warp::sse::reply(sse_stream);
+        let reply = crate::router::sse::reply(sse_stream);
         if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
             Ok(Box::new(warp::reply::with_header(
                 reply,
@@ -550,7 +550,7 @@ async fn handle_stream(
     });
 
     let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    Ok(Box::new(warp::sse::reply(sse_stream)))
+    Ok(Box::new(crate::router::sse::reply(sse_stream)))
 }
 
 async fn handle_stream_with_observe(
@@ -643,5 +643,5 @@ async fn handle_stream_with_observe(
     });
 
     let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    Ok(Box::new(warp::sse::reply(sse_stream)))
+    Ok(Box::new(crate::router::sse::reply(sse_stream)))
 }
