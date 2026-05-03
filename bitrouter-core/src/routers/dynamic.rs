@@ -88,6 +88,8 @@ impl<T> DynamicRoutingTable<T> {
             provider_name: endpoint.provider.clone(),
             service_id: strip_ansi_escapes(&endpoint.service_id),
             api_protocol: endpoint.api_protocol.unwrap_or(ApiProtocol::Openai),
+            api_key_override: None,
+            api_base_override: None,
         })
     }
 }
@@ -246,6 +248,8 @@ mod tests {
                     provider_name: "openai".to_owned(),
                     service_id: "gpt-4o".to_owned(),
                     api_protocol: ApiProtocol::Openai,
+                    api_key_override: None,
+                    api_base_override: None,
                 })
             } else {
                 Err(BitrouterError::invalid_request(
@@ -448,12 +452,16 @@ mod tests {
                             provider_name: "anthropic".to_owned(),
                             service_id: "claude-sonnet-4-20250514".to_owned(),
                             api_protocol: ApiProtocol::Anthropic,
+                            api_key_override: None,
+                            api_base_override: None,
                         })
                     } else {
                         Ok(RoutingTarget {
                             provider_name: "openai".to_owned(),
                             service_id: "gpt-4o".to_owned(),
                             api_protocol: ApiProtocol::Openai,
+                            api_key_override: None,
+                            api_base_override: None,
                         })
                     }
                 } else {
@@ -509,12 +517,16 @@ mod tests {
                             provider_name: "anthropic".to_owned(),
                             service_id: "claude-sonnet-4-20250514".to_owned(),
                             api_protocol: ApiProtocol::Anthropic,
+                            api_key_override: None,
+                            api_base_override: None,
                         })
                     } else {
                         Ok(RoutingTarget {
                             provider_name: "openai".to_owned(),
                             service_id: "gpt-4o".to_owned(),
                             api_protocol: ApiProtocol::Openai,
+                            api_key_override: None,
+                            api_base_override: None,
                         })
                     }
                 } else {

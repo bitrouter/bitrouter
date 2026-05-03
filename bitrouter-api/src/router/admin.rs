@@ -215,6 +215,8 @@ mod tests {
                     provider_name: "openai".to_owned(),
                     service_id: "gpt-4o".to_owned(),
                     api_protocol: ApiProtocol::Openai,
+                    api_key_override: None,
+                    api_base_override: None,
                 })
             } else {
                 Err(BitrouterError::invalid_request(

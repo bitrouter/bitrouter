@@ -457,6 +457,8 @@ fn match_hint(hint: &str, routes: &[RouteEntry]) -> Option<RoutingTarget> {
                 provider_name: route.provider.clone(),
                 service_id: route.name.clone(),
                 api_protocol: route.protocol,
+                api_key_override: None,
+                api_base_override: None,
             });
         }
     }

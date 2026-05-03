@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use bitrouter_core::observe::{CallerContext, MetadataHook, ObserveCallback};
+use bitrouter_core::routers::router::DynTargetOverlay;
 
 use super::PaymentGate;
 
@@ -18,4 +19,8 @@ pub struct GateContext {
     pub observer: Arc<dyn ObserveCallback>,
     pub metadata_hook: MetadataHook,
     pub origin: Option<String>,
+    /// Optional per-request hook that mutates the routing target after
+    /// resolution. Invoked between `RoutingTable::route()` and
+    /// `LanguageModelRouter::route_model()`. `None` is the no-op default.
+    pub target_overlay: Option<Arc<DynTargetOverlay<'static>>>,
 }

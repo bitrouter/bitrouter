@@ -13,7 +13,10 @@ use bitrouter_core::{
     observe::{
         CallerContext, ObserveCallback, RequestContext, RequestFailureEvent, RequestSuccessEvent,
     },
-    routers::{router::LanguageModelRouter, routing_table::RoutingTable},
+    routers::{
+        router::{DynTargetOverlay, LanguageModelRouter, TargetOverlay},
+        routing_table::RoutingTable,
+    },
 };
 
 use crate::router::context::openai_chat;
@@ -168,6 +171,10 @@ where
         observer,
         metadata_hook: bitrouter_core::observe::default_metadata_hook(),
         origin: None,
+        // _with_mpp does not expose a TargetOverlay constructor parameter;
+        // consumers needing per-request target mutation should use
+        // _with_payment_gate instead.
+        target_overlay: None,
     };
     handle_chat_completion_with_gate(gate_ctx, request, table, router).await
 }
@@ -190,6 +197,7 @@ where
         observer,
         metadata_hook,
         origin,
+        target_overlay,
     } = gate_ctx;
 
     let mpp_ctx = payment_gate
@@ -231,10 +239,17 @@ where
         )));
     }
 
-    let target = table
+    let mut target = table
         .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+
+    if let Some(ref overlay) = target_overlay {
+        overlay
+            .apply(&mut target, &caller)
+            .await
+            .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+    }
 
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();
@@ -484,6 +499,7 @@ pub fn chat_completions_filter_with_payment_gate<T, R, A>(
     observer: Arc<dyn ObserveCallback>,
     payment_gate: Arc<dyn crate::mpp::PaymentGate>,
     metadata_hook: MetadataHook,
+    target_overlay: Option<Arc<DynTargetOverlay<'static>>>,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
@@ -502,6 +518,7 @@ where
         .and(warp::any().map(move || router.clone()))
         .and(warp::any().map(move || observer.clone()))
         .and(warp::any().map(move || metadata_hook.clone()))
+        .and(warp::any().map(move || target_overlay.clone()))
         .and_then(
             |caller: CallerContext,
              gate: Arc<dyn crate::mpp::PaymentGate>,
@@ -511,7 +528,8 @@ where
              table: Arc<T>,
              router: Arc<R>,
              observer: Arc<dyn ObserveCallback>,
-             metadata_hook: MetadataHook| {
+             metadata_hook: MetadataHook,
+             target_overlay: Option<Arc<DynTargetOverlay<'static>>>| {
                 let gate_ctx = crate::mpp::GateContext {
                     caller,
                     payment_gate: gate,
@@ -519,6 +537,7 @@ where
                     observer,
                     metadata_hook,
                     origin,
+                    target_overlay,
                 };
                 handle_chat_completion_with_gate(gate_ctx, request, table, router)
             },

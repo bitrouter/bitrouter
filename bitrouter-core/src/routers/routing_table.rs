@@ -54,6 +54,19 @@ pub struct RoutingTarget {
     pub service_id: String,
     /// The resolved API protocol for this endpoint.
     pub api_protocol: ApiProtocol,
+    /// Per-target API key override.
+    ///
+    /// When `Some`, downstream model/tool routers should prefer this credential
+    /// over the provider's default `api_key`. Populated by per-endpoint
+    /// configuration (see `Endpoint.api_key`) or by a [`TargetOverlay`] that
+    /// runs after routing.
+    pub api_key_override: Option<String>,
+    /// Per-target API base URL override.
+    ///
+    /// When `Some`, downstream model/tool routers should prefer this base URL
+    /// over the provider's default `api_base`. Populated by per-endpoint
+    /// configuration (see `Endpoint.api_base`) or by a [`TargetOverlay`].
+    pub api_base_override: Option<String>,
 }
 
 /// A single entry in the route listing, describing a configured route.
