@@ -8,6 +8,7 @@ pub mod mcp;
 pub mod models;
 pub mod openai;
 pub mod routes;
+pub(crate) mod sse;
 pub mod tools;
 
 mod observe_ctx {
