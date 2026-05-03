@@ -159,23 +159,19 @@ where
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     let payment_gate: Arc<dyn crate::mpp::PaymentGate> = mpp_state;
-    handle_chat_completion_with_gate(
-        caller,
-        payment_gate,
+    let gate_req = crate::mpp::GateRequest {
+        gate: payment_gate,
+        request_id: generate_id(),
+        metadata: serde_json::Value::Null,
         auth_header,
-        request,
-        table,
-        router,
-        observer,
-    )
-    .await
+    };
+    handle_chat_completion_with_gate(caller, gate_req, request, table, router, observer).await
 }
 
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_chat_completion_with_gate<T, R>(
     caller: CallerContext,
-    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
-    auth_header: Option<String>,
+    gate_req: crate::mpp::GateRequest,
     request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
@@ -185,6 +181,12 @@ where
     T: RoutingTable + crate::mpp::PricingLookup + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
+    let crate::mpp::GateRequest {
+        gate: payment_gate,
+        request_id,
+        metadata,
+        auth_header,
+    } = gate_req;
     let mpp_ctx = payment_gate
         .verify_payment(caller.chain.clone(), auth_header)
         .await?;
@@ -264,6 +266,8 @@ where
             tick_cost,
         };
 
+        let request_id_for_stream = request_id.clone();
+        let metadata_for_stream = metadata.clone();
         tokio::spawn(async move {
             // Hold the close guard inside the task; channel is closed when the
             // task ends (success, error, or disconnect).
@@ -307,10 +311,17 @@ where
                 model: target_model_id,
                 caller,
                 latency_ms,
+                request_id: request_id_for_stream,
+                metadata: metadata_for_stream,
             };
             if let Some(usage) = usage {
                 observer
-                    .on_request_success(RequestSuccessEvent { ctx, usage })
+                    .on_request_success(RequestSuccessEvent {
+                        ctx,
+                        usage,
+                        streamed: true,
+                        generation_time_ms: None,
+                    })
                     .await;
             } else if client_disconnected {
                 observer
@@ -358,7 +369,12 @@ where
 
                 if micro_units > 0
                     && let Err(e) = payment_gate
-                        .deduct(&mpp_ctx.backend_key, &mpp_ctx.channel_id, micro_units)
+                        .deduct(
+                            &mpp_ctx.backend_key,
+                            &mpp_ctx.channel_id,
+                            micro_units,
+                            Some(&request_id),
+                        )
                         .await
                 {
                     tracing::warn!(
@@ -376,8 +392,12 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id,
+                        metadata,
                     },
                     usage: result.usage.clone(),
+                    streamed: false,
+                    generation_time_ms: None,
                 };
                 tokio::spawn(async move { observer.on_request_success(event).await });
 
@@ -402,6 +422,8 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id,
+                        metadata,
                     },
                     error: e.clone(),
                 };
@@ -455,6 +477,7 @@ pub fn chat_completions_filter_with_payment_gate<T, R, A>(
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
     payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    metadata_hook: crate::mpp::MetadataHook,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
@@ -466,7 +489,9 @@ where
         .and(warp::post())
         .and(account_filter)
         .and(warp::any().map(move || payment_gate.clone()))
+        .and(warp::any().map(move || metadata_hook.clone()))
         .and(warp::header::optional::<String>("authorization"))
+        .and(warp::header::optional::<String>("origin"))
         .and(crate::body::json::<ChatCompletionRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
@@ -474,20 +499,21 @@ where
         .and_then(
             |caller: CallerContext,
              gate: Arc<dyn crate::mpp::PaymentGate>,
+             metadata_hook: crate::mpp::MetadataHook,
              auth_header: Option<String>,
+             origin: Option<String>,
              request: ChatCompletionRequest,
              table: Arc<T>,
              router: Arc<R>,
              observer: Arc<dyn ObserveCallback>| {
-                handle_chat_completion_with_gate(
-                    caller,
+                let metadata = metadata_hook(&caller, &origin);
+                let gate_req = crate::mpp::GateRequest {
                     gate,
+                    request_id: generate_id(),
+                    metadata,
                     auth_header,
-                    request,
-                    table,
-                    router,
-                    observer,
-                )
+                };
+                handle_chat_completion_with_gate(caller, gate_req, request, table, router, observer)
             },
         )
 }
@@ -560,8 +586,12 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id: String::new(),
+                        metadata: serde_json::Value::Null,
                     },
                     usage: result.usage.clone(),
+                    streamed: false,
+                    generation_time_ms: None,
                 };
                 tokio::spawn(async move { observer.on_request_success(event).await });
                 let response = convert::from_generate_result(&model_id, result);
@@ -575,6 +605,8 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id: String::new(),
+                        metadata: serde_json::Value::Null,
                     },
                     error: e.clone(),
                 };
@@ -684,10 +716,17 @@ async fn handle_stream_with_observe(
             model: target_model,
             caller,
             latency_ms,
+            request_id: String::new(),
+            metadata: serde_json::Value::Null,
         };
         if let Some(usage) = usage {
             observer
-                .on_request_success(RequestSuccessEvent { ctx, usage })
+                .on_request_success(RequestSuccessEvent {
+                    ctx,
+                    usage,
+                    streamed: true,
+                    generation_time_ms: None,
+                })
                 .await;
         } else if client_disconnected {
             observer

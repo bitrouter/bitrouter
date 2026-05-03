@@ -43,7 +43,7 @@ pub struct CallerContext {
 }
 
 /// Context about the request available to observation callbacks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RequestContext {
     /// The incoming model name (route key).
     pub route: String,
@@ -55,6 +55,15 @@ pub struct RequestContext {
     pub caller: CallerContext,
     /// End-to-end request latency in milliseconds.
     pub latency_ms: u64,
+    /// Correlation identifier assigned at ingress; used to join observability
+    /// events back to billing rows. Empty when the handler has no ID to
+    /// attach (e.g. zero-observability paths).
+    pub request_id: String,
+    /// Free-form metadata supplied by the host application via an ingress
+    /// hook (see `metadata_hook` on the gate-aware filters). Allows downstream
+    /// consumers to attach SDK- or deployment-specific context to receipts
+    /// without expanding `RequestContext` itself for every new field.
+    pub metadata: serde_json::Value,
 }
 
 /// Event emitted when a request completes successfully.
@@ -64,6 +73,12 @@ pub struct RequestSuccessEvent {
     pub ctx: RequestContext,
     /// Token usage reported by the model.
     pub usage: LanguageModelUsage,
+    /// Whether the response was streamed back to the client.
+    pub streamed: bool,
+    /// Time spent generating tokens, in milliseconds. `None` when the
+    /// generation phase is not separately measured (e.g. non-streaming
+    /// requests where end-to-end latency is the only signal available).
+    pub generation_time_ms: Option<u64>,
 }
 
 /// Event emitted when a request fails.

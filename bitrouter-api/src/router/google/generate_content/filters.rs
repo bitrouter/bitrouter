@@ -319,10 +319,17 @@ where
                 model: target_model_id,
                 caller,
                 latency_ms,
+                request_id: String::new(),
+                metadata: serde_json::Value::Null,
             };
             if let Some(usage) = usage {
                 observer
-                    .on_request_success(RequestSuccessEvent { ctx, usage })
+                    .on_request_success(RequestSuccessEvent {
+                        ctx,
+                        usage,
+                        streamed: true,
+                        generation_time_ms: None,
+                    })
                     .await;
             } else if client_disconnected {
                 observer
@@ -369,7 +376,7 @@ where
 
                 if micro_units > 0
                     && let Err(e) = payment_gate
-                        .deduct(&mpp_ctx.backend_key, &mpp_ctx.channel_id, micro_units)
+                        .deduct(&mpp_ctx.backend_key, &mpp_ctx.channel_id, micro_units, None)
                         .await
                 {
                     tracing::warn!(
@@ -387,8 +394,12 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id: String::new(),
+                        metadata: serde_json::Value::Null,
                     },
                     usage: result.usage.clone(),
+                    streamed: false,
+                    generation_time_ms: None,
                 };
                 tokio::spawn(async move { observer.on_request_success(event).await });
 
@@ -413,6 +424,8 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id: String::new(),
+                        metadata: serde_json::Value::Null,
                     },
                     error: e.clone(),
                 };
@@ -491,8 +504,12 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id: String::new(),
+                        metadata: serde_json::Value::Null,
                     },
                     usage: result.usage.clone(),
+                    streamed: false,
+                    generation_time_ms: None,
                 };
                 tokio::spawn(async move { observer.on_request_success(event).await });
                 let response = convert::from_generate_result(&model_id, result);
@@ -506,6 +523,8 @@ where
                         model: target_model_id,
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
+                        request_id: String::new(),
+                        metadata: serde_json::Value::Null,
                     },
                     error: e.clone(),
                 };
@@ -613,10 +632,17 @@ async fn handle_stream_with_observe(
             model: target_model,
             caller,
             latency_ms,
+            request_id: String::new(),
+            metadata: serde_json::Value::Null,
         };
         if let Some(usage) = usage {
             observer
-                .on_request_success(RequestSuccessEvent { ctx, usage })
+                .on_request_success(RequestSuccessEvent {
+                    ctx,
+                    usage,
+                    streamed: true,
+                    generation_time_ms: None,
+                })
                 .await;
         } else if client_disconnected {
             observer

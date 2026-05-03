@@ -49,7 +49,7 @@ impl MeteredSseContext {
         for _ in 0..MAX_NEED_VOUCHER_RETRIES {
             match self
                 .payment_gate
-                .deduct(&self.backend_key, &self.channel_id, self.tick_cost)
+                .deduct(&self.backend_key, &self.channel_id, self.tick_cost, None)
                 .await
             {
                 Ok(()) => return true,

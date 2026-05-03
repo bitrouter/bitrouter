@@ -2,10 +2,37 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use bitrouter_core::observe::CallerContext;
+
 use super::filter::MppPaymentContext;
 
 /// Pinned boxed future used as the return type for [`PaymentGate`] methods.
 type GateFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Hook invoked once per request to attach host-supplied metadata to the
+/// [`bitrouter_core::observe::RequestContext`].
+///
+/// Receives the authenticated [`CallerContext`] and the request's `Origin`
+/// header so hosts can record SDK-, user-, or deployment-specific context
+/// (funding source, recipient, origin URL, ...). The returned value lands
+/// verbatim in `RequestContext::metadata`.
+pub type MetadataHook =
+    Arc<dyn Fn(&CallerContext, &Option<String>) -> serde_json::Value + Send + Sync>;
+
+/// Per-request bundle assembled by the warp filter and consumed by the
+/// payment-gated handlers.
+///
+/// Groups the [`PaymentGate`] handle with the request-scoped `request_id`,
+/// host-supplied `metadata`, and the raw `Authorization` header so handlers
+/// keep a manageable argument count while still receiving everything they
+/// need to verify payment, populate observability events, and forward
+/// billing context to downstream observers.
+pub struct GateRequest {
+    pub gate: Arc<dyn PaymentGate>,
+    pub request_id: String,
+    pub metadata: serde_json::Value,
+    pub auth_header: Option<String>,
+}
 
 /// Trait abstracting payment verification and settlement for MPP handlers.
 ///
@@ -33,11 +60,17 @@ pub trait PaymentGate: Send + Sync {
     ///
     /// For session-based flows this debits from the payment channel store.
     /// Custom implementations may debit from a centralized balance instead.
+    ///
+    /// `request_id` (when `Some`) lets implementations correlate the debit
+    /// with the request row written by an [`crate::observe`] receipt observer
+    /// so billing fields can be filled in regardless of which side completes
+    /// first.
     fn deduct<'a>(
         &'a self,
         backend_key: &'a str,
         channel_id: &'a str,
         amount: u128,
+        request_id: Option<&'a str>,
     ) -> GateFuture<'a, Result<(), mpp::server::VerificationError>>;
 
     /// Wait for the next channel update on the given backend.
@@ -86,8 +119,9 @@ impl PaymentGate for Arc<dyn PaymentGate> {
         backend_key: &'a str,
         channel_id: &'a str,
         amount: u128,
+        request_id: Option<&'a str>,
     ) -> GateFuture<'a, Result<(), mpp::server::VerificationError>> {
-        (**self).deduct(backend_key, channel_id, amount)
+        (**self).deduct(backend_key, channel_id, amount, request_id)
     }
 
     fn wait_for_update<'a>(

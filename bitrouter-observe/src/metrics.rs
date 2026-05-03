@@ -438,6 +438,8 @@ mod tests {
             model: model.into(),
             caller: CallerContext::default(),
             latency_ms: 300,
+            request_id: String::new(),
+            metadata: serde_json::Value::Null,
         }
     }
 
@@ -473,6 +475,8 @@ mod tests {
             .on_request_success(RequestSuccessEvent {
                 ctx: test_ctx("fast", "openai", "gpt-4o-mini"),
                 usage: test_usage(100, 50),
+                streamed: false,
+                generation_time_ms: None,
             })
             .await;
 
@@ -504,6 +508,8 @@ mod tests {
                     model: "gpt-4o-mini".into(),
                     caller: CallerContext::default(),
                     latency_ms: 500,
+                    request_id: String::new(),
+                    metadata: serde_json::Value::Null,
                 },
                 error: bitrouter_core::errors::BitrouterError::transport(None, "timeout"),
             })
@@ -525,6 +531,8 @@ mod tests {
                 .on_request_success(RequestSuccessEvent {
                     ctx: test_ctx("fast", "openai", "gpt-4o-mini"),
                     usage: test_usage(50, 25),
+                    streamed: false,
+                    generation_time_ms: None,
                 })
                 .await;
         }
@@ -533,6 +541,8 @@ mod tests {
                 .on_request_success(RequestSuccessEvent {
                     ctx: test_ctx("fast", "anthropic", "claude-haiku"),
                     usage: test_usage(60, 30),
+                    streamed: false,
+                    generation_time_ms: None,
                 })
                 .await;
         }
