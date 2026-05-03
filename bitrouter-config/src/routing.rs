@@ -229,6 +229,8 @@ impl RoutingTable for ConfigRoutingTable {
                 provider_name: resolved.provider_name,
                 service_id: resolved.service_id,
                 api_protocol: resolved.api_protocol,
+                api_key_override: resolved.api_key_override,
+                api_base_override: resolved.api_base_override,
             });
         }
 
@@ -237,6 +239,8 @@ impl RoutingTable for ConfigRoutingTable {
             provider_name: resolved.provider_name,
             service_id: resolved.service_id,
             api_protocol: resolved.api_protocol,
+            api_key_override: resolved.api_key_override,
+            api_base_override: resolved.api_base_override,
         })
     }
 
@@ -559,6 +563,8 @@ impl RoutingTable for ConfigToolRoutingTable {
             provider_name: resolved.provider_name,
             service_id: resolved.service_id,
             api_protocol: resolved.api_protocol,
+            api_key_override: resolved.api_key_override,
+            api_base_override: resolved.api_base_override,
         })
     }
 
@@ -844,6 +850,41 @@ mod tests {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         let result = table.resolve("nonexistent-model");
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn route_trait_propagates_endpoint_overrides() {
+        // Endpoint overrides resolved by `resolve()` are surfaced by the
+        // public `RoutingTable::route()` API on `RoutingTarget` so downstream
+        // consumers (e.g. NodeRouter) can honour them per request.
+        let mut models = HashMap::new();
+        models.insert(
+            "with-override".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "openai".into(),
+                    service_id: "gpt-4o".into(),
+                    api_protocol: None,
+                    api_key: Some("sk-byok".into()),
+                    api_base: Some("https://byok.example.com/v1".into()),
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::new(test_providers(), models);
+
+        let target = table
+            .route("with-override", &RouteContext::default())
+            .await
+            .unwrap();
+        assert_eq!(target.provider_name, "openai");
+        assert_eq!(target.service_id, "gpt-4o");
+        assert_eq!(target.api_key_override.as_deref(), Some("sk-byok"));
+        assert_eq!(
+            target.api_base_override.as_deref(),
+            Some("https://byok.example.com/v1")
+        );
     }
 
     #[test]

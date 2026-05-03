@@ -36,6 +36,8 @@ impl RoutingTable for MockTable {
             provider_name: "mock".to_owned(),
             service_id: incoming.to_owned(),
             api_protocol: ApiProtocol::Openai,
+            api_key_override: None,
+            api_base_override: None,
         })
     }
 }

@@ -649,6 +649,8 @@ mod tests {
             provider_name: "test-rest".into(),
             service_id: "search".into(),
             api_protocol: ApiProtocol::Rest,
+            api_key_override: None,
+            api_base_override: None,
         };
 
         let provider = router.route_tool(target).await;
@@ -670,6 +672,8 @@ mod tests {
             provider_name: "missing".into(),
             service_id: "foo".into(),
             api_protocol: ApiProtocol::Rest,
+            api_key_override: None,
+            api_base_override: None,
         };
         assert!(router.route_tool(target).await.is_err());
     }
