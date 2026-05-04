@@ -770,6 +770,10 @@ impl AnthropicSseParser {
                 raw_value: raw_value.clone(),
             });
         }
+        let event_type = raw_value
+            .get("type")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned);
 
         let event: MessagesStreamEvent = match serde_json::from_value(raw_value.clone()) {
             Ok(event) => event,
@@ -788,6 +792,26 @@ impl AnthropicSseParser {
         };
 
         parts.extend(self.state.apply_event(event));
+        if parts.is_empty()
+            && let Some(event_type) = event_type
+            && !matches!(
+                event_type.as_str(),
+                "message_start"
+                    | "content_block_start"
+                    | "content_block_delta"
+                    | "content_block_stop"
+                    | "message_delta"
+                    | "message_stop"
+                    | "ping"
+                    | "error"
+            )
+        {
+            tracing::debug!(
+                provider = ANTHROPIC_PROVIDER_NAME,
+                event_type = %event_type,
+                "ignored unsupported Anthropic stream event"
+            );
+        }
         parts
     }
 }

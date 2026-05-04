@@ -36,6 +36,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) const OPENAI_PROVIDER_NAME: &str = "openai";
 const STREAM_TEXT_ID: &str = "text";
+const MAX_RESPONSES_CALL_ID_LEN: usize = 64;
 
 // ── Free-function conversions (replace From / TryFrom impls) ───────────────
 
@@ -430,6 +431,7 @@ fn map_response_finish_reason(
 
 fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ResponsesInputItem>> {
     let mut input = Vec::new();
+    let mut call_ids = ResponsesCallIdMapper::from_prompt(prompt);
 
     for message in prompt {
         match message {
@@ -471,9 +473,10 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ResponsesInputI
                             input: tool_input,
                             ..
                         } => {
+                            let call_id = call_ids.normalize(tool_call_id);
                             input.push(ResponsesInputItem::FunctionCall(ResponsesInputFunctionCall {
                                 item_type: "function_call".to_owned(),
-                                call_id: tool_call_id.clone(),
+                                call_id,
                                 name: tool_name.clone(),
                                 arguments: serde_json::to_string(tool_input).map_err(|error| {
                                     BitrouterError::invalid_request(
@@ -529,10 +532,11 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ResponsesInputI
                             output,
                             ..
                         } => {
+                            let call_id = call_ids.normalize(tool_call_id);
                             input.push(ResponsesInputItem::FunctionCallOutput(
                                 ResponsesInputFunctionCallOutput {
                                     item_type: "function_call_output".to_owned(),
-                                    call_id: tool_call_id.clone(),
+                                    call_id,
                                     output: stringify_tool_output(output)?,
                                 },
                             ));
@@ -551,6 +555,72 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ResponsesInputI
     }
 
     Ok(input)
+}
+
+#[derive(Default)]
+struct ResponsesCallIdMapper {
+    normalized: HashMap<String, String>,
+    next_id: usize,
+}
+
+impl ResponsesCallIdMapper {
+    fn from_prompt(prompt: &[LanguageModelMessage]) -> Self {
+        let mut mapper = Self::default();
+        for message in prompt {
+            match message {
+                LanguageModelMessage::Assistant { content, .. } => {
+                    for item in content {
+                        if let LanguageModelAssistantContent::ToolCall { tool_call_id, .. } = item {
+                            mapper.reserve_if_provider_safe(tool_call_id);
+                        }
+                    }
+                }
+                LanguageModelMessage::Tool { content, .. } => {
+                    for item in content {
+                        if let LanguageModelToolResult::ToolResult { tool_call_id, .. } = item {
+                            mapper.reserve_if_provider_safe(tool_call_id);
+                        }
+                    }
+                }
+                LanguageModelMessage::System { .. } | LanguageModelMessage::User { .. } => {}
+            }
+        }
+        mapper
+    }
+
+    fn reserve_if_provider_safe(&mut self, call_id: &str) {
+        if call_id.len() <= MAX_RESPONSES_CALL_ID_LEN {
+            self.normalized
+                .entry(call_id.to_owned())
+                .or_insert_with(|| call_id.to_owned());
+        }
+    }
+
+    fn normalize(&mut self, call_id: &str) -> String {
+        if let Some(normalized) = self.normalized.get(call_id) {
+            return normalized.clone();
+        }
+
+        let mut normalized = format!("br_call_{}", self.next_id);
+        self.next_id += 1;
+        while self
+            .normalized
+            .values()
+            .any(|existing| existing == &normalized)
+        {
+            normalized = format!("br_call_{}", self.next_id);
+            self.next_id += 1;
+        }
+        tracing::debug!(
+            provider = OPENAI_PROVIDER_NAME,
+            original_len = call_id.len(),
+            normalized = %normalized,
+            "normalized Responses call_id that exceeds provider length limit"
+        );
+        self.normalized
+            .insert(call_id.to_owned(), normalized.clone());
+        normalized
+    }
 }
 
 fn convert_image_input(data: &LanguageModelDataContent, media_type: &str) -> Result<String> {
@@ -763,6 +833,10 @@ impl OpenAiResponsesSseParser {
                 raw_value: raw_value.clone(),
             });
         }
+        let event_type = raw_value
+            .get("type")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned);
 
         if let Ok(error_envelope) =
             serde_json::from_value::<ResponsesErrorEnvelope>(raw_value.clone())
@@ -796,6 +870,28 @@ impl OpenAiResponsesSseParser {
         };
 
         parts.extend(self.state.apply_event(event));
+        if parts.is_empty()
+            && let Some(event_type) = event_type
+            && !matches!(
+                event_type.as_str(),
+                "response.created"
+                    | "response.output_item.added"
+                    | "response.output_text.delta"
+                    | "response.output_text.done"
+                    | "response.function_call_arguments.delta"
+                    | "response.function_call_arguments.done"
+                    | "response.completed"
+                    | "response.incomplete"
+                    | "response.failed"
+                    | "error"
+            )
+        {
+            tracing::debug!(
+                provider = OPENAI_PROVIDER_NAME,
+                event_type = %event_type,
+                "ignored unsupported Responses stream event"
+            );
+        }
         parts
     }
 }
@@ -1245,7 +1341,10 @@ mod tests {
     use bitrouter_core::models::language::{
         call_options::LanguageModelCallOptions,
         data_content::LanguageModelDataContent,
-        prompt::{LanguageModelAssistantContent, LanguageModelMessage, LanguageModelUserContent},
+        prompt::{
+            LanguageModelAssistantContent, LanguageModelMessage, LanguageModelToolResult,
+            LanguageModelToolResultOutput, LanguageModelUserContent,
+        },
     };
 
     #[test]
@@ -1348,6 +1447,135 @@ mod tests {
             },
             other => panic!("expected Items input, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn normalizes_long_call_ids_consistently() {
+        let long_call_id = format!("toolu_{}", "x".repeat(402));
+        let request = build_responses_request(
+            "gpt-5.5",
+            &LanguageModelCallOptions {
+                prompt: vec![
+                    LanguageModelMessage::Assistant {
+                        content: vec![LanguageModelAssistantContent::ToolCall {
+                            tool_call_id: long_call_id.clone(),
+                            tool_name: "todo_write".to_owned(),
+                            input: json!({"todos":[]}),
+                            provider_executed: None,
+                            provider_options: None,
+                        }],
+                        provider_options: None,
+                    },
+                    LanguageModelMessage::Tool {
+                        content: vec![LanguageModelToolResult::ToolResult {
+                            tool_call_id: long_call_id,
+                            tool_name: "todo_write".to_owned(),
+                            output: LanguageModelToolResultOutput::Text {
+                                value: "ok".to_owned(),
+                                provider_options: None,
+                            },
+                            provider_options: None,
+                        }],
+                        provider_options: None,
+                    },
+                ],
+                stream: None,
+                max_output_tokens: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                stop_sequences: None,
+                presence_penalty: None,
+                frequency_penalty: None,
+                response_format: None,
+                seed: None,
+                tools: None,
+                tool_choice: None,
+                include_raw_chunks: None,
+                abort_signal: None,
+                headers: None,
+                provider_options: None,
+            },
+            false,
+        )
+        .expect("request should build");
+
+        let ResponsesInput::Items(items) = request.input else {
+            panic!("expected items input");
+        };
+        let ResponsesInputItem::FunctionCall(call) = &items[0] else {
+            panic!("expected function call item");
+        };
+        let ResponsesInputItem::FunctionCallOutput(output) = &items[1] else {
+            panic!("expected function call output item");
+        };
+
+        assert_eq!(call.call_id, "br_call_0");
+        assert_eq!(output.call_id, call.call_id);
+        assert!(call.call_id.len() <= MAX_RESPONSES_CALL_ID_LEN);
+    }
+
+    #[test]
+    fn normalized_call_ids_avoid_short_id_collisions() {
+        let long_call_id = format!("toolu_{}", "x".repeat(402));
+        let request = build_responses_request(
+            "gpt-5.5",
+            &LanguageModelCallOptions {
+                prompt: vec![
+                    LanguageModelMessage::Assistant {
+                        content: vec![LanguageModelAssistantContent::ToolCall {
+                            tool_call_id: "br_call_0".to_owned(),
+                            tool_name: "existing".to_owned(),
+                            input: json!({}),
+                            provider_executed: None,
+                            provider_options: None,
+                        }],
+                        provider_options: None,
+                    },
+                    LanguageModelMessage::Assistant {
+                        content: vec![LanguageModelAssistantContent::ToolCall {
+                            tool_call_id: long_call_id,
+                            tool_name: "todo_write".to_owned(),
+                            input: json!({"todos":[]}),
+                            provider_executed: None,
+                            provider_options: None,
+                        }],
+                        provider_options: None,
+                    },
+                ],
+                stream: None,
+                max_output_tokens: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                stop_sequences: None,
+                presence_penalty: None,
+                frequency_penalty: None,
+                response_format: None,
+                seed: None,
+                tools: None,
+                tool_choice: None,
+                include_raw_chunks: None,
+                abort_signal: None,
+                headers: None,
+                provider_options: None,
+            },
+            false,
+        )
+        .expect("request should build");
+
+        let ResponsesInput::Items(items) = request.input else {
+            panic!("expected items input");
+        };
+        let ResponsesInputItem::FunctionCall(existing) = &items[0] else {
+            panic!("expected function call item");
+        };
+        let ResponsesInputItem::FunctionCall(normalized) = &items[1] else {
+            panic!("expected function call item");
+        };
+
+        assert_eq!(existing.call_id, "br_call_0");
+        assert_eq!(normalized.call_id, "br_call_1");
     }
 
     #[test]
