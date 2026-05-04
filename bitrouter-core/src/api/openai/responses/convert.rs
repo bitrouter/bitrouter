@@ -345,7 +345,8 @@ fn input_content_to_string(content: Option<ResponsesInputContent>) -> String {
         Some(ResponsesInputContent::Parts(parts)) => parts
             .into_iter()
             .filter_map(|p| match p {
-                ResponsesInputContentPart::InputText { text } => Some(text),
+                ResponsesInputContentPart::InputText { text }
+                | ResponsesInputContentPart::OutputText { text } => Some(text),
                 ResponsesInputContentPart::InputImage { .. } => None,
             })
             .collect::<Vec<_>>()
@@ -363,10 +364,13 @@ fn input_content_to_parts(content: Option<ResponsesInputContent>) -> Vec<Languag
         Some(ResponsesInputContent::Parts(parts)) => parts
             .into_iter()
             .map(|p| match p {
-                ResponsesInputContentPart::InputText { text } => LanguageModelUserContent::Text {
-                    text,
-                    provider_options: None,
-                },
+                ResponsesInputContentPart::InputText { text }
+                | ResponsesInputContentPart::OutputText { text } => {
+                    LanguageModelUserContent::Text {
+                        text,
+                        provider_options: None,
+                    }
+                }
                 ResponsesInputContentPart::InputImage { image_url } => {
                     LanguageModelUserContent::File {
                         filename: None,
@@ -438,8 +442,8 @@ mod tests {
     };
 
     use super::super::types::{
-        ResponsesOutputContent, ResponsesOutputItem, ResponsesRequest, ResponsesResponse,
-        ResponsesStreamEvent, ResponsesUsage,
+        ResponsesInputMessage, ResponsesOutputContent, ResponsesOutputItem, ResponsesRequest,
+        ResponsesResponse, ResponsesStreamEvent, ResponsesUsage,
     };
 
     // ── Request Deserialization ─────────────────────────────────────────
@@ -587,6 +591,82 @@ mod tests {
             }
             other => panic!("expected Items input, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn deserialize_assistant_output_text_input_content() {
+        let json = r#"{
+            "model": "gpt-5.5",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "previous assistant reply"}
+                    ]
+                }
+            ]
+        }"#;
+        let req: ResponsesRequest = serde_json::from_str(json).expect("parse failed");
+        match &req.input {
+            ResponsesInput::Items(items) => {
+                assert_eq!(items.len(), 1);
+                match &items[0] {
+                    ResponsesInputItem::Message(msg) => {
+                        assert_eq!(msg.role, "assistant");
+                        match msg.content.as_ref() {
+                            Some(ResponsesInputContent::Parts(parts)) => {
+                                assert_eq!(parts.len(), 1);
+                                assert!(matches!(
+                                    &parts[0],
+                                    ResponsesInputContentPart::OutputText { text }
+                                        if text == "previous assistant reply"
+                                ));
+                            }
+                            other => panic!("expected Parts content, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Message, got {other:?}"),
+                }
+            }
+            other => panic!("expected Items input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn serialize_assistant_output_text_input_content() {
+        let req = ResponsesRequest {
+            model: "gpt-5.5".to_owned(),
+            input: ResponsesInput::Items(vec![ResponsesInputItem::Message(
+                ResponsesInputMessage {
+                    item_type: "message".to_owned(),
+                    role: "assistant".to_owned(),
+                    content: Some(ResponsesInputContent::Parts(vec![
+                        ResponsesInputContentPart::OutputText {
+                            text: "previous assistant reply".to_owned(),
+                        },
+                    ])),
+                },
+            )]),
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            stream: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            text: None,
+        };
+
+        let val = serde_json::to_value(&req).expect("serialize failed");
+        assert_eq!(val["model"], "gpt-5.5");
+        assert_eq!(val["input"][0]["type"], "message");
+        assert_eq!(val["input"][0]["role"], "assistant");
+        assert_eq!(val["input"][0]["content"][0]["type"], "output_text");
+        assert_eq!(
+            val["input"][0]["content"][0]["text"],
+            "previous assistant reply"
+        );
     }
 
     // ── Response Serialization ──────────────────────────────────────────

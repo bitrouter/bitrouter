@@ -24,14 +24,22 @@ pub fn copilot_default_headers() -> HashMap<String, String> {
     headers
 }
 
-/// Returns `true` when a model ID should use the Anthropic Messages API
-/// instead of the default OpenAI Chat Completions API.
+/// Returns `true` when a model ID should use the Anthropic Messages API.
 ///
 /// The Copilot API uses different protocols per model family: Claude models
-/// use the Anthropic Messages API (`POST /v1/messages`), while all other
-/// models use OpenAI Chat Completions (`POST /chat/completions`).
+/// use the Anthropic Messages API (`POST /v1/messages`).
 pub fn is_anthropic_model(model_id: &str) -> bool {
     model_id.starts_with("claude-") || model_id.starts_with("claude_")
+}
+
+/// Returns `true` when a Copilot OpenAI-family model should use the Responses
+/// API instead of Chat Completions.
+///
+/// Some Copilot-hosted OpenAI models are exposed to Copilot clients but reject
+/// the `/chat/completions` endpoint with "model is not accessible" errors.
+pub fn is_responses_model(model_id: &str) -> bool {
+    let model_id = model_id.to_ascii_lowercase();
+    model_id == "gpt-5.5" || (model_id.starts_with("gpt-5.") && model_id.contains("-codex"))
 }
 
 /// Derives the Anthropic-compatible API base from the provider's base URL.
@@ -87,6 +95,17 @@ mod tests {
         assert!(is_anthropic_model("claude-opus-4.6"));
         assert!(!is_anthropic_model("gpt-5.4"));
         assert!(!is_anthropic_model("gemini-2.5-pro"));
+    }
+
+    #[test]
+    fn copilot_response_models_detected() {
+        assert!(is_responses_model("gpt-5.5"));
+        assert!(is_responses_model("gpt-5.1-codex"));
+        assert!(is_responses_model("gpt-5.1-codex-mini"));
+        assert!(is_responses_model("gpt-5.3-codex"));
+        assert!(!is_responses_model("gpt-5.4"));
+        assert!(!is_responses_model("gpt-5-mini"));
+        assert!(!is_responses_model("claude-sonnet-4.6"));
     }
 
     #[test]
