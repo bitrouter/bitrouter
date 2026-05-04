@@ -78,6 +78,15 @@ impl LanguageModelRouter for MockSlowStreamRouter {
     }
 }
 
+struct MockNoFinishStreamRouter;
+impl LanguageModelRouter for MockNoFinishStreamRouter {
+    async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+        Ok(DynLanguageModel::new_box(MockNoFinishStreamModel {
+            model_id: target.service_id,
+        }))
+    }
+}
+
 #[derive(Clone)]
 struct MockModel {
     model_id: String,
@@ -396,6 +405,59 @@ impl LanguageModel for MockSlowStreamModel {
     }
 }
 
+#[derive(Clone)]
+struct MockNoFinishStreamModel {
+    model_id: String,
+}
+
+impl LanguageModel for MockNoFinishStreamModel {
+    fn provider_name(&self) -> &str {
+        "mock"
+    }
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+    async fn supported_urls(&self) -> HashMap<String, Regex> {
+        HashMap::new()
+    }
+    async fn generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult> {
+        Ok(LanguageModelGenerateResult {
+            content: vec![LanguageModelContent::Text {
+                text: "stream without usage".to_owned(),
+                provider_metadata: None,
+            }],
+            finish_reason: LanguageModelFinishReason::Stop,
+            usage: mock_usage(),
+            provider_metadata: None,
+            request: None,
+            response_metadata: None,
+            warnings: None,
+        })
+    }
+    async fn stream(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let _ = tx
+            .send(LanguageModelStreamPart::TextDelta {
+                id: "0".to_owned(),
+                delta: "Hello".to_owned(),
+                provider_metadata: None,
+            })
+            .await;
+
+        Ok(LanguageModelStreamResult {
+            stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            request: None,
+            response: None,
+        })
+    }
+}
+
 fn parse_sse_body(body: &[u8]) -> Vec<(Option<String>, String)> {
     String::from_utf8_lossy(body)
         .replace("\r\n", "\n")
@@ -507,17 +569,40 @@ async fn messages_streaming_sends_sse_events() {
     assert_eq!(res.headers()["content-type"], "text/event-stream");
 
     let events = parse_sse_body(res.body());
-    assert_eq!(events.len(), 3);
+    assert_eq!(events.len(), 6);
 
-    assert_eq!(events[0].0.as_deref(), Some("content_block_delta"));
-    let delta: Value = serde_json::from_str(&events[0].1).unwrap();
+    assert_eq!(events[0].0.as_deref(), Some("message_start"));
+    let start: Value = serde_json::from_str(&events[0].1).unwrap();
+    assert_eq!(start["type"], "message_start");
+    assert_eq!(start["message"]["type"], "message");
+    assert_eq!(start["message"]["role"], "assistant");
+    assert_eq!(start["message"]["model"], "claude-3-5-sonnet-20241022");
+    assert_eq!(
+        start["message"]["content"].as_array().map(Vec::len),
+        Some(0)
+    );
+
+    assert_eq!(events[1].0.as_deref(), Some("content_block_start"));
+    let block_start: Value = serde_json::from_str(&events[1].1).unwrap();
+    assert_eq!(block_start["type"], "content_block_start");
+    assert_eq!(block_start["index"], 0);
+    assert_eq!(block_start["content_block"]["type"], "text");
+    assert_eq!(block_start["content_block"]["text"], "");
+
+    assert_eq!(events[2].0.as_deref(), Some("content_block_delta"));
+    let delta: Value = serde_json::from_str(&events[2].1).unwrap();
     assert_eq!(delta["type"], "content_block_delta");
     assert_eq!(delta["index"], 0);
     assert_eq!(delta["delta"]["type"], "text_delta");
     assert_eq!(delta["delta"]["text"], "Hello");
 
-    assert_eq!(events[1].0.as_deref(), Some("message_delta"));
-    let finish: Value = serde_json::from_str(&events[1].1).unwrap();
+    assert_eq!(events[3].0.as_deref(), Some("content_block_stop"));
+    let block_stop: Value = serde_json::from_str(&events[3].1).unwrap();
+    assert_eq!(block_stop["type"], "content_block_stop");
+    assert_eq!(block_stop["index"], 0);
+
+    assert_eq!(events[4].0.as_deref(), Some("message_delta"));
+    let finish: Value = serde_json::from_str(&events[4].1).unwrap();
     assert_eq!(finish["type"], "message_delta");
     assert_eq!(finish["delta"]["type"], "message_delta");
     assert_eq!(finish["delta"]["stop_reason"], "end_turn");
@@ -530,8 +615,9 @@ async fn messages_streaming_sends_sse_events() {
             .starts_with("msg-")
     );
 
-    assert_eq!(events[2].0, None);
-    assert_eq!(events[2].1, "[DONE]");
+    assert_eq!(events[5].0.as_deref(), Some("message_stop"));
+    let stop: Value = serde_json::from_str(&events[5].1).unwrap();
+    assert_eq!(stop["type"], "message_stop");
 }
 
 #[tokio::test(start_paused = true)]
@@ -566,7 +652,10 @@ async fn messages_streaming_sends_keep_alive_comments_during_idle_gap() {
     );
 
     let events = parse_sse_body(res.body());
-    assert_eq!(events.last().map(|(_, data)| data.as_str()), Some("[DONE]"));
+    assert_eq!(
+        events.last().map(|(event, _)| event.as_deref()),
+        Some(Some("message_stop"))
+    );
 }
 
 #[tokio::test]
@@ -999,6 +1088,39 @@ async fn messages_observe_success() {
 async fn messages_observe_streaming_success() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = messages_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(CallerContext::default()) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "stream": true,
+        "messages": [{"role": "user", "content": "Hello"}]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/messages")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn messages_observe_streaming_without_finish_counts_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockNoFinishStreamRouter);
     let observer = Arc::new(MockObserver::new());
     let filter = messages_filter_with_observe(
         table,

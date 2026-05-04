@@ -14,6 +14,7 @@ use reqwest_middleware::ClientWithMiddleware;
 
 use super::copilot::{
     COPILOT_PROVIDER, anthropic_api_base, copilot_default_headers, is_anthropic_model,
+    is_responses_model,
 };
 
 #[cfg(feature = "mcp")]
@@ -162,6 +163,14 @@ impl LanguageModelRouter for Router {
             return Ok(DynLanguageModel::new_box(model));
         }
 
+        if is_copilot && is_responses_model(&target.service_id) {
+            let mut config = self.build_openai_config(&target.provider_name, provider)?;
+            merge_copilot_headers(&mut config.default_headers)?;
+            let model =
+                OpenAiResponsesModel::with_client(target.service_id, self.client.clone(), config);
+            return Ok(DynLanguageModel::new_box(model));
+        }
+
         // Phase 2: Inject Copilot-specific headers for non-Claude models.
         let copilot_headers = if is_copilot {
             Some(copilot_default_headers())
@@ -267,6 +276,7 @@ use bitrouter_providers::google::generate_content::provider::{
     GoogleConfig, GoogleGenerativeAiModel,
 };
 use bitrouter_providers::openai::chat::provider::{OpenAiChatCompletionsModel, OpenAiConfig};
+use bitrouter_providers::openai::responses::provider::OpenAiResponsesModel;
 
 // ── Tool router ──────────────────────────────────────────────────
 

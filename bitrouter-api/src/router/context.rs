@@ -97,7 +97,9 @@ pub(crate) mod openai_responses {
                             }
                             ResponsesInputContent::Parts(parts) => {
                                 for part in parts {
-                                    if let ResponsesInputContentPart::InputText { text } = part {
+                                    if let ResponsesInputContentPart::InputText { text }
+                                    | ResponsesInputContentPart::OutputText { text } = part
+                                    {
                                         char_count += text.len();
                                         if !has_code_blocks && has_code_fence(text) {
                                             has_code_blocks = true;

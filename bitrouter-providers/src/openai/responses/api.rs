@@ -463,7 +463,7 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ResponsesInputI
                     match item {
                         LanguageModelAssistantContent::Text { text, .. } => {
                             text_content
-                                .push(ResponsesInputContentPart::InputText { text: text.clone() });
+                                .push(ResponsesInputContentPart::OutputText { text: text.clone() });
                         }
                         LanguageModelAssistantContent::ToolCall {
                             tool_call_id,
@@ -1223,7 +1223,7 @@ mod tests {
     use bitrouter_core::models::language::{
         call_options::LanguageModelCallOptions,
         data_content::LanguageModelDataContent,
-        prompt::{LanguageModelMessage, LanguageModelUserContent},
+        prompt::{LanguageModelAssistantContent, LanguageModelMessage, LanguageModelUserContent},
     };
 
     #[test]
@@ -1273,6 +1273,57 @@ mod tests {
             ResponsesInput::Items(items) => {
                 assert!(matches!(items[0], ResponsesInputItem::Message(..)));
             }
+            other => panic!("expected Items input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn builds_assistant_history_with_output_text() {
+        let request = build_responses_request(
+            "gpt-5.5",
+            &LanguageModelCallOptions {
+                prompt: vec![LanguageModelMessage::Assistant {
+                    content: vec![LanguageModelAssistantContent::Text {
+                        text: "previous assistant reply".to_owned(),
+                        provider_options: None,
+                    }],
+                    provider_options: None,
+                }],
+                stream: None,
+                max_output_tokens: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                stop_sequences: None,
+                presence_penalty: None,
+                frequency_penalty: None,
+                response_format: None,
+                seed: None,
+                tools: None,
+                tool_choice: None,
+                include_raw_chunks: None,
+                abort_signal: None,
+                headers: None,
+                provider_options: None,
+            },
+            false,
+        )
+        .expect("request should build");
+
+        match &request.input {
+            ResponsesInput::Items(items) => match &items[0] {
+                ResponsesInputItem::Message(message) => match message.content.as_ref() {
+                    Some(ResponsesInputContent::Parts(parts)) => {
+                        assert!(matches!(
+                            &parts[0],
+                            ResponsesInputContentPart::OutputText { text }
+                                if text == "previous assistant reply"
+                        ));
+                    }
+                    other => panic!("expected Parts content, got {other:?}"),
+                },
+                other => panic!("expected Message, got {other:?}"),
+            },
             other => panic!("expected Items input, got {other:?}"),
         }
     }

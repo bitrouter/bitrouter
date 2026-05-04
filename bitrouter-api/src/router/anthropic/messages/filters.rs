@@ -359,18 +359,11 @@ where
         tokio::spawn(async move {
             let mut stream = stream_result.stream;
             let mut converter = convert::StreamConverter::new(model_id.clone());
-            use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;
             use tokio_stream::StreamExt as _;
-            let mut usage = None;
+            let mut observation = crate::router::StreamObservation::new();
             let mut client_disconnected = false;
             while let Some(part) = stream.next().await {
-                if let LanguageModelStreamPart::Finish {
-                    usage: ref finish_usage,
-                    ..
-                } = part
-                {
-                    usage = Some(finish_usage.clone());
-                }
+                observation.record_part(&part);
                 let events = converter.convert(&part);
                 if !events.is_empty() && !metered.deduct_or_pause(&tx).await {
                     client_disconnected = true;
@@ -392,9 +385,24 @@ where
                     break;
                 }
             }
-            let _ = tx
-                .send(Ok(warp::sse::Event::default().data("[DONE]")))
-                .await;
+            if !client_disconnected {
+                let events = converter.finish();
+                if !events.is_empty() && !metered.deduct_or_pause(&tx).await {
+                    client_disconnected = true;
+                }
+                if !client_disconnected {
+                    for event in events {
+                        let data = serde_json::to_string(&event).unwrap_or_default();
+                        let sse = Ok(warp::sse::Event::default()
+                            .event(event.event_type())
+                            .data(data));
+                        if tx.send(sse).await.is_err() {
+                            client_disconnected = true;
+                            break;
+                        }
+                    }
+                }
+            }
 
             let latency_ms = start.elapsed().as_millis() as u64;
             let ctx = RequestContext {
@@ -406,36 +414,22 @@ where
                 request_id,
                 metadata,
             };
-            if let Some(usage) = usage {
-                observer
-                    .on_request_success(RequestSuccessEvent {
-                        ctx,
-                        usage,
-                        streamed: true,
-                        generation_time_ms: None,
-                    })
-                    .await;
-            } else if client_disconnected {
-                observer
-                    .on_request_failure(RequestFailureEvent {
-                        ctx,
-                        error: bitrouter_core::errors::BitrouterError::cancelled(
-                            None,
-                            "client disconnected during stream",
-                        ),
-                    })
-                    .await;
-            } else {
-                observer
-                    .on_request_failure(RequestFailureEvent {
-                        ctx,
-                        error: bitrouter_core::errors::BitrouterError::stream_protocol(
-                            None,
-                            "stream completed without finish event",
-                            None,
-                        ),
-                    })
-                    .await;
+            match observation.outcome(client_disconnected) {
+                Ok(usage) => {
+                    observer
+                        .on_request_success(RequestSuccessEvent {
+                            ctx,
+                            usage,
+                            streamed: true,
+                            generation_time_ms: None,
+                        })
+                        .await;
+                }
+                Err(error) => {
+                    observer
+                        .on_request_failure(RequestFailureEvent { ctx, error })
+                        .await;
+                }
             }
         });
 
@@ -653,9 +647,15 @@ async fn handle_stream(
                 }
             }
         }
-        let _ = tx
-            .send(Ok(warp::sse::Event::default().data("[DONE]")))
-            .await;
+        for event in converter.finish() {
+            let data = serde_json::to_string(&event).unwrap_or_default();
+            let sse = Ok(warp::sse::Event::default()
+                .event(event.event_type())
+                .data(data));
+            if tx.send(sse).await.is_err() {
+                break;
+            }
+        }
     });
 
     let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -689,18 +689,11 @@ async fn handle_stream_with_observe(
     tokio::spawn(async move {
         let mut stream = stream_result.stream;
         let mut converter = convert::StreamConverter::new(target_model.clone());
-        use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;
         use tokio_stream::StreamExt as _;
-        let mut usage = None;
+        let mut observation = crate::router::StreamObservation::new();
         let mut client_disconnected = false;
         while let Some(part) = stream.next().await {
-            if let LanguageModelStreamPart::Finish {
-                usage: ref finish_usage,
-                ..
-            } = part
-            {
-                usage = Some(finish_usage.clone());
-            }
+            observation.record_part(&part);
             let mut send_failed = false;
             for event in converter.convert(&part) {
                 let data = serde_json::to_string(&event).unwrap_or_default();
@@ -717,9 +710,18 @@ async fn handle_stream_with_observe(
                 break;
             }
         }
-        let _ = tx
-            .send(Ok(warp::sse::Event::default().data("[DONE]")))
-            .await;
+        if !client_disconnected {
+            for event in converter.finish() {
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                let sse = Ok(warp::sse::Event::default()
+                    .event(event.event_type())
+                    .data(data));
+                if tx.send(sse).await.is_err() {
+                    client_disconnected = true;
+                    break;
+                }
+            }
+        }
 
         let latency_ms = start.elapsed().as_millis() as u64;
         let ctx = RequestContext {
@@ -731,36 +733,22 @@ async fn handle_stream_with_observe(
             request_id,
             metadata,
         };
-        if let Some(usage) = usage {
-            observer
-                .on_request_success(RequestSuccessEvent {
-                    ctx,
-                    usage,
-                    streamed: true,
-                    generation_time_ms: None,
-                })
-                .await;
-        } else if client_disconnected {
-            observer
-                .on_request_failure(RequestFailureEvent {
-                    ctx,
-                    error: bitrouter_core::errors::BitrouterError::cancelled(
-                        None,
-                        "client disconnected during stream",
-                    ),
-                })
-                .await;
-        } else {
-            observer
-                .on_request_failure(RequestFailureEvent {
-                    ctx,
-                    error: bitrouter_core::errors::BitrouterError::stream_protocol(
-                        None,
-                        "stream completed without finish event",
-                        None,
-                    ),
-                })
-                .await;
+        match observation.outcome(client_disconnected) {
+            Ok(usage) => {
+                observer
+                    .on_request_success(RequestSuccessEvent {
+                        ctx,
+                        usage,
+                        streamed: true,
+                        generation_time_ms: None,
+                    })
+                    .await;
+            }
+            Err(error) => {
+                observer
+                    .on_request_failure(RequestFailureEvent { ctx, error })
+                    .await;
+            }
         }
     });
 

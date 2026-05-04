@@ -144,6 +144,10 @@ pub fn from_generate_result(
 /// Stateful converter that tracks content-block indices across streaming events.
 pub struct StreamConverter {
     model_id: String,
+    message_id: String,
+    message_started: bool,
+    message_stopped: bool,
+    active_text_block_index: Option<u32>,
     tool_id_to_index: HashMap<String, u32>,
     next_block_index: u32,
 }
@@ -152,6 +156,10 @@ impl StreamConverter {
     pub fn new(model_id: String) -> Self {
         Self {
             model_id,
+            message_id: format!("msg-{}", generate_id()),
+            message_started: false,
+            message_stopped: false,
+            active_text_block_index: None,
             tool_id_to_index: HashMap::new(),
             next_block_index: 0,
         }
@@ -160,26 +168,46 @@ impl StreamConverter {
     /// Converts a [`LanguageModelStreamPart`] into Anthropic SSE events.
     pub fn convert(&mut self, part: &LanguageModelStreamPart) -> Vec<MessagesStreamEvent> {
         match part {
+            LanguageModelStreamPart::StreamStart { .. }
+            | LanguageModelStreamPart::ResponseMetadata { .. } => self.start_message_events(),
+            LanguageModelStreamPart::TextStart { .. } => self.start_text_events(),
             LanguageModelStreamPart::TextDelta { delta, .. } => {
-                vec![MessagesStreamEvent::ContentBlockDelta {
-                    index: 0,
+                let mut events = self.start_text_events();
+                let index = self.active_text_block_index.unwrap_or(0);
+                events.push(MessagesStreamEvent::ContentBlockDelta {
+                    index,
                     delta: MessagesStreamDelta::TextDelta {
                         text: delta.clone(),
                     },
-                }]
+                });
+                events
+            }
+            LanguageModelStreamPart::TextEnd { .. } => self.stop_text_events(),
+            LanguageModelStreamPart::Error { error } => {
+                let mut events = self.start_message_events();
+                self.message_stopped = true;
+                events.push(MessagesStreamEvent::Error {
+                    error: crate::api::anthropic::messages::types::MessagesStreamError {
+                        error_type: "provider_error".to_owned(),
+                        message: error.to_string(),
+                    },
+                });
+                events
             }
             LanguageModelStreamPart::ToolInputStart { id, tool_name, .. } => {
+                let mut events = self.stop_text_events();
                 let index = self.next_block_index;
                 self.tool_id_to_index.insert(id.clone(), index);
                 self.next_block_index += 1;
-                vec![MessagesStreamEvent::ContentBlockStart {
+                events.push(MessagesStreamEvent::ContentBlockStart {
                     index,
                     content_block: AnthropicContentBlock::ToolUse {
                         id: id.clone(),
                         name: tool_name.clone(),
                         input: serde_json::json!({}),
                     },
-                }]
+                });
+                events
             }
             LanguageModelStreamPart::ToolInputDelta { id, delta, .. } => {
                 let index = self
@@ -208,9 +236,10 @@ impl StreamConverter {
                 tool_input,
                 ..
             } => {
+                let mut events = self.stop_text_events();
                 let index = self.next_block_index;
                 self.next_block_index += 1;
-                vec![
+                events.extend([
                     MessagesStreamEvent::ContentBlockStart {
                         index,
                         content_block: AnthropicContentBlock::ToolUse {
@@ -226,14 +255,16 @@ impl StreamConverter {
                         },
                     },
                     MessagesStreamEvent::ContentBlockStop { index },
-                ]
+                ]);
+                events
             }
             LanguageModelStreamPart::Finish {
                 finish_reason,
                 usage,
                 ..
             } => {
-                vec![MessagesStreamEvent::MessageDelta {
+                let mut events = self.stop_text_events();
+                events.push(MessagesStreamEvent::MessageDelta {
                     delta: MessagesMessageDelta {
                         delta_type: "message_delta".to_owned(),
                         stop_reason: Some(map_finish_reason(finish_reason)),
@@ -246,14 +277,87 @@ impl StreamConverter {
                         cache_read_input_tokens: usage.input_tokens.cache_read,
                     }),
                     message: Some(MessagesStreamMessage {
-                        id: format!("msg-{}", generate_id()),
+                        id: self.message_id.clone(),
                         model: self.model_id.clone(),
                         role: "assistant".to_owned(),
                     }),
-                }]
+                });
+                events.push(MessagesStreamEvent::MessageStop);
+                self.message_stopped = true;
+                events
             }
             _ => vec![],
         }
+    }
+
+    /// Emits terminal Anthropic stream events when an upstream closes cleanly
+    /// without a final finish part.
+    pub fn finish(&mut self) -> Vec<MessagesStreamEvent> {
+        if self.message_stopped {
+            return Vec::new();
+        }
+
+        let mut events = self.stop_text_events();
+        events.push(MessagesStreamEvent::MessageDelta {
+            delta: MessagesMessageDelta {
+                delta_type: "message_delta".to_owned(),
+                stop_reason: Some("end_turn".to_owned()),
+                stop_sequence: None,
+            },
+            usage: None,
+            message: Some(MessagesStreamMessage {
+                id: self.message_id.clone(),
+                model: self.model_id.clone(),
+                role: "assistant".to_owned(),
+            }),
+        });
+        events.push(MessagesStreamEvent::MessageStop);
+        self.message_stopped = true;
+        events
+    }
+
+    fn start_message_events(&mut self) -> Vec<MessagesStreamEvent> {
+        if self.message_started {
+            return Vec::new();
+        }
+
+        self.message_started = true;
+        vec![MessagesStreamEvent::MessageStart {
+            message: MessagesResponse {
+                id: self.message_id.clone(),
+                response_type: "message".to_owned(),
+                role: "assistant".to_owned(),
+                content: Vec::new(),
+                model: self.model_id.clone(),
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            },
+        }]
+    }
+
+    fn start_text_events(&mut self) -> Vec<MessagesStreamEvent> {
+        let mut events = self.start_message_events();
+        if self.active_text_block_index.is_none() {
+            let index = self.next_block_index;
+            self.next_block_index += 1;
+            self.active_text_block_index = Some(index);
+            events.push(MessagesStreamEvent::ContentBlockStart {
+                index,
+                content_block: AnthropicContentBlock::Text {
+                    text: String::new(),
+                },
+            });
+        }
+        events
+    }
+
+    fn stop_text_events(&mut self) -> Vec<MessagesStreamEvent> {
+        let mut events = self.start_message_events();
+        if let Some(index) = self.active_text_block_index.take() {
+            events.push(MessagesStreamEvent::ContentBlockStop { index });
+        }
+        events
     }
 }
 
