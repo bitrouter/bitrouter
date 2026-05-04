@@ -569,17 +569,40 @@ async fn messages_streaming_sends_sse_events() {
     assert_eq!(res.headers()["content-type"], "text/event-stream");
 
     let events = parse_sse_body(res.body());
-    assert_eq!(events.len(), 3);
+    assert_eq!(events.len(), 6);
 
-    assert_eq!(events[0].0.as_deref(), Some("content_block_delta"));
-    let delta: Value = serde_json::from_str(&events[0].1).unwrap();
+    assert_eq!(events[0].0.as_deref(), Some("message_start"));
+    let start: Value = serde_json::from_str(&events[0].1).unwrap();
+    assert_eq!(start["type"], "message_start");
+    assert_eq!(start["message"]["type"], "message");
+    assert_eq!(start["message"]["role"], "assistant");
+    assert_eq!(start["message"]["model"], "claude-3-5-sonnet-20241022");
+    assert_eq!(
+        start["message"]["content"].as_array().map(Vec::len),
+        Some(0)
+    );
+
+    assert_eq!(events[1].0.as_deref(), Some("content_block_start"));
+    let block_start: Value = serde_json::from_str(&events[1].1).unwrap();
+    assert_eq!(block_start["type"], "content_block_start");
+    assert_eq!(block_start["index"], 0);
+    assert_eq!(block_start["content_block"]["type"], "text");
+    assert_eq!(block_start["content_block"]["text"], "");
+
+    assert_eq!(events[2].0.as_deref(), Some("content_block_delta"));
+    let delta: Value = serde_json::from_str(&events[2].1).unwrap();
     assert_eq!(delta["type"], "content_block_delta");
     assert_eq!(delta["index"], 0);
     assert_eq!(delta["delta"]["type"], "text_delta");
     assert_eq!(delta["delta"]["text"], "Hello");
 
-    assert_eq!(events[1].0.as_deref(), Some("message_delta"));
-    let finish: Value = serde_json::from_str(&events[1].1).unwrap();
+    assert_eq!(events[3].0.as_deref(), Some("content_block_stop"));
+    let block_stop: Value = serde_json::from_str(&events[3].1).unwrap();
+    assert_eq!(block_stop["type"], "content_block_stop");
+    assert_eq!(block_stop["index"], 0);
+
+    assert_eq!(events[4].0.as_deref(), Some("message_delta"));
+    let finish: Value = serde_json::from_str(&events[4].1).unwrap();
     assert_eq!(finish["type"], "message_delta");
     assert_eq!(finish["delta"]["type"], "message_delta");
     assert_eq!(finish["delta"]["stop_reason"], "end_turn");
@@ -592,8 +615,9 @@ async fn messages_streaming_sends_sse_events() {
             .starts_with("msg-")
     );
 
-    assert_eq!(events[2].0, None);
-    assert_eq!(events[2].1, "[DONE]");
+    assert_eq!(events[5].0.as_deref(), Some("message_stop"));
+    let stop: Value = serde_json::from_str(&events[5].1).unwrap();
+    assert_eq!(stop["type"], "message_stop");
 }
 
 #[tokio::test(start_paused = true)]
@@ -628,7 +652,10 @@ async fn messages_streaming_sends_keep_alive_comments_during_idle_gap() {
     );
 
     let events = parse_sse_body(res.body());
-    assert_eq!(events.last().map(|(_, data)| data.as_str()), Some("[DONE]"));
+    assert_eq!(
+        events.last().map(|(event, _)| event.as_deref()),
+        Some(Some("message_stop"))
+    );
 }
 
 #[tokio::test]

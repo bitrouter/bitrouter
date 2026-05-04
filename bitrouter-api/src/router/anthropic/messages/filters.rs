@@ -385,9 +385,24 @@ where
                     break;
                 }
             }
-            let _ = tx
-                .send(Ok(warp::sse::Event::default().data("[DONE]")))
-                .await;
+            if !client_disconnected {
+                let events = converter.finish();
+                if !events.is_empty() && !metered.deduct_or_pause(&tx).await {
+                    client_disconnected = true;
+                }
+                if !client_disconnected {
+                    for event in events {
+                        let data = serde_json::to_string(&event).unwrap_or_default();
+                        let sse = Ok(warp::sse::Event::default()
+                            .event(event.event_type())
+                            .data(data));
+                        if tx.send(sse).await.is_err() {
+                            client_disconnected = true;
+                            break;
+                        }
+                    }
+                }
+            }
 
             let latency_ms = start.elapsed().as_millis() as u64;
             let ctx = RequestContext {
@@ -632,9 +647,15 @@ async fn handle_stream(
                 }
             }
         }
-        let _ = tx
-            .send(Ok(warp::sse::Event::default().data("[DONE]")))
-            .await;
+        for event in converter.finish() {
+            let data = serde_json::to_string(&event).unwrap_or_default();
+            let sse = Ok(warp::sse::Event::default()
+                .event(event.event_type())
+                .data(data));
+            if tx.send(sse).await.is_err() {
+                break;
+            }
+        }
     });
 
     let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -689,9 +710,18 @@ async fn handle_stream_with_observe(
                 break;
             }
         }
-        let _ = tx
-            .send(Ok(warp::sse::Event::default().data("[DONE]")))
-            .await;
+        if !client_disconnected {
+            for event in converter.finish() {
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                let sse = Ok(warp::sse::Event::default()
+                    .event(event.event_type())
+                    .data(data));
+                if tx.send(sse).await.is_err() {
+                    client_disconnected = true;
+                    break;
+                }
+            }
+        }
 
         let latency_ms = start.elapsed().as_millis() as u64;
         let ctx = RequestContext {
