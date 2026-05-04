@@ -750,7 +750,7 @@ where
     let (provider, model) = executed_target
         .as_ref()
         .map(|target| (target.provider_name.clone(), target.service_id.clone()))
-        .unwrap_or_default();
+        .unwrap_or_else(|| ("unknown".to_owned(), "unknown".to_owned()));
     let event = RequestFailureEvent {
         ctx: RequestContext {
             route: incoming_model,
