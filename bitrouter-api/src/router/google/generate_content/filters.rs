@@ -285,18 +285,11 @@ where
         tokio::spawn(async move {
             let mut stream = stream_result.stream;
             let mut converter = convert::StreamConverter::new(model_id);
-            use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;
             use tokio_stream::StreamExt as _;
-            let mut usage = None;
+            let mut observation = crate::router::StreamObservation::new();
             let mut client_disconnected = false;
             while let Some(part) = stream.next().await {
-                if let LanguageModelStreamPart::Finish {
-                    usage: ref finish_usage,
-                    ..
-                } = part
-                {
-                    usage = Some(finish_usage.clone());
-                }
+                observation.record_part(&part);
                 if let Some(chunk) = converter.convert(&part) {
                     if !metered.deduct_or_pause(&tx).await {
                         client_disconnected = true;
@@ -324,36 +317,22 @@ where
                 request_id,
                 metadata: serde_json::Value::Null,
             };
-            if let Some(usage) = usage {
-                observer
-                    .on_request_success(RequestSuccessEvent {
-                        ctx,
-                        usage,
-                        streamed: true,
-                        generation_time_ms: None,
-                    })
-                    .await;
-            } else if client_disconnected {
-                observer
-                    .on_request_failure(RequestFailureEvent {
-                        ctx,
-                        error: bitrouter_core::errors::BitrouterError::cancelled(
-                            None,
-                            "client disconnected during stream",
-                        ),
-                    })
-                    .await;
-            } else {
-                observer
-                    .on_request_failure(RequestFailureEvent {
-                        ctx,
-                        error: bitrouter_core::errors::BitrouterError::stream_protocol(
-                            None,
-                            "stream completed without finish event",
-                            None,
-                        ),
-                    })
-                    .await;
+            match observation.outcome(client_disconnected) {
+                Ok(usage) => {
+                    observer
+                        .on_request_success(RequestSuccessEvent {
+                            ctx,
+                            usage,
+                            streamed: true,
+                            generation_time_ms: None,
+                        })
+                        .await;
+                }
+                Err(error) => {
+                    observer
+                        .on_request_failure(RequestFailureEvent { ctx, error })
+                        .await;
+                }
             }
         });
 
@@ -611,18 +590,11 @@ async fn handle_stream_with_observe(
     tokio::spawn(async move {
         let mut stream = stream_result.stream;
         let mut converter = convert::StreamConverter::new(model_id);
-        use bitrouter_core::models::language::stream_part::LanguageModelStreamPart;
         use tokio_stream::StreamExt as _;
-        let mut usage = None;
+        let mut observation = crate::router::StreamObservation::new();
         let mut client_disconnected = false;
         while let Some(part) = stream.next().await {
-            if let LanguageModelStreamPart::Finish {
-                usage: ref finish_usage,
-                ..
-            } = part
-            {
-                usage = Some(finish_usage.clone());
-            }
+            observation.record_part(&part);
             if let Some(chunk) = converter.convert(&part) {
                 let data = serde_json::to_string(&chunk).unwrap_or_default();
                 let sse = Ok(warp::sse::Event::default().data(data));
@@ -646,36 +618,22 @@ async fn handle_stream_with_observe(
             request_id,
             metadata,
         };
-        if let Some(usage) = usage {
-            observer
-                .on_request_success(RequestSuccessEvent {
-                    ctx,
-                    usage,
-                    streamed: true,
-                    generation_time_ms: None,
-                })
-                .await;
-        } else if client_disconnected {
-            observer
-                .on_request_failure(RequestFailureEvent {
-                    ctx,
-                    error: bitrouter_core::errors::BitrouterError::cancelled(
-                        None,
-                        "client disconnected during stream",
-                    ),
-                })
-                .await;
-        } else {
-            observer
-                .on_request_failure(RequestFailureEvent {
-                    ctx,
-                    error: bitrouter_core::errors::BitrouterError::stream_protocol(
-                        None,
-                        "stream completed without finish event",
-                        None,
-                    ),
-                })
-                .await;
+        match observation.outcome(client_disconnected) {
+            Ok(usage) => {
+                observer
+                    .on_request_success(RequestSuccessEvent {
+                        ctx,
+                        usage,
+                        streamed: true,
+                        generation_time_ms: None,
+                    })
+                    .await;
+            }
+            Err(error) => {
+                observer
+                    .on_request_failure(RequestFailureEvent { ctx, error })
+                    .await;
+            }
         }
     });
 

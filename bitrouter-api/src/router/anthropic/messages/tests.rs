@@ -78,6 +78,15 @@ impl LanguageModelRouter for MockSlowStreamRouter {
     }
 }
 
+struct MockNoFinishStreamRouter;
+impl LanguageModelRouter for MockNoFinishStreamRouter {
+    async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+        Ok(DynLanguageModel::new_box(MockNoFinishStreamModel {
+            model_id: target.service_id,
+        }))
+    }
+}
+
 #[derive(Clone)]
 struct MockModel {
     model_id: String,
@@ -387,6 +396,59 @@ impl LanguageModel for MockSlowStreamModel {
                 })
                 .await;
         });
+
+        Ok(LanguageModelStreamResult {
+            stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            request: None,
+            response: None,
+        })
+    }
+}
+
+#[derive(Clone)]
+struct MockNoFinishStreamModel {
+    model_id: String,
+}
+
+impl LanguageModel for MockNoFinishStreamModel {
+    fn provider_name(&self) -> &str {
+        "mock"
+    }
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+    async fn supported_urls(&self) -> HashMap<String, Regex> {
+        HashMap::new()
+    }
+    async fn generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult> {
+        Ok(LanguageModelGenerateResult {
+            content: vec![LanguageModelContent::Text {
+                text: "stream without usage".to_owned(),
+                provider_metadata: None,
+            }],
+            finish_reason: LanguageModelFinishReason::Stop,
+            usage: mock_usage(),
+            provider_metadata: None,
+            request: None,
+            response_metadata: None,
+            warnings: None,
+        })
+    }
+    async fn stream(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let _ = tx
+            .send(LanguageModelStreamPart::TextDelta {
+                id: "0".to_owned(),
+                delta: "Hello".to_owned(),
+                provider_metadata: None,
+            })
+            .await;
 
         Ok(LanguageModelStreamResult {
             stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
@@ -999,6 +1061,39 @@ async fn messages_observe_success() {
 async fn messages_observe_streaming_success() {
     let table = Arc::new(MockTable);
     let router = Arc::new(MockRouter);
+    let observer = Arc::new(MockObserver::new());
+    let filter = messages_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(CallerContext::default()) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "stream": true,
+        "messages": [{"role": "user", "content": "Hello"}]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/messages")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn messages_observe_streaming_without_finish_counts_success() {
+    let table = Arc::new(MockTable);
+    let router = Arc::new(MockNoFinishStreamRouter);
     let observer = Arc::new(MockObserver::new());
     let filter = messages_filter_with_observe(
         table,
