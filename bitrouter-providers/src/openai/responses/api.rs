@@ -611,7 +611,7 @@ impl ResponsesCallIdMapper {
             normalized = format!("br_call_{}", self.next_id);
             self.next_id += 1;
         }
-        tracing::debug!(
+        tracing::trace!(
             provider = OPENAI_PROVIDER_NAME,
             original_len = call_id.len(),
             normalized = %normalized,
@@ -901,6 +901,7 @@ struct OpenAiToolInputState {
     tool_name: Option<String>,
     started: bool,
     emitted_arguments: bool,
+    argument_buffer: String,
 }
 
 #[derive(Default)]
@@ -991,6 +992,14 @@ impl OpenAiResponsesStreamState {
                     ..
                 } => {
                     if let Some(id) = id {
+                        tracing::debug!(
+                            provider = OPENAI_PROVIDER_NAME,
+                            item_id = %id,
+                            call_id = %call_id,
+                            tool_name = %name,
+                            arguments_len = arguments.len(),
+                            "Responses tool call item added"
+                        );
                         self.tool_item_ids.insert(id, call_id.clone());
                     }
                     let tool_state = self.tool_inputs.entry(call_id.clone()).or_default();
@@ -1008,6 +1017,7 @@ impl OpenAiResponsesStreamState {
                         tool_state.started = true;
                     }
                     if !arguments.is_empty() {
+                        tool_state.argument_buffer.push_str(&arguments);
                         parts.push(LanguageModelStreamPart::ToolInputDelta {
                             id: call_id,
                             delta: arguments,
@@ -1089,6 +1099,7 @@ impl OpenAiResponsesStreamState {
                     tool_state.started = true;
                 }
                 if !delta.is_empty() {
+                    tool_state.argument_buffer.push_str(&delta);
                     parts.push(LanguageModelStreamPart::ToolInputDelta {
                         id,
                         delta,
@@ -1120,17 +1131,28 @@ impl OpenAiResponsesStreamState {
                     });
                     tool_state.started = true;
                 }
-                if let Some(arguments) = arguments
-                    && !arguments.is_empty()
+                let done_arguments_len = arguments.as_ref().map_or(0, String::len);
+                let skipped_done_arguments = done_arguments_len > 0 && tool_state.emitted_arguments;
+                if let Some(done_arguments) = arguments
+                    && !done_arguments.is_empty()
                     && !tool_state.emitted_arguments
                 {
+                    tool_state.argument_buffer.push_str(&done_arguments);
                     parts.push(LanguageModelStreamPart::ToolInputDelta {
                         id: id.clone(),
-                        delta: arguments,
+                        delta: done_arguments,
                         provider_metadata: None,
                     });
                     tool_state.emitted_arguments = true;
                 }
+                log_tool_arguments_done(
+                    &id,
+                    tool_state.tool_name.as_deref(),
+                    &tool_state.argument_buffer,
+                    tool_state.emitted_arguments,
+                    done_arguments_len,
+                    skipped_done_arguments,
+                );
                 parts.push(LanguageModelStreamPart::ToolInputEnd {
                     id,
                     provider_metadata: None,
@@ -1276,6 +1298,79 @@ impl OpenAiResponsesStreamState {
             "Responses function_call_arguments event omitted item_id and call_id"
         );
         "tool".to_owned()
+    }
+}
+
+fn log_tool_arguments_done(
+    call_id: &str,
+    tool_name: Option<&str>,
+    arguments: &str,
+    emitted_arguments: bool,
+    done_arguments_len: usize,
+    skipped_done_arguments: bool,
+) {
+    let summary = summarize_json(arguments);
+    tracing::debug!(
+        provider = OPENAI_PROVIDER_NAME,
+        call_id = %call_id,
+        tool_name = tool_name.unwrap_or("tool"),
+        arguments_len = arguments.len(),
+        done_arguments_len,
+        emitted_arguments,
+        skipped_done_arguments,
+        json_valid = summary.valid,
+        json_kind = summary.kind,
+        json_keys = summary.keys.as_deref().unwrap_or(""),
+        "Responses tool call arguments completed"
+    );
+}
+
+struct JsonSummary {
+    valid: bool,
+    kind: &'static str,
+    keys: Option<String>,
+}
+
+fn summarize_json(value: &str) -> JsonSummary {
+    match serde_json::from_str::<JsonValue>(value) {
+        Ok(JsonValue::Object(object)) => {
+            let keys = object.keys().take(8).cloned().collect::<Vec<_>>().join(",");
+            JsonSummary {
+                valid: true,
+                kind: "object",
+                keys: Some(keys),
+            }
+        }
+        Ok(JsonValue::Array(_)) => JsonSummary {
+            valid: true,
+            kind: "array",
+            keys: None,
+        },
+        Ok(JsonValue::String(_)) => JsonSummary {
+            valid: true,
+            kind: "string",
+            keys: None,
+        },
+        Ok(JsonValue::Number(_)) => JsonSummary {
+            valid: true,
+            kind: "number",
+            keys: None,
+        },
+        Ok(JsonValue::Bool(_)) => JsonSummary {
+            valid: true,
+            kind: "bool",
+            keys: None,
+        },
+        Ok(JsonValue::Null) => JsonSummary {
+            valid: true,
+            kind: "null",
+            keys: None,
+        },
+        Err(_) => JsonSummary {
+            valid: false,
+            kind: "invalid",
+            keys: None,
+        },
     }
 }
 
