@@ -166,6 +166,7 @@ mod tests {
 
         let event = RequestSuccessEvent {
             ctx: test_ctx(),
+            executed_target: None,
             usage: LanguageModelUsage {
                 input_tokens: LanguageModelInputTokens {
                     total: Some(1000),
@@ -205,6 +206,7 @@ mod tests {
 
         let event = RequestFailureEvent {
             ctx: test_ctx(),
+            executed_target: None,
             error: BitrouterError::transport(None, "connection refused"),
         };
 
