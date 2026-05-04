@@ -1,6 +1,6 @@
 //! Conversion between Anthropic Messages format and core LanguageModel types.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::models::{
     language::{
@@ -149,6 +149,8 @@ pub struct StreamConverter {
     message_stopped: bool,
     active_text_block_index: Option<u32>,
     tool_id_to_index: HashMap<String, u32>,
+    started_tool_ids: HashSet<String>,
+    closed_tool_ids: HashSet<String>,
     next_block_index: u32,
 }
 
@@ -161,6 +163,8 @@ impl StreamConverter {
             message_stopped: false,
             active_text_block_index: None,
             tool_id_to_index: HashMap::new(),
+            started_tool_ids: HashSet::new(),
+            closed_tool_ids: HashSet::new(),
             next_block_index: 0,
         }
     }
@@ -195,40 +199,36 @@ impl StreamConverter {
                 events
             }
             LanguageModelStreamPart::ToolInputStart { id, tool_name, .. } => {
-                let mut events = self.stop_text_events();
-                let index = self.next_block_index;
-                self.tool_id_to_index.insert(id.clone(), index);
-                self.next_block_index += 1;
-                events.push(MessagesStreamEvent::ContentBlockStart {
-                    index,
-                    content_block: AnthropicContentBlock::ToolUse {
-                        id: id.clone(),
-                        name: tool_name.clone(),
-                        input: serde_json::json!({}),
-                    },
-                });
-                events
+                self.start_tool_events(id, tool_name)
             }
             LanguageModelStreamPart::ToolInputDelta { id, delta, .. } => {
-                let index = self
-                    .tool_id_to_index
-                    .get(id)
-                    .copied()
-                    .unwrap_or(self.next_block_index);
-                vec![MessagesStreamEvent::ContentBlockDelta {
+                if self.closed_tool_ids.contains(id) {
+                    return Vec::new();
+                }
+
+                let mut events = self.start_tool_events(id, "tool");
+                let Some(index) = self.tool_id_to_index.get(id).copied() else {
+                    return events;
+                };
+                events.push(MessagesStreamEvent::ContentBlockDelta {
                     index,
                     delta: MessagesStreamDelta::InputJsonDelta {
                         partial_json: delta.clone(),
                     },
-                }]
+                });
+                events
             }
             LanguageModelStreamPart::ToolInputEnd { id, .. } => {
-                let index = self
-                    .tool_id_to_index
-                    .get(id)
-                    .copied()
-                    .unwrap_or(self.next_block_index);
-                vec![MessagesStreamEvent::ContentBlockStop { index }]
+                if self.closed_tool_ids.contains(id) {
+                    return Vec::new();
+                }
+
+                let mut events = self.start_tool_events(id, "tool");
+                if let Some(index) = self.tool_id_to_index.get(id).copied() {
+                    events.push(MessagesStreamEvent::ContentBlockStop { index });
+                    self.closed_tool_ids.insert(id.clone());
+                }
+                events
             }
             LanguageModelStreamPart::ToolCall {
                 tool_call_id,
@@ -357,6 +357,31 @@ impl StreamConverter {
         if let Some(index) = self.active_text_block_index.take() {
             events.push(MessagesStreamEvent::ContentBlockStop { index });
         }
+        events
+    }
+
+    fn start_tool_events(&mut self, id: &str, tool_name: &str) -> Vec<MessagesStreamEvent> {
+        if self.closed_tool_ids.contains(id) {
+            return Vec::new();
+        }
+
+        let mut events = self.stop_text_events();
+        if self.started_tool_ids.contains(id) {
+            return events;
+        }
+
+        let index = self.next_block_index;
+        self.tool_id_to_index.insert(id.to_owned(), index);
+        self.started_tool_ids.insert(id.to_owned());
+        self.next_block_index += 1;
+        events.push(MessagesStreamEvent::ContentBlockStart {
+            index,
+            content_block: AnthropicContentBlock::ToolUse {
+                id: id.to_owned(),
+                name: tool_name.to_owned(),
+                input: serde_json::json!({}),
+            },
+        });
         events
     }
 }
@@ -500,5 +525,64 @@ fn map_finish_reason(reason: &LanguageModelFinishReason) -> String {
         LanguageModelFinishReason::ContentFilter => "end_turn".to_owned(),
         LanguageModelFinishReason::Error => "end_turn".to_owned(),
         LanguageModelFinishReason::Other(_) => "end_turn".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_converter_starts_tool_block_for_delta_without_start() {
+        let mut converter = StreamConverter::new("claude-compatible".to_owned());
+
+        let events = converter.convert(&LanguageModelStreamPart::ToolInputDelta {
+            id: "call_1".to_owned(),
+            delta: r#"{"task":"plan"}"#.to_owned(),
+            provider_metadata: None,
+        });
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                MessagesStreamEvent::MessageStart { .. },
+                MessagesStreamEvent::ContentBlockStart { index: 0, content_block },
+                MessagesStreamEvent::ContentBlockDelta { index: 0, delta },
+            ] if matches!(
+                content_block,
+                AnthropicContentBlock::ToolUse { id, name, .. } if id == "call_1" && name == "tool"
+            ) && matches!(
+                delta,
+                MessagesStreamDelta::InputJsonDelta { partial_json } if partial_json == r#"{"task":"plan"}"#
+            )
+        ));
+    }
+
+    #[test]
+    fn stream_converter_ends_tool_block_for_end_without_start() {
+        let mut converter = StreamConverter::new("claude-compatible".to_owned());
+
+        let events = converter.convert(&LanguageModelStreamPart::ToolInputEnd {
+            id: "call_1".to_owned(),
+            provider_metadata: None,
+        });
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                MessagesStreamEvent::MessageStart { .. },
+                MessagesStreamEvent::ContentBlockStart { index: 0, content_block },
+                MessagesStreamEvent::ContentBlockStop { index: 0 },
+            ] if matches!(
+                content_block,
+                AnthropicContentBlock::ToolUse { id, name, .. } if id == "call_1" && name == "tool"
+            )
+        ));
+
+        let duplicate_events = converter.convert(&LanguageModelStreamPart::ToolInputEnd {
+            id: "call_1".to_owned(),
+            provider_metadata: None,
+        });
+        assert!(duplicate_events.is_empty());
     }
 }
