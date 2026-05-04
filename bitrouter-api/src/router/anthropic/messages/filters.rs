@@ -431,6 +431,7 @@ where
                     observer
                         .on_request_success(RequestSuccessEvent {
                             ctx,
+                            executed_target: None,
                             usage,
                             streamed: true,
                             generation_time_ms: None,
@@ -439,7 +440,11 @@ where
                 }
                 Err(error) => {
                     observer
-                        .on_request_failure(RequestFailureEvent { ctx, error })
+                        .on_request_failure(RequestFailureEvent {
+                            ctx,
+                            executed_target: None,
+                            error,
+                        })
                         .await;
                 }
             }
@@ -493,6 +498,7 @@ where
                         request_id,
                         metadata,
                     },
+                    executed_target: None,
                     usage: result.usage.clone(),
                     streamed: false,
                     generation_time_ms: None,
@@ -523,6 +529,7 @@ where
                         request_id,
                         metadata,
                     },
+                    executed_target: None,
                     error: e.clone(),
                 };
                 tokio::spawn(async move { observer.on_request_failure(event).await });
@@ -587,6 +594,7 @@ where
                 start,
                 request_id: uuid::Uuid::new_v4().to_string(),
                 metadata: serde_json::Value::Null,
+                executed_target: None,
             },
         )
         .await
@@ -604,6 +612,7 @@ where
                         request_id: uuid::Uuid::new_v4().to_string(),
                         metadata: serde_json::Value::Null,
                     },
+                    executed_target: None,
                     usage: result.usage.clone(),
                     streamed: false,
                     generation_time_ms: None,
@@ -623,6 +632,7 @@ where
                         request_id: uuid::Uuid::new_v4().to_string(),
                         metadata: serde_json::Value::Null,
                     },
+                    executed_target: None,
                     error: e.clone(),
                 };
                 tokio::spawn(async move { observer.on_request_failure(event).await });
@@ -697,6 +707,7 @@ async fn handle_stream_with_observe(
         start,
         request_id,
         metadata,
+        executed_target: _,
     } = ctx;
 
     tokio::spawn(async move {
@@ -751,6 +762,7 @@ async fn handle_stream_with_observe(
                 observer
                     .on_request_success(RequestSuccessEvent {
                         ctx,
+                        executed_target: None,
                         usage,
                         streamed: true,
                         generation_time_ms: None,
@@ -759,7 +771,11 @@ async fn handle_stream_with_observe(
             }
             Err(error) => {
                 observer
-                    .on_request_failure(RequestFailureEvent { ctx, error })
+                    .on_request_failure(RequestFailureEvent {
+                        ctx,
+                        executed_target: None,
+                        error,
+                    })
                     .await;
             }
         }

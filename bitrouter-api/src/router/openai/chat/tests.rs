@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bitrouter_core::{
-    errors::Result,
+    errors::{BitrouterError, ProviderErrorContext, Result},
     models::language::{
         call_options::LanguageModelCallOptions,
         content::LanguageModelContent,
@@ -58,10 +58,48 @@ impl RoutingTable for MockTable {
     }
 }
 
+struct ChainTable;
+impl RoutingTable for ChainTable {
+    async fn route(&self, incoming: &str, _context: &RouteContext) -> Result<RoutingTarget> {
+        Ok(target("primary", incoming))
+    }
+
+    async fn route_chain(
+        &self,
+        incoming: &str,
+        _context: &RouteContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        Ok(vec![
+            target("primary", incoming),
+            target("fallback", incoming),
+        ])
+    }
+}
+
+fn target(provider: &str, service_id: &str) -> RoutingTarget {
+    RoutingTarget {
+        provider_name: provider.to_owned(),
+        service_id: service_id.to_owned(),
+        api_protocol: ApiProtocol::Openai,
+        api_key_override: None,
+        api_base_override: None,
+    }
+}
+
 struct MockRouter;
 impl LanguageModelRouter for MockRouter {
     async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
         Ok(DynLanguageModel::new_box(MockModel {
+            model_id: target.service_id,
+        }))
+    }
+}
+
+struct FailoverRouter;
+impl LanguageModelRouter for FailoverRouter {
+    async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+        Ok(DynLanguageModel::new_box(FailoverModel {
+            provider_name: target.provider_name,
             model_id: target.service_id,
         }))
     }
@@ -88,6 +126,95 @@ impl LanguageModelRouter for MockToolStreamRouter {
 #[derive(Clone)]
 struct MockModel {
     model_id: String,
+}
+
+#[derive(Clone)]
+struct FailoverModel {
+    provider_name: String,
+    model_id: String,
+}
+
+impl LanguageModel for FailoverModel {
+    fn provider_name(&self) -> &str {
+        &self.provider_name
+    }
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+    async fn supported_urls(&self) -> HashMap<String, Regex> {
+        HashMap::new()
+    }
+    async fn generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult> {
+        if self.provider_name == "primary" {
+            return Err(BitrouterError::provider_error(
+                "primary",
+                "temporary upstream failure",
+                ProviderErrorContext {
+                    status_code: Some(500),
+                    error_type: None,
+                    code: None,
+                    param: None,
+                    request_id: None,
+                    body: None,
+                },
+            ));
+        }
+        Ok(LanguageModelGenerateResult {
+            content: vec![LanguageModelContent::Text {
+                text: "Hello from fallback!".to_owned(),
+                provider_metadata: None,
+            }],
+            finish_reason: LanguageModelFinishReason::Stop,
+            usage: mock_usage(),
+            provider_metadata: None,
+            request: None,
+            response_metadata: None,
+            warnings: None,
+        })
+    }
+    async fn stream(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        if self.provider_name == "primary" {
+            return Err(BitrouterError::provider_error(
+                "primary",
+                "temporary upstream failure",
+                ProviderErrorContext {
+                    status_code: Some(500),
+                    error_type: None,
+                    code: None,
+                    param: None,
+                    request_id: None,
+                    body: None,
+                },
+            ));
+        }
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let _ = tx
+            .send(LanguageModelStreamPart::TextDelta {
+                id: "0".to_owned(),
+                delta: "fallback".to_owned(),
+                provider_metadata: None,
+            })
+            .await;
+        let _ = tx
+            .send(LanguageModelStreamPart::Finish {
+                usage: mock_usage(),
+                finish_reason: LanguageModelFinishReason::Stop,
+                provider_metadata: None,
+            })
+            .await;
+
+        Ok(LanguageModelStreamResult {
+            stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            request: None,
+            response: None,
+        })
+    }
 }
 
 impl LanguageModel for MockModel {
@@ -327,6 +454,60 @@ async fn chat_completions_generate() {
     );
     assert_eq!(json["choices"][0]["finish_reason"], "stop");
     assert!(json["usage"]["prompt_tokens"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn chat_completions_falls_back_on_retryable_generate_error() {
+    let table = Arc::new(ChainTable);
+    let router = Arc::new(FailoverRouter);
+    let filter = chat_completions_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    let json: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+    assert_eq!(
+        json["choices"][0]["message"]["content"],
+        "Hello from fallback!"
+    );
+}
+
+#[tokio::test]
+async fn chat_completions_falls_back_on_stream_init_error() {
+    let table = Arc::new(ChainTable);
+    let router = Arc::new(FailoverRouter);
+    let filter = chat_completions_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ],
+        "stream": true
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    let body_str = String::from_utf8_lossy(res.body());
+    assert!(body_str.contains("fallback"));
 }
 
 #[tokio::test]

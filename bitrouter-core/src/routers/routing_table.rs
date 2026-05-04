@@ -47,6 +47,7 @@ impl fmt::Display for ApiProtocol {
 // ── Routing ──────────────────────────────────────────────────────
 
 /// The resolved target for a routed request (model or tool).
+#[derive(Debug, Clone)]
 pub struct RoutingTarget {
     /// The provider name to route to.
     pub provider_name: String,
@@ -147,6 +148,19 @@ pub trait RoutingTable: Send + Sync {
         context: &RouteContext,
     ) -> impl Future<Output = Result<RoutingTarget>> + Send;
 
+    /// Resolves an incoming name to an ordered chain of routing targets.
+    ///
+    /// Implementors that only support single-target routing can rely on this
+    /// default implementation, which wraps [`RoutingTable::route`] in a
+    /// one-element chain.
+    fn route_chain(
+        &self,
+        incoming_name: &str,
+        context: &RouteContext,
+    ) -> impl Future<Output = Result<Vec<RoutingTarget>>> + Send {
+        async move { Ok(vec![self.route(incoming_name, context).await?]) }
+    }
+
     /// Lists all configured routes.
     fn list_routes(&self) -> Vec<RouteEntry> {
         Vec::new()
@@ -156,6 +170,14 @@ pub trait RoutingTable: Send + Sync {
 impl<T: RoutingTable> RoutingTable for Arc<T> {
     async fn route(&self, incoming_name: &str, context: &RouteContext) -> Result<RoutingTarget> {
         (**self).route(incoming_name, context).await
+    }
+
+    async fn route_chain(
+        &self,
+        incoming_name: &str,
+        context: &RouteContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        (**self).route_chain(incoming_name, context).await
     }
 
     fn list_routes(&self) -> Vec<RouteEntry> {

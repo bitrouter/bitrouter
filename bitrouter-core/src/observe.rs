@@ -11,6 +11,7 @@ use std::pin::Pin;
 use crate::auth::claims::BudgetScope;
 use crate::errors::BitrouterError;
 use crate::models::language::usage::LanguageModelUsage;
+use crate::routers::routing_table::RoutingTarget;
 
 /// Authenticated caller context extracted from JWT claims.
 ///
@@ -76,6 +77,8 @@ pub struct RequestContext {
 pub struct RequestSuccessEvent {
     /// Request context.
     pub ctx: RequestContext,
+    /// The target that executed the request. `None` is reserved for synthetic events.
+    pub executed_target: Option<RoutingTarget>,
     /// Token usage reported by the model.
     pub usage: LanguageModelUsage,
     /// Whether the response was served as a streaming SSE response.
@@ -90,6 +93,8 @@ pub struct RequestSuccessEvent {
 pub struct RequestFailureEvent {
     /// Request context.
     pub ctx: RequestContext,
+    /// The last attempted target, or `None` when no target was attempted.
+    pub executed_target: Option<RoutingTarget>,
     /// The error that caused the failure.
     pub error: BitrouterError,
 }

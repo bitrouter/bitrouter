@@ -511,6 +511,7 @@ mod tests {
                     request_id: String::new(),
                     metadata: serde_json::Value::Null,
                 },
+                executed_target: None,
                 error: bitrouter_core::errors::BitrouterError::transport(None, "timeout"),
             })
             .await;
