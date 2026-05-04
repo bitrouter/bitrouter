@@ -577,6 +577,8 @@ async fn messages_streaming_sends_sse_events() {
     assert_eq!(start["message"]["type"], "message");
     assert_eq!(start["message"]["role"], "assistant");
     assert_eq!(start["message"]["model"], "claude-3-5-sonnet-20241022");
+    assert_eq!(start["message"]["usage"]["input_tokens"], 0);
+    assert_eq!(start["message"]["usage"]["output_tokens"], 0);
     assert_eq!(
         start["message"]["content"].as_array().map(Vec::len),
         Some(0)
@@ -606,6 +608,8 @@ async fn messages_streaming_sends_sse_events() {
     assert_eq!(finish["type"], "message_delta");
     assert_eq!(finish["delta"]["type"], "message_delta");
     assert_eq!(finish["delta"]["stop_reason"], "end_turn");
+    assert_eq!(finish["usage"]["input_tokens"], 12);
+    assert_eq!(finish["usage"]["output_tokens"], 6);
     assert_eq!(finish["message"]["model"], "claude-3-5-sonnet-20241022");
     assert_eq!(finish["message"]["role"], "assistant");
     assert!(

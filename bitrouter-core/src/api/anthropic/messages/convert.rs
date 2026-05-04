@@ -271,8 +271,8 @@ impl StreamConverter {
                         stop_sequence: None,
                     },
                     usage: Some(MessagesUsage {
-                        input_tokens: usage.input_tokens.total,
-                        output_tokens: usage.output_tokens.total,
+                        input_tokens: Some(usage.input_tokens.total.unwrap_or(0)),
+                        output_tokens: Some(usage.output_tokens.total.unwrap_or(0)),
                         cache_creation_input_tokens: usage.input_tokens.cache_write,
                         cache_read_input_tokens: usage.input_tokens.cache_read,
                     }),
@@ -304,7 +304,7 @@ impl StreamConverter {
                 stop_reason: Some("end_turn".to_owned()),
                 stop_sequence: None,
             },
-            usage: None,
+            usage: Some(empty_stream_usage()),
             message: Some(MessagesStreamMessage {
                 id: self.message_id.clone(),
                 model: self.model_id.clone(),
@@ -331,7 +331,7 @@ impl StreamConverter {
                 model: self.model_id.clone(),
                 stop_reason: None,
                 stop_sequence: None,
-                usage: None,
+                usage: Some(empty_stream_usage()),
             },
         }]
     }
@@ -528,6 +528,15 @@ fn map_finish_reason(reason: &LanguageModelFinishReason) -> String {
     }
 }
 
+fn empty_stream_usage() -> MessagesUsage {
+    MessagesUsage {
+        input_tokens: Some(0),
+        output_tokens: Some(0),
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,5 +593,55 @@ mod tests {
             provider_metadata: None,
         });
         assert!(duplicate_events.is_empty());
+    }
+
+    #[test]
+    fn stream_converter_message_start_includes_usage() {
+        let mut converter = StreamConverter::new("claude-compatible".to_owned());
+
+        let events = converter.convert(&LanguageModelStreamPart::TextStart {
+            id: "text".to_owned(),
+            provider_metadata: None,
+        });
+
+        assert!(matches!(
+            events.first(),
+            Some(MessagesStreamEvent::MessageStart { message })
+                if message.usage.as_ref().is_some_and(|usage|
+                    usage.input_tokens == Some(0) && usage.output_tokens == Some(0)
+                )
+        ));
+    }
+
+    #[test]
+    fn stream_converter_finish_includes_token_counts() {
+        let mut converter = StreamConverter::new("claude-compatible".to_owned());
+
+        let events = converter.convert(&LanguageModelStreamPart::Finish {
+            usage: crate::models::language::usage::LanguageModelUsage {
+                input_tokens: crate::models::language::usage::LanguageModelInputTokens {
+                    total: None,
+                    no_cache: None,
+                    cache_read: None,
+                    cache_write: None,
+                },
+                output_tokens: crate::models::language::usage::LanguageModelOutputTokens {
+                    total: None,
+                    text: None,
+                    reasoning: None,
+                },
+                raw: None,
+            },
+            finish_reason: LanguageModelFinishReason::Stop,
+            provider_metadata: None,
+        });
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            MessagesStreamEvent::MessageDelta {
+                usage: Some(usage),
+                ..
+            } if usage.input_tokens == Some(0) && usage.output_tokens == Some(0)
+        )));
     }
 }
