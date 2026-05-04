@@ -279,6 +279,7 @@ where
             backend_key: mpp_ctx.backend_key.clone(),
             channel_id: mpp_ctx.channel_id.clone(),
             tick_cost,
+            skip_deduct: false,
             request_id: Some(request_id.clone()),
         };
 
