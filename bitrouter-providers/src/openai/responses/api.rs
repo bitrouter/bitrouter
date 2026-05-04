@@ -852,10 +852,14 @@ enum OpenAiResponsesStreamEvent {
     },
     #[serde(rename = "response.completed")]
     ResponseCompleted { response: ResponsesResponse },
+    #[serde(rename = "response.incomplete")]
+    ResponseIncomplete { response: ResponsesResponse },
     #[serde(rename = "response.failed")]
     ResponseFailed { response: ResponsesResponse },
     #[serde(rename = "error")]
     Error { error: ResponsesApiError },
+    #[serde(other)]
+    Unknown,
 }
 
 impl OpenAiResponsesStreamState {
@@ -1020,6 +1024,23 @@ impl OpenAiResponsesStreamState {
                 ));
                 self.finish_parts()
             }
+            OpenAiResponsesStreamEvent::ResponseIncomplete { response } => {
+                if let Some(usage) = response.usage {
+                    self.usage = Some(usage_to_language_model(usage));
+                }
+                self.finish_reason = Some(map_response_finish_reason(
+                    response.status.as_deref(),
+                    response
+                        .incomplete_details
+                        .as_ref()
+                        .and_then(|details| details.reason.as_deref()),
+                    response
+                        .output
+                        .iter()
+                        .any(|item| matches!(item, ResponsesOutputItem::FunctionCall { .. })),
+                ));
+                self.finish_parts()
+            }
             OpenAiResponsesStreamEvent::ResponseFailed { response } => {
                 self.finish_reason = Some(LanguageModelFinishReason::Error);
                 let mut parts = Vec::new();
@@ -1049,6 +1070,7 @@ impl OpenAiResponsesStreamState {
                 parts.extend(self.finish_parts());
                 parts
             }
+            OpenAiResponsesStreamEvent::Unknown => Vec::new(),
         }
     }
 
@@ -1433,5 +1455,82 @@ mod tests {
                 .iter()
                 .any(|part| matches!(part, LanguageModelStreamPart::Finish { .. }))
         );
+    }
+
+    #[test]
+    fn sse_parser_ignores_unknown_responses_events() {
+        let mut parser = OpenAiResponsesSseParser::new(false);
+
+        let reasoning_delta = json!({
+            "type": "response.reasoning_text.delta",
+            "sequence_number": 1,
+            "item_id": "rs_1",
+            "delta": "thinking"
+        });
+        let completed = json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1",
+                "created_at": 1,
+                "model": "gpt-5.5",
+                "status": "completed",
+                "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+            }
+        });
+
+        let unknown_parts = parser.push_bytes(&sse_event(&reasoning_delta.to_string()));
+        assert!(
+            unknown_parts.is_empty(),
+            "unknown Responses events should be ignored, got {unknown_parts:?}"
+        );
+
+        let done_parts = parser.push_bytes(&sse_event(&completed.to_string()));
+        assert!(
+            done_parts
+                .iter()
+                .all(|part| !matches!(part, LanguageModelStreamPart::Error { .. })),
+            "unknown Responses events must not poison the stream: {done_parts:?}"
+        );
+        assert!(
+            done_parts
+                .iter()
+                .any(|part| matches!(part, LanguageModelStreamPart::Finish { .. }))
+        );
+    }
+
+    #[test]
+    fn sse_parser_handles_response_incomplete_as_finish() {
+        let mut parser = OpenAiResponsesSseParser::new(false);
+
+        let incomplete = json!({
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_1",
+                "created_at": 1,
+                "model": "gpt-5.5",
+                "status": "incomplete",
+                "output": [],
+                "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+                "incomplete_details": {"reason": "max_output_tokens"}
+            }
+        });
+
+        let parts = parser.push_bytes(&sse_event(&incomplete.to_string()));
+        assert!(
+            parts
+                .iter()
+                .all(|part| !matches!(part, LanguageModelStreamPart::Error { .. })),
+            "response.incomplete should not emit a stream error: {parts:?}"
+        );
+        assert!(parts.iter().any(|part| matches!(
+            part,
+            LanguageModelStreamPart::Finish {
+                finish_reason: LanguageModelFinishReason::Length,
+                usage,
+                ..
+            } if usage.input_tokens.total == Some(3)
+                && usage.output_tokens.total == Some(4)
+        )));
     }
 }
