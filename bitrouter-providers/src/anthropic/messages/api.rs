@@ -770,6 +770,10 @@ impl AnthropicSseParser {
                 raw_value: raw_value.clone(),
             });
         }
+        let event_type = raw_value
+            .get("type")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned);
 
         let event: MessagesStreamEvent = match serde_json::from_value(raw_value.clone()) {
             Ok(event) => event,
@@ -788,6 +792,26 @@ impl AnthropicSseParser {
         };
 
         parts.extend(self.state.apply_event(event));
+        if parts.is_empty()
+            && let Some(event_type) = event_type
+            && !matches!(
+                event_type.as_str(),
+                "message_start"
+                    | "content_block_start"
+                    | "content_block_delta"
+                    | "content_block_stop"
+                    | "message_delta"
+                    | "message_stop"
+                    | "ping"
+                    | "error"
+            )
+        {
+            tracing::debug!(
+                provider = ANTHROPIC_PROVIDER_NAME,
+                event_type = %event_type,
+                "ignored unsupported Anthropic stream event"
+            );
+        }
         parts
     }
 }
@@ -797,10 +821,19 @@ struct AnthropicStreamState {
     metadata_emitted: bool,
     text_started: bool,
     tool_inputs: HashMap<u32, AnthropicToolInputState>,
+    block_types: HashMap<u32, AnthropicStreamBlockType>,
     usage: Option<LanguageModelUsage>,
     finish_reason:
         Option<bitrouter_core::models::language::finish_reason::LanguageModelFinishReason>,
     finished: bool,
+}
+
+#[derive(Clone, Copy)]
+enum AnthropicStreamBlockType {
+    Text,
+    ToolUse,
+    Reasoning,
+    Other,
 }
 
 #[derive(Default)]
@@ -836,6 +869,8 @@ impl AnthropicStreamState {
                 let mut parts = Vec::new();
                 match content_block {
                     AnthropicContentBlock::Text { .. } => {
+                        self.block_types
+                            .insert(index, AnthropicStreamBlockType::Text);
                         if !self.text_started {
                             parts.push(LanguageModelStreamPart::TextStart {
                                 id: STREAM_TEXT_ID.to_owned(),
@@ -845,6 +880,8 @@ impl AnthropicStreamState {
                         }
                     }
                     AnthropicContentBlock::ToolUse { id, name, .. } => {
+                        self.block_types
+                            .insert(index, AnthropicStreamBlockType::ToolUse);
                         let entry = self.tool_inputs.entry(index).or_default();
                         entry.id = Some(id.clone());
                         entry.name = Some(name.clone());
@@ -858,10 +895,20 @@ impl AnthropicStreamState {
                         });
                         entry.started = true;
                     }
+                    AnthropicContentBlock::Thinking { .. }
+                    | AnthropicContentBlock::RedactedThinking { .. } => {
+                        self.block_types
+                            .insert(index, AnthropicStreamBlockType::Reasoning);
+                        parts.push(LanguageModelStreamPart::ReasoningStart {
+                            id: index.to_string(),
+                            provider_metadata: None,
+                        });
+                    }
                     AnthropicContentBlock::Image { .. }
-                    | AnthropicContentBlock::ToolResult { .. }
-                    | AnthropicContentBlock::Thinking { .. }
-                    | AnthropicContentBlock::RedactedThinking { .. } => {}
+                    | AnthropicContentBlock::ToolResult { .. } => {
+                        self.block_types
+                            .insert(index, AnthropicStreamBlockType::Other);
+                    }
                 }
                 parts
             }
@@ -895,9 +942,41 @@ impl AnthropicStreamState {
                     }
                     parts
                 }
+                MessagesStreamDelta::ThinkingDelta { thinking } => {
+                    let mut parts = Vec::new();
+                    if !matches!(
+                        self.block_types.get(&index),
+                        Some(AnthropicStreamBlockType::Reasoning)
+                    ) {
+                        self.block_types
+                            .insert(index, AnthropicStreamBlockType::Reasoning);
+                        parts.push(LanguageModelStreamPart::ReasoningStart {
+                            id: index.to_string(),
+                            provider_metadata: None,
+                        });
+                    }
+                    parts.push(LanguageModelStreamPart::ReasoningDelta {
+                        id: index.to_string(),
+                        delta: thinking,
+                        provider_metadata: None,
+                    });
+                    parts
+                }
+                MessagesStreamDelta::SignatureDelta { .. }
+                | MessagesStreamDelta::CitationsDelta { .. }
+                | MessagesStreamDelta::Unknown => Vec::new(),
             },
             MessagesStreamEvent::ContentBlockStop { index } => {
                 let mut parts = Vec::new();
+                if matches!(
+                    self.block_types.remove(&index),
+                    Some(AnthropicStreamBlockType::Reasoning)
+                ) {
+                    parts.push(LanguageModelStreamPart::ReasoningEnd {
+                        id: index.to_string(),
+                        provider_metadata: None,
+                    });
+                }
                 if let Some(tool_state) = self.tool_inputs.get(&index)
                     && tool_state.started
                 {
@@ -939,6 +1018,7 @@ impl AnthropicStreamState {
                     }),
                 }]
             }
+            MessagesStreamEvent::Unknown => Vec::new(),
         }
     }
 
@@ -1396,6 +1476,70 @@ mod tests {
         let mut parser = AnthropicSseParser::new(false);
         let parts = parser.push_bytes(&sse_event("ping", r#"{"type":"ping"}"#));
         assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn parse_thinking_stream() {
+        let mut parser = AnthropicSseParser::new(false);
+
+        let start_parts = parser.push_bytes(&sse_event(
+            "content_block_start",
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":null}}"#,
+        ));
+        assert!(
+            start_parts.iter().any(
+                |p| matches!(p, LanguageModelStreamPart::ReasoningStart { id, .. } if id == "0")
+            )
+        );
+
+        let delta_parts = parser.push_bytes(&sse_event(
+            "content_block_delta",
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me reason"}}"#,
+        ));
+        assert!(
+            delta_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ReasoningDelta { id, delta, .. } if id == "0" && delta == "Let me reason"))
+        );
+
+        let signature_parts = parser.push_bytes(&sse_event(
+            "content_block_delta",
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}"#,
+        ));
+        assert!(signature_parts.is_empty());
+
+        let stop_parts = parser.push_bytes(&sse_event(
+            "content_block_stop",
+            r#"{"type":"content_block_stop","index":0}"#,
+        ));
+        assert!(
+            stop_parts.iter().any(
+                |p| matches!(p, LanguageModelStreamPart::ReasoningEnd { id, .. } if id == "0")
+            )
+        );
+    }
+
+    #[test]
+    fn parse_unknown_anthropic_stream_events_are_ignored() {
+        let mut parser = AnthropicSseParser::new(false);
+
+        let event_parts = parser.push_bytes(&sse_event(
+            "unknown_event",
+            r#"{"type":"unknown_event","value":"future"}"#,
+        ));
+        assert!(
+            event_parts.is_empty(),
+            "unknown Anthropic stream events should be ignored: {event_parts:?}"
+        );
+
+        let delta_parts = parser.push_bytes(&sse_event(
+            "content_block_delta",
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"future_delta","value":"future"}}"#,
+        ));
+        assert!(
+            delta_parts.is_empty(),
+            "unknown Anthropic stream deltas should be ignored: {delta_parts:?}"
+        );
     }
 
     #[test]

@@ -14,11 +14,10 @@ openai = []
 anthropic = []
 google = []
 rest = []
-mcp = ["dep:tracing", "dep:rmcp"]
+mcp = ["dep:rmcp"]
 acp = [
     "dep:agent-client-protocol",
     "dep:async-trait",
-    "dep:tracing",
     "dep:bitrouter-config",
     "dep:flate2",
     "dep:tar",
@@ -28,7 +27,6 @@ acp = [
     "tokio/io-std",
 ]
 agentskills = [
-    "dep:tracing",
     "dep:serde-saphyr",
     "dep:chrono",
     "dep:uuid",
@@ -38,7 +36,7 @@ agentskills = [
 
 [dependencies]
 bitrouter-core.workspace = true
-tracing = { version = "0.1", optional = true }
+tracing = { version = "0.1" }
 
 base64 = "0.22"
 futures-core = "0.3"

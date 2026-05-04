@@ -252,6 +252,8 @@ pub enum MessagesStreamEvent {
     Error {
         error: MessagesStreamError,
     },
+    #[serde(other)]
+    Unknown,
 }
 
 impl MessagesStreamEvent {
@@ -266,6 +268,7 @@ impl MessagesStreamEvent {
             Self::MessageStop => "message_stop",
             Self::Ping => "ping",
             Self::Error { .. } => "error",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -273,8 +276,23 @@ impl MessagesStreamEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessagesStreamDelta {
-    TextDelta { text: String },
-    InputJsonDelta { partial_json: String },
+    TextDelta {
+        text: String,
+    },
+    InputJsonDelta {
+        partial_json: String,
+    },
+    ThinkingDelta {
+        thinking: String,
+    },
+    SignatureDelta {
+        signature: String,
+    },
+    CitationsDelta {
+        citation: serde_json::Value,
+    },
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -74,6 +74,7 @@ mod stream_observation {
                     ));
                 }
                 LanguageModelStreamPart::TextDelta { .. }
+                | LanguageModelStreamPart::ReasoningDelta { .. }
                 | LanguageModelStreamPart::ToolCall { .. }
                 | LanguageModelStreamPart::ToolInputStart { .. }
                 | LanguageModelStreamPart::ToolInputDelta { .. }
