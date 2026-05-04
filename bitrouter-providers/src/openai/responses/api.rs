@@ -876,6 +876,7 @@ impl OpenAiResponsesSseParser {
                 event_type.as_str(),
                 "response.created"
                     | "response.output_item.added"
+                    | "response.output_item.done"
                     | "response.output_text.delta"
                     | "response.output_text.done"
                     | "response.function_call_arguments.delta"
@@ -902,6 +903,8 @@ struct OpenAiToolInputState {
     started: bool,
     emitted_arguments: bool,
     argument_buffer: String,
+    pending_done: bool,
+    ended: bool,
 }
 
 #[derive(Default)]
@@ -923,6 +926,8 @@ enum OpenAiResponsesStreamEvent {
     ResponseCreated { response: ResponsesResponse },
     #[serde(rename = "response.output_item.added")]
     ResponseOutputItemAdded { item: ResponsesOutputItem },
+    #[serde(rename = "response.output_item.done")]
+    ResponseOutputItemDone { item: ResponsesOutputItem },
     #[serde(rename = "response.output_text.delta")]
     ResponseOutputTextDelta {
         #[serde(default)]
@@ -983,52 +988,12 @@ impl OpenAiResponsesStreamState {
                 }
                 parts
             }
-            OpenAiResponsesStreamEvent::ResponseOutputItemAdded { item } => match item {
-                ResponsesOutputItem::FunctionCall {
-                    id,
-                    call_id,
-                    name,
-                    arguments,
-                    ..
-                } => {
-                    if let Some(id) = id {
-                        tracing::debug!(
-                            provider = OPENAI_PROVIDER_NAME,
-                            item_id = %id,
-                            call_id = %call_id,
-                            tool_name = %name,
-                            arguments_len = arguments.len(),
-                            "Responses tool call item added"
-                        );
-                        self.tool_item_ids.insert(id, call_id.clone());
-                    }
-                    let tool_state = self.tool_inputs.entry(call_id.clone()).or_default();
-                    tool_state.tool_name = Some(name.clone());
-                    let mut parts = Vec::new();
-                    if !tool_state.started {
-                        parts.push(LanguageModelStreamPart::ToolInputStart {
-                            id: call_id.clone(),
-                            tool_name: name,
-                            provider_executed: None,
-                            dynamic: None,
-                            title: None,
-                            provider_metadata: None,
-                        });
-                        tool_state.started = true;
-                    }
-                    if !arguments.is_empty() {
-                        tool_state.argument_buffer.push_str(&arguments);
-                        parts.push(LanguageModelStreamPart::ToolInputDelta {
-                            id: call_id,
-                            delta: arguments,
-                            provider_metadata: None,
-                        });
-                        tool_state.emitted_arguments = true;
-                    }
-                    parts
-                }
-                _ => Vec::new(),
-            },
+            OpenAiResponsesStreamEvent::ResponseOutputItemAdded { item } => {
+                self.apply_output_item(item, false)
+            }
+            OpenAiResponsesStreamEvent::ResponseOutputItemDone { item } => {
+                self.apply_output_item(item, true)
+            }
             OpenAiResponsesStreamEvent::ResponseOutputTextDelta { item_id, delta } => {
                 let text_id = item_id.unwrap_or_else(|| STREAM_TEXT_ID.to_owned());
                 let mut parts = Vec::new();
@@ -1084,13 +1049,12 @@ impl OpenAiResponsesStreamState {
                 let id = self.resolve_tool_call_id(item_id.as_deref(), call_id.as_deref());
                 let tool_state = self.tool_inputs.entry(id.clone()).or_default();
                 let mut parts = Vec::new();
-                if !tool_state.started {
+                if !tool_state.started
+                    && let Some(tool_name) = tool_state.tool_name.clone()
+                {
                     parts.push(LanguageModelStreamPart::ToolInputStart {
                         id: id.clone(),
-                        tool_name: tool_state
-                            .tool_name
-                            .clone()
-                            .unwrap_or_else(|| "tool".to_owned()),
+                        tool_name,
                         provider_executed: None,
                         dynamic: None,
                         title: None,
@@ -1100,12 +1064,14 @@ impl OpenAiResponsesStreamState {
                 }
                 if !delta.is_empty() {
                     tool_state.argument_buffer.push_str(&delta);
-                    parts.push(LanguageModelStreamPart::ToolInputDelta {
-                        id,
-                        delta,
-                        provider_metadata: None,
-                    });
-                    tool_state.emitted_arguments = true;
+                    if tool_state.started {
+                        parts.push(LanguageModelStreamPart::ToolInputDelta {
+                            id,
+                            delta,
+                            provider_metadata: None,
+                        });
+                        tool_state.emitted_arguments = true;
+                    }
                 }
                 parts
             }
@@ -1117,13 +1083,12 @@ impl OpenAiResponsesStreamState {
                 let id = self.resolve_tool_call_id(item_id.as_deref(), call_id.as_deref());
                 let mut parts = Vec::new();
                 let tool_state = self.tool_inputs.entry(id.clone()).or_default();
-                if !tool_state.started {
+                if !tool_state.started
+                    && let Some(tool_name) = tool_state.tool_name.clone()
+                {
                     parts.push(LanguageModelStreamPart::ToolInputStart {
                         id: id.clone(),
-                        tool_name: tool_state
-                            .tool_name
-                            .clone()
-                            .unwrap_or_else(|| "tool".to_owned()),
+                        tool_name,
                         provider_executed: None,
                         dynamic: None,
                         title: None,
@@ -1132,18 +1097,21 @@ impl OpenAiResponsesStreamState {
                     tool_state.started = true;
                 }
                 let done_arguments_len = arguments.as_ref().map_or(0, String::len);
-                let skipped_done_arguments = done_arguments_len > 0 && tool_state.emitted_arguments;
+                let skipped_done_arguments =
+                    done_arguments_len > 0 && !tool_state.argument_buffer.is_empty();
                 if let Some(done_arguments) = arguments
                     && !done_arguments.is_empty()
-                    && !tool_state.emitted_arguments
+                    && tool_state.argument_buffer.is_empty()
                 {
                     tool_state.argument_buffer.push_str(&done_arguments);
-                    parts.push(LanguageModelStreamPart::ToolInputDelta {
-                        id: id.clone(),
-                        delta: done_arguments,
-                        provider_metadata: None,
-                    });
-                    tool_state.emitted_arguments = true;
+                    if tool_state.started {
+                        parts.push(LanguageModelStreamPart::ToolInputDelta {
+                            id: id.clone(),
+                            delta: done_arguments,
+                            provider_metadata: None,
+                        });
+                        tool_state.emitted_arguments = true;
+                    }
                 }
                 log_tool_arguments_done(
                     &id,
@@ -1153,13 +1121,25 @@ impl OpenAiResponsesStreamState {
                     done_arguments_len,
                     skipped_done_arguments,
                 );
-                parts.push(LanguageModelStreamPart::ToolInputEnd {
-                    id,
-                    provider_metadata: None,
-                });
+                if tool_state.started && !tool_state.ended {
+                    parts.push(LanguageModelStreamPart::ToolInputEnd {
+                        id,
+                        provider_metadata: None,
+                    });
+                    tool_state.ended = true;
+                } else {
+                    tool_state.pending_done = true;
+                    tracing::debug!(
+                        provider = OPENAI_PROVIDER_NAME,
+                        call_id = %id,
+                        arguments_len = tool_state.argument_buffer.len(),
+                        "buffered Responses tool call arguments until tool name is known"
+                    );
+                }
                 parts
             }
             OpenAiResponsesStreamEvent::ResponseCompleted { response } => {
+                let mut parts = self.apply_response_output_items(&response);
                 if let Some(usage) = response.usage {
                     self.usage = Some(usage_to_language_model(usage));
                 }
@@ -1174,9 +1154,11 @@ impl OpenAiResponsesStreamState {
                         .iter()
                         .any(|item| matches!(item, ResponsesOutputItem::FunctionCall { .. })),
                 ));
-                self.finish_parts()
+                parts.extend(self.finish_parts());
+                parts
             }
             OpenAiResponsesStreamEvent::ResponseIncomplete { response } => {
+                let mut parts = self.apply_response_output_items(&response);
                 if let Some(usage) = response.usage {
                     self.usage = Some(usage_to_language_model(usage));
                 }
@@ -1191,7 +1173,8 @@ impl OpenAiResponsesStreamState {
                         .iter()
                         .any(|item| matches!(item, ResponsesOutputItem::FunctionCall { .. })),
                 ));
-                self.finish_parts()
+                parts.extend(self.finish_parts());
+                parts
             }
             OpenAiResponsesStreamEvent::ResponseFailed { response } => {
                 self.finish_reason = Some(LanguageModelFinishReason::Error);
@@ -1226,6 +1209,94 @@ impl OpenAiResponsesStreamState {
         }
     }
 
+    fn apply_response_output_items(
+        &mut self,
+        response: &ResponsesResponse,
+    ) -> Vec<LanguageModelStreamPart> {
+        let mut parts = Vec::new();
+        for item in &response.output {
+            parts.extend(self.apply_output_item(item.clone(), true));
+        }
+        parts
+    }
+
+    fn apply_output_item(
+        &mut self,
+        item: ResponsesOutputItem,
+        item_done: bool,
+    ) -> Vec<LanguageModelStreamPart> {
+        let ResponsesOutputItem::FunctionCall {
+            id,
+            call_id,
+            name,
+            arguments,
+            ..
+        } = item
+        else {
+            return Vec::new();
+        };
+
+        if let Some(id) = id {
+            tracing::debug!(
+                provider = OPENAI_PROVIDER_NAME,
+                item_id = %id,
+                call_id = %call_id,
+                tool_name = %name,
+                arguments_len = arguments.len(),
+                item_done,
+                "Responses tool call item received"
+            );
+            self.tool_item_ids.insert(id, call_id.clone());
+        }
+
+        let tool_state = self.tool_inputs.entry(call_id.clone()).or_default();
+        tool_state.tool_name = Some(name.clone());
+        let mut parts = Vec::new();
+        if !tool_state.started {
+            parts.push(LanguageModelStreamPart::ToolInputStart {
+                id: call_id.clone(),
+                tool_name: name,
+                provider_executed: None,
+                dynamic: None,
+                title: None,
+                provider_metadata: None,
+            });
+            tool_state.started = true;
+        }
+
+        if !arguments.is_empty() && tool_state.argument_buffer.is_empty() {
+            tool_state.argument_buffer.push_str(&arguments);
+        }
+
+        if !tool_state.argument_buffer.is_empty() && !tool_state.emitted_arguments {
+            parts.push(LanguageModelStreamPart::ToolInputDelta {
+                id: call_id.clone(),
+                delta: tool_state.argument_buffer.clone(),
+                provider_metadata: None,
+            });
+            tool_state.emitted_arguments = true;
+        }
+
+        if (tool_state.pending_done || item_done) && !tool_state.ended {
+            log_tool_arguments_done(
+                &call_id,
+                tool_state.tool_name.as_deref(),
+                &tool_state.argument_buffer,
+                tool_state.emitted_arguments,
+                0,
+                false,
+            );
+            parts.push(LanguageModelStreamPart::ToolInputEnd {
+                id: call_id,
+                provider_metadata: None,
+            });
+            tool_state.pending_done = false;
+            tool_state.ended = true;
+        }
+
+        parts
+    }
+
     fn finish_parts(&mut self) -> Vec<LanguageModelStreamPart> {
         if self.finished {
             return Vec::new();
@@ -1246,13 +1317,15 @@ impl OpenAiResponsesStreamState {
         let mut tool_ids = self.tool_inputs.keys().cloned().collect::<Vec<_>>();
         tool_ids.sort();
         for id in tool_ids {
-            if let Some(state) = self.tool_inputs.get(&id)
+            if let Some(state) = self.tool_inputs.get_mut(&id)
                 && state.started
+                && !state.ended
             {
                 parts.push(LanguageModelStreamPart::ToolInputEnd {
-                    id,
+                    id: id.clone(),
                     provider_metadata: None,
                 });
+                state.ended = true;
             }
         }
 
@@ -2016,6 +2089,53 @@ mod tests {
         assert!(done_parts.iter().any(|part| matches!(
             part,
             LanguageModelStreamPart::ToolInputEnd { id, .. } if id == "call_tool_1"
+        )));
+    }
+
+    #[test]
+    fn sse_parser_buffers_arguments_until_tool_name_arrives() {
+        let mut parser = OpenAiResponsesSseParser::new(false);
+
+        let arguments_done = json!({
+            "type": "response.function_call_arguments.done",
+            "call_id": "call_tool_1",
+            "arguments": "{\"description\":\"Search files\",\"prompt\":\"Inspect code\",\"subagent_type\":\"Explore\"}"
+        });
+        let item_done = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "id": "fc_item_1",
+                "call_id": "call_tool_1",
+                "name": "Task",
+                "arguments": ""
+            }
+        });
+
+        let buffered_parts = parser.push_bytes(&sse_event(&arguments_done.to_string()));
+        assert!(
+            buffered_parts.is_empty(),
+            "unnamed tool arguments should not emit a fallback tool call: {buffered_parts:?}"
+        );
+
+        let named_parts = parser.push_bytes(&sse_event(&item_done.to_string()));
+        assert!(named_parts.iter().any(|part| matches!(
+            part,
+            LanguageModelStreamPart::ToolInputStart { id, tool_name, .. }
+                if id == "call_tool_1" && tool_name == "Task"
+        )));
+        assert!(named_parts.iter().any(|part| matches!(
+            part,
+            LanguageModelStreamPart::ToolInputDelta { id, delta, .. }
+                if id == "call_tool_1" && delta.contains("\"subagent_type\":\"Explore\"")
+        )));
+        assert!(named_parts.iter().any(|part| matches!(
+            part,
+            LanguageModelStreamPart::ToolInputEnd { id, .. } if id == "call_tool_1"
+        )));
+        assert!(named_parts.iter().all(|part| !matches!(
+            part,
+            LanguageModelStreamPart::ToolInputStart { tool_name, .. } if tool_name == "tool"
         )));
     }
 }
