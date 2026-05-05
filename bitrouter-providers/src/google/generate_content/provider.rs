@@ -29,11 +29,14 @@ use bitrouter_core::api::google::generate_content::types::GenerateContentRespons
 
 const GOOGLE_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 
+const GOOGLE_DEFAULT_API_VERSION: &str = "v1beta";
+
 #[derive(Debug, Clone)]
 pub struct GoogleConfig {
     pub api_key: String,
     pub base_url: String,
     pub default_headers: HeaderMap,
+    pub api_version: String,
 }
 
 impl GoogleConfig {
@@ -42,6 +45,7 @@ impl GoogleConfig {
             api_key: api_key.into(),
             base_url: GOOGLE_DEFAULT_BASE_URL.to_owned(),
             default_headers: HeaderMap::new(),
+            api_version: GOOGLE_DEFAULT_API_VERSION.to_owned(),
         }
     }
 }
@@ -199,8 +203,9 @@ impl GoogleGenerativeAiModel {
             "generateContent"
         };
         let endpoint = format!(
-            "{}/v1beta/models/{}:{}",
+            "{}/{}/models/{}:{}",
             self.config.base_url.trim_end_matches('/'),
+            self.config.api_version,
             self.model_id,
             action,
         );

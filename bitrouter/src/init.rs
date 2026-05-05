@@ -29,6 +29,8 @@ const PROVIDERS: &[(&str, &str)] = &[
     ("anthropic", "Anthropic"),
     ("google", "Google"),
     ("github-copilot", "GitHub Copilot"),
+    ("opencode-zen", "OpenCode Zen"),
+    ("opencode-go", "OpenCode Go"),
 ];
 
 pub fn run_init(paths: &RuntimePaths) -> Result<InitOutcome, Box<dyn std::error::Error>> {

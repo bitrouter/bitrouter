@@ -1,0 +1,172 @@
+api_protocol: openai
+api_base: https://opencode.ai/zen/go/v1
+env_prefix: OPENCODE_GO
+models:
+  deepseek-v4-flash:
+    name: DeepSeek V4 Flash
+    max_input_tokens: 1000000
+    max_output_tokens: 384000
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.0028
+      output_tokens:
+        text: 0.28
+  deepseek-v4-pro:
+    name: DeepSeek V4 Pro
+    max_input_tokens: 1000000
+    max_output_tokens: 384000
+    pricing:
+      input_tokens:
+        no_cache: 1.74
+        cache_read: 0.0145
+      output_tokens:
+        text: 3.48
+  glm-5:
+    name: GLM-5
+    max_input_tokens: 202752
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.2
+      output_tokens:
+        text: 3.2
+  glm-5.1:
+    name: GLM-5.1
+    max_input_tokens: 202752
+    max_output_tokens: 32768
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+  kimi-k2.5:
+    name: Kimi K2.5
+    max_input_tokens: 262144
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.1
+      output_tokens:
+        text: 3.0
+  kimi-k2.6:
+    name: Kimi K2.6
+    max_input_tokens: 262144
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.32
+        cache_read: 0.054
+      output_tokens:
+        text: 1.34
+  mimo-v2-omni:
+    name: MiMo V2 Omni
+    max_input_tokens: 262144
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - audio
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.08
+      output_tokens:
+        text: 2.0
+  mimo-v2-pro:
+    name: MiMo V2 Pro
+    max_input_tokens: 1048576
+    max_output_tokens: 128000
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.2
+      output_tokens:
+        text: 3.0
+  mimo-v2.5:
+    name: MiMo V2.5
+    max_input_tokens: 1000000
+    max_output_tokens: 128000
+    input_modalities:
+      - text
+      - image
+      - audio
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.08
+      output_tokens:
+        text: 2.0
+  mimo-v2.5-pro:
+    name: MiMo V2.5 Pro
+    max_input_tokens: 1048576
+    max_output_tokens: 128000
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.2
+      output_tokens:
+        text: 3.0
+  minimax-m2.5:
+    name: MiniMax M2.5
+    max_input_tokens: 204800
+    max_output_tokens: 65536
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.03
+      output_tokens:
+        text: 1.2
+  minimax-m2.7:
+    name: MiniMax M2.7
+    max_input_tokens: 204800
+    max_output_tokens: 131072
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 1.2
+  qwen3.5-plus:
+    name: Qwen3.5 Plus
+    max_input_tokens: 262144
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+        cache_read: 0.02
+        cache_write: 0.25
+      output_tokens:
+        text: 1.2
+  qwen3.6-plus:
+    name: Qwen3.6 Plus
+    max_input_tokens: 262144
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+        cache_read: 0.05
+        cache_write: 0.625
+      output_tokens:
+        text: 3.0

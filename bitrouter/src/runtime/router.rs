@@ -16,6 +16,15 @@ use super::copilot::{
     COPILOT_PROVIDER, anthropic_api_base, copilot_default_headers, is_anthropic_model,
     is_responses_model,
 };
+use super::go::{
+    GO_PROVIDER, anthropic_api_base as go_anthropic_api_base,
+    is_anthropic_model as go_is_anthropic_model,
+};
+use super::zen::{
+    ZEN_PROVIDER, anthropic_api_base as zen_anthropic_api_base,
+    google_api_base as zen_google_api_base, is_anthropic_model as zen_is_anthropic_model,
+    is_google_model as zen_is_google_model, is_responses_model as zen_is_responses_model,
+};
 
 #[cfg(feature = "mcp")]
 use bitrouter_providers::mcp::client::upstream::UpstreamConnection;
@@ -110,12 +119,17 @@ impl Router {
             .api_base
             .clone()
             .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
+        let api_version = provider
+            .api_version
+            .clone()
+            .unwrap_or_else(|| "v1beta".into());
 
         let default_headers = parse_headers(provider.default_headers.as_ref())?;
 
         Ok(GoogleConfig {
             api_key,
             base_url,
+            api_version,
             default_headers,
         })
     }
@@ -177,6 +191,93 @@ impl LanguageModelRouter for Router {
         } else {
             None
         };
+
+        // ── OpenCode Zen dispatch ────────────────────────────────────
+        // Zen serves models across multiple protocols from a single provider.
+        // Claude and select models use Anthropic, Gemini uses Google,
+        // GPT uses OpenAI Responses, and the rest use Chat Completions.
+        let is_zen = target.provider_name == ZEN_PROVIDER;
+
+        if is_zen && zen_is_anthropic_model(&target.service_id) {
+            let api_key = self.resolve_api_key(&target.provider_name, provider);
+            let base_url = zen_anthropic_api_base(provider.api_base.as_deref());
+            let mut default_headers = parse_headers(provider.default_headers.as_ref())?;
+            default_headers.insert(
+                reqwest::header::AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|e| {
+                    BitrouterError::invalid_request(
+                        None,
+                        format!("invalid Authorization header: {e}"),
+                        None,
+                    )
+                })?,
+            );
+            let config = AnthropicConfig {
+                api_key: String::new(),
+                base_url,
+                api_version: "2023-06-01".into(),
+                default_headers,
+            };
+            let model =
+                AnthropicMessagesModel::with_client(target.service_id, self.client.clone(), config);
+            return Ok(DynLanguageModel::new_box(model));
+        }
+
+        if is_zen && zen_is_google_model(&target.service_id) {
+            let api_key = self.resolve_api_key(&target.provider_name, provider);
+            let base_url = zen_google_api_base(provider.api_base.as_deref());
+            let api_version = provider.api_version.clone().unwrap_or_else(|| "v1".into());
+            let default_headers = parse_headers(provider.default_headers.as_ref())?;
+            let config = GoogleConfig {
+                api_key,
+                base_url,
+                api_version,
+                default_headers,
+            };
+            let model = GoogleGenerativeAiModel::with_client(
+                target.service_id,
+                self.client.clone(),
+                config,
+            );
+            return Ok(DynLanguageModel::new_box(model));
+        }
+
+        if is_zen && zen_is_responses_model(&target.service_id) {
+            let config = self.build_openai_config(&target.provider_name, provider)?;
+            let model =
+                OpenAiResponsesModel::with_client(target.service_id, self.client.clone(), config);
+            return Ok(DynLanguageModel::new_box(model));
+        }
+
+        // ── OpenCode Go dispatch ─────────────────────────────────────
+        // Go serves most models via Chat Completions but MiniMax M2.7 and
+        // Qwen3.5/3.6 Plus use the Anthropic Messages API.
+        let is_go = target.provider_name == GO_PROVIDER;
+
+        if is_go && go_is_anthropic_model(&target.service_id) {
+            let api_key = self.resolve_api_key(&target.provider_name, provider);
+            let base_url = go_anthropic_api_base(provider.api_base.as_deref());
+            let mut default_headers = parse_headers(provider.default_headers.as_ref())?;
+            default_headers.insert(
+                reqwest::header::AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|e| {
+                    BitrouterError::invalid_request(
+                        None,
+                        format!("invalid Authorization header: {e}"),
+                        None,
+                    )
+                })?,
+            );
+            let config = AnthropicConfig {
+                api_key: String::new(),
+                base_url,
+                api_version: "2023-06-01".into(),
+                default_headers,
+            };
+            let model =
+                AnthropicMessagesModel::with_client(target.service_id, self.client.clone(), config);
+            return Ok(DynLanguageModel::new_box(model));
+        }
 
         match target.api_protocol {
             ApiProtocol::Openai => {
