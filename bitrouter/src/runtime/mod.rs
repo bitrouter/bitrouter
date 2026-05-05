@@ -6,6 +6,7 @@ pub mod copilot;
 #[cfg(feature = "cli")]
 pub mod daemon;
 pub mod error;
+pub mod go;
 pub mod http_client;
 pub mod mcp_client;
 pub mod migration;
@@ -15,6 +16,7 @@ pub mod paths;
 pub mod payment;
 pub mod router;
 pub mod server;
+pub mod zen;
 
 pub use app::{AppRuntime, resolve_database_url};
 pub use migration::migrate;

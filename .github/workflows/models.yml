@@ -54,6 +54,8 @@ jobs:
             [moonshot]=moonshotai
             [qwen]=alibaba
             [github-copilot]=github-copilot
+            [opencode-zen]=opencode
+            [opencode-go]=opencode-go
           )
 
           # jq filter that converts a models.dev provider's models into
@@ -166,6 +168,61 @@ jobs:
 
           echo ""
           echo "Updated $updated provider file(s)"
+
+      - name: Verify protocol dispatch coverage
+        run: |
+          set -euo pipefail
+
+          API="/tmp/models-dev-api.json"
+
+          # Models that need Anthropic dispatch in zen.rs but don't start
+          # with "claude-". These are identified by provider.npm == "@ai-sdk/anthropic".
+          echo "Zen models requiring Anthropic dispatch (provider.npm == @ai-sdk/anthropic):"
+          jq -r '.opencode.models | to_entries[] | select(.value.provider?.npm == "@ai-sdk/anthropic") | .key' "$API" | sort
+
+          echo ""
+          echo "Zen models requiring Google dispatch (provider.npm == @ai-sdk/google):"
+          jq -r '.opencode.models | to_entries[] | select(.value.provider?.npm == "@ai-sdk/google") | .key' "$API" | sort
+
+          echo ""
+          echo "Zen models requiring OpenAI Responses dispatch (provider.npm == @ai-sdk/openai):"
+          jq -r '.opencode.models | to_entries[] | select(.value.provider?.npm == "@ai-sdk/openai") | .key' "$API" | sort
+
+          echo ""
+          echo "Go models requiring Anthropic dispatch (provider.npm == @ai-sdk/anthropic):"
+          jq -r '."opencode-go".models | to_entries[] | select(.value.provider?.npm == "@ai-sdk/anthropic") | .key' "$API" | sort
+
+          echo ""
+          echo "Verify these are covered in bitrouter/src/runtime/zen.rs and go.rs"
+          echo "Non-claude Anthropic models must be listed in ZEN_ANTHROPIC_MODELS"
+          echo "Go Anthropic models must be listed in is_anthropic_model()"
+
+          # Extract non-claude Anthropic models and check they're in the Rust source
+          non_claude_anthropic=$(jq -r '.opencode.models | to_entries[] | select(.value.provider?.npm == "@ai-sdk/anthropic") | select(.key | startswith("claude-") | not) | .key' "$API")
+          go_anthropic=$(jq -r '."opencode-go".models | to_entries[] | select(.value.provider?.npm == "@ai-sdk/anthropic") | .key' "$API")
+
+          missing=0
+          for model in $non_claude_anthropic; do
+            if ! grep -q "\"$model\"" bitrouter/src/runtime/zen.rs; then
+              echo "❌ Zen model '$model' needs Anthropic dispatch but is not in zen.rs ZEN_ANTHROPIC_MODELS"
+              missing=$((missing + 1))
+            fi
+          done
+
+          for model in $go_anthropic; do
+            if ! grep -q "\"$model\"" bitrouter/src/runtime/go.rs; then
+              echo "❌ Go model '$model' needs Anthropic dispatch but is not in go.rs is_anthropic_model()"
+              missing=$((missing + 1))
+            fi
+          done
+
+          if [ "$missing" -gt 0 ]; then
+            echo ""
+            echo "⚠ $missing model(s) missing from dispatch modules — update zen.rs/go.rs before merging"
+            exit 1
+          fi
+
+          echo "✓ All models with non-default protocols are covered by dispatch modules"
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7

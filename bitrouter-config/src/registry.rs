@@ -38,6 +38,14 @@ const PROVIDER_DEFS: &[(&str, &str)] = &[
         "github-copilot",
         include_str!("../providers/models/github-copilot.yaml"),
     ),
+    (
+        "opencode-zen",
+        include_str!("../providers/models/opencode-zen.yaml"),
+    ),
+    (
+        "opencode-go",
+        include_str!("../providers/models/opencode-go.yaml"),
+    ),
 ];
 
 /// Raw YAML shape for built-in provider files.
@@ -46,6 +54,8 @@ struct ProviderDef {
     api_protocol: ApiProtocol,
     api_base: String,
     env_prefix: String,
+    #[serde(default)]
+    api_version: Option<String>,
     #[serde(default)]
     auth: Option<AuthConfig>,
     #[serde(default)]
@@ -79,6 +89,7 @@ pub fn builtin_provider_defs() -> HashMap<String, BuiltinProvider> {
                         api_protocol: Some(def.api_protocol),
                         api_base: Some(def.api_base),
                         env_prefix: Some(def.env_prefix),
+                        api_version: def.api_version,
                         auth: def.auth,
                         models: if def.models.is_empty() {
                             None
@@ -272,6 +283,9 @@ pub fn merge_provider(base: &mut ProviderConfig, overlay: ProviderConfig) {
     if overlay.models.is_some() {
         base.models = overlay.models;
     }
+    if overlay.api_version.is_some() {
+        base.api_version = overlay.api_version;
+    }
 }
 
 /// Resolves all provider derivation chains and applies `env_prefix` overrides.
@@ -354,6 +368,9 @@ fn resolve_derives(
         }
         if child.models.is_none() {
             child.models = parent.models;
+        }
+        if child.api_version.is_none() {
+            child.api_version = parent.api_version;
         }
         child.derives = None;
     }

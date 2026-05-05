@@ -436,6 +436,13 @@ pub struct ProviderConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_headers: Option<HashMap<String, String>>,
 
+    /// API version segment inserted into the URL path.
+    ///
+    /// Used by the Google Generative AI adapter to select between `v1beta`
+    /// and `v1` URL paths. Ignored by other adapters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<String>,
+
     /// Per-model metadata and pricing catalog.
     ///
     /// Keys are upstream model IDs (e.g. `"gpt-4o"`). Values carry optional
