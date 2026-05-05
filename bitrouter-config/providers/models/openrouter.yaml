@@ -1777,6 +1777,18 @@ models:
         cache_read: 0.2
       output_tokens:
         text: 6.0
+  x-ai/grok-4.3:
+    max_input_tokens: 1000000
+    max_output_tokens: 1000000
+    input_modalities:
+      - text
+      - image
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.2
+      output_tokens:
+        text: 2.5
   x-ai/grok-code-fast-1:
     max_input_tokens: 256000
     max_output_tokens: 10000
