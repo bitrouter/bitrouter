@@ -29,6 +29,7 @@ pub struct MeteredSseContext {
     pub backend_key: String,
     pub channel_id: String,
     pub tick_cost: u128,
+    pub skip_deduct: bool,
     /// Optional stable correlation id for the request this stream serves.
     pub request_id: Option<String>,
 }
@@ -44,7 +45,7 @@ impl MeteredSseContext {
         &self,
         tx: &mpsc::Sender<Result<warp::sse::Event, std::convert::Infallible>>,
     ) -> bool {
-        if self.tick_cost == 0 {
+        if self.tick_cost == 0 || self.skip_deduct {
             return true;
         }
 

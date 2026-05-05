@@ -250,6 +250,7 @@ where
             .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
     }
 
+    let byok_used = target.api_key_override.is_some();
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();
 
@@ -262,7 +263,17 @@ where
     let options = convert::to_call_options(request);
     let start = Instant::now();
     let request_id = uuid::Uuid::new_v4().to_string();
-    let metadata = metadata_hook(&caller, &origin);
+    let mut metadata = metadata_hook(&caller, &origin);
+    if byok_used {
+        match metadata {
+            serde_json::Value::Object(ref mut map) => {
+                map.insert("byok_used".to_string(), serde_json::Value::Bool(true));
+            }
+            _ => {
+                metadata = serde_json::json!({ "byok_used": true });
+            }
+        }
+    }
 
     if is_stream {
         let stream_result = model
@@ -284,7 +295,8 @@ where
             payment_gate: payment_gate.clone(),
             backend_key: mpp_ctx.backend_key.clone(),
             channel_id: mpp_ctx.channel_id.clone(),
-            tick_cost,
+            tick_cost: if byok_used { 0 } else { tick_cost },
+            skip_deduct: byok_used,
             request_id: Some(request_id.clone()),
         };
 
@@ -366,7 +378,8 @@ where
                 let cost_usd = crate::mpp::calculate_usage_cost(&result.usage, &pricing);
                 let micro_units = crate::mpp::cost_to_micro_units(cost_usd);
 
-                if micro_units > 0
+                if !byok_used
+                    && micro_units > 0
                     && let Err(e) = payment_gate
                         .deduct(
                             &mpp_ctx.backend_key,
