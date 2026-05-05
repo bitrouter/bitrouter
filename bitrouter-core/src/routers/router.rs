@@ -60,6 +60,46 @@ pub trait ToolRouter {
     ) -> impl Future<Output = Result<Box<DynToolProvider<'static>>>> + Send;
 }
 
+/// A hook that mutates a routing chain after routing but before model
+/// instantiation, given the request's [`CallerContext`].
+///
+/// Implementations can inject per-caller credentials into one or more targets
+/// or append/remove fallback targets before the API handler starts attempting
+/// the chain.
+#[dynosaur(pub DynChainOverlay = dyn(box) ChainOverlay)]
+pub trait ChainOverlay: Send + Sync {
+    /// Inspects `caller` and optionally mutates `chain`.
+    fn apply(
+        &self,
+        chain: &mut Vec<RoutingTarget>,
+        caller: &CallerContext,
+    ) -> impl Future<Output = Result<()>> + Send;
+}
+
+/// Adapter that applies an existing [`TargetOverlay`] to the first target in a
+/// routing chain.
+pub struct SingleTarget<T> {
+    overlay: T,
+}
+
+impl<T> SingleTarget<T> {
+    pub fn new(overlay: T) -> Self {
+        Self { overlay }
+    }
+}
+
+impl<T> ChainOverlay for SingleTarget<T>
+where
+    T: TargetOverlay,
+{
+    async fn apply(&self, chain: &mut Vec<RoutingTarget>, caller: &CallerContext) -> Result<()> {
+        if let Some(target) = chain.first_mut() {
+            self.overlay.apply(target, caller).await?;
+        }
+        Ok(())
+    }
+}
+
 /// A hook that mutates a [`RoutingTarget`] after routing but before model
 /// instantiation, given the request's [`CallerContext`].
 ///
@@ -71,6 +111,9 @@ pub trait ToolRouter {
 /// Implementations should be cheap on the no-op path (e.g. anonymous caller,
 /// or caller with no overlay configured), since the hook runs on every
 /// request that the host filter receives.
+///
+/// Deprecated: use [`ChainOverlay`]. This trait is retained for one release to
+/// support migration and will be removed in bitrouter-core 0.31.
 #[dynosaur(pub DynTargetOverlay = dyn(box) TargetOverlay)]
 pub trait TargetOverlay: Send + Sync {
     /// Inspects `caller` and optionally mutates `target`.
@@ -136,5 +179,37 @@ mod tests {
             target.api_key_override.as_deref(),
             Some("sk-byok-from-overlay")
         );
+    }
+
+    #[tokio::test]
+    async fn single_target_adapter_mutates_first_chain_target() {
+        let overlay = SingleTarget::new(StaticKeyOverlay {
+            key: "sk-byok-from-chain-overlay".to_owned(),
+        });
+        let mut chain = vec![
+            RoutingTarget {
+                provider_name: "openai".to_owned(),
+                service_id: "gpt-4o".to_owned(),
+                api_protocol: ApiProtocol::Openai,
+                api_key_override: None,
+                api_base_override: None,
+            },
+            RoutingTarget {
+                provider_name: "anthropic".to_owned(),
+                service_id: "claude-sonnet-4".to_owned(),
+                api_protocol: ApiProtocol::Anthropic,
+                api_key_override: None,
+                api_base_override: None,
+            },
+        ];
+        let caller = CallerContext::default();
+
+        assert!(overlay.apply(&mut chain, &caller).await.is_ok());
+
+        assert_eq!(
+            chain[0].api_key_override.as_deref(),
+            Some("sk-byok-from-chain-overlay")
+        );
+        assert!(chain[1].api_key_override.is_none());
     }
 }

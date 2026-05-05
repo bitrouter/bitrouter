@@ -28,6 +28,7 @@
 //! it caps the *entire* request duration including the streamed body and
 //! will truncate long responses.
 
+pub mod fallback;
 pub mod router;
 
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]

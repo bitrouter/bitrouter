@@ -16,6 +16,7 @@ mod observe_ctx {
     use std::time::Instant;
 
     use bitrouter_core::observe::{CallerContext, ObserveCallback};
+    use bitrouter_core::routers::routing_table::RoutingTarget;
 
     /// Bundles observation-related context passed through streaming handlers.
     ///
@@ -32,6 +33,8 @@ mod observe_ctx {
         pub request_id: String,
         /// Opaque per-request metadata (see [`bitrouter_core::observe::MetadataHook`]).
         pub metadata: serde_json::Value,
+        /// Target that returned the committed stream.
+        pub executed_target: Option<RoutingTarget>,
     }
 }
 

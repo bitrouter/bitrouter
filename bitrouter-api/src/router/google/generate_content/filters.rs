@@ -126,7 +126,7 @@ where
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
     let model = router
-        .route_model(target)
+        .route_model(target.clone())
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -252,7 +252,7 @@ where
     let target_model_id = target.service_id.clone();
 
     let model = router
-        .route_model(target)
+        .route_model(target.clone())
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -329,6 +329,7 @@ where
                     observer
                         .on_request_success(RequestSuccessEvent {
                             ctx,
+                            executed_target: Some(target.clone()),
                             usage,
                             streamed: true,
                             generation_time_ms: None,
@@ -337,7 +338,11 @@ where
                 }
                 Err(error) => {
                     observer
-                        .on_request_failure(RequestFailureEvent { ctx, error })
+                        .on_request_failure(RequestFailureEvent {
+                            ctx,
+                            executed_target: Some(target.clone()),
+                            error,
+                        })
                         .await;
                 }
             }
@@ -391,6 +396,7 @@ where
                         request_id,
                         metadata: metadata.clone(),
                     },
+                    executed_target: Some(target.clone()),
                     usage: result.usage.clone(),
                     streamed: false,
                     generation_time_ms: None,
@@ -421,6 +427,7 @@ where
                         request_id,
                         metadata,
                     },
+                    executed_target: Some(target.clone()),
                     error: e.clone(),
                 };
                 tokio::spawn(async move { observer.on_request_failure(event).await });
@@ -464,7 +471,7 @@ where
     let target_model_id = target.service_id.clone();
 
     let model = router
-        .route_model(target)
+        .route_model(target.clone())
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -486,6 +493,7 @@ where
                 start,
                 request_id: uuid::Uuid::new_v4().to_string(),
                 metadata: serde_json::Value::Null,
+                executed_target: Some(target.clone()),
             },
         )
         .await
@@ -503,6 +511,7 @@ where
                         request_id: uuid::Uuid::new_v4().to_string(),
                         metadata: serde_json::Value::Null,
                     },
+                    executed_target: Some(target.clone()),
                     usage: result.usage.clone(),
                     streamed: false,
                     generation_time_ms: None,
@@ -522,6 +531,7 @@ where
                         request_id: uuid::Uuid::new_v4().to_string(),
                         metadata: serde_json::Value::Null,
                     },
+                    executed_target: Some(target.clone()),
                     error: e.clone(),
                 };
                 tokio::spawn(async move { observer.on_request_failure(event).await });
@@ -593,6 +603,7 @@ async fn handle_stream_with_observe(
         start,
         request_id,
         metadata,
+        executed_target,
     } = ctx;
 
     tokio::spawn(async move {
@@ -631,6 +642,7 @@ async fn handle_stream_with_observe(
                 observer
                     .on_request_success(RequestSuccessEvent {
                         ctx,
+                        executed_target: executed_target.clone(),
                         usage,
                         streamed: true,
                         generation_time_ms: None,
@@ -639,7 +651,11 @@ async fn handle_stream_with_observe(
             }
             Err(error) => {
                 observer
-                    .on_request_failure(RequestFailureEvent { ctx, error })
+                    .on_request_failure(RequestFailureEvent {
+                        ctx,
+                        executed_target,
+                        error,
+                    })
                     .await;
             }
         }

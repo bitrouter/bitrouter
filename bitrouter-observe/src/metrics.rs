@@ -474,6 +474,7 @@ mod tests {
         collector
             .on_request_success(RequestSuccessEvent {
                 ctx: test_ctx("fast", "openai", "gpt-4o-mini"),
+                executed_target: None,
                 usage: test_usage(100, 50),
                 streamed: false,
                 generation_time_ms: None,
@@ -511,6 +512,7 @@ mod tests {
                     request_id: String::new(),
                     metadata: serde_json::Value::Null,
                 },
+                executed_target: None,
                 error: bitrouter_core::errors::BitrouterError::transport(None, "timeout"),
             })
             .await;
@@ -530,6 +532,7 @@ mod tests {
             collector
                 .on_request_success(RequestSuccessEvent {
                     ctx: test_ctx("fast", "openai", "gpt-4o-mini"),
+                    executed_target: None,
                     usage: test_usage(50, 25),
                     streamed: false,
                     generation_time_ms: None,
@@ -540,6 +543,7 @@ mod tests {
             collector
                 .on_request_success(RequestSuccessEvent {
                     ctx: test_ctx("fast", "anthropic", "claude-haiku"),
+                    executed_target: None,
                     usage: test_usage(60, 30),
                     streamed: false,
                     generation_time_ms: None,

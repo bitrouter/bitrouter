@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bitrouter_core::{
-    errors::Result,
+    errors::{BitrouterError, ProviderErrorContext, Result},
     models::language::{
         call_options::LanguageModelCallOptions,
         content::LanguageModelContent,
@@ -21,6 +21,7 @@ use bitrouter_core::{
 };
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use warp::Filter;
 
@@ -58,10 +59,48 @@ impl RoutingTable for MockTable {
     }
 }
 
+struct ChainTable;
+impl RoutingTable for ChainTable {
+    async fn route(&self, incoming: &str, _context: &RouteContext) -> Result<RoutingTarget> {
+        Ok(target("primary", incoming))
+    }
+
+    async fn route_chain(
+        &self,
+        incoming: &str,
+        _context: &RouteContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        Ok(vec![
+            target("primary", incoming),
+            target("fallback", incoming),
+        ])
+    }
+}
+
+fn target(provider: &str, service_id: &str) -> RoutingTarget {
+    RoutingTarget {
+        provider_name: provider.to_owned(),
+        service_id: service_id.to_owned(),
+        api_protocol: ApiProtocol::Openai,
+        api_key_override: None,
+        api_base_override: None,
+    }
+}
+
 struct MockRouter;
 impl LanguageModelRouter for MockRouter {
     async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
         Ok(DynLanguageModel::new_box(MockModel {
+            model_id: target.service_id,
+        }))
+    }
+}
+
+struct FailoverRouter;
+impl LanguageModelRouter for FailoverRouter {
+    async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+        Ok(DynLanguageModel::new_box(FailoverModel {
+            provider_name: target.provider_name,
             model_id: target.service_id,
         }))
     }
@@ -88,6 +127,95 @@ impl LanguageModelRouter for MockToolStreamRouter {
 #[derive(Clone)]
 struct MockModel {
     model_id: String,
+}
+
+#[derive(Clone)]
+struct FailoverModel {
+    provider_name: String,
+    model_id: String,
+}
+
+impl LanguageModel for FailoverModel {
+    fn provider_name(&self) -> &str {
+        &self.provider_name
+    }
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+    async fn supported_urls(&self) -> HashMap<String, Regex> {
+        HashMap::new()
+    }
+    async fn generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult> {
+        if self.provider_name == "primary" {
+            return Err(BitrouterError::provider_error(
+                "primary",
+                "temporary upstream failure",
+                ProviderErrorContext {
+                    status_code: Some(500),
+                    error_type: None,
+                    code: None,
+                    param: None,
+                    request_id: None,
+                    body: None,
+                },
+            ));
+        }
+        Ok(LanguageModelGenerateResult {
+            content: vec![LanguageModelContent::Text {
+                text: "Hello from fallback!".to_owned(),
+                provider_metadata: None,
+            }],
+            finish_reason: LanguageModelFinishReason::Stop,
+            usage: mock_usage(),
+            provider_metadata: None,
+            request: None,
+            response_metadata: None,
+            warnings: None,
+        })
+    }
+    async fn stream(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        if self.provider_name == "primary" {
+            return Err(BitrouterError::provider_error(
+                "primary",
+                "temporary upstream failure",
+                ProviderErrorContext {
+                    status_code: Some(500),
+                    error_type: None,
+                    code: None,
+                    param: None,
+                    request_id: None,
+                    body: None,
+                },
+            ));
+        }
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let _ = tx
+            .send(LanguageModelStreamPart::TextDelta {
+                id: "0".to_owned(),
+                delta: "fallback".to_owned(),
+                provider_metadata: None,
+            })
+            .await;
+        let _ = tx
+            .send(LanguageModelStreamPart::Finish {
+                usage: mock_usage(),
+                finish_reason: LanguageModelFinishReason::Stop,
+                provider_metadata: None,
+            })
+            .await;
+
+        Ok(LanguageModelStreamResult {
+            stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            request: None,
+            response: None,
+        })
+    }
 }
 
 impl LanguageModel for MockModel {
@@ -295,6 +423,176 @@ impl LanguageModel for MockToolStreamModel {
     }
 }
 
+struct AllFailChainTable;
+impl RoutingTable for AllFailChainTable {
+    async fn route(&self, incoming: &str, _context: &RouteContext) -> Result<RoutingTarget> {
+        Ok(target("primary", incoming))
+    }
+
+    async fn route_chain(
+        &self,
+        incoming: &str,
+        _context: &RouteContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        Ok(vec![
+            target("primary", incoming),
+            target("fallback", incoming),
+        ])
+    }
+}
+
+struct AlwaysRetryableErrorModel;
+
+impl LanguageModel for AlwaysRetryableErrorModel {
+    fn provider_name(&self) -> &str {
+        "always-fail"
+    }
+    fn model_id(&self) -> &str {
+        "always-fail-model"
+    }
+    async fn supported_urls(&self) -> HashMap<String, Regex> {
+        HashMap::new()
+    }
+    async fn generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult> {
+        Err(BitrouterError::provider_error(
+            "always-fail",
+            "upstream unavailable",
+            ProviderErrorContext {
+                status_code: Some(500),
+                error_type: None,
+                code: None,
+                param: None,
+                request_id: None,
+                body: None,
+            },
+        ))
+    }
+    async fn stream(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        Err(BitrouterError::provider_error(
+            "always-fail",
+            "upstream unavailable",
+            ProviderErrorContext {
+                status_code: Some(500),
+                error_type: None,
+                code: None,
+                param: None,
+                request_id: None,
+                body: None,
+            },
+        ))
+    }
+}
+
+struct AlwaysRetryableRouter;
+impl LanguageModelRouter for AlwaysRetryableRouter {
+    async fn route_model(&self, _target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+        Ok(DynLanguageModel::new_box(AlwaysRetryableErrorModel))
+    }
+}
+
+struct AuthFailChainTable;
+impl RoutingTable for AuthFailChainTable {
+    async fn route(&self, incoming: &str, _context: &RouteContext) -> Result<RoutingTarget> {
+        Ok(target("denied", incoming))
+    }
+
+    async fn route_chain(
+        &self,
+        incoming: &str,
+        _context: &RouteContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        Ok(vec![
+            target("denied", incoming),
+            target("fallback", incoming),
+        ])
+    }
+}
+
+#[derive(Clone)]
+struct AuthFailThenSucceedModel {
+    provider_name: String,
+}
+
+impl LanguageModel for AuthFailThenSucceedModel {
+    fn provider_name(&self) -> &str {
+        &self.provider_name
+    }
+    fn model_id(&self) -> &str {
+        "test-model"
+    }
+    async fn supported_urls(&self) -> HashMap<String, Regex> {
+        HashMap::new()
+    }
+    async fn generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult> {
+        if self.provider_name == "denied" {
+            return Err(BitrouterError::AccessDenied {
+                message: "invalid API key".to_owned(),
+            });
+        }
+        Ok(LanguageModelGenerateResult {
+            content: vec![LanguageModelContent::Text {
+                text: "Hello from fallback!".to_owned(),
+                provider_metadata: None,
+            }],
+            finish_reason: LanguageModelFinishReason::Stop,
+            usage: mock_usage(),
+            provider_metadata: None,
+            request: None,
+            response_metadata: None,
+            warnings: None,
+        })
+    }
+    async fn stream(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult> {
+        if self.provider_name == "denied" {
+            return Err(BitrouterError::AccessDenied {
+                message: "invalid API key".to_owned(),
+            });
+        }
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let _ = tx
+            .send(LanguageModelStreamPart::TextDelta {
+                id: "0".to_owned(),
+                delta: "fallback".to_owned(),
+                provider_metadata: None,
+            })
+            .await;
+        let _ = tx
+            .send(LanguageModelStreamPart::Finish {
+                usage: mock_usage(),
+                finish_reason: LanguageModelFinishReason::Stop,
+                provider_metadata: None,
+            })
+            .await;
+
+        Ok(LanguageModelStreamResult {
+            stream: Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            request: None,
+            response: None,
+        })
+    }
+}
+
+struct AuthFailRouter;
+impl LanguageModelRouter for AuthFailRouter {
+    async fn route_model(&self, target: RoutingTarget) -> Result<Box<DynLanguageModel<'static>>> {
+        Ok(DynLanguageModel::new_box(AuthFailThenSucceedModel {
+            provider_name: target.provider_name,
+        }))
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -327,6 +625,60 @@ async fn chat_completions_generate() {
     );
     assert_eq!(json["choices"][0]["finish_reason"], "stop");
     assert!(json["usage"]["prompt_tokens"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn chat_completions_falls_back_on_retryable_generate_error() {
+    let table = Arc::new(ChainTable);
+    let router = Arc::new(FailoverRouter);
+    let filter = chat_completions_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    let json: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+    assert_eq!(
+        json["choices"][0]["message"]["content"],
+        "Hello from fallback!"
+    );
+}
+
+#[tokio::test]
+async fn chat_completions_falls_back_on_stream_init_error() {
+    let table = Arc::new(ChainTable);
+    let router = Arc::new(FailoverRouter);
+    let filter = chat_completions_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ],
+        "stream": true
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+    let body_str = String::from_utf8_lossy(res.body());
+    assert!(body_str.contains("fallback"));
 }
 
 #[tokio::test]
@@ -622,6 +974,146 @@ impl ObserveCallback for MockObserver {
     }
 }
 
+struct CapturingObserver {
+    success_events: Mutex<Vec<RequestSuccessEvent>>,
+    failure_events: Mutex<Vec<RequestFailureEvent>>,
+}
+
+impl CapturingObserver {
+    fn new() -> Self {
+        Self {
+            success_events: Mutex::new(Vec::new()),
+            failure_events: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl ObserveCallback for CapturingObserver {
+    fn on_request_success(
+        &self,
+        event: RequestSuccessEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.success_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(event);
+        Box::pin(async {})
+    }
+
+    fn on_request_failure(
+        &self,
+        event: RequestFailureEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        self.failure_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(event);
+        Box::pin(async {})
+    }
+}
+
+#[tokio::test]
+async fn chat_completions_all_chain_targets_fail_generate() {
+    let table = Arc::new(AllFailChainTable);
+    let router = Arc::new(AlwaysRetryableRouter);
+    let filter = chat_completions_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert!(!res.status().is_success());
+    let body_str = String::from_utf8_lossy(res.body());
+    assert!(body_str.contains("upstream unavailable"));
+}
+
+#[tokio::test]
+async fn chat_completions_all_chain_targets_fail_stream() {
+    let table = Arc::new(AllFailChainTable);
+    let router = Arc::new(AlwaysRetryableRouter);
+    let filter = chat_completions_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ],
+        "stream": true
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert!(!res.status().is_success());
+    let body_str = String::from_utf8_lossy(res.body());
+    assert!(body_str.contains("upstream unavailable"));
+}
+
+#[tokio::test]
+async fn chat_completions_non_retryable_error_stops_immediately_generate() {
+    let table = Arc::new(AuthFailChainTable);
+    let router = Arc::new(AuthFailRouter);
+    let filter = chat_completions_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert!(!res.status().is_success());
+    let body_str = String::from_utf8_lossy(res.body());
+    assert!(body_str.contains("invalid API key"));
+}
+
+#[tokio::test]
+async fn chat_completions_non_retryable_error_stops_immediately_stream() {
+    let table = Arc::new(AuthFailChainTable);
+    let router = Arc::new(AuthFailRouter);
+    let filter = chat_completions_filter(table, router);
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ],
+        "stream": true
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert!(!res.status().is_success());
+    let body_str = String::from_utf8_lossy(res.body());
+    assert!(body_str.contains("invalid API key"));
+}
+
 // ── Observe tests ───────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -687,4 +1179,85 @@ async fn chat_completions_observe_streaming_success() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert_eq!(observer.success_count.load(Ordering::SeqCst), 1);
     assert_eq!(observer.failure_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn chat_completions_observe_fallback_records_executed_target() {
+    let table = Arc::new(ChainTable);
+    let router = Arc::new(FailoverRouter);
+    let observer = Arc::new(CapturingObserver::new());
+    let filter = chat_completions_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(CallerContext::default()) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hello"}]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let events = observer
+        .success_events
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    assert_eq!(events.len(), 1);
+    let executed = events[0]
+        .executed_target
+        .as_ref()
+        .expect("executed_target should be set");
+    assert_eq!(executed.provider_name, "fallback");
+    assert_eq!(executed.service_id, "test-model");
+}
+
+#[tokio::test]
+async fn chat_completions_observe_all_fail_records_last_target() {
+    let table = Arc::new(AllFailChainTable);
+    let router = Arc::new(AlwaysRetryableRouter);
+    let observer = Arc::new(CapturingObserver::new());
+    let filter = chat_completions_filter_with_observe(
+        table,
+        router,
+        observer.clone(),
+        warp::any().and_then(|| async { Ok::<_, warp::Rejection>(CallerContext::default()) }),
+    );
+
+    let body = serde_json::json!({
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hello"}]
+    });
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/v1/chat/completions")
+        .json(&body)
+        .reply(&filter)
+        .await;
+
+    assert_eq!(res.status(), 500);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let events = observer
+        .failure_events
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    assert_eq!(events.len(), 1);
+    let executed = events[0]
+        .executed_target
+        .as_ref()
+        .expect("executed_target should be set");
+    assert_eq!(executed.provider_name, "fallback");
 }

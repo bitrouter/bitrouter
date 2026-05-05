@@ -18,6 +18,7 @@ use bitrouter_core::{
     routers::{router::LanguageModelRouter, routing_table::RoutingTable},
 };
 
+use crate::fallback::{FallbackDecision, FallbackPolicy, default_fallback_policy};
 use crate::router::context::openai_chat;
 use warp::Filter;
 
@@ -38,11 +39,26 @@ where
     T: RoutingTable + Send + Sync + 'static,
     R: LanguageModelRouter + Send + Sync + 'static,
 {
+    chat_completions_filter_with_fallback_policy(table, router, default_fallback_policy())
+}
+
+/// Creates a warp filter for the `/v1/chat/completions` endpoint with a custom
+/// fallback policy.
+pub fn chat_completions_filter_with_fallback_policy<T, R>(
+    table: Arc<T>,
+    router: Arc<R>,
+    fallback_policy: Arc<dyn FallbackPolicy>,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: RoutingTable + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+{
     warp::path!("v1" / "chat" / "completions")
         .and(warp::post())
         .and(crate::body::json::<ChatCompletionRequest>())
         .and(warp::any().map(move || table.clone()))
         .and(warp::any().map(move || router.clone()))
+        .and(warp::any().map(move || fallback_policy.clone()))
         .and_then(handle_chat_completion)
 }
 
@@ -86,6 +102,29 @@ where
     R: LanguageModelRouter + Send + Sync + 'static,
     A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
+    chat_completions_filter_with_observe_and_fallback_policy(
+        table,
+        router,
+        observer,
+        account_filter,
+        default_fallback_policy(),
+    )
+}
+
+/// Creates a warp filter for `/v1/chat/completions` with observation and a
+/// custom fallback policy.
+pub fn chat_completions_filter_with_observe_and_fallback_policy<T, R, A>(
+    table: Arc<T>,
+    router: Arc<R>,
+    observer: Arc<dyn ObserveCallback>,
+    account_filter: A,
+    fallback_policy: Arc<dyn FallbackPolicy>,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+where
+    T: RoutingTable + Send + Sync + 'static,
+    R: LanguageModelRouter + Send + Sync + 'static,
+    A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+{
     warp::path!("v1" / "chat" / "completions")
         .and(warp::post())
         .and(crate::body::json::<ChatCompletionRequest>())
@@ -93,6 +132,7 @@ where
         .and(warp::any().map(move || router.clone()))
         .and(warp::any().map(move || observer.clone()))
         .and(account_filter)
+        .and(warp::any().map(move || fallback_policy.clone()))
         .and_then(handle_chat_completion_with_observe)
 }
 
@@ -100,6 +140,7 @@ async fn handle_chat_completion<T, R>(
     request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
+    fallback_policy: Arc<dyn FallbackPolicy>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
 where
     T: RoutingTable + Send + Sync + 'static,
@@ -109,29 +150,50 @@ where
     let incoming_model = convert::extract_model_name(&request).to_owned();
     let route_ctx = openai_chat::extract(&request);
 
-    let target = table
-        .route(&incoming_model, &route_ctx)
+    let chain = table
+        .route_chain(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
-    let model = router
-        .route_model(target)
-        .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
-    let model_id = model.model_id().to_owned();
     let options = convert::to_call_options(request);
 
-    if is_stream {
-        handle_stream(&model, &model_id, options).await
-    } else {
-        let result = model
-            .generate(options)
+    let mut last_err = None;
+    for target in chain {
+        let model = router
+            .route_model(target.clone())
             .await
             .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-        let response = convert::from_generate_result(&model_id, result);
-        Ok(Box::new(warp::reply::json(&response)) as Box<dyn warp::Reply>)
+
+        let model_id = model.model_id().to_owned();
+        if is_stream {
+            match model.stream(options.clone()).await {
+                Ok(stream_result) => return handle_stream_result(stream_result, &model_id).await,
+                Err(e) if fallback_policy.classify(&e, &target) == FallbackDecision::Fallback => {
+                    last_err = Some(e);
+                }
+                Err(e) => return Err(warp::reject::custom(BitrouterRejection(e))),
+            }
+        } else {
+            match model.generate(options.clone()).await {
+                Ok(result) => {
+                    let response = convert::from_generate_result(&model_id, result);
+                    return Ok(Box::new(warp::reply::json(&response)) as Box<dyn warp::Reply>);
+                }
+                Err(e) if fallback_policy.classify(&e, &target) == FallbackDecision::Fallback => {
+                    last_err = Some(e);
+                }
+                Err(e) => return Err(warp::reject::custom(BitrouterRejection(e))),
+            }
+        }
     }
+
+    let error = last_err.unwrap_or_else(|| {
+        BitrouterError::invalid_request(
+            None,
+            format!("no routing targets resolved for model: {incoming_model}"),
+            None,
+        )
+    });
+    Err(warp::reject::custom(BitrouterRejection(error)))
 }
 
 async fn handle_chat_completion_with_hooks<T, R>(
@@ -145,7 +207,7 @@ where
     R: LanguageModelRouter + Send + Sync + 'static,
 {
     let hooked = Arc::new(HookedRouter::new(router, hooks));
-    handle_chat_completion(request, table, hooked).await
+    handle_chat_completion(request, table, hooked, default_fallback_policy()).await
 }
 
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
@@ -255,7 +317,7 @@ where
     let target_model_id = target.service_id.clone();
 
     let model = router
-        .route_model(target)
+        .route_model(target.clone())
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
@@ -344,6 +406,7 @@ where
                     observer
                         .on_request_success(RequestSuccessEvent {
                             ctx,
+                            executed_target: Some(target.clone()),
                             usage,
                             streamed: true,
                             generation_time_ms: None,
@@ -352,7 +415,11 @@ where
                 }
                 Err(error) => {
                     observer
-                        .on_request_failure(RequestFailureEvent { ctx, error })
+                        .on_request_failure(RequestFailureEvent {
+                            ctx,
+                            executed_target: Some(target.clone()),
+                            error,
+                        })
                         .await;
                 }
             }
@@ -407,6 +474,7 @@ where
                         request_id,
                         metadata,
                     },
+                    executed_target: Some(target.clone()),
                     usage: result.usage.clone(),
                     streamed: false,
                     generation_time_ms: None,
@@ -437,6 +505,7 @@ where
                         request_id,
                         metadata,
                     },
+                    executed_target: Some(target.clone()),
                     error: e.clone(),
                 };
                 tokio::spawn(async move { observer.on_request_failure(event).await });
@@ -541,6 +610,7 @@ async fn handle_chat_completion_with_observe<T, R>(
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
     caller: CallerContext,
+    fallback_policy: Arc<dyn FallbackPolicy>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
 where
     T: RoutingTable + Send + Sync + 'static,
@@ -560,92 +630,148 @@ where
         )));
     }
 
-    let target = table
-        .route(&incoming_model, &route_ctx)
+    let chain = table
+        .route_chain(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
-    let provider_name = target.provider_name.clone();
-    let target_model_id = target.service_id.clone();
-
-    let model = router
-        .route_model(target)
-        .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
-    let model_id = model.model_id().to_owned();
     let options = convert::to_call_options(request);
     let start = Instant::now();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let metadata = serde_json::Value::Null;
+    let mut last_err = None;
+    let mut last_target = None;
 
-    if is_stream {
-        handle_stream_with_observe(
-            &model,
-            &model_id,
-            options,
-            crate::router::StreamObserveContext {
-                observer,
-                route: incoming_model,
-                provider: provider_name,
-                target_model: target_model_id,
-                caller,
-                start,
-                request_id: uuid::Uuid::new_v4().to_string(),
-                metadata: serde_json::Value::Null,
-            },
-        )
-        .await
-    } else {
-        let gen_result = model.generate(options).await;
-        match gen_result {
-            Ok(result) => {
-                let event = RequestSuccessEvent {
-                    ctx: RequestContext {
-                        route: incoming_model,
-                        provider: provider_name,
-                        model: target_model_id,
-                        caller,
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        request_id: uuid::Uuid::new_v4().to_string(),
-                        metadata: serde_json::Value::Null,
-                    },
-                    usage: result.usage.clone(),
-                    streamed: false,
-                    generation_time_ms: None,
-                };
-                tokio::spawn(async move { observer.on_request_success(event).await });
-                let response = convert::from_generate_result(&model_id, result);
-                Ok(Box::new(warp::reply::json(&response)) as Box<dyn warp::Reply>)
+    for target in chain {
+        let provider_name = target.provider_name.clone();
+        let target_model_id = target.service_id.clone();
+        let model = router
+            .route_model(target.clone())
+            .await
+            .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+        let model_id = model.model_id().to_owned();
+
+        if is_stream {
+            match model.stream(options.clone()).await {
+                Ok(stream_result) => {
+                    return handle_stream_with_observe_result(
+                        stream_result,
+                        &model_id,
+                        crate::router::StreamObserveContext {
+                            observer,
+                            route: incoming_model,
+                            provider: provider_name,
+                            target_model: target_model_id,
+                            caller,
+                            start,
+                            request_id,
+                            metadata,
+                            executed_target: Some(target),
+                        },
+                    )
+                    .await;
+                }
+                Err(e) if fallback_policy.classify(&e, &target) == FallbackDecision::Fallback => {
+                    last_target = Some(target);
+                    last_err = Some(e);
+                }
+                Err(e) => {
+                    let event = RequestFailureEvent {
+                        ctx: RequestContext {
+                            route: incoming_model,
+                            provider: provider_name,
+                            model: target_model_id,
+                            caller,
+                            latency_ms: start.elapsed().as_millis() as u64,
+                            request_id,
+                            metadata,
+                        },
+                        executed_target: Some(target),
+                        error: e.clone(),
+                    };
+                    tokio::spawn(async move { observer.on_request_failure(event).await });
+                    return Err(warp::reject::custom(BitrouterRejection(e)));
+                }
             }
-            Err(e) => {
-                let event = RequestFailureEvent {
-                    ctx: RequestContext {
-                        route: incoming_model,
-                        provider: provider_name,
-                        model: target_model_id,
-                        caller,
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        request_id: uuid::Uuid::new_v4().to_string(),
-                        metadata: serde_json::Value::Null,
-                    },
-                    error: e.clone(),
-                };
-                tokio::spawn(async move { observer.on_request_failure(event).await });
-                Err(warp::reject::custom(BitrouterRejection(e)))
+        } else {
+            match model.generate(options.clone()).await {
+                Ok(result) => {
+                    let event = RequestSuccessEvent {
+                        ctx: RequestContext {
+                            route: incoming_model,
+                            provider: provider_name,
+                            model: target_model_id,
+                            caller,
+                            latency_ms: start.elapsed().as_millis() as u64,
+                            request_id,
+                            metadata,
+                        },
+                        executed_target: Some(target),
+                        usage: result.usage.clone(),
+                        streamed: false,
+                        generation_time_ms: None,
+                    };
+                    tokio::spawn(async move { observer.on_request_success(event).await });
+                    let response = convert::from_generate_result(&model_id, result);
+                    return Ok(Box::new(warp::reply::json(&response)) as Box<dyn warp::Reply>);
+                }
+                Err(e) if fallback_policy.classify(&e, &target) == FallbackDecision::Fallback => {
+                    last_target = Some(target);
+                    last_err = Some(e);
+                }
+                Err(e) => {
+                    let event = RequestFailureEvent {
+                        ctx: RequestContext {
+                            route: incoming_model,
+                            provider: provider_name,
+                            model: target_model_id,
+                            caller,
+                            latency_ms: start.elapsed().as_millis() as u64,
+                            request_id,
+                            metadata,
+                        },
+                        executed_target: Some(target),
+                        error: e.clone(),
+                    };
+                    tokio::spawn(async move { observer.on_request_failure(event).await });
+                    return Err(warp::reject::custom(BitrouterRejection(e)));
+                }
             }
         }
     }
+
+    let error = last_err.unwrap_or_else(|| {
+        BitrouterError::invalid_request(
+            None,
+            format!("no routing targets resolved for model: {incoming_model}"),
+            None,
+        )
+    });
+    let executed_target = last_target;
+    let (provider, model) = executed_target
+        .as_ref()
+        .map(|target| (target.provider_name.clone(), target.service_id.clone()))
+        .unwrap_or_else(|| ("unknown".to_owned(), "unknown".to_owned()));
+    let event = RequestFailureEvent {
+        ctx: RequestContext {
+            route: incoming_model,
+            provider,
+            model,
+            caller,
+            latency_ms: start.elapsed().as_millis() as u64,
+            request_id,
+            metadata,
+        },
+        executed_target,
+        error: error.clone(),
+    };
+    tokio::spawn(async move { observer.on_request_failure(event).await });
+    Err(warp::reject::custom(BitrouterRejection(error)))
 }
 
-async fn handle_stream(
-    model: &(impl LanguageModel + ?Sized),
+async fn handle_stream_result(
+    stream_result: bitrouter_core::models::language::stream_result::LanguageModelStreamResult,
     model_id: &str,
-    options: bitrouter_core::models::language::call_options::LanguageModelCallOptions,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-    let stream_result = model
-        .stream(options)
-        .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
     let stream_id = format!("chatcmpl-{}", generate_id());
     let model_id = model_id.to_owned();
 
@@ -674,17 +800,11 @@ async fn handle_stream(
     Ok(Box::new(crate::router::sse::reply(sse_stream)))
 }
 
-async fn handle_stream_with_observe(
-    model: &(impl LanguageModel + ?Sized),
+async fn handle_stream_with_observe_result(
+    stream_result: bitrouter_core::models::language::stream_result::LanguageModelStreamResult,
     model_id: &str,
-    options: bitrouter_core::models::language::call_options::LanguageModelCallOptions,
     ctx: crate::router::StreamObserveContext,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-    let stream_result = model
-        .stream(options)
-        .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-
     let stream_id = format!("chatcmpl-{}", generate_id());
     let model_id = model_id.to_owned();
 
@@ -700,6 +820,7 @@ async fn handle_stream_with_observe(
         start,
         request_id,
         metadata,
+        executed_target,
     } = ctx;
 
     tokio::spawn(async move {
@@ -738,6 +859,7 @@ async fn handle_stream_with_observe(
                 observer
                     .on_request_success(RequestSuccessEvent {
                         ctx,
+                        executed_target: executed_target.clone(),
                         usage,
                         streamed: true,
                         generation_time_ms: None,
@@ -746,7 +868,11 @@ async fn handle_stream_with_observe(
             }
             Err(error) => {
                 observer
-                    .on_request_failure(RequestFailureEvent { ctx, error })
+                    .on_request_failure(RequestFailureEvent {
+                        ctx,
+                        executed_target,
+                        error,
+                    })
                     .await;
             }
         }

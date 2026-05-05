@@ -244,6 +244,14 @@ impl RoutingTable for ConfigRoutingTable {
         })
     }
 
+    async fn route_chain(
+        &self,
+        incoming_name: &str,
+        context: &RouteContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        Ok(vec![self.route(incoming_name, context).await?])
+    }
+
     fn list_routes(&self) -> Vec<RouteEntry> {
         let mut entries = Vec::new();
 
@@ -885,6 +893,45 @@ mod tests {
             target.api_base_override.as_deref(),
             Some("https://byok.example.com/v1")
         );
+    }
+
+    #[tokio::test]
+    async fn route_chain_preserves_single_target_behavior() {
+        let mut models = HashMap::new();
+        models.insert(
+            "priority".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![
+                    Endpoint {
+                        provider: "openai".into(),
+                        service_id: "gpt-4o".into(),
+                        api_protocol: None,
+                        api_key: Some("sk-primary".into()),
+                        api_base: None,
+                    },
+                    Endpoint {
+                        provider: "anthropic".into(),
+                        service_id: "claude-sonnet-4".into(),
+                        api_protocol: None,
+                        api_key: Some("sk-fallback".into()),
+                        api_base: None,
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::new(test_providers(), models);
+
+        let chain = table
+            .route_chain("priority", &RouteContext::default())
+            .await
+            .unwrap_or_default();
+
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider_name, "openai");
+        assert_eq!(chain[0].service_id, "gpt-4o");
+        assert_eq!(chain[0].api_key_override.as_deref(), Some("sk-primary"));
     }
 
     #[test]
