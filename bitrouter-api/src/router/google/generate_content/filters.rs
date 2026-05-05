@@ -247,6 +247,7 @@ where
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
+    let byok_used = target.api_key_override.is_some();
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();
 
@@ -259,6 +260,11 @@ where
     let options = convert::to_call_options(request);
     let start = Instant::now();
     let request_id = uuid::Uuid::new_v4().to_string();
+    let metadata = if byok_used {
+        serde_json::json!({ "byok_used": true })
+    } else {
+        serde_json::Value::Null
+    };
 
     if is_stream {
         let stream_result = model
@@ -278,8 +284,8 @@ where
             payment_gate: payment_gate.clone(),
             backend_key: mpp_ctx.backend_key.clone(),
             channel_id: mpp_ctx.channel_id.clone(),
-            tick_cost,
-            skip_deduct: false,
+            tick_cost: if byok_used { 0 } else { tick_cost },
+            skip_deduct: byok_used,
             request_id: Some(request_id.clone()),
         };
 
@@ -316,7 +322,7 @@ where
                 caller,
                 latency_ms,
                 request_id,
-                metadata: serde_json::Value::Null,
+                metadata,
             };
             match observation.outcome(client_disconnected) {
                 Ok(usage) => {
@@ -356,7 +362,8 @@ where
                 let cost_usd = crate::mpp::calculate_usage_cost(&result.usage, &pricing);
                 let micro_units = crate::mpp::cost_to_micro_units(cost_usd);
 
-                if micro_units > 0
+                if !byok_used
+                    && micro_units > 0
                     && let Err(e) = payment_gate
                         .deduct(
                             &mpp_ctx.backend_key,
@@ -382,7 +389,7 @@ where
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
                         request_id,
-                        metadata: serde_json::Value::Null,
+                        metadata: metadata.clone(),
                     },
                     usage: result.usage.clone(),
                     streamed: false,
@@ -412,7 +419,7 @@ where
                         caller,
                         latency_ms: start.elapsed().as_millis() as u64,
                         request_id,
-                        metadata: serde_json::Value::Null,
+                        metadata,
                     },
                     error: e.clone(),
                 };
