@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0](https://github.com/bitrouter/bitrouter/compare/v0.30.0...v0.31.0)
+
+
+### ⛰️ Features
+
+- *(providers)* Add OpenCode Zen and Go built-in provider support ([#437](https://github.com/bitrouter/bitrouter/pull/437)) - ([18ffe41](https://github.com/bitrouter/bitrouter/commit/18ffe4152db66e89c7c88da931fe4aa1ef7fa4fa))
+- Add route chain primitive ([#431](https://github.com/bitrouter/bitrouter/pull/431)) - ([ab20fd4](https://github.com/bitrouter/bitrouter/commit/ab20fd4aa28a0bafed88ab7843c48b6883b10cbb))
+- Byok requirements ([#435](https://github.com/bitrouter/bitrouter/pull/435)) - ([9281e8c](https://github.com/bitrouter/bitrouter/commit/9281e8c0042fd540e2cf56ce87e387d40055c20e))
+
+### 🐛 Bug Fixes
+
+- Map responses tool stream ids ([#434](https://github.com/bitrouter/bitrouter/pull/434)) - ([bc98c13](https://github.com/bitrouter/bitrouter/commit/bc98c1364d0ab6cba20f12b223a30a1c5139f80b))
+- Tolerate responses stream events ([#432](https://github.com/bitrouter/bitrouter/pull/432)) - ([0cbd8f8](https://github.com/bitrouter/bitrouter/commit/0cbd8f8e07c28cf08bbb0421b46c995367236e0d))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#436](https://github.com/bitrouter/bitrouter/pull/436)) - ([b206fbe](https://github.com/bitrouter/bitrouter/commit/b206fbe983c3be48e7b83f3b9df9957afd1358c2))
+
+
 ## [0.30.0](https://github.com/bitrouter/bitrouter/compare/v0.29.0...v0.30.0)
 
 
