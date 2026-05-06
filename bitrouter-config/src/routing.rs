@@ -62,6 +62,28 @@ fn resolve_protocol(
         })
 }
 
+/// Builds a secondary index mapping `(provider, service_id)` → pricing from
+/// the top-level `models` section. When an endpoint's `service_id` differs
+/// from the virtual model key, this allows `model_pricing` to still resolve
+/// the correct pricing.
+fn build_endpoint_pricing(
+    models: &HashMap<String, ModelConfig>,
+) -> HashMap<(String, String), ModelPricing> {
+    let mut index = HashMap::new();
+    for model_config in models.values() {
+        if model_config.pricing.is_empty() {
+            continue;
+        }
+        for endpoint in &model_config.endpoints {
+            let key = (endpoint.provider.clone(), endpoint.service_id.clone());
+            index
+                .entry(key)
+                .or_insert_with(|| model_config.pricing.clone());
+        }
+    }
+    index
+}
+
 /// Configuration-driven routing table.
 ///
 /// Routes incoming model names to concrete provider targets using three strategies:
@@ -79,6 +101,11 @@ pub struct ConfigRoutingTable {
     counters: HashMap<String, AtomicUsize>,
     /// Compiled content-based routing rules (empty when no `routing:` config).
     content_rules: ContentRoutingRules,
+    /// Secondary index mapping `(provider_name, service_id)` → pricing,
+    /// built from the `endpoints` lists inside the top-level `models` section.
+    /// Allows `model_pricing` to resolve pricing when the endpoint's
+    /// `service_id` differs from the virtual model key.
+    endpoint_pricing: HashMap<(String, String), ModelPricing>,
 }
 
 impl ConfigRoutingTable {
@@ -100,11 +127,13 @@ impl ConfigRoutingTable {
             .map(|k| (k.clone(), AtomicUsize::new(0)))
             .collect();
         let content_rules = ContentRoutingRules::compile(routing);
+        let endpoint_pricing = build_endpoint_pricing(&models);
         Self {
             providers,
             models,
             counters,
             content_rules,
+            endpoint_pricing,
         }
     }
 
@@ -118,7 +147,10 @@ impl ConfigRoutingTable {
     /// Lookup order:
     /// 1. Provider-specific override: `providers[provider].models[model_id]`
     /// 2. Top-level model config: `models[model_id]`
-    /// 3. `ModelInfo::default()` for unknown providers or unconfigured models.
+    /// 3. Endpoint-based lookup: pricing from a top-level model whose endpoint
+    ///    matches `(provider, model_id)` — covers the case where the endpoint's
+    ///    `service_id` differs from the virtual model key.
+    /// 4. `ModelInfo::default()` for unknown providers or unconfigured models.
     pub fn model_info(&self, provider_name: &str, model_id: &str) -> ModelInfo {
         self.providers
             .get(provider_name)
@@ -130,6 +162,14 @@ impl ConfigRoutingTable {
                     pricing: mc.pricing.clone(),
                     ..Default::default()
                 })
+            })
+            .or_else(|| {
+                self.endpoint_pricing
+                    .get(&(provider_name.to_owned(), model_id.to_owned()))
+                    .map(|pricing| ModelInfo {
+                        pricing: pricing.clone(),
+                        ..Default::default()
+                    })
             })
             .unwrap_or_default()
     }
@@ -1036,6 +1076,108 @@ mod tests {
         assert_eq!(pricing.input_tokens.cache_read, Some(1.25));
         assert_eq!(pricing.output_tokens.text, Some(10.00));
         assert_eq!(pricing.output_tokens.reasoning, Some(10.00));
+    }
+
+    #[test]
+    fn model_pricing_resolves_via_endpoint_service_id() {
+        // When an endpoint's service_id differs from the virtual model key,
+        // model_pricing should still resolve pricing via the endpoint index.
+        // This is the core bug from https://github.com/bitrouter/bitrouter/issues/443
+        let mut models = HashMap::new();
+        models.insert(
+            "z-ai/glm-5.1".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "chutes-ai".into(),
+                    service_id: "zai-org/GLM-5.1-TEE".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                pricing: ModelPricing {
+                    input_tokens: InputTokenPricing {
+                        no_cache: Some(1.05),
+                        cache_read: None,
+                        cache_write: None,
+                    },
+                    output_tokens: OutputTokenPricing {
+                        text: Some(3.50),
+                        reasoning: None,
+                    },
+                },
+                ..Default::default()
+            },
+        );
+        let mut providers = test_providers();
+        providers.insert(
+            "chutes-ai".into(),
+            ProviderConfig {
+                api_protocol: Some(ApiProtocol::Openai),
+                api_base: Some("https://llm.chutes.ai/v1".into()),
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::new(providers, models);
+
+        // Lookup by endpoint's (provider, service_id) — this used to return
+        // empty pricing before the endpoint index was added.
+        let pricing = table.model_pricing("chutes-ai", "zai-org/GLM-5.1-TEE");
+        assert_eq!(pricing.input_tokens.no_cache, Some(1.05));
+        assert_eq!(pricing.output_tokens.text, Some(3.50));
+    }
+
+    #[test]
+    fn model_pricing_endpoint_index_does_not_override_provider_specific() {
+        // Provider-specific pricing (step 1) should still take priority over
+        // the endpoint-based fallback (step 3).
+        let mut models = HashMap::new();
+        models.insert(
+            "smart".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "openai".into(),
+                    service_id: "gpt-4o".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                pricing: ModelPricing {
+                    input_tokens: InputTokenPricing {
+                        no_cache: Some(2.50),
+                        ..Default::default()
+                    },
+                    output_tokens: OutputTokenPricing {
+                        text: Some(10.00),
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            },
+        );
+        let mut providers = test_providers();
+        providers.get_mut("openai").unwrap().models = Some(HashMap::from([(
+            "gpt-4o".into(),
+            ModelInfo {
+                pricing: ModelPricing {
+                    input_tokens: InputTokenPricing {
+                        no_cache: Some(99.00),
+                        ..Default::default()
+                    },
+                    output_tokens: OutputTokenPricing {
+                        text: Some(199.00),
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            },
+        )]));
+        let table = ConfigRoutingTable::new(providers, models);
+
+        let pricing = table.model_pricing("openai", "gpt-4o");
+        assert_eq!(pricing.input_tokens.no_cache, Some(99.00));
+        assert_eq!(pricing.output_tokens.text, Some(199.00));
     }
 
     #[test]
