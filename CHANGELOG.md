@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.1](https://github.com/bitrouter/bitrouter/compare/v0.31.0...v0.31.1)
+
+
+### 🐛 Bug Fixes
+
+- Model_info/model_pricing fall back to top-level models map ([#441](https://github.com/bitrouter/bitrouter/pull/441)) - ([94400f4](https://github.com/bitrouter/bitrouter/commit/94400f40f368610c4b7457b7099feb5a9ec3b035))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#438](https://github.com/bitrouter/bitrouter/pull/438)) - ([4461ce9](https://github.com/bitrouter/bitrouter/commit/4461ce992ec4d91cd28b9ce80281307f3581a899))
+
+
 ## [0.31.0](https://github.com/bitrouter/bitrouter/compare/v0.30.0...v0.31.0)
 
 
