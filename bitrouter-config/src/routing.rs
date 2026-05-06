@@ -115,14 +115,22 @@ impl ConfigRoutingTable {
 
     /// Returns the model metadata for a given provider and model ID.
     ///
-    /// Falls back to [`ModelInfo::default()`] for unknown providers or
-    /// unconfigured models.
+    /// Lookup order:
+    /// 1. Provider-specific override: `providers[provider].models[model_id]`
+    /// 2. Top-level model config: `models[model_id]`
+    /// 3. `ModelInfo::default()` for unknown providers or unconfigured models.
     pub fn model_info(&self, provider_name: &str, model_id: &str) -> ModelInfo {
         self.providers
             .get(provider_name)
             .and_then(|p| p.models.as_ref())
             .and_then(|models| models.get(model_id))
             .cloned()
+            .or_else(|| {
+                self.models.get(model_id).map(|mc| ModelInfo {
+                    pricing: mc.pricing.clone(),
+                    ..Default::default()
+                })
+            })
             .unwrap_or_default()
     }
 
@@ -991,6 +999,152 @@ mod tests {
         let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
         let pricing = table.model_pricing("unknown-provider", "gpt-4o");
         assert_eq!(pricing.input_tokens.no_cache, None);
+    }
+
+    #[test]
+    fn model_pricing_falls_back_to_top_level_models() {
+        let mut models = HashMap::new();
+        models.insert(
+            "gpt-4o".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "openai".into(),
+                    service_id: "gpt-4o".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                pricing: ModelPricing {
+                    input_tokens: InputTokenPricing {
+                        no_cache: Some(2.50),
+                        cache_read: Some(1.25),
+                        cache_write: Some(2.50),
+                    },
+                    output_tokens: OutputTokenPricing {
+                        text: Some(10.00),
+                        reasoning: Some(10.00),
+                    },
+                },
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::new(test_providers(), models);
+
+        let pricing = table.model_pricing("openai", "gpt-4o");
+        assert_eq!(pricing.input_tokens.no_cache, Some(2.50));
+        assert_eq!(pricing.input_tokens.cache_read, Some(1.25));
+        assert_eq!(pricing.output_tokens.text, Some(10.00));
+        assert_eq!(pricing.output_tokens.reasoning, Some(10.00));
+    }
+
+    #[test]
+    fn model_info_falls_back_to_top_level_models_pricing_only() {
+        let mut models = HashMap::new();
+        models.insert(
+            "gpt-4o".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "openai".into(),
+                    service_id: "gpt-4o".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                pricing: ModelPricing {
+                    input_tokens: InputTokenPricing {
+                        no_cache: Some(5.00),
+                        cache_read: None,
+                        cache_write: None,
+                    },
+                    output_tokens: OutputTokenPricing {
+                        text: Some(15.00),
+                        reasoning: None,
+                    },
+                },
+                name: Some("GPT-4o".into()),
+                max_input_tokens: Some(128000),
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::new(test_providers(), models);
+
+        let info = table.model_info("openai", "gpt-4o");
+        assert_eq!(info.pricing.input_tokens.no_cache, Some(5.00));
+        assert_eq!(info.pricing.output_tokens.text, Some(15.00));
+        assert!(
+            info.name.is_none(),
+            "fallback only carries pricing, not metadata"
+        );
+        assert!(
+            info.max_input_tokens.is_none(),
+            "fallback only carries pricing, not metadata"
+        );
+    }
+
+    #[test]
+    fn model_info_provider_specific_takes_priority_over_top_level() {
+        let mut providers = test_providers();
+        providers.get_mut("openai").unwrap().models = Some(HashMap::from([(
+            "gpt-4o".into(),
+            ModelInfo {
+                pricing: ModelPricing {
+                    input_tokens: InputTokenPricing {
+                        no_cache: Some(99.00),
+                        cache_read: None,
+                        cache_write: None,
+                    },
+                    output_tokens: OutputTokenPricing {
+                        text: Some(199.00),
+                        reasoning: None,
+                    },
+                },
+                name: Some("Provider Override".into()),
+                ..Default::default()
+            },
+        )]));
+
+        let mut models = HashMap::new();
+        models.insert(
+            "gpt-4o".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "openai".into(),
+                    service_id: "gpt-4o".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                }],
+                pricing: ModelPricing {
+                    input_tokens: InputTokenPricing {
+                        no_cache: Some(2.50),
+                        cache_read: None,
+                        cache_write: None,
+                    },
+                    output_tokens: OutputTokenPricing {
+                        text: Some(10.00),
+                        reasoning: None,
+                    },
+                },
+                ..Default::default()
+            },
+        );
+
+        let table = ConfigRoutingTable::new(providers, models);
+        let pricing = table.model_pricing("openai", "gpt-4o");
+
+        assert_eq!(
+            pricing.input_tokens.no_cache,
+            Some(99.00),
+            "provider-specific pricing should win"
+        );
+        assert_eq!(
+            pricing.output_tokens.text,
+            Some(199.00),
+            "provider-specific pricing should win"
+        );
     }
 
     #[test]
