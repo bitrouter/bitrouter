@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.2](https://github.com/bitrouter/bitrouter/compare/v0.31.1...v0.31.2)
+
+
+### 🐛 Bug Fixes
+
+- Model_pricing returning empty when endpoint service_id differs from model key ([#445](https://github.com/bitrouter/bitrouter/pull/445)) - ([1ac1ffb](https://github.com/bitrouter/bitrouter/commit/1ac1ffbf5fb8b8f10673dee87504bc014a87c997))
+
+
 ## [0.31.1](https://github.com/bitrouter/bitrouter/compare/v0.31.0...v0.31.1)
 
 
