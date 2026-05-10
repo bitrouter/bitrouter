@@ -205,10 +205,10 @@ models:
       - image
     pricing:
       input_tokens:
-        no_cache: 0.0
-        cache_read: 0.0
+        no_cache: 0.05
+        cache_read: 0.005
       output_tokens:
-        text: 0.0
+        text: 0.4
   gpt-5.1:
     max_input_tokens: 272000
     max_output_tokens: 128000
@@ -382,15 +382,6 @@ models:
         cache_read: 30.0
       output_tokens:
         text: 180.0
-  hy3-preview-free:
-    max_input_tokens: 256000
-    max_output_tokens: 64000
-    pricing:
-      input_tokens:
-        no_cache: 0.0
-        cache_read: 0.0
-      output_tokens:
-        text: 0.0
   kimi-k2.5:
     max_input_tokens: 262144
     max_output_tokens: 65536
@@ -481,3 +472,11 @@ models:
         cache_write: 0.625
       output_tokens:
         text: 3.0
+  ring-2.6-1t-free:
+    max_input_tokens: 262000
+    max_output_tokens: 66000
+    pricing:
+      input_tokens:
+        no_cache: 0.0
+      output_tokens:
+        text: 0.0
