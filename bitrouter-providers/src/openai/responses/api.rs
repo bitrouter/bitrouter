@@ -209,6 +209,10 @@ pub(crate) fn build_responses_request(
     Ok(ResponsesRequest {
         model,
         input: ResponsesInput::Items(convert_prompt(&options.prompt)?),
+        // The provider request path doesn't lift system messages back into
+        // top-level `instructions` — they remain inline `developer` items
+        // inside `input`, which is also valid per the Responses spec.
+        instructions: None,
         stream: Some(stream),
         max_output_tokens: options.max_output_tokens,
         temperature: options.temperature,
@@ -531,11 +535,18 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ResponsesInputI
                             ..
                         } => {
                             let call_id = call_ids.normalize(tool_call_id);
+                            // Plain-string form is the wire shape OpenAI's
+                            // Responses API accepts on input; the structured
+                            // {content_items: [...]} form is only used for
+                            // multimodal tool outputs which bitrouter does
+                            // not yet emit.
                             input.push(ResponsesInputItem::FunctionCallOutput(
                                 ResponsesInputFunctionCallOutput {
                                     item_type: "function_call_output".to_owned(),
                                     call_id,
-                                    output: stringify_tool_output(output)?,
+                                    output: serde_json::Value::String(stringify_tool_output(
+                                        output,
+                                    )?),
                                 },
                             ));
                         }

@@ -32,16 +32,31 @@ pub fn extract_model_name(request: &ResponsesRequest) -> &str {
 
 /// Converts a [`ResponsesRequest`] into [`LanguageModelCallOptions`].
 pub fn to_call_options(request: ResponsesRequest) -> LanguageModelCallOptions {
-    let prompt = match request.input {
-        ResponsesInput::Text(text) => vec![LanguageModelMessage::User {
+    let mut prompt = Vec::new();
+    // `instructions` is the canonical developer prompt on Responses; lift it
+    // into a System message so the routed model sees it regardless of the
+    // upstream protocol.
+    // https://platform.openai.com/docs/api-reference/responses/create#responses-create-instructions
+    if let Some(text) = request
+        .instructions
+        .as_ref()
+        .filter(|t| !t.trim().is_empty())
+    {
+        prompt.push(LanguageModelMessage::System {
+            content: text.clone(),
+            provider_options: None,
+        });
+    }
+    match request.input {
+        ResponsesInput::Text(text) => prompt.push(LanguageModelMessage::User {
             content: vec![LanguageModelUserContent::Text {
                 text,
                 provider_options: None,
             }],
             provider_options: None,
-        }],
-        ResponsesInput::Items(items) => convert_input_items(items),
-    };
+        }),
+        ResponsesInput::Items(items) => prompt.extend(convert_input_items(items)),
+    }
 
     let tools = request.tools.map(|tools| {
         tools
@@ -985,7 +1000,7 @@ fn convert_input_items(items: Vec<ResponsesInputItem>) -> Vec<LanguageModelMessa
                         tool_call_id: fco.call_id,
                         tool_name: String::new(),
                         output: LanguageModelToolResultOutput::Text {
-                            value: fco.output,
+                            value: stringify_function_call_output(&fco.output),
                             provider_options: None,
                         },
                         provider_options: None,
@@ -1006,9 +1021,48 @@ fn convert_input_items(items: Vec<ResponsesInputItem>) -> Vec<LanguageModelMessa
                     provider_options: None,
                 });
             }
+            // Unknown / unsupported item types (reasoning, web_search_call,
+            // image_generation_call, local_shell_call, compaction, ...) are
+            // accepted on the wire so strict clients like Codex CLI don't
+            // get 400s, but bitrouter can't replay them to a non-Responses
+            // upstream — silently drop. The downstream model still sees the
+            // surrounding messages and reasoning resumes from scratch.
+            ResponsesInputItem::Unknown(_) => {}
         }
     }
     messages
+}
+
+/// Codex CLI's `function_call_output.output` may be a plain string or a
+/// structured object with `content`/`content_items` (multimodal tool outputs).
+/// We collapse the structured form to plain text so the routed model — which
+/// often only accepts a string tool result — receives a usable value.
+/// <https://platform.openai.com/docs/api-reference/responses/create#input>
+fn stringify_function_call_output(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(s)) = map.get("content") {
+                return s.clone();
+            }
+            if let Some(serde_json::Value::Array(items)) = map.get("content_items") {
+                let pieces: Vec<String> = items
+                    .iter()
+                    .filter_map(|item| {
+                        item.get("text")
+                            .and_then(|t| t.as_str())
+                            .map(|s| s.to_owned())
+                    })
+                    .collect();
+                if !pieces.is_empty() {
+                    return pieces.join("\n");
+                }
+            }
+            serde_json::to_string(value).unwrap_or_default()
+        }
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
 }
 
 fn input_content_to_string(content: Option<ResponsesInputContent>) -> String {
@@ -1320,6 +1374,7 @@ mod tests {
                     ])),
                 },
             )]),
+            instructions: None,
             temperature: None,
             top_p: None,
             max_output_tokens: None,
@@ -2155,5 +2210,171 @@ mod tests {
         }"#;
         let req: ResponsesRequest = serde_json::from_str(json).expect("parse failed");
         assert_eq!(extract_model_name(&req), "gpt-4o-mini");
+    }
+
+    // ── Codex CLI compatibility ─────────────────────────────────────────
+
+    #[test]
+    fn deserialize_codex_multi_turn_request_with_reasoning_items() {
+        // Regression for the 400 reported when Codex CLI sends a multi-turn
+        // request: `input` contains `reasoning`, `web_search_call`, and
+        // other item types from previous turns. Our untagged enum must
+        // accept (and silently drop) anything it doesn't model, instead of
+        // failing the whole request.
+        // https://platform.openai.com/docs/api-reference/responses/create#input
+        let json = r#"{
+            "model": "opencode-go:glm-5.1",
+            "instructions": "You are a coding agent running in the Codex CLI.",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "<permissions instructions>"}]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}]
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello!"}]
+                },
+                {
+                    "type": "reasoning",
+                    "id": "rs_abc",
+                    "summary": [],
+                    "content": [{"type": "reasoning_text", "text": "I should greet."}],
+                    "encrypted_content": null
+                },
+                {
+                    "type": "web_search_call",
+                    "id": "ws_1",
+                    "status": "completed",
+                    "action": {"type": "search", "query": "weather"}
+                },
+                {
+                    "type": "local_shell_call",
+                    "call_id": "ls_1",
+                    "status": "completed",
+                    "action": {"type": "exec", "command": ["ls"]}
+                }
+            ],
+            "tool_choice": "auto",
+            "parallel_tool_calls": false,
+            "stream": true,
+            "store": false,
+            "include": ["reasoning.encrypted_content"],
+            "prompt_cache_key": "thread-1"
+        }"#;
+        let req: ResponsesRequest = serde_json::from_str(json).expect("Codex payload must parse");
+        assert_eq!(
+            req.instructions.as_deref(),
+            Some("You are a coding agent running in the Codex CLI.")
+        );
+        match &req.input {
+            ResponsesInput::Items(items) => {
+                assert_eq!(items.len(), 6);
+                // Reasoning, web_search_call, local_shell_call fall through
+                // to the catch-all variant.
+                assert!(matches!(items[3], ResponsesInputItem::Unknown(_)));
+                assert!(matches!(items[4], ResponsesInputItem::Unknown(_)));
+                assert!(matches!(items[5], ResponsesInputItem::Unknown(_)));
+            }
+            other => panic!("expected Items, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_call_options_lifts_instructions_to_system_message() {
+        // Codex sends the entire system prompt via the top-level
+        // `instructions` field, not as a message. `to_call_options` must
+        // synthesize a System message so the routed model sees it.
+        let json = r#"{
+            "model": "opencode-go:glm-5.1",
+            "instructions": "Be precise.",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hi"}]}]
+        }"#;
+        let req: ResponsesRequest = serde_json::from_str(json).expect("parse");
+        let opts = to_call_options(req);
+        assert!(matches!(
+            opts.prompt.first(),
+            Some(LanguageModelMessage::System { content, .. }) if content == "Be precise."
+        ));
+        assert!(matches!(
+            opts.prompt.get(1),
+            Some(LanguageModelMessage::User { .. })
+        ));
+    }
+
+    #[test]
+    fn to_call_options_skips_unknown_items() {
+        // Unknown input items (reasoning, web_search_call, ...) must not
+        // produce phantom messages in the converted prompt.
+        let json = r#"{
+            "model": "opencode-go:glm-5.1",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+                {"type": "reasoning", "id": "rs_1", "summary": [], "content": [{"type":"reasoning_text","text":"..."}]}
+            ]
+        }"#;
+        let req: ResponsesRequest = serde_json::from_str(json).expect("parse");
+        let opts = to_call_options(req);
+        assert_eq!(opts.prompt.len(), 1);
+        assert!(matches!(opts.prompt[0], LanguageModelMessage::User { .. }));
+    }
+
+    #[test]
+    fn function_call_output_accepts_string_or_content_object() {
+        // The Responses API allows `output` to be either a plain string or
+        // a structured `{content: "..."}` / `{content_items: [...]}` object
+        // (Codex emits the structured form for multimodal tool results).
+        let plain = r#"{
+            "model": "x",
+            "input": [
+                {"type": "function_call_output", "call_id": "c1", "output": "result text"}
+            ]
+        }"#;
+        let req: ResponsesRequest = serde_json::from_str(plain).expect("plain output parses");
+        let opts = to_call_options(req);
+        match &opts.prompt[0] {
+            LanguageModelMessage::Tool { content, .. } => match &content[0] {
+                LanguageModelToolResult::ToolResult { output, .. } => match output {
+                    LanguageModelToolResultOutput::Text { value, .. } => {
+                        assert_eq!(value, "result text")
+                    }
+                    other => panic!("expected Text output, got {other:?}"),
+                },
+                other => panic!("expected ToolResult, got {other:?}"),
+            },
+            other => panic!("expected Tool message, got {other:?}"),
+        }
+
+        let structured = r#"{
+            "model": "x",
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "c1",
+                    "output": {"content_items": [{"type": "input_text", "text": "first"}, {"type": "input_text", "text": "second"}]}
+                }
+            ]
+        }"#;
+        let req: ResponsesRequest =
+            serde_json::from_str(structured).expect("structured output parses");
+        let opts = to_call_options(req);
+        match &opts.prompt[0] {
+            LanguageModelMessage::Tool { content, .. } => match &content[0] {
+                LanguageModelToolResult::ToolResult { output, .. } => match output {
+                    LanguageModelToolResultOutput::Text { value, .. } => {
+                        assert_eq!(value, "first\nsecond")
+                    }
+                    other => panic!("expected Text output, got {other:?}"),
+                },
+                other => panic!("expected ToolResult, got {other:?}"),
+            },
+            other => panic!("expected Tool message, got {other:?}"),
+        }
     }
 }

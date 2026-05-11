@@ -13,6 +13,12 @@ use serde::{Deserialize, Serialize};
 pub struct ResponsesRequest {
     pub model: String,
     pub input: ResponsesInput,
+    /// Top-level developer prompt (Codex CLI sends the entire system prompt
+    /// here rather than as a system message). Mapped to a System message at
+    /// the head of the prompt in `to_call_options`.
+    /// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-instructions>
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,17 +60,26 @@ pub enum ResponsesInput {
 /// Input items for the Responses API.
 ///
 /// Uses `#[serde(untagged)]` so proxy clients can omit the `"type"` field on
-/// message items.  Variants are ordered most-specific-first so serde tries the
+/// message items. Variants are ordered most-specific-first so serde tries the
 /// variant with more required fields before the less specific one.
 ///
 /// Each inner struct carries a `type` field with a default value so that
 /// serialisation always includes the discriminator required by the upstream API.
+///
+/// The final `Unknown` variant is a permissive catch-all that lets unfamiliar
+/// item types (e.g. `reasoning`, `web_search_call`, `local_shell_call`,
+/// `image_generation_call`) deserialize without rejecting the whole request.
+/// Codex CLI surfaces all of these in `input` on multi-turn requests; the
+/// upstream models bitrouter routes to can't consume them, so we accept and
+/// silently drop them downstream.
+/// <https://platform.openai.com/docs/api-reference/responses/create>
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ResponsesInputItem {
     FunctionCall(ResponsesInputFunctionCall),
     FunctionCallOutput(ResponsesInputFunctionCallOutput),
     Message(ResponsesInputMessage),
+    Unknown(serde_json::Value),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,7 +100,12 @@ pub struct ResponsesInputFunctionCallOutput {
     #[serde(rename = "type", default = "default_function_call_output_type")]
     pub item_type: String,
     pub call_id: String,
-    pub output: String,
+    /// Wire encoding may be either a plain string or an object with
+    /// `content` / `content_items` (the structured form Codex sends for
+    /// multimodal tool outputs). We accept any JSON value here and stringify
+    /// downstream so the routed model receives a plain-text representation.
+    /// <https://platform.openai.com/docs/api-reference/responses/create#input>
+    pub output: serde_json::Value,
 }
 
 fn default_function_call_output_type() -> String {
