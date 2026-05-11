@@ -179,6 +179,7 @@ pub fn builtin_tool_provider_defs() -> HashMap<String, BuiltinToolProvider> {
                         api_protocol: tool_def.api_protocol,
                         api_key: None,
                         api_base: tool_def.api_base,
+                        tags: Vec::new(),
                     };
                     (
                         tool_name,

@@ -137,7 +137,7 @@ where
 }
 
 async fn handle_chat_completion<T, R>(
-    request: ChatCompletionRequest,
+    mut request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
     fallback_policy: Arc<dyn FallbackPolicy>,
@@ -154,6 +154,12 @@ where
         .route_chain(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+    // Apply preset overrides (if any) before converting to call options.
+    // Presets attach the same body bundle to every chain entry, so the
+    // first target's preset is authoritative for the request body.
+    if let Some(preset) = chain.first().and_then(|t| t.preset.as_ref()) {
+        bitrouter_core::api::openai::chat::preset::apply(&mut request, preset);
+    }
     let options = convert::to_call_options(request);
 
     let mut last_err = None;
@@ -243,7 +249,7 @@ where
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_chat_completion_with_gate<T, R>(
     gate_ctx: crate::mpp::GateContext,
-    request: ChatCompletionRequest,
+    mut request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
@@ -315,6 +321,10 @@ where
     let byok_used = target.api_key_override.is_some();
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();
+
+    if let Some(preset) = target.preset.as_ref() {
+        bitrouter_core::api::openai::chat::preset::apply(&mut request, preset);
+    }
 
     let model = router
         .route_model(target.clone())
@@ -605,7 +615,7 @@ where
 }
 
 async fn handle_chat_completion_with_observe<T, R>(
-    request: ChatCompletionRequest,
+    mut request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
@@ -634,6 +644,9 @@ where
         .route_chain(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+    if let Some(preset) = chain.first().and_then(|t| t.preset.as_ref()) {
+        bitrouter_core::api::openai::chat::preset::apply(&mut request, preset);
+    }
     let options = convert::to_call_options(request);
     let start = Instant::now();
     let request_id = uuid::Uuid::new_v4().to_string();

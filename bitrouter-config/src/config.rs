@@ -88,6 +88,24 @@ pub struct BitrouterConfig {
     /// defined in the `models` section.
     #[serde(default)]
     pub routing: HashMap<String, RoutingRuleConfig>,
+
+    /// Named LLM configuration presets, invoked via `@name` in the model field.
+    ///
+    /// A preset bundles generation parameters, system prompt, and routing
+    /// preferences under a single callable name. Request fields take
+    /// precedence; the preset fills in anything the request leaves unset
+    /// (OpenRouter-style shallow merge).
+    #[serde(default)]
+    pub presets: HashMap<String, PresetConfig>,
+
+    /// Routing-only modifiers, invoked via `:name` suffix in the model field.
+    ///
+    /// Variants override routing preferences (tag filtering, provider
+    /// allow/deny lists, price sorting) for a request without affecting the
+    /// request body. The built-in `:price` variant sorts endpoints by
+    /// ascending input-token cost.
+    #[serde(default)]
+    pub variants: HashMap<String, VariantConfig>,
 }
 
 impl BitrouterConfig {
@@ -189,8 +207,20 @@ impl BitrouterConfig {
             }
         }
 
+        // Merge built-in variants (v0 ships `:price` only).
+        // User-declared variants override built-ins by name.
+        if config.inherit_defaults {
+            for (name, builtin) in crate::presets::builtin_variants() {
+                config.variants.entry(name).or_insert(builtin);
+            }
+        }
+
         // Resolve derives + env_prefix
         config.providers = resolve_providers(providers, &env);
+
+        // Validate preset/variant names and tag tokens (after merge so
+        // built-ins are checked alongside user definitions).
+        crate::presets::validate(&config)?;
 
         Ok(config)
     }
@@ -844,6 +874,133 @@ pub struct Endpoint {
     /// Optional per-endpoint API base override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_base: Option<String>,
+
+    /// Free-form labels for variant filtering (e.g. `["free", "cheap"]`).
+    ///
+    /// Variants reference these via their `require_tags` field. Tag tokens
+    /// must match `^[a-z][a-z0-9_-]{0,31}$` — validated at config load time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+// ── Preset / variant configuration ──────────────────────────────────
+
+/// A named LLM configuration preset.
+///
+/// All fields are optional. When a request invokes a preset via `@name`,
+/// the preset's fields fill in anything the request leaves unset — fields
+/// already present on the request always win (shallow merge).
+///
+/// Reasoning effort and tool-policy (parallel_tool_calls, tool_choice) are
+/// intentionally omitted from v0. They will be added when wired through to
+/// provider adapters in a follow-up PR — adding inert fields now would be
+/// dead config surface.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PresetConfig {
+    /// Concrete model name this preset routes to (e.g. `gpt-5`).
+    ///
+    /// Looked up through the normal routing path after preset resolution.
+    /// When omitted, the preset's name itself is used as the model lookup
+    /// (callers can request `@careful` with no further qualification).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+
+    /// System prompt the preset injects when the request has none of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+
+    /// Generation parameter defaults.
+    #[serde(default)]
+    pub params: GenerationParams,
+
+    /// Routing preferences applied after preset resolution.
+    #[serde(default)]
+    pub routing: RoutingPrefs,
+}
+
+/// Routing-only configuration variant addressed by `:name` suffix.
+///
+/// `deny_unknown_fields` rejects YAML entries that set anything other than
+/// `routing` — variants only modify dispatch, never the request body.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VariantConfig {
+    #[serde(default)]
+    pub routing: RoutingPrefs,
+}
+
+/// Generation parameter defaults. All fields optional.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GenerationParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
+}
+
+impl GenerationParams {
+    pub fn is_empty(&self) -> bool {
+        self.temperature.is_none()
+            && self.top_p.is_none()
+            && self.top_k.is_none()
+            && self.max_tokens.is_none()
+            && self.frequency_penalty.is_none()
+            && self.presence_penalty.is_none()
+            && self.stop.is_none()
+    }
+}
+
+/// Routing preferences that flow from preset/variant lookup through to
+/// endpoint selection. Empty means "no opinion — use model strategy as-is".
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RoutingPrefs {
+    /// Sort endpoints by this key before selection. Overrides the model's
+    /// declared strategy when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<SortKey>,
+
+    /// Endpoints must carry every listed tag to be considered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub require_tags: Vec<String>,
+
+    /// Restrict candidates to endpoints whose provider name appears in this
+    /// list. Empty means "all providers allowed".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub only: Vec<String>,
+
+    /// Exclude endpoints whose provider name appears in this list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignore: Vec<String>,
+}
+
+impl RoutingPrefs {
+    pub fn is_empty(&self) -> bool {
+        self.sort.is_none()
+            && self.require_tags.is_empty()
+            && self.only.is_empty()
+            && self.ignore.is_empty()
+    }
+}
+
+/// Key by which endpoints can be sorted.
+///
+/// v0 ships `Price` only. Throughput and latency are deferred until
+/// BitRouter has a metric source; the project's no-dead-code rule
+/// forbids adding unimplemented variants here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortKey {
+    Price,
 }
 
 /// Routing configuration for a virtual model name.
@@ -1073,6 +1230,107 @@ providers:
         assert!(config.providers.contains_key("openai"));
         assert!(config.providers.contains_key("anthropic"));
         assert!(config.providers.contains_key("google"));
+    }
+
+    #[test]
+    fn empty_yaml_gets_builtin_price_variant() {
+        let config = BitrouterConfig::load_from_str("{}", None).unwrap();
+        assert!(
+            config.variants.contains_key("price"),
+            "built-in :price variant should be merged by default"
+        );
+        assert_eq!(
+            config.variants["price"].routing.sort,
+            Some(crate::config::SortKey::Price)
+        );
+    }
+
+    #[test]
+    fn user_variant_overrides_builtin() {
+        // A user-defined `:price` variant should win over the built-in.
+        let yaml = r#"
+variants:
+  price:
+    routing:
+      require_tags: [my-cheap-tag]
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        let price = &config.variants["price"];
+        assert_eq!(price.routing.require_tags, vec!["my-cheap-tag".to_owned()]);
+        // User entry didn't set sort, so it's None — built-in is fully shadowed.
+        assert!(price.routing.sort.is_none());
+    }
+
+    #[test]
+    fn inherit_defaults_false_skips_builtin_variants() {
+        let yaml = "inherit_defaults: false\n";
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        assert!(config.variants.is_empty());
+    }
+
+    #[test]
+    fn variant_with_non_routing_field_rejected() {
+        // VariantConfig uses #[serde(deny_unknown_fields)] so a YAML entry
+        // like `temperature: 0.2` (a body field, not a routing field) must
+        // fail to deserialize.
+        let yaml = r#"
+variants:
+  fast:
+    temperature: 0.2
+"#;
+        let err = BitrouterConfig::load_from_str(yaml, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown field") || msg.contains("temperature"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn invalid_preset_name_rejected() {
+        let yaml = r#"
+presets:
+  "Has Spaces":
+    model: gpt-4o
+"#;
+        let err = BitrouterConfig::load_from_str(yaml, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("invalid preset name"), "got: {msg}");
+    }
+
+    #[test]
+    fn load_preset_with_routing() {
+        let yaml = r#"
+presets:
+  careful:
+    model: gpt-4o
+    system_prompt: "Reason carefully."
+    params:
+      temperature: 0.2
+    routing:
+      require_tags: [paid]
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        let p = &config.presets["careful"];
+        assert_eq!(p.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(p.system_prompt.as_deref(), Some("Reason carefully."));
+        assert_eq!(p.params.temperature, Some(0.2));
+        assert_eq!(p.routing.require_tags, vec!["paid".to_owned()]);
+    }
+
+    #[test]
+    fn load_endpoint_tags() {
+        let yaml = r#"
+models:
+  smart:
+    endpoints:
+      - provider: openai
+        service_id: gpt-4o
+        tags: [paid, fast]
+"#;
+        let config = BitrouterConfig::load_from_str(yaml, None).unwrap();
+        let ep = &config.models["smart"].endpoints[0];
+        assert_eq!(ep.tags, vec!["paid".to_owned(), "fast".to_owned()]);
     }
 
     #[test]

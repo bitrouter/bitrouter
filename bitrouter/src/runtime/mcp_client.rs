@@ -459,6 +459,7 @@ fn match_hint(hint: &str, routes: &[RouteEntry]) -> Option<RoutingTarget> {
                 api_protocol: route.protocol,
                 api_key_override: None,
                 api_base_override: None,
+                preset: None,
             });
         }
     }

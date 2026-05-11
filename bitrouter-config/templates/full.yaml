@@ -192,6 +192,57 @@ models:
 #       research: smart           # research → smart model
 #       default: fast             # no signal matched → fast
 
+# ── Presets and Variants ────────────────────────────────────────────────────
+#
+# `presets:` defines named LLM configurations addressable as `@name` in the
+# `model` field. A preset bundles a target model, system prompt, generation
+# params, and routing preferences under one callable name.
+#
+# `variants:` defines routing-only modifiers addressable as a `:name` suffix.
+# Variants override routing preferences (sort, tag filter, provider
+# allow/deny lists) for a single request — they never touch the body.
+#
+# Composition examples:
+#   model: "@careful"         → preset only
+#   model: "gpt-5:price"      → variant only
+#   model: "@careful:price"   → preset + variant (variant overrides routing)
+#
+# Built-in variants merged automatically when `inherit_defaults: true`:
+#   :price — sort endpoints by ascending input-token cost
+
+# presets:
+#   careful:
+#     model: gpt-5
+#     system_prompt: "Reason carefully. Cite sources when relevant."
+#     params:
+#       temperature: 0.2
+#     routing:
+#       require_tags: [paid]
+#
+#   code-reviewer:
+#     model: gpt-5
+#     system_prompt: "You review code rigorously..."
+#     params:
+#       temperature: 0.3
+
+# variants:
+#   free:
+#     routing:
+#       require_tags: [free]
+
+# Endpoint tags (used by variant `require_tags`):
+#
+# models:
+#   gpt-5:
+#     endpoints:
+#       - provider: openai
+#         service_id: gpt-5
+#         tags: [paid]
+#       - provider: openai
+#         service_id: gpt-5
+#         tags: [free]
+#         api_key: ${FREE_OPENAI_KEY}
+
 # ── Tool Routing ────────────────────────────────────────────────────────────
 #
 # Virtual tool names that route to upstream MCP or REST tool providers.

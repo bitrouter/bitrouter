@@ -762,6 +762,7 @@ mod tests {
             api_protocol: ApiProtocol::Rest,
             api_key_override: None,
             api_base_override: None,
+            preset: None,
         };
 
         let provider = router.route_tool(target).await;
@@ -785,6 +786,7 @@ mod tests {
             api_protocol: ApiProtocol::Rest,
             api_key_override: None,
             api_base_override: None,
+            preset: None,
         };
         assert!(router.route_tool(target).await.is_err());
     }

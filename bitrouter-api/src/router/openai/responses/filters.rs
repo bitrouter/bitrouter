@@ -92,7 +92,7 @@ where
 }
 
 async fn handle_responses<T, R>(
-    request: ResponsesRequest,
+    mut request: ResponsesRequest,
     table: Arc<T>,
     router: Arc<R>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
@@ -108,6 +108,10 @@ where
         .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+
+    if let Some(preset) = target.preset.as_ref() {
+        bitrouter_core::api::openai::responses::preset::apply(&mut request, preset);
+    }
 
     let model = router
         .route_model(target.clone())
@@ -259,7 +263,7 @@ where
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_responses_with_gate<T, R>(
     gate_ctx: crate::mpp::GateContext,
-    request: ResponsesRequest,
+    mut request: ResponsesRequest,
     table: Arc<T>,
     router: Arc<R>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
@@ -321,6 +325,10 @@ where
     let byok_used = target.api_key_override.is_some();
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();
+
+    if let Some(preset) = target.preset.as_ref() {
+        bitrouter_core::api::openai::responses::preset::apply(&mut request, preset);
+    }
 
     let model = router
         .route_model(target.clone())
@@ -544,7 +552,7 @@ where
 }
 
 async fn handle_responses_with_observe<T, R>(
-    request: ResponsesRequest,
+    mut request: ResponsesRequest,
     table: Arc<T>,
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
@@ -572,6 +580,10 @@ where
         .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+
+    if let Some(preset) = target.preset.as_ref() {
+        bitrouter_core::api::openai::responses::preset::apply(&mut request, preset);
+    }
 
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();

@@ -109,7 +109,7 @@ where
 
 async fn handle_generate_content<T, R>(
     model_action: String,
-    request: GenerateContentRequest,
+    mut request: GenerateContentRequest,
     table: Arc<T>,
     router: Arc<R>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
@@ -124,6 +124,10 @@ where
         .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+
+    if let Some(preset) = target.preset.as_ref() {
+        bitrouter_core::api::google::generate_content::preset::apply(&mut request, preset);
+    }
 
     let model = router
         .route_model(target.clone())
@@ -200,7 +204,7 @@ where
 
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_generate_content_with_mpp<T, R>(
-    (model_action, request): (String, GenerateContentRequest),
+    (model_action, mut request): (String, GenerateContentRequest),
     caller: CallerContext,
     mpp_state: Arc<crate::mpp::MppState>,
     auth_header: Option<String>,
@@ -250,6 +254,10 @@ where
     let byok_used = target.api_key_override.is_some();
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();
+
+    if let Some(preset) = target.preset.as_ref() {
+        bitrouter_core::api::google::generate_content::preset::apply(&mut request, preset);
+    }
 
     let model = router
         .route_model(target.clone())
@@ -439,7 +447,7 @@ where
 
 async fn handle_generate_content_with_observe<T, R>(
     model_action: String,
-    request: GenerateContentRequest,
+    mut request: GenerateContentRequest,
     table: Arc<T>,
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
@@ -466,6 +474,10 @@ where
         .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+
+    if let Some(preset) = target.preset.as_ref() {
+        bitrouter_core::api::google::generate_content::preset::apply(&mut request, preset);
+    }
 
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();

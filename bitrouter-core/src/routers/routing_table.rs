@@ -46,6 +46,39 @@ impl fmt::Display for ApiProtocol {
 
 // ── Routing ──────────────────────────────────────────────────────
 
+/// Body-level overrides resolved from a preset attached to a routed request.
+///
+/// All fields are defaults — they take effect only when the request leaves
+/// the corresponding field unset (OpenRouter-style shallow merge). Filter
+/// handlers consume this value via a per-protocol applicator that knows how
+/// each field maps onto the protocol's request struct.
+#[derive(Debug, Clone, Default)]
+pub struct AppliedPreset {
+    /// System prompt to use when the request has no system message of its own.
+    pub system: Option<String>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub top_k: Option<u32>,
+    pub max_tokens: Option<u32>,
+    pub stop_sequences: Option<Vec<String>>,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+}
+
+impl AppliedPreset {
+    /// Returns true when no field is populated — equivalent to "no preset".
+    pub fn is_empty(&self) -> bool {
+        self.system.is_none()
+            && self.temperature.is_none()
+            && self.top_p.is_none()
+            && self.top_k.is_none()
+            && self.max_tokens.is_none()
+            && self.stop_sequences.is_none()
+            && self.presence_penalty.is_none()
+            && self.frequency_penalty.is_none()
+    }
+}
+
 /// The resolved target for a routed request (model or tool).
 #[derive(Debug, Clone)]
 pub struct RoutingTarget {
@@ -68,6 +101,10 @@ pub struct RoutingTarget {
     /// over the provider's default `api_base`. Populated by per-endpoint
     /// configuration (see `Endpoint.api_base`) or by a [`TargetOverlay`].
     pub api_base_override: Option<String>,
+    /// Body-level overrides resolved from a `@preset` reference in the model
+    /// string. When set, filter handlers shallow-merge these defaults onto
+    /// the inbound request before dispatch.
+    pub preset: Option<AppliedPreset>,
 }
 
 /// A single entry in the route listing, describing a configured route.

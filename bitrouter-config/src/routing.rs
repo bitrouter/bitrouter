@@ -15,10 +15,11 @@ use bitrouter_core::{
 };
 
 use crate::config::{
-    AgentConfig, ModelConfig, ModelInfo, ProviderConfig, RoutingRuleConfig, RoutingStrategy,
-    ToolConfig,
+    AgentConfig, Endpoint, ModelConfig, ModelInfo, PresetConfig, ProviderConfig, RoutingPrefs,
+    RoutingRuleConfig, RoutingStrategy, SortKey, ToolConfig, VariantConfig,
 };
 use crate::content_routing::ContentRoutingRules;
+use crate::presets;
 
 /// The provider name used as fallback when the user has no explicit `models:`
 /// section configured.
@@ -106,6 +107,10 @@ pub struct ConfigRoutingTable {
     /// Allows `model_pricing` to resolve pricing when the endpoint's
     /// `service_id` differs from the virtual model key.
     endpoint_pricing: HashMap<(String, String), ModelPricing>,
+    /// Named LLM presets — `@name` lookups in the model field.
+    presets: HashMap<String, PresetConfig>,
+    /// Named routing variants — `:name` suffixes in the model field.
+    variants: HashMap<String, VariantConfig>,
 }
 
 impl ConfigRoutingTable {
@@ -122,6 +127,17 @@ impl ConfigRoutingTable {
         models: HashMap<String, ModelConfig>,
         routing: &HashMap<String, RoutingRuleConfig>,
     ) -> Self {
+        Self::with_full_config(providers, models, routing, HashMap::new(), HashMap::new())
+    }
+
+    /// Creates a routing table with full config including presets and variants.
+    pub fn with_full_config(
+        providers: HashMap<String, ProviderConfig>,
+        models: HashMap<String, ModelConfig>,
+        routing: &HashMap<String, RoutingRuleConfig>,
+        presets: HashMap<String, PresetConfig>,
+        variants: HashMap<String, VariantConfig>,
+    ) -> Self {
         let counters = models
             .keys()
             .map(|k| (k.clone(), AtomicUsize::new(0)))
@@ -134,6 +150,8 @@ impl ConfigRoutingTable {
             counters,
             content_rules,
             endpoint_pricing,
+            presets,
+            variants,
         }
     }
 
@@ -185,8 +203,24 @@ impl ConfigRoutingTable {
     }
 
     /// Resolves an incoming model name to a full target with any per-endpoint overrides.
+    ///
+    /// The incoming string must already have any `@preset` / `:variant`
+    /// suffix peeled off — see [`resolve_with_prefs`](Self::resolve_with_prefs)
+    /// for the preset-aware entry point.
     pub fn resolve(&self, incoming: &str) -> Result<ResolvedTarget> {
-        // Strategy 1: "provider:model_id" → direct route if provider is known
+        self.resolve_with_prefs(incoming, &RoutingPrefs::default())
+    }
+
+    /// Like [`resolve`](Self::resolve) but applies routing preferences
+    /// (tag filtering, provider allow/deny lists, price sort) to endpoint
+    /// selection. An empty `RoutingPrefs` is equivalent to [`resolve`].
+    pub fn resolve_with_prefs(
+        &self,
+        incoming: &str,
+        prefs: &RoutingPrefs,
+    ) -> Result<ResolvedTarget> {
+        // Strategy 1: "provider:model_id" → direct route if provider is known.
+        // Prefs do not apply here (a direct route has a single endpoint).
         if let Some((prefix, suffix)) = incoming.split_once(':')
             && self.providers.contains_key(prefix)
         {
@@ -202,7 +236,7 @@ impl ConfigRoutingTable {
 
         // Strategy 2: lookup in models section
         if let Some(model_config) = self.models.get(incoming) {
-            return self.select_endpoint(incoming, model_config);
+            return self.select_endpoint(incoming, model_config, prefs);
         }
 
         // Strategy 3: when no explicit models section is configured, fall back
@@ -225,7 +259,12 @@ impl ConfigRoutingTable {
         ))
     }
 
-    fn select_endpoint(&self, model_name: &str, config: &ModelConfig) -> Result<ResolvedTarget> {
+    fn select_endpoint(
+        &self,
+        model_name: &str,
+        config: &ModelConfig,
+        prefs: &RoutingPrefs,
+    ) -> Result<ResolvedTarget> {
         if config.endpoints.is_empty() {
             return Err(BitrouterError::invalid_request(
                 None,
@@ -234,19 +273,42 @@ impl ConfigRoutingTable {
             ));
         }
 
-        let endpoint = match config.strategy {
-            RoutingStrategy::Priority => &config.endpoints[0],
-            RoutingStrategy::LoadBalance => {
-                let Some(counter) = self.counters.get(model_name) else {
-                    return Err(BitrouterError::invalid_request(
-                        None,
-                        format!("load-balance counter missing for model '{model_name}'"),
-                        None,
-                    ));
-                };
-                let idx = counter.fetch_add(1, Ordering::Relaxed) % config.endpoints.len();
-                &config.endpoints[idx]
-            }
+        // Filter the candidate list by routing prefs (tags, only, ignore).
+        // Filters apply before either sort or the model's declared strategy.
+        let candidates: Vec<&Endpoint> = config
+            .endpoints
+            .iter()
+            .filter(|ep| endpoint_matches_prefs(ep, prefs))
+            .collect();
+        if candidates.is_empty() {
+            return Err(BitrouterError::invalid_request(
+                None,
+                format!(
+                    "no endpoints for model '{model_name}' match the requested routing preferences (require_tags={:?}, only={:?}, ignore={:?})",
+                    prefs.require_tags, prefs.only, prefs.ignore
+                ),
+                None,
+            ));
+        }
+
+        // Pick: sort overrides model strategy when set; otherwise model's
+        // strategy applies untouched. Filters always apply.
+        let endpoint: &Endpoint = match prefs.sort {
+            Some(SortKey::Price) => self.pick_cheapest(&candidates),
+            None => match config.strategy {
+                RoutingStrategy::Priority => candidates[0],
+                RoutingStrategy::LoadBalance => {
+                    let Some(counter) = self.counters.get(model_name) else {
+                        return Err(BitrouterError::invalid_request(
+                            None,
+                            format!("load-balance counter missing for model '{model_name}'"),
+                            None,
+                        ));
+                    };
+                    let idx = counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
+                    candidates[idx]
+                }
+            },
         };
 
         let api_protocol =
@@ -260,35 +322,84 @@ impl ConfigRoutingTable {
             api_base_override: endpoint.api_base.clone(),
         })
     }
+
+    /// Returns the cheapest endpoint by ascending input-token price, breaking
+    /// ties on output-token price. Endpoints without pricing sort last.
+    fn pick_cheapest<'a>(&self, candidates: &[&'a Endpoint]) -> &'a Endpoint {
+        candidates
+            .iter()
+            .min_by(|a, b| {
+                let ka = self.endpoint_sort_key(a);
+                let kb = self.endpoint_sort_key(b);
+                ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied()
+            .unwrap_or_else(|| candidates[0])
+    }
+
+    /// Composite sort key: `(input_price, output_price)`. Missing pricing
+    /// becomes `f64::INFINITY` so unpriced endpoints sort last.
+    fn endpoint_sort_key(&self, endpoint: &Endpoint) -> (f64, f64) {
+        let pricing = self.model_pricing(&endpoint.provider, &endpoint.service_id);
+        let input = pricing.input_tokens.no_cache.unwrap_or(f64::INFINITY);
+        let output = pricing.output_tokens.text.unwrap_or(f64::INFINITY);
+        if input.is_infinite() && output.is_infinite() {
+            eprintln!(
+                "warning: no pricing data for endpoint '{}/{}' — sorting last under :price",
+                endpoint.provider, endpoint.service_id
+            );
+        }
+        (input, output)
+    }
+}
+
+/// True when `endpoint` satisfies every constraint in `prefs`.
+fn endpoint_matches_prefs(endpoint: &Endpoint, prefs: &RoutingPrefs) -> bool {
+    if !prefs.only.is_empty() && !prefs.only.iter().any(|p| p == &endpoint.provider) {
+        return false;
+    }
+    if prefs.ignore.iter().any(|p| p == &endpoint.provider) {
+        return false;
+    }
+    if !prefs
+        .require_tags
+        .iter()
+        .all(|t| endpoint.tags.iter().any(|et| et == t))
+    {
+        return false;
+    }
+    true
 }
 
 impl RoutingTable for ConfigRoutingTable {
     async fn route(&self, incoming_name: &str, context: &RouteContext) -> Result<RoutingTarget> {
-        // Content-based auto-routing: if the requested model name is a trigger
-        // and the caller supplied non-empty context, classify and resolve.
-        if !context.is_empty()
-            && self.content_rules.is_trigger(incoming_name)
-            && let Some(resolved_name) = self.content_rules.resolve(incoming_name, context)
-        {
-            // Delegate the resolved name through normal routing with empty
-            // context to prevent recursive auto-routing.
-            let resolved = self.resolve(&resolved_name)?;
-            return Ok(RoutingTarget {
-                provider_name: resolved.provider_name,
-                service_id: resolved.service_id,
-                api_protocol: resolved.api_protocol,
-                api_key_override: resolved.api_key_override,
-                api_base_override: resolved.api_base_override,
-            });
-        }
+        // Step 1: peel `@preset` / `:variant` off the model field.
+        // Unknown preset → 400. Unknown variant → suffix stays on the
+        // model name so the routing table sees the original string.
+        let pr = presets::resolve(incoming_name, &self.presets, &self.variants)?;
 
-        let resolved = self.resolve(incoming_name)?;
+        // Step 2: content-based auto-routing runs on the cleaned model
+        // name (after preset substitution) so a preset can target a
+        // virtual "auto" trigger if desired.
+        let routing_name = if !context.is_empty()
+            && self.content_rules.is_trigger(&pr.model)
+            && let Some(resolved_name) = self.content_rules.resolve(&pr.model, context)
+        {
+            resolved_name
+        } else {
+            pr.model.clone()
+        };
+
+        // Step 3: resolve the model name with the merged routing prefs.
+        let resolved = self.resolve_with_prefs(&routing_name, &pr.routing)?;
+
         Ok(RoutingTarget {
             provider_name: resolved.provider_name,
             service_id: resolved.service_id,
             api_protocol: resolved.api_protocol,
             api_key_override: resolved.api_key_override,
             api_base_override: resolved.api_base_override,
+            preset: pr.preset,
         })
     }
 
@@ -621,6 +732,7 @@ impl RoutingTable for ConfigToolRoutingTable {
             api_protocol: resolved.api_protocol,
             api_key_override: resolved.api_key_override,
             api_base_override: resolved.api_base_override,
+            preset: None,
         })
     }
 
@@ -788,6 +900,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -811,6 +924,7 @@ mod tests {
                     api_protocol: None,
                     api_key: Some("sk-override".into()),
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -844,6 +958,7 @@ mod tests {
                         api_protocol: None,
                         api_key: Some("key-a".into()),
                         api_base: None,
+                        tags: Vec::new(),
                     },
                     Endpoint {
                         provider: "openai".into(),
@@ -851,6 +966,7 @@ mod tests {
                         api_protocol: None,
                         api_key: Some("key-b".into()),
                         api_base: None,
+                        tags: Vec::new(),
                     },
                 ],
                 ..Default::default()
@@ -881,6 +997,7 @@ mod tests {
                         api_protocol: None,
                         api_key: Some("primary-key".into()),
                         api_base: None,
+                        tags: Vec::new(),
                     },
                     Endpoint {
                         provider: "openai".into(),
@@ -888,6 +1005,7 @@ mod tests {
                         api_protocol: None,
                         api_key: Some("fallback-key".into()),
                         api_base: None,
+                        tags: Vec::new(),
                     },
                 ],
                 ..Default::default()
@@ -924,6 +1042,7 @@ mod tests {
                     api_protocol: None,
                     api_key: Some("sk-byok".into()),
                     api_base: Some("https://byok.example.com/v1".into()),
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -957,6 +1076,7 @@ mod tests {
                         api_protocol: None,
                         api_key: Some("sk-primary".into()),
                         api_base: None,
+                        tags: Vec::new(),
                     },
                     Endpoint {
                         provider: "anthropic".into(),
@@ -964,6 +1084,7 @@ mod tests {
                         api_protocol: None,
                         api_key: Some("sk-fallback".into()),
                         api_base: None,
+                        tags: Vec::new(),
                     },
                 ],
                 ..Default::default()
@@ -1054,6 +1175,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 pricing: ModelPricing {
                     input_tokens: InputTokenPricing {
@@ -1094,6 +1216,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 pricing: ModelPricing {
                     input_tokens: InputTokenPricing {
@@ -1142,6 +1265,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 pricing: ModelPricing {
                     input_tokens: InputTokenPricing {
@@ -1193,6 +1317,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 pricing: ModelPricing {
                     input_tokens: InputTokenPricing {
@@ -1258,6 +1383,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 pricing: ModelPricing {
                     input_tokens: InputTokenPricing {
@@ -1384,6 +1510,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -1470,6 +1597,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -1483,6 +1611,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -1528,6 +1657,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -1564,6 +1694,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -1638,6 +1769,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -1672,6 +1804,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -1695,6 +1828,7 @@ mod tests {
                     api_protocol: Some(ApiProtocol::Mcp),
                     api_key: None,
                     api_base: Some("https://mcp.anthropic.com".into()),
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -1738,6 +1872,7 @@ mod tests {
                         api_protocol: None,
                         api_key: Some("key-a".into()),
                         api_base: None,
+                        tags: Vec::new(),
                     },
                     Endpoint {
                         provider: "github-mcp".into(),
@@ -1745,6 +1880,7 @@ mod tests {
                         api_protocol: None,
                         api_key: Some("key-b".into()),
                         api_base: None,
+                        tags: Vec::new(),
                     },
                 ],
                 ..Default::default()
@@ -1773,6 +1909,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 description: Some("Search GitHub code".into()),
                 ..Default::default()
@@ -1787,6 +1924,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -1835,6 +1973,7 @@ mod tests {
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -2005,6 +2144,7 @@ a2a:
                     api_protocol: None,
                     api_key: None,
                     api_base: None,
+                    tags: Vec::new(),
                 }],
                 ..Default::default()
             },
@@ -2033,5 +2173,217 @@ a2a:
             .await
             .unwrap();
         assert_eq!(target.service_id, "claude-opus-4-6");
+    }
+
+    // ── Preset / variant routing tests ───────────────────────────────
+
+    fn price_test_table() -> ConfigRoutingTable {
+        // Two endpoints for "smart": openai gpt-4o ($2.50 input) and
+        // anthropic claude ($3.00 input). Priority would pick openai first
+        // regardless, but ascending price sort also picks openai.
+        let mut models = HashMap::new();
+        models.insert(
+            "smart".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![
+                    Endpoint {
+                        provider: "anthropic".into(),
+                        service_id: "claude-sonnet".into(),
+                        api_protocol: None,
+                        api_key: None,
+                        api_base: None,
+                        tags: vec!["paid".into()],
+                    },
+                    Endpoint {
+                        provider: "openai".into(),
+                        service_id: "gpt-4o".into(),
+                        api_protocol: None,
+                        api_key: None,
+                        api_base: None,
+                        tags: vec!["paid".into()],
+                    },
+                ],
+                pricing: crate::config::ModelPricing::default(),
+                ..Default::default()
+            },
+        );
+        let mut providers = test_providers();
+        // Attach pricing to each provider's catalog so the price sort can read it.
+        providers.get_mut("openai").unwrap().models = Some(HashMap::from([(
+            "gpt-4o".to_owned(),
+            ModelInfo {
+                pricing: crate::config::ModelPricing {
+                    input_tokens: crate::config::InputTokenPricing {
+                        no_cache: Some(2.5),
+                        ..Default::default()
+                    },
+                    output_tokens: crate::config::OutputTokenPricing {
+                        text: Some(10.0),
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            },
+        )]));
+        providers.get_mut("anthropic").unwrap().models = Some(HashMap::from([(
+            "claude-sonnet".to_owned(),
+            ModelInfo {
+                pricing: crate::config::ModelPricing {
+                    input_tokens: crate::config::InputTokenPricing {
+                        no_cache: Some(3.0),
+                        ..Default::default()
+                    },
+                    output_tokens: crate::config::OutputTokenPricing {
+                        text: Some(15.0),
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            },
+        )]));
+        let mut variants = HashMap::new();
+        variants.insert(
+            "price".to_owned(),
+            VariantConfig {
+                routing: RoutingPrefs {
+                    sort: Some(SortKey::Price),
+                    ..Default::default()
+                },
+            },
+        );
+        ConfigRoutingTable::with_full_config(
+            providers,
+            models,
+            &HashMap::new(),
+            HashMap::new(),
+            variants,
+        )
+    }
+
+    #[tokio::test]
+    async fn price_variant_selects_cheapest_endpoint() {
+        let table = price_test_table();
+        // Priority strategy alone would pick anthropic (declared first).
+        // `:price` variant must override and pick openai (cheaper input).
+        let target = table
+            .route("smart:price", &RouteContext::default())
+            .await
+            .unwrap();
+        assert_eq!(target.provider_name, "openai");
+        assert_eq!(target.service_id, "gpt-4o");
+    }
+
+    #[tokio::test]
+    async fn unknown_variant_passes_through_to_model_strategy() {
+        let table = price_test_table();
+        // "smart:hf-rev-1" — "hf-rev-1" is not a known variant, so the
+        // suffix stays on the model name and the lookup fails normally.
+        let err = table
+            .route("smart:hf-rev-1", &RouteContext::default())
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no route") || msg.contains("smart:hf-rev-1"));
+    }
+
+    #[tokio::test]
+    async fn require_tags_filter_with_no_match_errors() {
+        let mut variants = HashMap::new();
+        variants.insert(
+            "free".to_owned(),
+            VariantConfig {
+                routing: RoutingPrefs {
+                    require_tags: vec!["free".into()],
+                    ..Default::default()
+                },
+            },
+        );
+        let mut models = HashMap::new();
+        models.insert(
+            "smart".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "openai".into(),
+                    service_id: "gpt-4o".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                    tags: vec!["paid".into()],
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::with_full_config(
+            test_providers(),
+            models,
+            &HashMap::new(),
+            HashMap::new(),
+            variants,
+        );
+        let err = table
+            .route("smart:free", &RouteContext::default())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("match the requested routing"));
+    }
+
+    #[tokio::test]
+    async fn preset_attaches_applied_preset_to_target() {
+        let mut presets = HashMap::new();
+        presets.insert(
+            "careful".to_owned(),
+            PresetConfig {
+                model: Some("smart".to_owned()),
+                system_prompt: Some("Reason carefully.".to_owned()),
+                params: crate::config::GenerationParams {
+                    temperature: Some(0.2),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let mut models = HashMap::new();
+        models.insert(
+            "smart".into(),
+            ModelConfig {
+                strategy: RoutingStrategy::Priority,
+                endpoints: vec![Endpoint {
+                    provider: "openai".into(),
+                    service_id: "gpt-4o".into(),
+                    api_protocol: None,
+                    api_key: None,
+                    api_base: None,
+                    tags: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        );
+        let table = ConfigRoutingTable::with_full_config(
+            test_providers(),
+            models,
+            &HashMap::new(),
+            presets,
+            HashMap::new(),
+        );
+        let target = table
+            .route("@careful", &RouteContext::default())
+            .await
+            .unwrap();
+        assert_eq!(target.service_id, "gpt-4o");
+        let preset = target.preset.expect("preset bundle attached");
+        assert_eq!(preset.temperature, Some(0.2));
+        assert_eq!(preset.system.as_deref(), Some("Reason carefully."));
+    }
+
+    #[tokio::test]
+    async fn unknown_preset_returns_invalid_request() {
+        let table = ConfigRoutingTable::new(test_providers(), HashMap::new());
+        let err = table
+            .route("@nope", &RouteContext::default())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown preset"));
     }
 }

@@ -105,7 +105,7 @@ pub struct GoogleFunctionCallingConfig {
     pub allowed_function_names: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleGenerationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
