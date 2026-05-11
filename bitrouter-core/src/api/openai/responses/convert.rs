@@ -734,62 +734,64 @@ impl StreamConverter {
             "content": [part.clone()],
             "status": "completed",
         });
-        let mut events = Vec::with_capacity(3);
-        events.push(self.make_event(
-            "response.reasoning_text.done",
-            ResponsesStreamEvent {
-                event_type: String::new(),
-                sequence_number: 0,
-                response: None,
-                item_id: Some(state.item_id.clone()),
-                output_index: Some(state.output_index),
-                content_index: Some(0),
-                delta: None,
-                text: Some(final_text),
-                call_id: None,
-                name: None,
-                arguments: None,
-                item: None,
-                part: None,
-            },
-        ));
-        events.push(self.make_event(
-            "response.content_part.done",
-            ResponsesStreamEvent {
-                event_type: String::new(),
-                sequence_number: 0,
-                response: None,
-                item_id: Some(state.item_id.clone()),
-                output_index: Some(state.output_index),
-                content_index: Some(0),
-                delta: None,
-                text: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                item: None,
-                part: Some(part),
-            },
-        ));
-        events.push(self.make_event(
-            "response.output_item.done",
-            ResponsesStreamEvent {
-                event_type: String::new(),
-                sequence_number: 0,
-                response: None,
-                item_id: None,
-                output_index: Some(state.output_index),
-                content_index: None,
-                delta: None,
-                text: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                item: Some(final_item),
-                part: None,
-            },
-        ));
-        events
+        // `vec!` ordering is left-to-right, so `make_event` is invoked once
+        // per slot and `sequence_number` is assigned in emission order.
+        vec![
+            self.make_event(
+                "response.reasoning_text.done",
+                ResponsesStreamEvent {
+                    event_type: String::new(),
+                    sequence_number: 0,
+                    response: None,
+                    item_id: Some(state.item_id.clone()),
+                    output_index: Some(state.output_index),
+                    content_index: Some(0),
+                    delta: None,
+                    text: Some(final_text),
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    item: None,
+                    part: None,
+                },
+            ),
+            self.make_event(
+                "response.content_part.done",
+                ResponsesStreamEvent {
+                    event_type: String::new(),
+                    sequence_number: 0,
+                    response: None,
+                    item_id: Some(state.item_id.clone()),
+                    output_index: Some(state.output_index),
+                    content_index: Some(0),
+                    delta: None,
+                    text: None,
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    item: None,
+                    part: Some(part),
+                },
+            ),
+            self.make_event(
+                "response.output_item.done",
+                ResponsesStreamEvent {
+                    event_type: String::new(),
+                    sequence_number: 0,
+                    response: None,
+                    item_id: None,
+                    output_index: Some(state.output_index),
+                    content_index: None,
+                    delta: None,
+                    text: None,
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    item: Some(final_item),
+                    part: None,
+                },
+            ),
+        ]
     }
 
     fn open_tool_item(
@@ -863,44 +865,44 @@ impl StreamConverter {
                 arguments: final_args.clone(),
                 status: Some("completed".to_owned()),
             });
-        let mut events = Vec::with_capacity(2);
-        events.push(self.make_event(
-            "response.function_call_arguments.done",
-            ResponsesStreamEvent {
-                event_type: String::new(),
-                sequence_number: 0,
-                response: None,
-                item_id: Some(state.item_id.clone()),
-                output_index: Some(state.output_index),
-                content_index: None,
-                delta: None,
-                text: None,
-                call_id: Some(state.call_id),
-                name: None,
-                arguments: Some(final_args),
-                item: None,
-                part: None,
-            },
-        ));
-        events.push(self.make_event(
-            "response.output_item.done",
-            ResponsesStreamEvent {
-                event_type: String::new(),
-                sequence_number: 0,
-                response: None,
-                item_id: None,
-                output_index: Some(state.output_index),
-                content_index: None,
-                delta: None,
-                text: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                item: Some(final_item),
-                part: None,
-            },
-        ));
-        events
+        vec![
+            self.make_event(
+                "response.function_call_arguments.done",
+                ResponsesStreamEvent {
+                    event_type: String::new(),
+                    sequence_number: 0,
+                    response: None,
+                    item_id: Some(state.item_id.clone()),
+                    output_index: Some(state.output_index),
+                    content_index: None,
+                    delta: None,
+                    text: None,
+                    call_id: Some(state.call_id),
+                    name: None,
+                    arguments: Some(final_args),
+                    item: None,
+                    part: None,
+                },
+            ),
+            self.make_event(
+                "response.output_item.done",
+                ResponsesStreamEvent {
+                    event_type: String::new(),
+                    sequence_number: 0,
+                    response: None,
+                    item_id: None,
+                    output_index: Some(state.output_index),
+                    content_index: None,
+                    delta: None,
+                    text: None,
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    item: Some(final_item),
+                    part: None,
+                },
+            ),
+        ]
     }
 
     fn build_in_progress_response(&self) -> ResponsesResponse {
