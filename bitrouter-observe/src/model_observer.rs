@@ -44,6 +44,22 @@ impl ObserveCallback for ModelSpendObserver {
         Box::pin(async move {
             let pricing = (self.pricing_lookup)(&event.ctx.provider, &event.ctx.model);
             let cost = calculate_cost(&event.usage, &pricing);
+            let input_tokens = event.usage.input_tokens.total.unwrap_or(0);
+            let output_tokens = event.usage.output_tokens.total.unwrap_or(0);
+
+            tracing::info!(
+                account_id = event.ctx.caller.account_id.as_deref().unwrap_or("-"),
+                route = %event.ctx.route,
+                provider = %event.ctx.provider,
+                model = %event.ctx.model,
+                stream = event.streamed,
+                status = 200,
+                latency_ms = event.ctx.latency_ms,
+                input_tokens,
+                output_tokens,
+                cost_usd = cost,
+                "request finished",
+            );
 
             let log = SpendLog {
                 id: Uuid::new_v4(),
@@ -53,8 +69,8 @@ impl ObserveCallback for ModelSpendObserver {
                 session_id: None,
                 service_name: event.ctx.route,
                 operation: format!("{}:{}", event.ctx.provider, event.ctx.model),
-                input_tokens: event.usage.input_tokens.total.unwrap_or(0),
-                output_tokens: event.usage.output_tokens.total.unwrap_or(0),
+                input_tokens,
+                output_tokens,
                 cost,
                 latency_ms: event.ctx.latency_ms,
                 success: true,
@@ -72,6 +88,19 @@ impl ObserveCallback for ModelSpendObserver {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             let error_info = error_variant_name(&event.error);
+            let status = error_http_status(&event.error);
+
+            tracing::info!(
+                account_id = event.ctx.caller.account_id.as_deref().unwrap_or("-"),
+                route = %event.ctx.route,
+                provider = %event.ctx.provider,
+                model = %event.ctx.model,
+                status,
+                latency_ms = event.ctx.latency_ms,
+                error_kind = %error_info,
+                error = %event.error,
+                "request finished",
+            );
 
             let log = SpendLog {
                 id: Uuid::new_v4(),
@@ -108,6 +137,25 @@ fn error_variant_name(error: &bitrouter_core::errors::BitrouterError) -> String 
         BitrouterError::Provider { .. } => "Provider".into(),
         BitrouterError::StreamProtocol { .. } => "StreamProtocol".into(),
         BitrouterError::AccessDenied { .. } => "AccessDenied".into(),
+    }
+}
+
+/// HTTP status code that a [`BitrouterError`] maps to in the response layer.
+///
+/// Mirrors the mapping in `bitrouter-api`'s rejection handler so that the
+/// finish log reports the same status the client will see.
+fn error_http_status(error: &bitrouter_core::errors::BitrouterError) -> u16 {
+    use bitrouter_core::errors::BitrouterError;
+    match error {
+        BitrouterError::InvalidRequest { .. }
+        | BitrouterError::UnsupportedFeature { .. }
+        | BitrouterError::Cancelled { .. } => 400,
+        BitrouterError::AccessDenied { .. } => 403,
+        BitrouterError::Provider { context, .. } => context.status_code.unwrap_or(502),
+        BitrouterError::Transport { .. }
+        | BitrouterError::ResponseDecode { .. }
+        | BitrouterError::InvalidResponse { .. }
+        | BitrouterError::StreamProtocol { .. } => 502,
     }
 }
 

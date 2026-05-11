@@ -704,11 +704,7 @@ where
         let acct = bitrouter_accounts::filters::account_routes(db_conn.clone(), mgmt_auth.clone());
         let sess = bitrouter_accounts::filters::session_routes(db_conn, mgmt_auth);
 
-        let all = all_routes
-            .or(acct)
-            .or(sess)
-            .recover(handle_auth_rejection)
-            .with(warp::trace::request());
+        let all = all_routes.or(acct).or(sess).recover(handle_auth_rejection);
 
         // Pre-check that the address is available (warp's bind panics on failure).
         check_addr_available(addr)?;
