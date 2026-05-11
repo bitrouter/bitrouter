@@ -263,6 +263,11 @@ pub struct ChatCompletionChunkDelta {
     pub role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    // Reasoning/thinking content emitted by OpenAI-compatible providers with
+    // extended thinking support (e.g. DeepSeek, GLM).
+    // https://platform.openai.com/docs/guides/reasoning
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ChatResponseToolCallDelta>>,
 }

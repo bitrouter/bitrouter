@@ -43,6 +43,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) const OPENAI_PROVIDER_NAME: &str = "openai";
 const STREAM_TEXT_ID: &str = "text";
+const STREAM_REASONING_ID: &str = "reasoning";
 
 // ── Helper functions (moved from types.rs) ──────────────────────────────────
 
@@ -472,11 +473,10 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ChatMessage>> {
                             });
                         }
                         LanguageModelAssistantContent::Reasoning { .. } => {
-                            return Err(BitrouterError::unsupported(
-                                OPENAI_PROVIDER_NAME,
-                                "assistant reasoning prompt parts",
-                                Some("Chat completions does not expose a dedicated reasoning message part".to_owned()),
-                            ));
+                            // OpenAI Chat Completions does not have a dedicated
+                            // reasoning message part; silently strip thinking
+                            // blocks from prior turns.
+                            // https://platform.openai.com/docs/guides/reasoning
                         }
                         LanguageModelAssistantContent::File { .. } => {
                             return Err(BitrouterError::unsupported(
@@ -834,6 +834,7 @@ impl OpenAiSseParser {
 struct OpenAiStreamState {
     metadata_emitted: bool,
     text_started: bool,
+    reasoning_started: bool,
     tool_inputs: HashMap<u32, OpenAiToolInputState>,
     usage: Option<LanguageModelUsage>,
     finish_reason:
@@ -871,8 +872,31 @@ impl OpenAiStreamState {
                 continue;
             }
 
+            if let Some(reasoning) = choice.delta.reasoning_content {
+                if !self.reasoning_started {
+                    parts.push(LanguageModelStreamPart::ReasoningStart {
+                        id: STREAM_REASONING_ID.to_owned(),
+                        provider_metadata: None,
+                    });
+                    self.reasoning_started = true;
+                }
+                parts.push(LanguageModelStreamPart::ReasoningDelta {
+                    id: STREAM_REASONING_ID.to_owned(),
+                    delta: reasoning,
+                    provider_metadata: None,
+                });
+            }
+
             if let Some(content) = choice.delta.content {
                 if !self.text_started {
+                    // Close any open reasoning block before starting text.
+                    if self.reasoning_started {
+                        parts.push(LanguageModelStreamPart::ReasoningEnd {
+                            id: STREAM_REASONING_ID.to_owned(),
+                            provider_metadata: None,
+                        });
+                        self.reasoning_started = false;
+                    }
                     parts.push(LanguageModelStreamPart::TextStart {
                         id: STREAM_TEXT_ID.to_owned(),
                         provider_metadata: None,
@@ -959,6 +983,12 @@ impl OpenAiStreamState {
         self.finished = true;
 
         let mut parts = Vec::new();
+        if self.reasoning_started {
+            parts.push(LanguageModelStreamPart::ReasoningEnd {
+                id: STREAM_REASONING_ID.to_owned(),
+                provider_metadata: None,
+            });
+        }
         if self.text_started {
             parts.push(LanguageModelStreamPart::TextEnd {
                 id: STREAM_TEXT_ID.to_owned(),
@@ -1312,6 +1342,105 @@ mod tests {
                 .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
         );
         assert!(parser.is_finished());
+    }
+
+    #[test]
+    fn sse_parser_reasoning_then_text_stream() {
+        // Regression test for issue #448: OpenAI-compatible providers
+        // (DeepSeek, GLM, Aliyun) stream chain-of-thought via the
+        // `reasoning_content` delta field. The state machine must emit
+        // ReasoningStart/Delta then close that block before opening a Text
+        // block when visible content arrives.
+        let mut parser = OpenAiSseParser::new(false);
+
+        let chunk1 = json!({
+            "id": "c1", "created": 1, "model": "deepseek-r1",
+            "choices": [{"index": 0, "delta": {"reasoning_content": "Hmm"}, "finish_reason": null}]
+        });
+        let chunk2 = json!({
+            "id": "c1", "created": 1, "model": "deepseek-r1",
+            "choices": [{"index": 0, "delta": {"reasoning_content": " let me think"}, "finish_reason": null}]
+        });
+        let chunk3 = json!({
+            "id": "c1", "created": 1, "model": "deepseek-r1",
+            "choices": [{"index": 0, "delta": {"content": "Answer"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+        });
+
+        let parts = parser.push_bytes(&sse_event(&chunk1.to_string()));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ReasoningStart { .. }))
+        );
+        assert!(parts.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::ReasoningDelta { delta, .. } if delta == "Hmm")
+        ));
+
+        let parts = parser.push_bytes(&sse_event(&chunk2.to_string()));
+        // Subsequent reasoning chunks must not re-emit ReasoningStart.
+        assert!(
+            !parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ReasoningStart { .. }))
+        );
+        assert!(parts.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::ReasoningDelta { delta, .. } if delta == " let me think")
+        ));
+
+        let parts = parser.push_bytes(&sse_event(&chunk3.to_string()));
+        // Transitioning to visible text must close the reasoning block
+        // before opening text.
+        let reasoning_end_idx = parts
+            .iter()
+            .position(|p| matches!(p, LanguageModelStreamPart::ReasoningEnd { .. }))
+            .expect("ReasoningEnd should appear before text starts");
+        let text_start_idx = parts
+            .iter()
+            .position(|p| matches!(p, LanguageModelStreamPart::TextStart { .. }))
+            .expect("TextStart should appear");
+        assert!(reasoning_end_idx < text_start_idx);
+        assert!(parts.iter().any(
+            |p| matches!(p, LanguageModelStreamPart::TextDelta { delta, .. } if delta == "Answer")
+        ));
+
+        let done_parts = parser.push_bytes(&sse_event("[DONE]"));
+        assert!(
+            done_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::TextEnd { .. }))
+        );
+        assert!(
+            done_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
+    }
+
+    #[test]
+    fn sse_parser_reasoning_only_closed_on_finish() {
+        // If a stream ends with only reasoning (no visible content), the
+        // ReasoningEnd must still be emitted at finish time.
+        let mut parser = OpenAiSseParser::new(false);
+
+        let chunk = json!({
+            "id": "c1", "created": 1, "model": "deepseek-r1",
+            "choices": [{"index": 0, "delta": {"reasoning_content": "thinking..."}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        });
+        parser.push_bytes(&sse_event(&chunk.to_string()));
+
+        let done_parts = parser.push_bytes(&sse_event("[DONE]"));
+        assert!(
+            done_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ReasoningEnd { .. }))
+        );
+        assert!(
+            done_parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
     }
 
     #[test]

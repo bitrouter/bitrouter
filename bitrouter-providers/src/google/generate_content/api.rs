@@ -41,6 +41,7 @@ pub(super) use bitrouter_core::api::google::generate_content::types::GenerateCon
 
 pub(super) const GOOGLE_PROVIDER_NAME: &str = "google";
 pub(super) const STREAM_TEXT_ID: &str = "text";
+pub(super) const STREAM_REASONING_ID: &str = "reasoning";
 
 // ── Default max tokens ──────────────────────────────────────────────────────
 
@@ -433,6 +434,7 @@ fn convert_prompt(
                         inline_data: None,
                         function_call: None,
                         function_response: None,
+                        thought: None,
                     }]),
                 });
             }
@@ -476,6 +478,7 @@ fn convert_user_content(
                     inline_data: None,
                     function_call: None,
                     function_response: None,
+                    thought: None,
                 });
             }
             LanguageModelUserContent::File {
@@ -527,6 +530,7 @@ fn convert_file_input(data: &LanguageModelDataContent, media_type: &str) -> Resu
         }),
         function_call: None,
         function_response: None,
+        thought: None,
     })
 }
 
@@ -541,6 +545,7 @@ fn convert_assistant_content(content: &[LanguageModelAssistantContent]) -> Resul
                     inline_data: None,
                     function_call: None,
                     function_response: None,
+                    thought: None,
                 });
             }
             LanguageModelAssistantContent::ToolCall {
@@ -554,18 +559,13 @@ fn convert_assistant_content(content: &[LanguageModelAssistantContent]) -> Resul
                         args: Some(input.clone()),
                     }),
                     function_response: None,
+                    thought: None,
                 });
             }
             LanguageModelAssistantContent::Reasoning { .. } => {
-                return Err(BitrouterError::unsupported(
-                    GOOGLE_PROVIDER_NAME,
-                    "assistant reasoning prompt parts",
-                    Some(
-                        "Google Generative AI API does not expose a dedicated reasoning \
-                         message part"
-                            .to_owned(),
-                    ),
-                ));
+                // Gemini does not accept thought summaries back as input —
+                // they're stream-only output. Silently strip on multi-turn.
+                // https://ai.google.dev/gemini-api/docs/thinking#thought-summaries
             }
             LanguageModelAssistantContent::File { .. } => {
                 return Err(BitrouterError::unsupported(
@@ -603,6 +603,7 @@ fn convert_tool_results(content: &[LanguageModelToolResult]) -> Result<Vec<Googl
                         name: tool_name.clone(),
                         response: response_value,
                     }),
+                    thought: None,
                 });
             }
             LanguageModelToolResult::ToolApprovalResponse { .. } => {
@@ -814,6 +815,7 @@ impl GoogleSseParser {
 struct GoogleStreamState {
     metadata_emitted: bool,
     text_started: bool,
+    reasoning_started: bool,
     tool_started: HashMap<String, bool>,
     usage: Option<LanguageModelUsage>,
     finish_reason:
@@ -860,18 +862,44 @@ impl GoogleStreamState {
             {
                 for part in content_parts {
                     if let Some(text) = &part.text {
-                        if !self.text_started {
-                            parts.push(LanguageModelStreamPart::TextStart {
-                                id: STREAM_TEXT_ID.to_owned(),
+                        // Gemini 2.5+ flags thought summaries with
+                        // `thought: true` on a text part; route those to
+                        // reasoning events instead of visible text.
+                        // https://ai.google.dev/gemini-api/docs/thinking#thought-summaries
+                        if part.thought.unwrap_or(false) {
+                            if !self.reasoning_started {
+                                parts.push(LanguageModelStreamPart::ReasoningStart {
+                                    id: STREAM_REASONING_ID.to_owned(),
+                                    provider_metadata: None,
+                                });
+                                self.reasoning_started = true;
+                            }
+                            parts.push(LanguageModelStreamPart::ReasoningDelta {
+                                id: STREAM_REASONING_ID.to_owned(),
+                                delta: text.clone(),
                                 provider_metadata: None,
                             });
-                            self.text_started = true;
+                        } else {
+                            if !self.text_started {
+                                if self.reasoning_started {
+                                    parts.push(LanguageModelStreamPart::ReasoningEnd {
+                                        id: STREAM_REASONING_ID.to_owned(),
+                                        provider_metadata: None,
+                                    });
+                                    self.reasoning_started = false;
+                                }
+                                parts.push(LanguageModelStreamPart::TextStart {
+                                    id: STREAM_TEXT_ID.to_owned(),
+                                    provider_metadata: None,
+                                });
+                                self.text_started = true;
+                            }
+                            parts.push(LanguageModelStreamPart::TextDelta {
+                                id: STREAM_TEXT_ID.to_owned(),
+                                delta: text.clone(),
+                                provider_metadata: None,
+                            });
                         }
-                        parts.push(LanguageModelStreamPart::TextDelta {
-                            id: STREAM_TEXT_ID.to_owned(),
-                            delta: text.clone(),
-                            provider_metadata: None,
-                        });
                     }
                     if let Some(fc) = &part.function_call {
                         let tool_id = fc.name.clone();
@@ -931,6 +959,12 @@ impl GoogleStreamState {
         self.finished = true;
 
         let mut parts = Vec::new();
+        if self.reasoning_started {
+            parts.push(LanguageModelStreamPart::ReasoningEnd {
+                id: STREAM_REASONING_ID.to_owned(),
+                provider_metadata: None,
+            });
+        }
         if self.text_started {
             parts.push(LanguageModelStreamPart::TextEnd {
                 id: STREAM_TEXT_ID.to_owned(),
@@ -1295,6 +1329,87 @@ mod tests {
     }
 
     #[test]
+    fn parse_thought_summary_then_text_stream() {
+        // Regression test for issue #448: Gemini 2.5+ streams thought
+        // summaries as text parts flagged with `thought: true`. The
+        // parser must route those to Reasoning events, then close the
+        // reasoning block before the visible text block begins.
+        let mut parser = GoogleSseParser::new(false);
+
+        let parts = parser.push_bytes(&sse_event(
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"Pondering","thought":true}]},"index":0}],"modelVersion":"gemini-2.5-pro","usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}"#,
+        ));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ReasoningStart { .. }))
+        );
+        assert!(parts.iter().any(|p| matches!(
+            p,
+            LanguageModelStreamPart::ReasoningDelta { delta, .. } if delta == "Pondering"
+        )));
+        assert!(
+            !parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::TextStart { .. })),
+            "thought summaries must not start a visible text block"
+        );
+
+        // Same call now flips to visible text — reasoning must close
+        // before text opens.
+        let parts = parser.push_bytes(&sse_event(
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"Final answer"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}"#,
+        ));
+        let reasoning_end = parts
+            .iter()
+            .position(|p| matches!(p, LanguageModelStreamPart::ReasoningEnd { .. }))
+            .expect("ReasoningEnd before text");
+        let text_start = parts
+            .iter()
+            .position(|p| matches!(p, LanguageModelStreamPart::TextStart { .. }))
+            .expect("TextStart after reasoning");
+        assert!(reasoning_end < text_start);
+        assert!(parts.iter().any(|p| matches!(
+            p,
+            LanguageModelStreamPart::TextDelta { delta, .. } if delta == "Final answer"
+        )));
+
+        let parts = parser.finish();
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::TextEnd { .. }))
+        );
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
+    }
+
+    #[test]
+    fn parse_thought_summary_only_closes_on_finish() {
+        // If the upstream emits only thought parts before closing, the
+        // ReasoningEnd must still be flushed on finish.
+        let mut parser = GoogleSseParser::new(false);
+
+        parser.push_bytes(&sse_event(
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking","thought":true}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}"#,
+        ));
+        let parts = parser.finish();
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::ReasoningEnd { .. }))
+        );
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, LanguageModelStreamPart::Finish { .. }))
+        );
+    }
+
+    #[test]
     fn parse_function_call_stream() {
         let mut parser = GoogleSseParser::new(false);
 
@@ -1654,6 +1769,7 @@ mod tests {
                     inline_data: None,
                     function_call: None,
                     function_response: None,
+                    thought: None,
                 }]),
             }],
             system_instruction: Some(GoogleContent {
@@ -1663,6 +1779,7 @@ mod tests {
                     inline_data: None,
                     function_call: None,
                     function_response: None,
+                    thought: None,
                 }]),
             }),
             tools: None,
@@ -1785,6 +1902,7 @@ mod tests {
             }),
             function_call: None,
             function_response: None,
+            thought: None,
         };
         let json = serde_json::to_value(&part).unwrap();
         assert_eq!(json["inlineData"]["mimeType"], "image/png");
@@ -1818,6 +1936,7 @@ mod tests {
                     inline_data: None,
                     function_call: None,
                     function_response: None,
+                    thought: None,
                 }]),
             }],
             system_instruction: None,

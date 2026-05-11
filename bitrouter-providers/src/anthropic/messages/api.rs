@@ -512,14 +512,12 @@ fn convert_assistant_content(
                 });
             }
             LanguageModelAssistantContent::Reasoning { .. } => {
-                return Err(BitrouterError::unsupported(
-                    ANTHROPIC_PROVIDER_NAME,
-                    "assistant reasoning prompt parts",
-                    Some(
-                        "Anthropic messages API does not expose a dedicated reasoning message part"
-                            .to_owned(),
-                    ),
-                ));
+                // Anthropic does support echoing back thinking blocks for
+                // tool-use continuation, but only when the original
+                // signature is preserved. Bitrouter doesn't carry the
+                // signature through `LanguageModelAssistantContent::Reasoning`,
+                // so silently strip rather than emit an invalid block.
+                // https://docs.claude.com/en/docs/build-with-claude/extended-thinking#preserving-thinking-blocks
             }
             LanguageModelAssistantContent::File { .. } => {
                 return Err(BitrouterError::unsupported(

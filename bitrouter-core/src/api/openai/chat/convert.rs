@@ -142,6 +142,21 @@ impl StreamConverter {
                 ChatCompletionChunkDelta {
                     role: None,
                     content: Some(delta.clone()),
+                    reasoning_content: None,
+                    tool_calls: None,
+                },
+                None,
+                None,
+            )),
+            // OpenAI-compatible providers with extended thinking (DeepSeek,
+            // GLM, Aliyun, etc.) stream chain-of-thought via the
+            // `reasoning_content` delta field on Chat Completions chunks.
+            // https://api-docs.deepseek.com/guides/reasoning_model
+            LanguageModelStreamPart::ReasoningDelta { delta, .. } => Some(self.make_chunk(
+                ChatCompletionChunkDelta {
+                    role: None,
+                    content: None,
+                    reasoning_content: Some(delta.clone()),
                     tool_calls: None,
                 },
                 None,
@@ -155,6 +170,7 @@ impl StreamConverter {
                     ChatCompletionChunkDelta {
                         role: None,
                         content: None,
+                        reasoning_content: None,
                         tool_calls: Some(vec![ChatResponseToolCallDelta {
                             index,
                             id: Some(id.clone()),
@@ -179,6 +195,7 @@ impl StreamConverter {
                     ChatCompletionChunkDelta {
                         role: None,
                         content: None,
+                        reasoning_content: None,
                         tool_calls: Some(vec![ChatResponseToolCallDelta {
                             index,
                             id: None,
@@ -205,6 +222,7 @@ impl StreamConverter {
                     ChatCompletionChunkDelta {
                         role: None,
                         content: None,
+                        reasoning_content: None,
                         tool_calls: Some(vec![ChatResponseToolCallDelta {
                             index,
                             id: Some(tool_call_id.clone()),
@@ -230,6 +248,7 @@ impl StreamConverter {
                     ChatCompletionChunkDelta {
                         role: None,
                         content: None,
+                        reasoning_content: None,
                         tool_calls: None,
                     },
                     Some(map_finish_reason(finish_reason)),
@@ -726,6 +745,7 @@ mod tests {
                 delta: ChatCompletionChunkDelta {
                     role: Some("assistant".to_owned()),
                     content: Some("Hello".to_owned()),
+                    reasoning_content: None,
                     tool_calls: None,
                 },
                 finish_reason: None,
@@ -753,6 +773,7 @@ mod tests {
                 delta: ChatCompletionChunkDelta {
                     role: None,
                     content: None,
+                    reasoning_content: None,
                     tool_calls: Some(vec![ChatResponseToolCallDelta {
                         index: 0,
                         id: Some("call_abc".to_owned()),
@@ -787,6 +808,7 @@ mod tests {
                 delta: ChatCompletionChunkDelta {
                     role: None,
                     content: None,
+                    reasoning_content: None,
                     tool_calls: None,
                 },
                 finish_reason: Some("stop".to_owned()),
@@ -1120,6 +1142,51 @@ mod tests {
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hello"));
         assert!(chunk.choices[0].delta.tool_calls.is_none());
         assert!(chunk.choices[0].finish_reason.is_none());
+    }
+
+    #[test]
+    fn stream_converter_reasoning_delta_maps_to_reasoning_content() {
+        // Regression test for issue #448: when the core emits a
+        // ReasoningDelta (e.g. forwarded from a DeepSeek/GLM upstream), the
+        // OpenAI Chat output converter must surface it via the
+        // `reasoning_content` delta field so clients render thinking
+        // in real time.
+        let mut conv = StreamConverter::new("deepseek-r1".to_owned(), "stream-r1".to_owned());
+        let part = LanguageModelStreamPart::ReasoningDelta {
+            id: "r1".to_owned(),
+            delta: "thinking...".to_owned(),
+            provider_metadata: None,
+        };
+        let chunk = conv.convert(&part).expect("reasoning chunk emitted");
+        assert_eq!(
+            chunk.choices[0].delta.reasoning_content.as_deref(),
+            Some("thinking...")
+        );
+        assert!(chunk.choices[0].delta.content.is_none());
+        assert!(chunk.choices[0].delta.tool_calls.is_none());
+    }
+
+    #[test]
+    fn stream_converter_reasoning_start_and_end_drop() {
+        // ReasoningStart/End have no Chat Completions equivalent — the
+        // content boundary is implicit from the presence of
+        // `reasoning_content`/`content` fields. They must not produce
+        // empty chunks that confuse clients.
+        let mut conv = StreamConverter::new("deepseek-r1".to_owned(), "stream-r2".to_owned());
+        assert!(
+            conv.convert(&LanguageModelStreamPart::ReasoningStart {
+                id: "r1".to_owned(),
+                provider_metadata: None,
+            })
+            .is_none()
+        );
+        assert!(
+            conv.convert(&LanguageModelStreamPart::ReasoningEnd {
+                id: "r1".to_owned(),
+                provider_metadata: None,
+            })
+            .is_none()
+        );
     }
 
     #[test]

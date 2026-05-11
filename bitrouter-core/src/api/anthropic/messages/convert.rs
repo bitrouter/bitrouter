@@ -148,6 +148,7 @@ pub struct StreamConverter {
     message_started: bool,
     message_stopped: bool,
     active_text_block_index: Option<u32>,
+    active_thinking_block_index: Option<u32>,
     tool_id_to_index: HashMap<String, u32>,
     started_tool_ids: HashSet<String>,
     closed_tool_ids: HashSet<String>,
@@ -162,6 +163,7 @@ impl StreamConverter {
             message_started: false,
             message_stopped: false,
             active_text_block_index: None,
+            active_thinking_block_index: None,
             tool_id_to_index: HashMap::new(),
             started_tool_ids: HashSet::new(),
             closed_tool_ids: HashSet::new(),
@@ -187,6 +189,24 @@ impl StreamConverter {
                 events
             }
             LanguageModelStreamPart::TextEnd { .. } => self.stop_text_events(),
+            // Anthropic extended thinking surfaces as a `thinking` content
+            // block with `thinking_delta` events, optionally followed by a
+            // `signature_delta`. We only emit the text deltas here — signatures
+            // come through provider_metadata if/when surfaced.
+            // https://docs.claude.com/en/docs/build-with-claude/extended-thinking#streaming-extended-thinking
+            LanguageModelStreamPart::ReasoningStart { .. } => self.start_thinking_events(),
+            LanguageModelStreamPart::ReasoningDelta { delta, .. } => {
+                let mut events = self.start_thinking_events();
+                let index = self.active_thinking_block_index.unwrap_or(0);
+                events.push(MessagesStreamEvent::ContentBlockDelta {
+                    index,
+                    delta: MessagesStreamDelta::ThinkingDelta {
+                        thinking: delta.clone(),
+                    },
+                });
+                events
+            }
+            LanguageModelStreamPart::ReasoningEnd { .. } => self.stop_thinking_events(),
             LanguageModelStreamPart::Error { error } => {
                 let mut events = self.start_message_events();
                 self.message_stopped = true;
@@ -264,6 +284,7 @@ impl StreamConverter {
                 ..
             } => {
                 let mut events = self.stop_text_events();
+                events.extend(self.stop_thinking_events());
                 events.push(MessagesStreamEvent::MessageDelta {
                     delta: MessagesMessageDelta {
                         delta_type: "message_delta".to_owned(),
@@ -298,6 +319,7 @@ impl StreamConverter {
         }
 
         let mut events = self.stop_text_events();
+        events.extend(self.stop_thinking_events());
         events.push(MessagesStreamEvent::MessageDelta {
             delta: MessagesMessageDelta {
                 delta_type: "message_delta".to_owned(),
@@ -337,7 +359,7 @@ impl StreamConverter {
     }
 
     fn start_text_events(&mut self) -> Vec<MessagesStreamEvent> {
-        let mut events = self.start_message_events();
+        let mut events = self.stop_thinking_events();
         if self.active_text_block_index.is_none() {
             let index = self.next_block_index;
             self.next_block_index += 1;
@@ -360,12 +382,38 @@ impl StreamConverter {
         events
     }
 
+    fn start_thinking_events(&mut self) -> Vec<MessagesStreamEvent> {
+        let mut events = self.start_message_events();
+        if self.active_thinking_block_index.is_none() {
+            let index = self.next_block_index;
+            self.next_block_index += 1;
+            self.active_thinking_block_index = Some(index);
+            events.push(MessagesStreamEvent::ContentBlockStart {
+                index,
+                content_block: AnthropicContentBlock::Thinking {
+                    thinking: String::new(),
+                    signature: None,
+                },
+            });
+        }
+        events
+    }
+
+    fn stop_thinking_events(&mut self) -> Vec<MessagesStreamEvent> {
+        let mut events = self.start_message_events();
+        if let Some(index) = self.active_thinking_block_index.take() {
+            events.push(MessagesStreamEvent::ContentBlockStop { index });
+        }
+        events
+    }
+
     fn start_tool_events(&mut self, id: &str, tool_name: &str) -> Vec<MessagesStreamEvent> {
         if self.closed_tool_ids.contains(id) {
             return Vec::new();
         }
 
         let mut events = self.stop_text_events();
+        events.extend(self.stop_thinking_events());
         if self.started_tool_ids.contains(id) {
             return events;
         }
@@ -611,6 +659,135 @@ mod tests {
                     usage.input_tokens == Some(0) && usage.output_tokens == Some(0)
                 )
         ));
+    }
+
+    #[test]
+    fn stream_converter_reasoning_emits_thinking_content_block() {
+        // Regression test for issue #448: when forwarding ReasoningStart/
+        // Delta/End to an Anthropic-format client, the converter must
+        // emit a `thinking` content_block_start, `thinking_delta` events,
+        // and a content_block_stop. Without this, /v1/messages clients
+        // see no SSE traffic until visible text arrives (~1 minute delay
+        // for thinking-enabled upstreams).
+        let mut converter = StreamConverter::new("claude-opus-4".to_owned());
+
+        let start_events = converter.convert(&LanguageModelStreamPart::ReasoningStart {
+            id: "r1".to_owned(),
+            provider_metadata: None,
+        });
+        assert!(start_events.iter().any(|e| matches!(
+            e,
+            MessagesStreamEvent::ContentBlockStart {
+                content_block: AnthropicContentBlock::Thinking { .. },
+                ..
+            }
+        )));
+
+        let delta_events = converter.convert(&LanguageModelStreamPart::ReasoningDelta {
+            id: "r1".to_owned(),
+            delta: "Let me think".to_owned(),
+            provider_metadata: None,
+        });
+        assert!(delta_events.iter().any(|e| matches!(
+            e,
+            MessagesStreamEvent::ContentBlockDelta {
+                delta: MessagesStreamDelta::ThinkingDelta { thinking },
+                ..
+            } if thinking == "Let me think"
+        )));
+
+        let end_events = converter.convert(&LanguageModelStreamPart::ReasoningEnd {
+            id: "r1".to_owned(),
+            provider_metadata: None,
+        });
+        assert!(
+            end_events
+                .iter()
+                .any(|e| matches!(e, MessagesStreamEvent::ContentBlockStop { .. }))
+        );
+    }
+
+    #[test]
+    fn stream_converter_text_after_reasoning_closes_thinking_block() {
+        // When reasoning is followed directly by visible text without an
+        // explicit ReasoningEnd (some upstreams elide it), the converter
+        // must still close the thinking block before opening the text
+        // block — otherwise the client sees overlapping content blocks
+        // on the same index, which Anthropic clients reject.
+        let mut converter = StreamConverter::new("claude-opus-4".to_owned());
+
+        converter.convert(&LanguageModelStreamPart::ReasoningStart {
+            id: "r1".to_owned(),
+            provider_metadata: None,
+        });
+        converter.convert(&LanguageModelStreamPart::ReasoningDelta {
+            id: "r1".to_owned(),
+            delta: "...".to_owned(),
+            provider_metadata: None,
+        });
+
+        let events = converter.convert(&LanguageModelStreamPart::TextDelta {
+            id: "t1".to_owned(),
+            delta: "Hello".to_owned(),
+            provider_metadata: None,
+        });
+        let block_stop_idx = events
+            .iter()
+            .position(|e| matches!(e, MessagesStreamEvent::ContentBlockStop { index: 0 }))
+            .expect("thinking block must close before text starts");
+        let block_start_idx = events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    MessagesStreamEvent::ContentBlockStart {
+                        content_block: AnthropicContentBlock::Text { .. },
+                        ..
+                    }
+                )
+            })
+            .expect("text content block start must follow");
+        assert!(block_stop_idx < block_start_idx);
+    }
+
+    #[test]
+    fn stream_converter_finish_closes_open_thinking_block() {
+        // If the upstream finishes mid-thinking (no explicit ReasoningEnd
+        // before Finish), the converter must still close the thinking
+        // block to produce a valid Anthropic stream.
+        let mut converter = StreamConverter::new("claude-opus-4".to_owned());
+
+        converter.convert(&LanguageModelStreamPart::ReasoningStart {
+            id: "r1".to_owned(),
+            provider_metadata: None,
+        });
+        let events = converter.convert(&LanguageModelStreamPart::Finish {
+            usage: crate::models::language::usage::LanguageModelUsage {
+                input_tokens: crate::models::language::usage::LanguageModelInputTokens {
+                    total: None,
+                    no_cache: None,
+                    cache_read: None,
+                    cache_write: None,
+                },
+                output_tokens: crate::models::language::usage::LanguageModelOutputTokens {
+                    total: None,
+                    text: None,
+                    reasoning: None,
+                },
+                raw: None,
+            },
+            finish_reason: LanguageModelFinishReason::Stop,
+            provider_metadata: None,
+        });
+        let stop_idx = events
+            .iter()
+            .position(|e| matches!(e, MessagesStreamEvent::ContentBlockStop { .. }))
+            .expect("thinking block must close on finish");
+        let message_stop_idx = events
+            .iter()
+            .position(|e| matches!(e, MessagesStreamEvent::MessageStop))
+            .expect("message_stop must follow");
+        assert!(stop_idx < message_stop_idx);
     }
 
     #[test]

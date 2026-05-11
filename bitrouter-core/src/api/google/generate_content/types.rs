@@ -31,7 +31,7 @@ pub struct GoogleContent {
     pub parts: Option<Vec<GooglePart>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GooglePart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,6 +42,12 @@ pub struct GooglePart {
     pub function_call: Option<GoogleFunctionCall>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function_response: Option<GoogleFunctionResponse>,
+    /// Set to `true` for thought summaries when thinking is enabled on
+    /// Gemini 2.5+ models. The `text` field still carries the content, but
+    /// it must be routed to reasoning rather than visible output.
+    /// <https://ai.google.dev/gemini-api/docs/thinking#thought-summaries>
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

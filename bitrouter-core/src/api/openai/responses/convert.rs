@@ -151,6 +151,39 @@ impl StreamConverter {
                     item: None,
                 }]
             }
+            // OpenAI Responses streams reasoning summaries via
+            // `response.reasoning_text.delta` / `.done` events.
+            // https://platform.openai.com/docs/api-reference/responses-streaming/response/reasoning_text/delta
+            LanguageModelStreamPart::ReasoningDelta { delta, .. } => {
+                vec![ResponsesStreamEvent {
+                    event_type: "response.reasoning_text.delta".to_owned(),
+                    item_id: None,
+                    output_index: Some(0),
+                    content_index: Some(0),
+                    delta: Some(delta.clone()),
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    item: None,
+                }]
+            }
+            LanguageModelStreamPart::ReasoningEnd { .. } => {
+                vec![ResponsesStreamEvent {
+                    event_type: "response.reasoning_text.done".to_owned(),
+                    item_id: None,
+                    output_index: Some(0),
+                    content_index: Some(0),
+                    delta: None,
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    item: None,
+                }]
+            }
+            // ReasoningStart has no dedicated Responses event; the first
+            // `.delta` is sufficient. We swallow it so it doesn't show up
+            // as a Raw passthrough.
+            LanguageModelStreamPart::ReasoningStart { .. } => vec![],
             LanguageModelStreamPart::ToolCall {
                 tool_call_id,
                 tool_name,
@@ -1125,6 +1158,46 @@ mod tests {
         assert_eq!(events[0].delta.as_deref(), Some("Hello"));
         assert_eq!(events[0].output_index, Some(0));
         assert_eq!(events[0].content_index, Some(0));
+    }
+
+    #[test]
+    fn stream_converter_reasoning_delta_emits_reasoning_text_delta() {
+        // Regression test for issue #448: ReasoningDelta must surface as
+        // a `response.reasoning_text.delta` event so Responses-format
+        // clients render thinking in real time.
+        let mut conv = StreamConverter::new();
+        let events = conv.convert(&LanguageModelStreamPart::ReasoningDelta {
+            id: "r1".to_owned(),
+            delta: "Hmm".to_owned(),
+            provider_metadata: None,
+        });
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "response.reasoning_text.delta");
+        assert_eq!(events[0].delta.as_deref(), Some("Hmm"));
+    }
+
+    #[test]
+    fn stream_converter_reasoning_end_emits_reasoning_text_done() {
+        let mut conv = StreamConverter::new();
+        let events = conv.convert(&LanguageModelStreamPart::ReasoningEnd {
+            id: "r1".to_owned(),
+            provider_metadata: None,
+        });
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "response.reasoning_text.done");
+        assert!(events[0].delta.is_none());
+    }
+
+    #[test]
+    fn stream_converter_reasoning_start_swallowed() {
+        // ReasoningStart has no dedicated Responses event; the first
+        // `.delta` is sufficient. Must produce zero events.
+        let mut conv = StreamConverter::new();
+        let events = conv.convert(&LanguageModelStreamPart::ReasoningStart {
+            id: "r1".to_owned(),
+            provider_metadata: None,
+        });
+        assert!(events.is_empty());
     }
 
     #[test]

@@ -36,6 +36,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) const OPENAI_PROVIDER_NAME: &str = "openai";
 const STREAM_TEXT_ID: &str = "text";
+const STREAM_REASONING_ID: &str = "reasoning";
 const MAX_RESPONSES_CALL_ID_LEN: usize = 64;
 
 // ── Free-function conversions (replace From / TryFrom impls) ───────────────
@@ -490,14 +491,11 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ResponsesInputI
                             }));
                         }
                         LanguageModelAssistantContent::Reasoning { .. } => {
-                            return Err(BitrouterError::unsupported(
-                                OPENAI_PROVIDER_NAME,
-                                "assistant reasoning prompt parts",
-                                Some(
-                                    "Responses API does not expose a dedicated assistant reasoning input type"
-                                        .to_owned(),
-                                ),
-                            ));
+                            // The Responses API only accepts `output_text` /
+                            // function_call assistant items as input; reasoning
+                            // items from a prior turn are not echoed back.
+                            // Silently strip rather than failing the request.
+                            // https://platform.openai.com/docs/api-reference/responses/create
                         }
                         LanguageModelAssistantContent::File { .. } => {
                             return Err(BitrouterError::unsupported(
@@ -910,6 +908,7 @@ struct OpenAiToolInputState {
 #[derive(Default)]
 struct OpenAiResponsesStreamState {
     metadata_emitted: bool,
+    reasoning_started: bool,
     text_started: bool,
     text_id: Option<String>,
     tool_inputs: HashMap<String, OpenAiToolInputState>,
@@ -958,6 +957,18 @@ enum OpenAiResponsesStreamEvent {
         #[serde(default)]
         arguments: Option<String>,
     },
+    // https://platform.openai.com/docs/guides/reasoning#streaming
+    #[serde(rename = "response.reasoning_text.delta")]
+    ResponseReasoningTextDelta {
+        #[serde(default)]
+        item_id: Option<String>,
+        delta: String,
+    },
+    #[serde(rename = "response.reasoning_text.done")]
+    ResponseReasoningTextDone {
+        #[serde(default)]
+        item_id: Option<String>,
+    },
     #[serde(rename = "response.completed")]
     ResponseCompleted { response: ResponsesResponse },
     #[serde(rename = "response.incomplete")]
@@ -994,10 +1005,45 @@ impl OpenAiResponsesStreamState {
             OpenAiResponsesStreamEvent::ResponseOutputItemDone { item } => {
                 self.apply_output_item(item, true)
             }
+            OpenAiResponsesStreamEvent::ResponseReasoningTextDelta { delta, .. } => {
+                let mut parts = Vec::new();
+                if !self.reasoning_started {
+                    parts.push(LanguageModelStreamPart::ReasoningStart {
+                        id: STREAM_REASONING_ID.to_owned(),
+                        provider_metadata: None,
+                    });
+                    self.reasoning_started = true;
+                }
+                parts.push(LanguageModelStreamPart::ReasoningDelta {
+                    id: STREAM_REASONING_ID.to_owned(),
+                    delta,
+                    provider_metadata: None,
+                });
+                parts
+            }
+            OpenAiResponsesStreamEvent::ResponseReasoningTextDone { .. } => {
+                let mut parts = Vec::new();
+                if self.reasoning_started {
+                    parts.push(LanguageModelStreamPart::ReasoningEnd {
+                        id: STREAM_REASONING_ID.to_owned(),
+                        provider_metadata: None,
+                    });
+                    self.reasoning_started = false;
+                }
+                parts
+            }
             OpenAiResponsesStreamEvent::ResponseOutputTextDelta { item_id, delta } => {
                 let text_id = item_id.unwrap_or_else(|| STREAM_TEXT_ID.to_owned());
                 let mut parts = Vec::new();
                 if !self.text_started {
+                    // Close any open reasoning block before starting text.
+                    if self.reasoning_started {
+                        parts.push(LanguageModelStreamPart::ReasoningEnd {
+                            id: STREAM_REASONING_ID.to_owned(),
+                            provider_metadata: None,
+                        });
+                        self.reasoning_started = false;
+                    }
                     parts.push(LanguageModelStreamPart::TextStart {
                         id: text_id.clone(),
                         provider_metadata: None,
@@ -1304,6 +1350,12 @@ impl OpenAiResponsesStreamState {
         self.finished = true;
 
         let mut parts = Vec::new();
+        if self.reasoning_started {
+            parts.push(LanguageModelStreamPart::ReasoningEnd {
+                id: STREAM_REASONING_ID.to_owned(),
+                provider_metadata: None,
+            });
+        }
         if self.text_started {
             parts.push(LanguageModelStreamPart::TextEnd {
                 id: self
@@ -1920,7 +1972,7 @@ mod tests {
     }
 
     #[test]
-    fn sse_parser_ignores_unknown_responses_events() {
+    fn sse_parser_emits_reasoning_events() {
         let mut parser = OpenAiResponsesSseParser::new(false);
 
         let reasoning_delta = json!({
@@ -1928,6 +1980,11 @@ mod tests {
             "sequence_number": 1,
             "item_id": "rs_1",
             "delta": "thinking"
+        });
+        let reasoning_done = json!({
+            "type": "response.reasoning_text.done",
+            "sequence_number": 2,
+            "item_id": "rs_1"
         });
         let completed = json!({
             "type": "response.completed",
@@ -1941,10 +1998,23 @@ mod tests {
             }
         });
 
-        let unknown_parts = parser.push_bytes(&sse_event(&reasoning_delta.to_string()));
+        let delta_parts = parser.push_bytes(&sse_event(&reasoning_delta.to_string()));
         assert!(
-            unknown_parts.is_empty(),
-            "unknown Responses events should be ignored, got {unknown_parts:?}"
+            delta_parts
+                .iter()
+                .any(|part| matches!(part, LanguageModelStreamPart::ReasoningStart { .. }))
+        );
+        assert!(
+            delta_parts.iter().any(
+                |part| matches!(part, LanguageModelStreamPart::ReasoningDelta { delta, .. } if delta == "thinking")
+            )
+        );
+
+        let done_reasoning_parts = parser.push_bytes(&sse_event(&reasoning_done.to_string()));
+        assert!(
+            done_reasoning_parts
+                .iter()
+                .any(|part| matches!(part, LanguageModelStreamPart::ReasoningEnd { .. }))
         );
 
         let done_parts = parser.push_bytes(&sse_event(&completed.to_string()));
@@ -1952,7 +2022,7 @@ mod tests {
             done_parts
                 .iter()
                 .all(|part| !matches!(part, LanguageModelStreamPart::Error { .. })),
-            "unknown Responses events must not poison the stream: {done_parts:?}"
+            "Responses events must not poison the stream: {done_parts:?}"
         );
         assert!(
             done_parts

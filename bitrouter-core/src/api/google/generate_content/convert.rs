@@ -193,11 +193,30 @@ impl StreamConverter {
                     inline_data: None,
                     function_call: None,
                     function_response: None,
+                    thought: None,
                 }],
                 None,
                 None,
                 None,
             )),
+            // Gemini 2.5+ streams thought summaries as `text` parts with
+            // `thought: true`. We mirror that on the output side so clients
+            // see reasoning chunks alongside visible text.
+            // https://ai.google.dev/gemini-api/docs/thinking#streaming-thoughts
+            LanguageModelStreamPart::ReasoningDelta { delta, .. } => Some(self.make_chunk(
+                vec![GooglePart {
+                    text: Some(delta.clone()),
+                    inline_data: None,
+                    function_call: None,
+                    function_response: None,
+                    thought: Some(true),
+                }],
+                None,
+                None,
+                None,
+            )),
+            LanguageModelStreamPart::ReasoningStart { .. }
+            | LanguageModelStreamPart::ReasoningEnd { .. } => None,
             LanguageModelStreamPart::ToolCall {
                 tool_name,
                 tool_input,
@@ -213,6 +232,7 @@ impl StreamConverter {
                             args: Some(args),
                         }),
                         function_response: None,
+                        thought: None,
                     }],
                     None,
                     None,
@@ -248,6 +268,7 @@ impl StreamConverter {
                                 args: Some(args),
                             }),
                             function_response: None,
+                            thought: None,
                         }],
                         None,
                         None,
@@ -270,6 +291,7 @@ impl StreamConverter {
                         inline_data: None,
                         function_call: None,
                         function_response: None,
+                        thought: None,
                     }],
                     Some(map_finish_reason(finish_reason)),
                     Some(GenerateContentUsageMetadata {
@@ -320,6 +342,14 @@ fn convert_model_parts(parts: Option<Vec<GooglePart>>) -> Vec<LanguageModelAssis
                     tool_name: fc.name,
                     input: fc.args.unwrap_or_default(),
                     provider_executed: None,
+                    provider_options: None,
+                })
+            } else if p.thought.unwrap_or(false) {
+                // Gemini marks thought summaries with `thought: true`; treat
+                // those as reasoning rather than visible assistant text.
+                // https://ai.google.dev/gemini-api/docs/thinking#thought-summaries
+                p.text.map(|text| LanguageModelAssistantContent::Reasoning {
+                    text,
                     provider_options: None,
                 })
             } else {
@@ -392,6 +422,17 @@ fn extract_response_parts(blocks: &[LanguageModelContent]) -> Vec<GooglePart> {
                 inline_data: None,
                 function_call: None,
                 function_response: None,
+                thought: None,
+            }),
+            // Per Gemini thinking docs, thought summaries appear as text parts
+            // flagged with `thought: true`.
+            // https://ai.google.dev/gemini-api/docs/thinking#thought-summaries
+            LanguageModelContent::Reasoning { text, .. } => out.push(GooglePart {
+                text: Some(text.clone()),
+                inline_data: None,
+                function_call: None,
+                function_response: None,
+                thought: Some(true),
             }),
             LanguageModelContent::ToolCall {
                 tool_name,
@@ -407,6 +448,7 @@ fn extract_response_parts(blocks: &[LanguageModelContent]) -> Vec<GooglePart> {
                         args: Some(args),
                     }),
                     function_response: None,
+                    thought: None,
                 });
             }
             _ => {}
@@ -423,5 +465,108 @@ fn map_finish_reason(reason: &LanguageModelFinishReason) -> String {
         LanguageModelFinishReason::ContentFilter => "SAFETY".to_owned(),
         LanguageModelFinishReason::Error => "OTHER".to_owned(),
         LanguageModelFinishReason::Other(other) => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_converter_reasoning_delta_emits_thought_part() {
+        // Regression test for issue #448: ReasoningDelta must surface as
+        // a Gemini text part flagged with `thought: true` so clients
+        // distinguish thinking from visible output.
+        let mut conv = StreamConverter::new("gemini-2.5-pro".to_owned());
+        let chunk = conv
+            .convert(&LanguageModelStreamPart::ReasoningDelta {
+                id: "r1".to_owned(),
+                delta: "Thinking".to_owned(),
+                provider_metadata: None,
+            })
+            .expect("reasoning chunk emitted");
+        let parts = chunk
+            .candidates
+            .as_ref()
+            .and_then(|c| c.first())
+            .and_then(|c| c.content.as_ref())
+            .and_then(|c| c.parts.as_ref())
+            .expect("parts present");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].text.as_deref(), Some("Thinking"));
+        assert_eq!(parts[0].thought, Some(true));
+    }
+
+    #[test]
+    fn stream_converter_reasoning_start_and_end_drop() {
+        let mut conv = StreamConverter::new("gemini-2.5-pro".to_owned());
+        assert!(
+            conv.convert(&LanguageModelStreamPart::ReasoningStart {
+                id: "r1".to_owned(),
+                provider_metadata: None,
+            })
+            .is_none()
+        );
+        assert!(
+            conv.convert(&LanguageModelStreamPart::ReasoningEnd {
+                id: "r1".to_owned(),
+                provider_metadata: None,
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn convert_model_parts_routes_thought_to_reasoning() {
+        // Multi-turn echo-back: a `thought: true` part on the input side
+        // must become a Reasoning assistant content block, not Text.
+        let parts = vec![
+            GooglePart {
+                text: Some("inner monologue".to_owned()),
+                inline_data: None,
+                function_call: None,
+                function_response: None,
+                thought: Some(true),
+            },
+            GooglePart {
+                text: Some("visible reply".to_owned()),
+                inline_data: None,
+                function_call: None,
+                function_response: None,
+                thought: None,
+            },
+        ];
+        let converted = convert_model_parts(Some(parts));
+        assert_eq!(converted.len(), 2);
+        assert!(matches!(
+            &converted[0],
+            LanguageModelAssistantContent::Reasoning { text, .. } if text == "inner monologue"
+        ));
+        assert!(matches!(
+            &converted[1],
+            LanguageModelAssistantContent::Text { text, .. } if text == "visible reply"
+        ));
+    }
+
+    #[test]
+    fn extract_response_parts_emits_thought_for_reasoning_block() {
+        // Non-streaming response: a LanguageModelContent::Reasoning
+        // becomes a Gemini text part flagged with `thought: true`.
+        let blocks = vec![
+            LanguageModelContent::Reasoning {
+                text: "thinking".to_owned(),
+                provider_metadata: None,
+            },
+            LanguageModelContent::Text {
+                text: "answer".to_owned(),
+                provider_metadata: None,
+            },
+        ];
+        let parts = extract_response_parts(&blocks);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].thought, Some(true));
+        assert_eq!(parts[0].text.as_deref(), Some("thinking"));
+        assert_eq!(parts[1].thought, None);
+        assert_eq!(parts[1].text.as_deref(), Some("answer"));
     }
 }
