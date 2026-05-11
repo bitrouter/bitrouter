@@ -339,22 +339,59 @@ async fn responses_streaming_sends_sse_events() {
     assert_eq!(res.headers()["content-type"], "text/event-stream");
 
     let events = parse_sse_body(res.body());
-    assert_eq!(events.len(), 3);
+    // Canonical Responses lifecycle for a single text delta + finish:
+    // response.created, response.in_progress, response.output_item.added,
+    // response.content_part.added, response.output_text.delta,
+    // response.output_text.done, response.content_part.done,
+    // response.output_item.done, response.completed.
+    // https://platform.openai.com/docs/api-reference/responses-streaming
+    let event_types: Vec<Option<&str>> = events.iter().map(|(e, _)| e.as_deref()).collect();
+    assert_eq!(event_types[0], Some("response.created"));
+    assert_eq!(event_types[1], Some("response.in_progress"));
+    assert!(event_types.contains(&Some("response.output_item.added")));
+    assert!(event_types.contains(&Some("response.content_part.added")));
+    assert!(event_types.contains(&Some("response.output_text.delta")));
+    assert!(event_types.contains(&Some("response.output_text.done")));
+    assert!(event_types.contains(&Some("response.content_part.done")));
+    assert!(event_types.contains(&Some("response.output_item.done")));
+    assert_eq!(event_types.last(), Some(&Some("response.completed")));
 
-    assert_eq!(events[0].0.as_deref(), Some("response.output_text.delta"));
-    let delta: Value = serde_json::from_str(&events[0].1).unwrap();
-    assert_eq!(delta["type"], "response.output_text.delta");
+    // response.created must carry the full response envelope so strict
+    // clients (Codex) can adopt the response id and model immediately.
+    let created: Value = serde_json::from_str(&events[0].1).unwrap();
+    assert_eq!(created["type"], "response.created");
+    assert!(created["response"].is_object());
+    assert_eq!(created["sequence_number"], 0);
+
+    // Every event carries a monotonic sequence_number.
+    for (i, (_, data)) in events.iter().enumerate() {
+        let v: Value = serde_json::from_str(data).unwrap();
+        assert_eq!(v["sequence_number"], i as i64, "event {i}");
+    }
+
+    // Find the delta event and confirm payload shape.
+    let delta = events
+        .iter()
+        .find(|(t, _)| t.as_deref() == Some("response.output_text.delta"))
+        .map(|(_, d)| serde_json::from_str::<Value>(d).unwrap())
+        .expect("delta present");
+    assert_eq!(delta["delta"], "Hello");
     assert_eq!(delta["output_index"], 0);
     assert_eq!(delta["content_index"], 0);
-    assert_eq!(delta["delta"], "Hello");
+    assert!(delta["item_id"].is_string());
 
-    assert_eq!(events[1].0.as_deref(), Some("response.completed"));
-    let finish: Value = serde_json::from_str(&events[1].1).unwrap();
-    assert_eq!(finish["type"], "response.completed");
-    assert!(finish.get("delta").is_none() || finish["delta"].is_null());
+    // response.completed must carry the final response with usage so Codex
+    // doesn't fail with "stream closed before response.completed".
+    let completed = events
+        .iter()
+        .find(|(t, _)| t.as_deref() == Some("response.completed"))
+        .map(|(_, d)| serde_json::from_str::<Value>(d).unwrap())
+        .expect("completed present");
+    assert_eq!(completed["response"]["status"], "completed");
+    assert!(completed["response"]["usage"].is_object());
 
-    assert_eq!(events[2].0, None);
-    assert_eq!(events[2].1, "[DONE]");
+    // Responses SSE has no [DONE] terminator.
+    assert!(events.iter().all(|(_, data)| data != "[DONE]"));
 }
 
 #[tokio::test]
@@ -565,17 +602,21 @@ async fn responses_stream_tool_calls() {
     assert_eq!(res.status(), 200);
 
     let events = parse_sse_body(res.body());
-    // ToolCall produces: output_item.added, arguments.delta, arguments.done, output_item.done
-    // Then Finish produces: response.completed
-    // Then [DONE]
-    assert!(events.len() >= 5);
+    // Tool call lifecycle: response.created, response.in_progress,
+    // response.output_item.added, response.function_call_arguments.delta,
+    // response.function_call_arguments.done, response.output_item.done,
+    // response.completed. No [DONE] terminator.
+    assert!(events.len() >= 7);
 
     let event_types: Vec<Option<&str>> = events.iter().map(|(e, _)| e.as_deref()).collect();
+    assert_eq!(event_types[0], Some("response.created"));
+    assert_eq!(event_types[1], Some("response.in_progress"));
     assert!(event_types.contains(&Some("response.output_item.added")));
     assert!(event_types.contains(&Some("response.function_call_arguments.delta")));
     assert!(event_types.contains(&Some("response.function_call_arguments.done")));
     assert!(event_types.contains(&Some("response.output_item.done")));
     assert!(event_types.contains(&Some("response.completed")));
+    assert!(events.iter().all(|(_, data)| data != "[DONE]"));
 
     // Check the `arguments.done` event has the full arguments
     let done_event = events

@@ -115,208 +115,845 @@ pub fn from_generate_result(
 
 // ── Streaming ───────────────────────────────────────────────────────────────
 
-/// Stateful converter that tracks output item indices across streaming events.
+/// Stateful converter that emits a canonical OpenAI Responses streaming
+/// lifecycle: `response.created` → `response.in_progress` → per-item
+/// `output_item.added` (+ `content_part.added` for messages) → delta events
+/// → `*.done` events → `response.completed`. Every emitted event carries a
+/// monotonically-increasing `sequence_number`.
+///
+/// Strict clients such as Codex CLI close the stream with
+/// "stream closed before response.completed" if any of this is missing or
+/// out of order, then retry immediately.
+/// <https://platform.openai.com/docs/api-reference/responses-streaming>
 pub struct StreamConverter {
-    tool_id_to_index: HashMap<String, u32>,
+    model_id: String,
+    response_id: String,
+    created_at: i64,
+    sequence_number: u64,
+    /// `response.created` / `response.in_progress` are emitted lazily on the
+    /// first delivered stream part so the response object can carry the
+    /// upstream response id once `ResponseMetadata` arrives.
+    created_emitted: bool,
+    /// True once `response.completed` (or `failed`/`incomplete`) has been
+    /// written. Further calls are no-ops to keep the SSE stream well-formed.
+    completed_emitted: bool,
+    /// Active output item index — incremented every time a new item opens.
     next_output_index: u32,
+    /// Open message item carrying streaming text.
+    text_item: Option<MessageItemState>,
+    /// Open reasoning item carrying streaming chain-of-thought.
+    reasoning_item: Option<ReasoningItemState>,
+    /// Open function-call items keyed by upstream tool id, in arrival order.
+    tool_items: HashMap<String, ToolItemState>,
+    tool_order: Vec<String>,
+    /// Completed output items, in emission order — populated as items close
+    /// and replayed on `response.completed` so the final envelope mirrors
+    /// the non-streaming response.
+    completed_output: Vec<ResponsesOutputItem>,
 }
 
-impl Default for StreamConverter {
-    fn default() -> Self {
-        Self::new()
-    }
+struct MessageItemState {
+    item_id: String,
+    output_index: u32,
+    /// Concatenated text deltas; finalized into `output_text.done.text`.
+    accumulated_text: String,
+}
+
+struct ReasoningItemState {
+    item_id: String,
+    output_index: u32,
+    accumulated_text: String,
+}
+
+struct ToolItemState {
+    item_id: String,
+    output_index: u32,
+    call_id: String,
+    tool_name: String,
+    accumulated_args: String,
 }
 
 impl StreamConverter {
-    pub fn new() -> Self {
+    /// Creates a converter bound to a target model id. The response id is
+    /// generated locally and surfaced in the `response.created` envelope so
+    /// clients can correlate the stream with downstream telemetry.
+    pub fn new(model_id: impl Into<String>) -> Self {
         Self {
-            tool_id_to_index: HashMap::new(),
+            model_id: model_id.into(),
+            response_id: format!("resp-{}", generate_id()),
+            created_at: now_unix(),
+            sequence_number: 0,
+            created_emitted: false,
+            completed_emitted: false,
             next_output_index: 0,
+            text_item: None,
+            reasoning_item: None,
+            tool_items: HashMap::new(),
+            tool_order: Vec::new(),
+            completed_output: Vec::new(),
         }
     }
 
-    /// Converts a [`LanguageModelStreamPart`] into Responses SSE events.
+    /// Converts a [`LanguageModelStreamPart`] into one or more canonical
+    /// Responses SSE events. Returns an empty vector for parts that have no
+    /// direct mapping (e.g. `StreamStart`).
     pub fn convert(&mut self, part: &LanguageModelStreamPart) -> Vec<ResponsesStreamEvent> {
+        if self.completed_emitted {
+            return Vec::new();
+        }
+
+        // Adopt the upstream response id *before* emitting `response.created`
+        // so the envelope carries the canonical id from the very first event.
+        // Multi-turn chaining via `previous_response_id` depends on this.
+        if !self.created_emitted
+            && let LanguageModelStreamPart::ResponseMetadata {
+                id: Some(upstream), ..
+            } = part
+        {
+            self.response_id = upstream.clone();
+        }
+
+        let mut events = self.emit_created_if_needed();
+
         match part {
-            LanguageModelStreamPart::TextDelta { delta, .. } => {
-                vec![ResponsesStreamEvent {
-                    event_type: "response.output_text.delta".to_owned(),
-                    item_id: None,
-                    output_index: Some(0),
-                    content_index: Some(0),
-                    delta: Some(delta.clone()),
-                    call_id: None,
-                    name: None,
-                    arguments: None,
-                    item: None,
-                }]
+            LanguageModelStreamPart::ResponseMetadata { id, .. } => {
+                // Late metadata (after `response.created` already emitted)
+                // still updates the in-progress id for downstream telemetry.
+                if let Some(upstream) = id.as_deref() {
+                    self.response_id = upstream.to_owned();
+                }
             }
-            // OpenAI Responses streams reasoning summaries via
-            // `response.reasoning_text.delta` / `.done` events.
-            // https://platform.openai.com/docs/api-reference/responses-streaming/response/reasoning_text/delta
+            LanguageModelStreamPart::TextStart { .. } => {
+                events.extend(self.close_reasoning_item());
+                self.open_text_item(&mut events);
+            }
+            LanguageModelStreamPart::TextDelta { delta, .. } => {
+                events.extend(self.close_reasoning_item());
+                self.open_text_item(&mut events);
+                let (item_id, output_index) = {
+                    let item = self
+                        .text_item
+                        .as_mut()
+                        .expect("text item just opened above");
+                    item.accumulated_text.push_str(delta);
+                    (item.item_id.clone(), item.output_index)
+                };
+                events.push(self.make_event(
+                    "response.output_text.delta",
+                    ResponsesStreamEvent {
+                        event_type: String::new(),
+                        sequence_number: 0,
+                        response: None,
+                        item_id: Some(item_id),
+                        output_index: Some(output_index),
+                        content_index: Some(0),
+                        delta: Some(delta.clone()),
+                        text: None,
+                        call_id: None,
+                        name: None,
+                        arguments: None,
+                        item: None,
+                        part: None,
+                    },
+                ));
+            }
+            LanguageModelStreamPart::TextEnd { .. } => {
+                events.extend(self.close_text_item());
+            }
+            LanguageModelStreamPart::ReasoningStart { .. } => {
+                events.extend(self.close_text_item());
+                self.open_reasoning_item(&mut events);
+            }
             LanguageModelStreamPart::ReasoningDelta { delta, .. } => {
-                vec![ResponsesStreamEvent {
-                    event_type: "response.reasoning_text.delta".to_owned(),
-                    item_id: None,
-                    output_index: Some(0),
-                    content_index: Some(0),
-                    delta: Some(delta.clone()),
-                    call_id: None,
-                    name: None,
-                    arguments: None,
-                    item: None,
-                }]
+                events.extend(self.close_text_item());
+                self.open_reasoning_item(&mut events);
+                let (item_id, output_index) = {
+                    let item = self
+                        .reasoning_item
+                        .as_mut()
+                        .expect("reasoning item just opened above");
+                    item.accumulated_text.push_str(delta);
+                    (item.item_id.clone(), item.output_index)
+                };
+                events.push(self.make_event(
+                    "response.reasoning_text.delta",
+                    ResponsesStreamEvent {
+                        event_type: String::new(),
+                        sequence_number: 0,
+                        response: None,
+                        item_id: Some(item_id),
+                        output_index: Some(output_index),
+                        content_index: Some(0),
+                        delta: Some(delta.clone()),
+                        text: None,
+                        call_id: None,
+                        name: None,
+                        arguments: None,
+                        item: None,
+                        part: None,
+                    },
+                ));
             }
             LanguageModelStreamPart::ReasoningEnd { .. } => {
-                vec![ResponsesStreamEvent {
-                    event_type: "response.reasoning_text.done".to_owned(),
-                    item_id: None,
-                    output_index: Some(0),
-                    content_index: Some(0),
-                    delta: None,
-                    call_id: None,
-                    name: None,
-                    arguments: None,
-                    item: None,
-                }]
+                events.extend(self.close_reasoning_item());
             }
-            // ReasoningStart has no dedicated Responses event; the first
-            // `.delta` is sufficient. We swallow it so it doesn't show up
-            // as a Raw passthrough.
-            LanguageModelStreamPart::ReasoningStart { .. } => vec![],
+            LanguageModelStreamPart::ToolInputStart { id, tool_name, .. } => {
+                events.extend(self.close_text_item());
+                events.extend(self.close_reasoning_item());
+                self.open_tool_item(id, tool_name, &mut events);
+            }
+            LanguageModelStreamPart::ToolInputDelta { id, delta, .. } => {
+                events.extend(self.close_text_item());
+                events.extend(self.close_reasoning_item());
+                if !self.tool_items.contains_key(id) {
+                    self.open_tool_item(id, "tool", &mut events);
+                }
+                let (item_id, output_index, call_id) = {
+                    let item = self
+                        .tool_items
+                        .get_mut(id)
+                        .expect("tool item just opened above");
+                    item.accumulated_args.push_str(delta);
+                    (
+                        item.item_id.clone(),
+                        item.output_index,
+                        item.call_id.clone(),
+                    )
+                };
+                events.push(self.make_event(
+                    "response.function_call_arguments.delta",
+                    ResponsesStreamEvent {
+                        event_type: String::new(),
+                        sequence_number: 0,
+                        response: None,
+                        item_id: Some(item_id),
+                        output_index: Some(output_index),
+                        content_index: None,
+                        delta: Some(delta.clone()),
+                        text: None,
+                        call_id: Some(call_id),
+                        name: None,
+                        arguments: None,
+                        item: None,
+                        part: None,
+                    },
+                ));
+            }
+            LanguageModelStreamPart::ToolInputEnd { id, .. } => {
+                events.extend(self.close_tool_item(id));
+            }
             LanguageModelStreamPart::ToolCall {
                 tool_call_id,
                 tool_name,
                 tool_input,
                 ..
             } => {
-                let index = self.next_output_index;
-                self.next_output_index += 1;
-                let item_id = format!("fc-{}", generate_id());
-                let item = serde_json::json!({
-                    "type": "function_call",
-                    "id": item_id,
-                    "call_id": tool_call_id,
-                    "name": tool_name,
-                    "arguments": tool_input,
-                    "status": "completed"
-                });
-                vec![
+                // Single-shot tool call: open, emit full arguments, close.
+                events.extend(self.close_text_item());
+                events.extend(self.close_reasoning_item());
+                self.open_tool_item(tool_call_id, tool_name, &mut events);
+                let (item_id, output_index, call_id) = {
+                    let item = self
+                        .tool_items
+                        .get_mut(tool_call_id)
+                        .expect("tool item just opened above");
+                    item.accumulated_args.push_str(tool_input);
+                    (
+                        item.item_id.clone(),
+                        item.output_index,
+                        item.call_id.clone(),
+                    )
+                };
+                events.push(self.make_event(
+                    "response.function_call_arguments.delta",
                     ResponsesStreamEvent {
-                        event_type: "response.output_item.added".to_owned(),
-                        item_id: None,
-                        output_index: Some(index),
-                        content_index: None,
-                        delta: None,
-                        call_id: None,
-                        name: None,
-                        arguments: None,
-                        item: Some(serde_json::json!({
-                            "type": "function_call",
-                            "id": item_id,
-                            "call_id": tool_call_id,
-                            "name": tool_name,
-                            "arguments": "",
-                            "status": "in_progress"
-                        })),
-                    },
-                    ResponsesStreamEvent {
-                        event_type: "response.function_call_arguments.delta".to_owned(),
-                        item_id: None,
-                        output_index: Some(index),
+                        event_type: String::new(),
+                        sequence_number: 0,
+                        response: None,
+                        item_id: Some(item_id),
+                        output_index: Some(output_index),
                         content_index: None,
                         delta: Some(tool_input.clone()),
-                        call_id: Some(tool_call_id.clone()),
+                        text: None,
+                        call_id: Some(call_id),
                         name: None,
                         arguments: None,
                         item: None,
+                        part: None,
                     },
+                ));
+                events.extend(self.close_tool_item(tool_call_id));
+            }
+            LanguageModelStreamPart::Finish { usage, .. } => {
+                events.extend(self.close_text_item());
+                events.extend(self.close_reasoning_item());
+                let pending: Vec<String> = self.tool_order.clone();
+                for id in pending {
+                    events.extend(self.close_tool_item(&id));
+                }
+                let response = self.build_completed_response(Some(usage));
+                events.push(self.make_event(
+                    "response.completed",
                     ResponsesStreamEvent {
-                        event_type: "response.function_call_arguments.done".to_owned(),
+                        event_type: String::new(),
+                        sequence_number: 0,
+                        response: Some(response),
                         item_id: None,
-                        output_index: Some(index),
+                        output_index: None,
                         content_index: None,
                         delta: None,
-                        call_id: Some(tool_call_id.clone()),
-                        name: None,
-                        arguments: Some(tool_input.clone()),
-                        item: None,
-                    },
-                    ResponsesStreamEvent {
-                        event_type: "response.output_item.done".to_owned(),
-                        item_id: None,
-                        output_index: Some(index),
-                        content_index: None,
-                        delta: None,
+                        text: None,
                         call_id: None,
                         name: None,
                         arguments: None,
-                        item: Some(item),
+                        item: None,
+                        part: None,
                     },
-                ]
+                ));
+                self.completed_emitted = true;
             }
-            LanguageModelStreamPart::ToolInputStart { id, tool_name, .. } => {
-                let index = self.next_output_index;
-                self.tool_id_to_index.insert(id.clone(), index);
-                self.next_output_index += 1;
-                let item_id = format!("fc-{}", generate_id());
-                vec![ResponsesStreamEvent {
-                    event_type: "response.output_item.added".to_owned(),
-                    item_id: None,
-                    output_index: Some(index),
-                    content_index: None,
-                    delta: None,
-                    call_id: None,
-                    name: Some(tool_name.clone()),
-                    arguments: None,
-                    item: Some(serde_json::json!({
-                        "type": "function_call",
-                        "id": item_id,
-                        "call_id": id,
-                        "name": tool_name,
-                        "arguments": "",
-                        "status": "in_progress"
-                    })),
-                }]
-            }
-            LanguageModelStreamPart::ToolInputDelta { id, delta, .. } => {
-                let index = self
-                    .tool_id_to_index
-                    .get(id)
-                    .copied()
-                    .unwrap_or(self.next_output_index);
-                vec![ResponsesStreamEvent {
-                    event_type: "response.function_call_arguments.delta".to_owned(),
-                    item_id: None,
-                    output_index: Some(index),
-                    content_index: None,
-                    delta: Some(delta.clone()),
-                    call_id: Some(id.clone()),
-                    name: None,
-                    arguments: None,
-                    item: None,
-                }]
-            }
-            LanguageModelStreamPart::ToolInputEnd { .. } => {
-                // No specific event needed; the arguments.done will come from
-                // the caller if needed, or the finish event signals completion.
-                vec![]
-            }
-            LanguageModelStreamPart::Finish { .. } => {
-                vec![ResponsesStreamEvent {
-                    event_type: "response.completed".to_owned(),
+            // Stream lifecycle markers without a direct Responses event.
+            LanguageModelStreamPart::StreamStart { .. }
+            | LanguageModelStreamPart::Raw { .. }
+            | LanguageModelStreamPart::Error { .. }
+            | LanguageModelStreamPart::File { .. }
+            | LanguageModelStreamPart::ToolApprovalRequest { .. }
+            | LanguageModelStreamPart::UrlSource { .. }
+            | LanguageModelStreamPart::DocumentSource { .. }
+            | LanguageModelStreamPart::ToolResult { .. } => {}
+        }
+
+        events
+    }
+
+    /// Closes any still-open items and emits a synthetic `response.completed`
+    /// if the upstream stream ended without a `Finish` part. Returns the
+    /// resulting events so the handler can flush them before tearing down
+    /// the SSE channel.
+    pub fn finish(&mut self) -> Vec<ResponsesStreamEvent> {
+        if self.completed_emitted {
+            return Vec::new();
+        }
+        let mut events = self.emit_created_if_needed();
+        events.extend(self.close_text_item());
+        events.extend(self.close_reasoning_item());
+        let pending: Vec<String> = self.tool_order.clone();
+        for id in pending {
+            events.extend(self.close_tool_item(&id));
+        }
+        let response = self.build_completed_response(None);
+        events.push(self.make_event(
+            "response.completed",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: Some(response),
+                item_id: None,
+                output_index: None,
+                content_index: None,
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: None,
+                part: None,
+            },
+        ));
+        self.completed_emitted = true;
+        events
+    }
+
+    fn emit_created_if_needed(&mut self) -> Vec<ResponsesStreamEvent> {
+        if self.created_emitted {
+            return Vec::new();
+        }
+        self.created_emitted = true;
+        let in_progress_response = self.build_in_progress_response();
+        vec![
+            self.make_event(
+                "response.created",
+                ResponsesStreamEvent {
+                    event_type: String::new(),
+                    sequence_number: 0,
+                    response: Some(in_progress_response.clone()),
                     item_id: None,
                     output_index: None,
                     content_index: None,
                     delta: None,
+                    text: None,
                     call_id: None,
                     name: None,
                     arguments: None,
                     item: None,
-                }]
-            }
-            _ => vec![],
+                    part: None,
+                },
+            ),
+            self.make_event(
+                "response.in_progress",
+                ResponsesStreamEvent {
+                    event_type: String::new(),
+                    sequence_number: 0,
+                    response: Some(in_progress_response),
+                    item_id: None,
+                    output_index: None,
+                    content_index: None,
+                    delta: None,
+                    text: None,
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    item: None,
+                    part: None,
+                },
+            ),
+        ]
+    }
+
+    fn open_text_item(&mut self, events: &mut Vec<ResponsesStreamEvent>) {
+        if self.text_item.is_some() {
+            return;
         }
+        let output_index = self.next_output_index;
+        self.next_output_index += 1;
+        let item_id = format!("msg-{}", generate_id());
+        let state = MessageItemState {
+            item_id: item_id.clone(),
+            output_index,
+            accumulated_text: String::new(),
+        };
+        let in_progress_item = serde_json::json!({
+            "type": "message",
+            "id": item_id,
+            "role": "assistant",
+            "content": [],
+            "status": "in_progress",
+        });
+        events.push(self.make_event(
+            "response.output_item.added",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: None,
+                output_index: Some(output_index),
+                content_index: None,
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: Some(in_progress_item),
+                part: None,
+            },
+        ));
+        let part = serde_json::json!({
+            "type": "output_text",
+            "text": "",
+            "annotations": [],
+        });
+        events.push(self.make_event(
+            "response.content_part.added",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: Some(item_id),
+                output_index: Some(output_index),
+                content_index: Some(0),
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: None,
+                part: Some(part),
+            },
+        ));
+        self.text_item = Some(state);
+    }
+
+    fn close_text_item(&mut self) -> Vec<ResponsesStreamEvent> {
+        let Some(state) = self.text_item.take() else {
+            return Vec::new();
+        };
+        let final_text = state.accumulated_text.clone();
+        let part = serde_json::json!({
+            "type": "output_text",
+            "text": final_text,
+            "annotations": [],
+        });
+        let final_item = serde_json::json!({
+            "type": "message",
+            "id": state.item_id,
+            "role": "assistant",
+            "content": [part.clone()],
+            "status": "completed",
+        });
+        self.completed_output.push(ResponsesOutputItem::Message {
+            id: Some(state.item_id.clone()),
+            role: Some("assistant".to_owned()),
+            content: vec![ResponsesOutputContent::OutputText {
+                text: final_text.clone(),
+            }],
+            status: Some("completed".to_owned()),
+        });
+        let mut events = Vec::with_capacity(4);
+        events.push(self.make_event(
+            "response.output_text.done",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: Some(state.item_id.clone()),
+                output_index: Some(state.output_index),
+                content_index: Some(0),
+                delta: None,
+                text: Some(final_text),
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: None,
+                part: None,
+            },
+        ));
+        events.push(self.make_event(
+            "response.content_part.done",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: Some(state.item_id.clone()),
+                output_index: Some(state.output_index),
+                content_index: Some(0),
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: None,
+                part: Some(part),
+            },
+        ));
+        events.push(self.make_event(
+            "response.output_item.done",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: None,
+                output_index: Some(state.output_index),
+                content_index: None,
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: Some(final_item),
+                part: None,
+            },
+        ));
+        events
+    }
+
+    fn open_reasoning_item(&mut self, events: &mut Vec<ResponsesStreamEvent>) {
+        if self.reasoning_item.is_some() {
+            return;
+        }
+        let output_index = self.next_output_index;
+        self.next_output_index += 1;
+        let item_id = format!("rs-{}", generate_id());
+        let state = ReasoningItemState {
+            item_id: item_id.clone(),
+            output_index,
+            accumulated_text: String::new(),
+        };
+        let in_progress_item = serde_json::json!({
+            "type": "reasoning",
+            "id": item_id,
+            "summary": [],
+            "content": [],
+            "status": "in_progress",
+        });
+        events.push(self.make_event(
+            "response.output_item.added",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: None,
+                output_index: Some(output_index),
+                content_index: None,
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: Some(in_progress_item),
+                part: None,
+            },
+        ));
+        let part = serde_json::json!({
+            "type": "reasoning_text",
+            "text": "",
+        });
+        events.push(self.make_event(
+            "response.content_part.added",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: Some(item_id),
+                output_index: Some(output_index),
+                content_index: Some(0),
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: None,
+                part: Some(part),
+            },
+        ));
+        self.reasoning_item = Some(state);
+    }
+
+    fn close_reasoning_item(&mut self) -> Vec<ResponsesStreamEvent> {
+        let Some(state) = self.reasoning_item.take() else {
+            return Vec::new();
+        };
+        let final_text = state.accumulated_text.clone();
+        let part = serde_json::json!({
+            "type": "reasoning_text",
+            "text": final_text,
+        });
+        let final_item = serde_json::json!({
+            "type": "reasoning",
+            "id": state.item_id,
+            "summary": [],
+            "content": [part.clone()],
+            "status": "completed",
+        });
+        let mut events = Vec::with_capacity(3);
+        events.push(self.make_event(
+            "response.reasoning_text.done",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: Some(state.item_id.clone()),
+                output_index: Some(state.output_index),
+                content_index: Some(0),
+                delta: None,
+                text: Some(final_text),
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: None,
+                part: None,
+            },
+        ));
+        events.push(self.make_event(
+            "response.content_part.done",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: Some(state.item_id.clone()),
+                output_index: Some(state.output_index),
+                content_index: Some(0),
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: None,
+                part: Some(part),
+            },
+        ));
+        events.push(self.make_event(
+            "response.output_item.done",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: None,
+                output_index: Some(state.output_index),
+                content_index: None,
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: Some(final_item),
+                part: None,
+            },
+        ));
+        events
+    }
+
+    fn open_tool_item(
+        &mut self,
+        upstream_id: &str,
+        tool_name: &str,
+        events: &mut Vec<ResponsesStreamEvent>,
+    ) {
+        if self.tool_items.contains_key(upstream_id) {
+            return;
+        }
+        let output_index = self.next_output_index;
+        self.next_output_index += 1;
+        let item_id = format!("fc-{}", generate_id());
+        let state = ToolItemState {
+            item_id: item_id.clone(),
+            output_index,
+            call_id: upstream_id.to_owned(),
+            tool_name: tool_name.to_owned(),
+            accumulated_args: String::new(),
+        };
+        let in_progress_item = serde_json::json!({
+            "type": "function_call",
+            "id": item_id,
+            "call_id": upstream_id,
+            "name": tool_name,
+            "arguments": "",
+            "status": "in_progress",
+        });
+        events.push(self.make_event(
+            "response.output_item.added",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: None,
+                output_index: Some(output_index),
+                content_index: None,
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: Some(in_progress_item),
+                part: None,
+            },
+        ));
+        self.tool_items.insert(upstream_id.to_owned(), state);
+        self.tool_order.push(upstream_id.to_owned());
+    }
+
+    fn close_tool_item(&mut self, upstream_id: &str) -> Vec<ResponsesStreamEvent> {
+        let Some(state) = self.tool_items.remove(upstream_id) else {
+            return Vec::new();
+        };
+        self.tool_order.retain(|id| id != upstream_id);
+        let final_args = state.accumulated_args.clone();
+        let final_item = serde_json::json!({
+            "type": "function_call",
+            "id": state.item_id,
+            "call_id": state.call_id,
+            "name": state.tool_name,
+            "arguments": final_args,
+            "status": "completed",
+        });
+        self.completed_output
+            .push(ResponsesOutputItem::FunctionCall {
+                id: Some(state.item_id.clone()),
+                call_id: state.call_id.clone(),
+                name: state.tool_name.clone(),
+                arguments: final_args.clone(),
+                status: Some("completed".to_owned()),
+            });
+        let mut events = Vec::with_capacity(2);
+        events.push(self.make_event(
+            "response.function_call_arguments.done",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: Some(state.item_id.clone()),
+                output_index: Some(state.output_index),
+                content_index: None,
+                delta: None,
+                text: None,
+                call_id: Some(state.call_id),
+                name: None,
+                arguments: Some(final_args),
+                item: None,
+                part: None,
+            },
+        ));
+        events.push(self.make_event(
+            "response.output_item.done",
+            ResponsesStreamEvent {
+                event_type: String::new(),
+                sequence_number: 0,
+                response: None,
+                item_id: None,
+                output_index: Some(state.output_index),
+                content_index: None,
+                delta: None,
+                text: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                item: Some(final_item),
+                part: None,
+            },
+        ));
+        events
+    }
+
+    fn build_in_progress_response(&self) -> ResponsesResponse {
+        ResponsesResponse {
+            id: self.response_id.clone(),
+            object: Some("response".to_owned()),
+            created_at: self.created_at,
+            model: self.model_id.clone(),
+            output: Vec::new(),
+            usage: None,
+            status: Some("in_progress".to_owned()),
+            incomplete_details: None,
+            error: None,
+        }
+    }
+
+    fn build_completed_response(
+        &self,
+        usage: Option<&crate::models::language::usage::LanguageModelUsage>,
+    ) -> ResponsesResponse {
+        let usage = usage.map(|u| ResponsesUsage {
+            input_tokens: u.input_tokens.total,
+            output_tokens: u.output_tokens.total,
+            total_tokens: u
+                .input_tokens
+                .total
+                .zip(u.output_tokens.total)
+                .map(|(i, o)| i + o),
+            input_tokens_details: None,
+            output_tokens_details: None,
+        });
+        ResponsesResponse {
+            id: self.response_id.clone(),
+            object: Some("response".to_owned()),
+            created_at: self.created_at,
+            model: self.model_id.clone(),
+            output: self.completed_output.clone(),
+            usage,
+            status: Some("completed".to_owned()),
+            incomplete_details: None,
+            error: None,
+        }
+    }
+
+    fn make_event(
+        &mut self,
+        event_type: &str,
+        mut event: ResponsesStreamEvent,
+    ) -> ResponsesStreamEvent {
+        event.event_type = event_type.to_owned();
+        event.sequence_number = self.sequence_number;
+        self.sequence_number += 1;
+        event
     }
 }
 
@@ -774,31 +1411,40 @@ mod tests {
     fn serialize_streaming_events() {
         let text_delta = ResponsesStreamEvent {
             event_type: "response.output_text.delta".to_owned(),
-            item_id: None,
+            sequence_number: 5,
+            response: None,
+            item_id: Some("msg-1".to_owned()),
             output_index: Some(0),
             content_index: Some(0),
             delta: Some("Hello".to_owned()),
+            text: None,
             call_id: None,
             name: None,
             arguments: None,
             item: None,
+            part: None,
         };
         let val = serde_json::to_value(&text_delta).expect("serialize failed");
         assert_eq!(val["type"], "response.output_text.delta");
+        assert_eq!(val["sequence_number"], 5);
         assert_eq!(val["delta"], "Hello");
         assert_eq!(val["output_index"], 0);
         assert_eq!(val["content_index"], 0);
 
         let fn_delta = ResponsesStreamEvent {
             event_type: "response.function_call_arguments.delta".to_owned(),
-            item_id: None,
+            sequence_number: 6,
+            response: None,
+            item_id: Some("fc-1".to_owned()),
             output_index: Some(1),
             content_index: None,
             delta: Some(r#"{"loc"#.to_owned()),
+            text: None,
             call_id: Some("call_1".to_owned()),
             name: None,
             arguments: None,
             item: None,
+            part: None,
         };
         let val = serde_json::to_value(&fn_delta).expect("serialize failed");
         assert_eq!(val["type"], "response.function_call_arguments.delta");
@@ -807,14 +1453,18 @@ mod tests {
 
         let completed = ResponsesStreamEvent {
             event_type: "response.completed".to_owned(),
+            sequence_number: 7,
+            response: None,
             item_id: None,
             output_index: None,
             content_index: None,
             delta: None,
+            text: None,
             call_id: None,
             name: None,
             arguments: None,
             item: None,
+            part: None,
         };
         let val = serde_json::to_value(&completed).expect("serialize failed");
         assert_eq!(val["type"], "response.completed");
@@ -1145,64 +1795,100 @@ mod tests {
     // ── Conversion: StreamConverter ─────────────────────────────────────
 
     #[test]
-    fn stream_converter_text_delta() {
-        let mut conv = StreamConverter::new();
+    fn stream_converter_text_delta_emits_full_lifecycle_prefix() {
+        // The first delta of a stream must be preceded by the canonical
+        // lifecycle preamble — `response.created`, `response.in_progress`,
+        // `response.output_item.added` (message), `response.content_part.added`
+        // (output_text) — before the actual `response.output_text.delta`.
+        // Codex CLI errors on streams that skip any of these and retries.
+        // https://platform.openai.com/docs/api-reference/responses-streaming
+        let mut conv = StreamConverter::new("test-model");
         let part = LanguageModelStreamPart::TextDelta {
             id: "t1".to_owned(),
             delta: "Hello".to_owned(),
             provider_metadata: None,
         };
         let events = conv.convert(&part);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "response.output_text.delta");
-        assert_eq!(events[0].delta.as_deref(), Some("Hello"));
-        assert_eq!(events[0].output_index, Some(0));
-        assert_eq!(events[0].content_index, Some(0));
+        assert_eq!(events.len(), 5);
+        assert_eq!(events[0].event_type, "response.created");
+        assert!(events[0].response.is_some());
+        assert_eq!(events[1].event_type, "response.in_progress");
+        assert_eq!(events[2].event_type, "response.output_item.added");
+        let item = events[2].item.as_ref().expect("item present");
+        assert_eq!(item["type"], "message");
+        assert_eq!(item["status"], "in_progress");
+        assert_eq!(events[3].event_type, "response.content_part.added");
+        let part = events[3].part.as_ref().expect("part present");
+        assert_eq!(part["type"], "output_text");
+        assert_eq!(events[4].event_type, "response.output_text.delta");
+        assert_eq!(events[4].delta.as_deref(), Some("Hello"));
+        assert_eq!(events[4].output_index, Some(0));
+        assert_eq!(events[4].content_index, Some(0));
+
+        // Every event must carry a monotonic sequence_number starting from 0.
+        for (i, e) in events.iter().enumerate() {
+            assert_eq!(e.sequence_number, i as u64);
+        }
     }
 
     #[test]
-    fn stream_converter_reasoning_delta_emits_reasoning_text_delta() {
+    fn stream_converter_reasoning_delta_emits_reasoning_lifecycle() {
         // Regression test for issue #448: ReasoningDelta must surface as
-        // a `response.reasoning_text.delta` event so Responses-format
+        // `response.reasoning_text.delta` wrapped in a reasoning output
+        // item, with the full lifecycle preamble so Responses-format
         // clients render thinking in real time.
-        let mut conv = StreamConverter::new();
+        let mut conv = StreamConverter::new("test-model");
         let events = conv.convert(&LanguageModelStreamPart::ReasoningDelta {
             id: "r1".to_owned(),
             delta: "Hmm".to_owned(),
             provider_metadata: None,
         });
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "response.reasoning_text.delta");
-        assert_eq!(events[0].delta.as_deref(), Some("Hmm"));
+        assert_eq!(events[0].event_type, "response.created");
+        assert_eq!(events[1].event_type, "response.in_progress");
+        assert_eq!(events[2].event_type, "response.output_item.added");
+        assert_eq!(events[2].item.as_ref().expect("item")["type"], "reasoning");
+        assert_eq!(events[3].event_type, "response.content_part.added");
+        assert_eq!(
+            events[3].part.as_ref().expect("part")["type"],
+            "reasoning_text"
+        );
+        assert_eq!(events[4].event_type, "response.reasoning_text.delta");
+        assert_eq!(events[4].delta.as_deref(), Some("Hmm"));
     }
 
     #[test]
-    fn stream_converter_reasoning_end_emits_reasoning_text_done() {
-        let mut conv = StreamConverter::new();
+    fn stream_converter_reasoning_end_closes_open_item() {
+        // ReasoningEnd received before any reasoning content opened the
+        // item: emit only the lifecycle preamble (no spurious .done).
+        let mut conv = StreamConverter::new("test-model");
         let events = conv.convert(&LanguageModelStreamPart::ReasoningEnd {
             id: "r1".to_owned(),
             provider_metadata: None,
         });
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "response.reasoning_text.done");
-        assert!(events[0].delta.is_none());
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "response.created");
+        assert_eq!(events[1].event_type, "response.in_progress");
     }
 
     #[test]
-    fn stream_converter_reasoning_start_swallowed() {
-        // ReasoningStart has no dedicated Responses event; the first
-        // `.delta` is sufficient. Must produce zero events.
-        let mut conv = StreamConverter::new();
+    fn stream_converter_reasoning_start_opens_item() {
+        // ReasoningStart eagerly opens the reasoning output item so
+        // subsequent deltas can attach without further preamble.
+        let mut conv = StreamConverter::new("test-model");
         let events = conv.convert(&LanguageModelStreamPart::ReasoningStart {
             id: "r1".to_owned(),
             provider_metadata: None,
         });
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].event_type, "response.created");
+        assert_eq!(events[1].event_type, "response.in_progress");
+        assert_eq!(events[2].event_type, "response.output_item.added");
+        assert_eq!(events[3].event_type, "response.content_part.added");
     }
 
     #[test]
-    fn stream_converter_tool_call() {
-        let mut conv = StreamConverter::new();
+    fn stream_converter_tool_call_emits_lifecycle_and_function_call_events() {
+        let mut conv = StreamConverter::new("test-model");
         let part = LanguageModelStreamPart::ToolCall {
             tool_call_id: "call_full".to_owned(),
             tool_name: "calculator".to_owned(),
@@ -1212,42 +1898,37 @@ mod tests {
             provider_metadata: None,
         };
         let events = conv.convert(&part);
-        assert_eq!(events.len(), 4);
-
-        // First: output_item.added
-        assert_eq!(events[0].event_type, "response.output_item.added");
-        assert_eq!(events[0].output_index, Some(0));
-        let item = events[0].item.as_ref().expect("item missing");
+        // created, in_progress, output_item.added, function_call_arguments.delta,
+        // function_call_arguments.done, output_item.done
+        assert_eq!(events.len(), 6);
+        assert_eq!(events[0].event_type, "response.created");
+        assert_eq!(events[1].event_type, "response.in_progress");
+        assert_eq!(events[2].event_type, "response.output_item.added");
+        let item = events[2].item.as_ref().expect("item missing");
         assert_eq!(item["type"], "function_call");
         assert_eq!(item["status"], "in_progress");
-
-        // Second: function_call_arguments.delta
         assert_eq!(
-            events[1].event_type,
+            events[3].event_type,
             "response.function_call_arguments.delta"
         );
-        assert_eq!(events[1].delta.as_deref(), Some(r#"{"expr":"2+2"}"#));
-        assert_eq!(events[1].call_id.as_deref(), Some("call_full"));
-
-        // Third: function_call_arguments.done
+        assert_eq!(events[3].delta.as_deref(), Some(r#"{"expr":"2+2"}"#));
+        assert_eq!(events[3].call_id.as_deref(), Some("call_full"));
         assert_eq!(
-            events[2].event_type,
+            events[4].event_type,
             "response.function_call_arguments.done"
         );
-        assert_eq!(events[2].arguments.as_deref(), Some(r#"{"expr":"2+2"}"#));
-
-        // Fourth: output_item.done
-        assert_eq!(events[3].event_type, "response.output_item.done");
-        let done_item = events[3].item.as_ref().expect("item missing");
+        assert_eq!(events[4].arguments.as_deref(), Some(r#"{"expr":"2+2"}"#));
+        assert_eq!(events[5].event_type, "response.output_item.done");
+        let done_item = events[5].item.as_ref().expect("item missing");
         assert_eq!(done_item["status"], "completed");
         assert_eq!(done_item["name"], "calculator");
     }
 
     #[test]
     fn stream_converter_tool_input_start_delta() {
-        let mut conv = StreamConverter::new();
+        let mut conv = StreamConverter::new("test-model");
 
-        // Start event
+        // Start event: created + in_progress + output_item.added
         let start = LanguageModelStreamPart::ToolInputStart {
             id: "call_a".to_owned(),
             tool_name: "search".to_owned(),
@@ -1257,16 +1938,14 @@ mod tests {
             provider_metadata: None,
         };
         let events = conv.convert(&start);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "response.output_item.added");
-        assert_eq!(events[0].output_index, Some(0));
-        assert_eq!(events[0].name.as_deref(), Some("search"));
-        let item = events[0].item.as_ref().expect("item missing");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[2].event_type, "response.output_item.added");
+        let item = events[2].item.as_ref().expect("item missing");
         assert_eq!(item["type"], "function_call");
         assert_eq!(item["name"], "search");
         assert_eq!(item["status"], "in_progress");
 
-        // Delta event uses the tracked index
+        // Delta event: function_call_arguments.delta only
         let delta = LanguageModelStreamPart::ToolInputDelta {
             id: "call_a".to_owned(),
             delta: r#"{"query":"rust"}"#.to_owned(),
@@ -1284,45 +1963,154 @@ mod tests {
     }
 
     #[test]
-    fn stream_converter_tool_input_end_is_empty() {
-        let mut conv = StreamConverter::new();
-        let part = LanguageModelStreamPart::ToolInputEnd {
+    fn stream_converter_tool_input_end_emits_done_when_open() {
+        let mut conv = StreamConverter::new("test-model");
+        // Open first, then close.
+        conv.convert(&LanguageModelStreamPart::ToolInputStart {
+            id: "call_a".to_owned(),
+            tool_name: "search".to_owned(),
+            provider_executed: None,
+            dynamic: None,
+            title: None,
+            provider_metadata: None,
+        });
+        let events = conv.convert(&LanguageModelStreamPart::ToolInputEnd {
             id: "call_a".to_owned(),
             provider_metadata: None,
-        };
-        let events = conv.convert(&part);
-        assert!(events.is_empty());
+        });
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].event_type,
+            "response.function_call_arguments.done"
+        );
+        assert_eq!(events[1].event_type, "response.output_item.done");
     }
 
     #[test]
-    fn stream_converter_finish() {
-        let mut conv = StreamConverter::new();
-        let part = LanguageModelStreamPart::Finish {
+    fn stream_converter_finish_emits_completed_with_usage_and_output() {
+        let mut conv = StreamConverter::new("test-model");
+        // Emit some text first so the final response has output items.
+        conv.convert(&LanguageModelStreamPart::TextDelta {
+            id: "t1".to_owned(),
+            delta: "Hello".to_owned(),
+            provider_metadata: None,
+        });
+        let events = conv.convert(&LanguageModelStreamPart::Finish {
             usage: make_usage(25, 30),
             finish_reason: LanguageModelFinishReason::Stop,
             provider_metadata: None,
-        };
-        let events = conv.convert(&part);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "response.completed");
-        assert!(events[0].delta.is_none());
-        assert!(events[0].output_index.is_none());
+        });
+        // output_text.done, content_part.done, output_item.done, response.completed
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[3].event_type, "response.completed");
+        let resp = events[3].response.as_ref().expect("response present");
+        let usage = resp.usage.as_ref().expect("usage present");
+        assert_eq!(usage.input_tokens, Some(25));
+        assert_eq!(usage.output_tokens, Some(30));
+        assert_eq!(usage.total_tokens, Some(55));
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert_eq!(resp.output.len(), 1);
     }
 
     #[test]
-    fn stream_converter_ignores_unknown_parts() {
-        let mut conv = StreamConverter::new();
+    fn stream_converter_text_start_opens_message_item() {
+        let mut conv = StreamConverter::new("test-model");
         let part = LanguageModelStreamPart::TextStart {
             id: "t1".to_owned(),
             provider_metadata: None,
         };
         let events = conv.convert(&part);
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].event_type, "response.created");
+        assert_eq!(events[1].event_type, "response.in_progress");
+        assert_eq!(events[2].event_type, "response.output_item.added");
+        assert_eq!(events[3].event_type, "response.content_part.added");
+    }
+
+    #[test]
+    fn stream_converter_finish_method_synthesizes_completed() {
+        // If the upstream closes without a Finish part, the handler is
+        // expected to call `finish()` to terminate the SSE stream with a
+        // valid `response.completed` envelope. Otherwise Codex CLI raises
+        // "stream closed before response.completed" and retries.
+        let mut conv = StreamConverter::new("test-model");
+        conv.convert(&LanguageModelStreamPart::TextDelta {
+            id: "t1".to_owned(),
+            delta: "Hi".to_owned(),
+            provider_metadata: None,
+        });
+        let events = conv.finish();
+        assert!(events.iter().any(|e| e.event_type == "response.completed"));
+    }
+
+    #[test]
+    fn stream_converter_no_done_terminator_emitted() {
+        // The Responses streaming protocol terminates with `response.completed`,
+        // not with a `[DONE]` sentinel. The converter must never emit one.
+        let mut conv = StreamConverter::new("test-model");
+        let mut all_events = Vec::new();
+        all_events.extend(conv.convert(&LanguageModelStreamPart::TextDelta {
+            id: "t1".to_owned(),
+            delta: "x".to_owned(),
+            provider_metadata: None,
+        }));
+        all_events.extend(conv.convert(&LanguageModelStreamPart::Finish {
+            usage: make_usage(1, 1),
+            finish_reason: LanguageModelFinishReason::Stop,
+            provider_metadata: None,
+        }));
+        assert!(all_events.iter().all(|e| !e.event_type.contains("[DONE]")
+            && e.event_type != "done"
+            && e.delta.as_deref() != Some("[DONE]")));
+    }
+
+    #[test]
+    fn stream_converter_sequence_numbers_monotonic_across_calls() {
+        let mut conv = StreamConverter::new("test-model");
+        let mut all = Vec::new();
+        all.extend(conv.convert(&LanguageModelStreamPart::TextDelta {
+            id: "t1".to_owned(),
+            delta: "a".to_owned(),
+            provider_metadata: None,
+        }));
+        all.extend(conv.convert(&LanguageModelStreamPart::TextDelta {
+            id: "t1".to_owned(),
+            delta: "b".to_owned(),
+            provider_metadata: None,
+        }));
+        all.extend(conv.convert(&LanguageModelStreamPart::Finish {
+            usage: make_usage(1, 1),
+            finish_reason: LanguageModelFinishReason::Stop,
+            provider_metadata: None,
+        }));
+        for (i, e) in all.iter().enumerate() {
+            assert_eq!(e.sequence_number, i as u64, "event {i}: {:?}", e.event_type);
+        }
+    }
+
+    #[test]
+    fn stream_converter_response_id_adopts_upstream_metadata() {
+        // When the upstream provides a response id via ResponseMetadata,
+        // the converter must adopt it *before* emitting `response.created`
+        // so the envelope carries the canonical id for downstream chaining
+        // via `previous_response_id`.
+        let mut conv = StreamConverter::new("test-model");
+        let preamble = conv.convert(&LanguageModelStreamPart::ResponseMetadata {
+            id: Some("resp-from-upstream".to_owned()),
+            timestamp: None,
+            model_id: None,
+        });
+        let created = preamble
+            .iter()
+            .find(|e| e.event_type == "response.created")
+            .and_then(|e| e.response.as_ref())
+            .expect("response.created present with response envelope");
+        assert_eq!(created.id, "resp-from-upstream");
     }
 
     #[test]
     fn stream_converter_multiple_tools_sequential_indices() {
-        let mut conv = StreamConverter::new();
+        let mut conv = StreamConverter::new("test-model");
 
         let start1 = LanguageModelStreamPart::ToolInputStart {
             id: "call_a".to_owned(),
@@ -1333,7 +2121,11 @@ mod tests {
             provider_metadata: None,
         };
         let events1 = conv.convert(&start1);
-        assert_eq!(events1[0].output_index, Some(0));
+        let added1 = events1
+            .iter()
+            .find(|e| e.event_type == "response.output_item.added")
+            .expect("output_item.added present");
+        assert_eq!(added1.output_index, Some(0));
 
         let start2 = LanguageModelStreamPart::ToolInputStart {
             id: "call_b".to_owned(),
@@ -1344,7 +2136,11 @@ mod tests {
             provider_metadata: None,
         };
         let events2 = conv.convert(&start2);
-        assert_eq!(events2[0].output_index, Some(1));
+        let added2 = events2
+            .iter()
+            .find(|e| e.event_type == "response.output_item.added")
+            .expect("output_item.added present");
+        assert_eq!(added2.output_index, Some(1));
     }
 
     // ── extract_model_name ──────────────────────────────────────────────

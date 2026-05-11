@@ -267,10 +267,23 @@ pub struct ResponsesErrorEnvelope {
 /// Flat SSE event structure used by the proxy layer to emit Responses-format
 /// server-sent events to the client.  This is **not** the same as the
 /// provider's inbound stream-event enum which parses upstream SSE.
+///
+/// The Responses streaming protocol assigns a monotonic `sequence_number` to
+/// every event and wraps the start/end of the stream in `response.created` /
+/// `response.completed` envelopes that carry the full response object. Codex
+/// and other strict clients reject streams that omit these.
+/// <https://platform.openai.com/docs/api-reference/responses-streaming>
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub event_type: String,
+    /// Monotonic event index within the stream; required on every event.
+    pub sequence_number: u64,
+    /// Full response payload — present on `response.created`,
+    /// `response.in_progress`, `response.completed`, `response.failed`,
+    /// `response.incomplete`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<ResponsesResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -279,12 +292,20 @@ pub struct ResponsesStreamEvent {
     pub content_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta: Option<String>,
+    /// Final authoritative text on `response.output_text.done` /
+    /// `response.reasoning_text.done`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<String>,
+    /// Item payload — present on `response.output_item.added`/`done`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<serde_json::Value>,
+    /// Content part payload — present on `response.content_part.added`/`done`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part: Option<serde_json::Value>,
 }

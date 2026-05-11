@@ -118,7 +118,7 @@ where
     let options = convert::to_call_options(request);
 
     if is_stream {
-        handle_stream(&model, options).await
+        handle_stream(&model, options, model_id).await
     } else {
         let result = model
             .generate(options)
@@ -366,14 +366,22 @@ where
             request_id: Some(request_id.clone()),
         };
 
+        let stream_model_id = model_id.clone();
         tokio::spawn(async move {
             let mut stream = stream_result.stream;
-            let mut converter = convert::StreamConverter::new();
+            let mut converter = convert::StreamConverter::new(stream_model_id);
             use tokio_stream::StreamExt as _;
             let mut observation = crate::router::StreamObservation::new();
             let mut client_disconnected = false;
+            let mut saw_finish = false;
             while let Some(part) = stream.next().await {
                 observation.record_part(&part);
+                if matches!(
+                    part,
+                    bitrouter_core::models::language::stream_part::LanguageModelStreamPart::Finish { .. }
+                ) {
+                    saw_finish = true;
+                }
                 let events = converter.convert(&part);
                 if !events.is_empty() && !metered.deduct_or_pause(&tx).await {
                     client_disconnected = true;
@@ -395,9 +403,22 @@ where
                     break;
                 }
             }
-            let _ = tx
-                .send(Ok(warp::sse::Event::default().data("[DONE]")))
-                .await;
+            // Ensure the stream closes with `response.completed` per the
+            // Responses spec; Codex CLI retries otherwise.
+            // https://platform.openai.com/docs/api-reference/responses-streaming
+            if !saw_finish && !client_disconnected {
+                for event in converter.finish() {
+                    let data = serde_json::to_string(&event).unwrap_or_default();
+                    let sse = Ok(warp::sse::Event::default()
+                        .event(&event.event_type)
+                        .data(data));
+                    if tx.send(sse).await.is_err() {
+                        client_disconnected = true;
+                        break;
+                    }
+                }
+            }
+            // Responses SSE has no [DONE] terminator.
 
             let latency_ms = start.elapsed().as_millis() as u64;
             let ctx = RequestContext {
@@ -568,6 +589,7 @@ where
         handle_stream_with_observe(
             &model,
             options,
+            model_id,
             crate::router::StreamObserveContext {
                 observer,
                 route: incoming_model,
@@ -628,6 +650,7 @@ where
 async fn handle_stream(
     model: &(impl LanguageModel + ?Sized),
     options: bitrouter_core::models::language::call_options::LanguageModelCallOptions,
+    model_id: String,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     let stream_result = model
         .stream(options)
@@ -639,9 +662,16 @@ async fn handle_stream(
 
     tokio::spawn(async move {
         let mut stream = stream_result.stream;
-        let mut converter = convert::StreamConverter::new();
+        let mut converter = convert::StreamConverter::new(model_id);
         use tokio_stream::StreamExt as _;
+        let mut saw_finish = false;
         'outer: while let Some(part) = stream.next().await {
+            if matches!(
+                part,
+                bitrouter_core::models::language::stream_part::LanguageModelStreamPart::Finish { .. }
+            ) {
+                saw_finish = true;
+            }
             for event in converter.convert(&part) {
                 let data = serde_json::to_string(&event).unwrap_or_default();
                 let sse = Ok(warp::sse::Event::default()
@@ -652,9 +682,24 @@ async fn handle_stream(
                 }
             }
         }
-        let _ = tx
-            .send(Ok(warp::sse::Event::default().data("[DONE]")))
-            .await;
+        // Upstream closed without a Finish part — synthesize a final
+        // `response.completed` so strict clients (e.g. Codex CLI) don't
+        // hit "stream closed before response.completed" and retry.
+        // https://platform.openai.com/docs/api-reference/responses-streaming
+        if !saw_finish {
+            for event in converter.finish() {
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                let sse = Ok(warp::sse::Event::default()
+                    .event(&event.event_type)
+                    .data(data));
+                if tx.send(sse).await.is_err() {
+                    break;
+                }
+            }
+        }
+        // Responses SSE has no [DONE] terminator; `response.completed` is
+        // the canonical close. Emitting [DONE] here would cause Codex to
+        // surface a parse error and retry.
     });
 
     let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -664,6 +709,7 @@ async fn handle_stream(
 async fn handle_stream_with_observe(
     model: &(impl LanguageModel + ?Sized),
     options: bitrouter_core::models::language::call_options::LanguageModelCallOptions,
+    model_id: String,
     ctx: crate::router::StreamObserveContext,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     let stream_result = model
@@ -688,12 +734,19 @@ async fn handle_stream_with_observe(
 
     tokio::spawn(async move {
         let mut stream = stream_result.stream;
-        let mut converter = convert::StreamConverter::new();
+        let mut converter = convert::StreamConverter::new(model_id);
         use tokio_stream::StreamExt as _;
         let mut observation = crate::router::StreamObservation::new();
         let mut client_disconnected = false;
+        let mut saw_finish = false;
         while let Some(part) = stream.next().await {
             observation.record_part(&part);
+            if matches!(
+                part,
+                bitrouter_core::models::language::stream_part::LanguageModelStreamPart::Finish { .. }
+            ) {
+                saw_finish = true;
+            }
             let mut send_failed = false;
             for event in converter.convert(&part) {
                 let data = serde_json::to_string(&event).unwrap_or_default();
@@ -710,9 +763,23 @@ async fn handle_stream_with_observe(
                 break;
             }
         }
-        let _ = tx
-            .send(Ok(warp::sse::Event::default().data("[DONE]")))
-            .await;
+        // Synthesize `response.completed` when the upstream stopped without
+        // a Finish so Codex CLI sees a well-formed terminator instead of
+        // raising "stream closed before response.completed" and retrying.
+        // https://platform.openai.com/docs/api-reference/responses-streaming
+        if !saw_finish && !client_disconnected {
+            for event in converter.finish() {
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                let sse = Ok(warp::sse::Event::default()
+                    .event(&event.event_type)
+                    .data(data));
+                if tx.send(sse).await.is_err() {
+                    client_disconnected = true;
+                    break;
+                }
+            }
+        }
+        // Responses SSE has no [DONE] terminator.
 
         let latency_ms = start.elapsed().as_millis() as u64;
         let ctx = RequestContext {
