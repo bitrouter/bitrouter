@@ -388,6 +388,7 @@ where
                 include_raw_chunks: None,
                 abort_signal: None,
                 headers: None,
+                reasoning_effort: None,
                 provider_options: None,
             };
 

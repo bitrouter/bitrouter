@@ -7,6 +7,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use bitrouter_core::models::language::call_options::ReasoningEffort;
 use bitrouter_core::routers::routing_table::ApiProtocol;
 
 use crate::env::{load_env, substitute_in_value};
@@ -891,10 +892,9 @@ pub struct Endpoint {
 /// the preset's fields fill in anything the request leaves unset — fields
 /// already present on the request always win (shallow merge).
 ///
-/// Reasoning effort and tool-policy (parallel_tool_calls, tool_choice) are
-/// intentionally omitted from v0. They will be added when wired through to
-/// provider adapters in a follow-up PR — adding inert fields now would be
-/// dead config surface.
+/// Tool-policy fields (parallel_tool_calls, tool_choice) are intentionally
+/// omitted — they will land when wired through to provider adapters; adding
+/// inert fields now would be dead config surface.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PresetConfig {
     /// Concrete model name this preset routes to (e.g. `gpt-5`).
@@ -946,6 +946,12 @@ pub struct GenerationParams {
     pub presence_penalty: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
+    /// Normalized reasoning effort. Provider adapters translate this to the
+    /// upstream's native shape — OpenAI takes the enum string directly,
+    /// Anthropic maps to a `thinking.budget_tokens` integer, Google to
+    /// `thinkingConfig.thinkingBudget`. See [`ReasoningEffort`] for the table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl GenerationParams {
@@ -957,6 +963,7 @@ impl GenerationParams {
             && self.frequency_penalty.is_none()
             && self.presence_penalty.is_none()
             && self.stop.is_none()
+            && self.reasoning_effort.is_none()
     }
 }
 

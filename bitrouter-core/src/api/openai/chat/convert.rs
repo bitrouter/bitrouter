@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::models::{
     language::{
-        call_options::LanguageModelCallOptions,
+        call_options::{LanguageModelCallOptions, ReasoningEffort},
         content::LanguageModelContent,
         finish_reason::LanguageModelFinishReason,
         generate_result::LanguageModelGenerateResult,
@@ -58,6 +58,11 @@ pub fn to_call_options(request: ChatCompletionRequest) -> LanguageModelCallOptio
 
     let tool_choice = request.tool_choice.as_ref().and_then(convert_tool_choice);
 
+    let reasoning_effort = request
+        .reasoning_effort
+        .as_deref()
+        .and_then(ReasoningEffort::from_str_opt);
+
     LanguageModelCallOptions {
         prompt,
         stream: request.stream,
@@ -75,6 +80,7 @@ pub fn to_call_options(request: ChatCompletionRequest) -> LanguageModelCallOptio
         include_raw_chunks: None,
         abort_signal: None,
         headers: None,
+        reasoning_effort,
         provider_options: None,
     }
 }
@@ -456,6 +462,33 @@ mod tests {
     };
 
     // ── Request Deserialization ─────────────────────────────────────────
+
+    #[test]
+    fn to_call_options_parses_reasoning_effort_string() {
+        let json = r#"{
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "high"
+        }"#;
+        let req: ChatCompletionRequest = serde_json::from_str(json).expect("parse failed");
+        let opts = to_call_options(req);
+        assert_eq!(opts.reasoning_effort, Some(ReasoningEffort::High));
+    }
+
+    #[test]
+    fn to_call_options_unknown_reasoning_effort_drops_to_none() {
+        // `xhigh` is OpenAI-specific (codex-max+); BitRouter's normalized
+        // enum doesn't carry it, so unknown values must drop cleanly
+        // rather than panicking or refusing the request.
+        let json = r#"{
+            "model": "gpt-5.1-codex-max",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "xhigh"
+        }"#;
+        let req: ChatCompletionRequest = serde_json::from_str(json).expect("parse failed");
+        let opts = to_call_options(req);
+        assert!(opts.reasoning_effort.is_none());
+    }
 
     #[test]
     fn deserialize_simple_text_message_request() {

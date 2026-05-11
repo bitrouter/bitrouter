@@ -249,11 +249,15 @@ pub(super) fn build_messages_request(
         .transpose()?;
 
     let (system, messages) = convert_prompt(&options.prompt)?;
+    let max_tokens = options.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    let thinking = options.reasoning_effort.map(|e| {
+        bitrouter_core::api::anthropic::messages::preset::effort_to_thinking(e, max_tokens)
+    });
 
     Ok(MessagesRequest {
         model,
         messages,
-        max_tokens: options.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        max_tokens,
         system: system.map(bitrouter_core::api::anthropic::messages::types::SystemPrompt::Text),
         stream: Some(stream),
         temperature: options.temperature,
@@ -266,6 +270,7 @@ pub(super) fn build_messages_request(
             .as_ref()
             .map(tool_choice_from_language_model),
         metadata: None,
+        thinking,
     })
 }
 
@@ -1467,6 +1472,88 @@ mod tests {
                 .iter()
                 .any(|p| matches!(p, LanguageModelStreamPart::ToolInputEnd { .. }))
         );
+    }
+
+    #[test]
+    fn build_messages_request_maps_effort_to_thinking_budget() {
+        use bitrouter_core::api::anthropic::messages::types::AnthropicThinking;
+        use bitrouter_core::models::language::call_options::ReasoningEffort;
+
+        let options = LanguageModelCallOptions {
+            prompt: vec![LanguageModelMessage::User {
+                content: vec![LanguageModelUserContent::Text {
+                    text: "hello".to_owned(),
+                    provider_options: None,
+                }],
+                provider_options: None,
+            }],
+            stream: None,
+            max_output_tokens: Some(32_000),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            response_format: None,
+            seed: None,
+            tools: None,
+            tool_choice: None,
+            include_raw_chunks: None,
+            abort_signal: None,
+            headers: None,
+            reasoning_effort: Some(ReasoningEffort::Medium),
+            provider_options: None,
+        };
+
+        let request = build_messages_request("claude-sonnet-4-5", &options, false)
+            .expect("request should build");
+        match request.thinking {
+            Some(AnthropicThinking::Enabled { budget_tokens, .. }) => {
+                assert_eq!(budget_tokens, 4096);
+            }
+            other => panic!("expected enabled thinking, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_messages_request_minimal_effort_disables_thinking() {
+        use bitrouter_core::api::anthropic::messages::types::AnthropicThinking;
+        use bitrouter_core::models::language::call_options::ReasoningEffort;
+
+        let options = LanguageModelCallOptions {
+            prompt: vec![LanguageModelMessage::User {
+                content: vec![LanguageModelUserContent::Text {
+                    text: "hello".to_owned(),
+                    provider_options: None,
+                }],
+                provider_options: None,
+            }],
+            stream: None,
+            max_output_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            response_format: None,
+            seed: None,
+            tools: None,
+            tool_choice: None,
+            include_raw_chunks: None,
+            abort_signal: None,
+            headers: None,
+            reasoning_effort: Some(ReasoningEffort::Minimal),
+            provider_options: None,
+        };
+
+        let request = build_messages_request("claude-sonnet-4-5", &options, false)
+            .expect("request should build");
+        assert!(matches!(
+            request.thinking,
+            Some(AnthropicThinking::Disabled)
+        ));
     }
 
     #[test]

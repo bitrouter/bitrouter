@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::models::{
     language::{
-        call_options::LanguageModelCallOptions,
+        call_options::{LanguageModelCallOptions, ReasoningEffort},
         content::LanguageModelContent,
         finish_reason::LanguageModelFinishReason,
         generate_result::LanguageModelGenerateResult,
@@ -20,9 +20,9 @@ use crate::models::{
 };
 
 use super::types::{
-    AnthropicContentBlock, AnthropicMessageContent, AnthropicToolChoice, MessagesMessageDelta,
-    MessagesRequest, MessagesResponse, MessagesStreamDelta, MessagesStreamEvent,
-    MessagesStreamMessage, MessagesUsage,
+    AnthropicContentBlock, AnthropicMessageContent, AnthropicThinking, AnthropicToolChoice,
+    MessagesMessageDelta, MessagesRequest, MessagesResponse, MessagesStreamDelta,
+    MessagesStreamEvent, MessagesStreamMessage, MessagesUsage,
 };
 use crate::api::util::generate_id;
 
@@ -91,6 +91,8 @@ pub fn to_call_options(request: MessagesRequest) -> LanguageModelCallOptions {
 
     let tool_choice = request.tool_choice.as_ref().and_then(convert_tool_choice);
 
+    let reasoning_effort = request.thinking.as_ref().and_then(map_thinking_to_effort);
+
     LanguageModelCallOptions {
         prompt,
         stream: request.stream,
@@ -108,7 +110,25 @@ pub fn to_call_options(request: MessagesRequest) -> LanguageModelCallOptions {
         include_raw_chunks: None,
         abort_signal: None,
         headers: None,
+        reasoning_effort,
         provider_options: None,
+    }
+}
+
+/// Buckets an Anthropic `thinking` configuration into the normalized enum.
+///
+/// `Disabled` → `Minimal`; `Enabled` buckets on `budget_tokens`; `Adaptive`
+/// is passthrough (`None`) so downstream protocol-translation hands the
+/// "let the model decide" intent back without forcing a bucket.
+fn map_thinking_to_effort(thinking: &AnthropicThinking) -> Option<ReasoningEffort> {
+    match thinking {
+        AnthropicThinking::Disabled => Some(ReasoningEffort::Minimal),
+        AnthropicThinking::Enabled { budget_tokens, .. } => Some(match *budget_tokens {
+            0..=2047 => ReasoningEffort::Low,
+            2048..=8191 => ReasoningEffort::Medium,
+            _ => ReasoningEffort::High,
+        }),
+        AnthropicThinking::Adaptive { .. } => None,
     }
 }
 
@@ -588,6 +608,36 @@ fn empty_stream_usage() -> MessagesUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_call_options_buckets_anthropic_thinking_budget() {
+        // Construct via JSON so the test exercises the wire-format
+        // deserialization path users actually hit.
+        let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 16384,
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "enabled", "budget_tokens": 5000},
+        }))
+        .expect("messages request parses");
+
+        let opts = to_call_options(request);
+        assert_eq!(opts.reasoning_effort, Some(ReasoningEffort::Medium));
+    }
+
+    #[test]
+    fn to_call_options_disabled_thinking_maps_to_minimal() {
+        let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "disabled"},
+        }))
+        .expect("messages request parses");
+
+        let opts = to_call_options(request);
+        assert_eq!(opts.reasoning_effort, Some(ReasoningEffort::Minimal));
+    }
 
     #[test]
     fn stream_converter_starts_tool_block_for_delta_without_start() {

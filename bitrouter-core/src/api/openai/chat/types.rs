@@ -36,6 +36,14 @@ pub struct ChatCompletionRequest {
     pub parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ChatResponseFormat>,
+    /// Reasoning effort for `o`- and `gpt-5`-series models.
+    /// <https://platform.openai.com/docs/guides/reasoning>
+    ///
+    /// Carried as a free-form string so requests targeting models that accept
+    /// values beyond BitRouter's normalized enum (e.g. `xhigh`, `none`) can
+    /// round-trip when both inbound and outbound protocol is OpenAI Chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

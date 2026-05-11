@@ -180,6 +180,7 @@ pub fn resolve(
             stop_sequences: params.stop.clone(),
             presence_penalty: params.presence_penalty,
             frequency_penalty: params.frequency_penalty,
+            reasoning_effort: params.reasoning_effort,
         };
         if bundle.is_empty() {
             None
@@ -413,6 +414,28 @@ mod tests {
         let p = r.preset.expect("preset bundle");
         assert_eq!(p.temperature, Some(0.2));
         assert_eq!(p.system.as_deref(), Some("Reason carefully."));
+    }
+
+    #[test]
+    fn resolve_propagates_reasoning_effort_into_bundle() {
+        use bitrouter_core::models::language::call_options::ReasoningEffort;
+
+        let mut presets = HashMap::new();
+        presets.insert(
+            "deep".to_owned(),
+            PresetConfig {
+                model: Some("gpt-5".to_owned()),
+                params: crate::config::GenerationParams {
+                    reasoning_effort: Some(ReasoningEffort::High),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let variants = HashMap::new();
+        let r = resolve("@deep", &presets, &variants).unwrap();
+        let bundle = r.preset.expect("preset bundle");
+        assert_eq!(bundle.reasoning_effort, Some(ReasoningEffort::High));
     }
 
     #[test]

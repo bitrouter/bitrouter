@@ -5,6 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::Result;
+use crate::models::language::call_options::ReasoningEffort;
 use crate::routers::content::RouteContext;
 
 // ── API protocol ──────────────────────────────────────────────────
@@ -63,6 +64,7 @@ pub struct AppliedPreset {
     pub stop_sequences: Option<Vec<String>>,
     pub presence_penalty: Option<f32>,
     pub frequency_penalty: Option<f32>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl AppliedPreset {
@@ -76,6 +78,7 @@ impl AppliedPreset {
             && self.stop_sequences.is_none()
             && self.presence_penalty.is_none()
             && self.frequency_penalty.is_none()
+            && self.reasoning_effort.is_none()
     }
 }
 
