@@ -234,11 +234,18 @@ pub enum ResponsesOutputContent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponsesUsage {
-    #[serde(default)]
+    // Strict consumers (Codex CLI) require these three fields as non-null
+    // integers when the `usage` object is present — they're typed `i64` in
+    // codex-rs/codex-api/src/sse/responses.rs::ResponseCompletedUsage and
+    // any `null` value fails the response.completed parse. Skip-on-None so
+    // the streaming converter can construct a partial usage object only
+    // when at least one field is known; in practice the converter always
+    // sets all three together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens_details: Option<ResponsesInputTokensDetails>,

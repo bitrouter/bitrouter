@@ -938,16 +938,27 @@ impl StreamConverter {
         &self,
         usage: Option<&crate::models::language::usage::LanguageModelUsage>,
     ) -> ResponsesResponse {
-        let usage = usage.map(|u| ResponsesUsage {
-            input_tokens: u.input_tokens.total,
-            output_tokens: u.output_tokens.total,
-            total_tokens: u
-                .input_tokens
-                .total
-                .zip(u.output_tokens.total)
-                .map(|(i, o)| i + o),
-            input_tokens_details: None,
-            output_tokens_details: None,
+        // Codex CLI's `ResponseCompletedUsage` types input/output/total as
+        // non-optional `i64` (see codex-rs/codex-api/src/sse/responses.rs),
+        // so any `null` inside the usage object fails the response.completed
+        // parse and the stream hangs. Default unknown counts to 0 and always
+        // emit the three core fields together; if no counts are known at
+        // all, omit `usage` entirely so codex falls back to `usage: None`.
+        let usage = usage.and_then(|u| {
+            let input = u.input_tokens.total;
+            let output = u.output_tokens.total;
+            if input.is_none() && output.is_none() {
+                return None;
+            }
+            let input = input.unwrap_or(0);
+            let output = output.unwrap_or(0);
+            Some(ResponsesUsage {
+                input_tokens: Some(input),
+                output_tokens: Some(output),
+                total_tokens: Some(input.saturating_add(output)),
+                input_tokens_details: None,
+                output_tokens_details: None,
+            })
         });
         ResponsesResponse {
             id: self.response_id.clone(),
@@ -2166,6 +2177,114 @@ mod tests {
         assert_eq!(usage.total_tokens, Some(55));
         assert_eq!(resp.status.as_deref(), Some("completed"));
         assert_eq!(resp.output.len(), 1);
+    }
+
+    #[test]
+    fn stream_converter_completed_payload_parses_as_codex_response_completed() {
+        // Lock the contract with codex-rs/codex-api/src/sse/responses.rs::
+        // ResponseCompletedUsage where input_tokens / output_tokens /
+        // total_tokens are typed `i64` (not Option). A `null` value inside
+        // the usage object fails the parse, the stream errors out, the
+        // oneshot LastResponse channel never fires, and the Codex TUI hangs.
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct CodexResponseCompleted {
+            id: String,
+            #[serde(default)]
+            usage: Option<CodexUsage>,
+            #[serde(default)]
+            end_turn: Option<bool>,
+        }
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct CodexUsage {
+            input_tokens: i64,
+            output_tokens: i64,
+            total_tokens: i64,
+        }
+
+        let mut conv = StreamConverter::new("test-model");
+        conv.convert(&LanguageModelStreamPart::TextDelta {
+            id: "t1".to_owned(),
+            delta: "Hi".to_owned(),
+            provider_metadata: None,
+        });
+        let events = conv.convert(&LanguageModelStreamPart::Finish {
+            usage: make_usage(11, 22),
+            finish_reason: LanguageModelFinishReason::Stop,
+            provider_metadata: None,
+        });
+        let completed = events
+            .iter()
+            .find(|e| e.event_type == "response.completed")
+            .and_then(|e| e.response.as_ref())
+            .expect("response.completed present");
+        let json = serde_json::to_value(completed).expect("serialize");
+        // The whole JSON shape must round-trip into Codex's struct.
+        let parsed: CodexResponseCompleted =
+            serde_json::from_value(json.clone()).expect("Codex parses response.completed");
+        assert_eq!(parsed.id, completed.id);
+        let usage = parsed.usage.expect("usage present");
+        assert_eq!(usage.input_tokens, 11);
+        assert_eq!(usage.output_tokens, 22);
+        assert_eq!(usage.total_tokens, 33);
+        // And there must be no JSON null inside usage that would break the parse.
+        let usage_obj = json["usage"].as_object().expect("usage object");
+        for key in ["input_tokens", "output_tokens", "total_tokens"] {
+            assert!(
+                !usage_obj[key].is_null(),
+                "usage.{key} must not be null in response.completed"
+            );
+        }
+    }
+
+    #[test]
+    fn stream_converter_completed_omits_usage_when_upstream_has_none() {
+        // If the upstream provides no token counts at all, the usage object
+        // is omitted entirely rather than emitting nulls. Codex's
+        // `usage: Option<ResponseCompletedUsage>` deserializes None cleanly.
+        use crate::models::language::usage::{
+            LanguageModelInputTokens, LanguageModelOutputTokens, LanguageModelUsage,
+        };
+        let empty_usage = LanguageModelUsage {
+            input_tokens: LanguageModelInputTokens {
+                total: None,
+                no_cache: None,
+                cache_read: None,
+                cache_write: None,
+            },
+            output_tokens: LanguageModelOutputTokens {
+                total: None,
+                text: None,
+                reasoning: None,
+            },
+            raw: None,
+        };
+        let mut conv = StreamConverter::new("test-model");
+        conv.convert(&LanguageModelStreamPart::TextDelta {
+            id: "t1".to_owned(),
+            delta: "Hi".to_owned(),
+            provider_metadata: None,
+        });
+        let events = conv.convert(&LanguageModelStreamPart::Finish {
+            usage: empty_usage,
+            finish_reason: LanguageModelFinishReason::Stop,
+            provider_metadata: None,
+        });
+        let completed = events
+            .iter()
+            .find(|e| e.event_type == "response.completed")
+            .and_then(|e| e.response.as_ref())
+            .expect("response.completed present");
+        assert!(
+            completed.usage.is_none(),
+            "usage must be omitted when no token counts"
+        );
+        let json = serde_json::to_value(completed).expect("serialize");
+        assert!(
+            json.get("usage").is_none(),
+            "usage key must be absent from serialized JSON, got {json}"
+        );
     }
 
     #[test]
