@@ -497,6 +497,17 @@ fn convert_prompt(prompt: &[LanguageModelMessage]) -> Result<Vec<ChatMessage>> {
 
                 let content_text = (!text_segments.is_empty())
                     .then(|| ChatMessageContent::Text(text_segments.join("\n")));
+                // Skip emitting empty assistant turns. Strict upstreams
+                // (e.g. Z.ai/GLM) reject `{role:"assistant"}` with neither
+                // `content` nor `tool_calls` populated, surfacing as
+                // "The prompt parameter was not received normally". This
+                // commonly happens when Codex CLI replays prior turns whose
+                // visible text was empty (real output lived in a separate
+                // `reasoning` item that we strip on this code path).
+                // https://platform.openai.com/docs/guides/text-generation
+                if content_text.is_none() && tool_calls.is_empty() {
+                    continue;
+                }
                 messages.push(ChatMessage {
                     role: "assistant".to_owned(),
                     content: content_text,
@@ -1219,6 +1230,73 @@ mod tests {
         };
         let err = message_to_language_model_content(message, None, json!({})).unwrap_err();
         assert!(format!("{err}").contains("neither content nor tool calls"));
+    }
+
+    #[test]
+    fn convert_prompt_drops_reasoning_only_assistant_turn() {
+        // Codex CLI replays prior assistant turns whose visible text was
+        // empty (real output lived in a separate `reasoning` item). After
+        // stripping Reasoning here, the assistant message has neither text
+        // nor tool_calls — emitting it would trip Z.ai/GLM's "prompt
+        // parameter was not received normally" error.
+        use bitrouter_core::models::language::prompt::{
+            LanguageModelAssistantContent, LanguageModelMessage, LanguageModelUserContent,
+        };
+        let prompt = vec![
+            LanguageModelMessage::User {
+                content: vec![LanguageModelUserContent::Text {
+                    text: "hi".to_owned(),
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+            LanguageModelMessage::Assistant {
+                content: vec![LanguageModelAssistantContent::Reasoning {
+                    text: "internal monologue".to_owned(),
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+            LanguageModelMessage::User {
+                content: vec![LanguageModelUserContent::Text {
+                    text: "do it".to_owned(),
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+        ];
+        let chat = convert_prompt(&prompt).expect("convert_prompt should succeed");
+        // The reasoning-only assistant turn must be dropped.
+        assert_eq!(chat.len(), 2);
+        assert_eq!(chat[0].role, "user");
+        assert_eq!(chat[1].role, "user");
+    }
+
+    #[test]
+    fn convert_prompt_keeps_assistant_with_text() {
+        use bitrouter_core::models::language::prompt::{
+            LanguageModelAssistantContent, LanguageModelMessage,
+        };
+        let prompt = vec![LanguageModelMessage::Assistant {
+            content: vec![
+                LanguageModelAssistantContent::Reasoning {
+                    text: "thinking".to_owned(),
+                    provider_options: None,
+                },
+                LanguageModelAssistantContent::Text {
+                    text: "Hello".to_owned(),
+                    provider_options: None,
+                },
+            ],
+            provider_options: None,
+        }];
+        let chat = convert_prompt(&prompt).expect("convert");
+        assert_eq!(chat.len(), 1);
+        assert_eq!(chat[0].role, "assistant");
+        assert!(matches!(
+            chat[0].content.as_ref(),
+            Some(ChatMessageContent::Text(t)) if t == "Hello"
+        ));
     }
 
     #[test]

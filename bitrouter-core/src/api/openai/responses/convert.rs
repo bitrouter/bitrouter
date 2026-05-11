@@ -987,11 +987,34 @@ fn convert_input_items(items: Vec<ResponsesInputItem>) -> Vec<LanguageModelMessa
                         provider_options: None,
                     });
                 }
+                "assistant" => {
+                    // Codex CLI sends prior assistant turns with role=assistant
+                    // and `output_text` content. Routing them through `User`
+                    // produces consecutive user messages with no assistant
+                    // turns between them; upstreams like Z.ai/GLM reject the
+                    // chat-completions payload as malformed
+                    // ("The prompt parameter was not received normally").
+                    // Codex commonly emits assistant messages with empty text
+                    // because the visible content lives in a sibling
+                    // `reasoning` item (which bitrouter can't replay to
+                    // chat-completions upstreams); drop those empty shells
+                    // rather than emit a vacuous Assistant message.
+                    let parts = input_content_to_assistant_parts(msg.content);
+                    if !parts.is_empty() {
+                        messages.push(LanguageModelMessage::Assistant {
+                            content: parts,
+                            provider_options: None,
+                        });
+                    }
+                }
                 _ => {
-                    messages.push(LanguageModelMessage::User {
-                        content: input_content_to_parts(msg.content),
-                        provider_options: None,
-                    });
+                    let parts = input_content_to_parts(msg.content);
+                    if !parts.is_empty() {
+                        messages.push(LanguageModelMessage::User {
+                            content: parts,
+                            provider_options: None,
+                        });
+                    }
                 }
             },
             ResponsesInputItem::FunctionCallOutput(fco) => {
@@ -1021,16 +1044,92 @@ fn convert_input_items(items: Vec<ResponsesInputItem>) -> Vec<LanguageModelMessa
                     provider_options: None,
                 });
             }
-            // Unknown / unsupported item types (reasoning, web_search_call,
-            // image_generation_call, local_shell_call, compaction, ...) are
-            // accepted on the wire so strict clients like Codex CLI don't
-            // get 400s, but bitrouter can't replay them to a non-Responses
-            // upstream — silently drop. The downstream model still sees the
-            // surrounding messages and reasoning resumes from scratch.
-            ResponsesInputItem::Unknown(_) => {}
+            ResponsesInputItem::Unknown(value) => {
+                // Codex CLI emits `reasoning` items separately from the
+                // assistant message: extract the text and surface it as
+                // Reasoning content on an Assistant message. Providers that
+                // support extended thinking (Anthropic) will round-trip it;
+                // chat-completions providers strip it per their own
+                // convert_prompt (see openai/chat/api.rs).
+                if let Some(reasoning_text) = extract_reasoning_text(&value)
+                    && !reasoning_text.is_empty()
+                {
+                    messages.push(LanguageModelMessage::Assistant {
+                        content: vec![LanguageModelAssistantContent::Reasoning {
+                            text: reasoning_text,
+                            provider_options: None,
+                        }],
+                        provider_options: None,
+                    });
+                }
+                // Other unknown item types (web_search_call, local_shell_call,
+                // image_generation_call, custom_tool_call, compaction, ...)
+                // are silently dropped — bitrouter can't replay them to a
+                // non-Responses upstream.
+            }
         }
     }
     messages
+}
+
+/// Extracts the concatenated text from a `reasoning` input item's `content`
+/// array. Codex CLI's shape per [`codex_protocol::models::ResponseItem`]:
+/// `{type: "reasoning", id, summary, content: [{type:"reasoning_text", text}], encrypted_content}`.
+/// Returns `None` for any other item type so callers can ignore non-reasoning
+/// unknowns.
+/// <https://platform.openai.com/docs/api-reference/responses/create#input>
+fn extract_reasoning_text(value: &serde_json::Value) -> Option<String> {
+    let obj = value.as_object()?;
+    if obj.get("type").and_then(|t| t.as_str()) != Some("reasoning") {
+        return None;
+    }
+    let content = obj.get("content").and_then(|c| c.as_array())?;
+    let mut pieces = Vec::new();
+    for item in content {
+        if let Some(text) = item.get("text").and_then(|t| t.as_str())
+            && !text.is_empty()
+        {
+            pieces.push(text.to_owned());
+        }
+    }
+    if pieces.is_empty() {
+        None
+    } else {
+        Some(pieces.join(""))
+    }
+}
+
+fn input_content_to_assistant_parts(
+    content: Option<ResponsesInputContent>,
+) -> Vec<LanguageModelAssistantContent> {
+    match content {
+        Some(ResponsesInputContent::Text(s)) if !s.is_empty() => {
+            vec![LanguageModelAssistantContent::Text {
+                text: s,
+                provider_options: None,
+            }]
+        }
+        Some(ResponsesInputContent::Parts(parts)) => parts
+            .into_iter()
+            .filter_map(|p| match p {
+                // Both `input_text` and `output_text` carry user-visible
+                // assistant text on the wire; collapse to Text content.
+                ResponsesInputContentPart::InputText { text }
+                | ResponsesInputContentPart::OutputText { text } => {
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some(LanguageModelAssistantContent::Text {
+                            text,
+                            provider_options: None,
+                        })
+                    }
+                }
+                ResponsesInputContentPart::InputImage { .. } => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Codex CLI's `function_call_output.output` may be a plain string or a
@@ -2309,14 +2408,92 @@ mod tests {
     }
 
     #[test]
-    fn to_call_options_skips_unknown_items() {
-        // Unknown input items (reasoning, web_search_call, ...) must not
-        // produce phantom messages in the converted prompt.
+    fn to_call_options_lifts_reasoning_items_to_assistant_reasoning() {
+        // Reasoning input items become Assistant messages with Reasoning
+        // content so providers that round-trip thinking (Anthropic) see them.
+        // Chat-completions providers strip Reasoning per their own
+        // convert_prompt and skip the empty assistant turn that remains.
         let json = r#"{
             "model": "opencode-go:glm-5.1",
             "input": [
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
-                {"type": "reasoning", "id": "rs_1", "summary": [], "content": [{"type":"reasoning_text","text":"..."}]}
+                {"type": "reasoning", "id": "rs_1", "summary": [], "content": [{"type":"reasoning_text","text":"thinking..."}]}
+            ]
+        }"#;
+        let req: ResponsesRequest = serde_json::from_str(json).expect("parse");
+        let opts = to_call_options(req);
+        assert_eq!(opts.prompt.len(), 2);
+        assert!(matches!(opts.prompt[0], LanguageModelMessage::User { .. }));
+        match &opts.prompt[1] {
+            LanguageModelMessage::Assistant { content, .. } => {
+                assert_eq!(content.len(), 1);
+                assert!(matches!(
+                    &content[0],
+                    LanguageModelAssistantContent::Reasoning { text, .. } if text == "thinking..."
+                ));
+            }
+            other => panic!("expected Assistant Reasoning, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_call_options_drops_other_unknown_items() {
+        // Non-reasoning Unknown items (web_search_call, etc.) still drop.
+        let json = r#"{
+            "model": "x",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+                {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+            ]
+        }"#;
+        let req: ResponsesRequest = serde_json::from_str(json).expect("parse");
+        let opts = to_call_options(req);
+        assert_eq!(opts.prompt.len(), 1);
+        assert!(matches!(opts.prompt[0], LanguageModelMessage::User { .. }));
+    }
+
+    #[test]
+    fn to_call_options_maps_assistant_role_to_assistant_message() {
+        // Codex CLI sends prior turns with role=assistant; they must NOT be
+        // demoted to User. Z.ai/GLM rejects payloads with no assistant turns
+        // ("The prompt parameter was not received normally").
+        let json = r#"{
+            "model": "opencode-go:glm-5.1",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Hello"}]},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Continue"}]}
+            ]
+        }"#;
+        let req: ResponsesRequest = serde_json::from_str(json).expect("parse");
+        let opts = to_call_options(req);
+        assert_eq!(opts.prompt.len(), 3);
+        assert!(matches!(opts.prompt[0], LanguageModelMessage::User { .. }));
+        match &opts.prompt[1] {
+            LanguageModelMessage::Assistant { content, .. } => {
+                assert!(matches!(
+                    &content[0],
+                    LanguageModelAssistantContent::Text { text, .. } if text == "Hello"
+                ));
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        assert!(matches!(opts.prompt[2], LanguageModelMessage::User { .. }));
+    }
+
+    #[test]
+    fn to_call_options_drops_empty_assistant_messages_from_codex() {
+        // Codex CLI commonly emits assistant messages with empty
+        // `output_text` because the visible content lives in a sibling
+        // reasoning item. Dropping these prevents an invalid chat-completions
+        // payload where many consecutive empty assistant turns confuse the
+        // upstream's prompt-shape validator.
+        let json = r#"{
+            "model": "opencode-go:glm-5.1",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": ""}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": ""}]}
             ]
         }"#;
         let req: ResponsesRequest = serde_json::from_str(json).expect("parse");
