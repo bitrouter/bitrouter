@@ -7,7 +7,7 @@
 //! about slashes.
 
 use bitrouter_config::BitrouterConfig;
-use bitrouter_config::acp::registry_agent_to_config;
+use bitrouter_providers::acp::ops;
 use bitrouter_providers::acp::types::InstallProgress;
 use tokio::sync::mpsc;
 
@@ -241,46 +241,36 @@ impl App {
     }
 
     fn slash_agents_list(&mut self, refresh: bool) {
-        let cache_file = self.state.config.cache_dir.join("acp-registry.json");
-        let state_file = self.state.config.agent_state_file.clone();
-        let registry_override = self.bitrouter_config.acp_registry_url.clone();
+        let paths = self.acp_paths();
+        let config = self.bitrouter_config.clone();
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
-            use bitrouter_providers::acp::registry;
-            use bitrouter_providers::acp::state;
-
-            let url = registry::resolve_registry_url(registry_override.as_deref());
-            let fetch = if refresh {
-                registry::fetch_registry_fresh(&cache_file, &url).await
-            } else {
-                registry::fetch_registry(&cache_file, registry::DEFAULT_TTL_SECS, &url).await
+            let list = match ops::list_agents(&config, &paths, refresh).await {
+                Ok(l) => l,
+                Err(e) => {
+                    send_system_lines(&event_tx, vec![format!("agents list failed: {e}")]).await;
+                    return;
+                }
             };
 
             let mut lines: Vec<String> = Vec::new();
-            let records = state::load_state(&state_file).await.unwrap_or_default();
-
-            match fetch {
-                Ok(index) => {
-                    lines.push(format!(
-                        "Agents ({} in registry v{}):",
-                        index.agents.len(),
-                        index.version
-                    ));
-                    let mut agents = index.agents.clone();
-                    agents.sort_by(|a, b| a.id.cmp(&b.id));
-                    for a in &agents {
-                        let installed = records.iter().find(|r| r.id == a.id);
-                        let mark = match installed {
-                            Some(r) => format!("[{}]", r.method),
-                            None => "[ ]".to_owned(),
-                        };
-                        lines.push(format!("  {mark} {:<22} v{}", a.id, a.version));
-                    }
-                }
-                Err(e) => lines.push(format!("Registry unavailable: {e}")),
+            for warning in &list.warnings {
+                lines.push(format!("warning: {warning}"));
             }
-
+            let header = match &list.registry_version {
+                Some(v) => format!("Agents ({} in registry v{v}):", list.agents.len()),
+                None => format!("Agents ({}):", list.agents.len()),
+            };
+            lines.push(header);
+            for info in &list.agents {
+                let mark = match &info.installed {
+                    Some(r) => format!("[{}]", r.method),
+                    None => "[ ]".to_owned(),
+                };
+                let version = info.version.as_deref().unwrap_or("-");
+                lines.push(format!("  {mark} {:<22} {version}", info.id));
+            }
             send_system_lines(&event_tx, lines).await;
         });
     }
@@ -288,71 +278,65 @@ impl App {
     fn slash_agents_install(&mut self, id: String, bitrouter_config: &BitrouterConfig) {
         self.push_system_msg(&format!("Installing {id}..."));
 
-        let cache_file = self.state.config.cache_dir.join("acp-registry.json");
-        let state_file = self.state.config.agent_state_file.clone();
-        let install_dir = self.state.config.agents_dir.join(&id);
-        let registry_override = bitrouter_config.acp_registry_url.clone();
+        let paths = self.acp_paths();
+        let config = bitrouter_config.clone();
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
-            use bitrouter_providers::acp::{eager, registry};
+            let mut handle = ops::install_agent(&id, &config, &paths);
+            let agent_id = id.clone();
+            let tx = event_tx.clone();
 
-            let url = registry::resolve_registry_url(registry_override.as_deref());
-            let index =
-                match registry::fetch_registry(&cache_file, registry::DEFAULT_TTL_SECS, &url).await
-                {
-                    Ok(i) => i,
-                    Err(e) => {
-                        send_system_lines(&event_tx, vec![format!("Registry unavailable: {e}")])
-                            .await;
-                        return;
+            while let Some(p) = handle.progress.recv().await {
+                let evt = match p {
+                    InstallProgress::Downloading {
+                        bytes_received,
+                        total,
+                    } => {
+                        let percent = total
+                            .filter(|&t| t > 0)
+                            .map(|t| ((bytes_received * 100) / t) as u8)
+                            .unwrap_or(0);
+                        AppEvent::InstallProgress {
+                            agent_id: agent_id.clone(),
+                            percent,
+                        }
                     }
+                    InstallProgress::Extracting => AppEvent::InstallProgress {
+                        agent_id: agent_id.clone(),
+                        percent: 95,
+                    },
+                    InstallProgress::Done(path) => AppEvent::InstallComplete {
+                        agent_id: agent_id.clone(),
+                        binary_path: path,
+                    },
+                    InstallProgress::Failed(msg) => AppEvent::InstallFailed {
+                        agent_id: agent_id.clone(),
+                        message: msg,
+                    },
                 };
+                if tx.send(evt).await.is_err() {
+                    break;
+                }
+            }
 
-            let Some(agent) = index.agents.iter().find(|a| a.id == id) else {
-                send_system_lines(
-                    &event_tx,
-                    vec![format!("Agent '{id}' not found in registry")],
-                )
-                .await;
-                return;
-            };
-
-            let agent_config = registry_agent_to_config(agent);
-            let (tx, rx) = mpsc::channel(32);
-
-            let reporter = spawn_progress_forwarder(rx, id.clone(), event_tx.clone());
-
-            let result = eager::install_agent(
-                &id,
-                &agent_config,
-                &install_dir,
-                &state_file,
-                &agent.version,
-                tx,
-            )
-            .await;
-            let _ = reporter.await;
-
-            let line = match result {
-                Ok(installed) => format!(
-                    "✓ {} installed via {}",
-                    installed.agent_id, installed.method
-                ),
-                Err(e) => format!("✗ install failed: {e}"),
+            let line = match handle.result.await {
+                Ok(Ok(installed)) => {
+                    format!("✓ {} installed via {}", installed.agent_id, installed.method)
+                }
+                Ok(Err(e)) => format!("✗ install failed: {e}"),
+                Err(_) => format!("✗ install task failed"),
             };
             send_system_lines(&event_tx, vec![line]).await;
         });
     }
 
     fn slash_agents_uninstall(&mut self, id: String) {
-        let install_dir = self.state.config.agents_dir.join(&id);
-        let state_file = self.state.config.agent_state_file.clone();
+        let paths = self.acp_paths();
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
-            use bitrouter_providers::acp::eager;
-            let line = match eager::uninstall_agent(&id, &install_dir, &state_file).await {
+            let line = match ops::uninstall_agent(&id, &paths).await {
                 Ok(()) => format!("✓ {id} uninstalled"),
                 Err(e) => format!("✗ uninstall failed: {e}"),
             };
@@ -361,11 +345,8 @@ impl App {
     }
 
     fn slash_agents_update(&mut self, id: Option<String>, bitrouter_config: &BitrouterConfig) {
-        // `load_state_sync` is acceptable here because we're already on
-        // the TUI's render/event-handling path (no active async ctx to
-        // block) and the file is a small JSON array.
-        let state_file = self.state.config.agent_state_file.clone();
-        let records = bitrouter_providers::acp::state::load_state_sync(&state_file);
+        let paths = self.acp_paths();
+        let records = bitrouter_providers::acp::state::load_state_sync(&paths.agent_state_file);
         if records.is_empty() {
             self.push_system_msg("(no agents installed)");
             return;
@@ -849,51 +830,6 @@ const HELP_TEXT: &[&str] = &[
     "  /obs             observability summary",
     "  /help or ?       this help",
 ];
-
-/// Spawn a task that forwards [`InstallProgress`] events to the app's
-/// [`AppEvent`] channel with real-percent computation.  Shared by the
-/// slash-install path and (when invoked) the update path so progress
-/// semantics stay consistent with `agent_lifecycle::start_binary_install`.
-pub(super) fn spawn_progress_forwarder(
-    mut rx: mpsc::Receiver<InstallProgress>,
-    agent_id: String,
-    tx: mpsc::Sender<AppEvent>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        while let Some(p) = rx.recv().await {
-            let evt = match p {
-                InstallProgress::Downloading {
-                    bytes_received,
-                    total,
-                } => {
-                    let percent = total
-                        .filter(|&t| t > 0)
-                        .map(|t| ((bytes_received * 100) / t) as u8)
-                        .unwrap_or(0);
-                    AppEvent::InstallProgress {
-                        agent_id: agent_id.clone(),
-                        percent,
-                    }
-                }
-                InstallProgress::Extracting => AppEvent::InstallProgress {
-                    agent_id: agent_id.clone(),
-                    percent: 95,
-                },
-                InstallProgress::Done(path) => AppEvent::InstallComplete {
-                    agent_id: agent_id.clone(),
-                    binary_path: path,
-                },
-                InstallProgress::Failed(msg) => AppEvent::InstallFailed {
-                    agent_id: agent_id.clone(),
-                    message: msg,
-                },
-            };
-            if tx.send(evt).await.is_err() {
-                break;
-            }
-        }
-    })
-}
 
 async fn send_system_lines(tx: &mpsc::Sender<AppEvent>, lines: Vec<String>) {
     for line in lines {

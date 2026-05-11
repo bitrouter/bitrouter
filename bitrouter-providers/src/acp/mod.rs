@@ -7,6 +7,7 @@
 pub mod discovery;
 pub mod eager;
 pub mod install;
+pub mod ops;
 pub mod platform;
 pub mod provider;
 pub mod proxy;

@@ -121,12 +121,46 @@ impl App {
         let state_file = self.state.config.agent_state_file.clone();
 
         tokio::spawn(async move {
+            use bitrouter_providers::acp::types::InstallProgress;
+
             let (progress_tx, progress_rx) = mpsc::channel(32);
-            let reporter = super::slash::spawn_progress_forwarder(
-                progress_rx,
-                agent_id_owned.clone(),
-                event_tx.clone(),
-            );
+            let agent_id_for_progress = agent_id_owned.clone();
+            let event_tx_for_progress = event_tx.clone();
+            let reporter = tokio::spawn(async move {
+                let mut rx = progress_rx;
+                while let Some(p) = rx.recv().await {
+                    let evt = match p {
+                        InstallProgress::Downloading {
+                            bytes_received,
+                            total,
+                        } => {
+                            let percent = total
+                                .filter(|&t| t > 0)
+                                .map(|t| ((bytes_received * 100) / t) as u8)
+                                .unwrap_or(0);
+                            AppEvent::InstallProgress {
+                                agent_id: agent_id_for_progress.clone(),
+                                percent,
+                            }
+                        }
+                        InstallProgress::Extracting => AppEvent::InstallProgress {
+                            agent_id: agent_id_for_progress.clone(),
+                            percent: 95,
+                        },
+                        InstallProgress::Done(path) => AppEvent::InstallComplete {
+                            agent_id: agent_id_for_progress.clone(),
+                            binary_path: path,
+                        },
+                        InstallProgress::Failed(msg) => AppEvent::InstallFailed {
+                            agent_id: agent_id_for_progress.clone(),
+                            message: msg,
+                        },
+                    };
+                    if event_tx_for_progress.send(evt).await.is_err() {
+                        break;
+                    }
+                }
+            });
 
             let result =
                 install_binary_agent(&agent_id_owned, &install_dir, &platforms, progress_tx).await;

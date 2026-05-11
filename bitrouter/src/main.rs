@@ -53,6 +53,11 @@ struct Cli {
     #[arg(long, global = true)]
     no_tui: bool,
 
+    /// Output format for read commands. Defaults to `text` on a TTY, `json` when piped.
+    #[cfg(feature = "cli")]
+    #[arg(long, short = 'o', global = true, value_enum)]
+    output: Option<cli::OutputFormat>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -189,6 +194,12 @@ enum RouteAction {
         strategy: String,
     },
     /// Remove a dynamic route
+    Delete {
+        /// Model name to remove
+        model: String,
+    },
+    /// Remove a dynamic route (alias for `delete`)
+    #[command(hide = true)]
     Rm {
         /// Model name to remove
         model: String,
@@ -484,6 +495,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    // Resolve output format: explicit flag overrides TTY auto-detection.
+    #[cfg(feature = "cli")]
+    let output = cli.output.unwrap_or_else(|| {
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            cli::OutputFormat::Text
+        } else {
+            cli::OutputFormat::Json
+        }
+    });
+
     // Resolve paths early — init needs them but not a loaded runtime
     let paths = resolve_home(cli.home_dir.as_deref());
     let overrides = PathOverrides {
@@ -671,8 +693,8 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
-                ToolsAction::List => cli::tools::run_list(&runtime.config, addr)?,
-                ToolsAction::Status => cli::tools::run_status(&runtime.config, addr)?,
+                ToolsAction::List => cli::tools::run_list(&runtime.config, addr, output)?,
+                ToolsAction::Status => cli::tools::run_status(&runtime.config, addr, output)?,
                 ToolsAction::Discover { provider } => {
                     cli::tools::run_discover(&runtime.config, &provider).await?
                 }
@@ -682,7 +704,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Models { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             match action {
-                ModelsAction::List => cli::models::run_list(&runtime.config)?,
+                ModelsAction::List => cli::models::run_list(&runtime.config, output)?,
             }
             return Ok(());
         }
@@ -701,9 +723,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             match action {
                 AgentsAction::List { refresh } => {
-                    cli::agents::run_list(&runtime.config, &paths, refresh).await?
+                    cli::agents::run_list(&runtime.config, &paths, refresh, output).await?
                 }
-                AgentsAction::Check => cli::agents::run_check(&runtime.config)?,
+                AgentsAction::Check => cli::agents::run_check(&runtime.config, output)?,
                 AgentsAction::Install { id } => {
                     cli::agents::run_install(&id, &runtime.config, &paths).await?
                 }
@@ -722,7 +744,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Providers { action }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             match action {
-                ProvidersAction::List => cli::providers::run_list(&runtime.config)?,
+                ProvidersAction::List => cli::providers::run_list(&runtime.config, output)?,
                 ProvidersAction::Use { mode } => cli::providers::run_use(&mode, &runtime.config)?,
             }
             return Ok(());
@@ -731,7 +753,7 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             let addr = runtime.config.server.listen;
             match action {
-                RouteAction::List => cli::route::run_list(&runtime.config, addr)?,
+                RouteAction::List => cli::route::run_list(&runtime.config, addr, output)?,
                 RouteAction::Add {
                     model,
                     endpoints,
@@ -745,7 +767,9 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         strategy: Some(strategy),
                     },
                 )?,
-                RouteAction::Rm { model } => cli::route::run_remove(&runtime.config, addr, &model)?,
+                RouteAction::Delete { model } | RouteAction::Rm { model } => {
+                    cli::route::run_remove(&runtime.config, addr, &model)?
+                }
             }
             return Ok(());
         }
