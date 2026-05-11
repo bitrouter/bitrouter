@@ -81,7 +81,7 @@ impl<'db> AccountService<'db> {
     ) -> Result<Option<account::Model>, DbErr> {
         // Check current active pubkey.
         if let Some(account) = self.find_by_pubkey(pubkey).await? {
-            tracing::info!(account_id = %account.id, "account resolved by pubkey");
+            tracing::debug!(account_id = %account.id, "account resolved by pubkey");
             return Ok(Some(account));
         }
 

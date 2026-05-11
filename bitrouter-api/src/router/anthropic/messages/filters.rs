@@ -301,33 +301,44 @@ where
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
     {
-        return Err(warp::reject::custom(BitrouterRejection(
-            BitrouterError::AccessDenied {
-                message: format!("model '{}' is not in your allowlist", incoming_model),
-            },
-        )));
+        let err = BitrouterError::AccessDenied {
+            message: format!("model '{}' is not in your allowlist", incoming_model),
+        };
+        crate::router::log_request_resolve_failed(&caller, &incoming_model, &err);
+        return Err(warp::reject::custom(BitrouterRejection(err)));
     }
 
     let mut target = table
         .route(&incoming_model, &route_ctx)
         .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+        .map_err(|e| {
+            crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
+            warp::reject::custom(BitrouterRejection(e))
+        })?;
 
     if let Some(ref overlay) = target_overlay {
-        overlay
-            .apply(&mut target, &caller)
-            .await
-            .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+        overlay.apply(&mut target, &caller).await.map_err(|e| {
+            crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
+            warp::reject::custom(BitrouterRejection(e))
+        })?;
     }
 
     let byok_used = target.api_key_override.is_some();
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();
 
-    let model = router
-        .route_model(target.clone())
-        .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+    let model = router.route_model(target.clone()).await.map_err(|e| {
+        crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
+        warp::reject::custom(BitrouterRejection(e))
+    })?;
+
+    crate::router::log_request_received(
+        &caller,
+        &incoming_model,
+        &provider_name,
+        &target_model_id,
+        is_stream,
+    );
 
     let model_id = model.model_id().to_owned();
     let options = convert::to_call_options(request);
@@ -557,25 +568,36 @@ where
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
     {
-        return Err(warp::reject::custom(BitrouterRejection(
-            BitrouterError::AccessDenied {
-                message: format!("model '{}' is not in your allowlist", incoming_model),
-            },
-        )));
+        let err = BitrouterError::AccessDenied {
+            message: format!("model '{}' is not in your allowlist", incoming_model),
+        };
+        crate::router::log_request_resolve_failed(&caller, &incoming_model, &err);
+        return Err(warp::reject::custom(BitrouterRejection(err)));
     }
 
     let target = table
         .route(&incoming_model, &route_ctx)
         .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+        .map_err(|e| {
+            crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
+            warp::reject::custom(BitrouterRejection(e))
+        })?;
 
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();
 
-    let model = router
-        .route_model(target.clone())
-        .await
-        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+    let model = router.route_model(target.clone()).await.map_err(|e| {
+        crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
+        warp::reject::custom(BitrouterRejection(e))
+    })?;
+
+    crate::router::log_request_received(
+        &caller,
+        &incoming_model,
+        &provider_name,
+        &target_model_id,
+        is_stream,
+    );
 
     let model_id = model.model_id().to_owned();
     let options = convert::to_call_options(request);

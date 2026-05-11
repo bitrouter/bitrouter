@@ -40,6 +40,47 @@ mod observe_ctx {
 
 pub(crate) use observe_ctx::StreamObserveContext;
 
+mod request_log {
+    use bitrouter_core::errors::BitrouterError;
+    use bitrouter_core::observe::CallerContext;
+
+    /// Emit the canonical "request received" INFO log after model name
+    /// resolution has succeeded. Companion to the "request finished" log
+    /// emitted by `ModelSpendObserver`.
+    pub(crate) fn received(
+        caller: &CallerContext,
+        route: &str,
+        provider: &str,
+        model: &str,
+        stream: bool,
+    ) {
+        tracing::info!(
+            account_id = caller.account_id.as_deref().unwrap_or("-"),
+            route,
+            provider,
+            model,
+            stream,
+            "request received",
+        );
+    }
+
+    /// Emit the "request received" log when model name resolution fails.
+    /// The request never reaches the observer, so this is the only log line
+    /// the operator will see for these requests.
+    pub(crate) fn resolve_failed(caller: &CallerContext, route: &str, error: &BitrouterError) {
+        tracing::info!(
+            account_id = caller.account_id.as_deref().unwrap_or("-"),
+            route,
+            error = %error,
+            "request received (model resolution failed)",
+        );
+    }
+}
+
+pub(crate) use request_log::{
+    received as log_request_received, resolve_failed as log_request_resolve_failed,
+};
+
 mod stream_observation {
     use bitrouter_core::{
         errors::BitrouterError,
