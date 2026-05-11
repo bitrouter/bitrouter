@@ -322,10 +322,13 @@ impl App {
 
             let line = match handle.result.await {
                 Ok(Ok(installed)) => {
-                    format!("✓ {} installed via {}", installed.agent_id, installed.method)
+                    format!(
+                        "✓ {} installed via {}",
+                        installed.agent_id, installed.method
+                    )
                 }
                 Ok(Err(e)) => format!("✗ install failed: {e}"),
-                Err(_) => format!("✗ install task failed"),
+                Err(_) => "✗ install task failed".to_string(),
             };
             send_system_lines(&event_tx, vec![line]).await;
         });

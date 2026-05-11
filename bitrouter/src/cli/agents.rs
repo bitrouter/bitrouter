@@ -201,7 +201,11 @@ pub fn render_check_text(check: &RoutingCheck, w: &mut impl Write) -> io::Result
     if check.server_reachable {
         writeln!(w, "  \u{2713} BitRouter reachable at {}", check.listen_addr)?;
     } else {
-        writeln!(w, "  \u{2717} BitRouter not reachable at {}", check.listen_addr)?;
+        writeln!(
+            w,
+            "  \u{2717} BitRouter not reachable at {}",
+            check.listen_addr
+        )?;
         writeln!(w, "    Start the server: bitrouter serve")?;
     }
 

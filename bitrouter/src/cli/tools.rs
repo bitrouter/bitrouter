@@ -6,8 +6,8 @@ use std::net::SocketAddr;
 
 use serde::Serialize;
 
-use crate::cli::admin_auth::{admin_get, parse_error_message};
 use crate::cli::OutputFormat;
+use crate::cli::admin_auth::{admin_get, parse_error_message};
 
 #[derive(Debug, Serialize)]
 pub struct ToolEntry {

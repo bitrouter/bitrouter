@@ -5,8 +5,8 @@ use std::net::SocketAddr;
 
 use serde::Serialize;
 
-use crate::cli::admin_auth::{admin_get, parse_error_message, request_with_admin_auth};
 use crate::cli::OutputFormat;
+use crate::cli::admin_auth::{admin_get, parse_error_message, request_with_admin_auth};
 
 /// Options for the `route add` subcommand.
 pub struct RouteAddOpts {
