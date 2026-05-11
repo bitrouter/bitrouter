@@ -75,7 +75,10 @@ pub async fn run_install(
                 total,
             } => {
                 if let Some(t) = total {
-                    let pct = bytes_received.saturating_mul(100).checked_div(t).unwrap_or(0);
+                    let pct = bytes_received
+                        .saturating_mul(100)
+                        .checked_div(t)
+                        .unwrap_or(0);
                     eprintln!("  [{id}] downloading: {pct}%");
                 } else {
                     eprintln!("  [{id}] downloading...");
@@ -138,7 +141,10 @@ pub async fn run_update(
                     total,
                 } => {
                     if let Some(t) = total {
-                        let pct = bytes_received.saturating_mul(100).checked_div(t).unwrap_or(0);
+                        let pct = bytes_received
+                            .saturating_mul(100)
+                            .checked_div(t)
+                            .unwrap_or(0);
                         eprintln!("  [{id}] downloading: {pct}%");
                     } else {
                         eprintln!("  [{id}] downloading...");
