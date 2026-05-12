@@ -27,7 +27,7 @@ use super::state::{self, InstallMethod, InstallRecord, now_unix_seconds};
 use super::types::InstallProgress;
 
 /// Outcome of a successful install.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct InstalledAgent {
     pub agent_id: String,
     pub method: InstallMethod,

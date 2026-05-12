@@ -3,50 +3,85 @@
 //! Add/remove of individual providers is handled by `bitrouter init`
 //! (re-runnable) rather than duplicating the interactive wizard here.
 
+use std::io::{self, Write};
+
 use bitrouter_config::BitrouterConfig;
+use serde::Serialize;
 
-/// Print every provider in the merged config: name, api_base, and whether
-/// an API key is configured.
-pub fn run_list(config: &BitrouterConfig) -> Result<(), Box<dyn std::error::Error>> {
-    if config.providers.is_empty() {
-        println!("  (no providers configured)");
-        return Ok(());
-    }
+use super::OutputFormat;
 
+#[derive(Debug, Serialize)]
+pub struct ProviderEntry {
+    pub name: String,
+    pub api_base: Option<String>,
+    pub auth_kind: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProviderListData {
+    pub providers: Vec<ProviderEntry>,
+}
+
+pub fn query_list(config: &BitrouterConfig) -> ProviderListData {
     let mut names: Vec<&String> = config.providers.keys().collect();
     names.sort();
+    let providers = names
+        .into_iter()
+        .map(|name| {
+            let p = &config.providers[name];
+            let auth_kind = if p.api_key.is_some() {
+                "api_key".to_owned()
+            } else if p.auth.is_some() {
+                "oauth".to_owned()
+            } else {
+                "none".to_owned()
+            };
+            ProviderEntry {
+                name: name.clone(),
+                api_base: p.api_base.clone(),
+                auth_kind,
+            }
+        })
+        .collect();
+    ProviderListData { providers }
+}
 
-    println!();
-    println!("  Providers");
-    println!("  ─────────");
-    println!();
-
-    for name in names {
-        let provider = &config.providers[name];
-        let api_base = provider
-            .api_base
-            .as_deref()
-            .unwrap_or("(derives from base)");
-        let key_status = if provider.api_key.is_some() {
-            "\u{2713} key set"
-        } else if provider.auth.is_some() {
-            "\u{2713} OAuth"
-        } else {
-            "\u{2717} no credentials"
-        };
-        println!("  {name:20}  {api_base:40}  {key_status}");
+pub fn render_list_text(data: &ProviderListData, w: &mut impl Write) -> io::Result<()> {
+    if data.providers.is_empty() {
+        writeln!(w, "  (no providers configured)")?;
+        return Ok(());
     }
-    println!();
+    eprintln!();
+    eprintln!("  Providers");
+    eprintln!("  ─────────");
+    eprintln!();
+    for entry in &data.providers {
+        let api_base = entry.api_base.as_deref().unwrap_or("(derives from base)");
+        let key_status = match entry.auth_kind.as_str() {
+            "api_key" => "\u{2713} key set",
+            "oauth" => "\u{2713} OAuth",
+            _ => "\u{2717} no credentials",
+        };
+        writeln!(w, "  {:<20}  {:<40}  {key_status}", entry.name, api_base)?;
+    }
+    writeln!(w)?;
+    Ok(())
+}
 
+/// Print every provider in the merged config.
+pub fn run_list(
+    config: &BitrouterConfig,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let data = query_list(config);
+    match output {
+        OutputFormat::Text => render_list_text(&data, &mut io::stdout())?,
+        OutputFormat::Json => serde_json::to_writer(io::stdout(), &data)?,
+    }
     Ok(())
 }
 
 /// Switch between `default` (BitRouter Cloud) and `byok` (Bring Your Own Keys).
-///
-/// This is a *soft* switch — it prints guidance.  The actual change is
-/// durable only via `bitrouter init`.  We detect the current mode by
-/// looking at whether any non-bitrouter provider has an API key
-/// configured.
 pub fn run_use(mode: &str, config: &BitrouterConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mode = mode.trim().to_lowercase();
 

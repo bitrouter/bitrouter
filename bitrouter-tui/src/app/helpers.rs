@@ -1,8 +1,19 @@
+use bitrouter_providers::acp::ops::AcpPaths;
+
 use crate::model::{ActivityEntry, ContentBlock, EntryKind, SystemNotice};
 
 use super::App;
 
 impl App {
+    /// Build [`AcpPaths`] from the TUI config.
+    pub(super) fn acp_paths(&self) -> AcpPaths {
+        AcpPaths {
+            cache_dir: self.state.config.cache_dir.clone(),
+            agents_dir: self.state.config.agents_dir.clone(),
+            agent_state_file: self.state.config.agent_state_file.clone(),
+        }
+    }
+
     /// Push a system message to a specific session.
     pub(super) fn push_system_msg_to_session(&mut self, session_idx: usize, text: &str) {
         if let Some(session) = self.state.session_store.active.get_mut(session_idx) {

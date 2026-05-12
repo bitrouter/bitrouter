@@ -1,7 +1,11 @@
 //! CLI subcommand for managing runtime routes via the admin API.
 
+use std::io::{self, Write};
 use std::net::SocketAddr;
 
+use serde::Serialize;
+
+use crate::cli::OutputFormat;
 use crate::cli::admin_auth::{admin_get, parse_error_message, request_with_admin_auth};
 
 /// Options for the `route add` subcommand.
@@ -11,59 +15,110 @@ pub struct RouteAddOpts {
     pub strategy: Option<String>,
 }
 
-/// Run the `route list` subcommand — prints all routes from the running daemon.
-pub fn run_list(
+#[derive(Debug, Serialize)]
+pub struct RouteEndpoint {
+    pub provider: String,
+    pub service_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RouteEntry {
+    pub name: String,
+    pub source: String,
+    pub endpoints: Vec<RouteEndpoint>,
+    pub strategy: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RouteListData {
+    pub routes: Vec<RouteEntry>,
+}
+
+pub fn query_list(
     config: &bitrouter_config::BitrouterConfig,
     addr: SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<RouteListData, Box<dyn std::error::Error>> {
     let resp = admin_get(config, addr, "/admin/routes")?;
-
     if !resp.status().is_success() {
         let msg = parse_error_message(resp)?;
         return Err(format!("failed to list routes: {msg}").into());
     }
-
     let body: serde_json::Value = resp.json()?;
-    let routes = body["routes"].as_array();
-    match routes {
-        Some(routes) if !routes.is_empty() => {
-            for route in routes {
-                let model = route["name"].as_str().unwrap_or("?");
-                let source = route["source"].as_str().unwrap_or("?");
-                let endpoints = route["endpoints"].as_array();
-
-                let targets: Vec<String> = endpoints
+    let raw_routes = body["routes"].as_array();
+    let routes = match raw_routes {
+        Some(raw) if !raw.is_empty() => raw
+            .iter()
+            .map(|route| {
+                let name = route["name"].as_str().unwrap_or("?").to_owned();
+                let source = route["source"].as_str().unwrap_or("?").to_owned();
+                let strategy = route["strategy"].as_str().unwrap_or("").to_owned();
+                let endpoints = route["endpoints"]
+                    .as_array()
                     .map(|eps| {
                         eps.iter()
-                            .map(|ep| {
-                                let provider = ep["provider"].as_str().unwrap_or("?");
-                                let service_id = ep["service_id"].as_str().unwrap_or("?");
-                                if service_id.is_empty() {
-                                    provider.to_owned()
-                                } else {
-                                    format!("{provider}:{service_id}")
-                                }
+                            .map(|ep| RouteEndpoint {
+                                provider: ep["provider"].as_str().unwrap_or("?").to_owned(),
+                                service_id: ep["service_id"].as_str().unwrap_or("").to_owned(),
                             })
                             .collect()
                     })
                     .unwrap_or_default();
+                RouteEntry {
+                    name,
+                    source,
+                    endpoints,
+                    strategy,
+                }
+            })
+            .collect(),
+        _ => vec![],
+    };
+    Ok(RouteListData { routes })
+}
 
-                let strategy = route["strategy"].as_str().unwrap_or("");
-                let strategy_suffix = if strategy.is_empty() {
-                    String::new()
+pub fn render_list_text(data: &RouteListData, w: &mut impl Write) -> io::Result<()> {
+    if data.routes.is_empty() {
+        writeln!(w, "  (no routes configured)")?;
+        return Ok(());
+    }
+    for route in &data.routes {
+        let targets: Vec<String> = route
+            .endpoints
+            .iter()
+            .map(|ep| {
+                if ep.service_id.is_empty() {
+                    ep.provider.clone()
                 } else {
-                    format!(" ({strategy})")
-                };
+                    format!("{}:{}", ep.provider, ep.service_id)
+                }
+            })
+            .collect();
+        let strategy_suffix = if route.strategy.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", route.strategy)
+        };
+        writeln!(
+            w,
+            "  {}  \u{2192}  {}{strategy_suffix}  [{}]",
+            route.name,
+            targets.join(", "),
+            route.source
+        )?;
+    }
+    Ok(())
+}
 
-                println!(
-                    "  {model}  →  {}{strategy_suffix}  [{source}]",
-                    targets.join(", ")
-                );
-            }
-        }
-        _ => {
-            println!("  (no routes configured)");
-        }
+/// Run the `route list` subcommand.
+pub fn run_list(
+    config: &bitrouter_config::BitrouterConfig,
+    addr: SocketAddr,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let data = query_list(config, addr)?;
+    match output {
+        OutputFormat::Text => render_list_text(&data, &mut io::stdout())?,
+        OutputFormat::Json => serde_json::to_writer(io::stdout(), &data)?,
     }
     Ok(())
 }
@@ -107,7 +162,7 @@ pub fn run_add(
     Ok(())
 }
 
-/// Run the `route rm` subcommand — removes a dynamic route.
+/// Run the `route delete` / `route rm` subcommand — removes a dynamic route.
 pub fn run_remove(
     config: &bitrouter_config::BitrouterConfig,
     addr: SocketAddr,

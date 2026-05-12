@@ -1,72 +1,146 @@
 //! `bitrouter tools` subcommand — inspect MCP tools and servers on a running daemon,
 //! and discover tools from MCP upstreams for config authoring.
 
+use std::io::{self, Write};
 use std::net::SocketAddr;
 
+use serde::Serialize;
+
+use crate::cli::OutputFormat;
 use crate::cli::admin_auth::{admin_get, parse_error_message};
 
-/// Run the `tools list` subcommand — prints all tools from the running daemon.
-pub fn run_list(
+#[derive(Debug, Serialize)]
+pub struct ToolEntry {
+    pub name: String,
+    pub provider: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolListData {
+    pub tools: Vec<ToolEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerEntry {
+    pub name: String,
+    pub tool_count: u64,
+    pub filtered: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolStatusData {
+    pub servers: Vec<ServerEntry>,
+}
+
+pub fn query_list(
     config: &bitrouter_config::BitrouterConfig,
     addr: SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<ToolListData, Box<dyn std::error::Error>> {
     let resp = admin_get(config, addr, "/admin/tools")?;
-
     if !resp.status().is_success() {
         let msg = parse_error_message(resp)?;
         return Err(format!("failed to list tools: {msg}").into());
     }
-
     let body: serde_json::Value = resp.json()?;
-    let tools = body["tools"].as_array();
-    match tools {
-        Some(tools) if !tools.is_empty() => {
-            for tool in tools {
-                let name = tool["name"].as_str().unwrap_or("?");
-                let server = tool["provider"].as_str().unwrap_or("?");
-                let desc = tool["description"].as_str().unwrap_or("");
+    let tools = body["tools"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|t| ToolEntry {
+                    name: t["name"].as_str().unwrap_or("?").to_owned(),
+                    provider: t["provider"].as_str().unwrap_or("?").to_owned(),
+                    description: t["description"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(ToolListData { tools })
+}
 
-                if desc.is_empty() {
-                    println!("  {name}  [{server}]");
-                } else {
-                    println!("  {name}  [{server}]  — {desc}");
-                }
-            }
-        }
-        _ => {
-            println!("  (no tools available)");
+pub fn render_list_text(data: &ToolListData, w: &mut impl Write) -> io::Result<()> {
+    if data.tools.is_empty() {
+        writeln!(w, "  (no tools available)")?;
+        return Ok(());
+    }
+    for tool in &data.tools {
+        if let Some(ref desc) = tool.description {
+            writeln!(w, "  {}  [{}]  \u{2014} {desc}", tool.name, tool.provider)?;
+        } else {
+            writeln!(w, "  {}  [{}]", tool.name, tool.provider)?;
         }
     }
     Ok(())
 }
 
-/// Run the `tools status` subcommand — shows upstream server health.
-pub fn run_status(
+pub fn query_status(
     config: &bitrouter_config::BitrouterConfig,
     addr: SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<ToolStatusData, Box<dyn std::error::Error>> {
     let resp = admin_get(config, addr, "/admin/tools/upstreams")?;
-
     if !resp.status().is_success() {
         let msg = parse_error_message(resp)?;
         return Err(format!("failed to get tool status: {msg}").into());
     }
-
     let body: serde_json::Value = resp.json()?;
-    let servers = body["servers"].as_array();
-    match servers {
-        Some(servers) if !servers.is_empty() => {
-            for server in servers {
-                let name = server["name"].as_str().unwrap_or("?");
-                let tool_count = server["tool_count"].as_u64().unwrap_or(0);
-                let has_filter = server["filter"].is_object();
-                let filter_info = if has_filter { " (filtered)" } else { "" };
-                println!("  {name}    {tool_count} tools{filter_info}");
-            }
-        }
-        _ => {
-            println!("  (no MCP servers configured)");
-        }
+    let servers = body["servers"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|s| ServerEntry {
+                    name: s["name"].as_str().unwrap_or("?").to_owned(),
+                    tool_count: s["tool_count"].as_u64().unwrap_or(0),
+                    filtered: s["filter"].is_object(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(ToolStatusData { servers })
+}
+
+pub fn render_status_text(data: &ToolStatusData, w: &mut impl Write) -> io::Result<()> {
+    if data.servers.is_empty() {
+        writeln!(w, "  (no MCP servers configured)")?;
+        return Ok(());
+    }
+    for server in &data.servers {
+        let filter_info = if server.filtered { " (filtered)" } else { "" };
+        writeln!(
+            w,
+            "  {}    {} tools{filter_info}",
+            server.name, server.tool_count
+        )?;
+    }
+    Ok(())
+}
+
+/// Run the `tools list` subcommand.
+pub fn run_list(
+    config: &bitrouter_config::BitrouterConfig,
+    addr: SocketAddr,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let data = query_list(config, addr)?;
+    match output {
+        OutputFormat::Text => render_list_text(&data, &mut io::stdout())?,
+        OutputFormat::Json => serde_json::to_writer(io::stdout(), &data)?,
+    }
+    Ok(())
+}
+
+/// Run the `tools status` subcommand.
+pub fn run_status(
+    config: &bitrouter_config::BitrouterConfig,
+    addr: SocketAddr,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let data = query_status(config, addr)?;
+    match output {
+        OutputFormat::Text => render_status_text(&data, &mut io::stdout())?,
+        OutputFormat::Json => serde_json::to_writer(io::stdout(), &data)?,
     }
     Ok(())
 }
@@ -122,7 +196,6 @@ pub async fn run_discover(
     eprintln!("Discovered {} tools from '{provider_name}'.", tools.len());
     eprintln!();
 
-    // Output YAML stanzas for pasting into bitrouter.yaml.
     println!("# Discovered from provider \"{provider_name}\"");
     println!("# Paste under the `tools:` section of your bitrouter.yaml");
     println!();
@@ -134,11 +207,9 @@ pub async fn run_discover(
         println!("      - provider: {provider_name}");
         println!("        tool_id: {}", tool.name);
         if let Some(ref desc) = tool.description {
-            // Escape double quotes in YAML string.
             let escaped = desc.replace('"', "\\\"");
             println!("    description: \"{escaped}\"");
         }
-        // Include input_schema if it has properties.
         if tool.input_schema.is_object() && tool.input_schema.get("properties").is_some() {
             println!(
                 "    input_schema: {}",

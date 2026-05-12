@@ -15,3 +15,11 @@ pub mod route;
 pub mod tools;
 pub mod update_check;
 pub mod wallet;
+
+/// Output format for read commands.
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+pub enum OutputFormat {
+    #[default]
+    Text,
+    Json,
+}

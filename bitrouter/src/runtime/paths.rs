@@ -49,12 +49,6 @@ impl RuntimePaths {
             home_dir: home,
         }
     }
-
-    #[cfg(feature = "tui")]
-    /// Return the flat install directory for the given agent id.
-    pub fn agent_install_dir(&self, agent_id: &str) -> PathBuf {
-        self.agents_dir.join(agent_id)
-    }
 }
 
 /// Overrides that can be applied to individual paths after resolution.
