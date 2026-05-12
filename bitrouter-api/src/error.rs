@@ -1,11 +1,16 @@
 use std::fmt;
 
 use bitrouter_core::errors::BitrouterError;
+use warp::http::StatusCode;
 use warp::reject::Reject;
 
 /// Wraps a [`BitrouterError`] so it can be used as a warp rejection.
+///
+/// Public so that anonymous-router-style consumers can intercept the
+/// rejection themselves (e.g. to sanitize provider details out of the
+/// outbound error body before delegating to [`handle_bitrouter_rejection`]).
 #[derive(Debug)]
-pub(crate) struct BitrouterRejection(pub BitrouterError);
+pub struct BitrouterRejection(pub BitrouterError);
 
 impl fmt::Display for BitrouterRejection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -27,33 +32,40 @@ impl fmt::Display for BadRequest {
 
 impl Reject for BadRequest {}
 
+/// Classifies a [`BitrouterError`] into the HTTP status code and
+/// machine-readable `error.type` string that should be returned to the
+/// client. Exposed so consumers building their own response bodies can
+/// reuse the variant → status mapping that [`handle_bitrouter_rejection`]
+/// uses internally.
+pub fn classify_response(err: &BitrouterError) -> (StatusCode, &'static str) {
+    match err {
+        BitrouterError::InvalidRequest { .. } | BitrouterError::UnsupportedFeature { .. } => {
+            (StatusCode::BAD_REQUEST, "invalid_request_error")
+        }
+        BitrouterError::AccessDenied { .. } => (StatusCode::FORBIDDEN, "access_denied"),
+        BitrouterError::Cancelled { .. } => (StatusCode::BAD_REQUEST, "cancelled"),
+        BitrouterError::Provider { context, .. } => {
+            let status = context
+                .status_code
+                .and_then(|code| StatusCode::from_u16(code).ok())
+                .unwrap_or(StatusCode::BAD_GATEWAY);
+            (status, "provider_error")
+        }
+        BitrouterError::Transport { .. }
+        | BitrouterError::ResponseDecode { .. }
+        | BitrouterError::InvalidResponse { .. }
+        | BitrouterError::StreamProtocol { .. } => (StatusCode::BAD_GATEWAY, "upstream_error"),
+    }
+}
+
 /// Converts a [`BitrouterRejection`] or [`BadRequest`] warp rejection into a
 /// structured JSON error response.
 ///
 /// Returns `Some(response)` if the rejection matches, `None` otherwise —
 /// allowing callers to fall through to other rejection handling.
 pub fn handle_bitrouter_rejection(err: &warp::Rejection) -> Option<warp::http::Response<String>> {
-    use warp::http::StatusCode;
-
     if let Some(e) = err.find::<BitrouterRejection>() {
-        let (status, error_type) = match &e.0 {
-            BitrouterError::InvalidRequest { .. } | BitrouterError::UnsupportedFeature { .. } => {
-                (StatusCode::BAD_REQUEST, "invalid_request_error")
-            }
-            BitrouterError::AccessDenied { .. } => (StatusCode::FORBIDDEN, "access_denied"),
-            BitrouterError::Cancelled { .. } => (StatusCode::BAD_REQUEST, "cancelled"),
-            BitrouterError::Provider { context, .. } => {
-                let status = context
-                    .status_code
-                    .and_then(|code| StatusCode::from_u16(code).ok())
-                    .unwrap_or(StatusCode::BAD_GATEWAY);
-                (status, "provider_error")
-            }
-            BitrouterError::Transport { .. }
-            | BitrouterError::ResponseDecode { .. }
-            | BitrouterError::InvalidResponse { .. }
-            | BitrouterError::StreamProtocol { .. } => (StatusCode::BAD_GATEWAY, "upstream_error"),
-        };
+        let (status, error_type) = classify_response(&e.0);
 
         let body = serde_json::json!({
             "error": {

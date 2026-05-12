@@ -20,7 +20,7 @@ pub use filter::{
     MppChallenge, MppPaymentContext, MppVerificationFailed, handle_mpp_rejection,
     mpp_payment_filter, verify_mpp_payment,
 };
-pub use gate_context::GateContext;
+pub use gate_context::{GateContext, PaymentGateOverlayOptions};
 pub use payment_gate::PaymentGate;
 pub use pricing::{PricingLookup, calculate_usage_cost, cost_to_micro_units};
 pub use state::MppState;

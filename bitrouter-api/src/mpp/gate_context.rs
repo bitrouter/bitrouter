@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use bitrouter_core::observe::{CallerContext, MetadataHook, ObserveCallback};
-use bitrouter_core::routers::router::DynTargetOverlay;
+use bitrouter_core::routers::router::DynChainOverlay;
+
+use crate::fallback::FallbackPolicy;
 
 use super::PaymentGate;
 
@@ -19,8 +21,34 @@ pub struct GateContext {
     pub observer: Arc<dyn ObserveCallback>,
     pub metadata_hook: MetadataHook,
     pub origin: Option<String>,
-    /// Optional per-request hook that mutates the routing target after
-    /// resolution. Invoked between `RoutingTable::route()` and
+    /// Optional per-request hook that mutates the resolved routing chain
+    /// after `RoutingTable::route_chain()` but before
     /// `LanguageModelRouter::route_model()`. `None` is the no-op default.
-    pub target_overlay: Option<Arc<DynTargetOverlay<'static>>>,
+    pub chain_overlay: Option<Arc<DynChainOverlay<'static>>>,
+    /// Policy that decides whether a per-target failure advances the
+    /// chain or surfaces immediately. Filters wrap a missing value with
+    /// [`crate::fallback::default_fallback_policy`].
+    pub fallback_policy: Arc<dyn FallbackPolicy>,
+}
+
+/// Filter-construction options that tune how the payment-gate handler
+/// builds and iterates its routing chain. Bundled into a single struct
+/// so the public `*_with_payment_gate` constructors stay under clippy's
+/// `too_many_arguments` threshold; both fields are independently
+/// defaultable, so the no-op case is just
+/// [`PaymentGateOverlayOptions::default()`].
+#[derive(Default, Clone)]
+pub struct PaymentGateOverlayOptions {
+    /// Per-request hook applied to the routing chain between
+    /// `RoutingTable::route_chain()` and the model invocation. Anonymous
+    /// routers inject candidate providers here; BYOK consumers inject
+    /// per-target credentials. `None` skips the overlay step.
+    pub chain_overlay: Option<Arc<DynChainOverlay<'static>>>,
+    /// Policy deciding whether a per-target failure advances the chain
+    /// or surfaces immediately. `None` falls back to
+    /// [`crate::fallback::default_fallback_policy`] (4xx → stop, 5xx and
+    /// transport → fallback), which is appropriate for direct-routing
+    /// callers; anonymous-router consumers will typically pass a custom
+    /// policy that treats any provider-tagged error as `Fallback`.
+    pub fallback_policy: Option<Arc<dyn FallbackPolicy>>,
 }
