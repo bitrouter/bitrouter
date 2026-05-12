@@ -20,6 +20,7 @@ use bitrouter_core::{
 use warp::Filter;
 
 use crate::error::BitrouterRejection;
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 use crate::fallback::{FallbackDecision, FallbackPolicy, default_fallback_policy};
 
 use super::{convert, types::MessagesRequest};
