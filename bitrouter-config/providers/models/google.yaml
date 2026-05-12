@@ -318,6 +318,22 @@ models:
         no_cache: 0.25
       output_tokens:
         text: 60.0
+  gemini-3.1-flash-lite:
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
+    input_modalities:
+      - text
+      - image
+      - video
+      - audio
+      - file
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+        cache_write: 1.0
+      output_tokens:
+        text: 1.5
   gemini-3.1-flash-lite-preview:
     max_input_tokens: 1048576
     max_output_tokens: 65536

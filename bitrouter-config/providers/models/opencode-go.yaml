@@ -64,29 +64,6 @@ models:
         cache_read: 0.16
       output_tokens:
         text: 4.0
-  mimo-v2-omni:
-    max_input_tokens: 262144
-    max_output_tokens: 128000
-    input_modalities:
-      - text
-      - image
-      - audio
-      - file
-    pricing:
-      input_tokens:
-        no_cache: 0.4
-        cache_read: 0.08
-      output_tokens:
-        text: 2.0
-  mimo-v2-pro:
-    max_input_tokens: 1048576
-    max_output_tokens: 128000
-    pricing:
-      input_tokens:
-        no_cache: 1.0
-        cache_read: 0.2
-      output_tokens:
-        text: 3.0
   mimo-v2.5:
     max_input_tokens: 1000000
     max_output_tokens: 128000
