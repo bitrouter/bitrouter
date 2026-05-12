@@ -45,7 +45,7 @@ impl FallbackPolicy for DefaultFallbackPolicy {
     }
 }
 
-pub(crate) fn default_fallback_policy() -> std::sync::Arc<dyn FallbackPolicy> {
+pub fn default_fallback_policy() -> std::sync::Arc<dyn FallbackPolicy> {
     std::sync::Arc::new(DefaultFallbackPolicy)
 }
 

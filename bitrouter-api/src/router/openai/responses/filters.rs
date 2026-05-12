@@ -6,7 +6,7 @@ use std::time::Instant;
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 use bitrouter_core::observe::MetadataHook;
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
-use bitrouter_core::routers::router::{DynTargetOverlay, TargetOverlay};
+use bitrouter_core::routers::router::{ChainOverlay, DynChainOverlay};
 use bitrouter_core::{
     auth::access::is_model_allowed,
     errors::BitrouterError,
@@ -20,6 +20,8 @@ use bitrouter_core::{
 use warp::Filter;
 
 use crate::error::BitrouterRejection;
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+use crate::fallback::{FallbackPolicy, default_fallback_policy};
 
 use super::{convert, types::ResponsesRequest};
 
@@ -185,7 +187,7 @@ pub fn responses_filter_with_payment_gate<T, R, A>(
     observer: Arc<dyn ObserveCallback>,
     payment_gate: Arc<dyn crate::mpp::PaymentGate>,
     metadata_hook: MetadataHook,
-    target_overlay: Option<Arc<DynTargetOverlay<'static>>>,
+    overlay_options: crate::mpp::PaymentGateOverlayOptions,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
@@ -193,6 +195,11 @@ where
     R: LanguageModelRouter + Send + Sync + 'static,
     A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
+    let crate::mpp::PaymentGateOverlayOptions {
+        chain_overlay,
+        fallback_policy,
+    } = overlay_options;
+    let fallback_policy = fallback_policy.unwrap_or_else(default_fallback_policy);
     warp::path!("v1" / "responses")
         .and(warp::post())
         .and(account_filter)
@@ -204,7 +211,8 @@ where
         .and(warp::any().map(move || router.clone()))
         .and(warp::any().map(move || observer.clone()))
         .and(warp::any().map(move || metadata_hook.clone()))
-        .and(warp::any().map(move || target_overlay.clone()))
+        .and(warp::any().map(move || chain_overlay.clone()))
+        .and(warp::any().map(move || fallback_policy.clone()))
         .and_then(
             |caller: CallerContext,
              gate: Arc<dyn crate::mpp::PaymentGate>,
@@ -215,7 +223,8 @@ where
              router: Arc<R>,
              observer: Arc<dyn ObserveCallback>,
              metadata_hook: MetadataHook,
-             target_overlay: Option<Arc<DynTargetOverlay<'static>>>| {
+             chain_overlay: Option<Arc<DynChainOverlay<'static>>>,
+             fallback_policy: Arc<dyn FallbackPolicy>| {
                 let gate_ctx = crate::mpp::GateContext {
                     caller,
                     payment_gate: gate,
@@ -223,7 +232,8 @@ where
                     observer,
                     metadata_hook,
                     origin,
-                    target_overlay,
+                    chain_overlay,
+                    fallback_policy,
                 };
                 handle_responses_with_gate(gate_ctx, request, table, router)
             },
@@ -252,10 +262,11 @@ where
         observer,
         metadata_hook: bitrouter_core::observe::default_metadata_hook(),
         origin: None,
-        // _with_mpp does not expose a TargetOverlay constructor parameter;
-        // consumers needing per-request target mutation should use
+        // _with_mpp does not expose a ChainOverlay constructor parameter;
+        // consumers needing per-request chain mutation should use
         // _with_payment_gate instead.
-        target_overlay: None,
+        chain_overlay: None,
+        fallback_policy: default_fallback_policy(),
     };
     handle_responses_with_gate(gate_ctx, request, table, router).await
 }
@@ -278,7 +289,11 @@ where
         observer,
         metadata_hook,
         origin,
-        target_overlay,
+        chain_overlay,
+        // Responses endpoint is single-target; the fallback policy
+        // attached to the gate context is destructured for symmetry but
+        // not used.
+        fallback_policy: _,
     } = gate_ctx;
     let mpp_ctx = payment_gate
         .verify_payment(caller.chain.clone(), auth_header)
@@ -310,7 +325,7 @@ where
         return Err(warp::reject::custom(BitrouterRejection(err)));
     }
 
-    let mut target = table
+    let target = table
         .route(&incoming_model, &route_ctx)
         .await
         .map_err(|e| {
@@ -318,11 +333,30 @@ where
             warp::reject::custom(BitrouterRejection(e))
         })?;
 
-    if let Some(ref overlay) = target_overlay {
-        overlay.apply(&mut target, &caller).await.map_err(|e| {
+    let target = if let Some(ref overlay) = chain_overlay {
+        let mut chain = vec![target];
+        overlay.apply(&mut chain, &caller).await.map_err(|e| {
             crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
             warp::reject::custom(BitrouterRejection(e))
         })?;
+        match chain.into_iter().next() {
+            Some(t) => t,
+            None => {
+                let err = BitrouterError::invalid_request(
+                    None,
+                    "chain overlay produced empty routing chain".to_owned(),
+                    None,
+                );
+                crate::router::log_request_resolve_failed(&caller, &incoming_model, &err);
+                return Err(warp::reject::custom(BitrouterRejection(err)));
+            }
+        }
+    } else {
+        target
+    };
+
+    if let Some(preset) = target.preset.clone() {
+        bitrouter_core::api::openai::responses::preset::apply(&mut request, &preset);
     }
 
     let byok_used = target.api_key_override.is_some();

@@ -6,7 +6,7 @@ use std::time::Instant;
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 use bitrouter_core::observe::MetadataHook;
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
-use bitrouter_core::routers::router::{DynTargetOverlay, TargetOverlay};
+use bitrouter_core::routers::router::{ChainOverlay, DynChainOverlay};
 use bitrouter_core::{
     auth::access::is_model_allowed,
     errors::BitrouterError,
@@ -137,7 +137,7 @@ where
 }
 
 async fn handle_chat_completion<T, R>(
-    mut request: ChatCompletionRequest,
+    request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
     fallback_policy: Arc<dyn FallbackPolicy>,
@@ -154,12 +154,6 @@ where
         .route_chain(&incoming_model, &route_ctx)
         .await
         .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
-    // Apply preset overrides (if any) before converting to call options.
-    // Presets attach the same body bundle to every chain entry, so the
-    // first target's preset is authoritative for the request body.
-    if let Some(preset) = chain.first().and_then(|t| t.preset.as_ref()) {
-        bitrouter_core::api::openai::chat::preset::apply(&mut request, preset);
-    }
     let options = convert::to_call_options(request);
 
     let mut last_err = None;
@@ -238,10 +232,11 @@ where
         observer,
         metadata_hook: bitrouter_core::observe::default_metadata_hook(),
         origin: None,
-        // _with_mpp does not expose a TargetOverlay constructor parameter;
-        // consumers needing per-request target mutation should use
+        // _with_mpp does not expose a ChainOverlay constructor parameter;
+        // consumers needing per-request chain mutation should use
         // _with_payment_gate instead.
-        target_overlay: None,
+        chain_overlay: None,
+        fallback_policy: default_fallback_policy(),
     };
     handle_chat_completion_with_gate(gate_ctx, request, table, router).await
 }
@@ -249,7 +244,7 @@ where
 #[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
 async fn handle_chat_completion_with_gate<T, R>(
     gate_ctx: crate::mpp::GateContext,
-    mut request: ChatCompletionRequest,
+    request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection>
@@ -264,14 +259,14 @@ where
         observer,
         metadata_hook,
         origin,
-        target_overlay,
+        chain_overlay,
+        fallback_policy,
     } = gate_ctx;
 
     let mpp_ctx = payment_gate
         .verify_payment(caller.chain.clone(), auth_header)
         .await?;
 
-    // Management actions (channel open/topUp/close) short-circuit request processing.
     if let Some(ref management) = mpp_ctx.management_response {
         let reply = warp::reply::json(management);
         if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
@@ -284,9 +279,7 @@ where
         return Ok(Box::new(reply));
     }
 
-    // Guard closes the payment channel on-chain when the request finishes.
-    // Moved into the streaming task or dropped at handler scope end.
-    let _close_guard = crate::mpp::SessionCloseGuard::new(
+    let close_guard = crate::mpp::SessionCloseGuard::new(
         payment_gate.clone(),
         mpp_ctx.backend_key.clone(),
         mpp_ctx.channel_id.clone(),
@@ -299,240 +292,420 @@ where
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
     {
-        let err = BitrouterError::AccessDenied {
-            message: format!("model '{}' is not in your allowlist", incoming_model),
-        };
-        crate::router::log_request_resolve_failed(&caller, &incoming_model, &err);
-        return Err(warp::reject::custom(BitrouterRejection(err)));
+        return Err(warp::reject::custom(BitrouterRejection(
+            BitrouterError::AccessDenied {
+                message: format!("model '{}' is not in your allowlist", incoming_model),
+            },
+        )));
     }
 
-    let mut target = table
-        .route(&incoming_model, &route_ctx)
+    let mut chain = table
+        .route_chain(&incoming_model, &route_ctx)
         .await
-        .map_err(|e| {
-            crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
-            warp::reject::custom(BitrouterRejection(e))
-        })?;
+        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
 
-    if let Some(ref overlay) = target_overlay {
-        overlay.apply(&mut target, &caller).await.map_err(|e| {
-            crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
-            warp::reject::custom(BitrouterRejection(e))
-        })?;
+    if let Some(ref overlay) = chain_overlay {
+        overlay
+            .apply(&mut chain, &caller)
+            .await
+            .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
     }
 
-    let byok_used = target.api_key_override.is_some();
-    let provider_name = target.provider_name.clone();
-    let target_model_id = target.service_id.clone();
-
-    if let Some(preset) = target.preset.as_ref() {
-        bitrouter_core::api::openai::chat::preset::apply(&mut request, preset);
+    if chain.is_empty() {
+        return Err(warp::reject::custom(BitrouterRejection(
+            BitrouterError::invalid_request(
+                None,
+                format!("no routing targets resolved for model: {incoming_model}"),
+                None,
+            ),
+        )));
     }
 
-    let model = router.route_model(target.clone()).await.map_err(|e| {
-        crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
-        warp::reject::custom(BitrouterRejection(e))
-    })?;
-
-    crate::router::log_request_received(
-        &caller,
-        &incoming_model,
-        &provider_name,
-        &target_model_id,
-        is_stream,
-    );
-
-    let model_id = model.model_id().to_owned();
     let options = convert::to_call_options(request);
     let start = Instant::now();
     let request_id = uuid::Uuid::new_v4().to_string();
-    let mut metadata = metadata_hook(&caller, &origin);
-    if byok_used {
-        match metadata {
-            serde_json::Value::Object(ref mut map) => {
-                map.insert("byok_used".to_string(), serde_json::Value::Bool(true));
+    // `fallback_policy` is destructured out of `gate_ctx` above.
+
+    // These are non-Clone but used at most once (in the final success branch).
+    let mut mpp_ctx_slot: Option<crate::mpp::MppPaymentContext> = Some(mpp_ctx);
+    let mut close_guard_slot: Option<crate::mpp::SessionCloseGuard> = Some(close_guard);
+
+    let chain_len = chain.len();
+    let mut last_err: Option<BitrouterError> = None;
+    for (idx, target) in chain.into_iter().enumerate() {
+        let is_last = idx + 1 == chain_len;
+        let byok_used = target.api_key_override.is_some();
+        let provider_name = target.provider_name.clone();
+        let target_model_id = target.service_id.clone();
+        let iter_caller = caller.clone();
+        let iter_route = incoming_model.clone();
+        let iter_request_id = request_id.clone();
+        let iter_observer = observer.clone();
+        let iter_payment_gate = payment_gate.clone();
+
+        let model = match router.route_model(target.clone()).await {
+            Ok(model) => model,
+            Err(e) => {
+                let decision = fallback_policy.classify(&e, &target);
+                if decision == FallbackDecision::Fallback && !is_last {
+                    last_err = Some(e);
+                    continue;
+                }
+                return Err(warp::reject::custom(BitrouterRejection(e)));
             }
-            _ => {
-                metadata = serde_json::json!({ "byok_used": true });
+        };
+
+        let model_id = model.model_id().to_owned();
+        let mut metadata = metadata_hook(&iter_caller, &origin);
+        if byok_used {
+            match metadata {
+                serde_json::Value::Object(ref mut map) => {
+                    map.insert("byok_used".to_string(), serde_json::Value::Bool(true));
+                }
+                _ => {
+                    metadata = serde_json::json!({ "byok_used": true });
+                }
+            }
+        }
+
+        if is_stream {
+            match model.stream(options.clone()).await {
+                Ok(stream_result) => {
+                    let Some(mpp_ctx) = mpp_ctx_slot.take() else {
+                        return Err(warp::reject::custom(BitrouterRejection(
+                            BitrouterError::invalid_request(
+                                None,
+                                "internal routing state lost".to_owned(),
+                                None,
+                            ),
+                        )));
+                    };
+                    let Some(close_guard) = close_guard_slot.take() else {
+                        return Err(warp::reject::custom(BitrouterRejection(
+                            BitrouterError::invalid_request(
+                                None,
+                                "internal routing state lost".to_owned(),
+                                None,
+                            ),
+                        )));
+                    };
+                    return finish_stream_with_gate(
+                        StreamGateContext {
+                            stream_result,
+                            model_id,
+                            target,
+                            provider_name,
+                            target_model_id,
+                            incoming_model: iter_route,
+                            caller: iter_caller,
+                            metadata,
+                            start,
+                            request_id: iter_request_id,
+                            byok_used,
+                            close_guard,
+                            mpp_ctx,
+                            payment_gate: iter_payment_gate,
+                            observer: iter_observer,
+                        },
+                        table,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    let decision = fallback_policy.classify(&e, &target);
+                    if decision == FallbackDecision::Fallback && !is_last {
+                        let event = RequestFailureEvent {
+                            ctx: RequestContext {
+                                route: iter_route,
+                                provider: provider_name,
+                                model: target_model_id,
+                                caller: iter_caller,
+                                latency_ms: start.elapsed().as_millis() as u64,
+                                request_id: iter_request_id,
+                                metadata,
+                            },
+                            executed_target: Some(target),
+                            error: e.clone(),
+                        };
+                        tokio::spawn(async move { iter_observer.on_request_failure(event).await });
+                        last_err = Some(e);
+                        continue;
+                    }
+                    let event = RequestFailureEvent {
+                        ctx: RequestContext {
+                            route: iter_route,
+                            provider: provider_name,
+                            model: target_model_id,
+                            caller: iter_caller,
+                            latency_ms: start.elapsed().as_millis() as u64,
+                            request_id: iter_request_id,
+                            metadata,
+                        },
+                        executed_target: Some(target),
+                        error: e.clone(),
+                    };
+                    tokio::spawn(async move { iter_observer.on_request_failure(event).await });
+                    return Err(warp::reject::custom(BitrouterRejection(e)));
+                }
+            }
+        } else {
+            match model.generate(options.clone()).await {
+                Ok(result) => {
+                    let Some(mpp_ctx) = mpp_ctx_slot.take() else {
+                        return Err(warp::reject::custom(BitrouterRejection(
+                            BitrouterError::invalid_request(
+                                None,
+                                "internal routing state lost".to_owned(),
+                                None,
+                            ),
+                        )));
+                    };
+                    let Some(close_guard) = close_guard_slot.take() else {
+                        return Err(warp::reject::custom(BitrouterRejection(
+                            BitrouterError::invalid_request(
+                                None,
+                                "internal routing state lost".to_owned(),
+                                None,
+                            ),
+                        )));
+                    };
+                    let pricing = table.model_pricing(&provider_name, &target_model_id);
+                    let cost_usd = crate::mpp::calculate_usage_cost(&result.usage, &pricing);
+                    let micro_units = crate::mpp::cost_to_micro_units(cost_usd);
+
+                    if !byok_used
+                        && micro_units > 0
+                        && let Err(e) = iter_payment_gate
+                            .deduct(
+                                &mpp_ctx.backend_key,
+                                &mpp_ctx.channel_id,
+                                micro_units,
+                                Some(iter_request_id.as_str()),
+                            )
+                            .await
+                    {
+                        tracing::warn!(
+                            channel_id = %mpp_ctx.channel_id,
+                            amount = micro_units,
+                            error = %e,
+                            "MPP deduction failed after successful generation"
+                        );
+                    }
+
+                    let event = RequestSuccessEvent {
+                        ctx: RequestContext {
+                            route: iter_route,
+                            provider: provider_name,
+                            model: target_model_id,
+                            caller: iter_caller,
+                            latency_ms: start.elapsed().as_millis() as u64,
+                            request_id: iter_request_id,
+                            metadata,
+                        },
+                        executed_target: Some(target),
+                        usage: result.usage.clone(),
+                        streamed: false,
+                        generation_time_ms: None,
+                    };
+                    tokio::spawn(async move { iter_observer.on_request_success(event).await });
+
+                    let response = convert::from_generate_result(&model_id, result);
+                    let reply = warp::reply::json(&response);
+                    drop(close_guard);
+
+                    if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+                        return Ok(Box::new(warp::reply::with_header(
+                            reply,
+                            mpp::PAYMENT_RECEIPT_HEADER,
+                            receipt_header,
+                        )));
+                    } else {
+                        return Ok(Box::new(reply) as Box<dyn warp::Reply>);
+                    }
+                }
+                Err(e) => {
+                    let decision = fallback_policy.classify(&e, &target);
+                    if decision == FallbackDecision::Fallback && !is_last {
+                        let event = RequestFailureEvent {
+                            ctx: RequestContext {
+                                route: iter_route,
+                                provider: provider_name,
+                                model: target_model_id,
+                                caller: iter_caller,
+                                latency_ms: start.elapsed().as_millis() as u64,
+                                request_id: iter_request_id,
+                                metadata,
+                            },
+                            executed_target: Some(target),
+                            error: e.clone(),
+                        };
+                        tokio::spawn(async move { iter_observer.on_request_failure(event).await });
+                        last_err = Some(e);
+                        continue;
+                    }
+                    let event = RequestFailureEvent {
+                        ctx: RequestContext {
+                            route: iter_route,
+                            provider: provider_name,
+                            model: target_model_id,
+                            caller: iter_caller,
+                            latency_ms: start.elapsed().as_millis() as u64,
+                            request_id: iter_request_id,
+                            metadata,
+                        },
+                        executed_target: Some(target),
+                        error: e.clone(),
+                    };
+                    tokio::spawn(async move { iter_observer.on_request_failure(event).await });
+                    return Err(warp::reject::custom(BitrouterRejection(e)));
+                }
             }
         }
     }
 
-    if is_stream {
-        let stream_result = model
-            .stream(options)
-            .await
-            .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
+    let error = last_err.unwrap_or_else(|| {
+        BitrouterError::invalid_request(
+            None,
+            format!("no routing targets resolved for model: {incoming_model}"),
+            None,
+        )
+    });
+    Err(warp::reject::custom(BitrouterRejection(error)))
+}
 
-        let stream_id = format!("chatcmpl-{}", generate_id());
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+struct StreamGateContext {
+    stream_result: bitrouter_core::models::language::stream_result::LanguageModelStreamResult,
+    model_id: String,
+    target: bitrouter_core::routers::routing_table::RoutingTarget,
+    provider_name: String,
+    target_model_id: String,
+    incoming_model: String,
+    caller: CallerContext,
+    metadata: serde_json::Value,
+    start: Instant,
+    request_id: String,
+    byok_used: bool,
+    close_guard: crate::mpp::SessionCloseGuard,
+    mpp_ctx: crate::mpp::MppPaymentContext,
+    payment_gate: Arc<dyn crate::mpp::PaymentGate>,
+    observer: Arc<dyn ObserveCallback>,
+}
 
-        let (tx, rx) =
-            tokio::sync::mpsc::channel::<Result<warp::sse::Event, std::convert::Infallible>>(32);
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+async fn finish_stream_with_gate<T>(
+    sg: StreamGateContext,
+    table: Arc<T>,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection>
+where
+    T: crate::mpp::PricingLookup + Send + Sync + 'static,
+{
+    let StreamGateContext {
+        stream_result,
+        model_id,
+        target,
+        provider_name,
+        target_model_id,
+        incoming_model,
+        caller,
+        metadata,
+        start,
+        request_id,
+        byok_used,
+        close_guard,
+        mpp_ctx,
+        payment_gate,
+        observer,
+    } = sg;
 
-        let pricing = table.model_pricing(&provider_name, &target_model_id);
-        let tick_cost = crate::mpp::cost_to_micro_units(
-            pricing.output_tokens.text.unwrap_or(0.0) / 1_000_000.0,
-        );
+    let stream_id = format!("chatcmpl-{}", generate_id());
+    let (tx, rx) =
+        tokio::sync::mpsc::channel::<Result<warp::sse::Event, std::convert::Infallible>>(32);
 
-        let metered = crate::mpp::metered_sse::MeteredSseContext {
-            payment_gate: payment_gate.clone(),
-            backend_key: mpp_ctx.backend_key.clone(),
-            channel_id: mpp_ctx.channel_id.clone(),
-            tick_cost: if byok_used { 0 } else { tick_cost },
-            skip_deduct: byok_used,
-            request_id: Some(request_id.clone()),
+    let pricing = table.model_pricing(&provider_name, &target_model_id);
+    let tick_cost =
+        crate::mpp::cost_to_micro_units(pricing.output_tokens.text.unwrap_or(0.0) / 1_000_000.0);
+
+    let metered = crate::mpp::metered_sse::MeteredSseContext {
+        payment_gate: payment_gate.clone(),
+        backend_key: mpp_ctx.backend_key.clone(),
+        channel_id: mpp_ctx.channel_id.clone(),
+        tick_cost: if byok_used { 0 } else { tick_cost },
+        skip_deduct: byok_used,
+        request_id: Some(request_id.clone()),
+    };
+
+    tokio::spawn(async move {
+        let _close_guard = close_guard;
+
+        let mut stream = stream_result.stream;
+        let mut converter = convert::StreamConverter::new(model_id, stream_id);
+        use tokio_stream::StreamExt as _;
+        let mut observation = crate::router::StreamObservation::new();
+        let mut client_disconnected = false;
+        while let Some(part) = stream.next().await {
+            observation.record_part(&part);
+            if let Some(chunk) = converter.convert(&part) {
+                if !metered.deduct_or_pause(&tx).await {
+                    client_disconnected = true;
+                    break;
+                }
+                let data = serde_json::to_string(&chunk).unwrap_or_default();
+                let event = Ok(warp::sse::Event::default().data(data));
+                if tx.send(event).await.is_err() {
+                    client_disconnected = true;
+                    break;
+                }
+            }
+        }
+        let _ = tx
+            .send(Ok(warp::sse::Event::default().data("[DONE]")))
+            .await;
+
+        let latency_ms = start.elapsed().as_millis() as u64;
+        let ctx = RequestContext {
+            route: incoming_model,
+            provider: provider_name,
+            model: target_model_id,
+            caller,
+            latency_ms,
+            request_id,
+            metadata,
         };
-
-        tokio::spawn(async move {
-            // Hold the close guard inside the task; channel is closed when the
-            // task ends (success, error, or disconnect).
-            let _close_guard = _close_guard;
-
-            let mut stream = stream_result.stream;
-            let mut converter = convert::StreamConverter::new(model_id, stream_id);
-            use tokio_stream::StreamExt as _;
-            let mut observation = crate::router::StreamObservation::new();
-            let mut client_disconnected = false;
-            while let Some(part) = stream.next().await {
-                observation.record_part(&part);
-                if let Some(chunk) = converter.convert(&part) {
-                    if !metered.deduct_or_pause(&tx).await {
-                        client_disconnected = true;
-                        break;
-                    }
-                    let data = serde_json::to_string(&chunk).unwrap_or_default();
-                    let event = Ok(warp::sse::Event::default().data(data));
-                    if tx.send(event).await.is_err() {
-                        client_disconnected = true;
-                        break;
-                    }
-                }
+        match observation.outcome(client_disconnected) {
+            Ok(usage) => {
+                observer
+                    .on_request_success(RequestSuccessEvent {
+                        ctx,
+                        executed_target: Some(target.clone()),
+                        usage,
+                        streamed: true,
+                        generation_time_ms: None,
+                    })
+                    .await;
             }
-            let _ = tx
-                .send(Ok(warp::sse::Event::default().data("[DONE]")))
-                .await;
-
-            let latency_ms = start.elapsed().as_millis() as u64;
-            let ctx = RequestContext {
-                route: incoming_model,
-                provider: provider_name,
-                model: target_model_id,
-                caller,
-                latency_ms,
-                request_id,
-                metadata,
-            };
-            match observation.outcome(client_disconnected) {
-                Ok(usage) => {
-                    observer
-                        .on_request_success(RequestSuccessEvent {
-                            ctx,
-                            executed_target: Some(target.clone()),
-                            usage,
-                            streamed: true,
-                            generation_time_ms: None,
-                        })
-                        .await;
-                }
-                Err(error) => {
-                    observer
-                        .on_request_failure(RequestFailureEvent {
-                            ctx,
-                            executed_target: Some(target.clone()),
-                            error,
-                        })
-                        .await;
-                }
+            Err(error) => {
+                observer
+                    .on_request_failure(RequestFailureEvent {
+                        ctx,
+                        executed_target: Some(target.clone()),
+                        error,
+                    })
+                    .await;
             }
-        });
-
-        let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-        let reply = crate::router::sse::reply(sse_stream);
-        if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
-            Ok(Box::new(warp::reply::with_header(
-                reply,
-                mpp::PAYMENT_RECEIPT_HEADER,
-                receipt_header,
-            )))
-        } else {
-            Ok(Box::new(reply) as Box<dyn warp::Reply>)
         }
+    });
+
+    let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let reply = crate::router::sse::reply(sse_stream);
+    if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
+        Ok(Box::new(warp::reply::with_header(
+            reply,
+            mpp::PAYMENT_RECEIPT_HEADER,
+            receipt_header,
+        )))
     } else {
-        let gen_result = model.generate(options).await;
-        match gen_result {
-            Ok(result) => {
-                // Compute cost and deduct from channel.
-                let pricing = table.model_pricing(&provider_name, &target_model_id);
-                let cost_usd = crate::mpp::calculate_usage_cost(&result.usage, &pricing);
-                let micro_units = crate::mpp::cost_to_micro_units(cost_usd);
-
-                if !byok_used
-                    && micro_units > 0
-                    && let Err(e) = payment_gate
-                        .deduct(
-                            &mpp_ctx.backend_key,
-                            &mpp_ctx.channel_id,
-                            micro_units,
-                            Some(request_id.as_str()),
-                        )
-                        .await
-                {
-                    tracing::warn!(
-                        channel_id = %mpp_ctx.channel_id,
-                        amount = micro_units,
-                        error = %e,
-                        "MPP deduction failed after successful generation"
-                    );
-                }
-
-                let event = RequestSuccessEvent {
-                    ctx: RequestContext {
-                        route: incoming_model,
-                        provider: provider_name,
-                        model: target_model_id,
-                        caller,
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        request_id,
-                        metadata,
-                    },
-                    executed_target: Some(target.clone()),
-                    usage: result.usage.clone(),
-                    streamed: false,
-                    generation_time_ms: None,
-                };
-                tokio::spawn(async move { observer.on_request_success(event).await });
-
-                let response = convert::from_generate_result(&model_id, result);
-                let reply = warp::reply::json(&response);
-
-                if let Ok(receipt_header) = mpp::format_receipt(&mpp_ctx.receipt) {
-                    Ok(Box::new(warp::reply::with_header(
-                        reply,
-                        mpp::PAYMENT_RECEIPT_HEADER,
-                        receipt_header,
-                    )))
-                } else {
-                    Ok(Box::new(reply) as Box<dyn warp::Reply>)
-                }
-            }
-            Err(e) => {
-                let event = RequestFailureEvent {
-                    ctx: RequestContext {
-                        route: incoming_model,
-                        provider: provider_name,
-                        model: target_model_id,
-                        caller,
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        request_id,
-                        metadata,
-                    },
-                    executed_target: Some(target.clone()),
-                    error: e.clone(),
-                };
-                tokio::spawn(async move { observer.on_request_failure(event).await });
-                Err(warp::reject::custom(BitrouterRejection(e)))
-            }
-        }
+        Ok(Box::new(reply) as Box<dyn warp::Reply>)
     }
 }
 
@@ -580,7 +753,7 @@ pub fn chat_completions_filter_with_payment_gate<T, R, A>(
     observer: Arc<dyn ObserveCallback>,
     payment_gate: Arc<dyn crate::mpp::PaymentGate>,
     metadata_hook: MetadataHook,
-    target_overlay: Option<Arc<DynTargetOverlay<'static>>>,
+    overlay_options: crate::mpp::PaymentGateOverlayOptions,
     account_filter: A,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
 where
@@ -588,6 +761,11 @@ where
     R: LanguageModelRouter + Send + Sync + 'static,
     A: Filter<Extract = (CallerContext,), Error = warp::Rejection> + Clone + Send + Sync + 'static,
 {
+    let crate::mpp::PaymentGateOverlayOptions {
+        chain_overlay,
+        fallback_policy,
+    } = overlay_options;
+    let fallback_policy = fallback_policy.unwrap_or_else(default_fallback_policy);
     warp::path!("v1" / "chat" / "completions")
         .and(warp::post())
         .and(account_filter)
@@ -599,7 +777,8 @@ where
         .and(warp::any().map(move || router.clone()))
         .and(warp::any().map(move || observer.clone()))
         .and(warp::any().map(move || metadata_hook.clone()))
-        .and(warp::any().map(move || target_overlay.clone()))
+        .and(warp::any().map(move || chain_overlay.clone()))
+        .and(warp::any().map(move || fallback_policy.clone()))
         .and_then(
             |caller: CallerContext,
              gate: Arc<dyn crate::mpp::PaymentGate>,
@@ -610,7 +789,8 @@ where
              router: Arc<R>,
              observer: Arc<dyn ObserveCallback>,
              metadata_hook: MetadataHook,
-             target_overlay: Option<Arc<DynTargetOverlay<'static>>>| {
+             chain_overlay: Option<Arc<DynChainOverlay<'static>>>,
+             fallback_policy: Arc<dyn FallbackPolicy>| {
                 let gate_ctx = crate::mpp::GateContext {
                     caller,
                     payment_gate: gate,
@@ -618,7 +798,8 @@ where
                     observer,
                     metadata_hook,
                     origin,
-                    target_overlay,
+                    chain_overlay,
+                    fallback_policy,
                 };
                 handle_chat_completion_with_gate(gate_ctx, request, table, router)
             },
@@ -626,7 +807,7 @@ where
 }
 
 async fn handle_chat_completion_with_observe<T, R>(
-    mut request: ChatCompletionRequest,
+    request: ChatCompletionRequest,
     table: Arc<T>,
     router: Arc<R>,
     observer: Arc<dyn ObserveCallback>,
@@ -644,32 +825,17 @@ where
     if let Some(ref allowed) = caller.models
         && !is_model_allowed(&incoming_model, allowed)
     {
-        let err = BitrouterError::AccessDenied {
-            message: format!("model '{}' is not in your allowlist", incoming_model),
-        };
-        crate::router::log_request_resolve_failed(&caller, &incoming_model, &err);
-        return Err(warp::reject::custom(BitrouterRejection(err)));
+        return Err(warp::reject::custom(BitrouterRejection(
+            BitrouterError::AccessDenied {
+                message: format!("model '{}' is not in your allowlist", incoming_model),
+            },
+        )));
     }
 
     let chain = table
         .route_chain(&incoming_model, &route_ctx)
         .await
-        .map_err(|e| {
-            crate::router::log_request_resolve_failed(&caller, &incoming_model, &e);
-            warp::reject::custom(BitrouterRejection(e))
-        })?;
-    if let Some(preset) = chain.first().and_then(|t| t.preset.as_ref()) {
-        bitrouter_core::api::openai::chat::preset::apply(&mut request, preset);
-    }
-    if let Some(first) = chain.first() {
-        crate::router::log_request_received(
-            &caller,
-            &incoming_model,
-            &first.provider_name,
-            &first.service_id,
-            is_stream,
-        );
-    }
+        .map_err(|e| warp::reject::custom(BitrouterRejection(e)))?;
     let options = convert::to_call_options(request);
     let start = Instant::now();
     let request_id = uuid::Uuid::new_v4().to_string();
