@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::models::{
     language::{
-        call_options::LanguageModelCallOptions,
+        call_options::{LanguageModelCallOptions, ReasoningEffort},
         content::LanguageModelContent,
         finish_reason::LanguageModelFinishReason,
         generate_result::LanguageModelGenerateResult,
@@ -21,7 +21,8 @@ use crate::models::{
 
 use super::types::{
     GenerateContentCandidate, GenerateContentRequest, GenerateContentResponse,
-    GenerateContentUsageMetadata, GoogleContent, GoogleFunctionCall, GooglePart, GoogleToolConfig,
+    GenerateContentUsageMetadata, GoogleContent, GoogleFunctionCall, GooglePart,
+    GoogleThinkingConfig, GoogleToolConfig,
 };
 use crate::api::util::generate_id;
 
@@ -100,17 +101,22 @@ pub fn to_call_options(request: GenerateContentRequest) -> LanguageModelCallOpti
 
     let tool_choice = request.tool_config.and_then(convert_tool_config);
 
-    let (max_output_tokens, temperature, top_p, top_k, stop_sequences) =
+    let (max_output_tokens, temperature, top_p, top_k, stop_sequences, reasoning_effort) =
         if let Some(config) = request.generation_config {
+            let effort = config
+                .thinking_config
+                .as_ref()
+                .and_then(map_thinking_config);
             (
                 config.max_output_tokens,
                 config.temperature,
                 config.top_p,
                 config.top_k,
                 config.stop_sequences,
+                effort,
             )
         } else {
-            (None, None, None, None, None)
+            (None, None, None, None, None, None)
         };
 
     LanguageModelCallOptions {
@@ -130,7 +136,32 @@ pub fn to_call_options(request: GenerateContentRequest) -> LanguageModelCallOpti
         include_raw_chunks: None,
         abort_signal: None,
         headers: None,
+        reasoning_effort,
         provider_options: None,
+    }
+}
+
+/// Buckets a Google `thinkingConfig` into the normalized enum.
+///
+/// Prefers `thinking_level` (Gemini 3+) when set, falling back to bucketing
+/// `thinking_budget` (Gemini 2.5). The dynamic-thinking sentinel `-1` is
+/// treated as passthrough — the caller asked the model to decide.
+///
+/// Bucket boundaries are the midpoints between consecutive outbound emit
+/// values (`Low → 1024`, `Medium → 4096`, `High → 16384`) so a same-protocol
+/// round-trip rounds to the nearest canonical budget.
+fn map_thinking_config(cfg: &GoogleThinkingConfig) -> Option<ReasoningEffort> {
+    if let Some(level) = cfg.thinking_level.as_deref()
+        && let Some(effort) = ReasoningEffort::from_str_opt(level)
+    {
+        return Some(effort);
+    }
+    match cfg.thinking_budget? {
+        -1 => None,
+        0 => Some(ReasoningEffort::Minimal),
+        1..=2559 => Some(ReasoningEffort::Low),
+        2560..=10239 => Some(ReasoningEffort::Medium),
+        _ => Some(ReasoningEffort::High),
     }
 }
 
@@ -471,6 +502,80 @@ fn map_finish_reason(reason: &LanguageModelFinishReason) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_call_options_buckets_google_thinking_budget() {
+        let request: GenerateContentRequest = serde_json::from_value(serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "generationConfig": {
+                "thinkingConfig": {"thinkingBudget": 5000}
+            }
+        }))
+        .expect("generate_content request parses");
+
+        let opts = to_call_options(request);
+        assert_eq!(opts.reasoning_effort, Some(ReasoningEffort::Medium));
+    }
+
+    #[test]
+    fn to_call_options_thinking_budget_buckets_at_midpoints() {
+        // Mirrors the Anthropic boundary test — bucket cutoffs are the
+        // midpoints between outbound emit values (1024, 4096, 16384).
+        let cases = [
+            (0_i32, ReasoningEffort::Minimal),
+            (1024, ReasoningEffort::Low),
+            (2559, ReasoningEffort::Low),
+            (2560, ReasoningEffort::Medium),
+            (4096, ReasoningEffort::Medium),
+            (10239, ReasoningEffort::Medium),
+            (10240, ReasoningEffort::High),
+            (32768, ReasoningEffort::High),
+        ];
+        for (budget, expected) in cases {
+            let request: GenerateContentRequest = serde_json::from_value(serde_json::json!({
+                "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                "generationConfig": {"thinkingConfig": {"thinkingBudget": budget}}
+            }))
+            .expect("generate_content request parses");
+            let opts = to_call_options(request);
+            assert_eq!(
+                opts.reasoning_effort,
+                Some(expected),
+                "thinkingBudget={budget} should bucket to {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn to_call_options_dynamic_thinking_budget_passes_through() {
+        // `-1` means "let the model decide" — we don't bucket, we pass
+        // through as no normalized effort so cross-protocol routing
+        // doesn't force a level on the caller's behalf.
+        let request: GenerateContentRequest = serde_json::from_value(serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "generationConfig": {
+                "thinkingConfig": {"thinkingBudget": -1}
+            }
+        }))
+        .expect("generate_content request parses");
+
+        let opts = to_call_options(request);
+        assert!(opts.reasoning_effort.is_none());
+    }
+
+    #[test]
+    fn to_call_options_thinking_level_takes_precedence() {
+        let request: GenerateContentRequest = serde_json::from_value(serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "generationConfig": {
+                "thinkingConfig": {"thinkingLevel": "high", "thinkingBudget": 0}
+            }
+        }))
+        .expect("generate_content request parses");
+
+        let opts = to_call_options(request);
+        assert_eq!(opts.reasoning_effort, Some(ReasoningEffort::High));
+    }
 
     #[test]
     fn stream_converter_reasoning_delta_emits_thought_part() {

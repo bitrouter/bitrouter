@@ -170,6 +170,7 @@ mod tests {
             api_protocol: ApiProtocol::Openai,
             api_key_override: None,
             api_base_override: None,
+            preset: None,
         };
         let caller = CallerContext::default();
 
@@ -193,6 +194,7 @@ mod tests {
                 api_protocol: ApiProtocol::Openai,
                 api_key_override: None,
                 api_base_override: None,
+                preset: None,
             },
             RoutingTarget {
                 provider_name: "anthropic".to_owned(),
@@ -200,6 +202,7 @@ mod tests {
                 api_protocol: ApiProtocol::Anthropic,
                 api_key_override: None,
                 api_base_override: None,
+                preset: None,
             },
         ];
         let caller = CallerContext::default();

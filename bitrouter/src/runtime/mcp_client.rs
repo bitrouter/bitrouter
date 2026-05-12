@@ -388,6 +388,7 @@ where
                 include_raw_chunks: None,
                 abort_signal: None,
                 headers: None,
+                reasoning_effort: None,
                 provider_options: None,
             };
 
@@ -459,6 +460,7 @@ fn match_hint(hint: &str, routes: &[RouteEntry]) -> Option<RoutingTarget> {
                 api_protocol: route.protocol,
                 api_key_override: None,
                 api_base_override: None,
+                preset: None,
             });
         }
     }

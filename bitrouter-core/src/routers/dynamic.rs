@@ -90,6 +90,7 @@ impl<T> DynamicRoutingTable<T> {
             api_protocol: endpoint.api_protocol.unwrap_or(ApiProtocol::Openai),
             api_key_override: None,
             api_base_override: None,
+            preset: None,
         })
     }
 }
@@ -250,6 +251,7 @@ mod tests {
                     api_protocol: ApiProtocol::Openai,
                     api_key_override: None,
                     api_base_override: None,
+                    preset: None,
                 })
             } else {
                 Err(BitrouterError::invalid_request(
@@ -454,6 +456,7 @@ mod tests {
                             api_protocol: ApiProtocol::Anthropic,
                             api_key_override: None,
                             api_base_override: None,
+                            preset: None,
                         })
                     } else {
                         Ok(RoutingTarget {
@@ -462,6 +465,7 @@ mod tests {
                             api_protocol: ApiProtocol::Openai,
                             api_key_override: None,
                             api_base_override: None,
+                            preset: None,
                         })
                     }
                 } else {
@@ -519,6 +523,7 @@ mod tests {
                             api_protocol: ApiProtocol::Anthropic,
                             api_key_override: None,
                             api_base_override: None,
+                            preset: None,
                         })
                     } else {
                         Ok(RoutingTarget {
@@ -527,6 +532,7 @@ mod tests {
                             api_protocol: ApiProtocol::Openai,
                             api_key_override: None,
                             api_base_override: None,
+                            preset: None,
                         })
                     }
                 } else {

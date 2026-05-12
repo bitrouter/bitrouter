@@ -6,7 +6,7 @@ use bitrouter_core::{
         GenerateContentCandidate, GenerateContentResponse, GenerateContentUsageMetadata,
         GoogleContent, GoogleErrorEnvelope, GoogleFunctionCall, GoogleFunctionCallingConfig,
         GoogleFunctionDeclaration, GoogleFunctionResponse, GoogleGenerationConfig,
-        GoogleInlineData, GooglePart, GoogleTool, GoogleToolConfig,
+        GoogleInlineData, GooglePart, GoogleThinkingConfig, GoogleTool, GoogleToolConfig,
     },
     errors::{BitrouterError, ProviderErrorContext, Result},
     models::{
@@ -250,7 +250,8 @@ pub(super) fn build_generate_content_request(
         || options.presence_penalty.is_some()
         || options.frequency_penalty.is_some()
         || options.seed.is_some()
-        || options.response_format.is_some();
+        || options.response_format.is_some()
+        || options.reasoning_effort.is_some();
 
     let generation_config = if has_generation_config {
         Some(GoogleGenerationConfig {
@@ -267,6 +268,11 @@ pub(super) fn build_generate_content_request(
                 .as_ref()
                 .map(|_| "application/json".to_owned()),
             response_schema: None,
+            thinking_config: options.reasoning_effort.map(|e| GoogleThinkingConfig {
+                thinking_budget: Some(e.google_thinking_budget()),
+                thinking_level: None,
+                include_thoughts: None,
+            }),
         })
     } else {
         None
@@ -1795,6 +1801,7 @@ mod tests {
                 seed: None,
                 response_mime_type: None,
                 response_schema: None,
+                thinking_config: None,
             }),
             stream: None,
         };
@@ -1808,6 +1815,46 @@ mod tests {
         assert!(json["generationConfig"]["temperature"].as_f64().unwrap() - 0.7 < 0.01);
         assert_eq!(json["generationConfig"]["maxOutputTokens"], 1024);
         assert!(json.get("tools").is_none());
+    }
+
+    #[test]
+    fn build_generate_content_request_writes_thinking_budget() {
+        use bitrouter_core::models::language::{
+            call_options::ReasoningEffort,
+            prompt::{LanguageModelMessage, LanguageModelUserContent},
+        };
+
+        let options = LanguageModelCallOptions {
+            prompt: vec![LanguageModelMessage::User {
+                content: vec![LanguageModelUserContent::Text {
+                    text: "hi".to_owned(),
+                    provider_options: None,
+                }],
+                provider_options: None,
+            }],
+            stream: None,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            response_format: None,
+            seed: None,
+            tools: None,
+            tool_choice: None,
+            include_raw_chunks: None,
+            abort_signal: None,
+            headers: None,
+            reasoning_effort: Some(ReasoningEffort::High),
+            provider_options: None,
+        };
+
+        let request = build_generate_content_request("gemini-2.5-pro", &options).expect("build ok");
+        let cfg = request.generation_config.expect("generation_config");
+        let thinking = cfg.thinking_config.expect("thinking_config");
+        assert_eq!(thinking.thinking_budget, Some(16384));
     }
 
     #[test]

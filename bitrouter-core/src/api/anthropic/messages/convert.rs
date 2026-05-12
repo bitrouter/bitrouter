@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::models::{
     language::{
-        call_options::LanguageModelCallOptions,
+        call_options::{LanguageModelCallOptions, ReasoningEffort},
         content::LanguageModelContent,
         finish_reason::LanguageModelFinishReason,
         generate_result::LanguageModelGenerateResult,
@@ -20,9 +20,9 @@ use crate::models::{
 };
 
 use super::types::{
-    AnthropicContentBlock, AnthropicMessageContent, AnthropicToolChoice, MessagesMessageDelta,
-    MessagesRequest, MessagesResponse, MessagesStreamDelta, MessagesStreamEvent,
-    MessagesStreamMessage, MessagesUsage,
+    AnthropicContentBlock, AnthropicMessageContent, AnthropicThinking, AnthropicToolChoice,
+    MessagesMessageDelta, MessagesRequest, MessagesResponse, MessagesStreamDelta,
+    MessagesStreamEvent, MessagesStreamMessage, MessagesUsage,
 };
 use crate::api::util::generate_id;
 
@@ -91,6 +91,8 @@ pub fn to_call_options(request: MessagesRequest) -> LanguageModelCallOptions {
 
     let tool_choice = request.tool_choice.as_ref().and_then(convert_tool_choice);
 
+    let reasoning_effort = request.thinking.as_ref().and_then(map_thinking_to_effort);
+
     LanguageModelCallOptions {
         prompt,
         stream: request.stream,
@@ -108,7 +110,32 @@ pub fn to_call_options(request: MessagesRequest) -> LanguageModelCallOptions {
         include_raw_chunks: None,
         abort_signal: None,
         headers: None,
+        reasoning_effort,
         provider_options: None,
+    }
+}
+
+/// Buckets an Anthropic `thinking` configuration into the normalized enum.
+///
+/// `Disabled` → `Minimal`; `Enabled` buckets on `budget_tokens`; `Adaptive`
+/// is passthrough (`None`) so downstream protocol-translation hands the
+/// "let the model decide" intent back without forcing a bucket.
+///
+/// Bucket boundaries are the midpoints between consecutive outbound emit
+/// values (`Low → 1024`, `Medium → 4096`, `High → 16384`). Picking
+/// midpoints means a same-protocol round-trip rounds each input to the
+/// *nearest* canonical budget rather than silently halving it: e.g.
+/// inbound `budget_tokens: 2000` buckets to `Low` (closer to 1024
+/// than to 4096) instead of being mis-bucketed by an off-midpoint cutoff.
+fn map_thinking_to_effort(thinking: &AnthropicThinking) -> Option<ReasoningEffort> {
+    match thinking {
+        AnthropicThinking::Disabled => Some(ReasoningEffort::Minimal),
+        AnthropicThinking::Enabled { budget_tokens, .. } => Some(match *budget_tokens {
+            0..=2559 => ReasoningEffort::Low,
+            2560..=10239 => ReasoningEffort::Medium,
+            _ => ReasoningEffort::High,
+        }),
+        AnthropicThinking::Adaptive { .. } => None,
     }
 }
 
@@ -588,6 +615,67 @@ fn empty_stream_usage() -> MessagesUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_call_options_buckets_anthropic_thinking_budget() {
+        // Construct via JSON so the test exercises the wire-format
+        // deserialization path users actually hit.
+        let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 16384,
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "enabled", "budget_tokens": 5000},
+        }))
+        .expect("messages request parses");
+
+        let opts = to_call_options(request);
+        assert_eq!(opts.reasoning_effort, Some(ReasoningEffort::Medium));
+    }
+
+    #[test]
+    fn to_call_options_thinking_budget_buckets_at_midpoints() {
+        // Bucket boundaries are midpoints of the outbound emit table
+        // (1024, 4096, 16384). Exercises the boundary values directly so
+        // future tuning of the table doesn't silently shift the rounding.
+        let cases = [
+            (1024_u32, ReasoningEffort::Low),
+            (2559, ReasoningEffort::Low),
+            (2560, ReasoningEffort::Medium),
+            (4096, ReasoningEffort::Medium),
+            (10239, ReasoningEffort::Medium),
+            (10240, ReasoningEffort::High),
+            (16384, ReasoningEffort::High),
+        ];
+        for (budget, expected) in cases {
+            let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 32768,
+                "messages": [{"role": "user", "content": "hi"}],
+                "thinking": {"type": "enabled", "budget_tokens": budget},
+            }))
+            .expect("messages request parses");
+            let opts = to_call_options(request);
+            assert_eq!(
+                opts.reasoning_effort,
+                Some(expected),
+                "budget_tokens={budget} should bucket to {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn to_call_options_disabled_thinking_maps_to_minimal() {
+        let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "disabled"},
+        }))
+        .expect("messages request parses");
+
+        let opts = to_call_options(request);
+        assert_eq!(opts.reasoning_effort, Some(ReasoningEffort::Minimal));
+    }
 
     #[test]
     fn stream_converter_starts_tool_block_for_delta_without_start() {

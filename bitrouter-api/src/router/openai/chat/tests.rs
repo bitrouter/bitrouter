@@ -55,6 +55,7 @@ impl RoutingTable for MockTable {
             api_protocol: ApiProtocol::Openai,
             api_key_override: None,
             api_base_override: None,
+            preset: None,
         })
     }
 }
@@ -84,6 +85,7 @@ fn target(provider: &str, service_id: &str) -> RoutingTarget {
         api_protocol: ApiProtocol::Openai,
         api_key_override: None,
         api_base_override: None,
+        preset: None,
     }
 }
 

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::models::{
     language::{
-        call_options::LanguageModelCallOptions,
+        call_options::{LanguageModelCallOptions, ReasoningEffort},
         content::LanguageModelContent,
         data_content::LanguageModelDataContent,
         generate_result::LanguageModelGenerateResult,
@@ -79,6 +79,12 @@ pub fn to_call_options(request: ResponsesRequest) -> LanguageModelCallOptions {
             .collect()
     });
 
+    let reasoning_effort = request
+        .reasoning
+        .as_ref()
+        .and_then(|r| r.effort.as_deref())
+        .and_then(ReasoningEffort::from_str_opt);
+
     LanguageModelCallOptions {
         prompt,
         stream: request.stream,
@@ -96,6 +102,7 @@ pub fn to_call_options(request: ResponsesRequest) -> LanguageModelCallOptions {
         include_raw_chunks: None,
         abort_signal: None,
         headers: None,
+        reasoning_effort,
         provider_options: None,
     }
 }
@@ -1493,6 +1500,7 @@ mod tests {
             tool_choice: None,
             parallel_tool_calls: None,
             text: None,
+            reasoning: None,
         };
 
         let val = serde_json::to_value(&req).expect("serialize failed");

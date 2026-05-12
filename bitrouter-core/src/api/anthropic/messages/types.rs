@@ -57,6 +57,29 @@ pub struct MessagesRequest {
     pub tool_choice: Option<AnthropicToolChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<AnthropicMetadata>,
+    /// Extended-thinking configuration.
+    /// <https://docs.claude.com/en/docs/build-with-claude/extended-thinking>
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<AnthropicThinking>,
+}
+
+/// Anthropic extended-thinking configuration.
+///
+/// `budget_tokens` must be at least 1024 and strictly less than
+/// `max_tokens` (they share the same output pool).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum AnthropicThinking {
+    Enabled {
+        budget_tokens: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+    },
+    Disabled,
+    Adaptive {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
