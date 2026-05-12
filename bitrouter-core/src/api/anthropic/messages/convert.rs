@@ -120,12 +120,19 @@ pub fn to_call_options(request: MessagesRequest) -> LanguageModelCallOptions {
 /// `Disabled` → `Minimal`; `Enabled` buckets on `budget_tokens`; `Adaptive`
 /// is passthrough (`None`) so downstream protocol-translation hands the
 /// "let the model decide" intent back without forcing a bucket.
+///
+/// Bucket boundaries are the midpoints between consecutive outbound emit
+/// values (`Low → 1024`, `Medium → 4096`, `High → 16384`). Picking
+/// midpoints means a same-protocol round-trip rounds each input to the
+/// *nearest* canonical budget rather than silently halving it: e.g.
+/// inbound `budget_tokens: 2000` buckets to `Low` (closer to 1024
+/// than to 4096) instead of being mis-bucketed by an off-midpoint cutoff.
 fn map_thinking_to_effort(thinking: &AnthropicThinking) -> Option<ReasoningEffort> {
     match thinking {
         AnthropicThinking::Disabled => Some(ReasoningEffort::Minimal),
         AnthropicThinking::Enabled { budget_tokens, .. } => Some(match *budget_tokens {
-            0..=2047 => ReasoningEffort::Low,
-            2048..=8191 => ReasoningEffort::Medium,
+            0..=2559 => ReasoningEffort::Low,
+            2560..=10239 => ReasoningEffort::Medium,
             _ => ReasoningEffort::High,
         }),
         AnthropicThinking::Adaptive { .. } => None,
@@ -623,6 +630,37 @@ mod tests {
 
         let opts = to_call_options(request);
         assert_eq!(opts.reasoning_effort, Some(ReasoningEffort::Medium));
+    }
+
+    #[test]
+    fn to_call_options_thinking_budget_buckets_at_midpoints() {
+        // Bucket boundaries are midpoints of the outbound emit table
+        // (1024, 4096, 16384). Exercises the boundary values directly so
+        // future tuning of the table doesn't silently shift the rounding.
+        let cases = [
+            (1024_u32, ReasoningEffort::Low),
+            (2559, ReasoningEffort::Low),
+            (2560, ReasoningEffort::Medium),
+            (4096, ReasoningEffort::Medium),
+            (10239, ReasoningEffort::Medium),
+            (10240, ReasoningEffort::High),
+            (16384, ReasoningEffort::High),
+        ];
+        for (budget, expected) in cases {
+            let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 32768,
+                "messages": [{"role": "user", "content": "hi"}],
+                "thinking": {"type": "enabled", "budget_tokens": budget},
+            }))
+            .expect("messages request parses");
+            let opts = to_call_options(request);
+            assert_eq!(
+                opts.reasoning_effort,
+                Some(expected),
+                "budget_tokens={budget} should bucket to {expected:?}"
+            );
+        }
     }
 
     #[test]

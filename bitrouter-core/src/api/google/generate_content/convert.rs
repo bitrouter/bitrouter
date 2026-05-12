@@ -146,6 +146,10 @@ pub fn to_call_options(request: GenerateContentRequest) -> LanguageModelCallOpti
 /// Prefers `thinking_level` (Gemini 3+) when set, falling back to bucketing
 /// `thinking_budget` (Gemini 2.5). The dynamic-thinking sentinel `-1` is
 /// treated as passthrough — the caller asked the model to decide.
+///
+/// Bucket boundaries are the midpoints between consecutive outbound emit
+/// values (`Low → 1024`, `Medium → 4096`, `High → 16384`) so a same-protocol
+/// round-trip rounds to the nearest canonical budget.
 fn map_thinking_config(cfg: &GoogleThinkingConfig) -> Option<ReasoningEffort> {
     if let Some(level) = cfg.thinking_level.as_deref()
         && let Some(effort) = ReasoningEffort::from_str_opt(level)
@@ -155,8 +159,8 @@ fn map_thinking_config(cfg: &GoogleThinkingConfig) -> Option<ReasoningEffort> {
     match cfg.thinking_budget? {
         -1 => None,
         0 => Some(ReasoningEffort::Minimal),
-        1..=2047 => Some(ReasoningEffort::Low),
-        2048..=8191 => Some(ReasoningEffort::Medium),
+        1..=2559 => Some(ReasoningEffort::Low),
+        2560..=10239 => Some(ReasoningEffort::Medium),
         _ => Some(ReasoningEffort::High),
     }
 }
@@ -511,6 +515,35 @@ mod tests {
 
         let opts = to_call_options(request);
         assert_eq!(opts.reasoning_effort, Some(ReasoningEffort::Medium));
+    }
+
+    #[test]
+    fn to_call_options_thinking_budget_buckets_at_midpoints() {
+        // Mirrors the Anthropic boundary test — bucket cutoffs are the
+        // midpoints between outbound emit values (1024, 4096, 16384).
+        let cases = [
+            (0_i32, ReasoningEffort::Minimal),
+            (1024, ReasoningEffort::Low),
+            (2559, ReasoningEffort::Low),
+            (2560, ReasoningEffort::Medium),
+            (4096, ReasoningEffort::Medium),
+            (10239, ReasoningEffort::Medium),
+            (10240, ReasoningEffort::High),
+            (32768, ReasoningEffort::High),
+        ];
+        for (budget, expected) in cases {
+            let request: GenerateContentRequest = serde_json::from_value(serde_json::json!({
+                "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                "generationConfig": {"thinkingConfig": {"thinkingBudget": budget}}
+            }))
+            .expect("generate_content request parses");
+            let opts = to_call_options(request);
+            assert_eq!(
+                opts.reasoning_effort,
+                Some(expected),
+                "thinkingBudget={budget} should bucket to {expected:?}"
+            );
+        }
     }
 
     #[test]
