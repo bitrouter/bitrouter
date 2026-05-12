@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0](https://github.com/bitrouter/bitrouter/compare/v0.31.2...v0.32.0)
+
+
+### ⛰️ Features
+
+- *(api)* ChainOverlay + custom FallbackPolicy for payment-gate filters ([#460](https://github.com/bitrouter/bitrouter/pull/460)) - ([90609e1](https://github.com/bitrouter/bitrouter/commit/90609e11b78ca95803666e8f902bd5f86272afbc))
+- CLI/TUI shared agents ops + headless-CLI consistency pass ([#452](https://github.com/bitrouter/bitrouter/pull/452)) - ([9e60e10](https://github.com/bitrouter/bitrouter/commit/9e60e10ca9c7e63e072e5eb046509d9b8c20bccf))
+- Presets and variants — named LLM configurations ([#457](https://github.com/bitrouter/bitrouter/pull/457)) - ([9e2db52](https://github.com/bitrouter/bitrouter/commit/9e2db52f7dcb4c55a2a102c859681037c3f51ed0))
+
+### 🐛 Bug Fixes
+
+- Propagate reasoning content across all streaming protocols ([#453](https://github.com/bitrouter/bitrouter/pull/453)) - ([6ae55b2](https://github.com/bitrouter/bitrouter/commit/6ae55b286528599163ef30214183a95946f0083d))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(observe)* Streamline per-request log output ([#456](https://github.com/bitrouter/bitrouter/pull/456)) - ([7e90154](https://github.com/bitrouter/bitrouter/commit/7e90154d5e8d9d30be9f54bd6c2a14d3fb85e792))
+- *(providers)* Update models from models.dev ([#451](https://github.com/bitrouter/bitrouter/pull/451)) - ([79ec89d](https://github.com/bitrouter/bitrouter/commit/79ec89ddbdfef016319c85eed48dba495bbec478))
+
+
 ## [0.31.2](https://github.com/bitrouter/bitrouter/compare/v0.31.1...v0.31.2)
 
 
