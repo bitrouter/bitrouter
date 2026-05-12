@@ -36,6 +36,11 @@ pub fn apply(request: &mut ChatCompletionRequest, preset: &AppliedPreset) {
     if request.frequency_penalty.is_none() {
         request.frequency_penalty = preset.frequency_penalty;
     }
+    if request.reasoning_effort.is_none()
+        && let Some(effort) = preset.reasoning_effort
+    {
+        request.reasoning_effort = Some(effort.as_openai_str().to_owned());
+    }
 
     // System prompt: only inject when the request has no system message of its own.
     if let Some(system) = &preset.system
@@ -57,6 +62,7 @@ pub fn apply(request: &mut ChatCompletionRequest, preset: &AppliedPreset) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::language::call_options::ReasoningEffort;
 
     fn empty_request() -> ChatCompletionRequest {
         ChatCompletionRequest {
@@ -82,6 +88,7 @@ mod tests {
             tool_choice: None,
             parallel_tool_calls: None,
             response_format: None,
+            reasoning_effort: None,
         }
     }
 
@@ -118,6 +125,29 @@ mod tests {
         apply(&mut req, &preset);
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[0].role, "system");
+    }
+
+    #[test]
+    fn preset_reasoning_effort_fills_when_request_unset() {
+        let mut req = empty_request();
+        let preset = AppliedPreset {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..Default::default()
+        };
+        apply(&mut req, &preset);
+        assert_eq!(req.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn request_reasoning_effort_wins() {
+        let mut req = empty_request();
+        req.reasoning_effort = Some("xhigh".into());
+        let preset = AppliedPreset {
+            reasoning_effort: Some(ReasoningEffort::Low),
+            ..Default::default()
+        };
+        apply(&mut req, &preset);
+        assert_eq!(req.reasoning_effort.as_deref(), Some("xhigh"));
     }
 
     #[test]

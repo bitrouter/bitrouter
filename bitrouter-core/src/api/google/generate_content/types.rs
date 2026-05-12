@@ -128,6 +128,25 @@ pub struct GoogleGenerationConfig {
     pub response_mime_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<serde_json::Value>,
+    /// Thinking configuration for Gemini 2.5+ models.
+    /// <https://ai.google.dev/gemini-api/docs/thinking>
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_config: Option<GoogleThinkingConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleThinkingConfig {
+    /// Token budget for thinking. `-1` enables dynamic thinking; `0` disables
+    /// thinking (allowed on 2.5 Flash, rejected on 2.5 Pro which requires ≥128).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<i32>,
+    /// Discrete thinking level (Gemini 3+ models only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// Whether to emit thought summaries in the response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_thoughts: Option<bool>,
 }
 
 // ── Response ────────────────────────────────────────────────────────────────

@@ -6,7 +6,9 @@
 
 use crate::routers::routing_table::AppliedPreset;
 
-use super::types::{GenerateContentRequest, GoogleContent, GoogleGenerationConfig, GooglePart};
+use super::types::{
+    GenerateContentRequest, GoogleContent, GoogleGenerationConfig, GooglePart, GoogleThinkingConfig,
+};
 
 /// Shallow-merges `preset` defaults onto `request`.
 pub fn apply(request: &mut GenerateContentRequest, preset: &AppliedPreset) {
@@ -22,7 +24,8 @@ pub fn apply(request: &mut GenerateContentRequest, preset: &AppliedPreset) {
         || preset.max_tokens.is_some()
         || preset.stop_sequences.is_some()
         || preset.presence_penalty.is_some()
-        || preset.frequency_penalty.is_some();
+        || preset.frequency_penalty.is_some()
+        || preset.reasoning_effort.is_some();
     if needs_gen_config {
         let cfg = request
             .generation_config
@@ -48,6 +51,19 @@ pub fn apply(request: &mut GenerateContentRequest, preset: &AppliedPreset) {
         if cfg.frequency_penalty.is_none() {
             cfg.frequency_penalty = preset.frequency_penalty;
         }
+        // Inject thinking only when the request omits the entire object.
+        // A request that supplied `thinkingConfig: {}` (no fields) is
+        // treated as explicit opt-out of preset thinking, matching the
+        // "request wins" semantics other fields use.
+        if cfg.thinking_config.is_none()
+            && let Some(effort) = preset.reasoning_effort
+        {
+            cfg.thinking_config = Some(GoogleThinkingConfig {
+                thinking_budget: Some(effort.google_thinking_budget()),
+                thinking_level: None,
+                include_thoughts: None,
+            });
+        }
     }
 
     // System: only when request has no system_instruction.
@@ -70,6 +86,7 @@ pub fn apply(request: &mut GenerateContentRequest, preset: &AppliedPreset) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::language::call_options::ReasoningEffort;
 
     fn empty_request() -> GenerateContentRequest {
         GenerateContentRequest {
@@ -109,6 +126,40 @@ mod tests {
         apply(&mut req, &preset);
         let cfg = req.generation_config.unwrap();
         assert_eq!(cfg.temperature, Some(0.9));
+    }
+
+    #[test]
+    fn preset_reasoning_effort_writes_thinking_budget() {
+        let mut req = empty_request();
+        let preset = AppliedPreset {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..Default::default()
+        };
+        apply(&mut req, &preset);
+        let cfg = req.generation_config.expect("generation_config");
+        let thinking = cfg.thinking_config.expect("thinking_config");
+        assert_eq!(thinking.thinking_budget, Some(16384));
+    }
+
+    #[test]
+    fn request_thinking_config_wins() {
+        let mut req = empty_request();
+        req.generation_config = Some(GoogleGenerationConfig {
+            thinking_config: Some(GoogleThinkingConfig {
+                thinking_budget: Some(0),
+                thinking_level: None,
+                include_thoughts: None,
+            }),
+            ..Default::default()
+        });
+        let preset = AppliedPreset {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..Default::default()
+        };
+        apply(&mut req, &preset);
+        let cfg = req.generation_config.unwrap();
+        let thinking = cfg.thinking_config.unwrap();
+        assert_eq!(thinking.thinking_budget, Some(0));
     }
 
     #[test]

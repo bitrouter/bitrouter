@@ -99,10 +99,12 @@ impl
     pub fn load(paths: RuntimePaths) -> Result<Self> {
         let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
         let config = BitrouterConfig::load_from_file(&paths.config_file, env_file)?;
-        let config_table = bitrouter_config::ConfigRoutingTable::with_routing(
+        let config_table = bitrouter_config::ConfigRoutingTable::with_full_config(
             config.providers.clone(),
             config.models.clone(),
             &config.routing,
+            config.presets.clone(),
+            config.variants.clone(),
         );
         let routing_table =
             bitrouter_core::routers::dynamic::DynamicRoutingTable::new(config_table);
@@ -121,10 +123,12 @@ impl
     pub fn scaffold(paths: RuntimePaths) -> Self {
         let env_file = paths.env_file.exists().then_some(paths.env_file.as_path());
         let config = BitrouterConfig::load_from_str("{}", env_file).unwrap_or_default();
-        let config_table = bitrouter_config::ConfigRoutingTable::with_routing(
+        let config_table = bitrouter_config::ConfigRoutingTable::with_full_config(
             config.providers.clone(),
             config.models.clone(),
             &config.routing,
+            config.presets.clone(),
+            config.variants.clone(),
         );
         let routing_table =
             bitrouter_core::routers::dynamic::DynamicRoutingTable::new(config_table);
@@ -192,10 +196,12 @@ impl
                 .map_err(|e| e.to_string())?;
 
             // Reload model routing table.
-            let new_table = bitrouter_config::ConfigRoutingTable::with_routing(
+            let new_table = bitrouter_config::ConfigRoutingTable::with_full_config(
                 config.providers.clone(),
                 config.models.clone(),
                 &config.routing,
+                config.presets.clone(),
+                config.variants.clone(),
             );
             reload_table.reload(new_table).map_err(|e| e.to_string())?;
 

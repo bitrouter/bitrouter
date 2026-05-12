@@ -227,6 +227,12 @@ pub(crate) fn build_responses_request(
             .response_format
             .as_ref()
             .map(text_config_from_response_format),
+        reasoning: options.reasoning_effort.map(|e| {
+            bitrouter_core::api::openai::responses::types::ResponsesReasoning {
+                effort: Some(e.as_openai_str().to_owned()),
+                summary: None,
+            }
+        }),
     })
 }
 
@@ -1645,6 +1651,47 @@ mod tests {
     };
 
     #[test]
+    fn build_responses_request_nests_effort_under_reasoning_object() {
+        use bitrouter_core::models::language::call_options::ReasoningEffort;
+
+        let request = build_responses_request(
+            "gpt-5",
+            &LanguageModelCallOptions {
+                prompt: vec![LanguageModelMessage::User {
+                    content: vec![LanguageModelUserContent::Text {
+                        text: "ping".to_owned(),
+                        provider_options: None,
+                    }],
+                    provider_options: None,
+                }],
+                stream: None,
+                max_output_tokens: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                stop_sequences: None,
+                presence_penalty: None,
+                frequency_penalty: None,
+                response_format: None,
+                seed: None,
+                tools: None,
+                tool_choice: None,
+                include_raw_chunks: None,
+                abort_signal: None,
+                headers: None,
+                reasoning_effort: Some(ReasoningEffort::Low),
+                provider_options: None,
+            },
+            false,
+        )
+        .expect("request should build");
+
+        let reasoning = request.reasoning.expect("reasoning object present");
+        assert_eq!(reasoning.effort.as_deref(), Some("low"));
+        assert!(reasoning.summary.is_none());
+    }
+
+    #[test]
     fn builds_image_prompt_request() {
         let request = build_responses_request(
             "gpt-4.1-mini",
@@ -1681,6 +1728,7 @@ mod tests {
                 include_raw_chunks: None,
                 abort_signal: None,
                 headers: None,
+                reasoning_effort: None,
                 provider_options: None,
             },
             false,
@@ -1722,6 +1770,7 @@ mod tests {
                 include_raw_chunks: None,
                 abort_signal: None,
                 headers: None,
+                reasoning_effort: None,
                 provider_options: None,
             },
             false,
@@ -1791,6 +1840,7 @@ mod tests {
                 include_raw_chunks: None,
                 abort_signal: None,
                 headers: None,
+                reasoning_effort: None,
                 provider_options: None,
             },
             false,
@@ -1855,6 +1905,7 @@ mod tests {
                 include_raw_chunks: None,
                 abort_signal: None,
                 headers: None,
+                reasoning_effort: None,
                 provider_options: None,
             },
             false,

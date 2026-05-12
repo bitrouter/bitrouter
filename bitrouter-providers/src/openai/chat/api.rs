@@ -320,6 +320,9 @@ pub(super) fn build_chat_request(
             .as_ref()
             .map(tool_choice_from_language_model),
         parallel_tool_calls: has_tools.then_some(false),
+        reasoning_effort: options
+            .reasoning_effort
+            .map(|e| e.as_openai_str().to_owned()),
     })
 }
 
@@ -1325,6 +1328,45 @@ mod tests {
     }
 
     #[test]
+    fn build_chat_request_passes_reasoning_effort_through() {
+        use bitrouter_core::models::language::call_options::ReasoningEffort;
+
+        let request = build_chat_request(
+            "gpt-5",
+            &LanguageModelCallOptions {
+                prompt: vec![LanguageModelMessage::User {
+                    content: vec![LanguageModelUserContent::Text {
+                        text: "ping".to_owned(),
+                        provider_options: None,
+                    }],
+                    provider_options: None,
+                }],
+                stream: None,
+                max_output_tokens: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                stop_sequences: None,
+                presence_penalty: None,
+                frequency_penalty: None,
+                response_format: None,
+                seed: None,
+                tools: None,
+                tool_choice: None,
+                include_raw_chunks: None,
+                abort_signal: None,
+                headers: None,
+                reasoning_effort: Some(ReasoningEffort::High),
+                provider_options: None,
+            },
+            false,
+        )
+        .expect("request should build");
+
+        assert_eq!(request.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
     fn builds_image_prompt_request() {
         let request = build_chat_request(
             "gpt-4o-mini",
@@ -1361,6 +1403,7 @@ mod tests {
                 include_raw_chunks: None,
                 abort_signal: None,
                 headers: None,
+                reasoning_effort: None,
                 provider_options: None,
             },
             false,

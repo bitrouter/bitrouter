@@ -216,6 +216,11 @@ models:
 #     system_prompt: "Reason carefully. Cite sources when relevant."
 #     params:
 #       temperature: 0.2
+#       # Normalized reasoning effort: minimal | low | medium | high.
+#       # OpenAI receives the string directly; Anthropic maps to a
+#       # `thinking.budget_tokens` integer (minimal disables thinking);
+#       # Google maps to `thinkingConfig.thinkingBudget`.
+#       reasoning_effort: high
 #     routing:
 #       require_tags: [paid]
 #

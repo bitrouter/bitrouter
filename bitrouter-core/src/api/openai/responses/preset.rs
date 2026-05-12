@@ -5,7 +5,7 @@
 
 use crate::routers::routing_table::AppliedPreset;
 
-use super::types::ResponsesRequest;
+use super::types::{ResponsesReasoning, ResponsesRequest};
 
 /// Shallow-merges `preset` defaults onto `request`.
 ///
@@ -26,6 +26,18 @@ pub fn apply(request: &mut ResponsesRequest, preset: &AppliedPreset) {
     if request.max_output_tokens.is_none() {
         request.max_output_tokens = preset.max_tokens;
     }
+    // Responses API nests effort under a `reasoning` object. Inject the
+    // whole object when the request omits it; if the request has its own
+    // `reasoning` (even with effort unset), leave it alone — the request
+    // already opted into reasoning configuration explicitly.
+    if request.reasoning.is_none()
+        && let Some(effort) = preset.reasoning_effort
+    {
+        request.reasoning = Some(ResponsesReasoning {
+            effort: Some(effort.as_openai_str().to_owned()),
+            summary: None,
+        });
+    }
 
     if request.instructions.is_none()
         && let Some(system) = &preset.system
@@ -38,6 +50,7 @@ pub fn apply(request: &mut ResponsesRequest, preset: &AppliedPreset) {
 mod tests {
     use super::*;
     use crate::api::openai::responses::types::ResponsesInput;
+    use crate::models::language::call_options::ReasoningEffort;
 
     fn empty_request() -> ResponsesRequest {
         ResponsesRequest {
@@ -52,6 +65,7 @@ mod tests {
             tool_choice: None,
             parallel_tool_calls: None,
             text: None,
+            reasoning: None,
         }
     }
 
@@ -75,6 +89,34 @@ mod tests {
         };
         apply(&mut req, &preset);
         assert_eq!(req.instructions.as_deref(), Some("Reason carefully."));
+    }
+
+    #[test]
+    fn preset_reasoning_effort_wraps_in_object_when_request_unset() {
+        let mut req = empty_request();
+        let preset = AppliedPreset {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..Default::default()
+        };
+        apply(&mut req, &preset);
+        let r = req.reasoning.expect("reasoning object created");
+        assert_eq!(r.effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn request_reasoning_object_wins() {
+        let mut req = empty_request();
+        req.reasoning = Some(ResponsesReasoning {
+            effort: Some("minimal".into()),
+            summary: None,
+        });
+        let preset = AppliedPreset {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..Default::default()
+        };
+        apply(&mut req, &preset);
+        let r = req.reasoning.expect("reasoning preserved");
+        assert_eq!(r.effort.as_deref(), Some("minimal"));
     }
 
     #[test]

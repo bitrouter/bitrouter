@@ -35,6 +35,22 @@ pub struct ResponsesRequest {
     pub parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<ResponsesTextConfig>,
+    /// Reasoning configuration for `o`- and `gpt-5`-series models on the
+    /// Responses API. The Responses API nests `effort` under a `reasoning`
+    /// object (Chat Completions uses a flat top-level field).
+    /// <https://platform.openai.com/docs/api-reference/responses/create>
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ResponsesReasoning>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResponsesReasoning {
+    /// Free-form string for forward-compatibility with `xhigh` / `none`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// Reasoning summary visibility (`auto` | `concise` | `detailed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
