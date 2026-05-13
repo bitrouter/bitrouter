@@ -501,11 +501,11 @@ models:
       - video
     pricing:
       input_tokens:
-        no_cache: 0.276
-        cache_read: 0.028
-        cache_write: 0.344
+        no_cache: 0.5
+        cache_read: 0.05
+        cache_write: 0.625
       output_tokens:
-        text: 1.651
+        text: 3.0
   qwq-plus:
     max_input_tokens: 131072
     max_output_tokens: 8192
