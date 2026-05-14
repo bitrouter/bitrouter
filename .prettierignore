@@ -1,5 +1,0 @@
-node_modules
-dist
-
-# cargo-dist generated workflow file
-.github/workflows/release.yml

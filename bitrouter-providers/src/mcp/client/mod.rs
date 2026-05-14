@@ -1,9 +1,0 @@
-//! MCP client runtime -- connects to upstream MCP servers and aggregates capabilities.
-
-pub mod bridge;
-pub mod config;
-pub mod registry;
-pub mod upstream;
-
-pub(crate) mod convert;
-pub(crate) mod transport;
