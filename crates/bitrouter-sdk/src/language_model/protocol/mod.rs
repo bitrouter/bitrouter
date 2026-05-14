@@ -89,6 +89,15 @@ pub trait StreamEncoder: Send {
     /// Encode one canonical part into zero or more SSE frames.
     fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>>;
 
+    /// Encode a mid-stream error into a **protocol-shaped terminal error
+    /// frame** the client will actually recognise. The default emits an SSE
+    /// comment (ignorable); each protocol adapter overrides this to emit its
+    /// real error event (Anthropic `error`, OpenAI error chunk, Responses
+    /// `response.failed`). After this the stream stops.
+    fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
+        vec![SseFrame::Comment(format!("error: {message}"))]
+    }
+
     /// Called once at clean stream end; emit any trailing frames (e.g. the
     /// OpenAI `[DONE]` sentinel — note Responses must **not** emit it, #454-2).
     fn finish(&mut self) -> Result<Vec<SseFrame>> {

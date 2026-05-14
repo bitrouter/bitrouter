@@ -83,6 +83,26 @@ impl CallerContext {
         }
     }
 
+    /// A pre-auth placeholder caller. Used when `skip_auth` is off — an
+    /// `AuthHook` is expected to validate credentials and replace it via
+    /// [`crate::language_model::PipelineContext::set_caller`]. If no `AuthHook`
+    /// upgrades it, downstream hooks see an anonymous caller.
+    pub fn anonymous() -> Self {
+        Self {
+            api_key_id: "anonymous".to_string(),
+            user_id: "anonymous".to_string(),
+            payment_method: PaymentMethod::None,
+            spend_limit_micro_usd: None,
+            rpm_limit: None,
+            local: false,
+        }
+    }
+
+    /// Whether this is the pre-auth anonymous placeholder.
+    pub fn is_anonymous(&self) -> bool {
+        !self.local && self.api_key_id == "anonymous"
+    }
+
     /// Set the monthly spend limit (builder-style).
     pub fn with_spend_limit(mut self, micro_usd: u64) -> Self {
         self.spend_limit_micro_usd = Some(micro_usd);

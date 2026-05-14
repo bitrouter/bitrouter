@@ -494,4 +494,16 @@ impl StreamEncoder for GoogleStreamEncoder {
             data: chunk.to_string(),
         }])
     }
+
+    fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
+        // Google surfaces a mid-stream error as a chunk carrying an `error`
+        // object (mirrors the non-streaming error envelope).
+        vec![SseFrame::Event {
+            event: None,
+            data: serde_json::json!({
+                "error": { "code": 502, "status": "UNAVAILABLE", "message": message }
+            })
+            .to_string(),
+        }]
+    }
 }

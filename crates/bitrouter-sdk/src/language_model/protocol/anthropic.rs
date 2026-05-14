@@ -762,4 +762,15 @@ impl StreamEncoder for AnthropicStreamEncoder {
         }
         Ok(frames)
     }
+
+    fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
+        // Anthropic surfaces a mid-stream error as a named `error` event.
+        vec![Self::ev(
+            "error",
+            serde_json::json!({
+                "type": "error",
+                "error": { "type": "api_error", "message": message },
+            }),
+        )]
+    }
 }

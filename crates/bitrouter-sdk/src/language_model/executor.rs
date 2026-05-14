@@ -174,6 +174,17 @@ impl HttpExecutor {
 
     /// The upstream endpoint URL for a target. Google encodes the model and the
     /// streaming mode in the path; the others use a fixed path.
+    ///
+    /// Endpoint paths, per the official API references:
+    /// - OpenAI Chat: `POST {base}/chat/completions`
+    ///   <https://platform.openai.com/docs/api-reference/chat/create>
+    /// - OpenAI Responses: `POST {base}/responses`
+    ///   <https://platform.openai.com/docs/api-reference/responses/create>
+    /// - Anthropic Messages: `POST {base}/messages`
+    ///   <https://docs.anthropic.com/en/api/messages>
+    /// - Google: `POST {base}/models/{model}:generateContent` (or
+    ///   `:streamGenerateContent?alt=sse` for SSE streaming)
+    ///   <https://ai.google.dev/api/generate-content>
     fn endpoint_url(target: &RoutingTarget, stream: bool) -> String {
         let base = target.effective_api_base().trim_end_matches('/');
         match target.api_protocol {

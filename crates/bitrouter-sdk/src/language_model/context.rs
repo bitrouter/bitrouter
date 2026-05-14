@@ -76,6 +76,14 @@ impl PipelineContext {
         &self.caller
     }
 
+    /// Replace the caller. The one Stage-1 exception to the water-flow model:
+    /// an `AuthHook` validates credentials and upgrades the pre-auth anonymous
+    /// placeholder to the real authenticated identity. No later stage may call
+    /// this — by Stage 2 the caller is established and read-only.
+    pub fn set_caller(&mut self, caller: CallerContext) {
+        self.caller = caller;
+    }
+
     /// Inbound HTTP headers.
     pub fn headers(&self) -> &http::HeaderMap {
         &self.headers

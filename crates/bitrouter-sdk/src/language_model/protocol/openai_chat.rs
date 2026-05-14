@@ -411,6 +411,7 @@ impl ProtocolAdapter for OpenAiChatAdapter {
             request_id: request_id.to_string(),
             model: model.to_string(),
             role_sent: false,
+            tool_call_indices: Vec::new(),
         })
     }
 }
@@ -626,6 +627,21 @@ struct ChatStreamEncoder {
     request_id: String,
     model: String,
     role_sent: bool,
+    /// Tool-call id → its `tool_calls[].index`, assigned in first-seen order so
+    /// parallel tool calls get distinct, stable indices.
+    tool_call_indices: Vec<String>,
+}
+
+impl ChatStreamEncoder {
+    /// Index for a tool-call id, assigning the next free slot on first sight.
+    fn tool_call_index(&mut self, id: &str) -> usize {
+        if let Some(pos) = self.tool_call_indices.iter().position(|x| x == id) {
+            pos
+        } else {
+            self.tool_call_indices.push(id.to_string());
+            self.tool_call_indices.len() - 1
+        }
+    }
 }
 
 impl ChatStreamEncoder {
@@ -670,6 +686,7 @@ impl StreamEncoder for ChatStreamEncoder {
                 name,
                 arguments,
             } => {
+                let index = self.tool_call_index(id);
                 let mut function = serde_json::Map::new();
                 if let Some(name) = name {
                     function.insert("name".into(), name.clone().into());
@@ -678,7 +695,7 @@ impl StreamEncoder for ChatStreamEncoder {
                 delta.insert(
                     "tool_calls".into(),
                     serde_json::json!([{
-                        "index": 0,
+                        "index": index,
                         "id": id,
                         "type": "function",
                         "function": serde_json::Value::Object(function),
@@ -697,6 +714,24 @@ impl StreamEncoder for ChatStreamEncoder {
             }
         }
         Ok(frames)
+    }
+
+    fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
+        // OpenAI surfaces a mid-stream error as a chunk carrying an `error`
+        // object, followed by the `[DONE]` sentinel.
+        vec![
+            SseFrame::Event {
+                event: None,
+                data: serde_json::json!({
+                    "error": { "message": message, "type": "upstream_error" }
+                })
+                .to_string(),
+            },
+            SseFrame::Event {
+                event: None,
+                data: "[DONE]".to_string(),
+            },
+        ]
     }
 
     fn finish(&mut self) -> Result<Vec<SseFrame>> {

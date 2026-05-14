@@ -813,6 +813,22 @@ impl StreamEncoder for ResponsesStreamEncoder {
         Ok(frames)
     }
 
+    fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
+        // Responses surfaces a mid-stream error as a `response.failed` event,
+        // carrying the full response object with an `error` (#454-2 envelope).
+        let response = serde_json::json!({
+            "id": self.request_id,
+            "object": "response",
+            "model": self.model,
+            "status": "failed",
+            "error": { "code": "upstream_error", "message": message },
+        });
+        vec![self.ev(
+            "response.failed",
+            serde_json::json!({ "response": response }),
+        )]
+    }
+
     fn finish(&mut self) -> Result<Vec<SseFrame>> {
         // #454-2: Responses never emits a `[DONE]` sentinel.
         Ok(Vec::new())

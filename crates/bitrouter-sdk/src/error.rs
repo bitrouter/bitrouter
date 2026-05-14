@@ -8,8 +8,10 @@ pub type Result<T> = std::result::Result<T, BitrouterError>;
 /// The unified BitRouter error type.
 ///
 /// Variants carry an HTTP status so handlers can render OpenAI/Anthropic-style
-/// error envelopes without a separate mapping table.
-#[derive(Debug, thiserror::Error)]
+/// error envelopes without a separate mapping table. `Clone` because the
+/// pipeline hands the same error to several consumers (observe hooks,
+/// settlement recorders, the caller).
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum BitrouterError {
     /// 400 — malformed request (bad JSON, unknown enum variant, …).
     #[error("bad request: {message}")]

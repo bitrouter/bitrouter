@@ -204,11 +204,13 @@ fn stream_response(
                             }
                         }
                         Err(e) => {
-                            // surface the error as a protocol-shaped comment;
-                            // the encoder's own error events are protocol work
-                            // left for a later pass.
-                            yield SseFrame::Comment(format!("error: {e}"));
-                            break;
+                            // Surface the error as a protocol-shaped terminal
+                            // error event the client will actually recognise,
+                            // then stop.
+                            for f in encoder.encode_error(&e.to_string()) {
+                                yield f;
+                            }
+                            return;
                         }
                     }
                 }
@@ -219,7 +221,9 @@ fn stream_response(
                 }
             }
             Err(e) => {
-                yield SseFrame::Comment(format!("error: {e}"));
+                for f in encoder.encode_error(&e.to_string()) {
+                    yield f;
+                }
             }
         }
     };
