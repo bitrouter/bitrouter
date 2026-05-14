@@ -11,18 +11,29 @@
 //! ## Feature flags
 //!
 //! - `server` — axum HTTP handlers, SSE, admin endpoints.
-//! - `config_file` — yaml config loading (`serde_saphyr` + `tokio::fs`).
+//! - `config_file` — yaml config loading (`serde-saphyr` + `tokio::fs`).
 
 #![forbid(unsafe_code)]
 
 // ===== shared library code (crate root) =====
+pub mod app;
+pub mod caller;
 pub mod error;
 pub mod event;
+pub mod metrics;
+pub mod plugin;
+
+#[cfg(feature = "server")]
+pub mod server;
 
 // ===== per-protocol modules =====
 pub mod acp;
 pub mod language_model;
 pub mod mcp;
 
+pub use app::{App, AppBuilder, Plugin};
+pub use caller::{CallerContext, FundingSource, PaymentMethod};
 pub use error::{BitrouterError, Result};
 pub use event::{EventBus, PipelineEvent};
+pub use metrics::{MetricsStore, RateMetrics, RequestMetric, TimeWindow, TokenUsage};
+pub use plugin::{MigrationContent, MigrationItem, PluginId};

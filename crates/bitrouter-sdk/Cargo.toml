@@ -47,4 +47,11 @@ server = ["dep:axum", "dep:tower", "dep:tower-http"]
 config_file = ["dep:serde-saphyr", "tokio/fs"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["sync", "rt", "macros", "time", "rt-multi-thread"] }
+tokio = { workspace = true, features = [
+    "sync",
+    "rt",
+    "macros",
+    "time",
+    "rt-multi-thread",
+    "test-util",
+] }
