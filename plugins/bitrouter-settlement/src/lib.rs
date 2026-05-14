@@ -28,7 +28,9 @@ mod tests;
 pub use balance::BalanceCheckHook;
 pub use bundle::SettlementBundle;
 pub use byok::{ByokCredential, ByokRouteHook, insert_byok_key};
-pub use charge::{ByokCharge, CreditCharge, MppCharge, add_credits, credit_balance};
+pub use charge::{
+    ByokCharge, CreditCharge, MppCharge, add_credits, credit_balance, credit_ledger_count,
+};
 pub use db::{migrate, migrations};
 pub use events::{ByokKeyApplied, MppCheckpointSigned, PricingUnavailable};
 pub use metrics_store::SqliteMetricsStore;

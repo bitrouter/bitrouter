@@ -3,7 +3,8 @@
 //! the first `Claimed` — "charge at most once" is a structural guarantee, not
 //! hook etiquette (003 §4.5).
 //!
-//! `CreditCharge` is the only module that touches `credit_accounts`.
+//! `CreditCharge` is the only module that touches `credit_accounts` and
+//! `credit_ledger_entries`.
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -17,7 +18,7 @@ use crate::events::{ByokKeyApplied, MppCheckpointSigned, PricingUnavailable};
 use crate::mpp::MppState;
 use crate::pricing::{PricingTable, calculate_charge_micro_usd};
 
-// ===== credit_accounts helpers (owned by CreditCharge) =====
+// ===== credit_accounts / credit_ledger_entries helpers (owned by CreditCharge) =====
 
 /// Read a user's credit balance (micro-USD); `0` if no account row exists.
 pub async fn credit_balance(pool: &SqlitePool, user_id: &str) -> Result<i64> {
@@ -31,8 +32,36 @@ pub async fn credit_balance(pool: &SqlitePool, user_id: &str) -> Result<i64> {
         .unwrap_or(0))
 }
 
-/// Credit a user's balance (used by the CLI / tests to top up).
+/// Number of ledger entries for a user (used by tests to assert idempotency).
+pub async fn credit_ledger_count(pool: &SqlitePool, user_id: &str) -> Result<i64> {
+    let row = sqlx::query("SELECT COUNT(*) AS n FROM credit_ledger_entries WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| BitrouterError::internal(format!("credit_ledger_count: {e}")))?;
+    Ok(row.get::<i64, _>("n"))
+}
+
+/// Credit a user's balance (used by the CLI / tests to top up). Writes a
+/// positive ledger entry with a NULL idempotency key (manual top-ups are not
+/// request-driven), and bumps the account balance, in one transaction.
 pub async fn add_credits(pool: &SqlitePool, user_id: &str, amount: i64) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| BitrouterError::internal(format!("add_credits begin: {e}")))?;
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO credit_ledger_entries \
+         (user_id, delta_micro_usd, request_id, idempotency_key, created_at) \
+         VALUES (?, ?, NULL, NULL, ?)",
+    )
+    .bind(user_id)
+    .bind(amount)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| BitrouterError::internal(format!("add_credits ledger: {e}")))?;
     sqlx::query(
         "INSERT INTO credit_accounts (user_id, balance_micro_usd, updated_at) \
          VALUES (?, ?, ?) \
@@ -42,18 +71,67 @@ pub async fn add_credits(pool: &SqlitePool, user_id: &str, amount: i64) -> Resul
     )
     .bind(user_id)
     .bind(amount)
-    .bind(Utc::now().to_rfc3339())
-    .execute(pool)
+    .bind(&now)
+    .execute(&mut *tx)
     .await
-    .map_err(|e| BitrouterError::internal(format!("add_credits: {e}")))?;
+    .map_err(|e| BitrouterError::internal(format!("add_credits balance: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| BitrouterError::internal(format!("add_credits commit: {e}")))?;
     Ok(())
 }
 
-/// Deduct `amount` micro-USD from a user's balance. The pre-flight balance gate
-/// is `BalanceCheckHook` (PreRequest); by settlement time the request has run,
-/// so the deduction is applied unconditionally and the balance may go negative
-/// (a debt to reconcile) — never a silent skip.
-async fn deduct_credits(pool: &SqlitePool, user_id: &str, amount: i64) -> Result<()> {
+/// Deduct `amount` micro-USD from a user's balance, **idempotently** keyed by
+/// `idempotency_key` (004 §7.5). The deduction and its ledger entry are written
+/// in one transaction; if a ledger row with the same `idempotency_key` already
+/// exists the call is a retry — the balance is left untouched.
+///
+/// The pre-flight balance gate is `BalanceCheckHook` (PreRequest); by settlement
+/// time the request has run, so a *first* deduction is applied unconditionally
+/// (the balance may go negative — a debt to reconcile) — never a silent skip.
+///
+/// Returns `true` if the balance was debited, `false` if this was a duplicate.
+pub(crate) async fn deduct_credits(
+    pool: &SqlitePool,
+    user_id: &str,
+    amount: i64,
+    idempotency_key: &str,
+) -> Result<bool> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| BitrouterError::internal(format!("deduct_credits begin: {e}")))?;
+    let now = Utc::now().to_rfc3339();
+
+    // `INSERT OR IGNORE` against the UNIQUE idempotency_key — a retry inserts
+    // zero rows, and we then leave the balance alone.
+    let inserted = sqlx::query(
+        "INSERT OR IGNORE INTO credit_ledger_entries \
+         (user_id, delta_micro_usd, request_id, idempotency_key, created_at) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind(-amount)
+    .bind(idempotency_key)
+    .bind(idempotency_key)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| BitrouterError::internal(format!("deduct_credits ledger: {e}")))?;
+
+    if inserted.rows_affected() == 0 {
+        // Duplicate — the original request already debited the balance.
+        tx.rollback()
+            .await
+            .map_err(|e| BitrouterError::internal(format!("deduct_credits rollback: {e}")))?;
+        tracing::info!(
+            user_id,
+            idempotency_key,
+            "duplicate credit deduction ignored (idempotent retry)"
+        );
+        return Ok(false);
+    }
+
     sqlx::query(
         "INSERT INTO credit_accounts (user_id, balance_micro_usd, updated_at) \
          VALUES (?, ?, ?) \
@@ -63,12 +141,16 @@ async fn deduct_credits(pool: &SqlitePool, user_id: &str, amount: i64) -> Result
     )
     .bind(user_id)
     .bind(-amount)
-    .bind(Utc::now().to_rfc3339())
+    .bind(&now)
     .bind(amount)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
-    .map_err(|e| BitrouterError::internal(format!("deduct_credits: {e}")))?;
-    Ok(())
+    .map_err(|e| BitrouterError::internal(format!("deduct_credits balance: {e}")))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| BitrouterError::internal(format!("deduct_credits commit: {e}")))?;
+    Ok(true)
 }
 
 fn usage_of(ctx: &SettlementContext) -> Usage {
@@ -131,7 +213,9 @@ impl ChargeStrategy for CreditCharge {
         match self.pricing.resolve(&ctx.provider_id, &ctx.model_id) {
             Some(pricing) if !pricing.is_unconfigured() => {
                 let charge = calculate_charge_micro_usd(&usage_of(ctx), &pricing);
-                deduct_credits(&self.pool, ctx.caller.user_id(), charge).await?;
+                // Idempotent on request_id — a retried settlement of the same
+                // request never double-debits (004 §7.5).
+                deduct_credits(&self.pool, ctx.caller.user_id(), charge, &ctx.request_id).await?;
                 ctx.final_charge_micro_usd = charge;
                 ctx.funding_source = FundingSource::Credits;
                 Ok(ChargeOutcome::Claimed)
