@@ -1,15 +1,17 @@
 //! Database schema for `bitrouter-settlement`.
 //!
-//! This plugin owns four tables — `requests` (receipts + usage metrics source),
-//! `credit_accounts`, `byok_provider_keys`, `mpp_sessions`. Each is touched
-//! only by its dedicated hook module (plugin DB isolation, 004 §7.2):
+//! This plugin owns five tables — `requests` (receipts + usage metrics source),
+//! `credit_accounts`, `credit_ledger_entries`, `byok_provider_keys`,
+//! `mpp_sessions`. Each is touched only by its dedicated hook module (plugin DB
+//! isolation, 004 §7.2):
 //!
-//! | table               | owner module          |
-//! |---------------------|-----------------------|
-//! | `requests`          | [`crate::metrics_store`] |
-//! | `credit_accounts`   | [`crate::charge`] (`CreditCharge`) |
-//! | `byok_provider_keys`| [`crate::byok`]       |
-//! | `mpp_sessions`      | [`crate::charge`] (`MppCharge`) / [`crate::balance`] |
+//! | table                   | owner module          |
+//! |-------------------------|-----------------------|
+//! | `requests`              | [`crate::metrics_store`] |
+//! | `credit_accounts`       | [`crate::charge`] (`CreditCharge`) |
+//! | `credit_ledger_entries` | [`crate::charge`] (`CreditCharge`) |
+//! | `byok_provider_keys`    | [`crate::byok`]       |
+//! | `mpp_sessions`          | [`crate::charge`] (`MppCharge`) / [`crate::balance`] |
 
 use sqlx::SqlitePool;
 
@@ -44,6 +46,20 @@ CREATE TABLE IF NOT EXISTS credit_accounts (
     updated_at        TEXT NOT NULL
 );
 
+-- Append-only ledger of every balance change (004 §7.5). `idempotency_key` is
+-- UNIQUE so a retried charge cannot be applied twice; NULL keys (manual
+-- top-ups) are exempt — sqlite permits multiple NULLs in a UNIQUE column.
+CREATE TABLE IF NOT EXISTS credit_ledger_entries (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          TEXT NOT NULL,
+    delta_micro_usd  INTEGER NOT NULL,
+    request_id       TEXT,
+    idempotency_key  TEXT UNIQUE,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_user
+    ON credit_ledger_entries(user_id, created_at);
+
 CREATE TABLE IF NOT EXISTS byok_provider_keys (
     id          TEXT PRIMARY KEY,
     user_id     TEXT NOT NULL,
@@ -73,6 +89,7 @@ pub fn migrations() -> Vec<MigrationItem> {
         vec![
             "requests".to_string(),
             "credit_accounts".to_string(),
+            "credit_ledger_entries".to_string(),
             "byok_provider_keys".to_string(),
             "mpp_sessions".to_string(),
         ],
@@ -82,7 +99,15 @@ pub fn migrations() -> Vec<MigrationItem> {
 
 /// Create this plugin's tables on `pool`. Idempotent.
 pub async fn migrate(pool: &SqlitePool) -> Result<()> {
-    for stmt in MIGRATION_SQL.split(';') {
+    // Strip `--` line comments *before* splitting on `;` — a comment may
+    // legitimately contain a semicolon, which would otherwise cut a statement
+    // in half.
+    let sql: String = MIGRATION_SQL
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for stmt in sql.split(';') {
         let stmt = stmt.trim();
         if stmt.is_empty() {
             continue;
