@@ -57,6 +57,12 @@ pub async fn build_app(config: &Config) -> Result<Assembled> {
     let policy_store = Arc::new(load_policy_store(config).await?);
     let guardrail_rules = build_guardrail_rules(config)?;
 
+    // When MPP is enabled, the channel state doubles as `AuthHook`'s MPP
+    // credential verifier (004 §3.1) — the SDK's `MppVerifier` trait keeps
+    // bitrouter-auth from depending on bitrouter-settlement.
+    let mpp_verifier: Option<std::sync::Arc<dyn bitrouter_sdk::MppVerifier>> =
+        mpp.clone().map(|m| std::sync::Arc::new(m) as _);
+
     // The settlement bundle owns the MetricsStore; share it with PolicyHook so
     // spend ceilings can be enforced (003 §4.7).
     let settlement = SettlementBundle::new(pool.clone(), pricing, mpp);
@@ -69,7 +75,11 @@ pub async fn build_app(config: &Config) -> Result<Assembled> {
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
             // Stage 1, in order: auth → policy → guardrail (upstream).
-            lm.pre_request_hook(AuthHook::new(pool_for_hooks.clone()));
+            let mut auth = AuthHook::new(pool_for_hooks.clone());
+            if let Some(verifier) = mpp_verifier {
+                auth = auth.with_mpp_verifier(verifier);
+            }
+            lm.pre_request_hook(auth);
             lm.pre_request_hook(PolicyHook::new(policy_store, Some(metrics_store)));
             if !guardrail_rules.is_empty() {
                 lm.pre_request_hook(GuardrailPreHook::new(guardrail_rules.clone()));
