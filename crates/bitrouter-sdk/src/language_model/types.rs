@@ -227,6 +227,29 @@ pub enum StreamPart {
         /// Why generation stopped.
         reason: FinishReason,
     },
+    /// Terminal lifecycle part for OpenAI Responses — preserves the response id
+    /// and status that a bare [`StreamPart::Finish`] would lose (005 §2.3).
+    /// Only the Responses decoder emits this; the other protocols' encoders
+    /// treat it as a terminal part equivalent to `Finish`.
+    ResponseCompleted {
+        /// The provider's response id.
+        id: String,
+        /// The terminal status (`completed` / `incomplete` / `failed`).
+        status: String,
+        /// Final usage, if the provider reported it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+    },
+}
+
+impl StreamPart {
+    /// Whether this part terminates the stream (`Finish` or `ResponseCompleted`).
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            StreamPart::Finish { .. } | StreamPart::ResponseCompleted { .. }
+        )
+    }
 }
 
 /// The result of executing one routing target — the upstream response plus

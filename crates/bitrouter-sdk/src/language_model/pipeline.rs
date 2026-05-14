@@ -170,7 +170,7 @@ impl Pipeline {
                 let processor = guard.processor();
                 match upstream.next().await {
                     Some(Ok(part)) => {
-                        let is_finish = matches!(part, StreamPart::Finish { .. });
+                        let is_finish = part.is_terminal();
                         match processor.process_part(part).await {
                             Ok(parts) => {
                                 for p in parts {

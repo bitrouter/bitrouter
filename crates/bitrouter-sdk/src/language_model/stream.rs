@@ -77,7 +77,9 @@ impl StreamInterest {
             StreamPart::ReasoningDelta { .. } => Self::REASONING_DELTA,
             StreamPart::ToolCallDelta { .. } => Self::TOOL_CALL_DELTA,
             StreamPart::Usage { .. } => Self::USAGE,
-            StreamPart::Finish { .. } => Self::FINISH,
+            // `ResponseCompleted` is a terminal part — a hook interested in
+            // `Finish` is, by construction, also interested in it.
+            StreamPart::Finish { .. } | StreamPart::ResponseCompleted { .. } => Self::FINISH,
         };
         self.0 & bit != 0
     }
@@ -216,11 +218,18 @@ impl UsageAccumulator {
         Self::default()
     }
 
-    /// Observe a part; updates the running usage if it is a `Usage` part.
+    /// Observe a part; updates the running usage from a `Usage` part or from a
+    /// `ResponseCompleted` part that carries usage.
     pub fn observe(&mut self, part: &StreamPart) {
-        if let StreamPart::Usage { usage } = part {
-            self.usage = *usage;
-            self.seen = true;
+        match part {
+            StreamPart::Usage { usage }
+            | StreamPart::ResponseCompleted {
+                usage: Some(usage), ..
+            } => {
+                self.usage = *usage;
+                self.seen = true;
+            }
+            _ => {}
         }
     }
 
