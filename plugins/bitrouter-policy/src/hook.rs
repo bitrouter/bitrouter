@@ -1,15 +1,18 @@
 //! `PolicyHook` — a `language_model::PreRequestHook` enforcing per-API-key
-//! policy (model allow/deny, spend ceiling, expiry).
+//! policy: model allow/deny, spend ceiling, expiry, payment-chain limits,
+//! tool-access rules and request-rate limits (004 §4.1).
 //!
 //! The caller's `policy_id` is read from the `bitrouter-auth` plugin's
 //! `PipelineContext` metadata (not by importing the auth crate's event type) —
-//! see 003 §3.3. Spend is read from the injected `MetricsStore` (003 §4.7.3).
+//! see 003 §3.3. Spend and rate are read from the injected `MetricsStore`
+//! (003 §4.7.3).
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use bitrouter_sdk::Result;
+use bitrouter_sdk::caller::PaymentMethod;
 use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
 use bitrouter_sdk::metrics::{MetricsStore, TimeWindow};
 
@@ -40,6 +43,16 @@ impl PolicyHook {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
+
+    /// The caller's payment chain, for chain-limit checks. v1.0 supports the
+    /// Tempo MPP channel only (008 §1.1), so an MPP caller is on `tempo`;
+    /// non-MPP callers have no chain to gate.
+    fn caller_chain(ctx: &PipelineContext) -> Option<&'static str> {
+        match ctx.caller().payment_method() {
+            PaymentMethod::Mpp => Some("tempo"),
+            _ => None,
+        }
+    }
 }
 
 #[async_trait]
@@ -64,7 +77,28 @@ impl PreRequestHook for PolicyHook {
             )));
         }
 
-        // 3. spend ceiling — only enforceable with a MetricsStore
+        // 3. payment-chain limit — only meaningful for chain-funded (MPP) callers
+        if effective.has_chain_restriction() {
+            if let Some(chain) = Self::caller_chain(ctx) {
+                if let Err(violation) = effective.check_chain(chain) {
+                    return Ok(HookDecision::Deny(DenyReason::Forbidden(
+                        violation.to_string(),
+                    )));
+                }
+            }
+        }
+
+        // 4. tool-access rules — checked against the request's declared tools
+        if effective.has_tool_restriction() {
+            let tools = ctx.prompt().tools.iter().map(|t| t.name.as_str());
+            if let Err(violation) = effective.check_tools(tools) {
+                return Ok(HookDecision::Deny(DenyReason::Forbidden(
+                    violation.to_string(),
+                )));
+            }
+        }
+
+        // 5. spend ceiling — only enforceable with a MetricsStore
         if effective.max_spend_micro_usd.is_some() {
             if let Some(metrics) = &self.metrics_store {
                 let spent = metrics
@@ -74,6 +108,22 @@ impl PreRequestHook for PolicyHook {
                     return Ok(HookDecision::Deny(DenyReason::Forbidden(
                         violation.to_string(),
                     )));
+                }
+            }
+        }
+
+        // 6. request-rate ceiling — also reads the MetricsStore. A rate
+        //    violation maps to 429 (RateLimited) rather than 403, with a
+        //    Retry-After hint.
+        if effective.max_requests_per_minute.is_some() {
+            if let Some(metrics) = &self.metrics_store {
+                let rate = metrics.get_rate(ctx.caller().api_key_id()).await?;
+                let observed = rate.requests_per_minute.round().max(0.0) as u32;
+                if let Err(violation) = effective.check_rate(observed) {
+                    tracing::debug!(%violation, "policy rate limit hit");
+                    return Ok(HookDecision::Deny(DenyReason::RateLimited {
+                        retry_after: Some(60),
+                    }));
                 }
             }
         }
