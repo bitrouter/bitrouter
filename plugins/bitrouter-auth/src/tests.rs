@@ -202,3 +202,118 @@ async fn inactive_key_is_denied() {
         HookDecision::Deny(_)
     ));
 }
+
+// ===== MPP credential path (004 §3.1 / §3.3) =====
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use bitrouter_sdk::{MppVerification, MppVerifier};
+
+use crate::events::MppVerified;
+
+/// A scripted `MppVerifier` — resolves exactly one credential to one channel.
+struct MockMppVerifier {
+    credential: String,
+    verification: MppVerification,
+}
+
+#[async_trait]
+impl MppVerifier for MockMppVerifier {
+    async fn verify(&self, credential: &str) -> bitrouter_sdk::Result<Option<MppVerification>> {
+        Ok((credential == self.credential).then(|| self.verification.clone()))
+    }
+}
+
+/// Build a context with a `payment-signature` header (no API key).
+fn ctx_with_payment(caller: CallerContext, payment: &str) -> PipelineContext {
+    let mut req = PipelineRequest::new("m", caller, prompt());
+    req.headers
+        .insert("payment-signature", payment.parse().unwrap());
+    PipelineContext::new(req)
+}
+
+fn mock_verifier(credential: &str) -> Arc<dyn MppVerifier> {
+    Arc::new(MockMppVerifier {
+        credential: credential.to_string(),
+        verification: MppVerification {
+            session_id: "sess-1".to_string(),
+            user_id: "mpp-user".to_string(),
+            channel_balance_micro_usd: 50_000,
+        },
+    })
+}
+
+#[tokio::test]
+async fn mpp_credential_authenticates_and_emits_events() {
+    let hook = AuthHook::new(pool().await).with_mpp_verifier(mock_verifier("session=sess-1"));
+    let mut ctx = ctx_with_payment(CallerContext::anonymous(), "session=sess-1");
+
+    assert!(matches!(
+        hook.check(&mut ctx).await.unwrap(),
+        HookDecision::Allow
+    ));
+    // caller upgraded to an MPP identity
+    assert_eq!(ctx.caller().payment_method(), PaymentMethod::Mpp);
+    assert_eq!(ctx.caller().user_id(), "mpp-user");
+    assert_eq!(ctx.caller().api_key_id(), "sess-1");
+
+    // both the Authenticated and MppVerified events are broadcast
+    let auth = ctx
+        .get_event::<Authenticated>()
+        .expect("Authenticated emitted");
+    assert_eq!(auth.payment_method, PaymentMethod::Mpp);
+    let mpp = ctx.get_event::<MppVerified>().expect("MppVerified emitted");
+    assert_eq!(mpp.session_id, "sess-1");
+    assert_eq!(mpp.channel_balance, 50_000);
+}
+
+#[tokio::test]
+async fn mpp_unknown_credential_is_payment_required() {
+    let hook = AuthHook::new(pool().await).with_mpp_verifier(mock_verifier("session=sess-1"));
+    let mut ctx = ctx_with_payment(CallerContext::anonymous(), "session=unknown");
+    match hook.check(&mut ctx).await.unwrap() {
+        HookDecision::Deny(reason) => {
+            let err: bitrouter_sdk::BitrouterError = reason.into();
+            assert_eq!(err.status(), 402);
+        }
+        HookDecision::Allow => panic!("unknown MPP credential must be denied"),
+    }
+}
+
+#[tokio::test]
+async fn mpp_credential_without_verifier_is_payment_required() {
+    // No MPP verifier wired — a payment credential cannot be honoured → 402.
+    let hook = AuthHook::new(pool().await);
+    let mut ctx = ctx_with_payment(CallerContext::anonymous(), "session=sess-1");
+    match hook.check(&mut ctx).await.unwrap() {
+        HookDecision::Deny(reason) => {
+            let err: bitrouter_sdk::BitrouterError = reason.into();
+            assert_eq!(err.status(), 402);
+        }
+        HookDecision::Allow => panic!("MPP credential needs a verifier"),
+    }
+}
+
+#[tokio::test]
+async fn api_key_and_payment_credential_together_is_400() {
+    let pool = pool().await;
+    let (secret, _) = insert_active_key(&pool, "u-both").await;
+    let hook = AuthHook::new(pool).with_mpp_verifier(mock_verifier("session=sess-1"));
+
+    // present BOTH an API key and an MPP payment credential — mutual exclusion
+    let mut req = PipelineRequest::new("m", CallerContext::anonymous(), prompt());
+    req.headers
+        .insert("authorization", format!("Bearer {secret}").parse().unwrap());
+    req.headers
+        .insert("payment-signature", "session=sess-1".parse().unwrap());
+    let mut ctx = PipelineContext::new(req);
+
+    match hook.check(&mut ctx).await.unwrap() {
+        HookDecision::Deny(reason) => {
+            let err: bitrouter_sdk::BitrouterError = reason.into();
+            assert_eq!(err.status(), 400);
+        }
+        HookDecision::Allow => panic!("both credentials present must be 400"),
+    }
+}

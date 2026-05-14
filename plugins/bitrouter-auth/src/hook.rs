@@ -17,16 +17,18 @@
 //! | true      | present    | validated (credentials still checked) |
 //! | true      | absent     | Allow — local caller passes through   |
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::SqlitePool;
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
-use bitrouter_sdk::{PluginId, Result};
+use bitrouter_sdk::{MppVerifier, PluginId, Result};
 
 use crate::db::{self, ApiKeyRecord};
-use crate::events::Authenticated;
+use crate::events::{Authenticated, MppVerified};
 use crate::keys;
 
 /// The auth plugin id, used as the `PipelineContext` metadata key.
@@ -34,21 +36,36 @@ pub fn plugin_id() -> PluginId {
     PluginId::new("bitrouter-auth")
 }
 
-/// Authenticates a request against the `api_keys` table. Owns no routing or
+/// Authenticates a request against the `api_keys` table (a `brvk_` virtual
+/// key) or an MPP `Payment-SIGNATURE` credential. Owns no routing or
 /// settlement behaviour — it only establishes identity.
 pub struct AuthHook {
     pool: SqlitePool,
+    /// Optional MPP credential verifier (004 §3.1). Without it, a
+    /// `Payment-SIGNATURE` request is rejected with 402 rather than verified.
+    /// `MppVerifier` is implemented by `bitrouter-settlement::MppState`.
+    mpp_verifier: Option<Arc<dyn MppVerifier>>,
 }
 
 impl AuthHook {
     /// Build an `AuthHook` over a sqlite pool. The pool must already have this
     /// plugin's tables (`crate::db::migrate`).
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            mpp_verifier: None,
+        }
     }
 
-    /// Extract a presented credential from the request headers. Both the
-    /// OpenAI-style `Authorization: Bearer …` and the Anthropic-style
+    /// Attach an MPP credential verifier, enabling the `Payment-SIGNATURE`
+    /// authentication path (builder-style).
+    pub fn with_mpp_verifier(mut self, verifier: Arc<dyn MppVerifier>) -> Self {
+        self.mpp_verifier = Some(verifier);
+        self
+    }
+
+    /// Extract a presented API-key credential from the request headers. Both
+    /// the OpenAI-style `Authorization: Bearer …` and the Anthropic-style
     /// `x-api-key: …` headers are accepted.
     fn extract_credential(ctx: &PipelineContext) -> Option<String> {
         let headers = ctx.headers();
@@ -67,6 +84,64 @@ impl AuthHook {
         None
     }
 
+    /// Extract the MPP `Payment-SIGNATURE` header value, if present.
+    fn extract_payment_credential(ctx: &PipelineContext) -> Option<String> {
+        ctx.headers()
+            .get("payment-signature")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    }
+
+    /// Verify an MPP payment credential and, on success, establish an
+    /// MPP-funded caller (004 §3.1 / §3.3).
+    async fn verify_mpp(
+        &self,
+        credential: &str,
+        ctx: &mut PipelineContext,
+    ) -> Result<HookDecision> {
+        let Some(verifier) = &self.mpp_verifier else {
+            // The server has no MPP verifier wired — an MPP credential cannot
+            // be honoured here.
+            return Ok(HookDecision::Deny(DenyReason::PaymentRequired(
+                "MPP payment is not enabled on this server".to_string(),
+            )));
+        };
+        match verifier.verify(credential).await? {
+            Some(verified) => {
+                let caller = CallerContext::new(
+                    &verified.session_id,
+                    &verified.user_id,
+                    bitrouter_sdk::caller::PaymentMethod::Mpp,
+                );
+                ctx.set_caller(caller);
+                ctx.set_metadata(
+                    &plugin_id(),
+                    serde_json::json!({
+                        "api_key_id": verified.session_id,
+                        "user_id": verified.user_id,
+                        "policy_id": serde_json::Value::Null,
+                    }),
+                );
+                ctx.emit(Authenticated {
+                    api_key_id: verified.session_id.clone(),
+                    user_id: verified.user_id,
+                    payment_method: bitrouter_sdk::caller::PaymentMethod::Mpp,
+                    policy_id: None,
+                });
+                ctx.emit(MppVerified {
+                    session_id: verified.session_id,
+                    channel_balance: verified.channel_balance_micro_usd,
+                });
+                Ok(HookDecision::Allow)
+            }
+            None => Ok(HookDecision::Deny(DenyReason::PaymentRequired(
+                "MPP credential not recognised or channel exhausted".to_string(),
+            ))),
+        }
+    }
+
     /// Turn a validated key record into a `CallerContext`.
     fn caller_from_record(record: &ApiKeyRecord) -> CallerContext {
         let mut caller = CallerContext::new(&record.id, &record.user_id, record.payment_method);
@@ -83,18 +158,23 @@ impl AuthHook {
 #[async_trait]
 impl PreRequestHook for AuthHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        let credential = Self::extract_credential(ctx);
+        let payment_credential = Self::extract_payment_credential(ctx);
+
         // Mutual exclusion (004 §3.1): an API key and an MPP payment credential
         // must not both be presented.
-        let has_api_key = Self::extract_credential(ctx).is_some();
-        let has_payment = ctx.headers().contains_key("payment-signature");
-        if has_api_key && has_payment {
+        if credential.is_some() && payment_credential.is_some() {
             return Ok(HookDecision::Deny(DenyReason::BadRequest(
                 "both an API key and an MPP payment credential were provided".to_string(),
             )));
         }
 
-        let credential = Self::extract_credential(ctx);
+        // MPP path (004 §3.1 / §3.3): a `Payment-SIGNATURE` credential.
+        if let Some(payment_credential) = payment_credential {
+            return self.verify_mpp(&payment_credential, ctx).await;
+        }
 
+        // API-key path.
         let Some(credential) = credential else {
             // No credential. Admit only the skip_auth-synthesised local caller.
             if ctx.caller().is_local() {
