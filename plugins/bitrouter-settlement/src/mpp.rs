@@ -15,7 +15,7 @@
 use chrono::Utc;
 use sqlx::{Row, SqlitePool};
 
-use bitrouter_sdk::{BitrouterError, Result};
+use bitrouter_sdk::{BitrouterError, MppVerification, MppVerifier, Result};
 
 /// Which MPP payment channel a session uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +108,17 @@ impl MppState {
             .unwrap_or(0))
     }
 
+    /// Look up a session's `(user_id, balance)` — `None` if no such session.
+    pub async fn session(&self, session_id: &str) -> Result<Option<(String, i64)>> {
+        let row =
+            sqlx::query("SELECT user_id, balance_micro_usd FROM mpp_sessions WHERE session_id = ?")
+                .bind(session_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| BitrouterError::internal(format!("mpp session: {e}")))?;
+        Ok(row.map(|r| (r.get("user_id"), r.get::<i64, _>("balance_micro_usd"))))
+    }
+
     /// Sign a streaming checkpoint: advance the session's
     /// `last_checkpoint_micro_usd` to `cumulative` and debit the channel
     /// balance by the delta since the previous checkpoint. Idempotent on a
@@ -177,6 +188,52 @@ impl MppState {
         .await
         .map_err(|e| BitrouterError::internal(format!("mpp settle: {e}")))?;
         Ok(())
+    }
+}
+
+/// Extract the channel session id from a `Payment-SIGNATURE` header value.
+///
+/// v1.0 accepts either a bare session id or a `key=value;…` credential string
+/// carrying `session=<id>` (and, in the full implementation, `sig=<voucher>`).
+/// **The on-chain voucher signature check is the documented Tempo follow-up**
+/// (cloud #183) — v1.0 resolves the credential to a known, positive-balance
+/// channel; it does not yet cryptographically verify the voucher.
+fn parse_session_id(credential: &str) -> Option<String> {
+    let credential = credential.trim();
+    if credential.is_empty() {
+        return None;
+    }
+    for field in credential.split(';') {
+        if let Some(value) = field.trim().strip_prefix("session=") {
+            return Some(value.trim().to_string());
+        }
+    }
+    // no structured field — treat the whole value as the session id
+    if credential.contains('=') {
+        None
+    } else {
+        Some(credential.to_string())
+    }
+}
+
+#[async_trait]
+impl MppVerifier for MppState {
+    async fn verify(&self, credential: &str) -> Result<Option<MppVerification>> {
+        let Some(session_id) = parse_session_id(credential) else {
+            return Ok(None);
+        };
+        // NOTE: v1.0 resolves the credential to a known channel and checks the
+        // balance; cryptographic verification of the Tempo voucher signature is
+        // the documented follow-up (see `parse_session_id`).
+        match self.session(&session_id).await? {
+            Some((user_id, balance)) if balance > 0 => Ok(Some(MppVerification {
+                session_id,
+                user_id,
+                channel_balance_micro_usd: balance,
+            })),
+            // session exists but is drained, or no such session → not verified
+            _ => Ok(None),
+        }
     }
 }
 
