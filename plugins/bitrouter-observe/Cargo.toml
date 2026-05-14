@@ -15,10 +15,17 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
+# `otlp` feature — a minimal OTLP/HTTP JSON span exporter (completes v0's #409).
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "sync", "macros"] }
+rand = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+
 [features]
 default = []
-# OTLP exporter — pulls the opentelemetry stack. Completes v0's unfinished #409.
-otlp = []
+# OTLP exporter — a self-contained OTLP/HTTP JSON trace exporter. Completes
+# v0's unfinished #409. Kept feature-gated because it pulls in reqwest.
+otlp = ["dep:reqwest", "dep:tokio", "dep:rand", "dep:hex"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
