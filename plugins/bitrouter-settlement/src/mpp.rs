@@ -335,3 +335,69 @@ impl StreamHook for MppStreamHook {
         self.checkpoint(ctx).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    #[test]
+    fn parse_session_id_accepts_bare_and_structured() {
+        // bare session id
+        assert_eq!(parse_session_id("sess-abc"), Some("sess-abc".to_string()));
+        // structured `session=<id>` field, with extra fields
+        assert_eq!(
+            parse_session_id("session=sess-xyz;sig=deadbeef"),
+            Some("sess-xyz".to_string())
+        );
+        // whitespace is trimmed
+        assert_eq!(
+            parse_session_id("  sess-trim  "),
+            Some("sess-trim".to_string())
+        );
+        // empty / missing-session structured credential → None (safe)
+        assert_eq!(parse_session_id(""), None);
+        assert_eq!(parse_session_id("sig=deadbeef;nonce=1"), None);
+    }
+
+    async fn pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        db::migrate(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn verify_resolves_a_funded_channel() {
+        let pool = pool().await;
+        let mpp = MppState::tempo(pool);
+        mpp.open_session("sess-1", "u1", 10_000).await.unwrap();
+
+        let v = mpp
+            .verify("session=sess-1")
+            .await
+            .unwrap()
+            .expect("verified");
+        assert_eq!(v.session_id, "sess-1");
+        assert_eq!(v.user_id, "u1");
+        assert_eq!(v.channel_balance_micro_usd, 10_000);
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_unknown_and_drained_channels() {
+        let pool = pool().await;
+        let mpp = MppState::tempo(pool);
+
+        // unknown session
+        assert!(mpp.verify("session=nope").await.unwrap().is_none());
+
+        // a drained channel (balance == 0) is not verified
+        mpp.open_session("sess-drained", "u2", 0).await.unwrap();
+        assert!(
+            mpp.verify("sess-drained").await.unwrap().is_none(),
+            "a zero-balance channel must not authenticate"
+        );
+
+        // an unparseable credential
+        assert!(mpp.verify("sig=only;nonce=2").await.unwrap().is_none());
+    }
+}
