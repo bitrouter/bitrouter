@@ -712,6 +712,19 @@ impl StreamEncoder for ChatStreamEncoder {
                     Some(finish_reason_str(*reason)),
                 ));
             }
+            StreamPart::ResponseCompleted { status, .. } => {
+                // Inbound was OpenAI Responses; Chat has no response-completed
+                // concept — terminate with a finish chunk derived from status.
+                let reason = if status == "incomplete" {
+                    FinishReason::Length
+                } else {
+                    FinishReason::Stop
+                };
+                frames.push(self.chunk(
+                    serde_json::Value::Object(delta),
+                    Some(finish_reason_str(reason)),
+                ));
+            }
         }
         Ok(frames)
     }

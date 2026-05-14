@@ -488,6 +488,31 @@ impl StreamEncoder for GoogleStreamEncoder {
                     "finishReason": finish_reason_str(*reason),
                 }]
             }),
+            StreamPart::ResponseCompleted { status, usage, .. } => {
+                // Inbound was OpenAI Responses; Google has no response-completed
+                // concept — emit a terminal candidate with a mapped
+                // `finishReason`, plus `usageMetadata` if usage was carried.
+                let finish_reason = if status == "incomplete" {
+                    "MAX_TOKENS"
+                } else {
+                    "STOP"
+                };
+                let mut chunk = serde_json::json!({
+                    "candidates": [{
+                        "content": { "role": "model", "parts": [] },
+                        "finishReason": finish_reason,
+                    }]
+                });
+                if let Some(u) = usage {
+                    chunk["usageMetadata"] = serde_json::json!({
+                        "promptTokenCount": u.prompt_tokens,
+                        "candidatesTokenCount": u.completion_tokens,
+                        "totalTokenCount": u.total(),
+                        "thoughtsTokenCount": u.reasoning_tokens,
+                    });
+                }
+                chunk
+            }
         };
         Ok(vec![SseFrame::Event {
             event: None,

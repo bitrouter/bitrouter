@@ -527,7 +527,6 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
 struct ResponsesStreamDecoder {
     /// item_id → (call_id, tool_name) for in-flight function-call items.
     function_items: Vec<(String, String, String)>,
-    usage: Option<Usage>,
 }
 
 impl ResponsesStreamDecoder {
@@ -627,22 +626,28 @@ impl StreamDecoder for ResponsesStreamDecoder {
             // them (would duplicate, #434).
             "response.function_call_arguments.done" | "response.output_item.done" => {}
             "response.completed" | "response.incomplete" => {
-                // #454-2: the full `response` object is carried here.
-                if let Some(usage) = json
-                    .get("response")
-                    .and_then(|r| r.get("usage"))
-                    .and_then(parse_usage)
-                {
-                    self.usage = Some(usage);
-                    parts.push(StreamPart::Usage { usage });
-                }
-                // #432: `incomplete` is terminal-but-fine, mapped to Length.
-                let reason = if event_type == "response.incomplete" {
-                    FinishReason::Length
+                // #454-2: the full `response` object is carried here. 005 §2.3:
+                // map `response.completed` to the dedicated `ResponseCompleted`
+                // part so the response id + status survive (a bare `Finish`
+                // would lose them).
+                let response = json.get("response");
+                let usage = response.and_then(|r| r.get("usage")).and_then(parse_usage);
+                let id = response
+                    .and_then(|r| r.get("id"))
+                    .and_then(|i| i.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                // #432: `incomplete` is terminal-but-fine, not an error.
+                let status = if event_type == "response.incomplete" {
+                    "incomplete"
                 } else {
-                    FinishReason::Stop
+                    "completed"
                 };
-                parts.push(StreamPart::Finish { reason });
+                parts.push(StreamPart::ResponseCompleted {
+                    id,
+                    status: status.to_string(),
+                    usage,
+                });
             }
             "error" | "response.failed" => {
                 let msg = json
@@ -708,6 +713,47 @@ impl ResponsesStreamEncoder {
                 serde_json::json!({ "response": response }),
             ));
         }
+    }
+
+    /// Emit the terminal lifecycle frame — `response.completed` (or
+    /// `response.incomplete`), carrying the full `response` object (#454-2).
+    /// Shared by the `Finish` and `ResponseCompleted` encode arms.
+    fn emit_terminal(
+        &mut self,
+        frames: &mut Vec<SseFrame>,
+        status: &str,
+        response_id: &str,
+        usage: Option<Usage>,
+    ) {
+        if self.text_item_open {
+            let idx = self.output_index;
+            frames.push(self.ev(
+                "response.output_item.done",
+                serde_json::json!({ "output_index": idx }),
+            ));
+            self.text_item_open = false;
+        }
+        let event_name = if status == "incomplete" {
+            "response.incomplete"
+        } else {
+            "response.completed"
+        };
+        let mut response = serde_json::json!({
+            "id": response_id,
+            "object": "response",
+            "model": self.model,
+            "status": status,
+        });
+        if let Some(u) = usage {
+            // #454-5: numeric, never null; absent stays absent.
+            response["usage"] = serde_json::json!({
+                "input_tokens": u.prompt_tokens,
+                "output_tokens": u.completion_tokens,
+                "total_tokens": u.total(),
+                "output_tokens_details": { "reasoning_tokens": u.reasoning_tokens },
+            });
+        }
+        frames.push(self.ev(event_name, serde_json::json!({ "response": response })));
     }
 }
 
@@ -784,30 +830,23 @@ impl StreamEncoder for ResponsesStreamEncoder {
             }
             StreamPart::Usage { .. } => {}
             StreamPart::Finish { reason } => {
-                if self.text_item_open {
-                    let idx = self.output_index;
-                    frames.push(self.ev(
-                        "response.output_item.done",
-                        serde_json::json!({ "output_index": idx }),
-                    ));
-                    self.text_item_open = false;
-                }
+                // A bare `Finish` (e.g. inbound was OpenAI Chat / Anthropic /
+                // Google) — synthesise the terminal envelope from the reason.
                 let status = match reason {
                     FinishReason::Length => "incomplete",
                     _ => "completed",
                 };
-                let event_name = if *reason == FinishReason::Length {
-                    "response.incomplete"
+                self.emit_terminal(&mut frames, status, &self.request_id.clone(), None);
+            }
+            StreamPart::ResponseCompleted { id, status, usage } => {
+                // A native Responses terminal part — use the carried id/status
+                // (005 §2.3), falling back to our request id if absent.
+                let response_id = if id.is_empty() {
+                    self.request_id.clone()
                 } else {
-                    "response.completed"
+                    id.clone()
                 };
-                let response = serde_json::json!({
-                    "id": self.request_id,
-                    "object": "response",
-                    "model": self.model,
-                    "status": status,
-                });
-                frames.push(self.ev(event_name, serde_json::json!({ "response": response })));
+                self.emit_terminal(&mut frames, status, &response_id, *usage);
             }
         }
         Ok(frames)

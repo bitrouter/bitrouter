@@ -665,6 +665,30 @@ impl AnthropicStreamEncoder {
             self.block_index += 1;
         }
     }
+
+    /// Emit the terminal `message_delta` + `message_stop` frames. Shared by the
+    /// `Finish` and `ResponseCompleted` encode arms.
+    fn emit_terminal(
+        &mut self,
+        frames: &mut Vec<SseFrame>,
+        stop_reason: &str,
+        usage: Option<Usage>,
+    ) {
+        self.close_block(frames);
+        let output_tokens = usage.map(|u| u.completion_tokens).unwrap_or(0);
+        frames.push(Self::ev(
+            "message_delta",
+            serde_json::json!({
+                "type": "message_delta",
+                "delta": { "stop_reason": stop_reason },
+                "usage": { "output_tokens": output_tokens },
+            }),
+        ));
+        frames.push(Self::ev(
+            "message_stop",
+            serde_json::json!({ "type": "message_stop" }),
+        ));
+    }
 }
 
 impl StreamEncoder for AnthropicStreamEncoder {
@@ -745,19 +769,17 @@ impl StreamEncoder for AnthropicStreamEncoder {
             }
             StreamPart::Usage { .. } => {}
             StreamPart::Finish { reason } => {
-                self.close_block(&mut frames);
-                frames.push(Self::ev(
-                    "message_delta",
-                    serde_json::json!({
-                        "type": "message_delta",
-                        "delta": { "stop_reason": finish_to_stop_reason(*reason) },
-                        "usage": { "output_tokens": 0 },
-                    }),
-                ));
-                frames.push(Self::ev(
-                    "message_stop",
-                    serde_json::json!({ "type": "message_stop" }),
-                ));
+                self.emit_terminal(&mut frames, finish_to_stop_reason(*reason), None);
+            }
+            StreamPart::ResponseCompleted { status, usage, .. } => {
+                // Inbound was OpenAI Responses; map its status onto Anthropic's
+                // `stop_reason` and carry the usage if present.
+                let stop_reason = if status == "incomplete" {
+                    "max_tokens"
+                } else {
+                    "end_turn"
+                };
+                self.emit_terminal(&mut frames, stop_reason, *usage);
             }
         }
         Ok(frames)

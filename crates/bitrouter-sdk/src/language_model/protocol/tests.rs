@@ -210,10 +210,8 @@ fn conversion_matrix_4x4_streaming() {
             "{outbound_proto:?}: tool-call delta survived"
         );
         assert!(
-            decoded
-                .iter()
-                .any(|p| matches!(p, StreamPart::Finish { .. })),
-            "{outbound_proto:?}: finish survived"
+            decoded.iter().any(|p| p.is_terminal()),
+            "{outbound_proto:?}: terminal part (Finish / ResponseCompleted) survived"
         );
 
         // and the decoded stream re-encodes in every inbound protocol
@@ -530,12 +528,14 @@ fn regression_432_responses_incomplete_and_unknown_events_not_errors() {
         "unknown event is not an error"
     );
 
-    // `response.incomplete` is a clean terminal event mapped to Finish(Length)
+    // `response.incomplete` is a clean terminal event — mapped to a
+    // `ResponseCompleted` part with status "incomplete" (005 §2.3), never an
+    // error.
     let incomplete = SseEvent {
         event: Some("response.incomplete".to_string()),
         data: serde_json::json!({
             "type": "response.incomplete",
-            "response": { "status": "incomplete" }
+            "response": { "id": "resp_inc", "status": "incomplete" }
         })
         .to_string(),
     };
@@ -545,11 +545,9 @@ fn regression_432_responses_incomplete_and_unknown_events_not_errors() {
     assert!(
         parts.iter().any(|p| matches!(
             p,
-            StreamPart::Finish {
-                reason: FinishReason::Length
-            }
+            StreamPart::ResponseCompleted { status, .. } if status == "incomplete"
         )),
-        "response.incomplete → Finish(Length)"
+        "response.incomplete → ResponseCompleted{{ status: incomplete }}"
     );
 }
 
@@ -609,6 +607,65 @@ fn regression_454_2_responses_stream_envelope() {
         )),
         "Responses must not emit [DONE]"
     );
+}
+
+/// 005 §2.3 — `response.completed` decodes to the dedicated `ResponseCompleted`
+/// part, preserving the response id + status + usage that a bare `Finish` would
+/// have lost; and that part re-encodes to a `response.completed` event carrying
+/// the same id.
+#[test]
+fn responses_completed_preserves_id_status_and_usage() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+
+    // decode: response.completed → ResponseCompleted
+    let mut decoder = adapter.stream_decoder();
+    let event = SseEvent {
+        event: Some("response.completed".to_string()),
+        data: serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_xyz",
+                "status": "completed",
+                "usage": { "input_tokens": 12, "output_tokens": 8 }
+            }
+        })
+        .to_string(),
+    };
+    let parts = decoder.decode(&event).unwrap();
+    match parts.first() {
+        Some(StreamPart::ResponseCompleted { id, status, usage }) => {
+            assert_eq!(id, "resp_xyz");
+            assert_eq!(status, "completed");
+            assert_eq!(usage.unwrap().prompt_tokens, 12);
+            assert_eq!(usage.unwrap().completion_tokens, 8);
+        }
+        other => panic!("expected ResponseCompleted, got {other:?}"),
+    }
+
+    // re-encode: ResponseCompleted → a response.completed event with the id
+    let mut encoder = adapter.stream_encoder("fallback_id", "gpt-5");
+    let frames = encoder
+        .encode(&StreamPart::ResponseCompleted {
+            id: "resp_xyz".to_string(),
+            status: "completed".to_string(),
+            usage: Some(Usage {
+                prompt_tokens: 12,
+                completion_tokens: 8,
+                reasoning_tokens: 0,
+            }),
+        })
+        .unwrap();
+    let completed = frames.iter().find_map(|f| match f {
+        SseFrame::Event { event, data } if event.as_deref() == Some("response.completed") => {
+            Some(serde_json::from_str::<serde_json::Value>(data).unwrap())
+        }
+        _ => None,
+    });
+    let completed = completed.expect("response.completed event emitted");
+    // the carried response id wins over the encoder's fallback request id
+    assert_eq!(completed["response"]["id"], "resp_xyz");
+    assert_eq!(completed["response"]["status"], "completed");
+    assert_eq!(completed["response"]["usage"]["input_tokens"], 12);
 }
 
 /// #434 — Responses function-call stream items map `item_id` back to the
