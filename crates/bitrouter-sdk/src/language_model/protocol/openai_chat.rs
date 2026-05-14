@@ -1,0 +1,709 @@
+//! OpenAI Chat Completions adapter.
+//!
+//! Official reference: <https://platform.openai.com/docs/api-reference/chat>
+//! Streaming format: <https://platform.openai.com/docs/api-reference/chat-streaming>
+//!
+//! Chat Completions is treated as the canonical "hub" shape — it maps most
+//! directly onto the internal representation.
+
+use serde::Deserialize;
+
+use crate::error::{BitrouterError, Result};
+use crate::language_model::protocol::{
+    ProtocolAdapter, SseEvent, StreamDecoder, StreamEncoder, describe_deser_error,
+};
+use crate::language_model::stream::SseFrame;
+use crate::language_model::types::{
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
+    StreamPart, Usage,
+};
+
+/// The OpenAI Chat Completions protocol adapter.
+pub struct OpenAiChatAdapter;
+
+// ===== wire request types =====
+
+#[derive(Debug, Deserialize)]
+struct ChatRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    #[serde(default)]
+    tools: Vec<ChatTool>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    top_p: Option<f64>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    max_completion_tokens: Option<u32>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
+    #[serde(default)]
+    stream: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatMessage {
+    role: String,
+    /// `content` may be a plain string or an array of content parts, or absent
+    /// (an assistant turn that is purely `tool_calls`).
+    #[serde(default)]
+    content: Option<serde_json::Value>,
+    #[serde(default)]
+    tool_calls: Vec<ChatToolCall>,
+    #[serde(default)]
+    tool_call_id: Option<String>,
+    /// Reasoning content — some OpenAI-compatible providers expose it here
+    /// (v0 #454-1: it must not be dropped).
+    #[serde(default)]
+    reasoning_content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatToolCall {
+    id: String,
+    #[serde(default)]
+    function: ChatFunctionCall,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChatFunctionCall {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    arguments: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatTool {
+    #[serde(default)]
+    function: ChatToolFunction,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChatToolFunction {
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    parameters: serde_json::Value,
+}
+
+// ===== role mapping (total — v0 #454-4) =====
+
+/// Map an OpenAI role string to a canonical [`Role`]. Total mapping: an unknown
+/// role is a hard error, never a silent downgrade to `User`.
+fn parse_role(role: &str) -> Result<Role> {
+    match role {
+        "system" | "developer" => Ok(Role::System),
+        "user" => Ok(Role::User),
+        "assistant" => Ok(Role::Assistant),
+        "tool" | "function" => Ok(Role::Tool),
+        other => Err(BitrouterError::bad_request(format!(
+            "unknown message role '{other}' (expected system/developer/user/assistant/tool)"
+        ))),
+    }
+}
+
+fn role_str(role: Role) -> &'static str {
+    match role {
+        Role::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::Tool => "tool",
+    }
+}
+
+/// Extract plain text from an OpenAI `content` value (string, or an array of
+/// `{type:"text", text:"..."}` parts). Non-text parts are ignored for now.
+fn content_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| {
+                if p.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    p.get("text").and_then(|t| t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
+}
+
+impl ProtocolAdapter for OpenAiChatAdapter {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::Openai
+    }
+
+    fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
+        let req: ChatRequest = serde_json::from_value(body.clone())
+            .map_err(|e| describe_deser_error("ChatRequest", &e, &body))?;
+
+        let mut system: Option<String> = None;
+        let mut messages = Vec::new();
+
+        for m in req.messages {
+            let role = parse_role(&m.role)?;
+            if role == Role::System {
+                let text = m.content.as_ref().map(content_text).unwrap_or_default();
+                system = Some(match system {
+                    Some(prev) => format!("{prev}\n{text}"),
+                    None => text,
+                });
+                continue;
+            }
+
+            let mut content = Vec::new();
+            // reasoning first so its position before text is preserved (#454-1)
+            if let Some(reasoning) = m.reasoning_content {
+                if !reasoning.is_empty() {
+                    content.push(Content::Reasoning { text: reasoning });
+                }
+            }
+            if role == Role::Tool {
+                let result = m.content.as_ref().map(content_text).unwrap_or_default();
+                let call_id = m.tool_call_id.ok_or_else(|| {
+                    BitrouterError::bad_request("tool message missing 'tool_call_id'")
+                })?;
+                content.push(Content::ToolResult {
+                    call_id,
+                    content: result,
+                });
+            } else {
+                if let Some(text) = &m.content {
+                    let text = content_text(text);
+                    if !text.is_empty() {
+                        content.push(Content::Text { text });
+                    }
+                }
+                for tc in m.tool_calls {
+                    content.push(Content::ToolCall {
+                        id: tc.id,
+                        name: tc.function.name,
+                        arguments: tc.function.arguments,
+                    });
+                }
+            }
+            messages.push(Message { role, content });
+        }
+
+        let tools = req
+            .tools
+            .into_iter()
+            .map(|t| crate::language_model::types::Tool {
+                name: t.function.name,
+                description: t.function.description,
+                parameters: t.function.parameters,
+            })
+            .collect();
+
+        Ok(Prompt {
+            model: req.model,
+            system,
+            messages,
+            tools,
+            params: GenerationParams {
+                temperature: req.temperature,
+                top_p: req.top_p,
+                max_tokens: req.max_tokens.or(req.max_completion_tokens),
+                reasoning_effort: req.reasoning_effort,
+                extra: Default::default(),
+            },
+            stream: req.stream,
+        })
+    }
+
+    fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
+        let mut messages = Vec::new();
+        if let Some(system) = &prompt.system {
+            messages.push(serde_json::json!({ "role": "system", "content": system }));
+        }
+        for m in &prompt.messages {
+            messages.push(render_message(m));
+        }
+
+        let mut req = serde_json::Map::new();
+        req.insert("model".into(), prompt.model.clone().into());
+        req.insert("messages".into(), messages.into());
+        if !prompt.tools.is_empty() {
+            req.insert(
+                "tools".into(),
+                prompt
+                    .tools
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": t.parameters,
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            );
+        }
+        // Absent params are omitted entirely, never serialised as null (#454-5).
+        if let Some(t) = prompt.params.temperature {
+            req.insert("temperature".into(), t.into());
+        }
+        if let Some(p) = prompt.params.top_p {
+            req.insert("top_p".into(), p.into());
+        }
+        if let Some(mt) = prompt.params.max_tokens {
+            req.insert("max_tokens".into(), mt.into());
+        }
+        if let Some(re) = &prompt.params.reasoning_effort {
+            req.insert("reasoning_effort".into(), re.clone().into());
+        }
+        req.insert("stream".into(), prompt.stream.into());
+        Ok(serde_json::Value::Object(req))
+    }
+
+    fn parse_response(&self, body: serde_json::Value) -> Result<GenerateResult> {
+        let choice = body
+            .get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+            .ok_or_else(|| BitrouterError::bad_request("chat response missing 'choices[0]'"))?;
+        let message = choice
+            .get("message")
+            .ok_or_else(|| BitrouterError::bad_request("chat choice missing 'message'"))?;
+
+        let mut content = Vec::new();
+        if let Some(reasoning) = message
+            .get("reasoning_content")
+            .and_then(|r| r.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            content.push(Content::Reasoning {
+                text: reasoning.to_string(),
+            });
+        }
+        if let Some(text) = message
+            .get("content")
+            .filter(|c| !c.is_null())
+            .map(content_text)
+            .filter(|s| !s.is_empty())
+        {
+            content.push(Content::Text { text });
+        }
+        if let Some(tool_calls) = message.get("tool_calls").and_then(|t| t.as_array()) {
+            for tc in tool_calls {
+                content.push(Content::ToolCall {
+                    id: tc
+                        .get("id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    name: tc
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    arguments: tc
+                        .get("function")
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(|a| a.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                });
+            }
+        }
+
+        let finish_reason = choice
+            .get("finish_reason")
+            .and_then(|f| f.as_str())
+            .and_then(parse_finish_reason);
+        let usage = body.get("usage").and_then(parse_usage);
+
+        Ok(GenerateResult {
+            content,
+            usage,
+            finish_reason,
+        })
+    }
+
+    fn render_response(
+        &self,
+        result: &GenerateResult,
+        prompt: &Prompt,
+        request_id: &str,
+    ) -> Result<serde_json::Value> {
+        let mut message = serde_json::Map::new();
+        message.insert("role".into(), "assistant".into());
+
+        let text: String = result
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        // `content` is always present (possibly an empty string) — never null.
+        message.insert("content".into(), text.into());
+
+        let reasoning: String = result
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::Reasoning { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        if !reasoning.is_empty() {
+            message.insert("reasoning_content".into(), reasoning.into());
+        }
+
+        let tool_calls: Vec<_> = result
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => Some(serde_json::json!({
+                    "id": id,
+                    "type": "function",
+                    "function": { "name": name, "arguments": arguments },
+                })),
+                _ => None,
+            })
+            .collect();
+        if !tool_calls.is_empty() {
+            message.insert("tool_calls".into(), tool_calls.into());
+        }
+
+        let mut response = serde_json::Map::new();
+        response.insert("id".into(), request_id.into());
+        response.insert("object".into(), "chat.completion".into());
+        response.insert("model".into(), prompt.model.clone().into());
+        response.insert(
+            "choices".into(),
+            serde_json::json!([{
+                "index": 0,
+                "message": serde_json::Value::Object(message),
+                "finish_reason": result.finish_reason.map(finish_reason_str),
+            }]),
+        );
+        if let Some(usage) = result.usage {
+            response.insert("usage".into(), render_usage(&usage));
+        }
+        Ok(serde_json::Value::Object(response))
+    }
+
+    fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
+        Box::new(ChatStreamDecoder::default())
+    }
+
+    fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
+        Box::new(ChatStreamEncoder {
+            request_id: request_id.to_string(),
+            model: model.to_string(),
+            role_sent: false,
+        })
+    }
+}
+
+fn render_message(m: &Message) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("role".into(), role_str(m.role).into());
+
+    if m.role == Role::Tool {
+        // tool messages carry a tool_call_id + flat string content
+        for c in &m.content {
+            if let Content::ToolResult { call_id, content } = c {
+                obj.insert("tool_call_id".into(), call_id.clone().into());
+                obj.insert("content".into(), content.clone().into());
+            }
+        }
+        return serde_json::Value::Object(obj);
+    }
+
+    let text: String = m
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    obj.insert("content".into(), text.into());
+
+    let reasoning: String = m
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Reasoning { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !reasoning.is_empty() {
+        obj.insert("reasoning_content".into(), reasoning.into());
+    }
+
+    let tool_calls: Vec<_> = m
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::ToolCall {
+                id,
+                name,
+                arguments,
+            } => Some(serde_json::json!({
+                "id": id,
+                "type": "function",
+                "function": { "name": name, "arguments": arguments },
+            })),
+            _ => None,
+        })
+        .collect();
+    if !tool_calls.is_empty() {
+        obj.insert("tool_calls".into(), tool_calls.into());
+    }
+    serde_json::Value::Object(obj)
+}
+
+fn parse_finish_reason(s: &str) -> Option<FinishReason> {
+    match s {
+        "stop" | "end_turn" => Some(FinishReason::Stop),
+        "length" | "max_tokens" => Some(FinishReason::Length),
+        "tool_calls" | "function_call" => Some(FinishReason::ToolCalls),
+        "content_filter" => Some(FinishReason::ContentFilter),
+        _ => None,
+    }
+}
+
+fn finish_reason_str(r: FinishReason) -> &'static str {
+    match r {
+        FinishReason::Stop => "stop",
+        FinishReason::Length => "length",
+        FinishReason::ToolCalls => "tool_calls",
+        FinishReason::ContentFilter => "content_filter",
+    }
+}
+
+fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
+    let prompt_tokens = value.get("prompt_tokens")?.as_u64()?;
+    let completion_tokens = value
+        .get("completion_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let reasoning_tokens = value
+        .get("completion_tokens_details")
+        .and_then(|d| d.get("reasoning_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    Some(Usage {
+        prompt_tokens,
+        completion_tokens,
+        reasoning_tokens,
+    })
+}
+
+fn render_usage(usage: &Usage) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "total_tokens": usage.total(),
+    });
+    if usage.reasoning_tokens > 0 {
+        obj["completion_tokens_details"] =
+            serde_json::json!({ "reasoning_tokens": usage.reasoning_tokens });
+    }
+    obj
+}
+
+// ===== streaming =====
+
+/// Decodes OpenAI Chat `data:` SSE chunks into canonical stream parts. Explicit
+/// state machine — unknown chunk shapes are ignored, never panicked on.
+#[derive(Default)]
+struct ChatStreamDecoder {
+    /// Accumulates tool-call name per index so the canonical
+    /// `ToolCallDelta.id` is stable across chunks.
+    tool_ids: Vec<(String, String)>,
+    done: bool,
+}
+
+impl StreamDecoder for ChatStreamDecoder {
+    fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>> {
+        let data = event.data.trim();
+        if data.is_empty() {
+            return Ok(Vec::new());
+        }
+        if data == "[DONE]" {
+            self.done = true;
+            return Ok(Vec::new());
+        }
+        let chunk: serde_json::Value = match serde_json::from_str(data) {
+            Ok(v) => v,
+            // A non-JSON keepalive / comment line — ignore, do not error.
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        let mut parts = Vec::new();
+        if let Some(choice) = chunk
+            .get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+        {
+            if let Some(delta) = choice.get("delta") {
+                if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
+                    if !text.is_empty() {
+                        parts.push(StreamPart::TextDelta {
+                            text: text.to_string(),
+                        });
+                    }
+                }
+                if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+                    if !reasoning.is_empty() {
+                        parts.push(StreamPart::ReasoningDelta {
+                            text: reasoning.to_string(),
+                        });
+                    }
+                }
+                if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                    for tc in tool_calls {
+                        let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                        let id = tc.get("id").and_then(|i| i.as_str());
+                        let name = tc
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str());
+                        let args = tc
+                            .get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("");
+                        while self.tool_ids.len() <= idx {
+                            self.tool_ids.push((String::new(), String::new()));
+                        }
+                        if let Some(id) = id {
+                            self.tool_ids[idx].0 = id.to_string();
+                        }
+                        if let Some(name) = name {
+                            self.tool_ids[idx].1 = name.to_string();
+                        }
+                        parts.push(StreamPart::ToolCallDelta {
+                            id: self.tool_ids[idx].0.clone(),
+                            name: name.map(|n| n.to_string()),
+                            arguments: args.to_string(),
+                        });
+                    }
+                }
+            }
+            if let Some(reason) = choice
+                .get("finish_reason")
+                .and_then(|f| f.as_str())
+                .and_then(parse_finish_reason)
+            {
+                if let Some(usage) = chunk.get("usage").and_then(parse_usage) {
+                    parts.push(StreamPart::Usage { usage });
+                }
+                parts.push(StreamPart::Finish { reason });
+            }
+        } else if let Some(usage) = chunk.get("usage").and_then(parse_usage) {
+            // Some providers send a trailing usage-only chunk.
+            parts.push(StreamPart::Usage { usage });
+        }
+        Ok(parts)
+    }
+}
+
+/// Encodes canonical stream parts into OpenAI Chat `data:` SSE chunks.
+struct ChatStreamEncoder {
+    request_id: String,
+    model: String,
+    role_sent: bool,
+}
+
+impl ChatStreamEncoder {
+    fn chunk(&self, delta: serde_json::Value, finish: Option<&str>) -> SseFrame {
+        let data = serde_json::json!({
+            "id": self.request_id,
+            "object": "chat.completion.chunk",
+            "model": self.model,
+            "choices": [{
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish,
+            }],
+        });
+        SseFrame::Event {
+            event: None,
+            data: data.to_string(),
+        }
+    }
+}
+
+impl StreamEncoder for ChatStreamEncoder {
+    fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
+        let mut frames = Vec::new();
+        // The first chunk carries the role; subsequent chunks omit it.
+        let mut delta = serde_json::Map::new();
+        if !self.role_sent {
+            delta.insert("role".into(), "assistant".into());
+            self.role_sent = true;
+        }
+        match part {
+            StreamPart::TextDelta { text } => {
+                delta.insert("content".into(), text.clone().into());
+                frames.push(self.chunk(serde_json::Value::Object(delta), None));
+            }
+            StreamPart::ReasoningDelta { text } => {
+                delta.insert("reasoning_content".into(), text.clone().into());
+                frames.push(self.chunk(serde_json::Value::Object(delta), None));
+            }
+            StreamPart::ToolCallDelta {
+                id,
+                name,
+                arguments,
+            } => {
+                let mut function = serde_json::Map::new();
+                if let Some(name) = name {
+                    function.insert("name".into(), name.clone().into());
+                }
+                function.insert("arguments".into(), arguments.clone().into());
+                delta.insert(
+                    "tool_calls".into(),
+                    serde_json::json!([{
+                        "index": 0,
+                        "id": id,
+                        "type": "function",
+                        "function": serde_json::Value::Object(function),
+                    }]),
+                );
+                frames.push(self.chunk(serde_json::Value::Object(delta), None));
+            }
+            StreamPart::Usage { .. } => {
+                // usage is attached to the Finish chunk below; nothing here.
+            }
+            StreamPart::Finish { reason } => {
+                frames.push(self.chunk(
+                    serde_json::Value::Object(delta),
+                    Some(finish_reason_str(*reason)),
+                ));
+            }
+        }
+        Ok(frames)
+    }
+
+    fn finish(&mut self) -> Result<Vec<SseFrame>> {
+        // OpenAI Chat terminates the stream with a literal `[DONE]` sentinel.
+        Ok(vec![SseFrame::Event {
+            event: None,
+            data: "[DONE]".to_string(),
+        }])
+    }
+}
