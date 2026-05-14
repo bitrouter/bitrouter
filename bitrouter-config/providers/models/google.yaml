@@ -130,7 +130,7 @@ models:
     pricing:
       input_tokens:
         no_cache: 0.1
-        cache_read: 0.025
+        cache_read: 0.01
       output_tokens:
         text: 0.4
   gemini-2.5-flash-lite-preview-06-17:
@@ -315,7 +315,7 @@ models:
       - image
     pricing:
       input_tokens:
-        no_cache: 0.25
+        no_cache: 0.5
       output_tokens:
         text: 60.0
   gemini-3.1-flash-lite:
@@ -331,7 +331,6 @@ models:
       input_tokens:
         no_cache: 0.25
         cache_read: 0.025
-        cache_write: 1.0
       output_tokens:
         text: 1.5
   gemini-3.1-flash-lite-preview:
@@ -347,7 +346,6 @@ models:
       input_tokens:
         no_cache: 0.25
         cache_read: 0.025
-        cache_write: 1.0
       output_tokens:
         text: 1.5
   gemini-3.1-pro-preview:
