@@ -360,6 +360,33 @@ mod tests {
     }
 
     #[test]
+    fn disjoint_chain_allowlists_intersect_to_no_constraint() {
+        // Two policies with non-overlapping chain lists intersect to the empty
+        // set. By the documented convention — an empty chain list means "no
+        // constraint", matching v0's `allowed_chains` semantics ("Empty means
+        // all chains allowed") — the effective policy then imposes no chain
+        // restriction. This is a deliberate "fail open on contradiction"
+        // choice, made explicit here so the behaviour is pinned.
+        let a = Policy {
+            id: "a".into(),
+            allowed_chains: Some(vec!["tempo".into()]),
+            ..Default::default()
+        };
+        let b = Policy {
+            id: "b".into(),
+            allowed_chains: Some(vec!["solana".into()]),
+            ..Default::default()
+        };
+        let eff = EffectivePolicy::combine([&a, &b]);
+        assert!(
+            !eff.has_chain_restriction(),
+            "empty intersection = no constraint"
+        );
+        assert!(eff.check_chain("tempo").is_ok());
+        assert!(eff.check_chain("anything").is_ok());
+    }
+
+    #[test]
     fn tool_allowlists_union() {
         let a = Policy {
             id: "a".into(),
