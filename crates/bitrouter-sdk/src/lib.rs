@@ -21,6 +21,7 @@ pub mod caller;
 pub mod error;
 pub mod event;
 pub mod metrics;
+pub mod mpp;
 pub mod plugin;
 
 #[cfg(feature = "config_file")]
@@ -39,4 +40,5 @@ pub use caller::{CallerContext, FundingSource, PaymentMethod};
 pub use error::{BitrouterError, Result};
 pub use event::{EventBus, PipelineEvent};
 pub use metrics::{MetricsStore, RateMetrics, RequestMetric, TimeWindow, TokenUsage};
+pub use mpp::{MppVerification, MppVerifier};
 pub use plugin::{MigrationContent, MigrationItem, PluginId};
