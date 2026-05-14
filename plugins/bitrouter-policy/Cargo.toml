@@ -13,8 +13,10 @@ bitrouter-sdk.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde-saphyr.workspace = true
 chrono.workspace = true
 tracing.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
