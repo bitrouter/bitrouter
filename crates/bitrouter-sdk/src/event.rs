@@ -92,6 +92,12 @@ impl EventBus {
         self.events.is_empty()
     }
 
+    /// Move every event from `other` into this bus. Used to fold a stage-local
+    /// bus (e.g. `StreamContext`'s) back into the request-level bus.
+    pub fn merge_from(&mut self, mut other: EventBus) {
+        self.events.append(&mut other.events);
+    }
+
     /// Dump all events as a JSON array (logging / debugging / receipt storage).
     /// Type-independent, always available.
     pub fn dump_json(&self) -> serde_json::Value {

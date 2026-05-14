@@ -1,0 +1,189 @@
+//! Routing for the `language_model` protocol: the `RoutingTable` trait,
+//! `RoutingPrefs`, `ModelInfo`, and the `FallbackPolicy`. The full cascade
+//! resolution (Strategy 0–3) and config/registry tables land in Phase 4; this
+//! module carries the trait surface plus a `StaticRoutingTable` used by the
+//! pipeline tests and the minimal server path.
+
+use std::collections::HashMap;
+use std::sync::RwLock;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+use crate::caller::CallerContext;
+use crate::error::{BitrouterError, Result};
+use crate::language_model::hooks::FallbackDecision;
+use crate::language_model::types::RoutingTarget;
+
+/// How a cascade chain should be ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrder {
+    /// Sort by provider name, ascending. The Phase-1 default; later replaced by
+    /// a recommender (cost / latency / throughput scoring).
+    #[default]
+    Alphabetical,
+    /// Sort by lowest latency first.
+    Latency,
+    /// Sort by lowest cost first.
+    Cost,
+}
+
+/// Routing preferences distilled from `@preset` / `:variant` (see 003 §5.4).
+/// Feeds both explicit-virtual-model endpoint selection and auto-cascade
+/// ordering / filtering.
+#[derive(Debug, Clone, Default)]
+pub struct RoutingPrefs {
+    /// Ordering applied to the cascade chain.
+    pub sort: SortOrder,
+    /// Only providers carrying all these tags are eligible.
+    pub require_tags: Vec<String>,
+    /// If non-empty, restrict the chain to exactly these providers.
+    pub only: Vec<String>,
+    /// Drop these providers from the chain.
+    pub ignore: Vec<String>,
+}
+
+/// Summary of a routable model, for `GET /v1/models`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    /// The model id.
+    pub id: String,
+    /// Providers that declare this model.
+    pub providers: Vec<String>,
+}
+
+/// Resolves a model name into a fallback chain. v1 has no single-target
+/// `route()` — everything is `route_chain()`; a "single target" is just a
+/// length-1 chain. Implementations: `ConfigRoutingTable` (yaml) and
+/// `RegistryRoutingTable` (external registry), plus `StaticRoutingTable` here.
+#[async_trait]
+pub trait RoutingTable: Send + Sync {
+    /// Resolve `model` into an ordered fallback chain.
+    async fn route_chain(
+        &self,
+        model: &str,
+        prefs: &RoutingPrefs,
+        caller: &CallerContext,
+    ) -> Result<Vec<RoutingTarget>>;
+
+    /// List every routable model (for `GET /v1/models`).
+    fn list_models(&self) -> Vec<ModelInfo>;
+
+    /// Look up one model's info.
+    fn model_info(&self, model: &str) -> Option<ModelInfo>;
+
+    /// Hot-reload the underlying config.
+    async fn reload(&self) -> Result<()>;
+}
+
+/// Classifies an upstream error into a fallback decision. `FallbackPolicy` is
+/// the default implementation behind `ExecutionHook::on_failure`.
+pub trait FallbackPolicy: Send + Sync {
+    /// Decide whether to try the next target after `err` on `attempted`.
+    fn classify(&self, err: &BitrouterError, attempted: &RoutingTarget) -> FallbackDecision;
+}
+
+/// The default policy: 5xx / 408 / 429 / transport errors → try next; other
+/// 4xx → fail. Mirrors v0's `DefaultFallbackPolicy`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DefaultFallbackPolicy;
+
+impl FallbackPolicy for DefaultFallbackPolicy {
+    fn classify(&self, err: &BitrouterError, _attempted: &RoutingTarget) -> FallbackDecision {
+        match err {
+            BitrouterError::Upstream { status, .. } if *status >= 500 => FallbackDecision::TryNext,
+            BitrouterError::Upstream { status, .. } if *status == 408 || *status == 429 => {
+                FallbackDecision::TryNext
+            }
+            BitrouterError::UpstreamTimeout => FallbackDecision::TryNext,
+            BitrouterError::RateLimited { .. } => FallbackDecision::TryNext,
+            // Any other error is the request's own fault — do not retry; the
+            // original error is preserved.
+            other => FallbackDecision::Fail(other.clone()),
+        }
+    }
+}
+
+/// A trivial in-memory routing table: `model -> ordered targets`. Used by the
+/// Phase-1 pipeline tests and the minimal server path. Phase 4 replaces it with
+/// `ConfigRoutingTable` / `RegistryRoutingTable`.
+pub struct StaticRoutingTable {
+    routes: RwLock<HashMap<String, Vec<RoutingTarget>>>,
+}
+
+impl StaticRoutingTable {
+    /// An empty table.
+    pub fn new() -> Self {
+        Self {
+            routes: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Register a chain for `model`.
+    pub fn insert(&self, model: impl Into<String>, chain: Vec<RoutingTarget>) {
+        self.routes
+            .write()
+            .expect("routing table lock poisoned")
+            .insert(model.into(), chain);
+    }
+}
+
+impl Default for StaticRoutingTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl RoutingTable for StaticRoutingTable {
+    async fn route_chain(
+        &self,
+        model: &str,
+        prefs: &RoutingPrefs,
+        _caller: &CallerContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        let guard = self.routes.read().expect("routing table lock poisoned");
+        let mut chain = guard
+            .get(model)
+            .cloned()
+            .ok_or_else(|| BitrouterError::NotFound(format!("no route for model '{model}'")))?;
+
+        if !prefs.only.is_empty() {
+            chain.retain(|t| prefs.only.contains(&t.provider_name));
+        }
+        chain.retain(|t| !prefs.ignore.contains(&t.provider_name));
+        if matches!(prefs.sort, SortOrder::Alphabetical) {
+            chain.sort_by(|a, b| a.provider_name.cmp(&b.provider_name));
+        }
+        if chain.is_empty() {
+            return Err(BitrouterError::NotFound(format!(
+                "no route for model '{model}' after applying routing preferences"
+            )));
+        }
+        Ok(chain)
+    }
+
+    fn list_models(&self) -> Vec<ModelInfo> {
+        let guard = self.routes.read().expect("routing table lock poisoned");
+        guard
+            .iter()
+            .map(|(id, chain)| ModelInfo {
+                id: id.clone(),
+                providers: chain.iter().map(|t| t.provider_name.clone()).collect(),
+            })
+            .collect()
+    }
+
+    fn model_info(&self, model: &str) -> Option<ModelInfo> {
+        let guard = self.routes.read().expect("routing table lock poisoned");
+        guard.get(model).map(|chain| ModelInfo {
+            id: model.to_string(),
+            providers: chain.iter().map(|t| t.provider_name.clone()).collect(),
+        })
+    }
+
+    async fn reload(&self) -> Result<()> {
+        Ok(())
+    }
+}
