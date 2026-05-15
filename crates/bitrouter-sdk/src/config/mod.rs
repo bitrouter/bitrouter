@@ -450,8 +450,17 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// populate the model list from the response (`{ "data": [{ "id": … }] }`,
 /// the OpenAI / Anthropic shape). A provider whose discovery call fails is
 /// left as-is with a WARN — discovery never aborts startup.
+///
+/// The HTTP client is built with bounded `connect_timeout` + `timeout` so an
+/// unreachable provider can't stall a `bitrouter reload` for the OS-level
+/// connect window (minutes). Discovery is best-effort; a 5s overall cap is
+/// well above any healthy `/models` round-trip and far below the default.
 pub async fn discover_models(config: &mut Config) {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     for (provider_id, provider) in config.providers.iter_mut() {
         if !provider.auto_discover || !provider.models.is_empty() {
             continue;

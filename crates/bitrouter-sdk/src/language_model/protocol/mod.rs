@@ -157,10 +157,15 @@ pub fn describe_deser_error(
 ) -> crate::error::BitrouterError {
     let preview = {
         let s = body.to_string();
-        if s.len() > 240 {
-            format!("{}…", &s[..240])
+        // Take up to 240 chars (not bytes) — slicing at a byte index would
+        // panic if the cut fell inside a multi-byte UTF-8 sequence (the body
+        // is attacker-controlled JSON, see regression for non-ASCII inputs).
+        const PREVIEW_CHARS: usize = 240;
+        let truncated: String = s.chars().take(PREVIEW_CHARS).collect();
+        if truncated.chars().count() < s.chars().count() {
+            format!("{truncated}…")
         } else {
-            s
+            truncated
         }
     };
     crate::error::BitrouterError::bad_request(format!(

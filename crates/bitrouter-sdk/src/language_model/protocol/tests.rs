@@ -451,6 +451,22 @@ fn regression_367_deser_errors_are_descriptive() {
     assert_eq!(err.status(), 400);
 }
 
+/// Preview truncation must respect UTF-8 char boundaries — slicing at byte
+/// 240 of a body whose 240th byte sits inside a multi-byte sequence used to
+/// panic on the request path.
+#[test]
+fn deser_error_preview_handles_multi_byte_utf8() {
+    let adapter = adapter_for(ApiProtocol::Openai);
+    // ~120 "é" (2 bytes) gives a body well over 240 bytes whose boundary
+    // would fall inside a multi-byte rune if naïvely byte-sliced.
+    let pad: String = "é".repeat(200);
+    let bad = serde_json::json!({ "model": "m", "messages": pad });
+    let err = adapter.parse_request(bad).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("ChatRequest"), "still diagnosable: {msg}");
+    assert!(msg.contains("preview"), "carries a body preview: {msg}");
+}
+
 /// #416 — a mixed text + tool_use Anthropic message must not be rejected; the
 /// blocks keep their order in the canonical representation.
 #[test]
