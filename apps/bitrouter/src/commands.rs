@@ -1,16 +1,18 @@
-//! Management command logic — the implementations behind the CLI subcommands
-//! (`init`, `key generate`, `models`). Kept in the lib so it is testable and so
-//! a future desktop front-end could reuse it (007 §4 — Tauri is out of scope
-//! for v1.0, but the lib/bin split keeps that door open).
+//! Management command logic — the implementations behind the CLI subcommands.
+//! Kept in the lib so it is testable and so a future desktop front-end could
+//! reuse it (007 §4 — Tauri is out of scope for v1.0, but the lib/bin split
+//! keeps that door open).
 
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
+use bitrouter_sdk::caller::{CallerContext, PaymentMethod};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
-use bitrouter_sdk::language_model::RoutingTable;
+use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
 use bitrouter_auth::{NewApiKey, db as auth_db, generate};
-use bitrouter_sdk::caller::PaymentMethod;
+
+use crate::daemon::RouteHop;
 
 /// The starter `bitrouter.yaml` written by `bitrouter init`. Note `skip_auth:
 /// true` — the onboarding config opts into local, credential-less use; the
@@ -102,14 +104,95 @@ pub async fn key_sign(
     })
 }
 
-/// `bitrouter models` — list every routable model for a config.
-pub async fn list_models(config: &Config) -> Result<Vec<(String, Vec<String>)>> {
+/// `bitrouter models [--provider <id>]` — list routable models, optionally
+/// filtered to those a given provider declares (007 §1.2).
+pub async fn list_models(
+    config: &Config,
+    provider_filter: Option<&str>,
+) -> Result<Vec<(String, Vec<String>)>> {
     let table = ConfigRoutingTable::from_config(config.clone());
     Ok(table
         .list_models()
         .into_iter()
+        .filter(|m| match provider_filter {
+            Some(p) => m.providers.iter().any(|x| x == p),
+            None => true,
+        })
         .map(|m| (m.id, m.providers))
         .collect())
+}
+
+/// `bitrouter route <model>` — resolve a model name through the routing table,
+/// **standalone** (no running daemon needed). Returns the fallback chain.
+pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>> {
+    let table = ConfigRoutingTable::from_config(config.clone());
+    let chain = table
+        .route_chain(model, &RoutingPrefs::default(), &CallerContext::local())
+        .await
+        .with_context(|| format!("resolving model '{model}'"))?;
+    Ok(chain
+        .into_iter()
+        .map(|t| RouteHop {
+            provider: t.provider_name,
+            service_id: t.service_id,
+            api_protocol: format!("{:?}", t.api_protocol).to_lowercase(),
+        })
+        .collect())
+}
+
+/// One provider entry for `bitrouter providers list`.
+pub struct ProviderListing {
+    /// Provider id.
+    pub id: String,
+    /// Upstream API base.
+    pub api_base: String,
+    /// Whether the provider is active / routable.
+    pub active: bool,
+    /// Number of declared models.
+    pub model_count: usize,
+}
+
+/// `bitrouter providers list` — list every configured provider.
+pub fn list_providers(config: &Config) -> Vec<ProviderListing> {
+    let mut providers: Vec<ProviderListing> = config
+        .providers
+        .iter()
+        .map(|(id, p)| ProviderListing {
+            id: id.clone(),
+            api_base: p.api_base.clone(),
+            active: p.active,
+            model_count: p.models.len(),
+        })
+        .collect();
+    providers.sort_by(|a, b| a.id.cmp(&b.id));
+    providers
+}
+
+/// `bitrouter policy create` — write a starter policy file into `policy_dir`.
+/// Refuses to overwrite an existing policy of the same id.
+pub async fn create_policy(policy_dir: &std::path::Path, id: &str) -> Result<std::path::PathBuf> {
+    tokio::fs::create_dir_all(policy_dir)
+        .await
+        .with_context(|| format!("creating policy dir {}", policy_dir.display()))?;
+    let path = policy_dir.join(format!("{id}.yaml"));
+    if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+        anyhow::bail!("policy '{id}' already exists at {}", path.display());
+    }
+    let body = format!(
+        "# policy '{id}' — edit to taste, then bind it to a key:\n\
+         #   bitrouter key sign --user <id> --policy {id}\n\
+         id: {id}\n\
+         # allowed_models: [gpt-5, claude-sonnet-4-6]\n\
+         # denied_models: []\n\
+         # max_spend_micro_usd: 1000000\n\
+         # max_requests_per_minute: 60\n\
+         # allowed_tools: [search]\n\
+         # allowed_chains: [tempo]\n"
+    );
+    tokio::fs::write(&path, body)
+        .await
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -145,5 +228,71 @@ mod tests {
             .unwrap();
         assert!(key.secret.starts_with("brvk_"));
         assert!(key.id.starts_with("brvk_id_"));
+    }
+
+    fn sample_config() -> Config {
+        let yaml = r#"
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: k1
+    models: [{ id: gpt-5 }, { id: shared }]
+  anthropic:
+    api_base: https://api.anthropic.com/v1
+    api_key: k2
+    models: [{ id: shared }]
+"#;
+        bitrouter_sdk::config::parse_with(yaml, |_| None).unwrap()
+    }
+
+    #[tokio::test]
+    async fn list_models_filters_by_provider() {
+        let cfg = sample_config();
+        let all = list_models(&cfg, None).await.unwrap();
+        assert_eq!(all.len(), 2); // gpt-5, shared
+        let openai_only = list_models(&cfg, Some("openai")).await.unwrap();
+        assert_eq!(openai_only.len(), 2); // gpt-5 + shared (openai declares both)
+        let anthropic_only = list_models(&cfg, Some("anthropic")).await.unwrap();
+        assert_eq!(anthropic_only.len(), 1); // only `shared`
+        assert_eq!(anthropic_only[0].0, "shared");
+    }
+
+    #[tokio::test]
+    async fn resolve_route_returns_the_cascade_chain() {
+        let cfg = sample_config();
+        // `shared` is declared by both providers → a 2-hop alphabetical chain
+        let chain = resolve_route(&cfg, "shared").await.unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].provider, "anthropic");
+        assert_eq!(chain[1].provider, "openai");
+        // an unknown model is a clean error (no DEFAULT_PROVIDER fallback)
+        assert!(resolve_route(&cfg, "no-such-model").await.is_err());
+    }
+
+    #[test]
+    fn list_providers_sorts_and_summarises() {
+        let providers = list_providers(&sample_config());
+        assert_eq!(providers.len(), 2);
+        assert_eq!(providers[0].id, "anthropic");
+        assert_eq!(providers[1].id, "openai");
+        assert_eq!(providers[1].model_count, 2);
+        assert!(providers[1].active);
+    }
+
+    #[tokio::test]
+    async fn create_policy_writes_a_starter_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "brpol-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = create_policy(&dir, "team-default").await.unwrap();
+        let body = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(body.contains("id: team-default"));
+        // a re-create refuses to overwrite
+        assert!(create_policy(&dir, "team-default").await.is_err());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }
