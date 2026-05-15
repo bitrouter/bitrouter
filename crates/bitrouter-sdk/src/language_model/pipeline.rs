@@ -217,7 +217,12 @@ impl Pipeline {
     }
 
     async fn resolve_route(&self, ctx: &mut PipelineContext) -> Result<Vec<RoutingTarget>> {
-        // Phase 1: default prefs. Preset/variant stripping arrives in Phase 4.
+        // Stage-0 preset overrides (003 §5.4) — `@careful` etc. inject a
+        // system prompt / sampling defaults that the request can still
+        // override. Done before the cascade so the upstream call sees them.
+        let overrides = self.routing_table.preset_overrides(ctx.model()).await?;
+        ctx.apply_preset_overrides(&overrides);
+
         let prefs = RoutingPrefs::default();
         let mut chain = self
             .routing_table

@@ -242,6 +242,18 @@ impl RoutingTable for ConfigRoutingTable {
         *self.config.write().expect("config lock poisoned") = fresh;
         Ok(())
     }
+
+    async fn preset_overrides(
+        &self,
+        model: &str,
+    ) -> Result<crate::config::PromptOverrides> {
+        // Same resolution as `route_chain` (Stage 0): strip `@preset:variant`
+        // and return the preset's prompt body overrides. The synchronous part
+        // is wrapped in a brief read-lock; no `.await` is held across it.
+        let config = self.config.read().expect("config lock poisoned");
+        let resolution = crate::config::resolve_presets(model, &config.presets, &config.variants)?;
+        Ok(resolution.overrides)
+    }
 }
 
 /// Merge `extra`'s knobs additively into `base` (caller prefs refine preset ones).

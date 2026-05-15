@@ -99,6 +99,32 @@ impl PipelineContext {
         self.model = model.into();
     }
 
+    /// Apply preset prompt-body overrides (003 §5.4). `system_prompt`, when
+    /// present, replaces the prompt's system; `params` is shallow-merged into
+    /// the prompt's `params.extra` so provider-specific knobs survive. Already-
+    /// set request fields take precedence — a preset is a *default*, not an
+    /// override of an explicit request value (except for `system` which has
+    /// no merging surface).
+    pub fn apply_preset_overrides(&mut self, overrides: &crate::config::PromptOverrides) {
+        if overrides.is_empty() {
+            return;
+        }
+        if let Some(system) = &overrides.system_prompt {
+            // Only fill `system` if the request did not already set one.
+            if self.prompt.system.is_none() {
+                self.prompt.system = Some(system.clone());
+            }
+        }
+        for (k, v) in &overrides.params {
+            // Don't clobber an explicit request value; presets are defaults.
+            self.prompt
+                .params
+                .extra
+                .entry(k.clone())
+                .or_insert_with(|| v.clone());
+        }
+    }
+
     /// Write this plugin's metadata blob.
     pub fn set_metadata(&mut self, plugin_id: &PluginId, value: serde_json::Value) {
         self.metadata.insert(plugin_id.clone(), value);
@@ -255,5 +281,91 @@ impl StreamContext {
     /// Read another plugin's metadata blob.
     pub fn get_metadata(&self, plugin_id: &PluginId) -> Option<&serde_json::Value> {
         self.metadata.get(plugin_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::PromptOverrides;
+    use crate::language_model::{Message, PipelineRequest, Role};
+
+    fn ctx_from_prompt(prompt: Prompt) -> PipelineContext {
+        let req = PipelineRequest {
+            request_id: "test".to_string(),
+            model: prompt.model.clone(),
+            caller: CallerContext::local(),
+            headers: http::HeaderMap::new(),
+            prompt,
+        };
+        PipelineContext::new(req)
+    }
+
+    fn empty_prompt() -> Prompt {
+        Prompt {
+            model: "gpt-5".into(),
+            system: None,
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![],
+            }],
+            tools: vec![],
+            params: Default::default(),
+            stream: false,
+        }
+    }
+
+    #[test]
+    fn apply_preset_overrides_sets_system_only_if_unset() {
+        // No system in the request → preset fills it.
+        let mut ctx = ctx_from_prompt(empty_prompt());
+        let overrides = PromptOverrides {
+            system_prompt: Some("Reason carefully.".to_string()),
+            params: Default::default(),
+        };
+        ctx.apply_preset_overrides(&overrides);
+        assert_eq!(ctx.prompt().system.as_deref(), Some("Reason carefully."));
+
+        // Request already has a system → preset is a default, not an override.
+        let mut prompt = empty_prompt();
+        prompt.system = Some("Be concise.".to_string());
+        let mut ctx = ctx_from_prompt(prompt);
+        ctx.apply_preset_overrides(&overrides);
+        assert_eq!(
+            ctx.prompt().system.as_deref(),
+            Some("Be concise."),
+            "request-set system survives preset"
+        );
+    }
+
+    #[test]
+    fn apply_preset_overrides_merges_into_params_extra_without_clobbering() {
+        let mut prompt = empty_prompt();
+        prompt
+            .params
+            .extra
+            .insert("temperature".to_string(), 0.7.into());
+        let mut ctx = ctx_from_prompt(prompt);
+
+        let mut overrides_map = serde_json::Map::new();
+        overrides_map.insert("temperature".to_string(), 0.2.into()); // preset default
+        overrides_map.insert("top_k".to_string(), 40.into()); // new key
+        let overrides = PromptOverrides {
+            system_prompt: None,
+            params: overrides_map,
+        };
+        ctx.apply_preset_overrides(&overrides);
+
+        // Existing key kept; new key filled in.
+        assert_eq!(ctx.prompt().params.extra["temperature"], 0.7);
+        assert_eq!(ctx.prompt().params.extra["top_k"], 40);
+    }
+
+    #[test]
+    fn empty_overrides_are_a_noop() {
+        let mut ctx = ctx_from_prompt(empty_prompt());
+        ctx.apply_preset_overrides(&PromptOverrides::default());
+        assert!(ctx.prompt().system.is_none());
+        assert!(ctx.prompt().params.extra.is_empty());
     }
 }

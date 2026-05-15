@@ -75,6 +75,15 @@ pub trait RoutingTable: Send + Sync {
 
     /// Hot-reload the underlying config.
     async fn reload(&self) -> Result<()>;
+
+    /// Stage-0 preset prompt-body overrides (003 §5.4) for `model`. Implementations
+    /// that don't know about presets return [`PromptOverrides::default()`]; the
+    /// pipeline applies these (shallow-merge into params, set system prompt)
+    /// before execution. Default impl returns nothing so non-preset-aware
+    /// tables (e.g. `StaticRoutingTable`) work unchanged.
+    async fn preset_overrides(&self, _model: &str) -> Result<crate::config::PromptOverrides> {
+        Ok(crate::config::PromptOverrides::default())
+    }
 }
 
 /// Classifies an upstream error into a fallback decision. `FallbackPolicy` is
