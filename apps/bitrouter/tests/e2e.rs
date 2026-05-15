@@ -385,10 +385,74 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["jsonrpc"], "2.0");
+    // JSON-RPC 2.0 — response MUST echo the inbound `id` verbatim, not a fresh
+    // server-side UUID (modelcontextprotocol.io/specification/2025-06-18/basic).
+    assert_eq!(json["id"], 1);
     assert_eq!(json["result"]["method"], "tools/list");
     assert_eq!(json["result"]["server"], "known");
 
-    // Unknown MCP server → routing table 404
+    // String id also round-trips.
+    let body_str = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "req-abc-42",
+        "method": "tools/list",
+        "params": {}
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body_str.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["id"], "req-abc-42");
+
+    // Missing `jsonrpc` field — JSON-RPC error envelope at HTTP 400, id echoed.
+    let bad_envelope = serde_json::json!({"id": 7, "method": "tools/list", "params": {}});
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(bad_envelope.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 400);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], 7);
+    assert_eq!(json["error"]["code"], -32600);
+
+    // Unsupported MCP-Protocol-Version is rejected with 400 per spec.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2099-01-01")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 400);
+
+    // Non-loopback Origin rejected with 403 to defeat DNS rebinding.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .header("origin", "http://evil.example.com")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 403);
+
+    // Unknown MCP server → JSON-RPC "Method not found" wrapped in HTTP 404.
     let bad = Request::builder()
         .method("POST")
         .uri("/mcp/no-such-server")
@@ -397,4 +461,11 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         .unwrap();
     let response = router.oneshot(bad).await.unwrap();
     assert_eq!(response.status(), 404);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], 1);
+    assert_eq!(json["error"]["code"], -32601);
 }

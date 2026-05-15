@@ -154,8 +154,12 @@ async fn prometheus_metrics(State(state): State<AppState>) -> Response {
 /// `POST /mcp/{server}` — Model Context Protocol invocation (003 §3.5.1).
 ///
 /// v1.0 implements the JSON-RPC request/response shape only; the Streamable
-/// HTTP SSE response variant is a documented follow-up (the MCP protocol's
-/// `Streamable HTTP` transport — see <https://modelcontextprotocol.io>).
+/// HTTP SSE response variant is a documented follow-up. Spec refs:
+/// - JSON-RPC envelope: <https://modelcontextprotocol.io/specification/2025-06-18/basic>
+///   ("Result responses MUST include the same ID as the request they
+///   correspond to"). The MCP Streamable HTTP transport (Origin /
+///   `MCP-Protocol-Version` / `MCP-Session-Id` requirements) is at
+///   <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports>.
 async fn mcp_invoke(
     State(state): State<AppState>,
     Path(server): Path<String>,
@@ -165,34 +169,143 @@ async fn mcp_invoke(
     let Some(pipeline) = state.mcp.clone() else {
         return BitrouterError::NotFound("mcp pipeline not configured".to_string()).into_response();
     };
-    let caller = if state.skip_auth {
-        CallerContext::local()
-    } else {
-        CallerContext::anonymous()
-    };
+
+    // Validate Streamable HTTP transport headers per spec. `Origin` MUST be
+    // validated to defeat DNS-rebinding; an unsupported `MCP-Protocol-Version`
+    // MUST be rejected with 400.
+    if let Err(e) = validate_mcp_transport_headers(&headers) {
+        return e.into_response();
+    }
+
+    // Capture the inbound JSON-RPC envelope so we can echo `id` correctly even
+    // for envelope-level rejections. Per JSON-RPC 2.0: `jsonrpc` MUST be exactly
+    // "2.0"; `id` is string|number|null.
+    let inbound_id = body.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let jsonrpc = body.get("jsonrpc").and_then(|v| v.as_str()).unwrap_or("");
+    if jsonrpc != "2.0" {
+        return mcp_error_response(
+            inbound_id,
+            -32600,
+            "Invalid Request: missing or wrong 'jsonrpc' (MUST be \"2.0\")",
+        );
+    }
+
     let method = body
         .get("method")
         .and_then(|m| m.as_str())
         .unwrap_or_default()
         .to_string();
     if method.is_empty() {
-        return BitrouterError::bad_request("MCP request missing 'method'").into_response();
+        return mcp_error_response(inbound_id, -32600, "Invalid Request: missing 'method'");
     }
     let params = body
         .get("params")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+
+    let caller = if state.skip_auth {
+        CallerContext::local()
+    } else {
+        CallerContext::anonymous()
+    };
     let request = mcp::McpRequest::new(server, method, params, caller);
-    let _ = headers; // future: pre-request hook may read these
     match pipeline.execute(request).await {
         Ok(response) => Json(serde_json::json!({
             "jsonrpc": "2.0",
-            "id": response.request_id,
+            "id": inbound_id,
             "result": response.result,
         }))
         .into_response(),
-        Err(e) => e.into_response(),
+        Err(e) => {
+            // JSON-RPC error envelope (see spec link above). Pipeline failures
+            // are returned at HTTP 200 with `error.code` mapped from the
+            // BitrouterError variant; unknown-server (`NotFound` from
+            // `RoutingTable::resolve`) maps to JSON-RPC "Method not found"
+            // (-32601). Pre-request denies / upstream errors keep their HTTP
+            // status so MCP-unaware proxies still surface them — but the body
+            // remains a JSON-RPC error object for the spec-aware client.
+            let (status, code) = match &e {
+                BitrouterError::NotFound(_) => (axum::http::StatusCode::NOT_FOUND, -32601),
+                BitrouterError::BadRequest { .. } => (axum::http::StatusCode::BAD_REQUEST, -32602),
+                BitrouterError::Unauthorized(_) => (axum::http::StatusCode::UNAUTHORIZED, -32000),
+                BitrouterError::Forbidden(_) => (axum::http::StatusCode::FORBIDDEN, -32000),
+                BitrouterError::PaymentRequired(_) => {
+                    (axum::http::StatusCode::PAYMENT_REQUIRED, -32000)
+                }
+                _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, -32603),
+            };
+            (
+                status,
+                Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": inbound_id,
+                    "error": { "code": code, "message": e.to_string() },
+                })),
+            )
+                .into_response()
+        }
     }
+}
+
+/// MCP supported transport protocol versions. Update when adding spec revisions.
+/// See <https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle>.
+const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Validates the MCP Streamable HTTP transport headers per the spec at
+/// <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports>.
+/// `Origin`: MUST be validated by the server to defeat DNS rebinding — we accept
+/// localhost / 127.0.0.1 / [::1] by default (the only safe default for a local
+/// daemon binding to loopback). `MCP-Protocol-Version`: if present, MUST be a
+/// version this server supports.
+fn validate_mcp_transport_headers(headers: &HeaderMap) -> Result<()> {
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok())
+        && !is_safe_mcp_origin(origin)
+    {
+        return Err(BitrouterError::Forbidden(format!(
+            "MCP Origin not allowed: '{origin}'. Local daemons accept only loopback origins."
+        )));
+    }
+    if let Some(version) = headers
+        .get("mcp-protocol-version")
+        .and_then(|v| v.to_str().ok())
+        && !MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "unsupported MCP-Protocol-Version '{version}' (supported: {})",
+            MCP_SUPPORTED_PROTOCOL_VERSIONS.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// Loopback-only Origin allow-list; covers the browser shape (`http://...`),
+/// the file:// shape, and the bare-host shape some MCP clients use.
+fn is_safe_mcp_origin(origin: &str) -> bool {
+    // null-Origin (e.g. file://) and same-origin requests with no Origin header
+    // already pass — this only inspects values that *did* arrive.
+    if origin == "null" {
+        return true;
+    }
+    let host = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+        .unwrap_or(origin);
+    let host = host.split('/').next().unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host);
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+}
+
+/// Build a JSON-RPC error response with HTTP 400 (transport-level rejection).
+fn mcp_error_response(id: serde_json::Value, code: i64, message: &str) -> Response {
+    (
+        axum::http::StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": code, "message": message },
+        })),
+    )
+        .into_response()
 }
 
 async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
@@ -381,7 +494,20 @@ impl IntoResponse for BitrouterError {
         // WWW-Authenticate, RFC 7231 §7.1.3 for Retry-After.
         let mut response = (status, body).into_response();
         match &self {
+            BitrouterError::Unauthorized(_) => {
+                // RFC 7235 §3.1: a 401 MUST include a `WWW-Authenticate`
+                // header field containing at least one challenge applicable
+                // to the resource. BitRouter's primary credential is a virtual
+                // API key (`Authorization: Bearer <brvk_...>`).
+                if let Ok(v) = header::HeaderValue::from_str("Bearer realm=\"bitrouter\"") {
+                    response.headers_mut().insert(header::WWW_AUTHENTICATE, v);
+                }
+            }
             BitrouterError::PaymentRequired(_) => {
+                // 402 + WWW-Authenticate: our scheme name (`Bitrouter-MPP`)
+                // and params predate the mpp.dev finalised wire format and
+                // remain compatible with v0 clients (cloud #183 will revisit
+                // alignment with <https://mpp.dev/protocol/http-402>).
                 if let Ok(v) = header::HeaderValue::from_str(
                     "Bitrouter-MPP realm=\"bitrouter\", scheme=\"tempo-voucher\"",
                 ) {
@@ -418,6 +544,23 @@ mod tests {
             .unwrap();
         assert!(www_auth.contains("Bitrouter-MPP"));
         assert!(www_auth.contains("tempo-voucher"));
+    }
+
+    #[test]
+    fn unauthorized_emits_www_authenticate_bearer() {
+        // RFC 7235 §3.1: 401 MUST include WWW-Authenticate.
+        let response = BitrouterError::Unauthorized("no key".to_string()).into_response();
+        assert_eq!(response.status().as_u16(), 401);
+        let www_auth = response
+            .headers()
+            .get(header::WWW_AUTHENTICATE)
+            .expect("401 must carry WWW-Authenticate (RFC 7235 §3.1)")
+            .to_str()
+            .unwrap();
+        assert!(
+            www_auth.starts_with("Bearer "),
+            "401 challenge should be Bearer, got: {www_auth}"
+        );
     }
 
     #[test]
