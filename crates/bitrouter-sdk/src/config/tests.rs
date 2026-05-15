@@ -110,6 +110,96 @@ fn protocol_inference_from_api_base() {
 }
 
 #[test]
+fn derives_inherits_empty_fields_from_parent_provider() {
+    let yaml = r#"
+providers:
+  base-openai:
+    api_base: https://api.openai.com/v1
+    api_key: parent
+    api_protocol:
+      - "*": openai
+      - "gpt-5*": responses
+    rate_limits:
+      - "*": { rpm: 1000 }
+    models:
+      - id: gpt-5
+      - id: gpt-4o
+    tags: [premium]
+    auto_discover: true
+  azure-prod:
+    derives: base-openai
+    api_base: https://my-azure.openai.azure.com/v1
+    api_key: azure-secret
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let azure = cfg.providers.get("azure-prod").unwrap();
+    // Inherited from the parent because azure-prod didn't set them.
+    assert_eq!(azure.models.len(), 2);
+    assert_eq!(azure.tags, vec!["premium"]);
+    assert!(azure.auto_discover);
+    // NOT inherited: api_base / api_key are intrinsic.
+    assert_eq!(azure.api_base, "https://my-azure.openai.azure.com/v1");
+    assert_eq!(azure.api_key, "azure-secret");
+    // The `derives` link is cleared so re-resolution is idempotent.
+    assert_eq!(azure.derives, None);
+}
+
+#[test]
+fn child_fields_win_over_parent_in_derives() {
+    let yaml = r#"
+providers:
+  parent:
+    api_base: https://parent.example.com
+    api_key: p
+    models:
+      - id: parent-model
+  child:
+    derives: parent
+    api_base: https://child.example.com
+    api_key: c
+    models:
+      - id: child-model
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let child = cfg.providers.get("child").unwrap();
+    // The child set its own `models`, so it must NOT inherit the parent's.
+    assert_eq!(child.models.len(), 1);
+    assert_eq!(child.models[0].id, "child-model");
+}
+
+#[test]
+fn derives_chain_cycle_is_a_400() {
+    let yaml = r#"
+providers:
+  a:
+    api_base: https://a.example.com
+    api_key: a
+    derives: b
+  b:
+    api_base: https://b.example.com
+    api_key: b
+    derives: a
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert_eq!(err.status(), 400);
+    assert!(err.to_string().contains("cycle"));
+}
+
+#[test]
+fn derives_from_unknown_provider_is_a_400() {
+    let yaml = r#"
+providers:
+  child:
+    api_base: https://child.example.com
+    api_key: c
+    derives: does-not-exist
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert_eq!(err.status(), 400);
+    assert!(err.to_string().contains("does-not-exist"));
+}
+
+#[test]
 fn parses_presets_and_variants() {
     let yaml = r#"
 presets:

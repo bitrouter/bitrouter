@@ -157,6 +157,12 @@ pub struct ProviderConfig {
     pub active: bool,
     /// Free-form tags, used by `RoutingPrefs.require_tags` filtering.
     pub tags: Vec<String>,
+    /// Inherit defaults from another provider in this config (acceptance F20 /
+    /// v0 `derives`). The named provider's `api_protocol`, `rate_limits`,
+    /// `models`, `tags` and `auto_discover` flow into *this* provider's empty
+    /// fields; explicit fields here win. Resolved by
+    /// [`resolve_derivations`] after the config is parsed.
+    pub derives: Option<String>,
 }
 
 impl Default for ProviderConfig {
@@ -170,6 +176,7 @@ impl Default for ProviderConfig {
             auto_discover: false,
             active: true,
             tags: Vec::new(),
+            derives: None,
         }
     }
 }
@@ -361,8 +368,72 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let substituted = substitute_with(yaml, lookup)?;
-    serde_saphyr::from_str(&substituted)
-        .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))
+    let mut config: Config = serde_saphyr::from_str(&substituted)
+        .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
+    resolve_derivations(&mut config)?;
+    Ok(config)
+}
+
+/// Resolve every provider's `derives` chain: any field this provider left
+/// empty / default flows from the named ancestor. Cycles are a 400.
+/// Resolution walks the chain depth-first; multi-level inheritance works.
+pub fn resolve_derivations(config: &mut Config) -> Result<()> {
+    let ids: Vec<String> = config.providers.keys().cloned().collect();
+    for id in ids {
+        let mut seen: Vec<String> = vec![id.clone()];
+        resolve_one_derivation(&mut config.providers, &id, &mut seen)?;
+    }
+    Ok(())
+}
+
+fn resolve_one_derivation(
+    providers: &mut HashMap<String, ProviderConfig>,
+    id: &str,
+    seen: &mut Vec<String>,
+) -> Result<()> {
+    let derives_target = providers.get(id).and_then(|p| p.derives.clone());
+    let Some(parent_id) = derives_target else {
+        return Ok(());
+    };
+    if seen.contains(&parent_id) {
+        return Err(BitrouterError::bad_request(format!(
+            "provider '{id}' derives chain has a cycle through '{parent_id}'"
+        )));
+    }
+    if !providers.contains_key(&parent_id) {
+        return Err(BitrouterError::bad_request(format!(
+            "provider '{id}' derives from unknown provider '{parent_id}'"
+        )));
+    }
+    seen.push(parent_id.clone());
+    resolve_one_derivation(providers, &parent_id, seen)?;
+    let parent = providers.get(&parent_id).cloned().expect("checked above");
+    let child = providers.get_mut(id).expect("we own this entry");
+    // Inherit each empty field from the parent. Explicit non-empty fields on
+    // the child win. `api_base` / `api_key` are NOT inherited — they are
+    // intrinsic to the child (you almost always want different endpoints).
+    if child.api_protocol.is_empty() {
+        child.api_protocol = parent.api_protocol.clone();
+    }
+    if child.rate_limits.is_empty() {
+        child.rate_limits = parent.rate_limits.clone();
+    }
+    if child.models.is_empty() {
+        child.models = parent.models.clone();
+    }
+    if !parent.tags.is_empty() && child.tags.is_empty() {
+        child.tags = parent.tags.clone();
+    }
+    // auto_discover propagates only when the child didn't explicitly set it;
+    // since it's a bool with default false, we propagate when child is false
+    // AND parent is true.
+    if !child.auto_discover && parent.auto_discover {
+        child.auto_discover = true;
+    }
+    // The `derives` link itself doesn't carry into the resolved form; clearing
+    // it makes repeated calls idempotent.
+    child.derives = None;
+    Ok(())
 }
 
 /// Load and parse `bitrouter.yaml` from disk.
