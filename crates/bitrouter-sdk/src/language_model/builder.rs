@@ -151,9 +151,7 @@ impl PipelineBuilder {
             fallback_policy,
             executor,
             keepalive_interval: self.keepalive_interval,
-            pending_settlements: Arc::new(std::sync::Mutex::new(
-                tokio::task::JoinSet::new(),
-            )),
+            pending_settlements: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
         })
     }
 }

@@ -243,10 +243,7 @@ impl RoutingTable for ConfigRoutingTable {
         Ok(())
     }
 
-    async fn preset_overrides(
-        &self,
-        model: &str,
-    ) -> Result<crate::config::PromptOverrides> {
+    async fn preset_overrides(&self, model: &str) -> Result<crate::config::PromptOverrides> {
         // Same resolution as `route_chain` (Stage 0): strip `@preset:variant`
         // and return the preset's prompt body overrides. The synchronous part
         // is wrapped in a brief read-lock; no `.await` is held across it.

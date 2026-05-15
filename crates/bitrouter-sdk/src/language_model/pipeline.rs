@@ -44,8 +44,7 @@ pub struct Pipeline {
     /// (`StreamSettlementGuard::drop` — 008 §3.5: no lost streaming
     /// settlement). [`Pipeline::drain_pending_settlements`] awaits them all
     /// on graceful shutdown so the process doesn't exit mid-settlement.
-    pub(crate) pending_settlements:
-        Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+    pub(crate) pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
 }
 
 impl Pipeline {
@@ -64,6 +63,13 @@ impl Pipeline {
     /// Call this from the HTTP server's graceful-shutdown path so a SIGTERM
     /// during heavy streaming traffic doesn't drop receipts (008 §3.5).
     /// Returns the number of tasks drained.
+    ///
+    /// Race note: any new `StreamSettlementGuard::drop` *after* this method
+    /// has swapped the JoinSet lands on a fresh empty set and is not awaited
+    /// by *this* call. In practice axum's graceful shutdown awaits every
+    /// in-flight handler/stream-consumer to drop before returning, so all
+    /// Drops fire *before* `drain_pending_settlements` is called — the swap
+    /// is correct under that contract.
     pub async fn drain_pending_settlements(&self) -> usize {
         // Take the JoinSet out of the mutex so we can `await` join_next
         // without holding a sync lock across an await.
