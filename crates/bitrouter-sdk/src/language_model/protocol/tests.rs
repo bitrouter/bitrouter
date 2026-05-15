@@ -411,6 +411,52 @@ fn openai_chat_cache_tokens_round_trip() {
 }
 
 #[test]
+fn anthropic_stream_encoder_closes_block_on_kind_transition() {
+    // v0 #429 regression: when the canonical part stream transitions
+    // text → reasoning → text → tool, the Anthropic encoder MUST emit a
+    // `content_block_stop` before opening the new block kind. Strict
+    // clients (Claude Code) reject a text_delta inside an open `thinking`
+    // block. Ref: docs.anthropic.com/en/api/messages-streaming.
+    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let mut encoder = adapter.stream_encoder("msg_x", "claude-3-7-sonnet");
+    let parts = [
+        StreamPart::ReasoningDelta {
+            text: "think ".into(),
+        },
+        StreamPart::TextDelta {
+            text: "answer ".into(),
+        },
+        StreamPart::ToolCallDelta {
+            id: "t1".into(),
+            name: Some("calc".into()),
+            arguments: "{}".into(),
+        },
+    ];
+    let mut events: Vec<String> = Vec::new();
+    for part in &parts {
+        for frame in encoder.encode(part).unwrap() {
+            if let SseFrame::Event { event, data } = frame {
+                events.push(format!("{} {data}", event.unwrap_or_default()));
+            }
+        }
+    }
+    // Find the sequence: thinking block → close → text block → close → tool block.
+    let joined = events.join("\n");
+    let thinking_open = joined
+        .find("\"content_block\":{\"type\":\"thinking\"")
+        .or_else(|| joined.find("\"type\":\"thinking\""));
+    let first_stop = joined.find("content_block_stop");
+    let text_open = joined.find("\"type\":\"text\"");
+    assert!(thinking_open.is_some(), "thinking block opened: {joined}");
+    assert!(first_stop.is_some(), "block stop emitted: {joined}");
+    assert!(text_open.is_some(), "text block opened: {joined}");
+    assert!(
+        thinking_open < first_stop && first_stop < text_open,
+        "block_stop must fall *between* thinking_start and text_start; got:\n{joined}"
+    );
+}
+
+#[test]
 fn anthropic_stream_error_maps_to_proper_http_status() {
     // Anthropic mid-stream `error` events carry `error.type` — a 4xx must
     // be threaded to `Upstream.status` so the fallback policy can decide

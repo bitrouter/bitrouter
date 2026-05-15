@@ -417,6 +417,7 @@ impl ProtocolAdapter for AnthropicAdapter {
             model: model.to_string(),
             started: false,
             block_open: false,
+            block_kind: None,
             block_index: 0,
         })
     }
@@ -692,11 +693,28 @@ impl StreamDecoder for AnthropicStreamDecoder {
 /// Anthropic SSE encoder. Emits the full event envelope: `message_start`,
 /// per-block `content_block_start` / `_delta` / `_stop`, `message_delta`,
 /// `message_stop`.
+///
+/// Block transitions: Anthropic's `content_block_*` events are typed
+/// (`text` / `thinking` / `tool_use`). Strict clients (e.g. Claude Code)
+/// reject a `text_delta` inside a still-open `thinking` block. The encoder
+/// therefore tracks the **kind** of the currently open block and closes it
+/// before opening a new block of a different kind (text → thinking, etc.).
+/// Same-kind consecutive deltas reuse the open block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EncoderBlockKind {
+    Text,
+    Thinking,
+    ToolUse,
+}
+
 struct AnthropicStreamEncoder {
     request_id: String,
     model: String,
     started: bool,
     block_open: bool,
+    /// The kind of the currently open block, used to detect transitions.
+    /// Meaningful only when `block_open == true`.
+    block_kind: Option<EncoderBlockKind>,
     block_index: usize,
 }
 
@@ -736,7 +754,24 @@ impl AnthropicStreamEncoder {
                 serde_json::json!({ "type": "content_block_stop", "index": self.block_index }),
             ));
             self.block_open = false;
+            self.block_kind = None;
             self.block_index += 1;
+        }
+    }
+
+    /// If a block of a different kind is currently open, close it; then ensure
+    /// a block of `wanted` is open. Returns whether a *new* block was opened
+    /// this call so the caller can append the right `content_block_start`.
+    fn ensure_block_open(&mut self, frames: &mut Vec<SseFrame>, wanted: EncoderBlockKind) -> bool {
+        if self.block_open && self.block_kind != Some(wanted) {
+            self.close_block(frames);
+        }
+        if !self.block_open {
+            self.block_kind = Some(wanted);
+            self.block_open = true;
+            true
+        } else {
+            false
         }
     }
 
@@ -792,7 +827,7 @@ impl StreamEncoder for AnthropicStreamEncoder {
         self.ensure_started(&mut frames);
         match part {
             StreamPart::TextDelta { text } => {
-                if !self.block_open {
+                if self.ensure_block_open(&mut frames, EncoderBlockKind::Text) {
                     frames.push(Self::ev(
                         "content_block_start",
                         serde_json::json!({
@@ -801,7 +836,6 @@ impl StreamEncoder for AnthropicStreamEncoder {
                             "content_block": { "type": "text", "text": "" },
                         }),
                     ));
-                    self.block_open = true;
                 }
                 frames.push(Self::ev(
                     "content_block_delta",
@@ -813,7 +847,7 @@ impl StreamEncoder for AnthropicStreamEncoder {
                 ));
             }
             StreamPart::ReasoningDelta { text } => {
-                if !self.block_open {
+                if self.ensure_block_open(&mut frames, EncoderBlockKind::Thinking) {
                     frames.push(Self::ev(
                         "content_block_start",
                         serde_json::json!({
@@ -822,7 +856,6 @@ impl StreamEncoder for AnthropicStreamEncoder {
                             "content_block": { "type": "thinking", "thinking": "" },
                         }),
                     ));
-                    self.block_open = true;
                 }
                 frames.push(Self::ev(
                     "content_block_delta",
@@ -839,8 +872,11 @@ impl StreamEncoder for AnthropicStreamEncoder {
                 arguments,
             } => {
                 if let Some(name) = name {
-                    // a new tool call starts its own block
+                    // A new tool call always opens its own block, even if a
+                    // tool_use block was already open (consecutive tool calls
+                    // are distinct blocks). Force-close, then open.
                     self.close_block(&mut frames);
+                    self.ensure_block_open(&mut frames, EncoderBlockKind::ToolUse);
                     frames.push(Self::ev(
                         "content_block_start",
                         serde_json::json!({
@@ -849,7 +885,6 @@ impl StreamEncoder for AnthropicStreamEncoder {
                             "content_block": { "type": "tool_use", "id": id, "name": name, "input": {} },
                         }),
                     ));
-                    self.block_open = true;
                 }
                 if !arguments.is_empty() {
                     frames.push(Self::ev(
