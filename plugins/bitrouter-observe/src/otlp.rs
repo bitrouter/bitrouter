@@ -44,12 +44,24 @@ struct SpanBatchItem {
     outcome: &'static str,
 }
 
+/// Soft cap on the in-flight `timings` map. If the pipeline never calls
+/// `on_request_end` for some requests (panic, runtime drop) the map would
+/// otherwise grow without bound. When full, the oldest entry is evicted
+/// instead of letting RAM grow forever. The cap is generous — any modern
+/// inbound rate hits steady-state well below this.
+const TIMINGS_CAP: usize = 16 * 1024;
+
+/// Bound on the exporter channel. With this and `try_send` drop-oldest
+/// semantics the OTLP collector being slow / down cannot cause memory growth.
+const CHANNEL_CAP: usize = 1024;
+
 /// A minimal OTLP/HTTP JSON trace exporter `ObserveHook`.
 pub struct OtlpExportHook {
-    /// Per-request timing, keyed by `request_id`.
+    /// Per-request timing, keyed by `request_id`. Bounded at `TIMINGS_CAP`.
     timings: Mutex<HashMap<String, RequestTiming>>,
-    /// Non-blocking handoff to the background exporter task.
-    tx: mpsc::UnboundedSender<SpanBatchItem>,
+    /// Non-blocking handoff to the background exporter task. Bounded so a
+    /// stuck collector cannot grow this unbounded.
+    tx: mpsc::Sender<SpanBatchItem>,
 }
 
 fn now_unix_nano() -> u64 {
@@ -80,7 +92,7 @@ impl OtlpExportHook {
     /// current tokio runtime.
     pub fn new(endpoint: impl Into<String>) -> Self {
         let endpoint = endpoint.into();
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(CHANNEL_CAP);
         tokio::spawn(export_loop(endpoint, rx));
         Self {
             timings: Mutex::new(HashMap::new()),
@@ -94,6 +106,13 @@ impl ObserveHook for OtlpExportHook {
     async fn after_phase(&self, phase: Phase, ctx: &PipelineContext) {
         let now = now_unix_nano();
         if let Ok(mut map) = self.timings.lock() {
+            // Hard cap on map size — if `on_request_end` was never called for
+            // some past request (panic, runtime-drop) we still bound memory.
+            if !map.contains_key(ctx.request_id()) && map.len() >= TIMINGS_CAP {
+                if let Some(victim) = map.keys().next().cloned() {
+                    map.remove(&victim);
+                }
+            }
             let timing = map
                 .entry(ctx.request_id().to_string())
                 .or_insert_with(|| RequestTiming {
@@ -127,21 +146,25 @@ impl ObserveHook for OtlpExportHook {
             RequestOutcome::Failed(_) => "failed",
             RequestOutcome::ClientDisconnected => "disconnected",
         };
-        // try_send is non-blocking — if the channel is somehow gone, the span
-        // is dropped (observation must never affect the request).
-        let _ = self.tx.send(SpanBatchItem {
+        // try_send is non-blocking — if the channel is full or gone, the
+        // span is dropped (observation must never affect the request, and a
+        // stuck collector must not stall the hot path).
+        let item = SpanBatchItem {
             request_id: ctx.request_id().to_string(),
             model: ctx.model().to_string(),
             timing,
             end_unix_nano: end,
             outcome: outcome_label,
-        });
+        };
+        if self.tx.try_send(item).is_err() {
+            tracing::warn!("OTLP exporter channel full / closed — dropping span");
+        }
     }
 }
 
 /// The background exporter task: drains finished requests, builds OTLP/JSON
 /// `ExportTraceServiceRequest` bodies and POSTs them to `{endpoint}/v1/traces`.
-async fn export_loop(endpoint: String, mut rx: mpsc::UnboundedReceiver<SpanBatchItem>) {
+async fn export_loop(endpoint: String, mut rx: mpsc::Receiver<SpanBatchItem>) {
     let client = reqwest::Client::new();
     let url = format!("{}/v1/traces", endpoint.trim_end_matches('/'));
     while let Some(item) = rx.recv().await {

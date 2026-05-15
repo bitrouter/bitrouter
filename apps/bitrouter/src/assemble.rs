@@ -15,7 +15,7 @@ use bitrouter_sdk::language_model::HttpExecutor;
 
 use bitrouter_auth::AuthHook;
 use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
-use bitrouter_observe::PrometheusHook;
+use bitrouter_observe::{OtlpExportHook, PrometheusHook};
 use bitrouter_policy::{PolicyHook, PolicyStore};
 use bitrouter_sdk::MetricsRenderer;
 use bitrouter_settlement::{ModelPricing, MppState, PricingTable, SettlementBundle};
@@ -94,6 +94,15 @@ pub async fn build_app_with_path(
     let prometheus_for_observe = prometheus.clone();
     let metrics_renderer: Arc<dyn MetricsRenderer> = prometheus;
 
+    // Optional OTLP/HTTP JSON tracer (003 §4.6 / 008 F17). Configured under
+    // `plugins.bitrouter-observe.otlp_endpoint`; absent → exporter not wired.
+    let otlp_endpoint: Option<String> = config
+        .plugins
+        .get("bitrouter-observe")
+        .and_then(|c| c.get("otlp_endpoint"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     let pool_for_hooks = pool.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -118,6 +127,10 @@ pub async fn build_app_with_path(
             // writes to. ObserveHook is read-only / error-swallowing so a
             // wiring problem never affects the request path.
             lm.observe_hook(PrometheusObserve(prometheus_for_observe.clone()));
+            // Optional OTLP exporter — wired only when configured.
+            if let Some(endpoint) = otlp_endpoint.as_ref() {
+                lm.observe_hook(OtlpExportHook::new(endpoint));
+            }
         })
         // The settlement bundle installs BalanceCheckHook, ByokRouteHook,
         // MppStreamHook, the ChargeStrategy chain and ReceiptRecorder.

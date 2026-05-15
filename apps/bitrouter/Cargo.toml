@@ -22,7 +22,7 @@ bitrouter-auth.workspace = true
 bitrouter-policy.workspace = true
 bitrouter-settlement = { workspace = true, features = ["sqlite", "mpp-tempo"] }
 bitrouter-guardrails.workspace = true
-bitrouter-observe.workspace = true
+bitrouter-observe = { workspace = true, features = ["otlp"] }
 sqlx = { workspace = true, features = ["sqlite"] }
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
