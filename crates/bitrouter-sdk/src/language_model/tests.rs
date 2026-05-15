@@ -535,6 +535,50 @@ async fn stream_on_stream_end_fires_on_completion() {
 }
 
 #[tokio::test]
+async fn drain_awaits_pending_disconnect_settlements() {
+    // The client drops the stream before it completes — the guard's Drop
+    // detaches a settlement task onto the pipeline's JoinSet. drain_pending_
+    // settlements must await it (otherwise SIGTERM could lose the receipt).
+    let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta { text: "hi".into() },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |b| {
+            b.stream_hook(ScriptedStreamHook {
+                interest: StreamInterest::all(),
+                mode: StreamMode::Pass,
+                ended_with: ended.clone(),
+            });
+        },
+    );
+
+    let stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("ok");
+    // Drop the stream WITHOUT polling to completion → Drop runs, detaches a
+    // settlement task with the ClientDisconnected outcome.
+    drop(stream);
+
+    let drained = pipeline.drain_pending_settlements().await;
+    assert!(
+        drained >= 1,
+        "drain must have awaited at least the one disconnect-settlement task; got {drained}"
+    );
+    assert_eq!(
+        *ended.lock().unwrap(),
+        vec!["disconnected"],
+        "the settlement task ran and the StreamHook saw ClientDisconnected"
+    );
+}
+
+#[tokio::test]
 async fn stream_on_stream_end_fires_on_upstream_error() {
     let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(

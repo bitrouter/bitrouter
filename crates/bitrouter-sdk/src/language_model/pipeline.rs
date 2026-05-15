@@ -40,6 +40,12 @@ pub struct Pipeline {
     pub(crate) fallback_policy: Arc<dyn FallbackPolicy>,
     pub(crate) executor: Arc<dyn Executor>,
     pub(crate) keepalive_interval: Duration,
+    /// Detached settlement tasks spawned when a streaming client disconnects
+    /// (`StreamSettlementGuard::drop` — 008 §3.5: no lost streaming
+    /// settlement). [`Pipeline::drain_pending_settlements`] awaits them all
+    /// on graceful shutdown so the process doesn't exit mid-settlement.
+    pub(crate) pending_settlements:
+        Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
 }
 
 impl Pipeline {
@@ -52,6 +58,27 @@ impl Pipeline {
     /// the outbound frame stream in [`crate::language_model::SseKeepaliveStream`].
     pub fn keepalive_interval(&self) -> Duration {
         self.keepalive_interval
+    }
+
+    /// Wait for every detached client-disconnect settlement task to finish.
+    /// Call this from the HTTP server's graceful-shutdown path so a SIGTERM
+    /// during heavy streaming traffic doesn't drop receipts (008 §3.5).
+    /// Returns the number of tasks drained.
+    pub async fn drain_pending_settlements(&self) -> usize {
+        // Take the JoinSet out of the mutex so we can `await` join_next
+        // without holding a sync lock across an await.
+        let mut taken = {
+            let mut guard = match self.pending_settlements.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            std::mem::take(&mut *guard)
+        };
+        let mut drained = 0;
+        while taken.join_next().await.is_some() {
+            drained += 1;
+        }
+        drained
     }
 
     /// Execute a non-streaming request: the four stages, in order.
@@ -409,16 +436,33 @@ impl Drop for StreamSettlementGuard {
         // If `state` is still `Some`, the consumer dropped the stream before it
         // terminated — settle the delivered tokens on a detached task with a
         // `ClientDisconnected` outcome (008 §3.5: no lost streaming settlement).
+        //
+        // The task is held on the pipeline's `pending_settlements` JoinSet so
+        // `Pipeline::drain_pending_settlements` can await every in-flight
+        // detached settlement during graceful shutdown — otherwise SIGTERM
+        // could cut a settlement task mid-await and the receipt would be lost.
         if let Some((mut processor, mut ctx)) = self.state.take() {
             let pipeline = self.pipeline.clone();
-            tokio::spawn(async move {
+            let fut = async move {
                 processor.finish(StreamOutcome::ClientDisconnected).await;
                 ctx.absorb_stream(processor.into_context());
                 pipeline.run_settlement(&mut ctx, true, None).await;
                 pipeline
                     .observe_end(&ctx, RequestOutcome::ClientDisconnected)
                     .await;
-            });
+            };
+            // The mutex is held only long enough to call `spawn` (which is
+            // synchronous); no `.await` is held across the lock. If the lock
+            // is poisoned we fall through to a bare `tokio::spawn` so the
+            // settlement still runs (the unhappy case beats losing it).
+            match self.pipeline.pending_settlements.lock() {
+                Ok(mut set) => {
+                    set.spawn(fut);
+                }
+                Err(_poisoned) => {
+                    tokio::spawn(fut);
+                }
+            }
         }
     }
 }

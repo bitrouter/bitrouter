@@ -52,7 +52,7 @@ impl App {
             })?
             .clone();
         let state = AppState {
-            language_model: pipeline,
+            language_model: pipeline.clone(),
             skip_auth: self.skip_auth(),
         };
         let router = build_router(state);
@@ -62,10 +62,19 @@ impl App {
         tracing::info!(%listen, "bitrouter listening");
         // Graceful shutdown (007 §1.2 / §6.2 / 008 §3.6): on SIGINT/SIGTERM
         // stop accepting new connections and let in-flight requests finish.
+        let drain_pipeline = pipeline.clone();
         serve(listener, router)
             .with_graceful_shutdown(shutdown_signal())
             .await
             .map_err(|e| BitrouterError::internal(format!("serve: {e}")))?;
+        // After the HTTP server drains, also wait for every detached client-
+        // disconnect settlement task (StreamSettlementGuard::drop). Without
+        // this, SIGTERM during heavy streaming traffic could drop the
+        // detached tasks mid-await and lose receipts (008 §3.5).
+        let drained = drain_pipeline.drain_pending_settlements().await;
+        if drained > 0 {
+            tracing::info!(drained, "drained pending streaming settlements on shutdown");
+        }
         Ok(())
     }
 }
@@ -328,8 +337,8 @@ mod tests {
 
     #[test]
     fn payment_required_emits_www_authenticate() {
-        let response = BitrouterError::PaymentRequired("send a Tempo voucher".to_string())
-            .into_response();
+        let response =
+            BitrouterError::PaymentRequired("send a Tempo voucher".to_string()).into_response();
         assert_eq!(response.status().as_u16(), 402);
         let www_auth = response
             .headers()
