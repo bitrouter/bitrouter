@@ -420,6 +420,61 @@ async fn fallback_does_not_retry_on_4xx() {
     assert!(matches!(err, BitrouterError::Upstream { status: 400, .. }));
 }
 
+/// An ExecutionHook that just *observes* failures — it never votes Fail. The
+/// presence of any such hook used to silently disable `FallbackPolicy::Fail`
+/// because `classify_failure` skipped the policy when `execution_hooks` was
+/// non-empty; this test pins the corrected behaviour.
+struct ObserveOnlyExecutionHook;
+#[async_trait::async_trait]
+impl crate::language_model::ExecutionHook for ObserveOnlyExecutionHook {
+    async fn on_success(
+        &self,
+        _ctx: &crate::language_model::PipelineContext,
+        _result: &crate::language_model::ExecutionResult,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
+    async fn on_failure(
+        &self,
+        _ctx: &crate::language_model::PipelineContext,
+        _error: &BitrouterError,
+    ) -> crate::language_model::FallbackDecision {
+        crate::language_model::FallbackDecision::TryNext
+    }
+}
+
+#[tokio::test]
+async fn fallback_does_not_retry_on_4xx_even_with_observe_only_execution_hook() {
+    // Same scenario as `fallback_does_not_retry_on_4xx`, but with an
+    // observe-only ExecutionHook registered. Before the fix, registering ANY
+    // execution hook caused `classify_failure` to skip the FallbackPolicy and
+    // unconditionally `TryNext`, so the 4xx would silently fall through to
+    // the second provider. The fix consults both hooks AND the policy.
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::Upstream {
+                status: 400,
+                message: "bad".into(),
+            }),
+            MockResponse::Generate(GenerateResult {
+                content: vec![Content::Text { text: "b".into() }],
+                usage: None,
+                finish_reason: None,
+            }),
+        ])),
+        |b| {
+            b.execution_hook(ObserveOnlyExecutionHook);
+        },
+    );
+
+    let err = pipeline.execute(request()).await.unwrap_err();
+    assert!(
+        matches!(err, BitrouterError::Upstream { status: 400, .. }),
+        "observe-only ExecutionHook must NOT disable FallbackPolicy::Fail on 4xx"
+    );
+}
+
 #[tokio::test]
 async fn observe_hook_panic_is_swallowed() {
     let pipeline = pipeline_with(

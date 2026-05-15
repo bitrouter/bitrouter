@@ -287,24 +287,24 @@ impl Pipeline {
             .unwrap_or_else(|| BitrouterError::NotFound("empty routing chain".to_string())))
     }
 
-    /// Decide fallback after an upstream failure. With execution hooks
-    /// registered, any hook voting `Fail` fails the request; otherwise the
-    /// `FallbackPolicy` decides.
+    /// Decide fallback after an upstream failure. Any registered execution hook
+    /// voting `Fail` short-circuits to Fail; otherwise the `FallbackPolicy`
+    /// decides (003 §4.3). A previous version of this method consulted the
+    /// FallbackPolicy *only* when `execution_hooks` was empty, which silently
+    /// disabled `FallbackPolicy::Fail` on 4xx upstream errors as soon as any
+    /// hook (even an observe-only one) was registered.
     async fn classify_failure(
         &self,
         ctx: &PipelineContext,
         err: &BitrouterError,
         target: &RoutingTarget,
     ) -> FallbackDecision {
-        if self.execution_hooks.is_empty() {
-            return self.fallback_policy.classify(err, target);
-        }
         for hook in &self.execution_hooks {
             if let FallbackDecision::Fail(e) = hook.on_failure(ctx, err).await {
                 return FallbackDecision::Fail(e);
             }
         }
-        FallbackDecision::TryNext
+        self.fallback_policy.classify(err, target)
     }
 
     /// Stage 4 — Settlement. The `ChargeStrategy` chain is mutually exclusive
