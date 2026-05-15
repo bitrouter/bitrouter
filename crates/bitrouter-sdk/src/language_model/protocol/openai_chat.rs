@@ -539,10 +539,22 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .and_then(|d| d.get("reasoning_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    // OpenAI Chat surfaces cached prompt tokens under
+    // `prompt_tokens_details.cached_tokens` — subset of `prompt_tokens`. Ref:
+    // <https://platform.openai.com/docs/api-reference/chat/object> →
+    // `usage` object. Some OpenAI-compatible providers (e.g. DeepSeek)
+    // expose the same field name so we cover them too.
+    let cache_read = value
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Some(Usage {
         prompt_tokens,
         completion_tokens,
         reasoning_tokens,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: 0,
     })
 }
 
@@ -555,6 +567,10 @@ fn render_usage(usage: &Usage) -> serde_json::Value {
     if usage.reasoning_tokens > 0 {
         obj["completion_tokens_details"] =
             serde_json::json!({ "reasoning_tokens": usage.reasoning_tokens });
+    }
+    if usage.cache_read_tokens > 0 {
+        obj["prompt_tokens_details"] =
+            serde_json::json!({ "cached_tokens": usage.cache_read_tokens });
     }
     obj
 }

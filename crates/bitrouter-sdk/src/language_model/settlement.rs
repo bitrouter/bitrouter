@@ -31,6 +31,14 @@ pub struct SettlementContext {
     pub completion_tokens: u64,
     /// Reasoning tokens consumed.
     pub reasoning_tokens: u64,
+    /// Cache-read prompt tokens — already-cached content served from cache.
+    /// Subset of `prompt_tokens`. Lets a `ChargeStrategy` apply discounted
+    /// pricing (e.g. Anthropic cache-read at 0.1× the prompt rate).
+    pub cache_read_tokens: u64,
+    /// Cache-write prompt tokens — content written to the cache this turn.
+    /// Subset of `prompt_tokens`. Lets a `ChargeStrategy` apply premium
+    /// pricing (e.g. Anthropic cache-write at 1.25× the prompt rate).
+    pub cache_write_tokens: u64,
     /// Whether the request was streamed.
     pub streamed: bool,
     /// End-to-end latency in milliseconds.

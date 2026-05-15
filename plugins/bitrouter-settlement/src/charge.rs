@@ -158,6 +158,8 @@ fn usage_of(ctx: &SettlementContext) -> Usage {
         prompt_tokens: ctx.prompt_tokens,
         completion_tokens: ctx.completion_tokens,
         reasoning_tokens: ctx.reasoning_tokens,
+        cache_read_tokens: ctx.cache_read_tokens,
+        cache_write_tokens: ctx.cache_write_tokens,
     }
 }
 

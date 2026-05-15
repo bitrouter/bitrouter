@@ -166,6 +166,7 @@ async fn stream_hook_passes_clean_content_through() {
                 prompt_tokens: 1,
                 completion_tokens: 2,
                 reasoning_tokens: 0,
+                ..Default::default()
             },
         },
         StreamPart::Finish {

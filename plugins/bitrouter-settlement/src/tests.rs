@@ -61,6 +61,7 @@ fn executor() -> Arc<MockExecutor> {
                 prompt_tokens: 100,
                 completion_tokens: 50,
                 reasoning_tokens: 0,
+                ..Default::default()
             }),
             finish_reason: Some(FinishReason::Stop),
         },
@@ -316,6 +317,7 @@ async fn metrics_store_aggregates_spend() {
                     prompt_tokens: 100,
                     completion_tokens: 50,
                     reasoning_tokens: 0,
+                    ..Default::default()
                 }),
                 finish_reason: Some(FinishReason::Stop),
             }),
@@ -325,6 +327,7 @@ async fn metrics_store_aggregates_spend() {
                     prompt_tokens: 100,
                     completion_tokens: 50,
                     reasoning_tokens: 0,
+                    ..Default::default()
                 }),
                 finish_reason: Some(FinishReason::Stop),
             }),

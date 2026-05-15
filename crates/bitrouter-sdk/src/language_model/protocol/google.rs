@@ -423,10 +423,18 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .get("thoughtsTokenCount")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    // Gemini reports cached prompt tokens under `cachedContentTokenCount`
+    // (ai.google.dev/api/generate-content). No write-side counter is exposed.
+    let cache_read = value
+        .get("cachedContentTokenCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Some(Usage {
         prompt_tokens: prompt,
         completion_tokens: candidates,
         reasoning_tokens: reasoning,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: 0,
     })
 }
 

@@ -66,7 +66,7 @@ impl MockExecutor {
             usage: Some(Usage {
                 prompt_tokens: 10,
                 completion_tokens: 5,
-                reasoning_tokens: 0,
+                ..Default::default()
             }),
             finish_reason: Some(FinishReason::Stop),
         };

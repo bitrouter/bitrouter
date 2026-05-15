@@ -396,8 +396,7 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
         request_id: &str,
     ) -> Result<serde_json::Value> {
         let output = render_output_items(result);
-        let usage = result.usage.unwrap_or_default();
-        Ok(serde_json::json!({
+        let mut body = serde_json::json!({
             "id": request_id,
             "object": "response",
             "model": prompt.model,
@@ -406,13 +405,15 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
                 _ => "completed",
             },
             "output": output,
-            "usage": {
-                "input_tokens": usage.prompt_tokens,
-                "output_tokens": usage.completion_tokens,
-                "total_tokens": usage.total(),
-                "output_tokens_details": { "reasoning_tokens": usage.reasoning_tokens },
-            },
-        }))
+        });
+        // Mirror the streaming `emit_terminal` behaviour: omit the `usage`
+        // key entirely when the upstream reported no token counts. A
+        // zero-filled object would let downstream callers conclude the
+        // request used zero tokens.
+        if let Some(usage) = result.usage {
+            body["usage"] = render_responses_usage(&usage);
+        }
+        Ok(body)
     }
 
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
@@ -532,6 +533,22 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
     items
 }
 
+/// Render a Responses-shaped `usage` object that always emits the canonical
+/// numeric fields and adds the cache subtree only when it'd carry signal.
+fn render_responses_usage(usage: &Usage) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "input_tokens": usage.prompt_tokens,
+        "output_tokens": usage.completion_tokens,
+        "total_tokens": usage.total(),
+        "output_tokens_details": { "reasoning_tokens": usage.reasoning_tokens },
+    });
+    if usage.cache_read_tokens > 0 {
+        obj["input_tokens_details"] =
+            serde_json::json!({ "cached_tokens": usage.cache_read_tokens });
+    }
+    obj
+}
+
 fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
     let input = value.get("input_tokens").and_then(|v| v.as_u64())?;
     let output = value
@@ -543,10 +560,20 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .and_then(|d| d.get("reasoning_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    // Responses' usage block exposes cached prompt tokens under
+    // `input_tokens_details.cached_tokens`. Ref:
+    // <https://platform.openai.com/docs/api-reference/responses/object>.
+    let cache_read = value
+        .get("input_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Some(Usage {
         prompt_tokens: input,
         completion_tokens: output,
         reasoning_tokens: reasoning,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: 0,
     })
 }
 

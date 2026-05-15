@@ -155,8 +155,25 @@ pub struct Usage {
     pub prompt_tokens: u64,
     /// Completion / output tokens.
     pub completion_tokens: u64,
-    /// Reasoning tokens (subset of completion on most providers).
+    /// Reasoning tokens (subset of `completion_tokens` on most providers).
     pub reasoning_tokens: u64,
+    /// Cache-read input tokens — already-cached prompt content that the
+    /// provider served from cache. Subset of `prompt_tokens`. Maps to
+    /// Anthropic's `usage.cache_read_input_tokens`
+    /// (<https://docs.anthropic.com/en/api/messages>) and to OpenAI Chat's
+    /// `usage.prompt_tokens_details.cached_tokens`. Default 0 when the
+    /// upstream reports no cache stats.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub cache_read_tokens: u64,
+    /// Cache-write input tokens — prompt content written to the cache this
+    /// turn. Subset of `prompt_tokens`. Maps to Anthropic's
+    /// `usage.cache_creation_input_tokens`.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub cache_write_tokens: u64,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
 }
 
 impl Usage {

@@ -100,6 +100,7 @@ mod tests {
             prompt_tokens: 100,
             completion_tokens: 50,
             reasoning_tokens: 0,
+            ..Default::default()
         };
         // 100*2 + 50*10 = 700
         assert_eq!(calculate_charge_micro_usd(&usage, &pricing), 700);

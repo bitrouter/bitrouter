@@ -379,10 +379,7 @@ impl ProtocolAdapter for AnthropicAdapter {
             "model": prompt.model,
             "content": content,
             "stop_reason": result.finish_reason.map(finish_to_stop_reason),
-            "usage": {
-                "input_tokens": usage.prompt_tokens,
-                "output_tokens": usage.completion_tokens,
-            },
+            "usage": render_usage(&usage),
         }))
     }
 
@@ -466,10 +463,23 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
     if value.get("input_tokens").is_none() && value.get("output_tokens").is_none() {
         return None;
     }
+    // Cache fields are Anthropic-specific; absent on providers that don't
+    // implement prompt caching. Ref:
+    // <https://docs.anthropic.com/en/api/messages> → `usage` object.
+    let cache_read = value
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_write = value
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Some(Usage {
         prompt_tokens: input,
         completion_tokens: output,
         reasoning_tokens: 0,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
     })
 }
 
@@ -508,7 +518,16 @@ impl StreamDecoder for AnthropicStreamDecoder {
 
         let mut parts = Vec::new();
         match event_name {
-            "message_start" => {}
+            "message_start" => {
+                // Anthropic emits the prompt-cache stats on the start frame,
+                // so capture them now and propagate via the terminal Usage
+                // part (docs.anthropic.com/en/api/messages-streaming).
+                if let Some(usage) = json.get("message").and_then(|m| m.get("usage"))
+                    && let Some(parsed) = parse_usage(usage)
+                {
+                    self.usage = parsed;
+                }
+            }
             "content_block_start" => {
                 let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
                 let block = json.get("content_block");
@@ -595,6 +614,20 @@ impl StreamDecoder for AnthropicStreamDecoder {
                 {
                     self.usage.prompt_tokens = input;
                 }
+                if let Some(cache_read) = json
+                    .get("usage")
+                    .and_then(|u| u.get("cache_read_input_tokens"))
+                    .and_then(|v| v.as_u64())
+                {
+                    self.usage.cache_read_tokens = cache_read;
+                }
+                if let Some(cache_write) = json
+                    .get("usage")
+                    .and_then(|u| u.get("cache_creation_input_tokens"))
+                    .and_then(|v| v.as_u64())
+                {
+                    self.usage.cache_write_tokens = cache_write;
+                }
                 if let Some(reason) = json
                     .get("delta")
                     .and_then(|d| d.get("stop_reason"))
@@ -676,7 +709,10 @@ impl AnthropicStreamEncoder {
     }
 
     /// Emit the terminal `message_delta` + `message_stop` frames. Shared by the
-    /// `Finish` and `ResponseCompleted` encode arms.
+    /// `Finish` and `ResponseCompleted` encode arms. Anthropic's
+    /// `message_delta.usage` carries `output_tokens`, `input_tokens`, and the
+    /// two cache fields when present
+    /// (<https://docs.anthropic.com/en/api/messages-streaming>).
     fn emit_terminal(
         &mut self,
         frames: &mut Vec<SseFrame>,
@@ -684,13 +720,13 @@ impl AnthropicStreamEncoder {
         usage: Option<Usage>,
     ) {
         self.close_block(frames);
-        let output_tokens = usage.map(|u| u.completion_tokens).unwrap_or(0);
+        let u = usage.unwrap_or_default();
         frames.push(Self::ev(
             "message_delta",
             serde_json::json!({
                 "type": "message_delta",
                 "delta": { "stop_reason": stop_reason },
-                "usage": { "output_tokens": output_tokens },
+                "usage": render_usage(&u),
             }),
         ));
         frames.push(Self::ev(
@@ -698,6 +734,24 @@ impl AnthropicStreamEncoder {
             serde_json::json!({ "type": "message_stop" }),
         ));
     }
+}
+
+/// Build an Anthropic-shaped `usage` object that always emits
+/// `input_tokens` / `output_tokens` and adds the cache fields when non-zero.
+fn render_usage(u: &Usage) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    map.insert("input_tokens".into(), u.prompt_tokens.into());
+    map.insert("output_tokens".into(), u.completion_tokens.into());
+    if u.cache_read_tokens > 0 {
+        map.insert("cache_read_input_tokens".into(), u.cache_read_tokens.into());
+    }
+    if u.cache_write_tokens > 0 {
+        map.insert(
+            "cache_creation_input_tokens".into(),
+            u.cache_write_tokens.into(),
+        );
+    }
+    serde_json::Value::Object(map)
 }
 
 impl StreamEncoder for AnthropicStreamEncoder {

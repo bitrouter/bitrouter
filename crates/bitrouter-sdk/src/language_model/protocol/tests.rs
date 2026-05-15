@@ -56,6 +56,7 @@ fn sample_result() -> GenerateResult {
             prompt_tokens: 12,
             completion_tokens: 8,
             reasoning_tokens: 3,
+            ..Default::default()
         }),
         finish_reason: Some(FinishReason::Stop),
     }
@@ -155,6 +156,7 @@ fn conversion_matrix_4x4_streaming() {
                 prompt_tokens: 5,
                 completion_tokens: 3,
                 reasoning_tokens: 1,
+                ..Default::default()
             },
         },
         StreamPart::Finish {
@@ -346,6 +348,87 @@ fn google_passes_through_uncommon_generation_config() {
             "Google generationConfig.{key} must survive parse/render"
         );
     }
+}
+
+#[test]
+fn anthropic_cache_tokens_round_trip() {
+    // Anthropic prompt caching exposes `cache_read_input_tokens` and
+    // `cache_creation_input_tokens` in `usage`. Parser captures them, encoder
+    // emits them on the non-streaming response, and on `message_delta` they
+    // accompany the streaming finalisation.
+    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-7-sonnet",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 80,
+            "cache_creation_input_tokens": 20
+        }
+    });
+    let result = adapter.parse_response(body).unwrap();
+    let usage = result.usage.unwrap();
+    assert_eq!(usage.cache_read_tokens, 80);
+    assert_eq!(usage.cache_write_tokens, 20);
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "msg_1")
+        .unwrap();
+    assert_eq!(rendered["usage"]["cache_read_input_tokens"], 80);
+    assert_eq!(rendered["usage"]["cache_creation_input_tokens"], 20);
+    // input_tokens still emitted alongside (audit1 §13).
+    assert_eq!(rendered["usage"]["input_tokens"], 100);
+}
+
+#[test]
+fn openai_chat_cache_tokens_round_trip() {
+    // OpenAI Chat surfaces cached prompt tokens via
+    // `prompt_tokens_details.cached_tokens`. Parse → canonical → render.
+    let adapter = adapter_for(ApiProtocol::Openai);
+    let body = serde_json::json!({
+        "id": "c1",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "prompt_tokens_details": {"cached_tokens": 70}
+        }
+    });
+    let result = adapter.parse_response(body).unwrap();
+    let usage = result.usage.unwrap();
+    assert_eq!(usage.cache_read_tokens, 70);
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "c1")
+        .unwrap();
+    assert_eq!(
+        rendered["usage"]["prompt_tokens_details"]["cached_tokens"],
+        70
+    );
+}
+
+#[test]
+fn openai_responses_omits_usage_when_none() {
+    // v0 #6ae55b2 — when upstream reported no token counts, the wire shape
+    // omits the `usage` key entirely. Mirrors the streaming `emit_terminal`.
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let result = GenerateResult {
+        content: vec![Content::Text {
+            text: "ok".to_string(),
+        }],
+        usage: None,
+        finish_reason: Some(FinishReason::Stop),
+    };
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "resp_n")
+        .unwrap();
+    assert!(
+        rendered.get("usage").is_none(),
+        "usage must be absent when upstream had no counts, got: {rendered}"
+    );
 }
 
 #[test]
@@ -901,6 +984,7 @@ fn responses_completed_preserves_id_status_and_usage() {
                 prompt_tokens: 12,
                 completion_tokens: 8,
                 reasoning_tokens: 0,
+                ..Default::default()
             }),
         })
         .unwrap();
@@ -1026,6 +1110,7 @@ fn regression_454_5_usage_zero_is_numeric_not_null() {
             prompt_tokens: 0,
             completion_tokens: 0,
             reasoning_tokens: 0,
+            ..Default::default()
         }),
         finish_reason: Some(FinishReason::Stop),
     };

@@ -201,6 +201,8 @@ impl PipelineContext {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             reasoning_tokens: usage.reasoning_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
             streamed: false,
             latency_ms: exec.map(|e| e.latency_ms).unwrap_or(0),
             generation_time_ms: exec.map(|e| e.generation_time_ms).unwrap_or(0),
