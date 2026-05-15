@@ -68,10 +68,61 @@ impl PricingTable {
     /// Resolve pricing for a `(provider, service_id)` pair. Returns `None` when
     /// no entry exists — the caller must treat that as "unconfigured", not free
     /// (#180 / #440 / #443).
+    ///
+    /// Called on every charge / streaming usage event, so it avoids
+    /// `provider.to_string() + service_id.to_string()` (a fresh allocation
+    /// per lookup): a 2-tuple of `&str` hashes the same as `(String, String)`
+    /// under the standard `Hash` derivation, so `HashMap::get` with the
+    /// `BorrowedKey` newtype reuses the borrow.
     pub fn resolve(&self, provider: &str, service_id: &str) -> Option<ModelPricing> {
         self.entries
-            .get(&(provider.to_string(), service_id.to_string()))
+            .get(&BorrowedKey(provider, service_id) as &dyn KeyLike)
             .copied()
+    }
+}
+
+/// Newtype wrapping `(&str, &str)` so `HashMap<(String, String), _>::get`
+/// can take a borrowed key without allocating two `String`s per lookup.
+/// We use a small trait-object trick: the map's key (`(String, String)`)
+/// and `BorrowedKey<'_>` both implement `KeyLike`, which `Hash + Eq`-equals
+/// the pair so the map can find the entry by reference.
+struct BorrowedKey<'a>(&'a str, &'a str);
+
+trait KeyLike {
+    fn parts(&self) -> (&str, &str);
+}
+
+impl KeyLike for (String, String) {
+    fn parts(&self) -> (&str, &str) {
+        (self.0.as_str(), self.1.as_str())
+    }
+}
+
+impl KeyLike for BorrowedKey<'_> {
+    fn parts(&self) -> (&str, &str) {
+        (self.0, self.1)
+    }
+}
+
+impl std::hash::Hash for dyn KeyLike + '_ {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let (a, b) = self.parts();
+        a.hash(state);
+        b.hash(state);
+    }
+}
+
+impl PartialEq for dyn KeyLike + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.parts() == other.parts()
+    }
+}
+
+impl Eq for dyn KeyLike + '_ {}
+
+impl<'a> std::borrow::Borrow<dyn KeyLike + 'a> for (String, String) {
+    fn borrow(&self) -> &(dyn KeyLike + 'a) {
+        self
     }
 }
 

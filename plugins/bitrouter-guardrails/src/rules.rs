@@ -135,13 +135,16 @@ const CARRY_CHARS: usize = 128;
 /// action) *is* cross-delta because abort can fire after partial emission.
 #[derive(Debug)]
 pub struct SlidingWindowMatcher {
-    rules: RuleSet,
+    /// Shared via `Arc` so the per-delta matcher construction is allocation-
+    /// free: a `RuleSet` holds compiled `Regex`es, and cloning it allocated
+    /// fresh `Vec`s + `Regex` references per streamed text token.
+    rules: std::sync::Arc<RuleSet>,
     carry: Vec<char>,
 }
 
 impl SlidingWindowMatcher {
     /// Build a matcher over a rule set with an empty carry window.
-    pub fn new(rules: RuleSet) -> Self {
+    pub fn new(rules: std::sync::Arc<RuleSet>) -> Self {
         Self {
             rules,
             carry: Vec::new(),
@@ -150,7 +153,7 @@ impl SlidingWindowMatcher {
 
     /// Build a matcher restoring a carry window (the per-request carry is
     /// persisted in `StreamContext` metadata between `on_part` calls).
-    pub fn with_carry(rules: RuleSet, carry: &str) -> Self {
+    pub fn with_carry(rules: std::sync::Arc<RuleSet>, carry: &str) -> Self {
         Self {
             rules,
             carry: carry.chars().collect(),
@@ -215,7 +218,7 @@ mod tests {
 
     #[test]
     fn sliding_window_redacts_within_a_delta() {
-        let mut m = SlidingWindowMatcher::new(rules());
+        let mut m = SlidingWindowMatcher::new(std::sync::Arc::new(rules()));
         let r = m.feed("my ssn is 123-45-6789 done");
         assert_eq!(
             r,
@@ -226,7 +229,7 @@ mod tests {
     #[test]
     fn sliding_window_blocks_cross_delta_badword() {
         // Block IS cross-delta — abort can fire after partial emission.
-        let mut m = SlidingWindowMatcher::new(rules());
+        let mut m = SlidingWindowMatcher::new(std::sync::Arc::new(rules()));
         let r1 = m.feed("the word is forb");
         assert!(matches!(r1, WindowResult::Emit(_)));
         let r2 = m.feed("idden now");
@@ -235,11 +238,11 @@ mod tests {
 
     #[test]
     fn carry_round_trips_through_metadata() {
-        let mut m = SlidingWindowMatcher::new(rules());
+        let mut m = SlidingWindowMatcher::new(std::sync::Arc::new(rules()));
         let _ = m.feed("hello there");
         let carry = m.carry();
         // a fresh matcher restored from the carry sees the same window
-        let mut restored = SlidingWindowMatcher::with_carry(rules(), &carry);
+        let mut restored = SlidingWindowMatcher::with_carry(std::sync::Arc::new(rules()), &carry);
         assert_eq!(
             restored.feed(" world"),
             WindowResult::Emit(" world".to_string())

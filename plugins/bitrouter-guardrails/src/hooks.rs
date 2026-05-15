@@ -53,12 +53,20 @@ fn request_text(ctx: &PipelineContext) -> String {
 
 /// Upstream guardrail: scans request content, denies on a `Block` match.
 pub struct GuardrailPreHook {
-    rules: RuleSet,
+    rules: std::sync::Arc<RuleSet>,
 }
 
 impl GuardrailPreHook {
     /// Build an upstream guardrail hook over a rule set.
     pub fn new(rules: RuleSet) -> Self {
+        Self {
+            rules: std::sync::Arc::new(rules),
+        }
+    }
+
+    /// Build a hook from an already-shared rule set so the two guardrail hooks
+    /// can share one `Arc<RuleSet>` and dodge per-stream-delta clones.
+    pub fn from_arc(rules: std::sync::Arc<RuleSet>) -> Self {
         Self { rules }
     }
 }
@@ -85,12 +93,20 @@ impl PreRequestHook for GuardrailPreHook {
 /// The per-request sliding-window carry is persisted in `StreamContext`
 /// metadata between `on_part` calls — the hook itself is stateless and shared.
 pub struct GuardrailStreamHook {
-    rules: RuleSet,
+    rules: std::sync::Arc<RuleSet>,
 }
 
 impl GuardrailStreamHook {
     /// Build a downstream guardrail hook over a rule set.
     pub fn new(rules: RuleSet) -> Self {
+        Self {
+            rules: std::sync::Arc::new(rules),
+        }
+    }
+
+    /// Build a hook from an already-shared rule set so it can share an
+    /// `Arc<RuleSet>` with [`GuardrailPreHook::from_arc`] and dodge clones.
+    pub fn from_arc(rules: std::sync::Arc<RuleSet>) -> Self {
         Self { rules }
     }
 
@@ -133,6 +149,8 @@ impl StreamHook for GuardrailStreamHook {
         };
 
         let carry = Self::load_carry(ctx);
+        // `Arc::clone` is a refcount bump; the matcher reuses the same
+        // compiled regex set without re-allocating per delta.
         let mut matcher = SlidingWindowMatcher::with_carry(self.rules.clone(), &carry);
         let verdict = matcher.feed(text);
         Self::store_carry(ctx, &matcher.carry());
