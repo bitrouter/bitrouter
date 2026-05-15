@@ -193,27 +193,36 @@ impl MppState {
 
 /// Extract the channel session id from a `Payment-SIGNATURE` header value.
 ///
-/// v1.0 accepts either a bare session id or a `key=value;…` credential string
-/// carrying `session=<id>` (and, in the full implementation, `sig=<voucher>`).
-/// **The on-chain voucher signature check is the documented Tempo follow-up**
-/// (cloud #183) — v1.0 resolves the credential to a known, positive-balance
-/// channel; it does not yet cryptographically verify the voucher.
+/// v1.0 requires the credential to carry **both** `session=<id>` and
+/// `sig=<voucher>` components. The `sig` value is required to be present and
+/// non-empty but is not yet cryptographically verified — that's the documented
+/// Tempo follow-up (cloud #183). The presence requirement matters today: a
+/// leaked / guessed bare session id alone must not authenticate, because
+/// without the `sig=` requirement an attacker who learns *any* session id (a
+/// log leak, a backup peek) gets to spend that channel's balance. Requiring
+/// `sig=` raises the bar to "must have seen a complete voucher" until the
+/// signature check lands.
 fn parse_session_id(credential: &str) -> Option<String> {
     let credential = credential.trim();
     if credential.is_empty() {
         return None;
     }
+    let mut session: Option<String> = None;
+    let mut has_nonempty_sig = false;
     for field in credential.split(';') {
-        if let Some(value) = field.trim().strip_prefix("session=") {
-            return Some(value.trim().to_string());
+        let field = field.trim();
+        if let Some(value) = field.strip_prefix("session=") {
+            let value = value.trim();
+            if !value.is_empty() {
+                session = Some(value.to_string());
+            }
+        } else if let Some(value) = field.strip_prefix("sig=") {
+            if !value.trim().is_empty() {
+                has_nonempty_sig = true;
+            }
         }
     }
-    // no structured field — treat the whole value as the session id
-    if credential.contains('=') {
-        None
-    } else {
-        Some(credential.to_string())
-    }
+    if has_nonempty_sig { session } else { None }
 }
 
 #[async_trait]
@@ -342,22 +351,33 @@ mod tests {
     use crate::db;
 
     #[test]
-    fn parse_session_id_accepts_bare_and_structured() {
-        // bare session id
-        assert_eq!(parse_session_id("sess-abc"), Some("sess-abc".to_string()));
-        // structured `session=<id>` field, with extra fields
+    fn parse_session_id_requires_both_session_and_sig() {
+        // A complete voucher: session= + non-empty sig=.
         assert_eq!(
             parse_session_id("session=sess-xyz;sig=deadbeef"),
             Some("sess-xyz".to_string())
         );
-        // whitespace is trimmed
+        // Order doesn't matter, extra fields are ignored.
         assert_eq!(
-            parse_session_id("  sess-trim  "),
+            parse_session_id("nonce=1;sig=ab12;session=sess-2"),
+            Some("sess-2".to_string())
+        );
+        // Whitespace around fields and values is trimmed.
+        assert_eq!(
+            parse_session_id("  session=sess-trim ; sig=ab  "),
             Some("sess-trim".to_string())
         );
-        // empty / missing-session structured credential → None (safe)
-        assert_eq!(parse_session_id(""), None);
+        // Bare session id WITHOUT sig= is no longer accepted — a leaked
+        // session id alone must not authenticate.
+        assert_eq!(parse_session_id("sess-abc"), None);
+        // session= without a corresponding sig= → None.
+        assert_eq!(parse_session_id("session=sess-xyz"), None);
+        // Empty sig= → None.
+        assert_eq!(parse_session_id("session=sess-xyz;sig="), None);
+        // sig= without session= → None.
         assert_eq!(parse_session_id("sig=deadbeef;nonce=1"), None);
+        // Empty / missing both → None.
+        assert_eq!(parse_session_id(""), None);
     }
 
     async fn pool() -> SqlitePool {
@@ -373,7 +393,7 @@ mod tests {
         mpp.open_session("sess-1", "u1", 10_000).await.unwrap();
 
         let v = mpp
-            .verify("session=sess-1")
+            .verify("session=sess-1;sig=deadbeef")
             .await
             .unwrap()
             .expect("verified");
@@ -388,13 +408,24 @@ mod tests {
         let mpp = MppState::tempo(pool);
 
         // unknown session
-        assert!(mpp.verify("session=nope").await.unwrap().is_none());
+        assert!(mpp.verify("session=nope;sig=ab").await.unwrap().is_none());
 
         // a drained channel (balance == 0) is not verified
         mpp.open_session("sess-drained", "u2", 0).await.unwrap();
         assert!(
-            mpp.verify("sess-drained").await.unwrap().is_none(),
+            mpp.verify("session=sess-drained;sig=ab")
+                .await
+                .unwrap()
+                .is_none(),
             "a zero-balance channel must not authenticate"
+        );
+
+        // a bare session id (no sig=) is no longer accepted — protects against
+        // a leaked session id alone authenticating.
+        mpp.open_session("sess-funded", "u3", 10_000).await.unwrap();
+        assert!(
+            mpp.verify("sess-funded").await.unwrap().is_none(),
+            "a bare session id (without sig=) must not authenticate"
         );
 
         // an unparseable credential
