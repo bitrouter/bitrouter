@@ -349,6 +349,99 @@ fn google_passes_through_uncommon_generation_config() {
 }
 
 #[test]
+fn openai_chat_streaming_forces_include_usage() {
+    // OpenAI omits the trailing usage chunk unless the caller asks for it.
+    // Settlement requires that chunk, so the outbound request injects
+    // `stream_options.include_usage = true` whenever stream=true.
+    let adapter = adapter_for(ApiProtocol::Openai);
+    let body = serde_json::json!({
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": true
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["stream_options"]["include_usage"], true);
+
+    // Non-streaming requests don't get the field — there's no streaming
+    // chunk to receive, and providers reject the field on non-streaming
+    // calls.
+    let body = serde_json::json!({
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}]
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert!(rendered.get("stream_options").is_none());
+
+    // Caller-supplied stream_options keys survive the merge.
+    let body = serde_json::json!({
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": true,
+        "stream_options": {"include_obfuscation": false}
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["stream_options"]["include_usage"], true);
+    assert_eq!(rendered["stream_options"]["include_obfuscation"], false);
+}
+
+#[test]
+fn google_passes_through_top_level_extras() {
+    // toolConfig / safetySettings / cachedContent live at the request root,
+    // not under generationConfig. They must survive the round-trip.
+    // Refs: <https://ai.google.dev/api/generate-content>.
+    let adapter = adapter_for(ApiProtocol::Google);
+    let body = serde_json::json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "toolConfig": {
+            "functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["lookup"]}
+        },
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}
+        ],
+        "cachedContent": "cachedContents/abc123"
+    });
+    let prompt = adapter.parse_request(body.clone()).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    for key in ["toolConfig", "safetySettings", "cachedContent"] {
+        assert_eq!(
+            rendered[key], body[key],
+            "Google top-level `{key}` must survive parse/render"
+        );
+    }
+}
+
+#[test]
+fn google_request_stream_flag_is_propagated() {
+    // The server injects `stream: true` from a `:streamGenerateContent` path
+    // verb. Before #stream-flag-fix the adapter dropped this field on the
+    // floor and forced stream=false, sending streaming clients to the
+    // non-streaming branch.
+    let adapter = adapter_for(ApiProtocol::Google);
+    let body = serde_json::json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "stream": true
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert!(
+        prompt.stream,
+        "streamGenerateContent must set prompt.stream"
+    );
+
+    // And the wire shape does NOT leak `stream` back upstream (Google's
+    // generate-content body has no `stream` field of its own).
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert!(
+        rendered.get("stream").is_none(),
+        "Google outbound must not include a stream field"
+    );
+}
+
+#[test]
 fn openai_responses_passes_through_uncommon_params() {
     let adapter = adapter_for(ApiProtocol::Responses);
     let body = serde_json::json!({

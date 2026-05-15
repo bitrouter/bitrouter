@@ -23,6 +23,12 @@ use crate::language_model::types::{
 /// The Google Generative AI protocol adapter.
 pub struct GoogleAdapter;
 
+/// Sentinel key under which top-level Google extras (`toolConfig`,
+/// `safetySettings`, `cachedContent`, …) ride through `GenerationParams::extra`.
+/// Only `GoogleAdapter::render_request` reads it — every other adapter ignores
+/// the namespaced key and the JSON wire shape never contains it.
+const GOOGLE_TOP_LEVEL_EXTRA_KEY: &str = "__google_top_level__";
+
 // ===== wire request types =====
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +45,15 @@ struct GenerateContentRequest {
     tools: Vec<GoogleTool>,
     #[serde(default)]
     generation_config: Option<GoogleGenerationConfig>,
+    /// Injected by `server::google_generate` from the path verb
+    /// (`:streamGenerateContent` → true, `:generateContent` → false).
+    #[serde(default)]
+    stream: bool,
+    /// Top-level extras: `toolConfig`, `safetySettings`, `cachedContent`, … —
+    /// preserve them across the inbound→outbound round-trip. Per
+    /// <https://ai.google.dev/api/generate-content>.
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -225,7 +240,7 @@ impl ProtocolAdapter for GoogleAdapter {
             })
             .collect();
 
-        let params = req
+        let mut params = req
             .generation_config
             .map(|g| GenerationParams {
                 temperature: g.temperature,
@@ -235,6 +250,16 @@ impl ProtocolAdapter for GoogleAdapter {
                 extra: g.extra,
             })
             .unwrap_or_default();
+        // Preserve top-level Google fields (`toolConfig`, `safetySettings`,
+        // `cachedContent`, …) across the round-trip. They're namespaced so they
+        // don't collide with `generationConfig`-level extras above and only the
+        // Google `render_request` lifts them back to the top level.
+        if !req.extra.is_empty() {
+            params.extra.insert(
+                GOOGLE_TOP_LEVEL_EXTRA_KEY.to_string(),
+                serde_json::Value::Object(req.extra.into_iter().collect()),
+            );
+        }
 
         Ok(Prompt {
             model: req.model,
@@ -242,7 +267,7 @@ impl ProtocolAdapter for GoogleAdapter {
             messages,
             tools,
             params,
-            stream: false,
+            stream: req.stream,
         })
     }
 
@@ -280,12 +305,25 @@ impl ProtocolAdapter for GoogleAdapter {
         }
         // Splat Google generation-config extras (stopSequences, topK, seed,
         // responseMimeType / responseSchema, …) back into the outbound config.
-        // Typed fields above win over a same-named extra.
+        // Typed fields above win over a same-named extra; the sentinel key
+        // carries top-level fields and is skipped here.
         for (k, v) in &prompt.params.extra {
+            if k == GOOGLE_TOP_LEVEL_EXTRA_KEY {
+                continue;
+            }
             gen_config.entry(k.clone()).or_insert_with(|| v.clone());
         }
         if !gen_config.is_empty() {
             req.insert("generationConfig".into(), gen_config.into());
+        }
+        // Lift namespaced top-level extras (toolConfig / safetySettings /
+        // cachedContent / …) back to the request root.
+        if let Some(serde_json::Value::Object(top)) =
+            prompt.params.extra.get(GOOGLE_TOP_LEVEL_EXTRA_KEY)
+        {
+            for (k, v) in top {
+                req.entry(k.clone()).or_insert_with(|| v.clone());
+            }
         }
         Ok(serde_json::Value::Object(req))
     }

@@ -283,6 +283,21 @@ impl ProtocolAdapter for OpenAiChatAdapter {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
         req.insert("stream".into(), prompt.stream.into());
+        // For streaming Chat Completions, force `stream_options.include_usage`
+        // on so the trailing usage chunk arrives. Without this, OpenAI and
+        // most OpenAI-compatible upstreams omit the usage frame, and the
+        // pipeline's settlement layer sees zero tokens. The official ref:
+        // <https://platform.openai.com/docs/api-reference/chat-streaming#chat-streaming-stream_options>.
+        // Caller-supplied entries under `stream_options` are preserved.
+        if prompt.stream {
+            let entry = req
+                .entry("stream_options".to_string())
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if let Some(map) = entry.as_object_mut() {
+                map.entry("include_usage".to_string())
+                    .or_insert(serde_json::Value::Bool(true));
+            }
+        }
         Ok(serde_json::Value::Object(req))
     }
 
