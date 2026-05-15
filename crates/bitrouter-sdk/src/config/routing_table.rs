@@ -25,6 +25,11 @@ pub struct ConfigRoutingTable {
     config: RwLock<Config>,
     /// The path the config was loaded from, for `reload()`.
     path: Option<std::path::PathBuf>,
+    /// Serialises `reload()` against itself. SIGHUP + `bitrouter reload`
+    /// arriving close together used to race: each call did its own
+    /// `load + discover_models` then wrote the result, last writer wins.
+    /// Now we hold this mutex for the full reload sequence.
+    reload_lock: tokio::sync::Mutex<()>,
 }
 
 impl ConfigRoutingTable {
@@ -33,6 +38,7 @@ impl ConfigRoutingTable {
         Self {
             config: RwLock::new(config),
             path: None,
+            reload_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -44,6 +50,7 @@ impl ConfigRoutingTable {
         Self {
             config: RwLock::new(config),
             path: Some(path.into()),
+            reload_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -54,6 +61,7 @@ impl ConfigRoutingTable {
         Ok(Self {
             config: RwLock::new(config),
             path: Some(path),
+            reload_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -232,6 +240,10 @@ impl RoutingTable for ConfigRoutingTable {
         let Some(path) = &self.path else {
             return Ok(());
         };
+        // Hold the reload mutex for the whole load+discover+swap sequence so
+        // a SIGHUP racing the control-socket `reload` command can't end up
+        // with last-writer-wins between two concurrent fetches.
+        let _guard = self.reload_lock.lock().await;
         let mut fresh = crate::config::load(path).await?;
         // Re-run model discovery so `auto_discover: true` providers pick up
         // upstream additions / removals (007 §1.2 #3 — "重新获取 provider

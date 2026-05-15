@@ -95,7 +95,7 @@ impl PolicyStore {
 }
 
 async fn scan_policy_dir(dir: &Path) -> Result<HashMap<String, Policy>> {
-    let mut out = HashMap::new();
+    let mut out: HashMap<String, Policy> = HashMap::new();
     let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
         BitrouterError::internal(format!("reading policy dir {}: {e}", dir.display()))
     })?;
@@ -119,7 +119,24 @@ async fn scan_policy_dir(dir: &Path) -> Result<HashMap<String, Policy>> {
         let policy: Policy = serde_saphyr::from_str(&raw).map_err(|e| {
             BitrouterError::bad_request(format!("invalid policy {}: {e}", path.display()))
         })?;
-        out.insert(policy.id.clone(), policy);
+        // Operators expect "filename == id" so they can find a policy by its
+        // file. Warn (don't fail) when the body's `id` differs — silently
+        // shadowing on duplicate id used to mask typos.
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if !stem.is_empty() && stem != policy.id {
+            tracing::warn!(
+                file = %path.display(),
+                id = %policy.id,
+                filename = %stem,
+                "policy filename does not match id: id wins, but operators usually expect them aligned"
+            );
+        }
+        if let Some(prev) = out.insert(policy.id.clone(), policy) {
+            tracing::warn!(
+                id = %prev.id,
+                "duplicate policy id encountered while scanning dir — the later file wins"
+            );
+        }
     }
     Ok(out)
 }

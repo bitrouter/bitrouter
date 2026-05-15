@@ -41,21 +41,26 @@ impl PrometheusHook {
     }
 
     /// Render the accumulated metrics in the Prometheus text exposition format.
+    /// Renders an empty body on lock poison (rather than panicking) so a
+    /// `/metrics` scrape never brings the server down — matches the
+    /// error-swallowing contract of the observe hook write path.
     pub fn render(&self) -> String {
-        let m = self
-            .metrics
-            .lock()
-            .expect("prometheus metrics lock poisoned");
+        let Ok(m) = self.metrics.lock() else {
+            return String::new();
+        };
         let mut out = String::new();
         out.push_str("# HELP bitrouter_requests_total Total requests by outcome.\n");
         out.push_str("# TYPE bitrouter_requests_total counter\n");
-        let mut total = 0u64;
+        let mut grand_total = 0u64;
         for (outcome, count) in &m.requests_total {
             out.push_str(&format!(
                 "bitrouter_requests_total{{outcome=\"{outcome}\"}} {count}\n"
             ));
-            total += count;
+            grand_total = grand_total.saturating_add(*count);
         }
+        out.push_str("# HELP bitrouter_requests_grand_total Total requests across all outcomes.\n");
+        out.push_str("# TYPE bitrouter_requests_grand_total counter\n");
+        out.push_str(&format!("bitrouter_requests_grand_total {grand_total}\n"));
         out.push_str("# HELP bitrouter_request_latency_ms_sum Sum of request latency in ms.\n");
         out.push_str("# TYPE bitrouter_request_latency_ms_sum counter\n");
         out.push_str(&format!(
@@ -74,7 +79,6 @@ impl PrometheusHook {
             "bitrouter_stream_parts_total {}\n",
             m.stream_parts_total
         ));
-        let _ = total;
         out
     }
 }

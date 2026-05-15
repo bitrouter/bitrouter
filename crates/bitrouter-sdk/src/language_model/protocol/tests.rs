@@ -411,6 +411,54 @@ fn openai_chat_cache_tokens_round_trip() {
 }
 
 #[test]
+fn openai_chat_parse_captures_refusal_and_reasoning_aliases() {
+    // `message.refusal` (when non-empty) is the OpenAI refusal text; carry it
+    // as a Content::Text and set FinishReason::ContentFilter regardless of
+    // what `finish_reason` says (OpenAI sometimes also says "content_filter"
+    // but not always). `message.reasoning` / `message.thinking` are
+    // OpenAI-compatible vendor aliases for `reasoning_content`.
+    let adapter = adapter_for(ApiProtocol::Openai);
+
+    // refusal
+    let body = serde_json::json!({
+        "choices": [{
+            "message": {"role": "assistant", "refusal": "I cannot help."},
+            "finish_reason": "stop"
+        }]
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert_eq!(result.finish_reason, Some(FinishReason::ContentFilter));
+    assert!(result.content.iter().any(|c| match c {
+        Content::Text { text } => text == "I cannot help.",
+        _ => false,
+    }));
+
+    // `reasoning` alias
+    let body = serde_json::json!({
+        "choices": [{
+            "message": {"role": "assistant", "reasoning": "step by step", "content": "ok"},
+            "finish_reason": "stop"
+        }]
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert!(
+        matches!(result.content.first(), Some(Content::Reasoning { text }) if text == "step by step")
+    );
+
+    // `thinking` alias (Aliyun-style)
+    let body = serde_json::json!({
+        "choices": [{
+            "message": {"role": "assistant", "thinking": "internal monologue", "content": "out"},
+            "finish_reason": "stop"
+        }]
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert!(
+        matches!(result.content.first(), Some(Content::Reasoning { text }) if text == "internal monologue")
+    );
+}
+
+#[test]
 fn anthropic_stream_encoder_closes_block_on_kind_transition() {
     // v0 #429 regression: when the canonical part stream transitions
     // text → reasoning → text → tool, the Anthropic encoder MUST emit a

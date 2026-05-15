@@ -150,6 +150,20 @@ impl Default for HttpTimeouts {
 /// target's [`ProtocolAdapter`], renders the canonical prompt into that wire
 /// format, performs the upstream call, and parses the response back into the
 /// canonical representation.
+/// Cap an upstream-supplied error message so a chatty provider that echoes
+/// the request body, an API key, or a stack trace doesn't surface through
+/// the client. ~1 KiB of char data is plenty for diagnostics. Truncated
+/// to a UTF-8 char boundary so we never panic on a multi-byte slice.
+fn truncate_upstream_message(text: &str) -> String {
+    const MAX_CHARS: usize = 1024;
+    let truncated: String = text.chars().take(MAX_CHARS).collect();
+    if truncated.chars().count() < text.chars().count() {
+        format!("{truncated}… [truncated]")
+    } else {
+        truncated
+    }
+}
+
 pub struct HttpExecutor {
     client: reqwest::Client,
 }
@@ -264,7 +278,7 @@ impl Executor for HttpExecutor {
         if !status.is_success() {
             return Err(BitrouterError::Upstream {
                 status: status.as_u16(),
-                message: text,
+                message: truncate_upstream_message(&text),
             });
         }
 
@@ -310,7 +324,7 @@ impl Executor for HttpExecutor {
             let text = response.text().await.unwrap_or_default();
             return Err(BitrouterError::Upstream {
                 status: status.as_u16(),
-                message: text,
+                message: truncate_upstream_message(&text),
             });
         }
 

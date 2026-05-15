@@ -108,10 +108,13 @@ impl ObserveHook for OtlpExportHook {
         if let Ok(mut map) = self.timings.lock() {
             // Hard cap on map size — if `on_request_end` was never called for
             // some past request (panic, runtime-drop) we still bound memory.
-            if !map.contains_key(ctx.request_id()) && map.len() >= TIMINGS_CAP {
-                if let Some(victim) = map.keys().next().cloned() {
-                    map.remove(&victim);
-                }
+            // Eviction is by `HashMap`'s arbitrary iteration order (not FIFO);
+            // good enough for "don't leak", not a guaranteed oldest-first.
+            if !map.contains_key(ctx.request_id())
+                && map.len() >= TIMINGS_CAP
+                && let Some(victim) = map.keys().next().cloned()
+            {
+                map.remove(&victim);
             }
             let timing = map
                 .entry(ctx.request_id().to_string())

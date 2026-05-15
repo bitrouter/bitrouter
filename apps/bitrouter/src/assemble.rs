@@ -57,6 +57,22 @@ pub async fn build_app_with_path(
     bitrouter_settlement::migrate(&pool)
         .await
         .context("running bitrouter-settlement migrations")?;
+    // The SQLite database holds SHA-256 hashes of every virtual key, BYOK
+    // provider keys (currently plaintext — sealed-box is a follow-up), MPP
+    // balances, and the request audit trail. On Unix, tighten the file
+    // permissions to 0600 so a co-tenant on the host can't read it. The
+    // control socket already does the same in `daemon::run_control_socket`.
+    #[cfg(unix)]
+    if let Some(path) = sqlite_file_path(&config.database.url) {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            if let Err(e) = std::fs::set_permissions(&path, perms) {
+                tracing::warn!(?path, %e, "failed to chmod 0600 on sqlite db file");
+            }
+        }
+    }
 
     // ---- routing table + upstream executor ----
     // Best-effort model discovery for providers with `auto_discover: true`
@@ -276,5 +292,46 @@ impl bitrouter_sdk::language_model::ObserveHook for PrometheusObserve {
         outcome: &bitrouter_sdk::language_model::RequestOutcome,
     ) {
         self.0.on_request_end(ctx, outcome).await
+    }
+}
+
+/// Extract the file path from a sqlite URL. Returns `None` for `:memory:` or
+/// non-file URLs. Accepts the `sqlite://`, `sqlite:` and bare-path forms that
+/// `sqlx::SqlitePool::connect` accepts.
+#[cfg(unix)]
+fn sqlite_file_path(url: &str) -> Option<std::path::PathBuf> {
+    let after_scheme = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+        .unwrap_or(url);
+    // Strip a leading `//` (sqlite://path → /path; treat as filesystem path)
+    let path = after_scheme.split('?').next().unwrap_or(after_scheme);
+    if path.is_empty() || path == ":memory:" {
+        return None;
+    }
+    Some(std::path::PathBuf::from(path))
+}
+
+#[cfg(all(test, unix))]
+mod sqlite_path_tests {
+    use super::sqlite_file_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_common_sqlite_urls() {
+        assert_eq!(
+            sqlite_file_path("sqlite:///var/lib/bitrouter.db"),
+            Some(PathBuf::from("/var/lib/bitrouter.db"))
+        );
+        assert_eq!(
+            sqlite_file_path("sqlite:bitrouter.db"),
+            Some(PathBuf::from("bitrouter.db"))
+        );
+        assert_eq!(
+            sqlite_file_path("sqlite:bitrouter.db?cache=shared"),
+            Some(PathBuf::from("bitrouter.db"))
+        );
+        assert_eq!(sqlite_file_path(":memory:"), None);
+        assert_eq!(sqlite_file_path("sqlite::memory:"), None);
     }
 }

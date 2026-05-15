@@ -312,10 +312,20 @@ impl ProtocolAdapter for OpenAiChatAdapter {
             .ok_or_else(|| BitrouterError::bad_request("chat choice missing 'message'"))?;
 
         let mut content = Vec::new();
-        if let Some(reasoning) = message
-            .get("reasoning_content")
-            .and_then(|r| r.as_str())
-            .filter(|s| !s.is_empty())
+        // `reasoning_content` is the DeepSeek-/Moonshot-/Qwen-style field name
+        // for the reasoning trace on the Chat envelope. Other OpenAI-compatible
+        // upstreams expose the same data under `reasoning` (some OpenRouter
+        // passthroughs) or `thinking` (Aliyun). Accept whichever is present.
+        // None of these are documented on OpenAI Chat itself; the canonical
+        // OpenAI Chat object does not carry a reasoning trace.
+        if let Some(reasoning) = ["reasoning_content", "reasoning", "thinking"]
+            .iter()
+            .find_map(|key| {
+                message
+                    .get(*key)
+                    .and_then(|r| r.as_str())
+                    .filter(|s| !s.is_empty())
+            })
         {
             content.push(Content::Reasoning {
                 text: reasoning.to_string(),
@@ -328,6 +338,21 @@ impl ProtocolAdapter for OpenAiChatAdapter {
             .filter(|s| !s.is_empty())
         {
             content.push(Content::Text { text });
+        }
+        // OpenAI Chat's `message.refusal` (when non-empty) is the model's
+        // declined-response text. Carry it through so the caller sees the
+        // refusal rather than an empty assistant message. Spec:
+        // <https://platform.openai.com/docs/api-reference/chat/object>.
+        let mut refusal_seen = false;
+        if let Some(refusal) = message
+            .get("refusal")
+            .and_then(|r| r.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            content.push(Content::Text {
+                text: refusal.to_string(),
+            });
+            refusal_seen = true;
         }
         if let Some(tool_calls) = message.get("tool_calls").and_then(|t| t.as_array()) {
             for tc in tool_calls {
@@ -356,7 +381,16 @@ impl ProtocolAdapter for OpenAiChatAdapter {
         let finish_reason = choice
             .get("finish_reason")
             .and_then(|f| f.as_str())
-            .and_then(parse_finish_reason);
+            .and_then(parse_finish_reason)
+            // A `refusal` field signals content-filter regardless of what
+            // `finish_reason` claims, so the caller can surface the refusal.
+            .map(|fr| {
+                if refusal_seen {
+                    FinishReason::ContentFilter
+                } else {
+                    fr
+                }
+            });
         let usage = body.get("usage").and_then(parse_usage);
 
         Ok(GenerateResult {
