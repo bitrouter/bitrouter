@@ -9,6 +9,19 @@
 //! `language_model`'s — an `mcp::RouteHook` cannot be registered on a
 //! `language_model::Pipeline` (compile-time protocol isolation). Reuse of
 //! cross-cutting logic is via shared crate-root library code, not shared traits.
+//!
+//! Spec refs (revision pinned to `2025-06-18`):
+//! - JSON-RPC envelope (Request / Response / Notification / Error):
+//!   <https://modelcontextprotocol.io/specification/2025-06-18/basic>
+//! - Streamable HTTP transport (`Origin`, `MCP-Session-Id`,
+//!   `MCP-Protocol-Version`, SSE response variant):
+//!   <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports>
+//! - Method catalogue (`tools/list`, `tools/call`, etc.):
+//!   <https://modelcontextprotocol.io/specification/2025-06-18>
+//!
+//! The HTTP server (`crates/bitrouter-sdk/src/server.rs::mcp_invoke`) handles
+//! the wire-format concerns — `id` round-trip, error envelope, Origin
+//! validation; this module is the pure routing core.
 
 use std::sync::Arc;
 

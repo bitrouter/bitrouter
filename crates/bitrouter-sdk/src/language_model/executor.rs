@@ -224,11 +224,17 @@ impl HttpExecutor {
         let key = target.effective_api_key();
         match target.api_protocol {
             ApiProtocol::Openai | ApiProtocol::Responses => builder.bearer_auth(key),
-            // Anthropic Messages auth — official: https://docs.anthropic.com/en/api/messages
+            // Anthropic Messages auth — official:
+            // <https://docs.anthropic.com/en/api/messages>
+            // `anthropic-version: 2023-06-01` is the only released spec
+            // revision as of 2026-05; cf.
+            // <https://platform.claude.com/docs/en/api/versioning>.
             ApiProtocol::Anthropic => builder
                 .header("x-api-key", key)
                 .header("anthropic-version", "2023-06-01"),
-            // Google Generative AI auth — official: https://ai.google.dev/api/rest
+            // Google Generative AI auth — `x-goog-api-key` is documented at
+            // <https://ai.google.dev/gemini-api/docs/api-key> and exercised
+            // throughout <https://ai.google.dev/api/generate-content>.
             ApiProtocol::Google => builder.header("x-goog-api-key", key),
         }
     }

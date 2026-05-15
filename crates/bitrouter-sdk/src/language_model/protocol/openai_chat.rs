@@ -63,8 +63,13 @@ struct ChatMessage {
     tool_calls: Vec<ChatToolCall>,
     #[serde(default)]
     tool_call_id: Option<String>,
-    /// Reasoning content — some OpenAI-compatible providers expose it here
-    /// (v0 #454-1: it must not be dropped).
+    /// Reasoning content — **not** in OpenAI's Chat Completions spec; this is
+    /// a vendor extension used by DeepSeek
+    /// (<https://api-docs.deepseek.com/api/create-chat-completion>), Moonshot
+    /// (Kimi), Qwen, and other OpenAI-compatible providers that expose the
+    /// model's chain-of-thought on the Chat envelope. v0 #454-1: it must
+    /// not be dropped. `parse_response` additionally accepts `reasoning`
+    /// (some OpenRouter passthroughs) and `thinking` (Aliyun) as aliases.
     #[serde(default)]
     reasoning_content: Option<String>,
 }

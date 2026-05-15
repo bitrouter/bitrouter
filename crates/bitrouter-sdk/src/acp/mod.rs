@@ -8,6 +8,16 @@
 //! `language_model`'s and `mcp`'s — protocol isolation is enforced at compile
 //! time. The shape mirrors `mcp` because ACP is also JSON-RPC routing; the
 //! deliberate "drift risk" of hand-writing each protocol is accepted (003 §0).
+//!
+//! Spec refs:
+//! - Protocol overview + schema: <https://agentclientprotocol.com/protocol/schema>
+//! - Transport / stdio framing: <https://agentclientprotocol.com/protocol/transports>
+//! - Initialization + capability negotiation:
+//!   <https://agentclientprotocol.com/protocol/initialization>
+//!
+//! The stdio adapter that exposes the pipeline over the wire is a tracked
+//! follow-up; the `Pipeline` here is callable directly by tests and any
+//! future ACP server entry-point.
 
 use std::sync::Arc;
 

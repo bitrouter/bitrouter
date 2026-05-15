@@ -8,6 +8,17 @@
 //! SDK-defines-the-trait pattern as [`crate::MetricsStore`]).
 //!
 //! v1.0 verifies the **Tempo** channel only (008 §1.1).
+//!
+//! ## Wire-format divergence from <https://mpp.dev>
+//!
+//! BitRouter's `Payment-SIGNATURE` header and `session=<id>;sig=<voucher>`
+//! grammar predate the now-published MPP spec at <https://mpp.dev> and remain
+//! compatible with v0 clients. The mpp.dev spec uses `Authorization: Payment
+//! <base64url-json>` with a typed `Challenge` / `Credential` / `Receipt`
+//! envelope, RFC 9457 Problem Details for 402 bodies, and a `Payment-Receipt`
+//! response header. Aligning v1's wire shape with the public MPP spec is a
+//! tracked follow-up (cloud #183 covers Tempo signature verification first;
+//! once the cryptographic side lands the wire format can follow).
 
 use crate::Result;
 use async_trait::async_trait;

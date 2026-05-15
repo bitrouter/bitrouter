@@ -11,6 +11,15 @@
 //! is a known follow-up — it is *not* a direct migration. `MppState` here
 //! tracks channel balance and per-checkpoint progress in `mpp_sessions`; the
 //! on-chain signing path plugs into [`MppState::sign_checkpoint`].
+//!
+//! Wire-format divergence from <https://mpp.dev>: v1 reads a v0-compatible
+//! `Payment-SIGNATURE: session=<id>;sig=<voucher>` header instead of the
+//! mpp.dev `Authorization: Payment <base64url-json>` Credential envelope.
+//! `MppState::verify` currently checks that `sig=` is non-empty but does
+//! NOT cryptographically verify it against the channel signing key — Tempo
+//! signature verification ships with cloud #183. Until that lands, a caller
+//! with a leaked `session=` value can spend the channel. See discussion in
+//! `crates/bitrouter-sdk/src/mpp.rs`.
 
 use chrono::Utc;
 use sqlx::{Row, SqlitePool};
