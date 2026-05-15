@@ -178,16 +178,18 @@ fn finish_reason(s: &str) -> Option<FinishReason> {
         "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" => {
             Some(FinishReason::ContentFilter)
         }
-        _ => None,
+        other => Some(FinishReason::Other(other.to_string())),
     }
 }
 
-fn finish_reason_str(r: FinishReason) -> &'static str {
+fn finish_reason_str(r: &FinishReason) -> String {
     match r {
-        FinishReason::Stop => "STOP",
-        FinishReason::Length => "MAX_TOKENS",
-        FinishReason::ToolCalls => "STOP",
-        FinishReason::ContentFilter => "SAFETY",
+        FinishReason::Stop => "STOP".to_string(),
+        FinishReason::Length => "MAX_TOKENS".to_string(),
+        FinishReason::ToolCalls => "STOP".to_string(),
+        FinishReason::ContentFilter => "SAFETY".to_string(),
+        FinishReason::Other(s) => s.clone(),
+        FinishReason::Error(_) => "OTHER".to_string(),
     }
 }
 
@@ -365,7 +367,11 @@ impl ProtocolAdapter for GoogleAdapter {
         Ok(serde_json::json!({
             "candidates": [{
                 "content": { "role": "model", "parts": parts },
-                "finishReason": result.finish_reason.map(finish_reason_str).unwrap_or("STOP"),
+                "finishReason": result
+                    .finish_reason
+                    .as_ref()
+                    .map(finish_reason_str)
+                    .unwrap_or_else(|| "STOP".to_string()),
                 "index": 0,
             }],
             "usageMetadata": {
@@ -543,7 +549,7 @@ impl StreamEncoder for GoogleStreamEncoder {
             StreamPart::Finish { reason } => serde_json::json!({
                 "candidates": [{
                     "content": { "role": "model", "parts": [] },
-                    "finishReason": finish_reason_str(*reason),
+                    "finishReason": finish_reason_str(reason),
                 }]
             }),
             StreamPart::ResponseCompleted { status, usage, .. } => {

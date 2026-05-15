@@ -180,16 +180,40 @@ fn stop_reason_to_finish(s: &str) -> Option<FinishReason> {
         "max_tokens" => Some(FinishReason::Length),
         "tool_use" => Some(FinishReason::ToolCalls),
         "refusal" => Some(FinishReason::ContentFilter),
-        _ => None,
+        // Unknown but provider-supplied — keep verbatim so observability can
+        // see it. Anthropic also documents `pause_turn`.
+        other => Some(FinishReason::Other(other.to_string())),
     }
 }
 
-fn finish_to_stop_reason(r: FinishReason) -> &'static str {
+/// Map Anthropic's `error.type` to an HTTP status code so a mid-stream 4xx
+/// upstream error doesn't blanket-convert to 502 (which masks
+/// `invalid_request_error` / `rate_limit_error` / `authentication_error`).
+/// Ref: <https://docs.anthropic.com/en/api/errors>.
+fn anthropic_error_status(err_type: &str) -> u16 {
+    match err_type {
+        "invalid_request_error" => 400,
+        "authentication_error" => 401,
+        "permission_error" => 403,
+        "not_found_error" => 404,
+        "rate_limit_error" => 429,
+        "overloaded_error" => 529,
+        "api_error" | "" => 502,
+        _ => 502,
+    }
+}
+
+fn finish_to_stop_reason(r: &FinishReason) -> String {
     match r {
-        FinishReason::Stop => "end_turn",
-        FinishReason::Length => "max_tokens",
-        FinishReason::ToolCalls => "tool_use",
-        FinishReason::ContentFilter => "refusal",
+        FinishReason::Stop => "end_turn".to_string(),
+        FinishReason::Length => "max_tokens".to_string(),
+        FinishReason::ToolCalls => "tool_use".to_string(),
+        FinishReason::ContentFilter => "refusal".to_string(),
+        FinishReason::Other(s) => s.clone(),
+        // Anthropic has no native "error" finish — pick `end_turn` so the
+        // wire envelope is well-formed; outbound encoders emit a separate
+        // error frame ahead of this when the canonical IR carries an error.
+        FinishReason::Error(_) => "end_turn".to_string(),
     }
 }
 
@@ -378,7 +402,7 @@ impl ProtocolAdapter for AnthropicAdapter {
             "role": "assistant",
             "model": prompt.model,
             "content": content,
-            "stop_reason": result.finish_reason.map(finish_to_stop_reason),
+            "stop_reason": result.finish_reason.as_ref().map(finish_to_stop_reason),
             "usage": render_usage(&usage),
         }))
     }
@@ -640,13 +664,21 @@ impl StreamDecoder for AnthropicStreamDecoder {
             }
             "message_stop" => {}
             "error" => {
-                let msg = json
-                    .get("error")
+                // Mid-stream error — derive the HTTP status from Anthropic's
+                // `error.type` so 4xx upstream errors pass through to the
+                // caller (instead of always 502'ing and triggering fallback
+                // retries). Spec: <https://docs.anthropic.com/en/api/errors>.
+                let error_obj = json.get("error");
+                let err_type = error_obj
+                    .and_then(|e| e.get("type"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
+                let msg = error_obj
                     .and_then(|e| e.get("message"))
                     .and_then(|m| m.as_str())
                     .unwrap_or("anthropic stream error");
                 return Err(BitrouterError::Upstream {
-                    status: 502,
+                    status: anthropic_error_status(err_type),
                     message: msg.to_string(),
                 });
             }
@@ -832,7 +864,7 @@ impl StreamEncoder for AnthropicStreamEncoder {
             }
             StreamPart::Usage { .. } => {}
             StreamPart::Finish { reason } => {
-                self.emit_terminal(&mut frames, finish_to_stop_reason(*reason), None);
+                self.emit_terminal(&mut frames, &finish_to_stop_reason(reason), None);
             }
             StreamPart::ResponseCompleted { status, usage, .. } => {
                 // Inbound was OpenAI Responses; map its status onto Anthropic's

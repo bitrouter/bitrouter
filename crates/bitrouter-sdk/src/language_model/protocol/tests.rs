@@ -411,6 +411,57 @@ fn openai_chat_cache_tokens_round_trip() {
 }
 
 #[test]
+fn anthropic_stream_error_maps_to_proper_http_status() {
+    // Anthropic mid-stream `error` events carry `error.type` — a 4xx must
+    // be threaded to `Upstream.status` so the fallback policy can decide
+    // "don't retry" instead of always treating these as 5xx. Ref:
+    // docs.anthropic.com/en/api/errors.
+    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let mut decoder = adapter.stream_decoder();
+    let err = decoder
+        .decode(&SseEvent {
+            event: Some("error".to_string()),
+            data: serde_json::json!({
+                "type": "error",
+                "error": { "type": "rate_limit_error", "message": "too many" }
+            })
+            .to_string(),
+        })
+        .unwrap_err();
+    match err {
+        crate::error::BitrouterError::Upstream { status, .. } => {
+            assert_eq!(status, 429, "rate_limit_error → 429");
+        }
+        other => panic!("expected Upstream, got {other:?}"),
+    }
+}
+
+#[test]
+fn openai_responses_stream_error_maps_to_proper_http_status() {
+    // OpenAI `response.failed` likewise — `error.type` decides
+    // `Upstream.status` so the fallback policy can tell "client did
+    // something wrong" (4xx, don't retry) from "upstream broke" (5xx).
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut decoder = adapter.stream_decoder();
+    let err = decoder
+        .decode(&SseEvent {
+            event: Some("response.failed".to_string()),
+            data: serde_json::json!({
+                "type": "response.failed",
+                "response": { "error": { "type": "invalid_request_error", "message": "nope" } }
+            })
+            .to_string(),
+        })
+        .unwrap_err();
+    match err {
+        crate::error::BitrouterError::Upstream { status, .. } => {
+            assert_eq!(status, 400, "invalid_request_error → 400");
+        }
+        other => panic!("expected Upstream, got {other:?}"),
+    }
+}
+
+#[test]
 fn openai_responses_omits_usage_when_none() {
     // v0 #6ae55b2 — when upstream reported no token counts, the wire shape
     // omits the `usage` key entirely. Mirrors the streaming `emit_terminal`.

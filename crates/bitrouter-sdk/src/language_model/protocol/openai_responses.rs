@@ -154,6 +154,22 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
     }
 }
 
+/// Map OpenAI's `error.type` (from the Responses error envelope) to a HTTP
+/// status code so 4xx upstream errors are not silently 502'd. Spec:
+/// <https://platform.openai.com/docs/guides/error-codes> +
+/// <https://platform.openai.com/docs/api-reference/responses-streaming/response/failed>.
+fn openai_error_status(err_type: &str) -> u16 {
+    match err_type {
+        "invalid_request_error" => 400,
+        "authentication_error" => 401,
+        "permission_error" => 403,
+        "not_found_error" => 404,
+        "rate_limit_error" | "tokens_limit_error" | "requests_limit_error" => 429,
+        "server_error" | "api_error" | "" => 502,
+        _ => 502,
+    }
+}
+
 fn finish_from_status(status: &str) -> Option<FinishReason> {
     match status {
         "completed" => Some(FinishReason::Stop),
@@ -400,8 +416,9 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
             "id": request_id,
             "object": "response",
             "model": prompt.model,
-            "status": match result.finish_reason {
+            "status": match &result.finish_reason {
                 Some(FinishReason::Length) => "incomplete",
+                Some(FinishReason::Error(_)) => "failed",
                 _ => "completed",
             },
             "output": output,
@@ -709,15 +726,22 @@ impl StreamDecoder for ResponsesStreamDecoder {
                 });
             }
             "error" | "response.failed" => {
-                let msg = json
-                    .get("response")
-                    .and_then(|r| r.get("error"))
+                // Map OpenAI's `error.type` to an HTTP status so 4xx upstream
+                // errors don't always 502 here (which would trigger fallback
+                // retries). Spec:
+                // <https://platform.openai.com/docs/guides/error-codes>.
+                let error_obj = json.get("response").and_then(|r| r.get("error"));
+                let err_type = error_obj
+                    .and_then(|e| e.get("type"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
+                let msg = error_obj
                     .and_then(|e| e.get("message"))
                     .or_else(|| json.get("message"))
                     .and_then(|m| m.as_str())
                     .unwrap_or("responses stream error");
                 return Err(BitrouterError::Upstream {
-                    status: 502,
+                    status: openai_error_status(err_type),
                     message: msg.to_string(),
                 });
             }
@@ -893,6 +917,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 // Google) — synthesise the terminal envelope from the reason.
                 let status = match reason {
                     FinishReason::Length => "incomplete",
+                    FinishReason::Error(_) => "failed",
                     _ => "completed",
                 };
                 self.emit_terminal(&mut frames, status, &self.request_id.clone(), None);

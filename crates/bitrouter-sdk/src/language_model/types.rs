@@ -184,7 +184,12 @@ impl Usage {
 }
 
 /// Why generation stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Other` and `Error` are escape valves: a finish reason the canonical set
+/// doesn't model (kept verbatim for observability), or a mid-stream upstream
+/// failure surfaced through the canonical IR rather than abruptly aborting
+/// the stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     /// Natural stop.
@@ -195,6 +200,13 @@ pub enum FinishReason {
     ToolCalls,
     /// Stopped by a content filter / guardrail.
     ContentFilter,
+    /// An upstream-provided reason this enum doesn't model — kept verbatim
+    /// (e.g. Anthropic's `pause_turn`, an unrecognised OpenAI value).
+    Other(String),
+    /// Generation aborted mid-stream because upstream returned a stream error
+    /// event. Carries the upstream message for observability and for
+    /// outbound encoders that want to emit a terminal error frame.
+    Error(String),
 }
 
 /// A complete non-streaming generation result.

@@ -427,7 +427,7 @@ impl ProtocolAdapter for OpenAiChatAdapter {
             serde_json::json!([{
                 "index": 0,
                 "message": serde_json::Value::Object(message),
-                "finish_reason": result.finish_reason.map(finish_reason_str),
+                "finish_reason": result.finish_reason.as_ref().map(finish_reason_str),
             }]),
         );
         if let Some(usage) = result.usage {
@@ -515,16 +515,18 @@ fn parse_finish_reason(s: &str) -> Option<FinishReason> {
         "length" | "max_tokens" => Some(FinishReason::Length),
         "tool_calls" | "function_call" => Some(FinishReason::ToolCalls),
         "content_filter" => Some(FinishReason::ContentFilter),
-        _ => None,
+        other => Some(FinishReason::Other(other.to_string())),
     }
 }
 
-fn finish_reason_str(r: FinishReason) -> &'static str {
+fn finish_reason_str(r: &FinishReason) -> String {
     match r {
-        FinishReason::Stop => "stop",
-        FinishReason::Length => "length",
-        FinishReason::ToolCalls => "tool_calls",
-        FinishReason::ContentFilter => "content_filter",
+        FinishReason::Stop => "stop".to_string(),
+        FinishReason::Length => "length".to_string(),
+        FinishReason::ToolCalls => "tool_calls".to_string(),
+        FinishReason::ContentFilter => "content_filter".to_string(),
+        FinishReason::Other(s) => s.clone(),
+        FinishReason::Error(_) => "stop".to_string(),
     }
 }
 
@@ -757,10 +759,8 @@ impl StreamEncoder for ChatStreamEncoder {
                 // usage is attached to the Finish chunk below; nothing here.
             }
             StreamPart::Finish { reason } => {
-                frames.push(self.chunk(
-                    serde_json::Value::Object(delta),
-                    Some(finish_reason_str(*reason)),
-                ));
+                let reason_str = finish_reason_str(reason);
+                frames.push(self.chunk(serde_json::Value::Object(delta), Some(&reason_str)));
             }
             StreamPart::ResponseCompleted { status, .. } => {
                 // Inbound was OpenAI Responses; Chat has no response-completed
@@ -770,10 +770,8 @@ impl StreamEncoder for ChatStreamEncoder {
                 } else {
                     FinishReason::Stop
                 };
-                frames.push(self.chunk(
-                    serde_json::Value::Object(delta),
-                    Some(finish_reason_str(reason)),
-                ));
+                let reason_str = finish_reason_str(&reason);
+                frames.push(self.chunk(serde_json::Value::Object(delta), Some(&reason_str)));
             }
         }
         Ok(frames)
