@@ -470,8 +470,23 @@ where
                         )));
                     };
                     let pricing = table.model_pricing(&provider_name, &target_model_id);
-                    let cost_usd = crate::mpp::calculate_usage_cost(&result.usage, &pricing);
-                    let micro_units = crate::mpp::cost_to_micro_units(cost_usd);
+                    let micro_units = match crate::mpp::calculate_usage_cost(
+                        &result.usage,
+                        &pricing,
+                    ) {
+                        Some(cost) => crate::mpp::cost_to_micro_units(cost),
+                        None => {
+                            tracing::warn!(
+                                provider = %provider_name,
+                                model = %target_model_id,
+                                request_id = %iter_request_id,
+                                "pricing_unavailable: upstream returned usage but \
+                                 pricing for this provider/model is incomplete; \
+                                 skipping deduction (response not billed)"
+                            );
+                            0
+                        }
+                    };
 
                     if !byok_used
                         && micro_units > 0
