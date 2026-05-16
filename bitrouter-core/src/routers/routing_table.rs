@@ -150,11 +150,22 @@ pub struct OutputTokenPricing {
     /// Cost per million reasoning output tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<f64>,
+    /// Cost per million image output tokens. Reserved — not yet wired into
+    /// `calculate_cost`; multimodal output billing will land alongside the
+    /// matching usage bucket in `LanguageModelOutputTokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<f64>,
+    /// Cost per million audio output tokens. Reserved — see `image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<f64>,
 }
 
 impl OutputTokenPricing {
     fn is_empty(&self) -> bool {
-        self.text.is_none() && self.reasoning.is_none()
+        self.text.is_none()
+            && self.reasoning.is_none()
+            && self.image.is_none()
+            && self.audio.is_none()
     }
 }
 
@@ -171,6 +182,15 @@ impl ModelPricing {
     /// Returns `true` when no pricing data is set.
     pub fn is_empty(&self) -> bool {
         self.input_tokens.is_empty() && self.output_tokens.is_empty()
+    }
+
+    /// Returns `true` when at minimum `input_tokens.no_cache` and
+    /// `output_tokens.text` are present. This is the "safe to bill"
+    /// predicate used by the cheapest-provider picker and the recommender
+    /// to skip provider entries with placeholder pricing; per-bucket
+    /// granular checks happen inside `calculate_cost`.
+    pub fn is_complete(&self) -> bool {
+        self.input_tokens.no_cache.is_some() && self.output_tokens.text.is_some()
     }
 }
 
