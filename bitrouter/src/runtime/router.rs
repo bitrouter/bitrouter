@@ -3,13 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_config::{ApiProtocol, ProviderConfig};
+#[cfg(test)]
+use bitrouter_core::routers::routing_table::BillingMode;
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::language::language_model::DynLanguageModel,
-    routers::{
-        router::LanguageModelRouter,
-        routing_table::{BillingMode, RoutingTarget},
-    },
+    routers::{router::LanguageModelRouter, routing_table::RoutingTarget},
     tools::provider::DynToolProvider,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};

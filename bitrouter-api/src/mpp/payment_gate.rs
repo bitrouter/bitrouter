@@ -7,6 +7,28 @@ use super::filter::MppPaymentContext;
 /// Pinned boxed future used as the return type for [`PaymentGate`] methods.
 type GateFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Outcome of a successful `deduct` call.
+///
+/// Distinguishes "money moved" from "debt recorded for later" so the
+/// chat/completions filters don't have to encode that policy themselves.
+/// Callers MUST treat `Deferred` as success — the response goes back to
+/// the client unchanged; recovery happens on the user's next gate
+/// `verify_payment`, which is expected to refuse the caller until the
+/// debt is cleared.
+///
+/// `Err(_)` from `deduct` is reserved for cases where the gate could
+/// neither settle nor record the debt (e.g., DB outage). Today the
+/// filters log-and-ship in that case; a future change may surface it.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum DebitOutcome {
+    /// The full amount was deducted synchronously.
+    Settled,
+    /// The amount could not be deducted (typically: insufficient
+    /// balance) and was recorded as pending debt instead. The next
+    /// `verify_payment` for this caller will reject until cleared.
+    Deferred,
+}
+
 /// Trait abstracting payment verification and settlement for MPP handlers.
 ///
 /// Allows downstream crates to provide custom payment logic (e.g. charge-based
@@ -38,13 +60,18 @@ pub trait PaymentGate: Send + Sync {
     /// request that triggered this deduction. It is `None` for streaming
     /// per-tick deductions where receipts are not tracked at the request
     /// level. Implementations that don't track receipts may ignore it.
+    ///
+    /// Returns [`DebitOutcome::Settled`] on a synchronous deduction,
+    /// or [`DebitOutcome::Deferred`] when the gate could not deduct
+    /// right now but has recorded the debt for later collection. See
+    /// [`DebitOutcome`] for the contract callers must honour.
     fn deduct<'a>(
         &'a self,
         backend_key: &'a str,
         channel_id: &'a str,
         amount: u128,
         request_id: Option<&'a str>,
-    ) -> GateFuture<'a, Result<(), mpp::server::VerificationError>>;
+    ) -> GateFuture<'a, Result<DebitOutcome, mpp::server::VerificationError>>;
 
     /// Wait for the next channel update on the given backend.
     ///
@@ -93,7 +120,7 @@ impl PaymentGate for Arc<dyn PaymentGate> {
         channel_id: &'a str,
         amount: u128,
         request_id: Option<&'a str>,
-    ) -> GateFuture<'a, Result<(), mpp::server::VerificationError>> {
+    ) -> GateFuture<'a, Result<DebitOutcome, mpp::server::VerificationError>> {
         (**self).deduct(backend_key, channel_id, amount, request_id)
     }
 
