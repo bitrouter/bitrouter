@@ -51,7 +51,10 @@ pub fn default_fallback_policy() -> std::sync::Arc<dyn FallbackPolicy> {
 
 #[cfg(test)]
 mod tests {
-    use bitrouter_core::{errors::ProviderErrorContext, routers::routing_table::ApiProtocol};
+    use bitrouter_core::{
+        errors::ProviderErrorContext,
+        routers::routing_table::{ApiProtocol, BillingMode},
+    };
 
     use super::*;
 
@@ -63,6 +66,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             preset: None,
+            billing_mode: BillingMode::default(),
         }
     }
 

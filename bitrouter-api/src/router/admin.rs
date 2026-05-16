@@ -201,7 +201,7 @@ mod tests {
     use bitrouter_core::routers::content::RouteContext;
     use bitrouter_core::routers::dynamic::DynamicRoutingTable;
     use bitrouter_core::routers::routing_table::{
-        ApiProtocol, RouteEntry, RoutingTable, RoutingTarget,
+        ApiProtocol, BillingMode, RouteEntry, RoutingTable, RoutingTarget,
     };
 
     use super::admin_routes_filter;
@@ -218,6 +218,7 @@ mod tests {
                     api_key_override: None,
                     api_base_override: None,
                     preset: None,
+                    billing_mode: BillingMode::default(),
                 })
             } else {
                 Err(BitrouterError::invalid_request(

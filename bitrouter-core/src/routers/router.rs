@@ -198,7 +198,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::routers::routing_table::ApiProtocol;
+    use crate::routers::routing_table::{ApiProtocol, BillingMode};
 
     struct StaticKeyOverlay {
         key: String,
@@ -227,6 +227,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             preset: None,
+            billing_mode: BillingMode::default(),
         };
         let caller = CallerContext::default();
 
@@ -263,6 +264,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             preset: None,
+            billing_mode: BillingMode::default(),
         }
     }
 
@@ -311,6 +313,7 @@ mod tests {
                 api_key_override: None,
                 api_base_override: None,
                 preset: None,
+                billing_mode: BillingMode::default(),
             },
             RoutingTarget {
                 provider_name: "anthropic".to_owned(),
@@ -319,6 +322,7 @@ mod tests {
                 api_key_override: None,
                 api_base_override: None,
                 preset: None,
+                billing_mode: BillingMode::default(),
             },
         ];
         let caller = CallerContext::default();

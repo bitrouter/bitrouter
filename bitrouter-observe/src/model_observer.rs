@@ -197,6 +197,8 @@ mod tests {
             output_tokens: OutputTokenPricing {
                 text: Some(10.00),
                 reasoning: None,
+                image: None,
+                audio: None,
             },
         }
     }

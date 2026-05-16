@@ -82,6 +82,28 @@ impl AppliedPreset {
     }
 }
 
+/// Who pays for a routed request.
+///
+/// Filters check `billing_mode` (not `api_key_override.is_some()`) to
+/// decide whether to deduct from the platform's payment gate after the
+/// upstream call. Inferring this from "the target has an api_key_override"
+/// breaks under the cloud's RegistryRoutingTable, which fills in the
+/// platform key on every target — including cloud-billed ones — and
+/// would have silently treated every request as BYOK.
+///
+/// Defaults to `Cloud` so a forgotten field still bills (safer to
+/// over-charge than to silently leak).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
+pub enum BillingMode {
+    /// Platform-paid: cloud-routed via a managed upstream credential;
+    /// the payment gate deducts against the user's credit balance.
+    #[default]
+    Cloud,
+    /// User-paid: caller supplied their own upstream credential (BYOK).
+    /// Skip the gate's deduction entirely.
+    Byok,
+}
+
 /// The resolved target for a routed request (model or tool).
 #[derive(Debug, Clone)]
 pub struct RoutingTarget {
@@ -97,6 +119,8 @@ pub struct RoutingTarget {
     /// over the provider's default `api_key`. Populated by per-endpoint
     /// configuration (see `Endpoint.api_key`) or by a [`TargetOverlay`] that
     /// runs after routing.
+    ///
+    /// Does NOT determine billing — see [`BillingMode`] / `billing_mode`.
     pub api_key_override: Option<String>,
     /// Per-target API base URL override.
     ///
@@ -108,6 +132,9 @@ pub struct RoutingTarget {
     /// string. When set, filter handlers shallow-merge these defaults onto
     /// the inbound request before dispatch.
     pub preset: Option<AppliedPreset>,
+    /// Who pays for this request. Read by the chat/completions filters
+    /// to decide whether to invoke the payment gate.
+    pub billing_mode: BillingMode,
 }
 
 /// A single entry in the route listing, describing a configured route.

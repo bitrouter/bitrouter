@@ -6,7 +6,10 @@ use bitrouter_config::{ApiProtocol, ProviderConfig};
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::language::language_model::DynLanguageModel,
-    routers::{router::LanguageModelRouter, routing_table::RoutingTarget},
+    routers::{
+        router::LanguageModelRouter,
+        routing_table::{BillingMode, RoutingTarget},
+    },
     tools::provider::DynToolProvider,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -763,6 +766,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             preset: None,
+            billing_mode: BillingMode::default(),
         };
 
         let provider = router.route_tool(target).await;
@@ -787,6 +791,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             preset: None,
+            billing_mode: BillingMode::default(),
         };
         assert!(router.route_tool(target).await.is_err());
     }

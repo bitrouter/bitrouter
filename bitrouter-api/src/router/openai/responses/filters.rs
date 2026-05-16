@@ -15,7 +15,10 @@ use bitrouter_core::{
     observe::{
         CallerContext, ObserveCallback, RequestContext, RequestFailureEvent, RequestSuccessEvent,
     },
-    routers::{router::LanguageModelRouter, routing_table::RoutingTable},
+    routers::{
+        router::LanguageModelRouter,
+        routing_table::{BillingMode, RoutingTable},
+    },
 };
 use warp::Filter;
 
@@ -359,7 +362,7 @@ where
         bitrouter_core::api::openai::responses::preset::apply(&mut request, &preset);
     }
 
-    let byok_used = target.api_key_override.is_some();
+    let byok_used = matches!(target.billing_mode, BillingMode::Byok);
     let provider_name = target.provider_name.clone();
     let target_model_id = target.service_id.clone();
 
@@ -523,10 +526,7 @@ where
         match gen_result {
             Ok(result) => {
                 let pricing = table.model_pricing(&provider_name, &target_model_id);
-                let micro_units = match crate::mpp::calculate_usage_cost(
-                    &result.usage,
-                    &pricing,
-                ) {
+                let micro_units = match crate::mpp::calculate_usage_cost(&result.usage, &pricing) {
                     Some(cost) => crate::mpp::cost_to_micro_units(cost),
                     None => {
                         tracing::warn!(
