@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0](https://github.com/bitrouter/bitrouter/compare/v0.32.0...v0.33.0)
+
+
+### 🐛 Bug Fixes
+
+- *(billing)* Audit P0 contract changes — pricing Option, BillingMode, DebitOutcome ([#463](https://github.com/bitrouter/bitrouter/pull/463)) - ([98ff690](https://github.com/bitrouter/bitrouter/commit/98ff6903d91909acb524d236fa3f234275f5d44f))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(providers)* Update models from models.dev ([#461](https://github.com/bitrouter/bitrouter/pull/461)) - ([b742659](https://github.com/bitrouter/bitrouter/commit/b74265951ed553efa17790f4c2ec7f16f022f33c))
+
+
 ## [0.32.0](https://github.com/bitrouter/bitrouter/compare/v0.31.2...v0.32.0)
 
 
