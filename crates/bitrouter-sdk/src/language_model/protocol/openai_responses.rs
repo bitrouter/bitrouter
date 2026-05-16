@@ -15,18 +15,25 @@
 //! - #434: function-call stream items map `item_id` back to `call_id`, and
 //!   argument deltas are not duplicated.
 
+use async_trait::async_trait;
+
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    ProtocolAdapter, SseEvent, StreamDecoder, StreamEncoder, describe_deser_error,
+    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
+    describe_deser_error,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    StreamPart, Usage,
+    RoutingTarget, StreamPart, Usage,
 };
 
 /// The OpenAI Responses protocol adapter.
 pub struct OpenAiResponsesAdapter;
+
+/// HTTP transport for OpenAI Responses: `POST {api_base}/responses` with
+/// `Authorization: Bearer <api_key>`.
+pub struct OpenAiResponsesTransport;
 
 fn parse_role(role: &str) -> Result<Role> {
     match role {
@@ -179,7 +186,7 @@ fn finish_from_status(status: &str) -> Option<FinishReason> {
     }
 }
 
-impl ProtocolAdapter for OpenAiResponsesAdapter {
+impl InboundAdapter for OpenAiResponsesAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Responses
     }
@@ -284,6 +291,51 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
                 .and_then(|s| s.as_bool())
                 .unwrap_or(false),
         })
+    }
+
+    fn render_response(
+        &self,
+        result: &GenerateResult,
+        prompt: &Prompt,
+        request_id: &str,
+    ) -> Result<serde_json::Value> {
+        let output = render_output_items(result);
+        let mut body = serde_json::json!({
+            "id": request_id,
+            "object": "response",
+            "model": prompt.model,
+            "status": match &result.finish_reason {
+                Some(FinishReason::Length) => "incomplete",
+                Some(FinishReason::Error(_)) => "failed",
+                _ => "completed",
+            },
+            "output": output,
+        });
+        // Mirror the streaming `emit_terminal` behaviour: omit the `usage`
+        // key entirely when the upstream reported no token counts. A
+        // zero-filled object would let downstream callers conclude the
+        // request used zero tokens.
+        if let Some(usage) = result.usage {
+            body["usage"] = render_responses_usage(&usage);
+        }
+        Ok(body)
+    }
+
+    fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
+        Box::new(ResponsesStreamEncoder {
+            request_id: request_id.to_string(),
+            model: model.to_string(),
+            seq: 0,
+            created: false,
+            output_index: 0,
+            text_item_open: false,
+        })
+    }
+}
+
+impl OutboundAdapter for OpenAiResponsesAdapter {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::Responses
     }
 
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
@@ -405,47 +457,36 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
         })
     }
 
-    fn render_response(
-        &self,
-        result: &GenerateResult,
-        prompt: &Prompt,
-        request_id: &str,
-    ) -> Result<serde_json::Value> {
-        let output = render_output_items(result);
-        let mut body = serde_json::json!({
-            "id": request_id,
-            "object": "response",
-            "model": prompt.model,
-            "status": match &result.finish_reason {
-                Some(FinishReason::Length) => "incomplete",
-                Some(FinishReason::Error(_)) => "failed",
-                _ => "completed",
-            },
-            "output": output,
-        });
-        // Mirror the streaming `emit_terminal` behaviour: omit the `usage`
-        // key entirely when the upstream reported no token counts. A
-        // zero-filled object would let downstream callers conclude the
-        // request used zero tokens.
-        if let Some(usage) = result.usage {
-            body["usage"] = render_responses_usage(&usage);
-        }
-        Ok(body)
-    }
-
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(ResponsesStreamDecoder::default())
     }
+}
 
-    fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
-        Box::new(ResponsesStreamEncoder {
-            request_id: request_id.to_string(),
-            model: model.to_string(),
-            seq: 0,
-            created: false,
-            output_index: 0,
-            text_item_open: false,
-        })
+#[async_trait]
+impl Transport for OpenAiResponsesTransport {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::Responses
+    }
+
+    fn endpoint_url(&self, target: &RoutingTarget, _stream: bool) -> String {
+        let base = target.effective_api_base().trim_end_matches('/');
+        format!("{base}/responses")
+    }
+
+    async fn authorise(
+        &self,
+        mut request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        let key = target.effective_api_key();
+        let value = format!("Bearer {key}");
+        let header = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
+            BitrouterError::internal(format!("invalid api key for Authorization header: {e}"))
+        })?;
+        request
+            .headers_mut()
+            .insert(reqwest::header::AUTHORIZATION, header);
+        Ok(request)
     }
 }
 

@@ -196,13 +196,13 @@ impl ProviderConfig {
     /// provider default (`openai`). Includes the `auto_discover` protocol
     /// inference from the api-base host.
     pub fn protocol_for(&self, model_id: &str) -> ApiProtocol {
-        if let Some(m) = self.models.iter().find(|m| m.id == model_id) {
-            if let Some(p) = m.api_protocol {
-                return p;
-            }
+        if let Some(m) = self.models.iter().find(|m| m.id == model_id)
+            && let Some(p) = &m.api_protocol
+        {
+            return p.clone();
         }
         if let Some(p) = self.api_protocol.resolve(model_id) {
-            return *p;
+            return p.clone();
         }
         infer_protocol(&self.api_base)
     }

@@ -8,20 +8,29 @@
 //! `{functionResponse}`. Reasoning is a `part` flagged `thought: true`
 //! (v0 #454-1: such parts must not be dropped).
 
+use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    ProtocolAdapter, SseEvent, StreamDecoder, StreamEncoder, describe_deser_error,
+    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
+    describe_deser_error,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    StreamPart, Usage,
+    RoutingTarget, StreamPart, Usage,
 };
 
 /// The Google Generative AI protocol adapter.
 pub struct GoogleAdapter;
+
+/// HTTP transport for Google Generative AI:
+/// `POST {api_base}/models/{model}:generateContent` (or
+/// `:streamGenerateContent?alt=sse` for streaming) with the `x-goog-api-key`
+/// header — documented at
+/// <https://ai.google.dev/gemini-api/docs/api-key>.
+pub struct GoogleTransport;
 
 /// Sentinel key under which top-level Google extras (`toolConfig`,
 /// `safetySettings`, `cachedContent`, …) ride through `GenerationParams::extra`.
@@ -193,7 +202,7 @@ fn finish_reason_str(r: &FinishReason) -> String {
     }
 }
 
-impl ProtocolAdapter for GoogleAdapter {
+impl InboundAdapter for GoogleAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Google
     }
@@ -271,6 +280,43 @@ impl ProtocolAdapter for GoogleAdapter {
             params,
             stream: req.stream,
         })
+    }
+
+    fn render_response(
+        &self,
+        result: &GenerateResult,
+        _prompt: &Prompt,
+        _request_id: &str,
+    ) -> Result<serde_json::Value> {
+        let parts: Vec<serde_json::Value> = result.content.iter().filter_map(render_part).collect();
+        let usage = result.usage.unwrap_or_default();
+        Ok(serde_json::json!({
+            "candidates": [{
+                "content": { "role": "model", "parts": parts },
+                "finishReason": result
+                    .finish_reason
+                    .as_ref()
+                    .map(finish_reason_str)
+                    .unwrap_or_else(|| "STOP".to_string()),
+                "index": 0,
+            }],
+            "usageMetadata": {
+                "promptTokenCount": usage.prompt_tokens,
+                "candidatesTokenCount": usage.completion_tokens,
+                "totalTokenCount": usage.total(),
+                "thoughtsTokenCount": usage.reasoning_tokens,
+            },
+        }))
+    }
+
+    fn stream_encoder(&self, _request_id: &str, _model: &str) -> Box<dyn StreamEncoder> {
+        Box::new(GoogleStreamEncoder)
+    }
+}
+
+impl OutboundAdapter for GoogleAdapter {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::Google
     }
 
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
@@ -356,39 +402,38 @@ impl ProtocolAdapter for GoogleAdapter {
         })
     }
 
-    fn render_response(
-        &self,
-        result: &GenerateResult,
-        _prompt: &Prompt,
-        _request_id: &str,
-    ) -> Result<serde_json::Value> {
-        let parts: Vec<serde_json::Value> = result.content.iter().filter_map(render_part).collect();
-        let usage = result.usage.unwrap_or_default();
-        Ok(serde_json::json!({
-            "candidates": [{
-                "content": { "role": "model", "parts": parts },
-                "finishReason": result
-                    .finish_reason
-                    .as_ref()
-                    .map(finish_reason_str)
-                    .unwrap_or_else(|| "STOP".to_string()),
-                "index": 0,
-            }],
-            "usageMetadata": {
-                "promptTokenCount": usage.prompt_tokens,
-                "candidatesTokenCount": usage.completion_tokens,
-                "totalTokenCount": usage.total(),
-                "thoughtsTokenCount": usage.reasoning_tokens,
-            },
-        }))
-    }
-
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(GoogleStreamDecoder::default())
     }
+}
 
-    fn stream_encoder(&self, _request_id: &str, _model: &str) -> Box<dyn StreamEncoder> {
-        Box::new(GoogleStreamEncoder)
+#[async_trait]
+impl Transport for GoogleTransport {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::Google
+    }
+
+    fn endpoint_url(&self, target: &RoutingTarget, stream: bool) -> String {
+        let base = target.effective_api_base().trim_end_matches('/');
+        let verb = if stream {
+            "streamGenerateContent?alt=sse"
+        } else {
+            "generateContent"
+        };
+        format!("{base}/models/{}:{verb}", target.service_id)
+    }
+
+    async fn authorise(
+        &self,
+        mut request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        let key = target.effective_api_key();
+        let header = reqwest::header::HeaderValue::from_str(key).map_err(|e| {
+            BitrouterError::internal(format!("invalid api key for x-goog-api-key header: {e}"))
+        })?;
+        request.headers_mut().insert("x-goog-api-key", header);
+        Ok(request)
     }
 }
 

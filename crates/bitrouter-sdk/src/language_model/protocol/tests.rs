@@ -6,6 +6,25 @@ use crate::language_model::types::*;
 
 // ===== fixtures =====
 
+/// Helper trait combining inbound + outbound; the 4 built-in adapter structs
+/// implement both so the matrix tests can use a single handle for each
+/// protocol.
+trait BothAdapter: InboundAdapter + OutboundAdapter {}
+impl<T: InboundAdapter + OutboundAdapter> BothAdapter for T {}
+
+/// Test-only lookup that returns one of the four built-in adapters as a
+/// `BothAdapter` so the matrix tests can call inbound + outbound methods on
+/// the same value.
+fn adapter_for(protocol: ApiProtocol) -> Box<dyn BothAdapter> {
+    match protocol {
+        ApiProtocol::Openai => Box::new(openai_chat::OpenAiChatAdapter),
+        ApiProtocol::Anthropic => Box::new(anthropic::AnthropicAdapter),
+        ApiProtocol::Responses => Box::new(openai_responses::OpenAiResponsesAdapter),
+        ApiProtocol::Google => Box::new(google::GoogleAdapter),
+        ApiProtocol::Custom(_) => unreachable!("test helper only handles built-in protocols"),
+    }
+}
+
 fn all_protocols() -> [ApiProtocol; 4] {
     [
         ApiProtocol::Anthropic,
@@ -81,8 +100,8 @@ fn text_of(content: &[Content]) -> String {
 fn conversion_matrix_4x4_non_streaming() {
     for inbound_proto in all_protocols() {
         for outbound_proto in all_protocols() {
-            let inbound = adapter_for(inbound_proto);
-            let outbound = adapter_for(outbound_proto);
+            let inbound = adapter_for(inbound_proto.clone());
+            let outbound = adapter_for(outbound_proto.clone());
             let canonical = sample_prompt();
 
             // client → router (inbound parse of an inbound-rendered request)
@@ -165,7 +184,7 @@ fn conversion_matrix_4x4_streaming() {
     ];
 
     for outbound_proto in all_protocols() {
-        let outbound = adapter_for(outbound_proto);
+        let outbound = adapter_for(outbound_proto.clone());
         // encode canonical → outbound SSE frames
         let mut encoder = outbound.stream_encoder("resp_s", "test-model");
         let mut frames = Vec::new();
@@ -218,7 +237,7 @@ fn conversion_matrix_4x4_streaming() {
 
         // and the decoded stream re-encodes in every inbound protocol
         for inbound_proto in all_protocols() {
-            let inbound = adapter_for(inbound_proto);
+            let inbound = adapter_for(inbound_proto.clone());
             let mut enc = inbound.stream_encoder("resp_s", "test-model");
             for part in &decoded {
                 enc.encode(part).unwrap_or_else(|e| {
@@ -891,7 +910,7 @@ fn regression_364_tool_result_array_and_thinking() {
 #[test]
 fn regression_454_1_reasoning_survives_all_protocols() {
     for proto in all_protocols() {
-        let adapter = adapter_for(proto);
+        let adapter = adapter_for(proto.clone());
         let result = sample_result(); // has a Reasoning block
         let rendered = adapter
             .render_response(&result, &sample_prompt(), "r1")

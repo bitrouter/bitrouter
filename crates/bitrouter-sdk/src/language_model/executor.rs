@@ -11,9 +11,9 @@ use futures::StreamExt;
 use futures_core::Stream;
 
 use crate::error::{BitrouterError, Result};
-use crate::language_model::protocol::{SseEvent, adapter_for};
+use crate::language_model::protocol::{OutboundDispatch, SseEvent};
 use crate::language_model::types::{
-    ApiProtocol, ExecutionResult, GenerateResult, Prompt, RoutingTarget, StreamPart,
+    ExecutionResult, GenerateResult, Prompt, RoutingTarget, StreamPart,
 };
 
 /// A boxed stream of canonical stream parts.
@@ -173,11 +173,24 @@ fn truncate_upstream_message(text: &str) -> String {
 /// or [`HttpExecutor::new`] with a custom [`HttpTimeouts`].
 pub struct HttpExecutor {
     client: reqwest::Client,
+    dispatch: OutboundDispatch,
 }
 
 impl HttpExecutor {
-    /// Build an executor with the given upstream timeout configuration.
+    /// Build an executor with the given upstream timeout configuration and the
+    /// default [`OutboundDispatch::builtin`] registry. Use
+    /// [`with_dispatch`](Self::with_dispatch) instead when you want to
+    /// register a custom provider (e.g. AWS Bedrock).
     pub fn new(timeouts: HttpTimeouts) -> Result<Self> {
+        Self::with_dispatch(timeouts, OutboundDispatch::builtin())
+    }
+
+    /// Build an executor with the given upstream timeout configuration and a
+    /// custom outbound-dispatch registry. The dispatch table is consulted
+    /// once per request (via [`RoutingTarget::api_protocol`]) to find the
+    /// adapter that renders the request body + parses the response and the
+    /// transport that builds the URL + applies auth.
+    pub fn with_dispatch(timeouts: HttpTimeouts, dispatch: OutboundDispatch) -> Result<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(timeouts.connect)
             .read_timeout(timeouts.read)
@@ -185,90 +198,46 @@ impl HttpExecutor {
             .tcp_keepalive(timeouts.tcp_keepalive)
             .build()
             .map_err(|e| BitrouterError::internal(format!("building HTTP client: {e}")))?;
-        Ok(Self { client })
+        Ok(Self { client, dispatch })
     }
 
-    /// Build an executor with default timeouts.
+    /// Build an executor with default timeouts and the built-in dispatch.
     pub fn with_defaults() -> Result<Self> {
         Self::new(HttpTimeouts::default())
     }
 
-    /// The upstream endpoint URL for a target. Google encodes the model and the
-    /// streaming mode in the path; the others use a fixed path.
-    ///
-    /// Endpoint paths, per the official API references:
-    /// - OpenAI Chat: `POST {base}/chat/completions`
-    ///   <https://platform.openai.com/docs/api-reference/chat/create>
-    /// - OpenAI Responses: `POST {base}/responses`
-    ///   <https://platform.openai.com/docs/api-reference/responses/create>
-    /// - Anthropic Messages: `POST {base}/messages`
-    ///   <https://docs.anthropic.com/en/api/messages>
-    /// - Google: `POST {base}/models/{model}:generateContent` (or
-    ///   `:streamGenerateContent?alt=sse` for SSE streaming)
-    ///   <https://ai.google.dev/api/generate-content>
-    fn endpoint_url(target: &RoutingTarget, stream: bool) -> String {
-        let base = target.effective_api_base().trim_end_matches('/');
-        match target.api_protocol {
-            ApiProtocol::Openai => format!("{base}/chat/completions"),
-            ApiProtocol::Responses => format!("{base}/responses"),
-            ApiProtocol::Anthropic => format!("{base}/messages"),
-            ApiProtocol::Google => {
-                let verb = if stream {
-                    "streamGenerateContent?alt=sse"
-                } else {
-                    "generateContent"
-                };
-                format!("{base}/models/{}:{verb}", target.service_id)
-            }
-        }
-    }
-
-    /// Apply the protocol's auth headers to a request builder.
-    fn auth_headers(
-        builder: reqwest::RequestBuilder,
-        target: &RoutingTarget,
-    ) -> reqwest::RequestBuilder {
-        let key = target.effective_api_key();
-        match target.api_protocol {
-            ApiProtocol::Openai | ApiProtocol::Responses => builder.bearer_auth(key),
-            // Anthropic Messages auth — official:
-            // <https://docs.anthropic.com/en/api/messages>
-            // `anthropic-version: 2023-06-01` is the only released spec
-            // revision as of 2026-05; cf.
-            // <https://platform.claude.com/docs/en/api/versioning>.
-            ApiProtocol::Anthropic => builder
-                .header("x-api-key", key)
-                .header("anthropic-version", "2023-06-01"),
-            // Google Generative AI auth — `x-goog-api-key` is documented at
-            // <https://ai.google.dev/gemini-api/docs/api-key> and exercised
-            // throughout <https://ai.google.dev/api/generate-content>.
-            ApiProtocol::Google => builder.header("x-goog-api-key", key),
-        }
-    }
-
-    /// Render the canonical prompt into the target's wire format, with the
-    /// upstream model id substituted and the streaming flag set.
-    fn render_body(
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        stream: bool,
-    ) -> Result<serde_json::Value> {
-        let mut upstream_prompt = prompt.clone();
-        upstream_prompt.model = target.service_id.clone();
-        upstream_prompt.stream = stream;
-        adapter_for(target.api_protocol).render_request(&upstream_prompt)
+    fn no_dispatch_error(target: &RoutingTarget) -> BitrouterError {
+        BitrouterError::internal(format!(
+            "no outbound dispatch registered for protocol '{}' (target provider '{}'); \
+             register an OutboundAdapter + Transport via OutboundDispatch::register",
+            target.api_protocol, target.provider_name,
+        ))
     }
 }
 
 #[async_trait]
 impl Executor for HttpExecutor {
     async fn execute(&self, target: &RoutingTarget, prompt: &Prompt) -> Result<ExecutionResult> {
-        let url = Self::endpoint_url(target, false);
-        let body = Self::render_body(target, prompt, false)?;
-        let started = Instant::now();
+        let (adapter, transport) = self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| Self::no_dispatch_error(target))?;
 
-        let builder = Self::auth_headers(self.client.post(&url).json(&body), target);
-        let response = builder.send().await.map_err(|e| {
+        let mut upstream_prompt = prompt.clone();
+        upstream_prompt.model = target.service_id.clone();
+        upstream_prompt.stream = false;
+        let body = adapter.render_request(&upstream_prompt)?;
+        let url = transport.endpoint_url(target, false);
+
+        let started = Instant::now();
+        let request = self
+            .client
+            .post(&url)
+            .json(&body)
+            .build()
+            .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
+        let request = transport.authorise(request, target).await?;
+        let response = self.client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
                 BitrouterError::UpstreamTimeout
             } else {
@@ -300,7 +269,7 @@ impl Executor for HttpExecutor {
                 status: 502,
                 message: format!("upstream returned non-JSON body: {e}"),
             })?;
-        let result = adapter_for(target.api_protocol).parse_response(json)?;
+        let result = adapter.parse_response(json)?;
         let elapsed = started.elapsed().as_millis() as u64;
 
         Ok(ExecutionResult {
@@ -317,11 +286,25 @@ impl Executor for HttpExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
     ) -> Result<StreamPartStream> {
-        let url = Self::endpoint_url(target, true);
-        let body = Self::render_body(target, prompt, true)?;
+        let (adapter, transport) = self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| Self::no_dispatch_error(target))?;
 
-        let builder = Self::auth_headers(self.client.post(&url).json(&body), target);
-        let response = builder.send().await.map_err(|e| {
+        let mut upstream_prompt = prompt.clone();
+        upstream_prompt.model = target.service_id.clone();
+        upstream_prompt.stream = true;
+        let body = adapter.render_request(&upstream_prompt)?;
+        let url = transport.endpoint_url(target, true);
+
+        let request = self
+            .client
+            .post(&url)
+            .json(&body)
+            .build()
+            .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
+        let request = transport.authorise(request, target).await?;
+        let response = self.client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
                 BitrouterError::UpstreamTimeout
             } else {
@@ -343,8 +326,7 @@ impl Executor for HttpExecutor {
 
         // Parse the upstream SSE byte stream into canonical stream parts via
         // the protocol's stateful decoder.
-        let protocol = target.api_protocol;
-        let mut decoder = adapter_for(protocol).stream_decoder();
+        let mut decoder = adapter.stream_decoder();
         let byte_stream = response.bytes_stream();
 
         let stream = async_stream::stream! {

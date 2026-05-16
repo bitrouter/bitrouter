@@ -27,7 +27,7 @@ use crate::app::App;
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::Pipeline;
-use crate::language_model::protocol::{adapter_for, sanitize_model_name};
+use crate::language_model::protocol::{inbound_adapter_for, sanitize_model_name};
 use crate::language_model::stream::{SseFrame, SseKeepaliveStream};
 use crate::language_model::types::{ApiProtocol, PipelineRequest};
 use crate::mcp;
@@ -377,7 +377,16 @@ async fn handle(
     body: serde_json::Value,
     model_override: Option<String>,
 ) -> Response {
-    let adapter = adapter_for(inbound);
+    let adapter = match inbound_adapter_for(&inbound) {
+        Some(a) => a,
+        None => {
+            return BitrouterError::internal(format!(
+                "no inbound adapter for protocol '{inbound}' — Custom protocols are \
+                 outbound-only by design"
+            ))
+            .into_response();
+        }
+    };
     let prompt = match adapter.parse_request(body) {
         Ok(mut p) => {
             if let Some(model) = model_override {
@@ -401,7 +410,12 @@ async fn handle(
     req.headers = headers;
 
     if prompt.stream {
-        stream_response(state.language_model.clone(), req, inbound, &prompt.model)
+        stream_response(
+            state.language_model.clone(),
+            req,
+            inbound.clone(),
+            &prompt.model,
+        )
     } else {
         match state.language_model.execute(req).await {
             Ok(resp) => match adapter.render_response(&resp.result, &prompt, &resp.request_id) {
@@ -422,7 +436,16 @@ fn stream_response(
     inbound: ApiProtocol,
     model: &str,
 ) -> Response {
-    let adapter = adapter_for(inbound);
+    let adapter = match inbound_adapter_for(&inbound) {
+        Some(a) => a,
+        None => {
+            return BitrouterError::internal(format!(
+                "no inbound adapter for protocol '{inbound}' — Custom protocols are \
+                 outbound-only by design"
+            ))
+            .into_response();
+        }
+    };
     let mut encoder = adapter.stream_encoder(&req.request_id, model);
     let keepalive = pipeline.keepalive_interval();
 

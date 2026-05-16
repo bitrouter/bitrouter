@@ -84,7 +84,8 @@ pub use hooks::{
 };
 pub use pipeline::{DEFAULT_KEEPALIVE, Pipeline};
 pub use protocol::{
-    ProtocolAdapter, SseEvent, StreamDecoder, StreamEncoder, adapter_for, sanitize_model_name,
+    InboundAdapter, OutboundAdapter, OutboundDispatch, SseEvent, StreamDecoder, StreamEncoder,
+    Transport, inbound_adapter_for, sanitize_model_name,
 };
 pub use routing::{
     DefaultFallbackPolicy, FallbackPolicy, ModelInfo, RoutingPrefs, RoutingTable, SortOrder,

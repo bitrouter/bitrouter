@@ -10,11 +10,22 @@ use std::collections::HashMap;
 
 use crate::caller::CallerContext;
 
-/// The wire protocol an upstream provider speaks. v0 had
-/// `Openai/Anthropic/Google/Mcp/Rest/Acp`; v1 promotes OpenAI Responses to its
-/// own first-class variant (see 005).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
+/// The wire protocol an upstream provider speaks.
+///
+/// The four built-in variants are bidirectional — the SDK both serves them to
+/// clients (via an
+/// [`InboundAdapter`](crate::language_model::protocol::InboundAdapter)) and
+/// calls them upstream (via an
+/// [`OutboundAdapter`](crate::language_model::protocol::OutboundAdapter)).
+///
+/// [`Custom`](Self::Custom) is an extension point for *outbound-only*
+/// platform providers (AWS Bedrock, Azure OpenAI, Vertex AI, …). Such a
+/// provider lives in its own crate and registers an `OutboundAdapter` +
+/// [`Transport`](crate::language_model::protocol::Transport) on the
+/// executor's
+/// [`OutboundDispatch`](crate::language_model::protocol::OutboundDispatch).
+/// The name passed to `Custom` is the registration key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum ApiProtocol {
     /// OpenAI Chat Completions.
     #[default]
@@ -25,6 +36,51 @@ pub enum ApiProtocol {
     Google,
     /// OpenAI Responses.
     Responses,
+    /// An externally-registered protocol identified by its registration name
+    /// (e.g. `"bedrock-claude"`). The SDK does not serve `Custom` protocols
+    /// inbound; they are outbound-only by design.
+    Custom(String),
+}
+
+impl ApiProtocol {
+    /// Stable string name for this protocol (`"openai"`, `"anthropic"`, …, or
+    /// the inner string for [`Custom`](Self::Custom)). Used as the wire-format
+    /// representation in YAML config and as the registry key for outbound
+    /// dispatch.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Openai => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Google => "google",
+            Self::Responses => "responses",
+            Self::Custom(name) => name.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for ApiProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ApiProtocol {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ApiProtocol {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(match s.as_str() {
+            "openai" => Self::Openai,
+            "anthropic" => Self::Anthropic,
+            "google" => Self::Google,
+            "responses" => Self::Responses,
+            _ => Self::Custom(s),
+        })
+    }
 }
 
 /// A conversation role.

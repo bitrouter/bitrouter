@@ -8,20 +8,26 @@
 
 use std::collections::HashMap;
 
+use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    ProtocolAdapter, SseEvent, StreamDecoder, StreamEncoder, describe_deser_error,
+    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
+    describe_deser_error,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    StreamPart, Usage,
+    RoutingTarget, StreamPart, Usage,
 };
 
-/// The OpenAI Chat Completions protocol adapter.
+/// The OpenAI Chat Completions inbound + outbound protocol adapter.
 pub struct OpenAiChatAdapter;
+
+/// HTTP transport for OpenAI Chat: `POST {api_base}/chat/completions` with
+/// `Authorization: Bearer <api_key>`.
+pub struct OpenAiChatTransport;
 
 // ===== wire request types =====
 
@@ -149,7 +155,7 @@ fn content_text(value: &serde_json::Value) -> String {
     }
 }
 
-impl ProtocolAdapter for OpenAiChatAdapter {
+impl InboundAdapter for OpenAiChatAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Openai
     }
@@ -234,6 +240,91 @@ impl ProtocolAdapter for OpenAiChatAdapter {
             },
             stream: req.stream,
         })
+    }
+
+    fn render_response(
+        &self,
+        result: &GenerateResult,
+        prompt: &Prompt,
+        request_id: &str,
+    ) -> Result<serde_json::Value> {
+        let mut message = serde_json::Map::new();
+        message.insert("role".into(), "assistant".into());
+
+        let text: String = result
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        // `content` is always present (possibly an empty string) — never null.
+        message.insert("content".into(), text.into());
+
+        let reasoning: String = result
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::Reasoning { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        if !reasoning.is_empty() {
+            message.insert("reasoning_content".into(), reasoning.into());
+        }
+
+        let tool_calls: Vec<_> = result
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => Some(serde_json::json!({
+                    "id": id,
+                    "type": "function",
+                    "function": { "name": name, "arguments": arguments },
+                })),
+                _ => None,
+            })
+            .collect();
+        if !tool_calls.is_empty() {
+            message.insert("tool_calls".into(), tool_calls.into());
+        }
+
+        let mut response = serde_json::Map::new();
+        response.insert("id".into(), request_id.into());
+        response.insert("object".into(), "chat.completion".into());
+        response.insert("model".into(), prompt.model.clone().into());
+        response.insert(
+            "choices".into(),
+            serde_json::json!([{
+                "index": 0,
+                "message": serde_json::Value::Object(message),
+                "finish_reason": result.finish_reason.as_ref().map(finish_reason_str),
+            }]),
+        );
+        if let Some(usage) = result.usage {
+            response.insert("usage".into(), render_usage(&usage));
+        }
+        Ok(serde_json::Value::Object(response))
+    }
+
+    fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
+        Box::new(ChatStreamEncoder {
+            request_id: request_id.to_string(),
+            model: model.to_string(),
+            role_sent: false,
+            tool_call_indices: Vec::new(),
+        })
+    }
+}
+
+impl OutboundAdapter for OpenAiChatAdapter {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::Openai
     }
 
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
@@ -405,87 +496,36 @@ impl ProtocolAdapter for OpenAiChatAdapter {
         })
     }
 
-    fn render_response(
-        &self,
-        result: &GenerateResult,
-        prompt: &Prompt,
-        request_id: &str,
-    ) -> Result<serde_json::Value> {
-        let mut message = serde_json::Map::new();
-        message.insert("role".into(), "assistant".into());
-
-        let text: String = result
-            .content
-            .iter()
-            .filter_map(|c| match c {
-                Content::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        // `content` is always present (possibly an empty string) — never null.
-        message.insert("content".into(), text.into());
-
-        let reasoning: String = result
-            .content
-            .iter()
-            .filter_map(|c| match c {
-                Content::Reasoning { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        if !reasoning.is_empty() {
-            message.insert("reasoning_content".into(), reasoning.into());
-        }
-
-        let tool_calls: Vec<_> = result
-            .content
-            .iter()
-            .filter_map(|c| match c {
-                Content::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                } => Some(serde_json::json!({
-                    "id": id,
-                    "type": "function",
-                    "function": { "name": name, "arguments": arguments },
-                })),
-                _ => None,
-            })
-            .collect();
-        if !tool_calls.is_empty() {
-            message.insert("tool_calls".into(), tool_calls.into());
-        }
-
-        let mut response = serde_json::Map::new();
-        response.insert("id".into(), request_id.into());
-        response.insert("object".into(), "chat.completion".into());
-        response.insert("model".into(), prompt.model.clone().into());
-        response.insert(
-            "choices".into(),
-            serde_json::json!([{
-                "index": 0,
-                "message": serde_json::Value::Object(message),
-                "finish_reason": result.finish_reason.as_ref().map(finish_reason_str),
-            }]),
-        );
-        if let Some(usage) = result.usage {
-            response.insert("usage".into(), render_usage(&usage));
-        }
-        Ok(serde_json::Value::Object(response))
-    }
-
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(ChatStreamDecoder::default())
     }
+}
 
-    fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
-        Box::new(ChatStreamEncoder {
-            request_id: request_id.to_string(),
-            model: model.to_string(),
-            role_sent: false,
-            tool_call_indices: Vec::new(),
-        })
+#[async_trait]
+impl Transport for OpenAiChatTransport {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::Openai
+    }
+
+    fn endpoint_url(&self, target: &RoutingTarget, _stream: bool) -> String {
+        let base = target.effective_api_base().trim_end_matches('/');
+        format!("{base}/chat/completions")
+    }
+
+    async fn authorise(
+        &self,
+        mut request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        let key = target.effective_api_key();
+        let value = format!("Bearer {key}");
+        let header = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
+            BitrouterError::internal(format!("invalid api key for Authorization header: {e}"))
+        })?;
+        request
+            .headers_mut()
+            .insert(reqwest::header::AUTHORIZATION, header);
+        Ok(request)
     }
 }
 

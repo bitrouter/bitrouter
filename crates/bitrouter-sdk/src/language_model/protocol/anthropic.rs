@@ -12,18 +12,27 @@
 
 use serde::Deserialize;
 
+use async_trait::async_trait;
+
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    ProtocolAdapter, SseEvent, StreamDecoder, StreamEncoder, describe_deser_error,
+    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
+    describe_deser_error,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    StreamPart, Usage,
+    RoutingTarget, StreamPart, Usage,
 };
 
-/// The Anthropic Messages protocol adapter.
+/// The Anthropic Messages inbound + outbound protocol adapter.
 pub struct AnthropicAdapter;
+
+/// HTTP transport for Anthropic Messages: `POST {api_base}/messages` with
+/// `x-api-key` + `anthropic-version: 2023-06-01`. The version constant is the
+/// only released revision as of 2026-05; cf.
+/// <https://platform.claude.com/docs/en/api/versioning>.
+pub struct AnthropicTransport;
 
 // ===== wire request types =====
 
@@ -217,7 +226,7 @@ fn finish_to_stop_reason(r: &FinishReason) -> String {
     }
 }
 
-impl ProtocolAdapter for AnthropicAdapter {
+impl InboundAdapter for AnthropicAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Anthropic
     }
@@ -279,6 +288,47 @@ impl ProtocolAdapter for AnthropicAdapter {
             },
             stream: req.stream,
         })
+    }
+
+    fn render_response(
+        &self,
+        result: &GenerateResult,
+        prompt: &Prompt,
+        request_id: &str,
+    ) -> Result<serde_json::Value> {
+        // Content blocks keep their canonical order (#416).
+        let content: Vec<serde_json::Value> = result
+            .content
+            .iter()
+            .filter_map(render_content_block)
+            .collect();
+        let usage = result.usage.unwrap_or_default();
+        Ok(serde_json::json!({
+            "id": request_id,
+            "type": "message",
+            "role": "assistant",
+            "model": prompt.model,
+            "content": content,
+            "stop_reason": result.finish_reason.as_ref().map(finish_to_stop_reason),
+            "usage": render_usage(&usage),
+        }))
+    }
+
+    fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
+        Box::new(AnthropicStreamEncoder {
+            request_id: request_id.to_string(),
+            model: model.to_string(),
+            started: false,
+            block_open: false,
+            block_kind: None,
+            block_index: 0,
+        })
+    }
+}
+
+impl OutboundAdapter for AnthropicAdapter {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::Anthropic
     }
 
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
@@ -383,43 +433,37 @@ impl ProtocolAdapter for AnthropicAdapter {
         })
     }
 
-    fn render_response(
-        &self,
-        result: &GenerateResult,
-        prompt: &Prompt,
-        request_id: &str,
-    ) -> Result<serde_json::Value> {
-        // Content blocks keep their canonical order (#416).
-        let content: Vec<serde_json::Value> = result
-            .content
-            .iter()
-            .filter_map(render_content_block)
-            .collect();
-        let usage = result.usage.unwrap_or_default();
-        Ok(serde_json::json!({
-            "id": request_id,
-            "type": "message",
-            "role": "assistant",
-            "model": prompt.model,
-            "content": content,
-            "stop_reason": result.finish_reason.as_ref().map(finish_to_stop_reason),
-            "usage": render_usage(&usage),
-        }))
-    }
-
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(AnthropicStreamDecoder::default())
     }
+}
 
-    fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
-        Box::new(AnthropicStreamEncoder {
-            request_id: request_id.to_string(),
-            model: model.to_string(),
-            started: false,
-            block_open: false,
-            block_kind: None,
-            block_index: 0,
-        })
+#[async_trait]
+impl Transport for AnthropicTransport {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::Anthropic
+    }
+
+    fn endpoint_url(&self, target: &RoutingTarget, _stream: bool) -> String {
+        let base = target.effective_api_base().trim_end_matches('/');
+        format!("{base}/messages")
+    }
+
+    async fn authorise(
+        &self,
+        mut request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        let key = target.effective_api_key();
+        let key_header = reqwest::header::HeaderValue::from_str(key).map_err(|e| {
+            BitrouterError::internal(format!("invalid api key for x-api-key header: {e}"))
+        })?;
+        request.headers_mut().insert("x-api-key", key_header);
+        request.headers_mut().insert(
+            "anthropic-version",
+            reqwest::header::HeaderValue::from_static("2023-06-01"),
+        );
+        Ok(request)
     }
 }
 
