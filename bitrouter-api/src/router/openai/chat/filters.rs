@@ -15,11 +15,13 @@ use bitrouter_core::{
     observe::{
         CallerContext, ObserveCallback, RequestContext, RequestFailureEvent, RequestSuccessEvent,
     },
-    routers::{
-        router::LanguageModelRouter,
-        routing_table::{BillingMode, RoutingTable},
-    },
+    routers::{router::LanguageModelRouter, routing_table::RoutingTable},
 };
+// BillingMode is only read by the payment-gated filter branches; gate
+// the import or the no-features build sees an unused-imports warning
+// (which CI treats as a hard error via -D warnings).
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+use bitrouter_core::routers::routing_table::BillingMode;
 
 use crate::fallback::{FallbackDecision, FallbackPolicy, default_fallback_policy};
 use crate::router::context::openai_chat;
