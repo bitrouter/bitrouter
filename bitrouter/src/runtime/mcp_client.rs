@@ -88,7 +88,9 @@ use bitrouter_core::routers::content::RouteContext;
 #[cfg(feature = "mcp")]
 use bitrouter_core::routers::router::LanguageModelRouter;
 #[cfg(feature = "mcp")]
-use bitrouter_core::routers::routing_table::{RouteEntry, RoutingTable, RoutingTarget};
+use bitrouter_core::routers::routing_table::{
+    BillingMode, RouteEntry, RoutingTable, RoutingTarget,
+};
 #[cfg(feature = "mcp")]
 use bitrouter_providers::mcp::client::bridge::SingleServerBridge;
 #[cfg(feature = "mcp")]
@@ -461,6 +463,7 @@ fn match_hint(hint: &str, routes: &[RouteEntry]) -> Option<RoutingTarget> {
                 api_key_override: None,
                 api_base_override: None,
                 preset: None,
+                billing_mode: BillingMode::default(),
             });
         }
     }

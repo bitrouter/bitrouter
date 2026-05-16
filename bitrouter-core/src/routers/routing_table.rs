@@ -82,6 +82,28 @@ impl AppliedPreset {
     }
 }
 
+/// Who pays for a routed request.
+///
+/// Filters check `billing_mode` (not `api_key_override.is_some()`) to
+/// decide whether to deduct from the platform's payment gate after the
+/// upstream call. Inferring this from "the target has an api_key_override"
+/// breaks under the cloud's RegistryRoutingTable, which fills in the
+/// platform key on every target — including cloud-billed ones — and
+/// would have silently treated every request as BYOK.
+///
+/// Defaults to `Cloud` so a forgotten field still bills (safer to
+/// over-charge than to silently leak).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
+pub enum BillingMode {
+    /// Platform-paid: cloud-routed via a managed upstream credential;
+    /// the payment gate deducts against the user's credit balance.
+    #[default]
+    Cloud,
+    /// User-paid: caller supplied their own upstream credential (BYOK).
+    /// Skip the gate's deduction entirely.
+    Byok,
+}
+
 /// The resolved target for a routed request (model or tool).
 #[derive(Debug, Clone)]
 pub struct RoutingTarget {
@@ -97,6 +119,8 @@ pub struct RoutingTarget {
     /// over the provider's default `api_key`. Populated by per-endpoint
     /// configuration (see `Endpoint.api_key`) or by a [`TargetOverlay`] that
     /// runs after routing.
+    ///
+    /// Does NOT determine billing — see [`BillingMode`] / `billing_mode`.
     pub api_key_override: Option<String>,
     /// Per-target API base URL override.
     ///
@@ -108,6 +132,9 @@ pub struct RoutingTarget {
     /// string. When set, filter handlers shallow-merge these defaults onto
     /// the inbound request before dispatch.
     pub preset: Option<AppliedPreset>,
+    /// Who pays for this request. Read by the chat/completions filters
+    /// to decide whether to invoke the payment gate.
+    pub billing_mode: BillingMode,
 }
 
 /// A single entry in the route listing, describing a configured route.
@@ -150,11 +177,22 @@ pub struct OutputTokenPricing {
     /// Cost per million reasoning output tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<f64>,
+    /// Cost per million image output tokens. Reserved — not yet wired into
+    /// `calculate_cost`; multimodal output billing will land alongside the
+    /// matching usage bucket in `LanguageModelOutputTokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<f64>,
+    /// Cost per million audio output tokens. Reserved — see `image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<f64>,
 }
 
 impl OutputTokenPricing {
     fn is_empty(&self) -> bool {
-        self.text.is_none() && self.reasoning.is_none()
+        self.text.is_none()
+            && self.reasoning.is_none()
+            && self.image.is_none()
+            && self.audio.is_none()
     }
 }
 
@@ -171,6 +209,15 @@ impl ModelPricing {
     /// Returns `true` when no pricing data is set.
     pub fn is_empty(&self) -> bool {
         self.input_tokens.is_empty() && self.output_tokens.is_empty()
+    }
+
+    /// Returns `true` when at minimum `input_tokens.no_cache` and
+    /// `output_tokens.text` are present. This is the "safe to bill"
+    /// predicate used by the cheapest-provider picker and the recommender
+    /// to skip provider entries with placeholder pricing; per-bucket
+    /// granular checks happen inside `calculate_cost`.
+    pub fn is_complete(&self) -> bool {
+        self.input_tokens.no_cache.is_some() && self.output_tokens.text.is_some()
     }
 }
 

@@ -20,7 +20,7 @@ use super::admin::{
 use super::registry::{ModelEntry, ModelRegistry, ToolEntry, ToolRegistry};
 use super::reload::ReloadableRoutingTable;
 use super::routing_table::{
-    ApiProtocol, RouteEntry, RoutingTable, RoutingTarget, strip_ansi_escapes,
+    ApiProtocol, BillingMode, RouteEntry, RoutingTable, RoutingTarget, strip_ansi_escapes,
 };
 use crate::routers::content::RouteContext;
 
@@ -91,6 +91,7 @@ impl<T> DynamicRoutingTable<T> {
             api_key_override: None,
             api_base_override: None,
             preset: None,
+            billing_mode: BillingMode::default(),
         })
     }
 }
@@ -252,6 +253,7 @@ mod tests {
                     api_key_override: None,
                     api_base_override: None,
                     preset: None,
+                    billing_mode: BillingMode::default(),
                 })
             } else {
                 Err(BitrouterError::invalid_request(
@@ -457,6 +459,7 @@ mod tests {
                             api_key_override: None,
                             api_base_override: None,
                             preset: None,
+                            billing_mode: BillingMode::default(),
                         })
                     } else {
                         Ok(RoutingTarget {
@@ -466,6 +469,7 @@ mod tests {
                             api_key_override: None,
                             api_base_override: None,
                             preset: None,
+                            billing_mode: BillingMode::default(),
                         })
                     }
                 } else {
@@ -524,6 +528,7 @@ mod tests {
                             api_key_override: None,
                             api_base_override: None,
                             preset: None,
+                            billing_mode: BillingMode::default(),
                         })
                     } else {
                         Ok(RoutingTarget {
@@ -533,6 +538,7 @@ mod tests {
                             api_key_override: None,
                             api_base_override: None,
                             preset: None,
+                            billing_mode: BillingMode::default(),
                         })
                     }
                 } else {

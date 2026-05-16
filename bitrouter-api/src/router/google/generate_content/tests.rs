@@ -16,7 +16,7 @@ use bitrouter_core::{
     routers::{
         content::RouteContext,
         router::LanguageModelRouter,
-        routing_table::{ApiProtocol, RoutingTable, RoutingTarget},
+        routing_table::{ApiProtocol, BillingMode, RoutingTable, RoutingTarget},
     },
 };
 use regex::Regex;
@@ -39,6 +39,7 @@ impl RoutingTable for MockTable {
             api_key_override: None,
             api_base_override: None,
             preset: None,
+            billing_mode: BillingMode::default(),
         })
     }
 }

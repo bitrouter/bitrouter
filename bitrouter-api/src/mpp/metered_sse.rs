@@ -60,7 +60,7 @@ impl MeteredSseContext {
                 )
                 .await
             {
-                Ok(()) => return true,
+                Ok(_outcome) => return true,
                 Err(_) => {
                     // Emit need-voucher event.
                     if let Some((settled, authorized, deposit)) = self

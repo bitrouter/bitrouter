@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bitrouter_config::{ApiProtocol, ProviderConfig};
+#[cfg(test)]
+use bitrouter_core::routers::routing_table::BillingMode;
 use bitrouter_core::{
     errors::{BitrouterError, Result},
     models::language::language_model::DynLanguageModel,
@@ -763,6 +765,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             preset: None,
+            billing_mode: BillingMode::default(),
         };
 
         let provider = router.route_tool(target).await;
@@ -787,6 +790,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             preset: None,
+            billing_mode: BillingMode::default(),
         };
         assert!(router.route_tool(target).await.is_err());
     }

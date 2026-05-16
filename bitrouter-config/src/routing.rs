@@ -9,7 +9,8 @@ use bitrouter_core::{
         ModelRegistry, ToolEntry, ToolRegistry,
     },
     routers::routing_table::{
-        ApiProtocol, ModelPricing, RouteEntry, RoutingTable, RoutingTarget, strip_ansi_escapes,
+        ApiProtocol, BillingMode, ModelPricing, RouteEntry, RoutingTable, RoutingTarget,
+        strip_ansi_escapes,
     },
     tools::definition::ToolDefinition,
 };
@@ -400,6 +401,7 @@ impl RoutingTable for ConfigRoutingTable {
             api_key_override: resolved.api_key_override,
             api_base_override: resolved.api_base_override,
             preset: pr.preset,
+            billing_mode: BillingMode::default(),
         })
     }
 
@@ -733,6 +735,7 @@ impl RoutingTable for ConfigToolRoutingTable {
             api_key_override: resolved.api_key_override,
             api_base_override: resolved.api_base_override,
             preset: None,
+            billing_mode: BillingMode::default(),
         })
     }
 
@@ -1134,6 +1137,8 @@ mod tests {
                     output_tokens: OutputTokenPricing {
                         text: Some(10.00),
                         reasoning: Some(10.00),
+                        image: None,
+                        audio: None,
                     },
                 },
                 ..Default::default()
@@ -1186,6 +1191,8 @@ mod tests {
                     output_tokens: OutputTokenPricing {
                         text: Some(10.00),
                         reasoning: Some(10.00),
+                        image: None,
+                        audio: None,
                     },
                 },
                 ..Default::default()
@@ -1227,6 +1234,8 @@ mod tests {
                     output_tokens: OutputTokenPricing {
                         text: Some(3.50),
                         reasoning: None,
+                        image: None,
+                        audio: None,
                     },
                 },
                 ..Default::default()
@@ -1328,6 +1337,8 @@ mod tests {
                     output_tokens: OutputTokenPricing {
                         text: Some(15.00),
                         reasoning: None,
+                        image: None,
+                        audio: None,
                     },
                 },
                 name: Some("GPT-4o".into()),
@@ -1365,6 +1376,8 @@ mod tests {
                     output_tokens: OutputTokenPricing {
                         text: Some(199.00),
                         reasoning: None,
+                        image: None,
+                        audio: None,
                     },
                 },
                 name: Some("Provider Override".into()),
@@ -1394,6 +1407,8 @@ mod tests {
                     output_tokens: OutputTokenPricing {
                         text: Some(10.00),
                         reasoning: None,
+                        image: None,
+                        audio: None,
                     },
                 },
                 ..Default::default()

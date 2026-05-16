@@ -17,6 +17,11 @@ use bitrouter_core::{
     },
     routers::{router::LanguageModelRouter, routing_table::RoutingTable},
 };
+// BillingMode is only read by the payment-gated filter branches; gate
+// the import or the no-features build sees an unused-imports warning
+// (which CI treats as a hard error via -D warnings).
+#[cfg(any(feature = "payments-tempo", feature = "payments-solana"))]
+use bitrouter_core::routers::routing_table::BillingMode;
 
 use crate::fallback::{FallbackDecision, FallbackPolicy, default_fallback_policy};
 use crate::router::context::openai_chat;
@@ -334,7 +339,7 @@ where
     let mut last_err: Option<BitrouterError> = None;
     for (idx, target) in chain.into_iter().enumerate() {
         let is_last = idx + 1 == chain_len;
-        let byok_used = target.api_key_override.is_some();
+        let byok_used = matches!(target.billing_mode, BillingMode::Byok);
         let provider_name = target.provider_name.clone();
         let target_model_id = target.service_id.clone();
         let iter_caller = caller.clone();
@@ -470,8 +475,21 @@ where
                         )));
                     };
                     let pricing = table.model_pricing(&provider_name, &target_model_id);
-                    let cost_usd = crate::mpp::calculate_usage_cost(&result.usage, &pricing);
-                    let micro_units = crate::mpp::cost_to_micro_units(cost_usd);
+                    let micro_units =
+                        match crate::mpp::calculate_usage_cost(&result.usage, &pricing) {
+                            Some(cost) => crate::mpp::cost_to_micro_units(cost),
+                            None => {
+                                tracing::warn!(
+                                    provider = %provider_name,
+                                    model = %target_model_id,
+                                    request_id = %iter_request_id,
+                                    "pricing_unavailable: upstream returned usage but \
+                                     pricing for this provider/model is incomplete; \
+                                     skipping deduction (response not billed)"
+                                );
+                                0
+                            }
+                        };
 
                     if !byok_used
                         && micro_units > 0

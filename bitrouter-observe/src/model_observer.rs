@@ -43,7 +43,16 @@ impl ObserveCallback for ModelSpendObserver {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             let pricing = (self.pricing_lookup)(&event.ctx.provider, &event.ctx.model);
-            let cost = calculate_cost(&event.usage, &pricing);
+            let cost = calculate_cost(&event.usage, &pricing).unwrap_or_else(|| {
+                tracing::warn!(
+                    provider = %event.ctx.provider,
+                    model = %event.ctx.model,
+                    "pricing_unavailable: spend log will record cost=0 \
+                     (incomplete pricing rates); fix the catalog entry to \
+                     restore correct accounting"
+                );
+                0.0
+            });
             let input_tokens = event.usage.input_tokens.total.unwrap_or(0);
             let output_tokens = event.usage.output_tokens.total.unwrap_or(0);
 
@@ -188,6 +197,8 @@ mod tests {
             output_tokens: OutputTokenPricing {
                 text: Some(10.00),
                 reasoning: None,
+                image: None,
+                audio: None,
             },
         }
     }

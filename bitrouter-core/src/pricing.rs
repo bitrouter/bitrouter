@@ -40,51 +40,68 @@ const PER_MILLION: f64 = 1_000_000.0;
 
 /// Calculates the USD cost of a model request from token usage and pricing.
 ///
+/// Returns `None` when any token bucket with a nonzero count has no
+/// matching rate. Treating missing rates as zero would silently undercharge
+/// (a provider that omitted output pricing would bill all output tokens at
+/// $0); callers must decide what to do with `None` — typically: log
+/// `pricing_unavailable`, skip the debit, and surface a receipt with no
+/// charge. Returns `Some(0.0)` when usage is empty or every nonzero bucket
+/// has a rate of zero.
+///
 /// For input tokens: if granular buckets (`no_cache`, `cache_read`,
 /// `cache_write`) are available they are used with their respective rates.
 /// Otherwise falls back to `total * input_no_cache`.
 ///
 /// For output tokens: if granular buckets (`text`, `reasoning`) are available
 /// they are used. Otherwise falls back to `total * output_text`.
-pub fn calculate_cost(usage: &LanguageModelUsage, pricing: &ModelPricing) -> f64 {
-    let input_cost = {
-        let has_granular = usage.input_tokens.no_cache.is_some()
-            || usage.input_tokens.cache_read.is_some()
-            || usage.input_tokens.cache_write.is_some();
+pub fn calculate_cost(usage: &LanguageModelUsage, pricing: &ModelPricing) -> Option<f64> {
+    let input_cost = calculate_input_cost(usage, pricing)?;
+    let output_cost = calculate_output_cost(usage, pricing)?;
+    Some(input_cost + output_cost)
+}
 
-        if has_granular {
-            let no_cache = usage.input_tokens.no_cache.unwrap_or(0) as f64;
-            let cache_read = usage.input_tokens.cache_read.unwrap_or(0) as f64;
-            let cache_write = usage.input_tokens.cache_write.unwrap_or(0) as f64;
-            (no_cache * pricing.input_tokens.no_cache.unwrap_or(0.0)
-                + cache_read * pricing.input_tokens.cache_read.unwrap_or(0.0)
-                + cache_write * pricing.input_tokens.cache_write.unwrap_or(0.0))
-                / PER_MILLION
-        } else if let Some(total) = usage.input_tokens.total {
-            total as f64 * pricing.input_tokens.no_cache.unwrap_or(0.0) / PER_MILLION
-        } else {
-            0.0
+fn calculate_input_cost(usage: &LanguageModelUsage, pricing: &ModelPricing) -> Option<f64> {
+    let has_granular = usage.input_tokens.no_cache.is_some()
+        || usage.input_tokens.cache_read.is_some()
+        || usage.input_tokens.cache_write.is_some();
+
+    if has_granular {
+        let mut cost = 0.0;
+        if let Some(tokens) = usage.input_tokens.no_cache.filter(|&t| t > 0) {
+            cost += tokens as f64 * pricing.input_tokens.no_cache? / PER_MILLION;
         }
-    };
-
-    let output_cost = {
-        let has_granular =
-            usage.output_tokens.text.is_some() || usage.output_tokens.reasoning.is_some();
-
-        if has_granular {
-            let text = usage.output_tokens.text.unwrap_or(0) as f64;
-            let reasoning = usage.output_tokens.reasoning.unwrap_or(0) as f64;
-            (text * pricing.output_tokens.text.unwrap_or(0.0)
-                + reasoning * pricing.output_tokens.reasoning.unwrap_or(0.0))
-                / PER_MILLION
-        } else if let Some(total) = usage.output_tokens.total {
-            total as f64 * pricing.output_tokens.text.unwrap_or(0.0) / PER_MILLION
-        } else {
-            0.0
+        if let Some(tokens) = usage.input_tokens.cache_read.filter(|&t| t > 0) {
+            cost += tokens as f64 * pricing.input_tokens.cache_read? / PER_MILLION;
         }
-    };
+        if let Some(tokens) = usage.input_tokens.cache_write.filter(|&t| t > 0) {
+            cost += tokens as f64 * pricing.input_tokens.cache_write? / PER_MILLION;
+        }
+        Some(cost)
+    } else if let Some(total) = usage.input_tokens.total.filter(|&t| t > 0) {
+        Some(total as f64 * pricing.input_tokens.no_cache? / PER_MILLION)
+    } else {
+        Some(0.0)
+    }
+}
 
-    input_cost + output_cost
+fn calculate_output_cost(usage: &LanguageModelUsage, pricing: &ModelPricing) -> Option<f64> {
+    let has_granular =
+        usage.output_tokens.text.is_some() || usage.output_tokens.reasoning.is_some();
+
+    if has_granular {
+        let mut cost = 0.0;
+        if let Some(tokens) = usage.output_tokens.text.filter(|&t| t > 0) {
+            cost += tokens as f64 * pricing.output_tokens.text? / PER_MILLION;
+        }
+        if let Some(tokens) = usage.output_tokens.reasoning.filter(|&t| t > 0) {
+            cost += tokens as f64 * pricing.output_tokens.reasoning? / PER_MILLION;
+        }
+        Some(cost)
+    } else if let Some(total) = usage.output_tokens.total.filter(|&t| t > 0) {
+        Some(total as f64 * pricing.output_tokens.text? / PER_MILLION)
+    } else {
+        Some(0.0)
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +123,8 @@ mod tests {
             output_tokens: OutputTokenPricing {
                 text: Some(10.00),
                 reasoning: Some(15.00),
+                image: None,
+                audio: None,
             },
         }
     }
@@ -127,7 +146,7 @@ mod tests {
             raw: None,
         };
 
-        let cost = calculate_cost(&usage, &test_pricing());
+        let cost = calculate_cost(&usage, &test_pricing()).expect("complete pricing");
         // input: (1000*2.50 + 1500*1.25 + 500*3.75) / 1_000_000 = 0.00625
         // output: (400*10.0 + 200*15.0) / 1_000_000 = 0.007
         let expected = 0.00625 + 0.007;
@@ -151,7 +170,7 @@ mod tests {
             raw: None,
         };
 
-        let cost = calculate_cost(&usage, &test_pricing());
+        let cost = calculate_cost(&usage, &test_pricing()).expect("complete pricing");
         // input: 2000 * 2.50 / 1_000_000 = 0.005
         // output: 500 * 10.0 / 1_000_000 = 0.005
         let expected = 0.005 + 0.005;
@@ -175,12 +194,13 @@ mod tests {
             raw: None,
         };
 
-        let cost = calculate_cost(&usage, &test_pricing());
+        // Pricing irrelevant when no tokens — must still report a value, not None.
+        let cost = calculate_cost(&usage, &ModelPricing::default()).expect("zero usage");
         assert!((cost - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn zero_pricing_yields_zero_cost() {
+    fn missing_pricing_for_nonzero_tokens_yields_none() {
         let usage = LanguageModelUsage {
             input_tokens: LanguageModelInputTokens {
                 total: Some(10000),
@@ -196,8 +216,57 @@ mod tests {
             raw: None,
         };
 
-        let cost = calculate_cost(&usage, &ModelPricing::default());
-        assert!((cost - 0.0).abs() < f64::EPSILON);
+        // Default ModelPricing has every rate = None. With nonzero tokens
+        // we cannot bill — return None so callers don't silently undercharge.
+        assert!(calculate_cost(&usage, &ModelPricing::default()).is_none());
+    }
+
+    #[test]
+    fn partial_output_pricing_yields_none() {
+        // Common production shape: input pricing complete, output pricing
+        // empty (the placeholder-entry footgun the audit caught).
+        let mut pricing = ModelPricing::default();
+        pricing.input_tokens.no_cache = Some(2.5);
+        let usage = LanguageModelUsage {
+            input_tokens: LanguageModelInputTokens {
+                total: Some(1000),
+                no_cache: Some(1000),
+                cache_read: None,
+                cache_write: None,
+            },
+            output_tokens: LanguageModelOutputTokens {
+                total: Some(500),
+                text: Some(500),
+                reasoning: None,
+            },
+            raw: None,
+        };
+        assert!(calculate_cost(&usage, &pricing).is_none());
+    }
+
+    #[test]
+    fn missing_rate_for_unused_bucket_is_ok() {
+        // cache_read tokens are 0, so a missing cache_read rate is fine.
+        let mut pricing = ModelPricing::default();
+        pricing.input_tokens.no_cache = Some(2.0);
+        pricing.output_tokens.text = Some(10.0);
+        let usage = LanguageModelUsage {
+            input_tokens: LanguageModelInputTokens {
+                total: Some(1000),
+                no_cache: Some(1000),
+                cache_read: Some(0),
+                cache_write: None,
+            },
+            output_tokens: LanguageModelOutputTokens {
+                total: Some(500),
+                text: Some(500),
+                reasoning: None,
+            },
+            raw: None,
+        };
+        let cost = calculate_cost(&usage, &pricing).expect("unused bucket should not block");
+        // input: 1000 * 2.0 / 1M = 0.002; output: 500 * 10.0 / 1M = 0.005
+        assert!((cost - 0.007).abs() < 1e-10);
     }
 
     // ── FlatPricing tests ──────────────────────────────────────────────

@@ -30,8 +30,10 @@ impl<T: PricingLookup> PricingLookup for bitrouter_core::routers::dynamic::Dynam
 
 /// Calculates the cost in USD from token usage and per-million-token pricing.
 ///
-/// Delegates to [`bitrouter_core::pricing::calculate_cost`].
-pub fn calculate_usage_cost(usage: &LanguageModelUsage, pricing: &ModelPricing) -> f64 {
+/// Delegates to [`bitrouter_core::pricing::calculate_cost`]. Returns `None`
+/// when any token bucket with a nonzero count has no matching rate — callers
+/// must NOT silently treat `None` as zero (that would undercharge).
+pub fn calculate_usage_cost(usage: &LanguageModelUsage, pricing: &ModelPricing) -> Option<f64> {
     bitrouter_core::pricing::calculate_cost(usage, pricing)
 }
 

@@ -640,13 +640,25 @@ impl super::payment_gate::PaymentGate for MppState {
         request_id: Option<&'a str>,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<(), mpp::server::VerificationError>>
-                + Send
+            dyn std::future::Future<
+                    Output = Result<
+                        super::payment_gate::DebitOutcome,
+                        mpp::server::VerificationError,
+                    >,
+                > + Send
                 + 'a,
         >,
     > {
         let _ = request_id;
-        Box::pin(self.deduct(backend_key, channel_id, amount))
+        // MPP channels can't defer — a channel either has funds or it
+        // doesn't. Translate the inner deduct into a Settled outcome
+        // on success; on insufficient funds the inner method returns
+        // Err, which propagates up unchanged.
+        Box::pin(async move {
+            self.deduct(backend_key, channel_id, amount)
+                .await
+                .map(|()| super::payment_gate::DebitOutcome::Settled)
+        })
     }
 
     fn wait_for_update<'a>(
