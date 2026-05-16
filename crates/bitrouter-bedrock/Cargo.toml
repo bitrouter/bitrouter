@@ -1,0 +1,27 @@
+[package]
+name = "bitrouter-bedrock"
+description = "Amazon Bedrock outbound provider for bitrouter, using the official AWS SDK."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bitrouter-sdk.workspace = true
+
+async-stream.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+# AWS SDK — uses the official `aws-sdk-bedrockruntime` for the Bedrock
+# Runtime data-plane API (Converse / ConverseStream). The SDK owns the URL
+# resolution, SigV4 signing, retries, and the binary event-stream framing.
+# Refs:
+# - https://docs.rs/aws-sdk-bedrockruntime/latest/aws_sdk_bedrockruntime/
+# - https://docs.aws.amazon.com/sdk-for-rust/latest/dg/welcome.html
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rustls"] }
+aws-sdk-bedrockruntime = { version = "1", default-features = false, features = ["behavior-version-latest", "rustls"] }
+aws-smithy-types = "1"

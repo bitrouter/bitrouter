@@ -10,10 +10,13 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures_core::Stream;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{OutboundDispatch, SseEvent};
 use crate::language_model::types::{
-    ExecutionResult, GenerateResult, Prompt, RoutingTarget, StreamPart,
+    ApiProtocol, ExecutionResult, GenerateResult, Prompt, RoutingTarget, StreamPart,
 };
 
 /// A boxed stream of canonical stream parts.
@@ -371,5 +374,112 @@ impl Executor for HttpExecutor {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+/// Routes outbound requests to one of several [`Executor`] implementations,
+/// keyed by [`RoutingTarget::api_protocol`].
+///
+/// Use this when some providers use the built-in [`HttpExecutor`] +
+/// [`OutboundDispatch`] (HTTP / JSON / per-protocol auth header) and others
+/// bypass that machinery entirely — typically because they use a vendor SDK
+/// that owns the transport itself (e.g. `aws-sdk-bedrockruntime` for AWS
+/// Bedrock).
+///
+/// The `default` executor handles every protocol that is **not** explicitly
+/// registered. The four built-in protocols (`openai` / `responses` /
+/// `anthropic` / `google`) should remain on the default `HttpExecutor`; only
+/// route `ApiProtocol::Custom(_)` protocols away from it.
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use bitrouter_sdk::App;
+/// use bitrouter_sdk::language_model::{
+///     ApiProtocol, DispatchExecutor, Executor, HttpExecutor, StaticRoutingTable,
+/// };
+///
+/// # async fn run() -> bitrouter_sdk::Result<()> {
+/// # struct BedrockExecutor;
+/// # #[async_trait::async_trait]
+/// # impl Executor for BedrockExecutor {
+/// #     async fn execute(
+/// #         &self,
+/// #         _: &bitrouter_sdk::language_model::RoutingTarget,
+/// #         _: &bitrouter_sdk::language_model::Prompt,
+/// #     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
+/// #         unimplemented!()
+/// #     }
+/// #     async fn execute_stream(
+/// #         &self,
+/// #         _: &bitrouter_sdk::language_model::RoutingTarget,
+/// #         _: &bitrouter_sdk::language_model::Prompt,
+/// #     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// let http: Arc<dyn Executor> = Arc::new(HttpExecutor::with_defaults()?);
+/// let bedrock: Arc<dyn Executor> = Arc::new(BedrockExecutor);
+/// let executor = DispatchExecutor::new(http)
+///     .with(ApiProtocol::Custom("bedrock-claude".into()), bedrock);
+///
+/// let _app = App::builder()
+///     .language_model(|lm| {
+///         lm.routing_table(Arc::new(StaticRoutingTable::new()))
+///           .executor(Arc::new(executor));
+///     })
+///     .build()?;
+/// # Ok(()) }
+/// ```
+pub struct DispatchExecutor {
+    by_protocol: HashMap<ApiProtocol, Arc<dyn Executor>>,
+    default: Arc<dyn Executor>,
+}
+
+impl DispatchExecutor {
+    /// Build a dispatcher with `default` handling every unregistered protocol.
+    /// Typically pass an [`HttpExecutor`] here.
+    pub fn new(default: Arc<dyn Executor>) -> Self {
+        Self {
+            by_protocol: HashMap::new(),
+            default,
+        }
+    }
+
+    /// Route requests with `target.api_protocol == protocol` to `executor`.
+    /// Subsequent calls with the same `protocol` overwrite the previous entry.
+    /// Returns `self` so calls can be chained at construction.
+    pub fn with(mut self, protocol: ApiProtocol, executor: Arc<dyn Executor>) -> Self {
+        self.register(protocol, executor);
+        self
+    }
+
+    /// Imperative form of [`with`](Self::with).
+    pub fn register(&mut self, protocol: ApiProtocol, executor: Arc<dyn Executor>) {
+        self.by_protocol.insert(protocol, executor);
+    }
+}
+
+#[async_trait]
+impl Executor for DispatchExecutor {
+    async fn execute(&self, target: &RoutingTarget, prompt: &Prompt) -> Result<ExecutionResult> {
+        let executor = self
+            .by_protocol
+            .get(&target.api_protocol)
+            .cloned()
+            .unwrap_or_else(|| self.default.clone());
+        executor.execute(target, prompt).await
+    }
+
+    async fn execute_stream(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+    ) -> Result<StreamPartStream> {
+        let executor = self
+            .by_protocol
+            .get(&target.api_protocol)
+            .cloned()
+            .unwrap_or_else(|| self.default.clone());
+        executor.execute_stream(target, prompt).await
     }
 }

@@ -76,7 +76,8 @@ mod tests;
 pub use builder::PipelineBuilder;
 pub use context::{PipelineContext, StreamContext};
 pub use executor::{
-    Executor, HttpExecutor, HttpTimeouts, MockExecutor, MockResponse, StreamPartStream,
+    DispatchExecutor, Executor, HttpExecutor, HttpTimeouts, MockExecutor, MockResponse,
+    StreamPartStream,
 };
 pub use hooks::{
     DenyReason, ExecutionHook, FallbackDecision, HookDecision, ObserveHook, Phase, PreRequestHook,
