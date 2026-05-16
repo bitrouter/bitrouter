@@ -67,3 +67,27 @@ jobs:
         with:
           toolchain: "1.85"
       - run: cargo check --workspace
+
+  doc:
+    name: doc
+    runs-on: ubuntu-latest
+    # Build rustdoc for the whole workspace under -D warnings: any broken
+    # intra-doc link or missing-docs warning becomes a CI failure. Matches
+    # what docs.rs will run.
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo doc --workspace --all-features --no-deps
+
+  doctest:
+    name: doctest
+    runs-on: ubuntu-latest
+    # Compile and run every ``` example in rustdoc comments. The plain
+    # `test` job uses nextest, which does not execute doctests, so they
+    # need their own pass.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo test --doc --workspace --all-features

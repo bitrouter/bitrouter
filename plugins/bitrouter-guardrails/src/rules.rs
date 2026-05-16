@@ -36,8 +36,8 @@ pub struct GuardrailRule {
 }
 
 impl GuardrailRule {
-    /// Build a rule, compiling `pattern` as a regex under a [`REGEX_SIZE_LIMIT`]
-    /// compiled-size cap.
+    /// Build a rule, compiling `pattern` as a regex under a 1 MiB
+    /// compiled-size cap so a hostile pattern can't blow up the runtime.
     pub fn new(
         name: impl Into<String>,
         pattern: &str,
