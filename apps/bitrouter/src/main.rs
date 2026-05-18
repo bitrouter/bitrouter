@@ -19,16 +19,28 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use bitrouter::commands;
-use bitrouter::daemon::{self, DEFAULT_CONTROL_SOCKET, DaemonCommand, DaemonResponse, RouteHop};
+use bitrouter::daemon::{
+    self, DEFAULT_CONTROL_SOCKET, DaemonCommand, DaemonResponse, DaemonTransport,
+    LocalSocketTransport, RouteHop,
+};
 use bitrouter_sdk::caller::PaymentMethod;
 use bitrouter_sdk::config;
 
+/// Default `bitrouter.yaml` path used by bare invocation (no subcommand).
+/// Subcommands continue to accept `--config` so this is only consulted in the
+/// no-subcommand path.
+const DEFAULT_CONFIG_PATH: &str = "bitrouter.yaml";
+
 /// BitRouter — an LLM API router.
+///
+/// **Headless-first.** Bare `bitrouter` (no subcommand) starts the proxy in
+/// the foreground if `bitrouter.yaml` is present; otherwise it writes a
+/// starter config and exits with a hint. The terminal UI is not part of v1.0.
 #[derive(Parser)]
 #[command(name = "bitrouter", version, about)]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -128,7 +140,9 @@ enum Command {
         #[command(subcommand)]
         action: ProviderAction,
     },
-    /// OWS wallet integration — not implemented in v1.0.
+    /// OWS wallet integration — not implemented in v1.0. Wallet management
+    /// is delivered by the separate `ows` workspace; bitrouter does not
+    /// consume OWS keys in any v1.0 code path.
     Wallet,
     /// Log in to an upstream provider. Today: `bitrouter login github-copilot`
     /// runs the GitHub OAuth Device Authorization Grant + stores the
@@ -275,28 +289,31 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Serve { config } => serve(&config).await,
-        Command::Start { config, log } => start(&config, &log).await,
-        Command::Stop { socket } => stop(&socket).await,
-        Command::Restart {
+        // Bare `bitrouter` — headless-first: serve if configured, else write
+        // a starter config and exit with a hint.
+        None => bare().await,
+        Some(Command::Serve { config }) => serve(&config).await,
+        Some(Command::Start { config, log }) => start(&config, &log).await,
+        Some(Command::Stop { socket }) => stop(&socket).await,
+        Some(Command::Restart {
             config,
             socket,
             log,
-        } => restart(&config, &socket, &log).await,
-        Command::Reload { socket } => reload(&socket).await,
-        Command::Status { socket } => status(&socket).await,
-        Command::Route {
+        }) => restart(&config, &socket, &log).await,
+        Some(Command::Reload { socket }) => reload(&socket).await,
+        Some(Command::Status { socket }) => status(&socket).await,
+        Some(Command::Route {
             model,
             config,
             socket,
-        } => route(&model, &config, &socket).await,
-        Command::Init { config } => init(&config).await,
-        Command::Key { action } => key(action).await,
-        Command::Models { config, provider } => models(&config, provider.as_deref()).await,
-        Command::Tools { action } => tools(action).await,
-        Command::Policy { action } => policy(action).await,
-        Command::Providers { action } => providers(action).await,
-        Command::Wallet => {
+        }) => route(&model, &config, &socket).await,
+        Some(Command::Init { config }) => init(&config).await,
+        Some(Command::Key { action }) => key(action).await,
+        Some(Command::Models { config, provider }) => models(&config, provider.as_deref()).await,
+        Some(Command::Tools { action }) => tools(action).await,
+        Some(Command::Policy { action }) => policy(action).await,
+        Some(Command::Providers { action }) => providers(action).await,
+        Some(Command::Wallet) => {
             print_unimplemented(
                 "wallet",
                 "OWS wallet integration is delivered by the `ows` workspace, not\n\
@@ -304,7 +321,7 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Login { provider } => match provider.as_deref() {
+        Some(Command::Login { provider }) => match provider.as_deref() {
             Some(name) => bitrouter::commands::login_provider(name).await,
             None => {
                 print_unimplemented(
@@ -316,7 +333,7 @@ async fn main() -> Result<()> {
                 Ok(())
             }
         },
-        Command::Logout { provider } => match provider.as_deref() {
+        Some(Command::Logout { provider }) => match provider.as_deref() {
             Some(name) => bitrouter::commands::logout_provider(name).await,
             None => {
                 print_unimplemented(
@@ -327,7 +344,7 @@ async fn main() -> Result<()> {
                 Ok(())
             }
         },
-        Command::Whoami => {
+        Some(Command::Whoami) => {
             print_unimplemented(
                 "whoami",
                 "Cloud identity is not in v1.0 scope. Local callers are identified\n\
@@ -335,9 +352,33 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Agents { action } => agents_cmd(action).await,
-        Command::AgentProxy { agent, config } => agent_proxy_cmd(&agent, &config).await,
+        Some(Command::Agents { action }) => agents_cmd(action).await,
+        Some(Command::AgentProxy { agent, config }) => agent_proxy_cmd(&agent, &config).await,
     }
+}
+
+/// Bare invocation (`bitrouter` with no subcommand). Mirrors the headless-first
+/// pillar: if the default config is present, behave like `bitrouter serve`; if
+/// it isn't, write a starter config (same as `bitrouter init`) and exit with a
+/// hint. We deliberately do not run an interactive wizard in v1.0.
+///
+/// A parse error on an existing config is *not* treated as "unconfigured" — we
+/// drop into `serve` and surface the parse error there so the user can fix it,
+/// rather than silently overwriting their broken-but-edited file.
+async fn bare() -> Result<()> {
+    let config = PathBuf::from(DEFAULT_CONFIG_PATH);
+    if tokio::fs::try_exists(&config).await.unwrap_or(false) {
+        return serve(&config).await;
+    }
+    commands::init(&config).await?;
+    println!("wrote starter config to {}", config.display());
+    println!("  (skip_auth is on — credential-less local requests are admitted)");
+    println!();
+    println!(
+        "Review {}, then run `bitrouter` again to start the proxy.",
+        config.display()
+    );
+    Ok(())
 }
 
 // ===== serve / daemon control =====
@@ -505,7 +546,8 @@ async fn start(config_path: &Path, log_path: &Path) -> Result<()> {
 }
 
 async fn stop(socket: &Path) -> Result<()> {
-    match daemon::send_command(socket, &DaemonCommand::Stop).await? {
+    let transport = LocalSocketTransport::new(socket.to_path_buf());
+    match transport.send(&DaemonCommand::Stop).await? {
         DaemonResponse::Ok => {
             println!("daemon stopped");
             Ok(())
@@ -519,7 +561,8 @@ async fn restart(config_path: &Path, socket: &Path, log_path: &Path) -> Result<(
     // Stop is best-effort — a missing daemon is fine, we just go straight to
     // start. Any other error from the running daemon is fatal.
     if socket.exists() {
-        match daemon::send_command(socket, &DaemonCommand::Stop).await {
+        let transport = LocalSocketTransport::new(socket.to_path_buf());
+        match transport.send(&DaemonCommand::Stop).await {
             Ok(DaemonResponse::Ok) => println!("daemon stopped"),
             Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
             Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
@@ -558,7 +601,8 @@ async fn wait_for_socket_release(socket: &Path, timeout: std::time::Duration) ->
 }
 
 async fn reload(socket: &Path) -> Result<()> {
-    match daemon::send_command(socket, &DaemonCommand::Reload).await? {
+    let transport = LocalSocketTransport::new(socket.to_path_buf());
+    match transport.send(&DaemonCommand::Reload).await? {
         DaemonResponse::Ok => {
             println!("config reloaded");
             Ok(())
@@ -569,7 +613,8 @@ async fn reload(socket: &Path) -> Result<()> {
 }
 
 async fn status(socket: &Path) -> Result<()> {
-    match daemon::send_command(socket, &DaemonCommand::Status).await? {
+    let transport = LocalSocketTransport::new(socket.to_path_buf());
+    match transport.send(&DaemonCommand::Status).await? {
         DaemonResponse::Status {
             pid,
             listen,
@@ -587,34 +632,10 @@ async fn status(socket: &Path) -> Result<()> {
 }
 
 async fn route(model: &str, config_path: &Path, socket: &Path) -> Result<()> {
-    // Try the running daemon first — its routing table reflects any `reload`s.
-    if socket.exists() {
-        match daemon::send_command(
-            socket,
-            &DaemonCommand::Route {
-                model: model.into(),
-            },
-        )
-        .await
-        {
-            Ok(DaemonResponse::Route { chain }) => {
-                print_route_chain(model, &chain, "live daemon");
-                return Ok(());
-            }
-            Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
-            Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
-            Err(e) => {
-                // Fall through to the standalone resolution. The daemon may
-                // just not be reachable from this client invocation.
-                tracing::debug!(error = %e, "daemon route failed — resolving from config");
-            }
-        }
-    }
-    let cfg = config::load(config_path)
-        .await
-        .with_context(|| format!("loading {}", config_path.display()))?;
-    let chain = commands::resolve_route(&cfg, model).await?;
-    print_route_chain(model, &chain, "config");
+    let transport = LocalSocketTransport::new(socket.to_path_buf());
+    let (chain, source) =
+        commands::resolve_route_with_fallback(&transport, config_path, model).await?;
+    print_route_chain(model, &chain, source);
     Ok(())
 }
 

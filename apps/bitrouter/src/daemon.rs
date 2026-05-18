@@ -273,6 +273,40 @@ pub async fn send_command(socket_path: &Path, command: &DaemonCommand) -> Result
     serde_json::from_str(line.trim()).context("parsing daemon response")
 }
 
+// ===== transport =====
+
+/// Transport for the daemon RPC protocol. Today only [`LocalSocketTransport`]
+/// exists; the trait abstracts the wire so a future cloud transport (HTTPS
+/// tunnel over the same [`DaemonCommand`] / [`DaemonResponse`] shape) can drop
+/// in alongside without touching call sites.
+#[async_trait::async_trait]
+pub trait DaemonTransport: Send + Sync {
+    /// Send `command` and await the response.
+    async fn send(&self, command: &DaemonCommand) -> Result<DaemonResponse>;
+}
+
+/// [`DaemonTransport`] backed by a Unix-domain control socket on the local
+/// machine — a thin wrapper over [`send_command`].
+pub struct LocalSocketTransport {
+    socket_path: PathBuf,
+}
+
+impl LocalSocketTransport {
+    /// Construct a transport bound to `socket_path`. The socket does not need
+    /// to exist yet; `send` will return a clear "is the daemon running" error
+    /// if it doesn't.
+    pub fn new(socket_path: PathBuf) -> Self {
+        Self { socket_path }
+    }
+}
+
+#[async_trait::async_trait]
+impl DaemonTransport for LocalSocketTransport {
+    async fn send(&self, command: &DaemonCommand) -> Result<DaemonResponse> {
+        send_command(&self.socket_path, command).await
+    }
+}
+
 // ===== PID file =====
 
 /// Write the current process id to `path`.
@@ -312,6 +346,62 @@ mod tests {
             // tag-based round trip
             assert_eq!(std::mem::discriminant(&cmd), std::mem::discriminant(&back));
         }
+    }
+
+    #[tokio::test]
+    async fn local_socket_transport_round_trip() {
+        use std::sync::Arc;
+
+        // /tmp keeps the SUN_LEN budget comfortable on macOS (see the
+        // tests/daemon.rs note about TMPDIR length).
+        let dir = std::path::PathBuf::from("/tmp").join(format!(
+            "brd-transport-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let socket = dir.join("bitrouter.sock");
+
+        // Stand up the bare control surface — no App needed for the response
+        // path we're exercising (the dispatcher only reads `app` for Status /
+        // Route; we only send Stop, which short-circuits before that).
+        // For that reason we need a minimal App; rebuild from an empty config.
+        let cfg_yaml = r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+providers: {}
+"#;
+        let cfg = bitrouter_sdk::config::parse_with(cfg_yaml, |_| None).unwrap();
+        let assembled = crate::build_app(&cfg).await.unwrap();
+        let app = Arc::new(assembled.app);
+
+        let server = tokio::spawn(run_control_socket(
+            socket.clone(),
+            app.clone(),
+            "127.0.0.1:0".to_string(),
+            Arc::new(NoopReloader),
+        ));
+        // Wait for bind.
+        for _ in 0..50 {
+            if socket.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let transport = LocalSocketTransport::new(socket.clone());
+        let resp = transport.send(&DaemonCommand::Stop).await.unwrap();
+        assert!(matches!(resp, DaemonResponse::Ok));
+
+        // run_control_socket returns once it processes Stop.
+        server.await.unwrap().unwrap();
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     #[test]

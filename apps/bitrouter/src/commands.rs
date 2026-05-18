@@ -11,7 +11,7 @@ use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
 use bitrouter_auth::{NewApiKey, db as auth_db, generate};
 
-use crate::daemon::RouteHop;
+use crate::daemon::{DaemonCommand, DaemonResponse, DaemonTransport, RouteHop};
 
 /// The starter `bitrouter.yaml` written by `bitrouter init`. Note `skip_auth:
 /// true` — the onboarding config opts into local, credential-less use; the
@@ -373,6 +373,57 @@ pub async fn logout_provider(provider_id: &str) -> Result<()> {
         None => eprintln!("  No stored OAuth token for {provider_id}; nothing to remove."),
     }
     Ok(())
+}
+
+/// `bitrouter route <model>` via a transport, with config fallback. Tries the
+/// live daemon first (so the resolution reflects any `reload`s); falls back to
+/// loading the config off disk only when the daemon is **unreachable** (socket
+/// absent or connection refused). Any other transport error — timeout, half-
+/// read response, malformed JSON, daemon-side `Error` payload — is propagated
+/// so the user sees the real failure instead of being silently served stale
+/// on-disk routing.
+///
+/// Returns the chain plus a short source label (`"live daemon"` or `"config"`)
+/// for the caller's print helper.
+pub async fn resolve_route_with_fallback(
+    transport: &dyn DaemonTransport,
+    config_path: &std::path::Path,
+    model: &str,
+) -> Result<(Vec<RouteHop>, &'static str)> {
+    match transport
+        .send(&DaemonCommand::Route {
+            model: model.to_string(),
+        })
+        .await
+    {
+        Ok(DaemonResponse::Route { chain }) => return Ok((chain, "live daemon")),
+        Ok(DaemonResponse::Error { message }) => anyhow::bail!(message),
+        Ok(other) => anyhow::bail!("unexpected response: {other:?}"),
+        Err(e) if is_daemon_unreachable(&e) => {
+            tracing::debug!(error = %e, "daemon unreachable — falling back to config");
+        }
+        Err(e) => return Err(e),
+    }
+    let cfg = bitrouter_sdk::config::load(config_path)
+        .await
+        .with_context(|| format!("loading {}", config_path.display()))?;
+    let chain = resolve_route(&cfg, model).await?;
+    Ok((chain, "config"))
+}
+
+/// True iff `err`'s source chain contains an `io::Error` whose kind indicates
+/// the daemon is not listening (no socket file, or nothing accepting on it).
+/// Other I/O failures (timeout, broken pipe, permission denied) are *not* a
+/// "no daemon" signal and should propagate.
+fn is_daemon_unreachable(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            )
+        })
+    })
 }
 
 #[cfg(test)]
