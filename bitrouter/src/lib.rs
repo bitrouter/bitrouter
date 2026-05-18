@@ -12,5 +12,7 @@ compile_error!(
     "bitrouter requires at least one payment chain feature: enable `tempo` and/or `solana`"
 );
 
+pub mod accounts;
 pub mod auth;
+pub mod providers;
 pub mod runtime;

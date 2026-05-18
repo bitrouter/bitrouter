@@ -15,6 +15,7 @@ use bitrouter_observe::builder::ObserveStack;
 use sea_orm::DatabaseConnection;
 use warp::Filter;
 
+#[cfg(feature = "acp")]
 use bitrouter_core::agents::provider::AgentProvider as _;
 
 use crate::runtime::auth::{self, JwtAuthContext, Unauthorized};
@@ -277,6 +278,7 @@ where
         // Agent router — resolves agent names to live provider instances.
         // Also spawns a background task for idle session cleanup.
         // Held as a keepalive handle to prevent the Arc from being dropped.
+        #[cfg(feature = "acp")]
         let _agent_router_handle = if self.config.agents.is_empty() {
             None
         } else {
@@ -992,6 +994,7 @@ async fn wait_for_reload_signal(paths: &Option<crate::runtime::paths::RuntimePat
 /// Runs every 60 seconds and calls [`AcpAgentProvider::cleanup_idle_sessions`]
 /// on every provider managed by the router. Logging is emitted only when
 /// sessions are actually cleaned up.
+#[cfg(feature = "acp")]
 async fn agent_session_cleanup_loop(router: Arc<crate::runtime::router::ConfigAgentRouter>) {
     const INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
     loop {

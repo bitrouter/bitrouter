@@ -676,10 +676,12 @@ where
 /// Enabled agents get a shared provider on construction. Callers receive
 /// an `Arc`-wrapped handle so that multiple API requests can share the
 /// same session pool for a given agent.
+#[cfg(feature = "acp")]
 pub struct ConfigAgentRouter {
     agents: HashMap<String, Arc<bitrouter_providers::acp::provider::AcpAgentProvider>>,
 }
 
+#[cfg(feature = "acp")]
 impl ConfigAgentRouter {
     /// Build a router from the `agents:` configuration map.
     ///
@@ -712,6 +714,7 @@ impl ConfigAgentRouter {
     }
 }
 
+#[cfg(feature = "acp")]
 impl bitrouter_core::routers::router::AgentRouter for ConfigAgentRouter {
     async fn route_agent(
         &self,
@@ -816,6 +819,7 @@ mod tests {
 
     // ── ConfigAgentRouter ────────────────────────────────────────────
 
+    #[cfg(feature = "acp")]
     fn test_agent_configs() -> HashMap<String, bitrouter_config::AgentConfig> {
         let mut m = HashMap::new();
         m.insert(
@@ -848,6 +852,7 @@ mod tests {
         m
     }
 
+    #[cfg(feature = "acp")]
     #[tokio::test]
     async fn agent_router_routes_enabled_agent() {
         use bitrouter_core::routers::router::AgentRouter;
@@ -856,6 +861,7 @@ mod tests {
         assert!(provider.is_ok());
     }
 
+    #[cfg(feature = "acp")]
     #[tokio::test]
     async fn agent_router_rejects_unknown_agent() {
         use bitrouter_core::routers::router::AgentRouter;
@@ -863,6 +869,7 @@ mod tests {
         assert!(router.route_agent("nonexistent").await.is_err());
     }
 
+    #[cfg(feature = "acp")]
     #[tokio::test]
     async fn agent_router_skips_disabled_agent() {
         use bitrouter_core::routers::router::AgentRouter;
@@ -871,6 +878,7 @@ mod tests {
         assert!(router.route_agent("disabled-agent").await.is_err());
     }
 
+    #[cfg(feature = "acp")]
     #[tokio::test]
     async fn agent_router_providers_iterator() {
         let router = super::ConfigAgentRouter::new(test_agent_configs());

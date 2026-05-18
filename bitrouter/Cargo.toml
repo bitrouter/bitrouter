@@ -13,9 +13,14 @@ readme = "README.md"
 path = "src/lib.rs"
 
 [features]
-default = ["sqlite", "tempo", "mcp", "rest"]
+default = ["sqlite", "tempo", "mcp", "rest", "acp"]
 rest = ["bitrouter-providers/rest"]
 mcp = ["bitrouter-providers/mcp"]
+# Agent Client Protocol support. Gates `ConfigAgentRouter`, the idle-session
+# cleanup loop, and the `bitrouter::providers::acp` re-export. Pure-proxy
+# embedders that do not host agents can disable this to drop the
+# `agent-client-protocol`, `flate2`, `tar`, and `zip` compile cost.
+acp = ["bitrouter-providers/acp"]
 # Database driver selection. Exactly one driver must be enabled (default: sqlite).
 # Accounts, sessions, JWT auth, and persistent spend tracking are baked into the
 # runtime unconditionally — these features only choose the storage backend.
@@ -44,7 +49,7 @@ bitrouter-config.workspace = true
 bitrouter-core.workspace = true
 bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true }
-bitrouter-providers = { workspace = true, features = ["acp", "agentskills"] }
+bitrouter-providers = { workspace = true, features = ["agentskills"] }
 
 # Runtime
 dirs = "6"
