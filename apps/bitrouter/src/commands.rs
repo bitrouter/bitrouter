@@ -109,7 +109,9 @@ pub async fn list_models(
     config: &Config,
     provider_filter: Option<&str>,
 ) -> Result<Vec<(String, Vec<String>)>> {
-    let table = ConfigRoutingTable::from_config(config.clone());
+    let mut resolved = config.clone();
+    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    let table = ConfigRoutingTable::from_config(resolved);
     Ok(table
         .list_models()
         .into_iter()
@@ -124,7 +126,9 @@ pub async fn list_models(
 /// `bitrouter route <model>` — resolve a model name through the routing table,
 /// **standalone** (no running daemon needed). Returns the fallback chain.
 pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>> {
-    let table = ConfigRoutingTable::from_config(config.clone());
+    let mut resolved = config.clone();
+    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    let table = ConfigRoutingTable::from_config(resolved);
     let chain = table
         .route_chain(model, &RoutingPrefs::default(), &CallerContext::local())
         .await

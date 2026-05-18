@@ -78,6 +78,10 @@ pub async fn build_app_with_path(
     // Best-effort model discovery for providers with `auto_discover: true`
     // and no declared models — failures WARN, never abort.
     let mut resolved = config.clone();
+    // Fill empty fields on built-in providers from the compiled-in catalog
+    // (api_base / api_protocol / api_key-from-env). No-op when
+    // `inherit_defaults: false`, and never overrides user-set fields.
+    bitrouter_providers::apply_builtin_defaults(&mut resolved);
     bitrouter_sdk::config::discover_models(&mut resolved).await;
     let routing_table = Arc::new(match config_path {
         Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),

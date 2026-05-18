@@ -32,9 +32,11 @@
 
 #![deny(missing_docs)]
 
+mod apply;
 pub mod builtin;
 mod entry;
 
+pub use apply::apply_builtin_defaults;
 pub use entry::{AuthScheme, ProtocolMapping, ProviderEntry};
 
 /// Errors raised while loading the compile-time registry.

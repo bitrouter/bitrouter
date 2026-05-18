@@ -620,6 +620,7 @@ dependencies = [
  "bitrouter-guardrails",
  "bitrouter-observe",
  "bitrouter-policy",
+ "bitrouter-providers",
  "bitrouter-sdk",
  "bitrouter-settlement",
  "clap",

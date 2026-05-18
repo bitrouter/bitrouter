@@ -9,7 +9,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bitrouter-sdk.workspace = true
+# `config_file` for `bitrouter_sdk::config::{Config, ProviderConfig, PatternMap}`
+# — used by `apply_builtin_defaults` to fill in a parsed user config.
+bitrouter-sdk = { workspace = true, features = ["config_file"] }
 
 serde.workspace = true
 thiserror.workspace = true
