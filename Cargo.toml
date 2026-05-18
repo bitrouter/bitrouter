@@ -45,6 +45,7 @@ tower-http = { version = "0.6", features = ["trace"] }
 # http client
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 eventsource-stream = "0.2"
+url = "2"
 
 # config (sdk `config_file` feature)
 serde-saphyr = "0.0.26"

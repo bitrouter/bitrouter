@@ -212,30 +212,40 @@ impl ChargeStrategy for CreditCharge {
         // the charge is left unsettled (funding_source stays `Unsettled`), a
         // `PricingUnavailable` event is emitted, and zero is never silently
         // debited from a real account.
-        match self.pricing.resolve(&ctx.provider_id, &ctx.model_id) {
-            Some(pricing) if !pricing.is_unconfigured() => {
-                let charge = calculate_charge_micro_usd(&usage_of(ctx), &pricing);
-                // Idempotent on request_id — a retried settlement of the same
-                // request never double-debits.
-                deduct_credits(&self.pool, ctx.caller.user_id(), charge, &ctx.request_id).await?;
-                ctx.final_charge_micro_usd = charge;
-                ctx.funding_source = FundingSource::Credits;
-                Ok(ChargeOutcome::Claimed)
-            }
-            _ => {
-                tracing::warn!(
-                    provider = %ctx.provider_id,
-                    service_id = %ctx.model_id,
-                    "no pricing configured for target — skipping credit charge"
-                );
-                ctx.emit(PricingUnavailable {
-                    provider_id: ctx.provider_id.clone(),
-                    service_id: ctx.model_id.clone(),
-                });
-                Ok(ChargeOutcome::Pass)
-            }
-        }
+        let pricing = match self.pricing.resolve(&ctx.provider_id, &ctx.model_id) {
+            Some(p) if !p.is_unconfigured() => p,
+            _ => return pricing_unavailable_pass(ctx, "credit"),
+        };
+        // Partial-pricing safety (v0 bitrouter#463-A): when any nonzero
+        // token bucket lacks a rate, calculate returns None and we MUST
+        // skip the charge entirely — never bill the partial total.
+        let Some(charge) = calculate_charge_micro_usd(&usage_of(ctx), &pricing) else {
+            return pricing_unavailable_pass(ctx, "credit");
+        };
+        // Idempotent on request_id — a retried settlement of the same
+        // request never double-debits.
+        deduct_credits(&self.pool, ctx.caller.user_id(), charge, &ctx.request_id).await?;
+        ctx.final_charge_micro_usd = charge;
+        ctx.funding_source = FundingSource::Credits;
+        Ok(ChargeOutcome::Claimed)
     }
+}
+
+fn pricing_unavailable_pass(
+    ctx: &mut SettlementContext,
+    chain_link: &'static str,
+) -> Result<ChargeOutcome> {
+    tracing::warn!(
+        provider = %ctx.provider_id,
+        service_id = %ctx.model_id,
+        chain_link,
+        "pricing missing or partial for target — skipping charge (never silently $0)"
+    );
+    ctx.emit(PricingUnavailable {
+        provider_id: ctx.provider_id.clone(),
+        service_id: ctx.model_id.clone(),
+    });
+    Ok(ChargeOutcome::Pass)
 }
 
 // ===== MppCharge — chain link 3 =====
@@ -261,24 +271,16 @@ impl ChargeStrategy for MppCharge {
             return Ok(ChargeOutcome::Pass);
         }
 
-        // Per.6: an unconfigured price → emit `PricingUnavailable` and
-        // `Pass` (do not settle), exactly as `CreditCharge` does.
-        let charge = match self.pricing.resolve(&ctx.provider_id, &ctx.model_id) {
-            Some(pricing) if !pricing.is_unconfigured() => {
-                calculate_charge_micro_usd(&usage_of(ctx), &pricing)
-            }
-            _ => {
-                tracing::warn!(
-                    provider = %ctx.provider_id,
-                    service_id = %ctx.model_id,
-                    "no pricing configured for target — skipping MPP charge"
-                );
-                ctx.emit(PricingUnavailable {
-                    provider_id: ctx.provider_id.clone(),
-                    service_id: ctx.model_id.clone(),
-                });
-                return Ok(ChargeOutcome::Pass);
-            }
+        // An unconfigured or partial price → emit `PricingUnavailable` and
+        // `Pass`, exactly as `CreditCharge` does. Partial-pricing safety
+        // (v0 bitrouter#463-A) — never silently bill the missing bucket
+        // at $0.
+        let pricing = match self.pricing.resolve(&ctx.provider_id, &ctx.model_id) {
+            Some(p) if !p.is_unconfigured() => p,
+            _ => return pricing_unavailable_pass(ctx, "mpp"),
+        };
+        let Some(charge) = calculate_charge_micro_usd(&usage_of(ctx), &pricing) else {
+            return pricing_unavailable_pass(ctx, "mpp");
         };
 
         // Streaming requests settle incrementally via `MppStreamHook`, which

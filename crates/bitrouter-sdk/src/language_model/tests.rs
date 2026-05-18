@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde::Serialize;
 
 use crate::caller::{CallerContext, FundingSource, PaymentMethod};
@@ -124,6 +125,20 @@ struct CountingRecorder(Arc<AtomicUsize>);
 impl SettlementRecorder for CountingRecorder {
     async fn record(&self, _ctx: &SettlementContext) -> Result<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// Records the `(prompt_tokens, completion_tokens)` seen by every settlement
+/// call so a test can assert what was actually billed.
+struct UsageCapturingRecorder(Arc<std::sync::Mutex<Vec<(u64, u64)>>>);
+#[async_trait]
+impl SettlementRecorder for UsageCapturingRecorder {
+    async fn record(&self, ctx: &SettlementContext) -> Result<()> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((ctx.prompt_tokens, ctx.completion_tokens));
         Ok(())
     }
 }
@@ -574,6 +589,55 @@ async fn drain_awaits_pending_disconnect_settlements() {
         *ended.lock().unwrap(),
         vec!["disconnected"],
         "the settlement task ran and the StreamHook saw ClientDisconnected"
+    );
+}
+
+#[tokio::test]
+async fn disconnect_before_usage_bills_estimated_output() {
+    // v0 #463 / cloud #251 audit P0: if the client disconnects mid-stream
+    // before the upstream `Usage` frame arrives, the request must still
+    // bill — otherwise a hostile client drains a long generation, hangs up
+    // just before the trailing usage chunk, and pays $0.
+    let captured: Arc<std::sync::Mutex<Vec<(u64, u64)>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            // ~30 chars of text delta — no Usage / Finish part.
+            StreamPart::TextDelta {
+                text: "the quick brown fox jumps over.".into(),
+            },
+        ])])),
+        |b| {
+            b.settlement_recorder(UsageCapturingRecorder(captured.clone()));
+        },
+    );
+
+    let mut stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("ok");
+    // Simulate: the client received the text delta, then disconnected
+    // *before* the upstream's terminal usage / finish chunk would arrive.
+    let first = stream.next().await.expect("at least one part");
+    assert!(first.is_ok(), "the text delta surfaced cleanly");
+    drop(stream);
+
+    let drained = pipeline.drain_pending_settlements().await;
+    assert!(
+        drained >= 1,
+        "settlement task must have been detached + drained"
+    );
+
+    let entries = captured.lock().unwrap().clone();
+    assert_eq!(entries.len(), 1, "exactly one settlement recorded");
+    let (prompt, completion) = entries[0];
+    // Prompt-tokens not plumbed through StreamContext yet — known gap.
+    assert_eq!(prompt, 0, "prompt-token estimate is the documented gap");
+    assert!(
+        completion >= 1,
+        "completion-token estimate must be non-zero ({completion}); ~31 chars / 4 ≈ 8 tokens"
     );
 }
 

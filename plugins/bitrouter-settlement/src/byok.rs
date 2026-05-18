@@ -20,7 +20,10 @@ use bitrouter_sdk::{BitrouterError, Result};
 use crate::events::ByokKeyApplied;
 
 /// One stored BYOK provider credential.
-#[derive(Debug, Clone)]
+///
+/// `Debug` redacts `api_key` (v0 audit S9) so a future `tracing::error!(?cred, …)`
+/// can't dump the user's upstream key to the log stream.
+#[derive(Clone)]
 pub struct ByokCredential {
     /// The provider this credential is for.
     pub provider: String,
@@ -28,6 +31,23 @@ pub struct ByokCredential {
     pub api_key: String,
     /// Optional API-base override that pairs with the key.
     pub api_base: Option<String>,
+}
+
+impl std::fmt::Debug for ByokCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ByokCredential")
+            .field("provider", &self.provider)
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("api_base", &self.api_base)
+            .finish()
+    }
 }
 
 /// Inject caller-owned provider keys into the routing chain.
@@ -100,6 +120,13 @@ pub async fn insert_byok_key(
     api_key: &str,
     api_base: Option<&str>,
 ) -> Result<()> {
+    // SSRF defence (v0 audit S3): a malicious BYOK row could otherwise
+    // point at `http://169.254.169.254/` or `http://localhost:8200/v1/secret/`,
+    // and the executor would happily POST upstream requests there with the
+    // caller-provided Authorization header — exfiltrating data + IAM creds.
+    if let Some(base) = api_base {
+        bitrouter_sdk::url_validator::validate_upstream_url(base)?;
+    }
     sqlx::query(
         "INSERT INTO byok_provider_keys \
          (id, user_id, provider, api_key, api_base, active, created_at) \

@@ -206,20 +206,40 @@ where
 
 /// Accumulates token usage seen across a stream. The last `Usage` part wins
 /// (providers send a running or final total, not deltas).
+///
+/// Also tracks the total *character* count of text and reasoning deltas
+/// observed so that — when the consumer hangs up before the upstream `Usage`
+/// frame arrives — we can synthesise an estimated output-token count and bill
+/// for the work the upstream already did. Without this, a hostile client
+/// could drain a long generation, disconnect just before the terminal Usage
+/// chunk, and pay nothing. See
+/// [`UsageAccumulator::estimated_output_tokens`] and the
+/// disconnect branch inside [`StreamProcessor::finish`].
+///
+/// Heuristic for the estimate: ~4 chars per token (the OpenAI "rule of thumb"
+/// for English) — wrong for code / non-Latin scripts but bounded, monotonic
+/// in delta length, and far closer to the true cost than `0`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UsageAccumulator {
     usage: Usage,
     seen: bool,
+    /// Total `char` count of `TextDelta` + `ReasoningDelta` text observed.
+    delta_chars: u64,
 }
 
 impl UsageAccumulator {
+    /// Chars-per-token estimate for the disconnect-time billing heuristic.
+    /// Conservative-ish: too small bills extra, too large bills less.
+    const CHARS_PER_TOKEN_ESTIMATE: u64 = 4;
+
     /// A fresh, empty accumulator.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Observe a part; updates the running usage from a `Usage` part or from a
-    /// `ResponseCompleted` part that carries usage.
+    /// `ResponseCompleted` part that carries usage. Text / reasoning deltas
+    /// are counted (chars) into the disconnect-time estimate.
     pub fn observe(&mut self, part: &StreamPart) {
         match part {
             StreamPart::Usage { usage }
@@ -229,6 +249,9 @@ impl UsageAccumulator {
                 self.usage = *usage;
                 self.seen = true;
             }
+            StreamPart::TextDelta { text } | StreamPart::ReasoningDelta { text } => {
+                self.delta_chars = self.delta_chars.saturating_add(text.chars().count() as u64);
+            }
             _ => {}
         }
     }
@@ -236,6 +259,13 @@ impl UsageAccumulator {
     /// The accumulated usage, if any `Usage` part was seen.
     pub fn finalized(&self) -> Option<Usage> {
         self.seen.then_some(self.usage)
+    }
+
+    /// Estimated output-token count from accumulated delta text, for the
+    /// disconnect-billing fallback. Returns `0` when no text deltas were
+    /// observed.
+    pub fn estimated_output_tokens(&self) -> u64 {
+        self.delta_chars.div_ceil(Self::CHARS_PER_TOKEN_ESTIMATE)
     }
 }
 
@@ -319,6 +349,21 @@ impl StreamProcessor {
     /// Terminate the stream: fire `on_stream_end` on every hook exactly once.
     /// Idempotent — repeated calls are no-ops. Hook errors are swallowed (the
     /// stream is already over) but logged.
+    ///
+    /// Settlement billing rules at the end of a stream:
+    /// - If an authoritative `Usage` part was observed at any point, that
+    ///   wins — covers both clean termination and disconnect *after* the
+    ///   usage chunk.
+    /// - If the stream ended via [`StreamOutcome::ClientDisconnected`] before
+    ///   any `Usage` was seen but delta text *was* observed, synthesise a
+    ///   usage with `completion_tokens` estimated from the text length so
+    ///   the request still bills. Without this, a client could drain a long
+    ///   generation, hang up just before the trailing usage frame, and pay
+    ///   $0. Prompt tokens stay at `0` in the estimate (the prompt isn't
+    ///   plumbed through `StreamContext` — known gap, mirrors the v0 fix).
+    /// - Otherwise (clean error with no usage, or disconnect with no
+    ///   deltas), leave `final_usage` empty; settlement records the request
+    ///   as un-billable.
     pub async fn finish(&mut self, outcome: StreamOutcome) -> &StreamContext {
         if self.ended {
             return &self.ctx;
@@ -331,6 +376,19 @@ impl StreamProcessor {
         }
         if let Some(usage) = self.ctx.accumulated_usage.finalized() {
             self.ctx.final_usage = Some(usage);
+        } else if matches!(outcome, StreamOutcome::ClientDisconnected) {
+            let estimated = self.ctx.accumulated_usage.estimated_output_tokens();
+            if estimated > 0 {
+                tracing::warn!(
+                    request_id = %self.ctx.request_id,
+                    estimated_output_tokens = estimated,
+                    "client disconnected mid-stream before upstream usage frame; billing estimated output"
+                );
+                self.ctx.final_usage = Some(Usage {
+                    completion_tokens: estimated,
+                    ..Default::default()
+                });
+            }
         }
         &self.ctx
     }

@@ -354,7 +354,11 @@ pub struct ExecutionResult {
 }
 
 /// One hop in a fallback chain: a concrete provider + model + connection info.
-#[derive(Debug, Clone)]
+///
+/// The `Debug` impl redacts `api_key` and `api_key_override` (v0 audit S9):
+/// any `tracing::error!(?target, ...)` call by a future contributor would
+/// otherwise leak the upstream credential into structured logs.
+#[derive(Clone)]
 pub struct RoutingTarget {
     /// Provider id (config key).
     pub provider_name: String,
@@ -371,6 +375,31 @@ pub struct RoutingTarget {
     pub api_key_override: Option<String>,
     /// BYOK api-base override, paired with `api_key_override`.
     pub api_base_override: Option<String>,
+}
+
+impl std::fmt::Debug for RoutingTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RoutingTarget")
+            .field("provider_name", &self.provider_name)
+            .field("service_id", &self.service_id)
+            .field("api_base", &self.api_base)
+            .field("api_key", &redacted(&self.api_key))
+            .field("api_protocol", &self.api_protocol)
+            .field(
+                "api_key_override",
+                &self.api_key_override.as_deref().map(redacted),
+            )
+            .field("api_base_override", &self.api_base_override)
+            .finish()
+    }
+}
+
+fn redacted(s: &str) -> &'static str {
+    if s.is_empty() {
+        "<empty>"
+    } else {
+        "<redacted>"
+    }
 }
 
 impl RoutingTarget {

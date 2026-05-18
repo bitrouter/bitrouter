@@ -141,10 +141,24 @@ impl MppState {
         session_id: &str,
         cumulative_micro_usd: i64,
     ) -> Result<i64> {
+        // Race-fix: previously this read `last_checkpoint` and wrote in
+        // separate statements — two concurrent calls with different
+        // `cumulative` values could compute deltas off the same `prev` and
+        // the second UPDATE would overwrite the first's checkpoint with a
+        // lower value (lost-update race against the channel balance).
+        // Wrap read + compute + write in a transaction; SQLite serialises
+        // writers under `BEGIN IMMEDIATE` so the row's state can't change
+        // between the read and the UPDATE.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| BitrouterError::internal(format!("mpp checkpoint begin: {e}")))?;
+
         let prev =
             sqlx::query("SELECT last_checkpoint_micro_usd FROM mpp_sessions WHERE session_id = ?")
                 .bind(session_id)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await
                 .map_err(|e| BitrouterError::internal(format!("mpp checkpoint read: {e}")))?
                 .map(|r| r.get::<i64, _>("last_checkpoint_micro_usd"))
@@ -152,8 +166,14 @@ impl MppState {
 
         let delta = (cumulative_micro_usd - prev).max(0);
         if delta == 0 {
+            // Non-advancing checkpoint — idempotent no-op. Roll back the
+            // (empty) transaction so we don't hold a write lock.
+            tx.rollback()
+                .await
+                .map_err(|e| BitrouterError::internal(format!("mpp checkpoint rollback: {e}")))?;
             return Ok(0);
         }
+
         sqlx::query(
             "UPDATE mpp_sessions SET \
                last_checkpoint_micro_usd = ?, \
@@ -165,9 +185,13 @@ impl MppState {
         .bind(delta)
         .bind(Utc::now().to_rfc3339())
         .bind(session_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| BitrouterError::internal(format!("mpp checkpoint write: {e}")))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| BitrouterError::internal(format!("mpp checkpoint commit: {e}")))?;
         Ok(delta)
     }
 
@@ -298,7 +322,10 @@ impl MppStreamHook {
         if pricing.is_unconfigured() {
             return None;
         }
-        Some(calculate_charge_micro_usd(&usage, &pricing))
+        // Inherits the partial-pricing safety from `calculate_charge_micro_usd`:
+        // a target whose output rate is unset while output tokens were used
+        // returns `None`, suppressing the checkpoint (v0 bitrouter#463-A).
+        calculate_charge_micro_usd(&usage, &pricing)
     }
 
     /// Sign a checkpoint for the current cumulative cost and announce it.

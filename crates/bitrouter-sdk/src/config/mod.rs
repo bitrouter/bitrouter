@@ -145,7 +145,10 @@ pub struct PricingConfig {
 }
 
 /// One upstream provider entry — registry-style.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// `Debug` redacts `api_key` (v0 audit S9) so a future `tracing::error!(?config, …)`
+/// can't dump the platform credential straight into structured logs.
+#[derive(Clone, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
     /// Upstream API base URL.
@@ -172,6 +175,29 @@ pub struct ProviderConfig {
     /// fields; explicit fields here win. Resolved by
     /// [`resolve_derivations`] after the config is parsed.
     pub derives: Option<String>,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("api_base", &self.api_base)
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("api_protocol", &self.api_protocol)
+            .field("rate_limits", &self.rate_limits)
+            .field("models", &self.models)
+            .field("auto_discover", &self.auto_discover)
+            .field("active", &self.active)
+            .field("tags", &self.tags)
+            .field("derives", &self.derives)
+            .finish()
+    }
 }
 
 impl Default for ProviderConfig {
@@ -380,6 +406,19 @@ where
     let mut config: Config = serde_saphyr::from_str(&substituted)
         .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
     resolve_derivations(&mut config)?;
+    // SSRF defence (v0 audit S4): refuse a config that asks bitrouter to
+    // route at a loopback / private / metadata URL. A typo or a malicious
+    // YAML otherwise has the executor send every upstream request — and
+    // any API keys / prompt bodies — into the host's internal network.
+    // Validated post-`resolve_derivations` so an inherited `api_base` is
+    // checked against the *effective* value.
+    for (id, provider) in &config.providers {
+        if !provider.api_base.is_empty() {
+            crate::url_validator::validate_upstream_url(&provider.api_base).map_err(|e| {
+                BitrouterError::bad_request(format!("provider '{id}' api_base rejected: {e}"))
+            })?;
+        }
+    }
     Ok(config)
 }
 

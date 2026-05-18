@@ -24,6 +24,7 @@ bytes.workspace = true
 pin-project-lite.workspace = true
 async-stream.workspace = true
 reqwest.workspace = true
+url.workspace = true
 eventsource-stream.workspace = true
 chrono.workspace = true
 uuid.workspace = true

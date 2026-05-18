@@ -119,6 +119,7 @@ pub mod event;
 pub mod metrics;
 pub mod mpp;
 pub mod plugin;
+pub mod url_validator;
 
 #[cfg(feature = "config_file")]
 pub mod config;
