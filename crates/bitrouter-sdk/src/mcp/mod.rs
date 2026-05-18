@@ -22,6 +22,17 @@
 //! The HTTP server (`crates/bitrouter-sdk/src/server.rs::mcp_invoke`) handles
 //! the wire-format concerns — `id` round-trip, error envelope, Origin
 //! validation; this module is the pure routing core.
+//!
+//! ## Where the concrete executor lives
+//!
+//! The `Pipeline`, `Builder`, hook traits, and request/response types are
+//! always available — they have no external dependencies, so a consumer can
+//! plug in a custom `Executor` for a non-standard transport.
+//!
+//! The bundled implementation that dials real upstream MCP servers via
+//! [rmcp](https://github.com/modelcontextprotocol/rust-sdk) lives behind the
+//! crate's `mcp` feature; see [`rmcp_executor::RmcpExecutor`] and
+//! [`config_routing::ConfigMcpRoutingTable`].
 
 use std::sync::Arc;
 
@@ -30,6 +41,20 @@ use async_trait::async_trait;
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::HookDecision;
+
+pub mod transport;
+
+#[cfg(feature = "mcp")]
+pub mod config_routing;
+#[cfg(feature = "mcp")]
+pub mod rmcp_executor;
+
+pub use transport::{McpServerConfig, McpTransport};
+
+#[cfg(feature = "mcp")]
+pub use config_routing::ConfigMcpRoutingTable;
+#[cfg(feature = "mcp")]
+pub use rmcp_executor::RmcpExecutor;
 
 /// An inbound MCP request — a JSON-RPC call against a named MCP server.
 #[derive(Debug, Clone)]
@@ -78,10 +103,8 @@ pub struct McpResponse {
 pub struct McpTarget {
     /// The upstream MCP server name.
     pub server_name: String,
-    /// The upstream endpoint (URL or stdio command spec).
-    pub endpoint: String,
-    /// Optional upstream credential.
-    pub api_key: Option<String>,
+    /// How to reach the upstream — Streamable HTTP or stdio child-process.
+    pub transport: McpTransport,
 }
 
 /// Resolves an MCP server name into a routing target.
@@ -280,8 +303,11 @@ mod tests {
             if server == "known" {
                 Ok(McpTarget {
                     server_name: server.to_string(),
-                    endpoint: "stdio://known".to_string(),
-                    api_key: None,
+                    transport: McpTransport::Stdio {
+                        command: "/bin/true".into(),
+                        args: vec![],
+                        env: Default::default(),
+                    },
                 })
             } else {
                 Err(BitrouterError::NotFound(format!(

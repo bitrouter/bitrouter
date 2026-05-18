@@ -269,7 +269,9 @@ async fn e2e_credits_caller_authenticates_and_is_charged() {
 async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     use async_trait::async_trait;
     use bitrouter_sdk::App;
-    use bitrouter_sdk::mcp::{Executor, McpRequest, McpResponse, McpTarget, RoutingTable};
+    use bitrouter_sdk::mcp::{
+        Executor, McpRequest, McpResponse, McpTarget, McpTransport, RoutingTable,
+    };
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -287,8 +289,11 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
             if server == "known" {
                 Ok(McpTarget {
                     server_name: server.to_string(),
-                    endpoint: "stdio://known".to_string(),
-                    api_key: None,
+                    transport: McpTransport::Stdio {
+                        command: "/bin/true".into(),
+                        args: vec![],
+                        env: Default::default(),
+                    },
                 })
             } else {
                 Err(bitrouter_sdk::BitrouterError::NotFound(format!(

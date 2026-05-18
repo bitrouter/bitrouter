@@ -40,12 +40,21 @@ tower-http = { workspace = true, optional = true }
 # `config_file` feature
 serde-saphyr = { workspace = true, optional = true }
 
+# `mcp` feature — official Rust MCP SDK.
+# <https://github.com/modelcontextprotocol/rust-sdk>
+rmcp = { workspace = true, optional = true }
+
 [features]
 default = []
 # axum HTTP server + SSE handlers + admin endpoints
 server = ["dep:axum", "dep:tower", "dep:tower-http", "tokio/signal"]
 # yaml config loading (serde-saphyr + tokio::fs)
 config_file = ["dep:serde-saphyr", "tokio/fs"]
+# rmcp-backed `RmcpExecutor` + `ConfigMcpRoutingTable` for the `mcp`
+# pure-routing pipeline. Without this feature the SDK still exposes
+# `mcp::Pipeline`, hook traits, and the `McpTransport` enum, so a consumer
+# can plug in a custom Executor without pulling rmcp.
+mcp = ["dep:rmcp", "tokio/process"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = [

@@ -13,6 +13,7 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
+use bitrouter_sdk::mcp::{ConfigMcpRoutingTable, RmcpExecutor};
 
 use bitrouter_auth::AuthHook;
 use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
@@ -135,6 +136,26 @@ pub async fn build_app_with_path(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // Optional MCP pure-routing pipeline — wired only when the config
+    // declares at least one upstream MCP server. The pipeline is independent
+    // of the language_model pipeline (different hook traits, different
+    // routing table) and carries no settlement.
+    let mcp_routing = if config.mcp_servers.is_empty() {
+        None
+    } else {
+        Some(Arc::new(
+            ConfigMcpRoutingTable::from_configs(
+                config
+                    .mcp_servers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone())),
+            )
+            .context("building the MCP routing table from config.mcp_servers")?,
+        ))
+    };
+    let mcp_executor: Option<Arc<RmcpExecutor>> =
+        mcp_routing.as_ref().map(|_| Arc::new(RmcpExecutor::new()));
+
     let pool_for_hooks = pool.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -166,9 +187,22 @@ pub async fn build_app_with_path(
         })
         // The settlement bundle installs BalanceCheckHook, ByokRouteHook,
         // MppStreamHook, the ChargeStrategy chain and ReceiptRecorder.
-        .plugin(settlement)
-        .build()
-        .context("building the App")?;
+        // It is only wired onto the `language_model` pipeline; the MCP
+        // pipeline below stays pure-routing (no settlement) by design until
+        // the MCP-specific charge model lands.
+        .plugin(settlement);
+    // Apply the optional MCP pipeline configuration in a second builder step
+    // so the language_model configuration above stays the same shape it has
+    // had since v0.
+    let app = match (mcp_routing, mcp_executor) {
+        (Some(table), Some(exec)) => app
+            .mcp(move |m| {
+                m.routing_table(table).executor(exec);
+            })
+            .build()
+            .context("building the App")?,
+        _ => app.build().context("building the App")?,
+    };
 
     Ok(Assembled {
         app,

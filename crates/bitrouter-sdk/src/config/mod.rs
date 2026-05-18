@@ -58,6 +58,10 @@ pub struct Config {
     pub variants: HashMap<String, VariantConfig>,
     /// Plugin config, keyed by plugin / bundle id.
     pub plugins: HashMap<String, serde_json::Value>,
+    /// Upstream MCP servers, keyed by server id. The id is what appears in
+    /// `POST /mcp/{id}` and what the `mcp` pipeline's routing table looks up.
+    /// Empty by default — when empty, the binary does not mount the MCP route.
+    pub mcp_servers: HashMap<String, crate::mcp::McpServerConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
 }
@@ -72,6 +76,7 @@ impl Default for Config {
             presets: HashMap::new(),
             variants: HashMap::new(),
             plugins: HashMap::new(),
+            mcp_servers: HashMap::new(),
             inherit_defaults: true,
         }
     }

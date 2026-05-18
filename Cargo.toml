@@ -52,6 +52,19 @@ url = "2"
 serde-saphyr = "0.0.26"
 toml = "0.8"
 
+# MCP (sdk `mcp` feature) — official Rust MCP SDK.
+# Source: <https://github.com/modelcontextprotocol/rust-sdk>
+rmcp = { version = "1.7", default-features = false, features = [
+    "client",
+    "reqwest",
+    "transport-streamable-http-client-reqwest",
+    "transport-child-process",
+] }
+
+# ACP (sdk `acp` feature) — official Rust Agent Client Protocol crate.
+# Source: <https://github.com/agentclientprotocol/rust-sdk>
+agent-client-protocol = "0.12"
+
 # database (settlement plugin)
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "macros", "chrono"] }
 
