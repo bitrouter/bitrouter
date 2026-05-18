@@ -201,6 +201,11 @@ fn render_install_stub(agent: &KnownAgent) -> String {
 /// `>`, `'`, `"`, `%`, `#`, `?`, `:`, `-`, `,`, `{`, `}`, `[`, `]`), or
 /// contains a space or `#`. Conservative: when in doubt, double-quote.
 fn yaml_scalar(s: &str) -> String {
+    if s.is_empty() {
+        // An unquoted empty plain scalar parses as YAML null, which would
+        // silently corrupt a command/arg field. Always quote.
+        return "\"\"".to_string();
+    }
     let first_special = s
         .chars()
         .next()
@@ -325,6 +330,14 @@ mod tests {
     fn install_emits_project_url_for_attribution() {
         let out = install("gemini-cli").unwrap();
         assert!(out.contains("github.com"));
+    }
+
+    #[test]
+    fn yaml_scalar_quotes_empty_string() {
+        // Empty unquoted plain scalar would parse as YAML null and silently
+        // corrupt a command / arg field. Regression check: the empty case
+        // must be double-quoted.
+        assert_eq!(yaml_scalar(""), "\"\"");
     }
 
     #[test]
