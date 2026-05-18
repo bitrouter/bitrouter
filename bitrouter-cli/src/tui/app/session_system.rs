@@ -11,10 +11,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use bitrouter::providers::acp::provider::AcpAgentProvider;
 use bitrouter_config::AgentConfig;
 use bitrouter_core::agents::event::{AgentEvent, PermissionRequestId, PermissionResponse};
 use bitrouter_core::agents::provider::AgentProvider;
-use bitrouter_providers::acp::provider::AcpAgentProvider;
 use tokio::sync::mpsc;
 
 use crate::tui::event::AppEvent;

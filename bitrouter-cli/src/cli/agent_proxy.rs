@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
+use bitrouter::providers::acp::provider::AcpAgentProvider;
+use bitrouter::providers::acp::proxy::{ProxyConfig, run_stdio_proxy};
 use bitrouter_config::BitrouterConfig;
-use bitrouter_providers::acp::provider::AcpAgentProvider;
-use bitrouter_providers::acp::proxy::{ProxyConfig, run_stdio_proxy};
 
 /// Run the agent-proxy command.
 ///

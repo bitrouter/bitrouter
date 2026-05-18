@@ -7,9 +7,9 @@ use bitrouter_config::{
 };
 use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 
+use bitrouter::providers::acp::discovery::discover_agents;
+use bitrouter::providers::acp::types::AgentAvailability;
 use bitrouter_config::builtin_agent_defs;
-use bitrouter_providers::acp::discovery::discover_agents;
-use bitrouter_providers::acp::types::AgentAvailability;
 
 /// Outcome of the init wizard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -632,7 +632,7 @@ fn run_agent_step(
         .ok_or("could not determine home directory")?
         .join(".local")
         .join("bin");
-    let platform = bitrouter_providers::acp::shim::Platform::current();
+    let platform = bitrouter::providers::acp::shim::Platform::current();
 
     println!();
 
@@ -641,24 +641,25 @@ fn run_agent_step(
     let mut skipped: Vec<String> = Vec::new();
 
     for name in &all_names {
-        let Some(env) = bitrouter_providers::acp::shim::shim_env_for(name, listen) else {
+        let Some(env) = bitrouter::providers::acp::shim::shim_env_for(name, listen) else {
             skipped.push(format!("{name} (no env mapping)"));
             continue;
         };
-        let Some(real) = bitrouter_providers::acp::shim::locate_real_binary(name, &shim_dir) else {
+        let Some(real) = bitrouter::providers::acp::shim::locate_real_binary(name, &shim_dir)
+        else {
             skipped.push(format!("{name} (binary not on PATH)"));
             continue;
         };
-        let shim_path = bitrouter_providers::acp::shim::shim_path_for(platform, &shim_dir, name);
-        match bitrouter_providers::acp::shim::install_shim(
+        let shim_path = bitrouter::providers::acp::shim::shim_path_for(platform, &shim_dir, name);
+        match bitrouter::providers::acp::shim::install_shim(
             platform, &shim_path, &real, listen, &env,
         ) {
-            Ok(bitrouter_providers::acp::shim::ShimAction::Created)
-            | Ok(bitrouter_providers::acp::shim::ShimAction::Updated) => {
+            Ok(bitrouter::providers::acp::shim::ShimAction::Created)
+            | Ok(bitrouter::providers::acp::shim::ShimAction::Updated) => {
                 installed += 1;
                 println!("  ✓ {name}: shim → {}", shim_path.display());
             }
-            Ok(bitrouter_providers::acp::shim::ShimAction::SkippedConflict) => {
+            Ok(bitrouter::providers::acp::shim::ShimAction::SkippedConflict) => {
                 conflicts.push(shim_path.display().to_string());
             }
             Err(e) => eprintln!("  Warning: {name}: {e}"),

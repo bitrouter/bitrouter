@@ -3,9 +3,9 @@
 
 use std::io::{self, Write};
 
+use bitrouter::providers::acp::ops::{self, AcpPaths, AgentList, RoutingCheck};
+use bitrouter::providers::acp::types::InstallProgress;
 use bitrouter_config::BitrouterConfig;
-use bitrouter_providers::acp::ops::{self, AcpPaths, AgentList, RoutingCheck};
-use bitrouter_providers::acp::types::InstallProgress;
 
 use crate::cli::OutputFormat;
 use bitrouter::runtime::paths::RuntimePaths;
@@ -115,7 +115,7 @@ pub async fn run_update(
     paths: &RuntimePaths,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let acp_paths = paths_from_runtime(paths);
-    let records = bitrouter_providers::acp::state::load_state_sync(&paths.agent_state_file);
+    let records = bitrouter::providers::acp::state::load_state_sync(&paths.agent_state_file);
     if records.is_empty() {
         println!("  (no agents installed)");
         return Ok(());

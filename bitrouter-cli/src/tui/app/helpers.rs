@@ -1,4 +1,4 @@
-use bitrouter_providers::acp::ops::AcpPaths;
+use bitrouter::providers::acp::ops::AcpPaths;
 
 use crate::tui::model::{ActivityEntry, ContentBlock, EntryKind, SystemNotice};
 

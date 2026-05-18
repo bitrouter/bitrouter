@@ -152,8 +152,8 @@ pub async fn run_discover(
     config: &bitrouter_config::BitrouterConfig,
     provider_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_providers::mcp::client::config::{McpServerConfig, McpServerTransport};
-    use bitrouter_providers::mcp::client::upstream::UpstreamConnection;
+    use bitrouter::providers::mcp::client::config::{McpServerConfig, McpServerTransport};
+    use bitrouter::providers::mcp::client::upstream::UpstreamConnection;
 
     let provider = config
         .providers

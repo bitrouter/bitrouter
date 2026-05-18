@@ -223,7 +223,7 @@ pub fn create_virtual_key_on_server(
     addr: std::net::SocketAddr,
     jwt: &str,
 ) -> Result {
-    use bitrouter_accounts::service::{CreateVirtualKeyRequest, CreateVirtualKeyResponse};
+    use bitrouter::accounts::{CreateVirtualKeyRequest, CreateVirtualKeyResponse};
 
     let url = format!("http://{addr}/admin/keys/virtual");
     let client = reqwest::blocking::Client::new();

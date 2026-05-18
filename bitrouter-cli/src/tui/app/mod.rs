@@ -18,8 +18,8 @@ use session_system::SessionSystem;
 use std::io::Stdout;
 use std::path::PathBuf;
 
-use bitrouter_providers::acp::discovery::discover_agents;
-use bitrouter_providers::acp::types::AgentAvailability;
+use bitrouter::providers::acp::discovery::discover_agents;
+use bitrouter::providers::acp::types::AgentAvailability;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
@@ -287,7 +287,7 @@ fn spawn_import_scan(tx: mpsc::Sender<AppEvent>, cwd: PathBuf, agent_ids: Vec<St
             return;
         };
         let discovered =
-            bitrouter_providers::acp::session_import::scan_for_cwd(&home, &cwd, &agent_ids);
+            bitrouter::providers::acp::session_import::scan_for_cwd(&home, &cwd, &agent_ids);
         let sessions: Vec<ImportCandidate> = discovered
             .into_iter()
             .map(|d| ImportCandidate {

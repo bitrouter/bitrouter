@@ -6,9 +6,9 @@
 //! back to being sent to the agent as a prompt so users can still talk
 //! about slashes.
 
+use bitrouter::providers::acp::ops;
+use bitrouter::providers::acp::types::InstallProgress;
 use bitrouter_config::BitrouterConfig;
-use bitrouter_providers::acp::ops;
-use bitrouter_providers::acp::types::InstallProgress;
 use tokio::sync::mpsc;
 
 use crate::tui::event::AppEvent;
@@ -349,7 +349,7 @@ impl App {
 
     fn slash_agents_update(&mut self, id: Option<String>, bitrouter_config: &BitrouterConfig) {
         let paths = self.acp_paths();
-        let records = bitrouter_providers::acp::state::load_state_sync(&paths.agent_state_file);
+        let records = bitrouter::providers::acp::state::load_state_sync(&paths.agent_state_file);
         if records.is_empty() {
             self.push_system_msg("(no agents installed)");
             return;
@@ -420,7 +420,7 @@ impl App {
                 }
             };
             let cwd = self.session_system.launch_cwd().to_path_buf();
-            let scanned = bitrouter_providers::acp::session_import::scan_for_cwd(
+            let scanned = bitrouter::providers::acp::session_import::scan_for_cwd(
                 &home,
                 &cwd,
                 std::slice::from_ref(&agent_id),

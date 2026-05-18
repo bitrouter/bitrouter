@@ -1,8 +1,8 @@
+use bitrouter::providers::acp::discovery::discover_agents;
+use bitrouter::providers::acp::types::AgentAvailability;
 use bitrouter_core::agents::event::{
     PermissionOutcome, PermissionRequest, PermissionRequestId, PermissionResponse,
 };
-use bitrouter_providers::acp::discovery::discover_agents;
-use bitrouter_providers::acp::types::AgentAvailability;
 use tokio::sync::mpsc;
 
 use crate::tui::event::AppEvent;
@@ -99,11 +99,11 @@ impl App {
 
     /// Spawn the async binary download task (click-connect path).
     fn start_binary_install(&self, agent_id: &str, config: &bitrouter_config::AgentConfig) {
-        use bitrouter_config::Distribution;
-        use bitrouter_providers::acp::install::install_binary_agent;
-        use bitrouter_providers::acp::state::{
+        use bitrouter::providers::acp::install::install_binary_agent;
+        use bitrouter::providers::acp::state::{
             InstallMethod, InstallRecord, now_unix_seconds, upsert_record,
         };
+        use bitrouter_config::Distribution;
 
         let platforms = config.distribution.iter().find_map(|d| match d {
             Distribution::Binary { platforms } => Some(platforms.clone()),
@@ -121,7 +121,7 @@ impl App {
         let state_file = self.state.config.agent_state_file.clone();
 
         tokio::spawn(async move {
-            use bitrouter_providers::acp::types::InstallProgress;
+            use bitrouter::providers::acp::types::InstallProgress;
 
             let (progress_tx, progress_rx) = mpsc::channel(32);
             let agent_id_for_progress = agent_id_owned.clone();
@@ -237,8 +237,8 @@ impl App {
     }
 
     fn binary_archive_args(config: &bitrouter_config::AgentConfig) -> Option<Vec<String>> {
+        use bitrouter::providers::acp::platform::current_platform;
         use bitrouter_config::Distribution;
-        use bitrouter_providers::acp::platform::current_platform;
 
         let platform = current_platform()?;
         for dist in &config.distribution {
