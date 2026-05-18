@@ -62,6 +62,10 @@ pub struct Config {
     /// `POST /mcp/{id}` and what the `mcp` pipeline's routing table looks up.
     /// Empty by default — when empty, the binary does not mount the MCP route.
     pub mcp_servers: HashMap<String, crate::mcp::McpServerConfig>,
+    /// Upstream ACP agents, keyed by agent id. Looked up by the `acp`
+    /// pipeline's routing table; the `bitrouter agent-proxy <id>` CLI
+    /// dispatches against this. Empty by default.
+    pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
 }
@@ -77,6 +81,7 @@ impl Default for Config {
             variants: HashMap::new(),
             plugins: HashMap::new(),
             mcp_servers: HashMap::new(),
+            agents: HashMap::new(),
             inherit_defaults: true,
         }
     }

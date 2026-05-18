@@ -15,9 +15,14 @@
 //! - Initialization + capability negotiation:
 //!   <https://agentclientprotocol.com/protocol/initialization>
 //!
-//! The stdio adapter that exposes the pipeline over the wire is a tracked
-//! follow-up; the `Pipeline` here is callable directly by tests and any
-//! future ACP server entry-point.
+//! ## Where the concrete executor lives
+//!
+//! The `Pipeline`, `Builder`, hook traits, and request/response types are
+//! always available — they have no external dependencies. The bundled
+//! [`AcpStdioExecutor`] (and its persistent subprocess pool) live behind
+//! the `acp` feature; see [`stdio_executor`] for the wire layer and
+//! [`config_routing::ConfigAcpRoutingTable`] for the config-driven routing
+//! table the binary registers at startup.
 
 use std::sync::Arc;
 
@@ -26,6 +31,20 @@ use async_trait::async_trait;
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::HookDecision;
+
+pub mod transport;
+
+#[cfg(feature = "acp")]
+pub mod config_routing;
+#[cfg(feature = "acp")]
+pub mod stdio_executor;
+
+pub use transport::{AcpAgentConfig, AcpTransport};
+
+#[cfg(feature = "acp")]
+pub use config_routing::ConfigAcpRoutingTable;
+#[cfg(feature = "acp")]
+pub use stdio_executor::AcpStdioExecutor;
 
 /// An inbound ACP request — a JSON-RPC call against a named agent.
 #[derive(Debug, Clone)]
@@ -74,10 +93,10 @@ pub struct AcpResponse {
 pub struct AcpTarget {
     /// The agent name.
     pub agent_name: String,
-    /// The agent endpoint (stdio command spec, or a reverse-proxy URL).
-    pub endpoint: String,
-    /// Optional upstream credential.
-    pub api_key: Option<String>,
+    /// How to reach the upstream agent. v1.0 only ships stdio (the canonical
+    /// ACP transport per
+    /// <https://agentclientprotocol.com/protocol/transports>).
+    pub transport: AcpTransport,
 }
 
 /// Resolves an agent name into a routing target (ACP registry + local cache).
@@ -272,8 +291,11 @@ mod tests {
             if agent == "code-agent" {
                 Ok(AcpTarget {
                     agent_name: agent.to_string(),
-                    endpoint: "stdio://code-agent".to_string(),
-                    api_key: None,
+                    transport: AcpTransport::Stdio {
+                        command: "/bin/true".into(),
+                        args: vec![],
+                        env: Default::default(),
+                    },
                 })
             } else {
                 Err(BitrouterError::NotFound(format!("no agent '{agent}'")))

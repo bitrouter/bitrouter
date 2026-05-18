@@ -61,9 +61,13 @@ rmcp = { version = "1.7", default-features = false, features = [
     "transport-child-process",
 ] }
 
-# ACP (sdk `acp` feature) — official Rust Agent Client Protocol crate.
-# Source: <https://github.com/agentclientprotocol/rust-sdk>
-agent-client-protocol = "0.12"
+# ACP (sdk `acp` feature): v1 implements ACP as a pure JSON-RPC router over
+# newline-delimited stdio per the spec — the official Rust SDK
+# (<https://github.com/agentclientprotocol/rust-sdk>) is shaped around
+# typed `connect_with(|cx| …)` session callbacks that don't fit a
+# request-response `Executor` trait, so we don't pull it in. The spec is the
+# source of truth: <https://agentclientprotocol.com/protocol/schema> +
+# <https://agentclientprotocol.com/protocol/transports>.
 
 # database (settlement plugin)
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "macros", "chrono"] }

@@ -17,7 +17,7 @@ name = "bitrouter"
 path = "src/main.rs"
 
 [dependencies]
-bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp"] }
+bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
 bitrouter-providers.workspace = true
 bitrouter-auth.workspace = true
 bitrouter-policy.workspace = true

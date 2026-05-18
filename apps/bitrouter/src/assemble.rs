@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
 use bitrouter_sdk::App;
+use bitrouter_sdk::acp::{AcpStdioExecutor, ConfigAcpRoutingTable};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
@@ -156,6 +157,23 @@ pub async fn build_app_with_path(
     let mcp_executor: Option<Arc<RmcpExecutor>> =
         mcp_routing.as_ref().map(|_| Arc::new(RmcpExecutor::new()));
 
+    // Optional ACP pure-routing pipeline — wired only when the config
+    // declares at least one upstream agent. Mirrors the MCP wiring above;
+    // the `bitrouter agent-proxy <id>` CLI dispatches against this pipeline.
+    let acp_routing = if config.agents.is_empty() {
+        None
+    } else {
+        Some(Arc::new(
+            ConfigAcpRoutingTable::from_configs(
+                config.agents.iter().map(|(k, v)| (k.clone(), v.clone())),
+            )
+            .context("building the ACP routing table from config.agents")?,
+        ))
+    };
+    let acp_executor: Option<Arc<AcpStdioExecutor>> = acp_routing
+        .as_ref()
+        .map(|_| Arc::new(AcpStdioExecutor::new()));
+
     let pool_for_hooks = pool.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -195,14 +213,20 @@ pub async fn build_app_with_path(
     // so the language_model configuration above stays the same shape it has
     // had since v0.
     let app = match (mcp_routing, mcp_executor) {
-        (Some(table), Some(exec)) => app
-            .mcp(move |m| {
-                m.routing_table(table).executor(exec);
-            })
-            .build()
-            .context("building the App")?,
-        _ => app.build().context("building the App")?,
+        (Some(table), Some(exec)) => app.mcp(move |m| {
+            m.routing_table(table).executor(exec);
+        }),
+        _ => app,
     };
+    // ACP pipeline — separate match because it's an independent optional
+    // configuration step on the same builder.
+    let app = match (acp_routing, acp_executor) {
+        (Some(table), Some(exec)) => app.acp(move |a| {
+            a.routing_table(table).executor(exec);
+        }),
+        _ => app,
+    };
+    let app = app.build().context("building the App")?;
 
     Ok(Assembled {
         app,

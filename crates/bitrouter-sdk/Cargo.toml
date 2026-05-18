@@ -55,6 +55,12 @@ config_file = ["dep:serde-saphyr", "tokio/fs"]
 # `mcp::Pipeline`, hook traits, and the `McpTransport` enum, so a consumer
 # can plug in a custom Executor without pulling rmcp.
 mcp = ["dep:rmcp", "tokio/process"]
+# Bundled `AcpStdioExecutor` + `ConfigAcpRoutingTable` for the `acp`
+# pure-routing pipeline. The executor implements newline-delimited JSON-RPC
+# over the subprocess stdio per the ACP spec; without this feature the SDK
+# still exposes `acp::Pipeline`, hook traits, and the `AcpTransport` enum,
+# so a consumer can plug in a custom Executor.
+acp = ["tokio/process", "tokio/io-util"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = [

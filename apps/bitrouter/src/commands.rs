@@ -56,6 +56,22 @@ providers:
 #       command: uvx
 #       args: ["mcp-server-git"]
 
+# Upstream ACP (Agent Client Protocol) agents — invoked from an editor via
+# `bitrouter agent-proxy <id>`. Spec: https://agentclientprotocol.com/protocol/schema
+# agents:
+#   claude:
+#     name: claude
+#     transport:
+#       type: stdio
+#       command: npx
+#       args: ["-y", "@zed-industries/claude-code-acp@latest"]
+#   codex:
+#     name: codex
+#     transport:
+#       type: stdio
+#       command: npx
+#       args: ["-y", "@zed-industries/codex-acp@latest"]
+
 inherit_defaults: true
 "#;
 

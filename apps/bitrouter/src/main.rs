@@ -147,8 +147,20 @@ enum Command {
     },
     /// Print the authenticated cloud identity — not implemented in v1.0.
     Whoami,
-    /// ACP agent management — the v1.0 `acp` module is pure-routing only.
+    /// ACP agent management — `bitrouter agents` is the lifecycle CLI;
+    /// `bitrouter agent-proxy <id>` is the stdio bridge an editor spawns.
     Agents,
+    /// Stdio bridge between an ACP-aware editor and a configured upstream
+    /// agent. Routes inbound JSON-RPC requests through the `acp` pipeline,
+    /// relays upstream notifications back to the editor.
+    #[command(name = "agent-proxy")]
+    AgentProxy {
+        /// Agent id (must exist under `agents:` in the config).
+        agent: String,
+        /// Path to `bitrouter.yaml`.
+        #[arg(short, long, default_value = "bitrouter.yaml")]
+        config: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -299,11 +311,13 @@ async fn main() -> Result<()> {
         Command::Agents => {
             print_unimplemented(
                 "agents",
-                "The v1.0 `acp` module is pure-routing — agent lifecycle management\n\
-                 is not in v1.0 scope.",
+                "Agent lifecycle (install/uninstall/update) is not yet implemented in v1.0.\n\
+                 For now, declare agents under `agents:` in bitrouter.yaml and invoke them\n\
+                 via `bitrouter agent-proxy <id>`.",
             );
             Ok(())
         }
+        Command::AgentProxy { agent, config } => agent_proxy_cmd(&agent, &config).await,
     }
 }
 
@@ -781,6 +795,13 @@ async fn tools(action: ToolsAction) -> Result<()> {
             }
         }
     }
+}
+
+async fn agent_proxy_cmd(agent: &str, config_path: &Path) -> Result<()> {
+    let cfg = config::load(config_path)
+        .await
+        .with_context(|| format!("loading {}", config_path.display()))?;
+    bitrouter::agent_proxy::run(cfg, agent).await
 }
 
 // ===== helpers =====
