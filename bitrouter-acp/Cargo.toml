@@ -1,0 +1,54 @@
+[package]
+name = "bitrouter-acp"
+version = { workspace = true }
+edition = "2024"
+description = "BitRouter Agent Client Protocol (ACP) integration — Send-safe facade, registry, install, proxy"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+readme = "README.md"
+
+[dependencies]
+# Internal crates
+bitrouter-config.workspace = true
+bitrouter-core.workspace = true
+
+# ACP protocol + transport
+agent-client-protocol = "0.10"
+async-trait = "0.1"
+
+# Runtime
+tokio = { version = "1", features = [
+    "fs",
+    "io-std",
+    "macros",
+    "process",
+    "rt",
+    "sync",
+] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+tracing = { version = "0.1" }
+
+# Registry HTTP fetch
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "rustls",
+    "stream",
+] }
+
+# Install: archive extraction
+flate2 = "1"
+tar = "0.4"
+zip = { version = "8.5", default-features = false, features = ["deflate"] }
+
+# Serde
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Misc
+dirs = "6"
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3"

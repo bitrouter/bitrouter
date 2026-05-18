@@ -678,7 +678,7 @@ where
 /// same session pool for a given agent.
 #[cfg(feature = "acp")]
 pub struct ConfigAgentRouter {
-    agents: HashMap<String, Arc<bitrouter_providers::acp::provider::AcpAgentProvider>>,
+    agents: HashMap<String, Arc<bitrouter_acp::provider::AcpAgentProvider>>,
 }
 
 #[cfg(feature = "acp")]
@@ -693,7 +693,7 @@ impl ConfigAgentRouter {
             .into_iter()
             .filter(|(_, config)| config.enabled)
             .map(|(name, config)| {
-                let provider = Arc::new(bitrouter_providers::acp::provider::AcpAgentProvider::new(
+                let provider = Arc::new(bitrouter_acp::provider::AcpAgentProvider::new(
                     name.clone(),
                     config,
                 ));
@@ -709,7 +709,7 @@ impl ConfigAgentRouter {
     /// agents.
     pub fn providers(
         &self,
-    ) -> impl Iterator<Item = &Arc<bitrouter_providers::acp::provider::AcpAgentProvider>> {
+    ) -> impl Iterator<Item = &Arc<bitrouter_acp::provider::AcpAgentProvider>> {
         self.agents.values()
     }
 }

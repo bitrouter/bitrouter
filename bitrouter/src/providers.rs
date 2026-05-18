@@ -1,13 +1,9 @@
 //! Provider re-exports for `bitrouter-cli`.
 //!
-//! Re-surfaces the ACP and MCP provider modules so that the CLI does not
-//! need a direct dependency on `bitrouter-providers`. The re-exports are
-//! feature-gated to match the underlying provider features on this crate;
-//! callers reach them via `bitrouter::providers::acp::*` and
-//! `bitrouter::providers::mcp::*`.
-
-#[cfg(feature = "acp")]
-pub use bitrouter_providers::acp;
+//! Re-surfaces the MCP provider module so the CLI can reach it via
+//! `bitrouter::providers::mcp` without a direct dependency on
+//! `bitrouter-providers`. ACP lives in its own crate (`bitrouter-acp`) and
+//! is re-exported at the top level as `bitrouter::acp`.
 
 #[cfg(feature = "mcp")]
 pub use bitrouter_providers::mcp;

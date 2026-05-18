@@ -960,18 +960,18 @@ async fn run_tui(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>>
     // stale cache, then built-in agent defs, then user config remain as
     // the backstop.
     let cache_file = paths.cache_dir.join("acp-registry.json");
-    let registry_url = bitrouter::providers::acp::registry::resolve_registry_url(
+    let registry_url = bitrouter::acp::registry::resolve_registry_url(
         bitrouter_config.acp_registry_url.as_deref(),
     );
-    match bitrouter::providers::acp::registry::fetch_registry(
+    match bitrouter::acp::registry::fetch_registry(
         &cache_file,
-        bitrouter::providers::acp::registry::DEFAULT_TTL_SECS,
+        bitrouter::acp::registry::DEFAULT_TTL_SECS,
         &registry_url,
     )
     .await
     {
         Ok(index) => {
-            bitrouter::providers::acp::registry::merge_registry_into_agents(
+            bitrouter::acp::registry::merge_registry_into_agents(
                 &index,
                 &mut bitrouter_config.agents,
             );
@@ -981,7 +981,7 @@ async fn run_tui(paths: &RuntimePaths) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    bitrouter::providers::acp::state::overlay_install_state_sync(
+    bitrouter::acp::state::overlay_install_state_sync(
         &mut bitrouter_config.agents,
         &paths.agent_state_file,
     );

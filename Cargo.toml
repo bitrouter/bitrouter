@@ -7,6 +7,7 @@ version = "0.33.0"
 
 [workspace.dependencies]
 bitrouter-accounts = { path = "bitrouter-accounts", version = "0.33", default-features = false }
+bitrouter-acp = { path = "bitrouter-acp", version = "0.33" }
 bitrouter-api = { path = "bitrouter-api", version = "0.33", default-features = false }
 bitrouter-blob = { path = "bitrouter-blob", version = "0.33" }
 bitrouter-config = { path = "bitrouter-config", version = "0.33" }

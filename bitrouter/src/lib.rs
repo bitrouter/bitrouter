@@ -13,6 +13,8 @@ compile_error!(
 );
 
 pub mod accounts;
+#[cfg(feature = "acp")]
+pub use bitrouter_acp as acp;
 pub mod auth;
 pub mod providers;
 pub mod runtime;
