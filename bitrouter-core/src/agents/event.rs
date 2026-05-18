@@ -5,6 +5,8 @@
 //! requests, and disconnect. They are transport-agnostic — protocol
 //! adapters (ACP, A2A) convert their wire types into these.
 
+use serde::Serialize;
+
 /// Opaque identifier for a pending permission request.
 ///
 /// Used to correlate a [`PermissionRequest`] with the
@@ -26,7 +28,8 @@ pub type PermissionRequestId = u64;
 /// [`TurnDone`]: AgentEvent::TurnDone
 /// [`Error`]: AgentEvent::Error
 /// [`Disconnected`]: AgentEvent::Disconnected
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     /// Agent connection closed cleanly.
     Disconnected,
@@ -70,7 +73,8 @@ pub enum AgentEvent {
 }
 
 /// Status of an agent tool call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus {
     Pending,
     InProgress,
@@ -79,7 +83,8 @@ pub enum ToolCallStatus {
 }
 
 /// Reason a prompt turn completed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StopReason {
     EndTurn,
     MaxTokens,
@@ -89,7 +94,7 @@ pub enum StopReason {
 }
 
 /// A permission request from an agent.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PermissionRequest {
     /// Display title for the permission dialog.
     pub title: String,
@@ -100,7 +105,7 @@ pub struct PermissionRequest {
 }
 
 /// A single option in a permission request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PermissionOption {
     /// Unique identifier for this option.
     pub id: String,

@@ -322,6 +322,15 @@ async fn run_command_loop(
                 permission_bridge.resolve(request_id, response);
             }
             AgentCommand::Disconnect => {
+                // If a prompt turn is still in flight (the ACP `prompt`
+                // call hasn't returned), the consumer is awaiting events
+                // on this `reply_tx`. Emit `Disconnected` so the
+                // consumer's drain loop terminates promptly rather than
+                // waiting for the agent thread to fully unwind.
+                let pending = reply_tx_slot.borrow_mut().take();
+                if let Some(reply_tx) = pending {
+                    let _ = reply_tx.send(AgentEvent::Disconnected).await;
+                }
                 break;
             }
         }

@@ -23,6 +23,10 @@ pub struct RuntimePaths {
     pub agents_dir: PathBuf,
     /// ACP agent install-state ledger (`<home>/agents/state.json`).
     pub agent_state_file: PathBuf,
+    /// Named ACP session ledger
+    /// (`<home>/sessions/agent-sessions.json`). Tracks resumable
+    /// `bitrouter agent run --session <name>` mappings.
+    pub agent_sessions_file: PathBuf,
 }
 
 impl RuntimePaths {
@@ -38,6 +42,7 @@ impl RuntimePaths {
             token_store_file: home.join("tokens.json"),
             cache_dir: home.join("cache"),
             agent_state_file: agents_dir.join("state.json"),
+            agent_sessions_file: home.join("sessions").join("agent-sessions.json"),
             agents_dir,
             home_dir: home,
         }

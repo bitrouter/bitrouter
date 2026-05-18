@@ -124,6 +124,13 @@ enum Command {
         token: Option<String>,
     },
 
+    /// Run and manage headless ACP agent sessions
+    #[cfg(feature = "acp")]
+    Agent {
+        #[command(subcommand)]
+        action: cli::agent::AgentCommand,
+    },
+
     /// Manage spend-limit policies for OWS wallet signing
     Policy {
         #[command(subcommand)]
@@ -689,6 +696,12 @@ async fn run_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::AgentProxy { agent_name, token }) => {
             let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
             cli::agent_proxy::run(&runtime.config, &agent_name, token.as_deref())?;
+            return Ok(());
+        }
+        #[cfg(feature = "acp")]
+        Some(Command::Agent { action }) => {
+            let runtime: DefaultRuntime = load_or_warn_scaffold(&paths);
+            cli::agent::dispatch(&runtime.config, &paths, action).await?;
             return Ok(());
         }
         Some(Command::Agents { action }) => {

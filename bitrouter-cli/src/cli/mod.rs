@@ -1,4 +1,6 @@
 pub mod admin_auth;
+#[cfg(feature = "acp")]
+pub mod agent;
 pub mod agent_proxy;
 pub mod agents;
 pub mod auth;
