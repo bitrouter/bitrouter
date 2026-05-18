@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::{BitrouterError, Result};
+use crate::language_model::auth::AuthAppliers;
 use crate::language_model::protocol::{OutboundDispatch, SseEvent};
 use crate::language_model::types::{
     ApiProtocol, ExecutionResult, GenerateResult, Prompt, RoutingTarget, StreamPart,
@@ -177,6 +178,7 @@ fn truncate_upstream_message(text: &str) -> String {
 pub struct HttpExecutor {
     client: reqwest::Client,
     dispatch: OutboundDispatch,
+    auth_appliers: AuthAppliers,
 }
 
 impl HttpExecutor {
@@ -194,6 +196,19 @@ impl HttpExecutor {
     /// adapter that renders the request body + parses the response and the
     /// transport that builds the URL + applies auth.
     pub fn with_dispatch(timeouts: HttpTimeouts, dispatch: OutboundDispatch) -> Result<Self> {
+        Self::with_dispatch_and_auth(timeouts, dispatch, AuthAppliers::new())
+    }
+
+    /// Build an executor with custom timeouts, dispatch, **and** a registry
+    /// of per-provider [`AuthApplier`](crate::language_model::AuthApplier)s.
+    /// When a target's `provider_name` matches a registered applier, that
+    /// applier replaces `Transport::authorise` for the request (OAuth, SigV4,
+    /// any custom credential flow).
+    pub fn with_dispatch_and_auth(
+        timeouts: HttpTimeouts,
+        dispatch: OutboundDispatch,
+        auth_appliers: AuthAppliers,
+    ) -> Result<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(timeouts.connect)
             .read_timeout(timeouts.read)
@@ -201,12 +216,32 @@ impl HttpExecutor {
             .tcp_keepalive(timeouts.tcp_keepalive)
             .build()
             .map_err(|e| BitrouterError::internal(format!("building HTTP client: {e}")))?;
-        Ok(Self { client, dispatch })
+        Ok(Self {
+            client,
+            dispatch,
+            auth_appliers,
+        })
     }
 
     /// Build an executor with default timeouts and the built-in dispatch.
     pub fn with_defaults() -> Result<Self> {
         Self::new(HttpTimeouts::default())
+    }
+
+    /// Apply the per-provider [`AuthApplier`](crate::language_model::AuthApplier)
+    /// if one is registered for `target.provider_name`, else fall through to
+    /// `Transport::authorise`. Shared by both `execute` and `execute_stream`.
+    async fn apply_auth(
+        &self,
+        request: reqwest::Request,
+        target: &RoutingTarget,
+        transport: &Arc<dyn crate::language_model::protocol::Transport>,
+    ) -> Result<reqwest::Request> {
+        if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
+            applier.apply(request, target).await
+        } else {
+            transport.authorise(request, target).await
+        }
     }
 
     fn no_dispatch_error(target: &RoutingTarget) -> BitrouterError {
@@ -239,7 +274,7 @@ impl Executor for HttpExecutor {
             .json(&body)
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
-        let request = transport.authorise(request, target).await?;
+        let request = self.apply_auth(request, target, transport).await?;
         let response = self.client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
                 BitrouterError::UpstreamTimeout
@@ -306,7 +341,7 @@ impl Executor for HttpExecutor {
             .json(&body)
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
-        let request = transport.authorise(request, target).await?;
+        let request = self.apply_auth(request, target, transport).await?;
         let response = self.client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
                 BitrouterError::UpstreamTimeout

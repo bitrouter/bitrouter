@@ -57,6 +57,7 @@
 //! (compile-time error). Cross-cutting reuse goes through crate-root library
 //! code, never a shared trait.
 
+pub mod auth;
 pub mod builder;
 pub mod context;
 pub mod executor;
@@ -73,6 +74,7 @@ mod tests;
 
 // ===== canonical re-exports — `language_model::Pipeline`, etc. =====
 
+pub use auth::{AuthApplier, AuthAppliers};
 pub use builder::PipelineBuilder;
 pub use context::{PipelineContext, StreamContext};
 pub use executor::{
