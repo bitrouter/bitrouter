@@ -8,16 +8,16 @@ BitRouter is organized as a set of focused crates:
 
 | Crate                  | Responsibility                                                                                                                                    |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bitrouter`            | CLI entry point with setup wizard, auto-init on first run, and runtime launch                                                                     |
+| `bitrouter-cli`        | The `bitrouter` binary — headless-first operator CLI with setup wizard, optional `tui` feature, and pass-through DB/chain feature selection       |
+| `bitrouter`            | Runtime **library** — HTTP server, router, payment middleware, daemon lifecycle, configuration paths, database migrations                          |
 | `bitrouter-api`        | Reusable Warp filters for provider-compatible HTTP endpoints and the MCP gateway                                                                  |
 | `bitrouter-config`     | YAML loading, `.env` support, environment substitution, built-in providers (models and tools), config-backed routing, and config generation        |
 | `bitrouter-core`       | Shared traits for models and tools, router contracts, errors, and transport-neutral types                                                          |
-| `bitrouter-providers`  | Feature-gated provider adapters (OpenAI, Anthropic, Google), MCP client, Agent Skills registry, and REST tool provider                            |
+| `bitrouter-providers`  | Feature-gated provider adapters (OpenAI, Anthropic, Google), MCP client, Agent Skills registry, ACP client, and REST tool provider                |
 | `bitrouter-accounts`   | Account and session management backed by sea-orm                                                                                                  |
 | `bitrouter-observe`    | Spend tracking, metrics collection, and request observation for model and tool invocations                                                        |
 | `bitrouter-blob`       | Concrete `BlobStore` implementations (filesystem backend)                                                                                         |
 | `bitrouter-guardrails` | Local firewall for AI agent traffic — pattern-based content inspection with warn, redact, and block actions                                       |
-| `bitrouter-tui`        | Terminal UI with ACP (Agent Client Protocol) integration for managing coding agent sessions in real time                                              |
 
 ### Dependency Logic
 
@@ -31,8 +31,8 @@ The layering follows a strict bottom-up principle — each crate depends only on
 6. **bitrouter-observe** — Depends on `bitrouter-core` for observation callback traits. Provides spend tracking, metrics collection, and request observation for both model and tool invocations.
 7. **bitrouter-blob** — Depends on `bitrouter-core` for the `BlobStore` trait. Provides concrete blob storage backends (filesystem via the `fs` feature).
 8. **bitrouter-guardrails** — Depends on `bitrouter-core`. Local firewall for AI agent traffic — pattern-based content inspection with warn, redact, and block actions for both model and tool requests.
-9. **bitrouter-tui** — Standalone TUI crate. Depends on `agent-client-protocol` for ACP integration and `ratatui`/`crossterm` for rendering. Provides the terminal UI for managing coding agent sessions via the Agent Client Protocol (JSON-RPC over stdio). Auto-discovers ACP-compatible agents on PATH and communicates with them on a dedicated thread using `LocalSet` (ACP types are `!Send`).
-10. **bitrouter** (binary) — The CLI product. Depends on all workspace crates. Assembles everything: resolves paths, loads config, and provides the user-facing commands (`serve`, `start`, `stop`, `status`, `restart`) and optional TUI.
+9. **bitrouter** (library) — The runtime. Depends on `bitrouter-api`, `bitrouter-accounts`, `bitrouter-observe`, `bitrouter-providers`, `bitrouter-guardrails`, `bitrouter-config`, and `bitrouter-core`. Exposes `bitrouter::runtime::{AppRuntime, Router, RuntimePaths, DaemonManager, ...}` plus `bitrouter::auth::token_store` for embedders and the CLI. Produces no binary of its own.
+10. **bitrouter-cli** — Produces the `bitrouter` binary. Headless-first: a bare invocation runs the `init` wizard (when unconfigured) or starts the proxy daemon (when configured). The interactive multi-agent TUI is gated behind the `tui` feature and the `bitrouter tui` subcommand. Internally hosts `bitrouter-cli/src/tui/` (previously the `bitrouter-tui` crate), which depends on `agent-client-protocol`, `ratatui`, and `crossterm`.
 
 ### Crate-creation rule
 
@@ -44,7 +44,6 @@ The rule keeps the workspace small by default and pushes new integrations into c
 - `bitrouter-providers` — pulls provider SDKs and protocol clients (`rmcp`, ACP archive readers) that should not be paid for by SDK consumers who don't use them.
 - `bitrouter-guardrails` — kept as its own crate because the firewall is a distinct concern with room to grow its own dep surface (richer pattern engines, ML-based detectors, remote rule sources).
 - `bitrouter-blob` — kept as its own crate in anticipation of additional backends (`s3`, `gcs`, …) that will pull large SDK trees; avoids moving code in and out of the workspace.
-- `bitrouter-tui` — pulls `ratatui`, `crossterm`, and the ACP stack; clearly its own crate.
 - `bitrouter-config` — owns YAML loading and the built-in provider registry; not a heavy integration but a natural seam between transport-neutral types and runtime composition.
 
 A feature on `bitrouter-api` that would satisfy this rule today: anything pulling a new optional dep on a companion crate (e.g. `bitrouter-accounts`, `bitrouter-observe`, `bitrouter-guardrails`).

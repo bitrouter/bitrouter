@@ -1562,7 +1562,6 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "base64 0.22.1",
  "bitrouter-accounts",
  "bitrouter-api",
  "bitrouter-config",
@@ -1570,19 +1569,15 @@ dependencies = [
  "bitrouter-guardrails",
  "bitrouter-observe",
  "bitrouter-providers",
- "bitrouter-tui",
  "bs58",
  "chrono",
- "clap",
  "curve25519-dalek",
- "dialoguer",
  "dirs",
  "libc",
  "mpp-br",
  "ows-core",
  "ows-lib",
  "ows-signer",
- "rand 0.9.4",
  "reqwest 0.13.2",
  "reqwest-middleware 0.5.1",
  "sea-orm",
@@ -1595,8 +1590,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-subscriber 0.3.23",
- "uuid",
  "warp",
 ]
 
@@ -1658,6 +1651,44 @@ dependencies = [
  "bitrouter-core",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "bitrouter-cli"
+version = "0.33.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "base64 0.22.1",
+ "bitrouter",
+ "bitrouter-accounts",
+ "bitrouter-config",
+ "bitrouter-core",
+ "bitrouter-providers",
+ "chrono",
+ "clap",
+ "crossterm",
+ "dialoguer",
+ "dirs",
+ "futures",
+ "libc",
+ "ows-core",
+ "ows-lib",
+ "ows-signer",
+ "rand 0.9.4",
+ "ratatui",
+ "reqwest 0.13.2",
+ "reqwest-middleware 0.5.1",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+ "uuid",
 ]
 
 [[package]]
@@ -1762,20 +1793,6 @@ dependencies = [
  "tracing",
  "uuid",
  "zip",
-]
-
-[[package]]
-name = "bitrouter-tui"
-version = "0.33.0"
-dependencies = [
- "bitrouter-config",
- "bitrouter-core",
- "bitrouter-providers",
- "crossterm",
- "futures",
- "ratatui",
- "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]

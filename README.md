@@ -23,7 +23,7 @@ As LLM agents grow more autonomous, humans can no longer hand-pick the best mode
 - **Skills registry** — track and expose agent skills following the [agentskills.io](https://agentskills.io) standard ([`providers`](bitrouter-providers/))
 - **Agentic payment** — 402/MPP payment handling for LLMs, tools, and APIs ([`api`](bitrouter-api/) · [`accounts`](bitrouter-accounts/))
 - **Observability** — per-request spend tracking, metrics, and cost calculation ([`observe`](bitrouter-observe/))
-- **CLI + TUI** — monitor and control agent sessions in real time, with live ACP (Agent Client Protocol) integration for managing coding agents ([`cli`](bitrouter/) · [`tui`](bitrouter-tui/))
+- **Headless-first CLI** — operator-friendly subcommands, scriptable and CI-safe by default; opt into the interactive multi-agent TUI with `bitrouter tui` ([`cli`](bitrouter-cli/) · [`runtime`](bitrouter/))
 
 ## Documentation
 
@@ -45,12 +45,19 @@ cargo install bitrouter
 bitrouter
 ```
 
-On first launch, BitRouter runs an interactive setup wizard with two modes:
+On first launch — when no configuration exists yet — BitRouter runs an
+interactive setup wizard with two modes:
 
 - **Cloud** — connect to BitRouter Cloud with x402/Solana wallet payments
 - **BYOK** — bring your own API keys for OpenAI, Anthropic, Google, or custom providers
 
-After setup, the TUI and API server start at `http://localhost:8787`.
+Once configured, a plain `bitrouter` starts the proxy in the foreground at
+`http://localhost:8787`. The TUI is opt-in:
+
+```bash
+bitrouter --features tui ...    # build with the TUI compiled in
+bitrouter tui                   # launch the interactive UI
+```
 
 You can re-run the wizard at any time with `bitrouter reset`.
 
@@ -64,7 +71,8 @@ bitrouter
 # Routes to "openai:gpt-4o" at http://localhost:8787
 ```
 
-For a foreground server without the TUI, use `bitrouter serve`.
+For an explicit foreground server start, use `bitrouter serve` (identical to
+running `bitrouter` with a configured home directory).
 
 ### Agent Skills
 

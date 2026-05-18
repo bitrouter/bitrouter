@@ -1,0 +1,100 @@
+[package]
+name = "bitrouter-cli"
+version = { workspace = true }
+edition = "2024"
+description = "BitRouter CLI — headless-first operator interface for the BitRouter LLM proxy"
+authors = ["Archer <archer@bitrouter.ai>"]
+license = "Apache-2.0"
+repository = "https://github.com/bitrouter/bitrouter"
+homepage = "https://bitrouter.ai"
+readme = "README.md"
+
+[[bin]]
+name = "bitrouter"
+path = "src/main.rs"
+
+[features]
+# Headless-first: TUI is NOT in the default feature set. Enable explicitly
+# (`--features tui`) to compile in the terminal UI and the `bitrouter tui`
+# subcommand.
+default = ["sqlite", "tempo", "mcp", "rest"]
+
+# Optional terminal UI for multi-agent ACP sessions. Adds ratatui/crossterm
+# and the `bitrouter tui` subcommand.
+tui = ["dep:ratatui", "dep:crossterm", "dep:futures"]
+
+# Pass-through DB driver selection (forwards to the bitrouter runtime crate).
+sqlite = ["bitrouter/sqlite"]
+postgres = ["bitrouter/postgres"]
+mysql = ["bitrouter/mysql"]
+
+# Pass-through payment chain selection.
+tempo = ["bitrouter/tempo"]
+solana = ["bitrouter/solana"]
+
+# Pass-through provider transports.
+mcp = ["bitrouter/mcp"]
+rest = ["bitrouter/rest"]
+
+[dependencies]
+# Internal — the runtime crate (lib) plus the workspace pieces the CLI uses
+# directly for command implementations. `bitrouter-api` and `bitrouter-observe`
+# are pulled transitively through `bitrouter`; they are not direct deps here.
+bitrouter = { path = "../bitrouter", default-features = false }
+bitrouter-accounts = { workspace = true }
+bitrouter-config = { workspace = true }
+bitrouter-core = { workspace = true }
+bitrouter-providers = { workspace = true, features = ["acp", "agentskills"] }
+
+# CLI plumbing
+clap = { version = "4.5", features = ["derive"] }
+dialoguer = { version = "0.12" }
+anyhow = { version = "1" }
+thiserror = { version = "2.0" }
+
+# Shared runtime support used by command implementations
+reqwest = { version = "0.13", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls",
+] }
+reqwest-middleware = { version = "0.5" }
+sea-orm = { version = "1.1", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+tokio = { version = "1", features = [
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Crypto / encoding (JWT signing, key derivation, base64).
+base64 = { version = "0.22" }
+chrono = { version = "0.4" }
+rand = { version = "0.9" }
+sha2 = { version = "0.10" }
+uuid = { version = "1", features = ["v4"] }
+
+# OWS wallet integration (used by `bitrouter wallet`, `bitrouter key`, `bitrouter policy`).
+ows-lib = { version = "1.1" }
+ows-core = { version = "1.1" }
+ows-signer = { version = "1.1" }
+alloy = { version = "1", default-features = false, features = ["signers"] }
+dirs = "6"
+
+# TUI dependencies (only compiled when `tui` feature is enabled).
+ratatui = { version = "0.30", optional = true }
+crossterm = { version = "0.29", features = ["event-stream"], optional = true }
+futures = { version = "0.3", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2" }
+
+[dev-dependencies]
+tempfile = { version = "3" }

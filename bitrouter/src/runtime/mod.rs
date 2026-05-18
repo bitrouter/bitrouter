@@ -3,7 +3,6 @@ pub mod app;
 pub mod auth;
 pub mod budget;
 pub mod copilot;
-#[cfg(feature = "cli")]
 pub mod daemon;
 pub mod error;
 pub mod go;

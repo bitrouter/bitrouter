@@ -2,41 +2,29 @@
 name = "bitrouter"
 version = { workspace = true }
 edition = "2024"
-description = "BitRouter"
+description = "BitRouter — the runtime library (HTTP server, router, payment middleware, daemon)"
 authors = ["Archer <archer@bitrouter.ai>"]
 license = "Apache-2.0"
 repository = "https://github.com/bitrouter/bitrouter"
 homepage = "https://bitrouter.ai"
 readme = "README.md"
 
+[lib]
+path = "src/lib.rs"
+
 [features]
-default = [
-    "cli",
-    "tui",
-    "sqlite",
-    "tempo",
-    "mcp",
-    "rest",
-]
+default = ["sqlite", "tempo", "mcp", "rest"]
 rest = ["bitrouter-providers/rest"]
 mcp = ["bitrouter-providers/mcp"]
-# Operator CLI surface: subcommands beyond `serve` (Wallet, Key, Route,
-# Status, Start, Stop, Restart, Reload, Tools, Models, Agents, Policy,
-# Auth, Reset, AgentProxy, the setup wizard, the daemon manager).
-# Without `cli`, the binary exposes only `serve` (foreground) and is
-# significantly smaller.
-cli = ["dep:dialoguer", "dep:libc"]
-tui = ["cli", "dep:bitrouter-tui", "bitrouter-providers/acp"]
 # Database driver selection. Exactly one driver must be enabled (default: sqlite).
 # Accounts, sessions, JWT auth, and persistent spend tracking are baked into the
-# binary unconditionally — these features only choose the storage backend.
+# runtime unconditionally — these features only choose the storage backend.
 sqlite = ["bitrouter-accounts/sqlite", "bitrouter-observe/sqlite"]
 postgres = ["bitrouter-accounts/postgres", "bitrouter-observe/postgres"]
 mysql = ["bitrouter-accounts/mysql", "bitrouter-observe/mysql"]
 # Payment chain selection. Payments (mpp client + server, OWS wallet, alloy)
-# are baked into the binary unconditionally; these features choose which
-# chain backends are wired up. At least one of `tempo` / `solana` must be
-# enabled; default is `tempo`.
+# are baked in unconditionally; these features choose which chain backends are
+# wired up. At least one of `tempo` / `solana` must be enabled; default is `tempo`.
 tempo = [
     "bitrouter-api/payments-tempo",
     "mpp/tempo",
@@ -56,19 +44,12 @@ bitrouter-config.workspace = true
 bitrouter-core.workspace = true
 bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true }
-bitrouter-providers = { workspace = true, features = ["agentskills"] }
-
-# CLI
-clap = { version = "4.5", features = ["derive"] }
-dialoguer = { version = "0.12", optional = true }
+bitrouter-providers = { workspace = true, features = ["acp", "agentskills"] }
 
 # Runtime
 dirs = "6"
-base64 = { version = "0.22" }
 chrono = { version = "0.4" }
-rand = { version = "0.9" }
 reqwest = { version = "0.13", default-features = false, features = [
-    "blocking",
     "json",
     "rustls",
 ] }
@@ -90,12 +71,7 @@ tokio = { version = "1", features = [
     "time",
 ] }
 tracing = { version = "0.1" }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-uuid = { version = "1", features = ["v4"] }
 warp = { version = "0.4.2", features = ["server"] }
-
-# TUI (optional)
-bitrouter-tui = { workspace = true, optional = true }
 anyhow = { version = "1" }
 
 
@@ -120,4 +96,4 @@ async-trait = { version = "0.1" }
 tempfile = { version = "3" }
 
 [target.'cfg(unix)'.dependencies]
-libc = { version = "0.2", optional = true }
+libc = { version = "0.2" }

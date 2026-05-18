@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠️ Breaking changes
+
+- **CLI/runtime split.** The `bitrouter` workspace now produces the `bitrouter`
+  binary from a new `bitrouter-cli` crate; the original `bitrouter` crate
+  becomes a library hosting the runtime (HTTP server, router, payment
+  middleware, daemon lifecycle, configuration paths). The `bitrouter-tui`
+  crate has been merged into `bitrouter-cli/src/tui/` and is gated by the new
+  `tui` feature on `bitrouter-cli`. Embedders that previously linked against
+  `bitrouter` as a binary should switch to consuming `bitrouter` as a library
+  or run the `bitrouter-cli` binary.
+- **Headless-first.** A bare `bitrouter` invocation now starts the proxy in
+  the foreground (equivalent to `bitrouter serve`) when a configuration
+  exists. The TUI is no longer auto-launched after `init` or `reset`.
+- **TUI is opt-in.** The `tui` feature is removed from the default feature
+  set. Build with `--features tui` and run `bitrouter tui` to use the
+  interactive multi-agent UI. The `--no-tui` global flag has been removed
+  (it is no longer needed; TUI never auto-launches).
+- **`agents` and `agent-proxy` are no longer TUI-gated.** Both subcommands
+  now ship in every build — the underlying ACP support lives in
+  `bitrouter-providers/acp`, which is now always compiled into the runtime.
+- **Supersedes `specs/cli-tui-ops-layer.md`.** That spec was based on
+  treating CLI and TUI as co-equal; this release re-grounds the product on
+  headless-first.
+
+
 ## [0.33.0](https://github.com/bitrouter/bitrouter/compare/v0.32.0...v0.33.0)
 
 
