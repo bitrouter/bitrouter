@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agent_proxy;
+pub mod agents;
 pub mod assemble;
 pub mod commands;
 pub mod daemon;

@@ -41,3 +41,4 @@ futures.workspace = true
 tower = { workspace = true, features = ["util"] }
 axum.workspace = true
 http.workspace = true
+serde-saphyr.workspace = true

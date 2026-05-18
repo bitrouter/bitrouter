@@ -627,6 +627,7 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "sqlx",
  "tokio",

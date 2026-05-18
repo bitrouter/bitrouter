@@ -147,9 +147,13 @@ enum Command {
     },
     /// Print the authenticated cloud identity — not implemented in v1.0.
     Whoami,
-    /// ACP agent management — `bitrouter agents` is the lifecycle CLI;
-    /// `bitrouter agent-proxy <id>` is the stdio bridge an editor spawns.
-    Agents,
+    /// ACP agent lifecycle — list the catalog, check configured agents,
+    /// print install stubs. `bitrouter agent-proxy <id>` is the separate
+    /// stdio bridge an editor spawns.
+    Agents {
+        #[command(subcommand)]
+        action: AgentsAction,
+    },
     /// Stdio bridge between an ACP-aware editor and a configured upstream
     /// agent. Routes inbound JSON-RPC requests through the `acp` pipeline,
     /// relays upstream notifications back to the editor.
@@ -160,6 +164,29 @@ enum Command {
         /// Path to `bitrouter.yaml`.
         #[arg(short, long, default_value = "bitrouter.yaml")]
         config: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentsAction {
+    /// Show the bundled v1.0 catalog of well-known agents and which of
+    /// them are present under `agents:` in the loaded config.
+    List {
+        /// Path to `bitrouter.yaml`.
+        #[arg(short, long, default_value = "bitrouter.yaml")]
+        config: PathBuf,
+    },
+    /// Spawn each configured agent and verify it answers `initialize`.
+    Check {
+        /// Path to `bitrouter.yaml`.
+        #[arg(short, long, default_value = "bitrouter.yaml")]
+        config: PathBuf,
+    },
+    /// Print a YAML stub for an agent in the catalog (paste under
+    /// `agents:` in `bitrouter.yaml`).
+    Install {
+        /// Agent id from the catalog (see `bitrouter agents list`).
+        id: String,
     },
 }
 
@@ -308,15 +335,7 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Agents => {
-            print_unimplemented(
-                "agents",
-                "Agent lifecycle (install/uninstall/update) is not yet implemented in v1.0.\n\
-                 For now, declare agents under `agents:` in bitrouter.yaml and invoke them\n\
-                 via `bitrouter agent-proxy <id>`.",
-            );
-            Ok(())
-        }
+        Command::Agents { action } => agents_cmd(action).await,
         Command::AgentProxy { agent, config } => agent_proxy_cmd(&agent, &config).await,
     }
 }
@@ -802,6 +821,62 @@ async fn agent_proxy_cmd(agent: &str, config_path: &Path) -> Result<()> {
         .await
         .with_context(|| format!("loading {}", config_path.display()))?;
     bitrouter::agent_proxy::run(cfg, agent).await
+}
+
+async fn agents_cmd(action: AgentsAction) -> Result<()> {
+    use bitrouter::agents as agents_cmd;
+
+    match action {
+        AgentsAction::List { config } => {
+            let cfg = config::load(&config)
+                .await
+                .with_context(|| format!("loading {}", config.display()))?;
+            let rows = agents_cmd::list(&cfg);
+            println!(
+                "{:<16} {:<12} {:<10} DESCRIPTION",
+                "ID", "CONFIGURED", "CATALOG"
+            );
+            for row in rows {
+                println!(
+                    "{:<16} {:<12} {:<10} {}",
+                    row.id,
+                    if row.configured { "yes" } else { "no" },
+                    if row.in_catalog { "yes" } else { "no" },
+                    row.description,
+                );
+            }
+            Ok(())
+        }
+        AgentsAction::Check { config } => {
+            let cfg = config::load(&config)
+                .await
+                .with_context(|| format!("loading {}", config.display()))?;
+            if cfg.agents.is_empty() {
+                println!("(no agents configured)");
+                println!("  install one with: bitrouter agents install <id>");
+                return Ok(());
+            }
+            let rows = agents_cmd::check(&cfg).await;
+            println!("{:<24} {:<8} LATENCY/ERROR", "AGENT", "STATUS");
+            for row in rows {
+                match row.outcome {
+                    Ok(d) => println!("{:<24} {:<8} {}ms", row.id, "ok", d.as_millis()),
+                    Err(e) => {
+                        println!("{:<24} {:<8} -", row.id, "FAIL");
+                        eprintln!("  ↳ {e}");
+                    }
+                }
+            }
+            Ok(())
+        }
+        AgentsAction::Install { id } => match agents_cmd::install(&id) {
+            Ok(yaml) => {
+                print!("{yaml}");
+                Ok(())
+            }
+            Err(e) => anyhow::bail!(e),
+        },
+    }
 }
 
 // ===== helpers =====
