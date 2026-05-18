@@ -1,0 +1,57 @@
+# GitHub Copilot — OAuth Device Flow + per-model protocol map.
+#
+# Official references:
+# - GitHub OAuth Device Flow:
+#   https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
+# - Copilot API surface (chat / messages endpoints at api.githubcopilot.com):
+#   https://docs.github.com/en/copilot/reference/api-reference/copilot-api-endpoints
+# - VS Code Copilot Chat (MIT) — reference implementation of the
+#   GitHub→Copilot token exchange + per-model protocol routing:
+#   https://github.com/microsoft/vscode-copilot-chat
+#
+# Two-step authentication:
+# 1. `bitrouter login github-copilot` runs the device flow and stores a
+#    GitHub user-to-server access token (ghu_…).
+# 2. Per request, the `github-copilot` AuthApplier exchanges that token via
+#    `GET https://api.github.com/copilot_internal/v2/token` for a short-lived
+#    Copilot Bearer (see crates/bitrouter-providers/src/copilot/exchange.rs).
+#
+# Per-model protocol routing (Copilot multiplexes families behind one host):
+# - claude-*               → Anthropic Messages
+# - gpt-*-codex / gpt-5.5  → OpenAI Responses (Chat Completions returns 404
+#                             on these in Copilot's edition)
+# - everything else        → OpenAI Chat Completions
+#
+# The `oauth` AuthScheme stores routing metadata only — the actual exchange
+# + integration headers live in the `bitrouter-providers::copilot` module
+# referenced by `handler = "github-copilot"`.
+
+id = "github-copilot"
+display_name = "GitHub Copilot"
+api_base = "https://api.githubcopilot.com"
+doc_url = "https://docs.github.com/en/copilot/reference/api-reference/copilot-api-endpoints"
+
+[api_protocol]
+"claude-*" = "anthropic"
+"gpt-5.5" = "responses"
+"gpt-5.5-codex" = "responses"
+"gpt-5.1-codex" = "responses"
+"gpt-5.1-codex-mini" = "responses"
+"gpt-5.3-codex" = "responses"
+"gpt-5.2-codex" = "responses"
+"*" = "openai"
+
+[auth]
+kind = "oauth"
+# Resolved at startup to the `bitrouter-providers::copilot::CopilotAuthApplier`.
+handler = "github-copilot"
+
+[auth.params]
+# Opencode's public client_id, reused while bitrouter doesn't have its own
+# registered GitHub OAuth App. The CLI surfaces a one-line warning at login
+# inviting the user to register their own and set `auth.params.client_id` in
+# their bitrouter.yaml override. Source: opencode auth registry.
+client_id = "Ov23li8tweQw6odWQebz"
+scope = "read:user"
+device_authorization_endpoint = "https://github.com/login/device/code"
+token_endpoint = "https://github.com/login/oauth/access_token"

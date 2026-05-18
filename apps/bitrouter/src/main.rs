@@ -126,11 +126,21 @@ enum Command {
     },
     /// OWS wallet integration — not implemented in v1.0.
     Wallet,
-    /// Cloud login — not implemented in v1.0 (no cloud dependency in v1.0
-    /// scope; sign a `brvk_` virtual key with `bitrouter key sign` instead).
-    Login,
-    /// Cloud logout — not implemented in v1.0.
-    Logout,
+    /// Log in to an upstream provider. Today: `bitrouter login github-copilot`
+    /// runs the GitHub OAuth Device Authorization Grant + stores the
+    /// resulting token under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`.
+    /// Cloud login (no argument) is not in v1.0 scope.
+    Login {
+        /// Provider id to log in to (e.g. `github-copilot`). Omit for the
+        /// v0-style cloud login flow (not implemented in v1.0).
+        provider: Option<String>,
+    },
+    /// Log out of an upstream provider — clears the OAuth token from disk.
+    /// Cloud logout (no argument) is not in v1.0 scope.
+    Logout {
+        /// Provider id whose stored OAuth token should be removed.
+        provider: Option<String>,
+    },
     /// Print the authenticated cloud identity — not implemented in v1.0.
     Whoami,
     /// ACP agent management — the v1.0 `acp` module is pure-routing only.
@@ -233,21 +243,29 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Login => {
-            print_unimplemented(
-                "login",
-                "Cloud login is not in v1.0 scope. Mint a local virtual key with\n\
-                 `bitrouter key sign --user <id>` and configure clients with it.",
-            );
-            Ok(())
-        }
-        Command::Logout => {
-            print_unimplemented(
-                "logout",
-                "See `bitrouter login` — no cloud session in v1.0.",
-            );
-            Ok(())
-        }
+        Command::Login { provider } => match provider.as_deref() {
+            Some(name) => bitrouter::commands::login_provider(name).await,
+            None => {
+                print_unimplemented(
+                    "login",
+                    "Cloud login is not in v1.0 scope. Run\n\
+                     `bitrouter login <provider>` for per-provider OAuth (today: github-copilot),\n\
+                     or mint a local virtual key with `bitrouter key sign --user <id>`.",
+                );
+                Ok(())
+            }
+        },
+        Command::Logout { provider } => match provider.as_deref() {
+            Some(name) => bitrouter::commands::logout_provider(name).await,
+            None => {
+                print_unimplemented(
+                    "logout",
+                    "See `bitrouter logout <provider>` for per-provider OAuth logout.\n\
+                     No cloud session in v1.0.",
+                );
+                Ok(())
+            }
+        },
         Command::Whoami => {
             print_unimplemented(
                 "whoami",

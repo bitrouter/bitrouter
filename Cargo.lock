@@ -715,6 +715,7 @@ dependencies = [
 name = "bitrouter-providers"
 version = "1.0.0-alpha.1"
 dependencies = [
+ "async-trait",
  "bitrouter-sdk",
  "reqwest",
  "serde",
@@ -722,6 +723,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "wiremock",
 ]
 
 [[package]]

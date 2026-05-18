@@ -224,6 +224,123 @@ pub async fn create_policy(policy_dir: &std::path::Path, id: &str) -> Result<std
     Ok(path)
 }
 
+/// `bitrouter login <provider>` — run the provider's OAuth flow + persist a
+/// token. Today only `github-copilot` is wired; other oauth providers can
+/// register via [`bitrouter_providers::builtin`].
+pub async fn login_provider(provider_id: &str) -> Result<()> {
+    use bitrouter_providers::{AuthScheme, builtin};
+
+    let entry = builtin::find(provider_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown provider '{provider_id}' — try `bitrouter providers list` for the catalog"
+        )
+    })?;
+    let (client_id, scope, device_url, token_url) = match &entry.auth {
+        AuthScheme::Oauth { params, .. } => {
+            let client_id = params
+                .get("client_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "provider '{provider_id}': auth.params.client_id is missing in the TOML"
+                    )
+                })?
+                .to_string();
+            let scope = params
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let device_url = params
+                .get("device_authorization_endpoint")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "provider '{provider_id}': auth.params.device_authorization_endpoint is missing"
+                    )
+                })?
+                .to_string();
+            let token_url = params
+                .get("token_endpoint")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "provider '{provider_id}': auth.params.token_endpoint is missing"
+                    )
+                })?
+                .to_string();
+            (client_id, scope, device_url, token_url)
+        }
+        other => anyhow::bail!(
+            "provider '{provider_id}' is not OAuth (auth scheme: {:?})",
+            std::mem::discriminant(other)
+        ),
+    };
+
+    let flow = bitrouter_providers::oauth::DeviceCodeFlow::new(
+        bitrouter_providers::oauth::DeviceCodeParams {
+            client_id,
+            scope,
+            device_authorization_endpoint: device_url,
+            token_endpoint: token_url,
+        },
+    )
+    .with_context(|| format!("building OAuth flow for {provider_id}"))?;
+
+    let device_code = flow
+        .request_device_code()
+        .await
+        .with_context(|| format!("requesting OAuth device code for {provider_id}"))?;
+
+    eprintln!();
+    eprintln!("  OAuth device authorization for {}", entry.display_name);
+    eprintln!("  ──────────────────────────────────────────");
+    if let Some(complete) = &device_code.verification_uri_complete {
+        eprintln!("  Open:  {complete}");
+    } else {
+        eprintln!("  Open:  {}", device_code.verification_uri);
+    }
+    eprintln!("  Code:  {}", device_code.user_code);
+    eprintln!();
+    eprintln!("  Waiting for authorization…");
+
+    let mut interval = std::time::Duration::from_secs(device_code.interval.max(1));
+    let token = loop {
+        tokio::time::sleep(interval).await;
+        match flow.poll_once(&device_code.device_code).await? {
+            bitrouter_providers::oauth::device_code::PollOutcome::Token(t) => break t,
+            bitrouter_providers::oauth::device_code::PollOutcome::Pending => continue,
+            bitrouter_providers::oauth::device_code::PollOutcome::SlowDown => {
+                // RFC 8628 §3.5: server requested back-off — add 5s.
+                interval += std::time::Duration::from_secs(5);
+            }
+        }
+    };
+
+    let mut store = bitrouter_providers::oauth::TokenStore::default_path()
+        .context("opening OAuth token store")?;
+    store
+        .set(provider_id, token)
+        .with_context(|| format!("persisting OAuth token for {provider_id}"))?;
+
+    eprintln!("  ✓ Authorized. Token saved to {}", store.path().display());
+    eprintln!();
+    Ok(())
+}
+
+/// `bitrouter logout <provider>` — drop the stored OAuth token, if any.
+pub async fn logout_provider(provider_id: &str) -> Result<()> {
+    let mut store = bitrouter_providers::oauth::TokenStore::default_path()
+        .context("opening OAuth token store")?;
+    match store
+        .remove(provider_id)
+        .with_context(|| format!("removing OAuth token for {provider_id}"))?
+    {
+        Some(_) => eprintln!("  ✓ Removed stored OAuth token for {provider_id}."),
+        None => eprintln!("  No stored OAuth token for {provider_id}; nothing to remove."),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

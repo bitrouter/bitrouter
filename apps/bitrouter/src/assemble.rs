@@ -11,7 +11,8 @@ use sqlx::SqlitePool;
 
 use bitrouter_sdk::App;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
-use bitrouter_sdk::language_model::HttpExecutor;
+use bitrouter_sdk::language_model::protocol::OutboundDispatch;
+use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
 
 use bitrouter_auth::AuthHook;
 use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
@@ -87,8 +88,19 @@ pub async fn build_app_with_path(
         Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),
         None => ConfigRoutingTable::from_config(resolved),
     });
-    let executor =
-        Arc::new(HttpExecutor::with_defaults().context("building the upstream HTTP executor")?);
+    // Per-provider auth appliers — currently only GitHub Copilot, whose
+    // OAuth-driven Bearer is resolved + cached by the applier on every
+    // request. Listed only when the user configures the provider, so an
+    // operator who doesn't use Copilot doesn't pay a token-store read.
+    let auth_appliers = build_auth_appliers(config)?;
+    let executor = Arc::new(
+        HttpExecutor::with_dispatch_and_auth(
+            HttpTimeouts::default(),
+            OutboundDispatch::builtin(),
+            auth_appliers,
+        )
+        .context("building the upstream HTTP executor")?,
+    );
 
     // ---- pricing, MPP, policy, guardrails — all derived from config ----
     let pricing = build_pricing_table(config);
@@ -166,6 +178,22 @@ pub async fn build_app_with_path(
 }
 
 /// Build the settlement `PricingTable` from every provider's per-model pricing.
+/// Build the per-provider `AuthAppliers` registry. Each entry covers a
+/// provider whose credential flow needs more than the per-protocol
+/// `Transport::authorise` default (today: only GitHub Copilot).
+fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
+    let mut appliers = AuthAppliers::new();
+    if config.providers.contains_key("github-copilot") {
+        let token_store_path = bitrouter_providers::oauth::TokenStore::default_path()
+            .map(|s| s.path().to_path_buf())
+            .context("resolving OAuth token store path for github-copilot")?;
+        let applier = bitrouter_providers::copilot::CopilotAuthApplier::new(token_store_path)
+            .context("building the github-copilot AuthApplier")?;
+        appliers.register("github-copilot", Arc::new(applier));
+    }
+    Ok(appliers)
+}
+
 fn build_pricing_table(config: &Config) -> PricingTable {
     let mut table = PricingTable::new();
     for (provider_id, provider) in &config.providers {

@@ -16,6 +16,10 @@ const EMBEDDED: &[(&str, &str)] = &[
     ("anthropic", include_str!("../providers/anthropic.toml")),
     ("google", include_str!("../providers/google.toml")),
     ("openrouter", include_str!("../providers/openrouter.toml")),
+    (
+        "github-copilot",
+        include_str!("../providers/github-copilot.toml"),
+    ),
 ];
 
 static REGISTRY: OnceLock<Vec<ProviderEntry>> = OnceLock::new();
@@ -66,7 +70,7 @@ mod tests {
         let entries = load_embedded().expect("embedded TOML files must parse");
         // Bump this when adding a new provider — keeps the test honest about
         // catalog growth.
-        assert_eq!(entries.len(), 4);
+        assert_eq!(entries.len(), 5);
     }
 
     #[test]
@@ -75,7 +79,34 @@ mod tests {
         assert!(find("anthropic").is_some());
         assert!(find("google").is_some());
         assert!(find("openrouter").is_some());
+        assert!(find("github-copilot").is_some());
         assert!(find("definitely-not-a-provider").is_none());
+    }
+
+    #[test]
+    fn github_copilot_per_model_protocols() {
+        use bitrouter_sdk::language_model::types::ApiProtocol;
+        let copilot = find("github-copilot").unwrap();
+        // Claude family → Anthropic Messages.
+        assert_eq!(
+            copilot.api_protocol.resolve("claude-sonnet-4.6"),
+            Some(ApiProtocol::Anthropic)
+        );
+        // GPT-5-codex → OpenAI Responses (chat-completions returns 404 in
+        // Copilot for these models).
+        assert_eq!(
+            copilot.api_protocol.resolve("gpt-5.3-codex"),
+            Some(ApiProtocol::Responses)
+        );
+        // Default → OpenAI Chat Completions.
+        assert_eq!(
+            copilot.api_protocol.resolve("gpt-4o"),
+            Some(ApiProtocol::Openai)
+        );
+        assert_eq!(
+            copilot.api_protocol.resolve("gemini-2.5-pro"),
+            Some(ApiProtocol::Openai)
+        );
     }
 
     #[test]

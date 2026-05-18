@@ -35,7 +35,9 @@
 mod apply;
 pub mod builtin;
 pub mod catalog;
+pub mod copilot;
 mod entry;
+pub mod oauth;
 
 pub use apply::apply_builtin_defaults;
 pub use entry::{AuthScheme, ProtocolMapping, ProviderEntry};
