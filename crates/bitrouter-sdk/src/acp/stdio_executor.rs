@@ -29,7 +29,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -57,7 +57,7 @@ const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 /// [`Executor`] that pools per-agent stdio subprocesses.
 #[derive(Default)]
 pub struct AcpStdioExecutor {
-    connections: Mutex<HashMap<String, Arc<AgentConnection>>>,
+    connections: Arc<Mutex<HashMap<String, Arc<AgentConnection>>>>,
 }
 
 impl AcpStdioExecutor {
@@ -86,23 +86,32 @@ impl AcpStdioExecutor {
     }
 
     async fn connection_for(&self, target: &AcpTarget) -> Result<Arc<AgentConnection>> {
-        // Fast path.
-        if let Some(existing) = self
-            .connections
-            .lock()
-            .await
-            .get(&target.agent_name)
-            .cloned()
+        // Fast path — but skip a dead connection so a one-off crashed child
+        // doesn't poison the agent for the rest of the process's lifetime.
+        // (Acceptance criteria: if an upstream agent crashes, the next
+        // request should respawn it transparently.)
         {
-            return Ok(existing);
+            let mut guard = self.connections.lock().await;
+            if let Some(existing) = guard.get(&target.agent_name) {
+                if !existing.is_dead.load(Ordering::Acquire) {
+                    return Ok(Arc::clone(existing));
+                }
+                guard.remove(&target.agent_name);
+            }
         }
         // Slow path. We drop the lock across the spawn so a slow startup
         // for one agent doesn't block lookups for another. If two requests
         // race to dial the same agent, both will spawn a child; the second
-        // spawn's value silently replaces the first in the pool. The first
-        // child's tasks shut down once its `request_tx` drops with the
-        // losing `AgentConnection`.
-        let connection = AgentConnection::spawn(&target.agent_name, &target.transport).await?;
+        // spawn's value silently replaces the first in the pool. The
+        // losing `AgentConnection`'s reaper still runs against its own
+        // `Child`, killing the orphan via `kill_on_drop` once the
+        // `AgentConnection` is dropped.
+        let connection = AgentConnection::spawn(
+            &target.agent_name,
+            &target.transport,
+            Arc::clone(&self.connections),
+        )
+        .await?;
         let arc = Arc::new(connection);
         self.connections
             .lock()
@@ -139,6 +148,11 @@ struct AgentConnection {
     server_messages: broadcast::Sender<serde_json::Value>,
     /// Monotonic id allocator for client-initiated requests.
     next_id: AtomicU64,
+    /// Set to true once the reaper or the writer observes a fatal condition
+    /// (child exit, broken stdin). Read inside the pending lock by
+    /// [`Self::request`] so a request arriving after the connection has gone
+    /// dark fails fast instead of leaking its oneshot into [`Self::pending`].
+    is_dead: Arc<AtomicBool>,
     /// Server-facing tag for error messages.
     agent_name: String,
 }
@@ -149,14 +163,28 @@ struct OutgoingMessage {
 }
 
 impl AgentConnection {
-    async fn spawn(agent_name: &str, transport: &AcpTransport) -> Result<Self> {
+    async fn spawn(
+        agent_name: &str,
+        transport: &AcpTransport,
+        pool: Arc<Mutex<HashMap<String, Arc<AgentConnection>>>>,
+    ) -> Result<Self> {
         let (mut child, stdin, stdout) = spawn_child(agent_name, transport)?;
         let (request_tx, request_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
         let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
         let (server_messages, _) = broadcast::channel(SERVER_MESSAGE_CHANNEL_CAPACITY);
+        let is_dead = Arc::new(AtomicBool::new(false));
 
-        // Writer task.
-        tokio::spawn(writer_loop(stdin, request_rx, agent_name.to_string()));
+        // Writer task. When stdin writes fail, the writer marks the
+        // connection dead and drains pending so any in-flight `request()`
+        // call that already handed its message to the writer doesn't hang
+        // on the orphaned oneshot.
+        tokio::spawn(writer_loop(
+            stdin,
+            request_rx,
+            Arc::clone(&pending),
+            Arc::clone(&is_dead),
+            agent_name.to_string(),
+        ));
 
         // Reader task.
         tokio::spawn(reader_loop(
@@ -166,24 +194,38 @@ impl AgentConnection {
             agent_name.to_string(),
         ));
 
-        // Reaper: when the child exits, fail every still-pending request so
-        // callers don't hang. The Child is owned by this task; on drop the
-        // process is left to be reaped by the kernel (tokio's
-        // `kill_on_drop` would orphan the channel side already, so
-        // controlling shutdown explicitly is the safer choice).
+        // Reaper: when the child exits, mark the connection dead so future
+        // `request()` calls fail fast before inserting a pending oneshot,
+        // then fail every still-in-flight request so existing callers
+        // don't hang. Both halves run under the pending lock so a
+        // concurrent `request()` either observes `is_dead` and bails or
+        // already inserted its oneshot before us and we drain it.
         let reaper_pending = Arc::clone(&pending);
+        let reaper_dead = Arc::clone(&is_dead);
         let reaper_name = agent_name.to_string();
+        let reaper_pool = pool;
         tokio::spawn(async move {
             let exit_status = child.wait().await;
-            let mut guard = reaper_pending.lock().await;
-            let pending_count = guard.len();
-            for (_, tx) in guard.drain() {
-                let _ = tx.send(Err(BitrouterError::Upstream {
-                    status: 502,
-                    message: format!(
-                        "acp '{reaper_name}': agent process exited (status: {exit_status:?}); {pending_count} pending request(s) aborted"
-                    ),
-                }));
+            mark_dead_and_drain(
+                &reaper_pending,
+                &reaper_dead,
+                &reaper_name,
+                format!("agent process exited (status: {exit_status:?})"),
+            )
+            .await;
+            // Evict the dead entry from the pool so the next request to
+            // this agent name spawns a fresh subprocess instead of
+            // reusing the corpse. Compare-pointer-eq the slot's Arc with
+            // our `is_dead` Arc so we don't accidentally evict a
+            // replacement connection that the slow-path of
+            // `connection_for` may have installed while we were waiting
+            // on `child.wait`.
+            let mut guard = reaper_pool.lock().await;
+            let evict = guard
+                .get(&reaper_name)
+                .is_some_and(|c| Arc::ptr_eq(&c.is_dead, &reaper_dead));
+            if evict {
+                guard.remove(&reaper_name);
             }
         });
 
@@ -192,6 +234,7 @@ impl AgentConnection {
             pending,
             server_messages,
             next_id: AtomicU64::new(1),
+            is_dead,
             agent_name: agent_name.to_string(),
         })
     }
@@ -215,8 +258,21 @@ impl AgentConnection {
             ))
         })?;
         let (tx, rx) = oneshot::channel::<Result<serde_json::Value>>();
+        // Insert under the pending lock while checking `is_dead` so we are
+        // strictly ordered against the reaper / writer drain: either we
+        // insert before the drain (and they wake us with the failure
+        // message), or we observe `is_dead` and bail without inserting.
         {
             let mut guard = self.pending.lock().await;
+            if self.is_dead.load(Ordering::Acquire) {
+                return Err(BitrouterError::Upstream {
+                    status: 502,
+                    message: format!(
+                        "acp '{}': connection is dead (child exited or stdin failed)",
+                        self.agent_name
+                    ),
+                });
+            }
             guard.insert(id, tx);
         }
         if self.request_tx.send(OutgoingMessage { line }).is_err() {
@@ -243,6 +299,30 @@ impl AgentConnection {
                 ),
             }),
         }
+    }
+}
+
+/// Mark the connection dead AND drain every pending oneshot with a uniform
+/// `Upstream` error. Called by the reaper on child exit and by the writer
+/// on a stdin failure. The `is_dead` store happens under the pending lock
+/// so that [`AgentConnection::request`] cannot insert a fresh oneshot
+/// between the store and the drain.
+async fn mark_dead_and_drain(
+    pending: &PendingResponses,
+    is_dead: &Arc<AtomicBool>,
+    agent_name: &str,
+    reason: String,
+) {
+    let mut guard = pending.lock().await;
+    is_dead.store(true, Ordering::Release);
+    let pending_count = guard.len();
+    for (_, tx) in guard.drain() {
+        let _ = tx.send(Err(BitrouterError::Upstream {
+            status: 502,
+            message: format!(
+                "acp '{agent_name}': {reason}; {pending_count} pending request(s) aborted"
+            ),
+        }));
     }
 }
 
@@ -286,22 +366,43 @@ fn spawn_child(
 async fn writer_loop(
     mut stdin: ChildStdin,
     mut rx: mpsc::UnboundedReceiver<OutgoingMessage>,
+    pending: PendingResponses,
+    is_dead: Arc<AtomicBool>,
     agent_name: String,
 ) {
     while let Some(OutgoingMessage { mut line }) = rx.recv().await {
         line.push('\n');
         if let Err(e) = stdin.write_all(line.as_bytes()).await {
             tracing::warn!(agent = %agent_name, %e, "acp writer: stdin write failed; closing");
-            break;
+            // The OutgoingMessage we just consumed will never reach the
+            // upstream — its caller is waiting on the pending-map oneshot.
+            // Mark the connection dead and drain so that caller (and every
+            // other in-flight one) sees a failure instead of hanging.
+            mark_dead_and_drain(
+                &pending,
+                &is_dead,
+                &agent_name,
+                format!("stdin write failed: {e}"),
+            )
+            .await;
+            return;
         }
         if let Err(e) = stdin.flush().await {
             tracing::warn!(agent = %agent_name, %e, "acp writer: stdin flush failed; closing");
-            break;
+            mark_dead_and_drain(
+                &pending,
+                &is_dead,
+                &agent_name,
+                format!("stdin flush failed: {e}"),
+            )
+            .await;
+            return;
         }
     }
-    // Receiver closed (executor dropped) or stdin failed: drop stdin so the
-    // child sees EOF and shuts down cleanly. The reaper task will surface
-    // an Upstream error for any still-pending request.
+    // Receiver closed (executor dropped): drop stdin so the child sees EOF
+    // and shuts down cleanly. We do NOT mark the connection dead here —
+    // this is the orderly-shutdown path; the reaper observes the child's
+    // exit and runs the drain.
 }
 
 async fn reader_loop(
@@ -419,19 +520,49 @@ async fn read_line_bounded(
     buf: &mut String,
     max_bytes: usize,
 ) -> std::io::Result<usize> {
-    // tokio's read_line lacks a built-in cap. Compose one over read_until
-    // to avoid a single huge line blowing process memory.
-    let mut raw = Vec::with_capacity(256);
-    let bytes = reader.read_until(b'\n', &mut raw).await?;
-    if raw.len() > max_bytes {
-        return Err(std::io::Error::other(format!(
-            "acp line exceeded {max_bytes} bytes"
-        )));
+    // Walks the BufReader's internal chunk a slice at a time so a rogue
+    // upstream that never emits a `\n` can't drive us into an unbounded
+    // allocation. The naive `read_until` would fill the whole line first
+    // and only then check the cap.
+    let mut raw: Vec<u8> = Vec::with_capacity(256);
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            break; // EOF
+        }
+        let newline_at = chunk.iter().position(|&b| b == b'\n');
+        match newline_at {
+            Some(i) => {
+                let take = i + 1;
+                if raw.len() + take > max_bytes {
+                    return Err(std::io::Error::other(format!(
+                        "acp line exceeded {max_bytes} bytes"
+                    )));
+                }
+                raw.extend_from_slice(&chunk[..take]);
+                reader.consume(take);
+                break;
+            }
+            None => {
+                if raw.len() + chunk.len() > max_bytes {
+                    // Consume what we already have so the next read doesn't
+                    // re-see the same bytes; then surface the cap error.
+                    let n = chunk.len();
+                    reader.consume(n);
+                    return Err(std::io::Error::other(format!(
+                        "acp line exceeded {max_bytes} bytes"
+                    )));
+                }
+                raw.extend_from_slice(chunk);
+                let n = chunk.len();
+                reader.consume(n);
+            }
+        }
     }
     match std::str::from_utf8(&raw) {
         Ok(s) => {
             buf.push_str(s);
-            Ok(bytes)
+            Ok(raw.len())
         }
         Err(e) => Err(std::io::Error::other(format!("acp line not utf-8: {e}"))),
     }
@@ -561,6 +692,78 @@ mod tests {
             err.to_string().contains("unknown method"),
             "unexpected: {err}"
         );
+    }
+
+    /// Regression for the Phase-3-review-discovered leak: when an agent
+    /// crashes between requests, the pool must evict the dead connection
+    /// and the next request must respawn transparently. Before the fix,
+    /// the second request would either hang or be silently rejected by
+    /// the pool's reuse of the corpse.
+    #[tokio::test]
+    async fn pool_evicts_dead_connection_and_respawns_on_next_request() {
+        // First child: answer once and exit. Second child: answer once
+        // again. We expect the executor to spawn child #1, observe its
+        // exit, evict, then spawn child #2 on the second `execute`.
+        let script = r#"
+            read line
+            id=$(echo "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"call":1}}\n' "$id"
+            exit 0
+        "#;
+        let exec = AcpStdioExecutor::new();
+        let target = AcpTarget {
+            agent_name: "respawn".into(),
+            transport: AcpTransport::Stdio {
+                command: "bash".into(),
+                args: vec!["-c".into(), script.into()],
+                env: HashMap::new(),
+            },
+        };
+        let r1 = exec
+            .execute(&target, &req("respawn", "initialize"))
+            .await
+            .unwrap();
+        assert_eq!(r1.result["call"], 1);
+        // Give the reaper a moment to observe the child exit + evict.
+        // A real upstream's crash is observed asynchronously; the next
+        // `execute` must tolerate either the eviction happening before
+        // or interleaving with its arrival.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let r2 = exec
+            .execute(&target, &req("respawn", "initialize"))
+            .await
+            .unwrap();
+        assert_eq!(r2.result["call"], 1, "respawn produced fresh value");
+    }
+
+    /// Regression for the unbounded-allocation in `read_line_bounded`:
+    /// emit > MAX_LINE_BYTES of bytes with no newline. The reader loop
+    /// observes the cap error and exits without panicking. The pending
+    /// request is then drained by the reaper when the child exits.
+    #[tokio::test]
+    async fn reader_caps_oversized_line_without_unbounded_allocation() {
+        // Emit 17 MiB of `x` bytes without a newline, then exit. v1's
+        // MAX_LINE_BYTES is 16 MiB, so the reader should bail before
+        // exhausting memory. The request times out via the reaper after
+        // the child exits.
+        let script = r#"
+            read line
+            head -c 17825792 /dev/zero | tr '\0' 'x'
+        "#;
+        let exec = AcpStdioExecutor::new();
+        let target = AcpTarget {
+            agent_name: "huge".into(),
+            transport: AcpTransport::Stdio {
+                command: "bash".into(),
+                args: vec!["-c".into(), script.into()],
+                env: HashMap::new(),
+            },
+        };
+        let err = exec
+            .execute(&target, &req("huge", "initialize"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), 502);
     }
 
     /// Notifications (no id) flow out via the broadcast channel rather than
