@@ -716,8 +716,11 @@ name = "bitrouter-providers"
 version = "1.0.0-alpha.1"
 dependencies = [
  "bitrouter-sdk",
+ "reqwest",
  "serde",
+ "serde_json",
  "thiserror",
+ "tokio",
  "toml",
 ]
 

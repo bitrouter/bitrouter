@@ -13,6 +13,11 @@ rust-version.workspace = true
 # — used by `apply_builtin_defaults` to fill in a parsed user config.
 bitrouter-sdk = { workspace = true, features = ["config_file"] }
 
+reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

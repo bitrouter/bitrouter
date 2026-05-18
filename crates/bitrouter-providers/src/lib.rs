@@ -34,6 +34,7 @@
 
 mod apply;
 pub mod builtin;
+pub mod catalog;
 mod entry;
 
 pub use apply::apply_builtin_defaults;
