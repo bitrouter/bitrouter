@@ -139,31 +139,38 @@ async fn truth_table_skip_auth_no_credential_allows_local() {
 }
 
 #[tokio::test]
-async fn truth_table_skip_auth_with_credential_still_validates() {
-    // skip_auth=true but a credential IS present → it is still validated, and
-    // the credential's identity wins over the synthesised local one.
+async fn truth_table_skip_auth_with_valid_brvk_still_admits_as_local() {
+    // skip_auth=true admits every inbound request as the synthesised
+    // local caller — even ones carrying a real virtual key. The point
+    // of skip_auth is "fully open local-first"; clients like Claude
+    // Code that auto-inject placeholder tokens must not be rejected.
     let pool = pool().await;
-    let (secret, key_id) = insert_active_key(&pool, "u2").await;
+    let (secret, _key_id) = insert_active_key(&pool, "u2").await;
     let hook = AuthHook::new(pool);
     let mut ctx = ctx_with(CallerContext::local(), Some(&secret));
     assert!(matches!(
         hook.check(&mut ctx).await.unwrap(),
         HookDecision::Allow
     ));
-    assert_eq!(ctx.caller().api_key_id(), key_id);
-    assert!(!ctx.caller().is_local());
+    assert!(ctx.caller().is_local());
 }
 
 #[tokio::test]
-async fn truth_table_skip_auth_with_bad_credential_still_rejected() {
-    // skip_auth=true does NOT excuse a *bad* credential — it is still rejected.
+async fn truth_table_skip_auth_with_bad_credential_admits_as_local() {
+    // skip_auth=true also accepts garbage credentials — the local
+    // caller passes through regardless. Tools like Claude Code /
+    // litellm always inject an `Authorization: Bearer …` header even
+    // when bitrouter doesn't require one, and the value is often a
+    // placeholder. Validating it would silently break the zero-config
+    // story.
     let pool = pool().await;
     let hook = AuthHook::new(pool);
     let mut ctx = ctx_with(CallerContext::local(), Some("sk-bad"));
     assert!(matches!(
         hook.check(&mut ctx).await.unwrap(),
-        HookDecision::Deny(_)
+        HookDecision::Allow
     ));
+    assert!(ctx.caller().is_local());
 }
 
 #[tokio::test]

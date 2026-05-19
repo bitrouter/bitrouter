@@ -5,17 +5,25 @@
 //! looked up by SHA-256 hash in the `api_keys` table.
 //!
 //! Relationship to `server.skip_auth`: `skip_auth` is an SDK-level flag
-//! handled at the server entry — when it is on and a request carries no
-//! credentials, the server synthesises a *local* `CallerContext`.
-//! `AuthHook` respects an already-local caller and lets it through. The
-//! four-way truth table (skip_auth × has-credential):
+//! handled at the server entry — when it is on, the server synthesises
+//! a *local* `CallerContext` for every inbound request, **regardless of
+//! any credential header**. The intent is "local-first, fully open" —
+//! the same posture the zero-config startup uses to make tools like
+//! codex / Claude Code / litellm just work without requiring the user
+//! to mint a virtual key first. The four-way truth table:
 //!
 //! | skip_auth | credential | result                                |
 //! |-----------|------------|---------------------------------------|
 //! | false     | present    | validated (Allow / Deny)              |
 //! | false     | absent     | Deny 401                              |
-//! | true      | present    | validated (credentials still checked) |
+//! | true      | present    | Allow — any header accepted as local  |
 //! | true      | absent     | Allow — local caller passes through   |
+//!
+//! Previously the `true × present` row also validated — which silently
+//! broke Claude Code and litellm because both auto-inject an
+//! `Authorization: Bearer …` header that bitrouter saw as a malformed
+//! virtual key. Multi-tenant operators set `skip_auth: false` (the SDK
+//! default) to get real validation.
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -80,14 +88,19 @@ impl AuthHook {
 #[async_trait]
 impl PreRequestHook for AuthHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        // `skip_auth=true` on the SDK side synthesises a local caller
+        // for *every* inbound request — admit immediately regardless of
+        // any presented header. Validating a stray `Authorization`
+        // bearer would otherwise reject zero-config clients that
+        // auto-inject a placeholder token (Claude Code, litellm, …).
+        if ctx.caller().is_local() {
+            return Ok(HookDecision::Allow);
+        }
+
         let credential = Self::extract_credential(ctx);
 
         // API-key path.
         let Some(credential) = credential else {
-            // No credential. Admit only the skip_auth-synthesised local caller.
-            if ctx.caller().is_local() {
-                return Ok(HookDecision::Allow);
-            }
             return Ok(HookDecision::Deny(DenyReason::Unauthorized(
                 "missing API key".to_string(),
             )));
