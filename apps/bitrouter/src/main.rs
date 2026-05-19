@@ -610,6 +610,10 @@ async fn start(config_path: &Path, log_path: &Path) -> Result<()> {
     }
 
     let exe = std::env::current_exe().context("locating current bitrouter binary")?;
+    // Capture the log's pre-spawn size so we can quote *this run's*
+    // output back to the user on early death instead of slurping
+    // stale content from prior runs (the log is opened append-only).
+    let log_size_before = std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0);
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -639,10 +643,9 @@ async fn start(config_path: &Path, log_path: &Path) -> Result<()> {
     // port already in use, …) we want the user to know now, not in the log.
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     if let Ok(Some(status)) = child.try_wait() {
-        anyhow::bail!(
-            "daemon exited immediately ({status}); see {} for details",
-            log_path.display()
-        );
+        let tail = read_log_since(log_path, log_size_before).await;
+        eprint_failure_log(log_path, &tail);
+        anyhow::bail!("daemon exited immediately ({status})");
     }
 
     println!(
@@ -651,6 +654,46 @@ async fn start(config_path: &Path, log_path: &Path) -> Result<()> {
         log_path.display()
     );
     Ok(())
+}
+
+/// Read the daemon log from `offset` to end. Used to recover the
+/// freshly-written failure output when the spawned child dies during
+/// the liveness grace period — the pre-spawn offset captured by
+/// [`start`] ensures we only quote *this* run's content even though
+/// the log is opened append-only and may carry history.
+///
+/// Returns an empty string on any read failure (missing file, permission
+/// error, decode hiccup) so the caller can fall back to a path-only
+/// hint without panicking on the user's worst day.
+async fn read_log_since(path: &Path, offset: u64) -> String {
+    let bytes = match tokio::fs::read(path).await {
+        Ok(b) => b,
+        Err(_) => return String::new(),
+    };
+    let start = (offset as usize).min(bytes.len());
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
+/// Print the daemon's tail-of-log to stderr as an indented, captioned
+/// block so the user sees the actual failure inline instead of being
+/// pointed at a log file they have to open separately. Silent no-op
+/// when there is nothing useful to show.
+fn eprint_failure_log(log_path: &Path, content: &str) {
+    let trimmed = content.trim_end();
+    if trimmed.is_empty() {
+        return;
+    }
+    let p = bitrouter::style::Palette::for_stderr();
+    eprintln!(
+        "{dim}daemon log ({path}):{reset}",
+        dim = p.dim,
+        path = log_path.display(),
+        reset = p.reset,
+    );
+    for line in trimmed.lines() {
+        eprintln!("  {line}");
+    }
+    eprintln!();
 }
 
 async fn stop(socket: &Path) -> Result<()> {
