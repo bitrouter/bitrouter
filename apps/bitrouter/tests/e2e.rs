@@ -115,89 +115,49 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() {
 
 #[tokio::test]
 async fn e2e_http_server_chat_completions_end_to_end() {
-    use http::Request;
-    use tower::ServiceExt;
+    use axum_test::TestServer;
 
     let upstream = mock_openai_upstream().await;
     let cfg = config_for(&upstream.uri());
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
 
-    // Build the axum router directly (no port bind) and drive it with a
-    // oneshot request — exercises server.rs + the inbound OpenAI adapter.
     let state = AppState {
         language_model: assembled.app.language_model().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
     };
-    let router = build_router(state);
+    let server = TestServer::new(build_router(state));
 
-    let body = serde_json::json!({
-        "model": "test-model",
-        "messages": [{ "role": "user", "content": "hello" }],
-    });
-    let request = Request::builder()
-        .method("POST")
-        .uri("/v1/chat/completions")
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(body.to_string()))
-        .unwrap();
-
-    let response = router.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), 200);
-    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let resp = server
+        .post("/v1/chat/completions")
+        .json(&serde_json::json!({
+            "model": "test-model",
+            "messages": [{ "role": "user", "content": "hello" }],
+        }))
+        .await;
+    resp.assert_status_ok();
+    let json: serde_json::Value = resp.json();
     assert_eq!(
         json["choices"][0]["message"]["content"],
         "hello from the mock upstream"
     );
 
     // /health is up
-    let health = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/health")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(health.status(), 200);
+    let health = server.get("/health").await;
+    health.assert_status_ok();
 
     // /metrics renders the Prometheus exposition that the pipeline just
     // accumulated. The earlier /chat/completions request fed the observer,
     // so the requests_total{outcome="completed"} counter is at least 1.
-    let metrics = router
-        .oneshot(
-            Request::builder()
-                .uri("/metrics")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(metrics.status(), 200);
-    let ct = metrics
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+    let metrics = server.get("/metrics").await;
+    metrics.assert_status_ok();
+    let ct = metrics.header("content-type");
     assert!(
-        ct.starts_with("text/plain"),
-        "Prometheus content-type must be text/plain (got {ct})"
+        ct.to_str().unwrap().starts_with("text/plain"),
+        "Prometheus content-type must be text/plain (got {ct:?})"
     );
-    let text = String::from_utf8(
-        axum::body::to_bytes(metrics.into_body(), 1 << 20)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap();
+    let text = metrics.text();
     assert!(
         text.contains("bitrouter_requests_total{outcome=\"completed\"}"),
         "/metrics should expose the completed-request counter; got:\n{text}"
