@@ -22,12 +22,11 @@
 //! Colours: red for `error:`, cyan for `info:`, dim for `while:` / `hint:`,
 //! emitted only when stderr is a TTY (so piping to a log file stays clean).
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 
-/// ANSI palette. Resolved once per process — picked up from whether
-/// stderr is a TTY (the user can override via `NO_COLOR`, which the
-/// detection already honours indirectly: `is_terminal` returns false
-/// when stderr is redirected).
+/// ANSI palette. The colour variant is selected by [`Palette::for_stderr`]
+/// when stderr is a TTY and `NO_COLOR` is unset; otherwise (and in tests)
+/// callers pass [`Palette::none`] to get a plain-text rendering.
 struct Palette {
     red: &'static str,
     cyan: &'static str,
@@ -37,91 +36,141 @@ struct Palette {
 }
 
 impl Palette {
+    /// ANSI-colour palette: red error / cyan info / dim while+hint / bold heads.
+    fn ansi() -> Self {
+        Self {
+            red: "\x1b[31m",
+            cyan: "\x1b[36m",
+            bold: "\x1b[1m",
+            dim: "\x1b[2m",
+            reset: "\x1b[0m",
+        }
+    }
+
+    /// Empty palette — every field is `""`. Used when stderr is not a
+    /// terminal or `NO_COLOR` is set, and in unit tests.
+    fn none() -> Self {
+        Self {
+            red: "",
+            cyan: "",
+            bold: "",
+            dim: "",
+            reset: "",
+        }
+    }
+
+    /// Pick the palette appropriate for the current stderr. Honours the
+    /// `NO_COLOR` de-facto convention (<https://no-color.org/>) — set
+    /// `NO_COLOR=1` (or anything non-empty) to disable colours even on a TTY.
+    /// Piping stderr automatically drops colours via [`IsTerminal`].
     fn for_stderr() -> Self {
-        // Respect the de-facto `NO_COLOR` convention
-        // (<https://no-color.org/>) even when stderr is a TTY.
         let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
         if !no_color && std::io::stderr().is_terminal() {
-            Self {
-                red: "\x1b[31m",
-                cyan: "\x1b[36m",
-                bold: "\x1b[1m",
-                dim: "\x1b[2m",
-                reset: "\x1b[0m",
-            }
+            Self::ansi()
         } else {
-            Self {
-                red: "",
-                cyan: "",
-                bold: "",
-                dim: "",
-                reset: "",
-            }
+            Self::none()
         }
     }
 }
 
-/// Print an anyhow error chain in the documented CLI shape. Always
-/// writes to stderr. Caller decides whether to `std::process::exit(1)`
-/// afterwards.
+/// Print an anyhow error chain to stderr in the documented CLI shape.
+/// Caller decides whether to `std::process::exit(1)` afterwards.
 pub fn report(err: &anyhow::Error) {
-    let p = Palette::for_stderr();
-    let chain: Vec<String> = err.chain().map(|e| e.to_string()).collect();
-    // The root cause is the most actionable part — surface it as the
-    // headline. Anyhow's chain runs head→root; we want the tail.
-    let root_raw = chain.last().expect("anyhow chains always have ≥1 entry");
-    let root = strip_status_prefix(root_raw);
-    eprintln!(
-        "{red}{bold}error:{reset} {root}",
-        red = p.red,
-        bold = p.bold,
-        reset = p.reset
-    );
-
-    // Intermediate context layers, oldest to newest, skipping the root.
-    // (Anyhow's chain is head→root; the head is usually the outermost
-    // `.context("loading X")`, which is the most user-facing locator.)
-    if chain.len() > 1 {
-        for layer in chain[..chain.len() - 1].iter() {
-            let stripped = strip_status_prefix(layer);
-            eprintln!(
-                "  {dim}while:{reset} {stripped}",
-                dim = p.dim,
-                reset = p.reset
-            );
-        }
-    }
-
-    if let Some(hint) = hint_for(root) {
-        eprintln!();
-        for line in hint.lines() {
-            eprintln!(
-                "  {cyan}hint:{reset} {line}",
-                cyan = p.cyan,
-                reset = p.reset
-            );
-        }
-    }
+    let palette = Palette::for_stderr();
+    let mut stderr = std::io::stderr().lock();
+    // I/O failure writing to stderr is unrecoverable; ignore.
+    let _ = write_report(&mut stderr, &palette, err);
 }
 
 /// Print an informational notice in the same visual family as
 /// [`report`]. Used by paths.rs's first-run scaffold message and any
 /// future "we did a thing on your behalf" surface.
 pub fn info(message: impl std::fmt::Display) {
-    let p = Palette::for_stderr();
-    eprintln!(
+    let palette = Palette::for_stderr();
+    let mut stderr = std::io::stderr().lock();
+    let _ = write_info(&mut stderr, &palette, message);
+}
+
+/// Render the report to an arbitrary writer with an explicit palette.
+/// Pulled out from [`report`] so tests can capture and assert on the
+/// rendered bytes without touching stderr.
+fn write_report(out: &mut dyn Write, p: &Palette, err: &anyhow::Error) -> std::io::Result<()> {
+    let chain: Vec<String> = err.chain().map(|e| e.to_string()).collect();
+    // The root cause is the most actionable part — surface it as the
+    // headline. Anyhow's chain runs head→root; we want the tail.
+    // `chain()` is documented as non-empty (the head is the error itself),
+    // but fall back rather than panic if that ever changes upstream.
+    let root_raw = chain
+        .last()
+        .map(String::as_str)
+        .unwrap_or("(unknown error)");
+    let root = strip_status_prefix(root_raw);
+    writeln!(
+        out,
+        "{red}{bold}error:{reset} {root}",
+        red = p.red,
+        bold = p.bold,
+        reset = p.reset
+    )?;
+
+    // Intermediate context layers, oldest to newest, skipping the root.
+    // Anyhow's chain is head→root; the head is usually the outermost
+    // `.context("loading X")`, which is the most user-facing locator.
+    if chain.len() > 1 {
+        for layer in chain[..chain.len() - 1].iter() {
+            let stripped = strip_status_prefix(layer);
+            writeln!(
+                out,
+                "  {dim}while:{reset} {stripped}",
+                dim = p.dim,
+                reset = p.reset
+            )?;
+        }
+    }
+
+    if let Some(hint) = hint_for(root) {
+        writeln!(out)?;
+        for line in hint.lines() {
+            writeln!(
+                out,
+                "  {cyan}hint:{reset} {line}",
+                cyan = p.cyan,
+                reset = p.reset
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn write_info(
+    out: &mut dyn Write,
+    p: &Palette,
+    message: impl std::fmt::Display,
+) -> std::io::Result<()> {
+    writeln!(
+        out,
         "{cyan}{bold}info:{reset} {message}",
         cyan = p.cyan,
         bold = p.bold,
         reset = p.reset
-    );
+    )
 }
 
-/// `BitrouterError`'s `Display` impl carries an HTTP-shape prefix
-/// (`"bad request: …"`, `"internal error: …"`, etc.) — the CLI doesn't
-/// need it. Strip the prefix when we recognise one; leave the message
-/// alone otherwise. Keeps the formatter lossless for any error type
-/// outside our taxonomy.
+/// `BitrouterError`'s `Display` impl carries an HTTP-shape prefix on
+/// the variants with a payload (`"bad request: …"`, `"internal error: …"`,
+/// etc.) — the CLI doesn't need them. Strip the prefix when we recognise
+/// one; leave the message alone otherwise. Keeps the formatter lossless
+/// for any error type outside our taxonomy.
+///
+/// The payload-less variants (`RateLimited` → `"rate limited"`,
+/// `UpstreamTimeout` → `"upstream timeout"`) are not stripped — they're
+/// already short, and they shouldn't reach the CLI surface anyway (those
+/// failures are produced by HTTP request handlers, not by the
+/// CLI-driven assembly / config-loading paths).
+///
+/// `Upstream { status, message }` renders as `"upstream error (502): …"`;
+/// the status is genuine debugging signal so we preserve the whole
+/// string rather than stripping a prefix.
 fn strip_status_prefix(msg: &str) -> &str {
     const PREFIXES: &[&str] = &[
         "bad request: ",
@@ -130,8 +179,6 @@ fn strip_status_prefix(msg: &str) -> &str {
         "forbidden: ",
         "payment required: ",
         "not found: ",
-        // `upstream error (…): X` carries the upstream status, which is
-        // user-debugging signal — keep that one as-is.
     ];
     for prefix in PREFIXES {
         if let Some(rest) = msg.strip_prefix(prefix) {
@@ -142,8 +189,9 @@ fn strip_status_prefix(msg: &str) -> &str {
 }
 
 /// Recognise a handful of common failure modes and emit an actionable
-/// next-step hint. The match is by substring against the *stripped*
-/// root message so display-prefix churn doesn't break the table.
+/// next-step hint. Matches by anchored prefix or specific substring
+/// against the *stripped* root message so display-prefix churn doesn't
+/// break the table.
 fn hint_for(root: &str) -> Option<String> {
     // Undefined config env-var. Pull the var name out so the hint can
     // name it explicitly.
@@ -171,8 +219,12 @@ fn hint_for(root: &str) -> Option<String> {
                 .into(),
         );
     }
-    // Sqlite path didn't open.
-    if root.contains("connecting to database") || root.contains("sqlite") {
+    // Sqlite path didn't open. Match the specific phrasing from
+    // `BitrouterError::internal(format!("connecting to database {url}: …"))`
+    // in `apps/bitrouter/src/{auth,metering}/db.rs` — broad substring
+    // matching against bare "sqlite" would false-positive on unrelated
+    // migration / policy-store messages.
+    if root.contains("connecting to database") {
         return Some(
             "Check the `database.url` value in bitrouter.yaml. For local use,\n\
              `sqlite://./bitrouter.db` is the default; the file is created on first run."
@@ -194,6 +246,13 @@ fn hint_for(root: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn render(err: &anyhow::Error) -> String {
+        let palette = Palette::none();
+        let mut buf: Vec<u8> = Vec::new();
+        write_report(&mut buf, &palette, err).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
     #[test]
     fn strip_known_status_prefixes() {
         assert_eq!(strip_status_prefix("bad request: foo"), "foo");
@@ -206,6 +265,10 @@ mod tests {
             strip_status_prefix("upstream error (502): boom"),
             "upstream error (502): boom"
         );
+        // Bare "rate limited" / "upstream timeout" pass through (they
+        // don't have the ": " suffix the table strips on).
+        assert_eq!(strip_status_prefix("rate limited"), "rate limited");
+        assert_eq!(strip_status_prefix("upstream timeout"), "upstream timeout");
     }
 
     #[test]
@@ -231,7 +294,70 @@ mod tests {
     }
 
     #[test]
+    fn hint_does_not_fire_for_unrelated_sqlite_mentions() {
+        // Bare "sqlite" mentions (e.g. an internal-error from
+        // policy-store migrations) must not pull in the database.url
+        // hint — only the specific "connecting to database" phrase does.
+        assert!(hint_for("internal error: failed to apply sqlite migrations").is_none());
+    }
+
+    #[test]
     fn hint_returns_none_for_unknown_messages() {
         assert!(hint_for("something we have no opinion on").is_none());
+    }
+
+    #[test]
+    fn report_renders_chain_head_to_root_in_order() {
+        let err: anyhow::Error = anyhow::anyhow!("bad request: config thing exploded")
+            .context("loading /tmp/bitrouter.yaml")
+            .context("preparing models command");
+        let out = render(&err);
+        // Root cause becomes the `error:` headline with prefix stripped.
+        assert!(
+            out.contains("error: config thing exploded"),
+            "missing root headline: {out}"
+        );
+        // Outer contexts render as `while:` lines, prefix-stripped if applicable.
+        assert!(
+            out.contains("while: preparing models command"),
+            "missing outer context: {out}"
+        );
+        assert!(
+            out.contains("while: loading /tmp/bitrouter.yaml"),
+            "missing inner context: {out}"
+        );
+        // Order: head → root (so outer command appears before the
+        // inner `loading …` context).
+        let outer = out.find("preparing models command").unwrap();
+        let inner = out.find("loading /tmp/bitrouter.yaml").unwrap();
+        assert!(outer < inner, "context order wrong:\n{out}");
+    }
+
+    #[test]
+    fn report_appends_hint_block_when_pattern_matches() {
+        let err: anyhow::Error =
+            anyhow::anyhow!("config references undefined environment variable 'FOO_KEY'")
+                .context("loading /tmp/bitrouter.yaml");
+        let out = render(&err);
+        assert!(
+            out.contains("hint: Set `FOO_KEY`"),
+            "no hint emitted:\n{out}"
+        );
+    }
+
+    #[test]
+    fn report_omits_hint_block_when_no_pattern_matches() {
+        let err: anyhow::Error = anyhow::anyhow!("something obscure happened");
+        let out = render(&err);
+        assert!(!out.contains("hint:"), "spurious hint emitted:\n{out}");
+    }
+
+    #[test]
+    fn write_info_uses_info_prefix() {
+        let palette = Palette::none();
+        let mut buf: Vec<u8> = Vec::new();
+        write_info(&mut buf, &palette, "scaffolded a thing").unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert_eq!(out, "info: scaffolded a thing\n");
     }
 }
