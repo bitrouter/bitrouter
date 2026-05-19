@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use bitrouter::commands;
-use bitrouter::daemon::{self, DEFAULT_CONTROL_SOCKET, DaemonCommand, DaemonResponse, RouteHop};
+use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
 use bitrouter_sdk::config;
 
 /// BitRouter — an LLM API router.
@@ -52,9 +52,14 @@ enum Command {
     },
     /// Send a `stop` command to a running daemon.
     Stop {
-        /// Control socket path.
-        #[arg(long, default_value = DEFAULT_CONTROL_SOCKET)]
-        socket: PathBuf,
+        /// Path to `bitrouter.yaml` (used to locate the control socket).
+        /// Resolves via the standard chain: `./bitrouter.yaml` →
+        /// `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml`.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit control socket path. Overrides the config-derived path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
     /// `stop` then `start` — config path is passed through.
     Restart {
@@ -63,36 +68,44 @@ enum Command {
         /// → `~/.bitrouter/bitrouter.yaml` (auto-scaffolded on first run).
         #[arg(short, long)]
         config: Option<PathBuf>,
-        /// Control socket path.
-        #[arg(long, default_value = DEFAULT_CONTROL_SOCKET)]
-        socket: PathBuf,
+        /// Explicit control socket path. Overrides the config-derived path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
         /// Path to redirect the new daemon's stdout/stderr to.
         #[arg(long, default_value = "./bitrouter.log")]
         log: PathBuf,
     },
     /// Hot-reload the running daemon's config / routing table.
     Reload {
-        /// Control socket path.
-        #[arg(long, default_value = DEFAULT_CONTROL_SOCKET)]
-        socket: PathBuf,
+        /// Path to `bitrouter.yaml` (used to locate the control socket).
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit control socket path. Overrides the config-derived path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
     /// Report a running daemon's status (pid, listen address, model count).
+    /// Prints `running: no` when no daemon is reachable.
     Status {
-        /// Control socket path.
-        #[arg(long, default_value = DEFAULT_CONTROL_SOCKET)]
-        socket: PathBuf,
+        /// Path to `bitrouter.yaml` (used to locate the control socket).
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit control socket path. Overrides the config-derived path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
     /// Resolve a model name through the routing table. Uses the running
     /// daemon if reachable, otherwise loads the config and resolves locally.
     Route {
         /// The model name to resolve.
         model: String,
-        /// Path to `bitrouter.yaml` (used as the standalone fallback).
+        /// Path to `bitrouter.yaml` (used as the standalone fallback and
+        /// to locate the control socket).
         #[arg(short, long)]
         config: Option<PathBuf>,
-        /// Control socket path.
-        #[arg(long, default_value = DEFAULT_CONTROL_SOCKET)]
-        socket: PathBuf,
+        /// Explicit control socket path. Overrides the config-derived path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
     /// Write a starter `bitrouter.yaml` (with `skip_auth: true`).
     Init {
@@ -312,24 +325,35 @@ async fn run() -> Result<()> {
             let config = bitrouter::paths::resolve_config(config.as_deref())?;
             start(&config, &log).await
         }
-        Command::Stop { socket } => stop(&socket).await,
+        Command::Stop { config, socket } => {
+            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            stop(&socket).await
+        }
         Command::Restart {
             config,
             socket,
             log,
         } => {
-            let config = bitrouter::paths::resolve_config(config.as_deref())?;
-            restart(&config, &socket, &log).await
+            let config_path = bitrouter::paths::resolve_config(config.as_deref())?;
+            let socket = resolve_client_socket_from(&config_path, socket.as_deref()).await?;
+            restart(&config_path, &socket, &log).await
         }
-        Command::Reload { socket } => reload(&socket).await,
-        Command::Status { socket } => status(&socket).await,
+        Command::Reload { config, socket } => {
+            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            reload(&socket).await
+        }
+        Command::Status { config, socket } => {
+            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            status(&socket).await
+        }
         Command::Route {
             model,
             config,
             socket,
         } => {
-            let config = bitrouter::paths::resolve_config(config.as_deref())?;
-            route(&model, &config, &socket).await
+            let config_path = bitrouter::paths::resolve_config(config.as_deref())?;
+            let socket = resolve_client_socket_from(&config_path, socket.as_deref()).await?;
+            route(&model, &config_path, &socket).await
         }
         Command::Init { config } => init(&config).await,
         Command::Key { action } => key(action).await,
@@ -389,6 +413,46 @@ async fn run() -> Result<()> {
 
 // ===== serve / daemon control =====
 
+/// Resolve the control-socket path for a *daemon-control* subcommand
+/// (`stop`, `reload`, `status`). An explicit `--socket` override wins;
+/// otherwise we resolve the config path via the standard chain, try to
+/// load the YAML to read `server.control_socket`, and join the value
+/// onto the config file's directory.
+///
+/// Loading the YAML is **best-effort**: a broken or env-var-incomplete
+/// config falls back to the default socket name in the same directory.
+/// That keeps `bitrouter status` answerable in exactly the state where
+/// the user most wants to ask (config can't load → daemon can't be
+/// running → "stopped"). The "real" config error still surfaces the
+/// next time the user runs `serve` / `start`.
+async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> Result<PathBuf> {
+    if let Some(s) = socket {
+        return Ok(s.to_path_buf());
+    }
+    let config_path = bitrouter::paths::resolve_config(config)?;
+    let socket_str = match config::load(&config_path).await {
+        Ok(cfg) => cfg.server.control_socket,
+        Err(_) => daemon::DEFAULT_CONTROL_SOCKET.to_string(),
+    };
+    Ok(daemon::resolve_socket_path(&config_path, &socket_str))
+}
+
+/// Variant of [`resolve_client_socket`] for subcommands (`restart`,
+/// `route`) that load the config for other reasons anyway, so a config
+/// failure is a real error worth surfacing.
+async fn resolve_client_socket_from(config_path: &Path, socket: Option<&Path>) -> Result<PathBuf> {
+    if let Some(s) = socket {
+        return Ok(s.to_path_buf());
+    }
+    let cfg = config::load(config_path)
+        .await
+        .with_context(|| format!("loading {}", config_path.display()))?;
+    Ok(daemon::resolve_socket_path(
+        config_path,
+        &cfg.server.control_socket,
+    ))
+}
+
 /// Fan out a daemon `Reload` (and SIGHUP) to every reloadable subsystem the
 /// running daemon owns. Failures from any single subsystem are accumulated and
 /// reported together so an unrelated subsystem (e.g. a missing policy dir)
@@ -423,7 +487,7 @@ async fn serve(config_path: &Path) -> Result<()> {
         .await
         .with_context(|| format!("loading {}", config_path.display()))?;
     let listen = cfg.server.listen.clone();
-    let socket_path = PathBuf::from(&cfg.server.control_socket);
+    let socket_path = daemon::resolve_socket_path(config_path, &cfg.server.control_socket);
     let pid_path = pid_path_for(&socket_path);
 
     let assembled = bitrouter::build_app_with_path(&cfg, Some(config_path)).await?;
@@ -491,7 +555,10 @@ async fn start(config_path: &Path, log_path: &Path) -> Result<()> {
     // would race two `serve`s for the same socket and one would die into the
     // log file (the user wouldn't see it).
     let cfg_socket_path = match config::load(config_path).await {
-        Ok(cfg) => Some(PathBuf::from(&cfg.server.control_socket)),
+        Ok(cfg) => Some(daemon::resolve_socket_path(
+            config_path,
+            &cfg.server.control_socket,
+        )),
         Err(_) => None,
     };
     if let Some(socket) = &cfg_socket_path {
@@ -616,20 +683,31 @@ async fn reload(socket: &Path) -> Result<()> {
 }
 
 async fn status(socket: &Path) -> Result<()> {
-    match daemon::send_command(socket, &DaemonCommand::Status).await? {
-        DaemonResponse::Status {
+    match daemon::send_command(socket, &DaemonCommand::Status).await {
+        Ok(DaemonResponse::Status {
             pid,
             listen,
             models,
-        } => {
-            println!("running       : yes");
-            println!("pid           : {pid}");
-            println!("http listen   : {listen}");
+        }) => {
+            println!("running        : yes");
+            println!("pid            : {pid}");
+            println!("http listen    : {listen}");
             println!("routable models: {models}");
+            println!("control socket : {}", socket.display());
             Ok(())
         }
-        DaemonResponse::Error { message } => Err(anyhow::anyhow!(message)),
-        other => Err(anyhow::anyhow!("unexpected response: {other:?}")),
+        Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
+        Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
+        // No daemon listening on the socket → report stopped, not error.
+        // Anything else (permission denied, malformed response, …) is a
+        // real failure and bubbles to the pretty reporter.
+        Err(e) if daemon::is_not_reachable(&e) => {
+            println!("running        : no");
+            println!("control socket : {}", socket.display());
+            println!("hint           : run `bitrouter start` to launch the daemon");
+            Ok(())
+        }
+        Err(e) => Err(e),
     }
 }
 

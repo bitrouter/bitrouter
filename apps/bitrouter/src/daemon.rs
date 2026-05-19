@@ -95,7 +95,51 @@ pub enum DaemonResponse {
 }
 
 /// The default control-socket path when the config does not set one.
+/// Stored as a relative path so [`resolve_socket_path`] places it next
+/// to the config file rather than in the daemon's working directory.
 pub const DEFAULT_CONTROL_SOCKET: &str = "./bitrouter.sock";
+
+/// Resolve `cfg.server.control_socket` against the config file's
+/// directory. Absolute paths are returned as-is; relative paths are
+/// joined onto the parent of `config_path`. This is what keeps `start`
+/// (which binds the socket) and `status` / `stop` / `reload` (which
+/// connect to it) agreeing on a single path regardless of where each
+/// invocation's CWD happens to be — the daemon launched from `~` and
+/// the `status` run from `/tmp` both resolve to the same file under
+/// `~/.bitrouter/`.
+pub fn resolve_socket_path(config_path: &Path, cfg_socket: &str) -> PathBuf {
+    let raw = Path::new(cfg_socket);
+    if raw.is_absolute() {
+        return raw.to_path_buf();
+    }
+    // Strip a leading `./` so the joined path doesn't render as
+    // `/a/b/./c` — `Path::join` is faithful, not normalising.
+    let stripped = raw.strip_prefix("./").unwrap_or(raw);
+    let parent = config_path.parent().filter(|p| !p.as_os_str().is_empty());
+    match parent {
+        Some(dir) => dir.join(stripped),
+        None => stripped.to_path_buf(),
+    }
+}
+
+/// True when `err` came from connecting to a Unix socket that nothing
+/// is listening on — i.e. the daemon is stopped, not that something
+/// else went wrong. Inspects the chain for an io error of kind
+/// `NotFound` (socket file absent) or `ConnectionRefused` (file present
+/// but no acceptor, e.g. stale after a crash).
+pub fn is_not_reachable(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .map(|io| {
+                matches!(
+                    io.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                )
+            })
+            .unwrap_or(false)
+    })
+}
 
 // ===== server side =====
 
@@ -330,5 +374,90 @@ mod tests {
             }
             other => panic!("expected Status, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_socket_joins_relative_paths_onto_config_directory() {
+        let resolved = resolve_socket_path(
+            Path::new("/Users/x/.bitrouter/bitrouter.yaml"),
+            "./bitrouter.sock",
+        );
+        // Leading `./` is stripped so the rendered path doesn't read
+        // `…/.bitrouter/./bitrouter.sock`.
+        assert_eq!(
+            resolved,
+            PathBuf::from("/Users/x/.bitrouter/bitrouter.sock")
+        );
+    }
+
+    #[test]
+    fn resolve_socket_handles_relative_without_dot_prefix() {
+        let resolved = resolve_socket_path(
+            Path::new("/Users/x/.bitrouter/bitrouter.yaml"),
+            "bitrouter.sock",
+        );
+        assert_eq!(
+            resolved,
+            PathBuf::from("/Users/x/.bitrouter/bitrouter.sock")
+        );
+    }
+
+    #[test]
+    fn resolve_socket_joins_nested_relative_path() {
+        let resolved = resolve_socket_path(
+            Path::new("/Users/x/.bitrouter/bitrouter.yaml"),
+            "sub/bitrouter.sock",
+        );
+        assert_eq!(
+            resolved,
+            PathBuf::from("/Users/x/.bitrouter/sub/bitrouter.sock")
+        );
+    }
+
+    #[test]
+    fn resolve_socket_passes_absolute_paths_through() {
+        let resolved = resolve_socket_path(
+            Path::new("/Users/x/.bitrouter/bitrouter.yaml"),
+            "/var/run/bitrouter.sock",
+        );
+        assert_eq!(resolved, PathBuf::from("/var/run/bitrouter.sock"));
+    }
+
+    #[test]
+    fn resolve_socket_handles_config_paths_without_parent() {
+        // `bitrouter.yaml` with no directory component → fall back to the
+        // raw socket value (CWD-relative). The leading `./` is stripped.
+        let resolved = resolve_socket_path(Path::new("bitrouter.yaml"), "./bitrouter.sock");
+        assert_eq!(resolved, PathBuf::from("bitrouter.sock"));
+    }
+
+    #[test]
+    fn is_not_reachable_detects_socket_not_found() {
+        let io_err = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let err: anyhow::Error =
+            anyhow::Error::new(io_err).context("connecting to /tmp/bitrouter.sock");
+        assert!(is_not_reachable(&err));
+    }
+
+    #[test]
+    fn is_not_reachable_detects_connection_refused() {
+        let io_err = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        let err: anyhow::Error =
+            anyhow::Error::new(io_err).context("connecting to /tmp/bitrouter.sock");
+        assert!(is_not_reachable(&err));
+    }
+
+    #[test]
+    fn is_not_reachable_ignores_unrelated_io_errors() {
+        let io_err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let err: anyhow::Error =
+            anyhow::Error::new(io_err).context("connecting to /tmp/bitrouter.sock");
+        assert!(!is_not_reachable(&err));
+    }
+
+    #[test]
+    fn is_not_reachable_false_for_plain_messages() {
+        let err = anyhow::anyhow!("daemon closed the connection without responding");
+        assert!(!is_not_reachable(&err));
     }
 }
