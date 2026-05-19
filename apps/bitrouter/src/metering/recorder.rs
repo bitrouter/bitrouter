@@ -3,9 +3,8 @@
 //! For every settled request (success or failure):
 //! 1. Compute the estimated micro-USD from the pricing table + token counts
 //!    via [`super::calculate_charge_micro_usd`]. When pricing is missing
-//!    for the resolved `(provider, service_id)`, emit a
-//!    [`PricingUnavailable`] event and write 0 — never silently bill the
-//!    zero, never block the request.
+//!    for the resolved `(provider, service_id)`, write 0 and log a
+//!    warning — never silently bill the zero, never block the request.
 //! 2. Write a `RequestMetric` row to [`super::MeteringStore`].
 //!
 //! No charging, no balance check, no funding-source selection. Those are
@@ -20,7 +19,6 @@ use bitrouter_sdk::Result;
 use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, Usage};
 
 use crate::metering::db::RequestMetric;
-use crate::metering::events::PricingUnavailable;
 use crate::metering::pricing::{PricingTable, calculate_charge_micro_usd};
 use crate::metering::store::MeteringStore;
 
@@ -74,14 +72,6 @@ impl SettlementRecorder for MeteringRecorder {
                 request_id = %ctx.request_id,
                 "metering: no pricing for (provider, model); estimated charge = 0"
             );
-            // The event is emitted on the SettlementContext's local bus.
-            // The slim SDK consumes the bus only by re-attaching it to
-            // PipelineContext via `absorb_settlement`; downstream observers
-            // can read it from there.
-            let _ = PricingUnavailable {
-                provider_id: ctx.provider_id.clone(),
-                model_id: ctx.model_id.clone(),
-            };
         }
         let metric = RequestMetric {
             request_id: ctx.request_id.clone(),

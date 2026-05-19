@@ -7,7 +7,7 @@
 //! pipeline → routing → HttpExecutor → outbound protocol render → upstream →
 //! response parse → settlement → receipt.
 
-use bitrouter_sdk::caller::{CallerContext, PaymentMethod};
+use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config;
 use bitrouter_sdk::language_model::{GenerationParams, Message, PipelineRequest, Prompt, Role};
 use bitrouter_sdk::server::{AppState, build_router};
@@ -102,14 +102,15 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() {
         .collect();
     assert_eq!(text, "hello from the mock upstream");
 
-    // settlement ran — a local (PaymentMethod::None) caller is not charged, but
-    // a receipt row exists with the full identity context.
+    // metering ran — a metering row exists with the full identity context.
     let row: (i64, String) =
-        sqlx::query_as("SELECT final_charge_micro_usd, model_id FROM requests LIMIT 1")
+        sqlx::query_as("SELECT estimated_charge_micro_usd, model_id FROM requests LIMIT 1")
             .fetch_one(&assembled.pool)
             .await
-            .expect("a receipt was written");
-    assert_eq!(row.1, "test-model", "receipt records the routed model");
+            .expect("a metering row was written");
+    assert_eq!(row.1, "test-model", "metering row records the routed model");
+    // 11 prompt × 2 + 7 completion × 10 = 92 µ$
+    assert_eq!(row.0, 92, "estimated charge derived from pricing × tokens");
 }
 
 #[tokio::test]
@@ -218,52 +219,9 @@ async fn e2e_unknown_model_is_a_clean_404() {
     assert_eq!(err.status(), 404);
 }
 
-#[tokio::test]
-async fn e2e_credits_caller_authenticates_and_is_charged() {
-    let upstream = mock_openai_upstream().await;
-    let cfg = config_for(&upstream.uri());
-    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
-
-    // Mint a real brvk_ key for a credits user and give them a balance — the
-    // full auth → policy → settlement path, not a hand-built caller.
-    let key = bitrouter_auth::generate();
-    bitrouter_auth::db::upsert_user(&assembled.pool, "payer")
-        .await
-        .unwrap();
-    bitrouter_auth::db::insert_api_key(
-        &assembled.pool,
-        &bitrouter_auth::NewApiKey {
-            id: "payer-key".to_string(),
-            key_hash: key.hash.clone(),
-            user_id: "payer".to_string(),
-            payment_method: PaymentMethod::Credits,
-            spend_limit_micro_usd: None,
-            rpm_limit: None,
-            policy_id: None,
-        },
-    )
-    .await
-    .unwrap();
-    bitrouter_settlement::add_credits(&assembled.pool, "payer", 1_000_000)
-        .await
-        .unwrap();
-
-    let pipeline = assembled.app.language_model().unwrap().clone();
-    // Start anonymous + present the credential — AuthHook upgrades the caller.
-    let mut req = PipelineRequest::new("test-model", CallerContext::anonymous(), chat_prompt());
-    req.headers.insert(
-        "authorization",
-        format!("Bearer {}", key.secret).parse().unwrap(),
-    );
-    let resp = pipeline.execute(req).await.expect("request succeeds");
-
-    // mock usage 11 prompt + 7 completion; pricing 2 / 10 µ$ → 11*2 + 7*10 = 92
-    assert_eq!(resp.final_charge_micro_usd, 92);
-    let balance = bitrouter_settlement::credit_balance(&assembled.pool, "payer")
-        .await
-        .unwrap();
-    assert_eq!(balance, 1_000_000 - 92);
-}
+// `e2e_metering_drives_policy_spend_cap` replaces the v0 credits-charging
+// test in Phase 5 of the OSS-scope refactor (validates the auth → policy →
+// metering loop end-to-end with no charging code).
 
 #[tokio::test]
 async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {

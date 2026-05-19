@@ -23,7 +23,6 @@
 //! billing plugins via their own recorder.
 
 pub mod db;
-pub mod events;
 pub mod pricing;
 pub mod recorder;
 pub mod store;
@@ -32,7 +31,6 @@ pub mod store;
 mod tests;
 
 pub use db::{RequestMetric, migrate};
-pub use events::PricingUnavailable;
 pub use pricing::{ModelPricing, PricingTable, calculate_charge_micro_usd};
 pub use recorder::MeteringRecorder;
 pub use store::{MeteringStore, RateMetrics, TimeWindow, TokenUsage};

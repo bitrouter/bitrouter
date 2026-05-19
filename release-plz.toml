@@ -15,7 +15,6 @@ changelog_include = [           # Include commits from the SDK and built-in plug
     "bitrouter-sdk",
     "bitrouter-auth",
     "bitrouter-policy",
-    "bitrouter-settlement",
     "bitrouter-guardrails",
     "bitrouter-observe",
 ]
