@@ -25,11 +25,13 @@
 //! - **Shared crate-root infrastructure** that every protocol uses:
 //!   - [`app`] — [`App`] / [`AppBuilder`] / [`Plugin`].
 //!   - [`error`] — the unified [`BitrouterError`] / [`Result`].
-//!   - [`caller`] — [`CallerContext`], [`FundingSource`], [`PaymentMethod`].
+//!   - [`caller`] — [`CallerContext`] (identity-only; business
+//!     classifications like payment method live in deployment code, not
+//!     here).
 //!   - [`event`] — typed [`PipelineEvent`] bus.
-//!   - [`metrics`] — the [`MetricsStore`] / [`MetricsRenderer`] traits.
-//!   - [`mpp`] — the [`MppVerifier`] trait used by the auth + settlement
-//!     plugins for paying callers.
+//!   - [`metrics`] — the [`MetricsRenderer`] trait (the `GET /metrics`
+//!     endpoint contract; spend / token / rate aggregation are
+//!     deployment-specific concerns).
 //!   - [`plugin`] — [`PluginId`] and SQL [`MigrationItem`]s.
 //!
 //! - **Optional features** (off by default):
@@ -56,9 +58,12 @@
 //!    target. On a retriable failure the [`FallbackPolicy`] advances to the
 //!    next target. Streaming responses run through every
 //!    [`StreamHook`](language_model::StreamHook) on each canonical part.
-//! 4. **Settle** — exactly one [`ChargeStrategy`](language_model::ChargeStrategy)
-//!    in the registered chain claims and records the charge. Every
-//!    [`SettlementRecorder`](language_model::SettlementRecorder) always runs.
+//! 4. **Settle** — every registered
+//!    [`SettlementRecorder`](language_model::SettlementRecorder) runs in
+//!    registration order against the immutable
+//!    [`SettlementContext`](language_model::SettlementContext). Deployments
+//!    use recorders for metering, charging, signed receipts, etc.; the SDK
+//!    is opinionated only about pipeline-data correctness.
 //! 5. **Observe** — [`ObserveHook`](language_model::ObserveHook)s see every
 //!    phase boundary and the final outcome; they never influence the request.
 //!

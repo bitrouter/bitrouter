@@ -3,9 +3,8 @@
 //! these are **not** shared across protocols — `mcp` /
 //! `acp` define their own, independently. The full set here:
 //! `PreRequestHook` / `RouteHook` / `ExecutionHook` / `StreamHook` /
-//! `ChargeStrategy` / `SettlementRecorder` / `ObserveHook`. The last three live
-//! in [`crate::language_model::settlement`]; this module defines the first four
-//! plus `ObserveHook`.
+//! `SettlementRecorder` / `ObserveHook`. `SettlementRecorder` lives in
+//! [`crate::language_model::settlement`]; this module defines the rest.
 
 use async_trait::async_trait;
 
