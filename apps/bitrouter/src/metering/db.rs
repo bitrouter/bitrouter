@@ -6,7 +6,7 @@
 //! this OSS module measures, not bills.
 
 use bitrouter_sdk::{BitrouterError, Result};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 /// The SQL that creates this module's tables. Run once at startup.
 pub const MIGRATION_SQL: &str = r#"
@@ -35,6 +35,14 @@ CREATE INDEX IF NOT EXISTS idx_requests_user_created
 "#;
 
 /// Create the metering tables on `pool`. Idempotent.
+///
+/// Also handles the schema rename from the pre-OSS-refactor column name
+/// `final_charge_micro_usd` to the current `estimated_charge_micro_usd`.
+/// A pre-refactor `.db` file would otherwise have the old column and
+/// every recorder insert would fail with `no such column:
+/// estimated_charge_micro_usd`. The rename is detected by inspecting
+/// `pragma_table_info(requests)` and applied with `ALTER TABLE … RENAME
+/// COLUMN`, which SQLite supports natively since 3.25.0.
 pub async fn migrate(pool: &SqlitePool) -> Result<()> {
     for stmt in MIGRATION_SQL.split(';') {
         let stmt = stmt.trim();
@@ -45,6 +53,37 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
             .execute(pool)
             .await
             .map_err(|e| BitrouterError::internal(format!("metering migration: {e}")))?;
+    }
+    rename_legacy_charge_column(pool).await?;
+    Ok(())
+}
+
+/// Pre-OSS-refactor schema named the column `final_charge_micro_usd`. The
+/// OSS metering module renamed it to `estimated_charge_micro_usd` for
+/// semantic clarity (we measure; cloud bills). This helper looks for the
+/// legacy column on existing databases and renames it in place.
+async fn rename_legacy_charge_column(pool: &SqlitePool) -> Result<()> {
+    let columns: Vec<String> = sqlx::query("PRAGMA table_info(requests)")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| BitrouterError::internal(format!("metering migration probe: {e}")))?
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect();
+    let has_legacy = columns.iter().any(|c| c == "final_charge_micro_usd");
+    let has_current = columns.iter().any(|c| c == "estimated_charge_micro_usd");
+    if has_legacy && !has_current {
+        sqlx::query(
+            "ALTER TABLE requests RENAME COLUMN final_charge_micro_usd \
+             TO estimated_charge_micro_usd",
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| BitrouterError::internal(format!("metering migration rename: {e}")))?;
+        tracing::info!(
+            "metering: renamed legacy `requests.final_charge_micro_usd` → \
+             `estimated_charge_micro_usd`"
+        );
     }
     Ok(())
 }

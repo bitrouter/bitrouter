@@ -404,6 +404,54 @@ mod tests {
         assert!(key.id.starts_with("brvk_id_"));
     }
 
+    /// Regression: the `mcp_servers:` and `agents:` blocks in
+    /// `STARTER_CONFIG` are commented out by default, but if a user
+    /// uncomments them the result must still parse against the current
+    /// `Config` schema. This test strips the leading `# ` from those
+    /// blocks and reparses; future schema drift fails CI here rather
+    /// than fails the next user's `bitrouter init`.
+    #[test]
+    fn starter_config_parses_with_mcp_and_agents_examples_uncommented() {
+        let uncommented: String = STARTER_CONFIG
+            .lines()
+            .map(|line| {
+                // Uncomment any line inside the mcp_servers: / agents:
+                // blocks. Those blocks are characterised by lines that
+                // start with "# " followed by either the block-header
+                // keyword or a key-value pair shaped like YAML.
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("# mcp_servers:")
+                    || trimmed.starts_with("# agents:")
+                    || trimmed.starts_with("#   ")
+                    || trimmed.starts_with("#     ")
+                    || trimmed.starts_with("#       ")
+                {
+                    let leading_spaces = line.len() - trimmed.len();
+                    let stripped = trimmed
+                        .strip_prefix("# ")
+                        .or_else(|| trimmed.strip_prefix("#"))
+                        .unwrap_or(trimmed);
+                    format!("{}{}", " ".repeat(leading_spaces), stripped)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cfg = bitrouter_sdk::config::parse_with(&uncommented, |_| Some("x".to_string()))
+            .expect("uncommented STARTER_CONFIG must parse against current schema");
+        assert!(
+            !cfg.mcp_servers.is_empty(),
+            "mcp_servers block should land as parsed entries; got: {:?}",
+            cfg.mcp_servers.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !cfg.agents.is_empty(),
+            "agents block should land as parsed entries; got: {:?}",
+            cfg.agents.keys().collect::<Vec<_>>()
+        );
+    }
+
     fn sample_config() -> Config {
         let yaml = r#"
 providers:

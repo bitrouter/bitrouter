@@ -94,6 +94,63 @@ async fn spend_isolates_by_api_key() -> Result<()> {
     Ok(())
 }
 
+/// Regression for the OSS-refactor column rename: a database that
+/// was created by the pre-refactor code has `final_charge_micro_usd`.
+/// After `migrate()` runs on it, the column is renamed in place and
+/// the new recorder writes work end-to-end.
+#[tokio::test]
+async fn migrate_renames_legacy_final_charge_column() -> Result<()> {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    // Stand up the pre-refactor schema (final_charge_micro_usd, no
+    // cache_read/write columns — the renamer only handles the legacy
+    // column; missing columns elsewhere would require a full v2
+    // migration which v1.0 doesn't ship).
+    sqlx::query(
+        "CREATE TABLE requests (\
+            request_id                      TEXT PRIMARY KEY,\
+            user_id                         TEXT NOT NULL,\
+            api_key_id                      TEXT NOT NULL,\
+            model_id                        TEXT NOT NULL,\
+            provider_id                     TEXT NOT NULL,\
+            prompt_tokens                   INTEGER NOT NULL,\
+            completion_tokens               INTEGER NOT NULL,\
+            reasoning_tokens                INTEGER NOT NULL,\
+            cache_read_tokens               INTEGER NOT NULL DEFAULT 0,\
+            cache_write_tokens              INTEGER NOT NULL DEFAULT 0,\
+            final_charge_micro_usd          INTEGER NOT NULL DEFAULT 0,\
+            streamed                        INTEGER NOT NULL DEFAULT 0,\
+            latency_ms                      INTEGER NOT NULL DEFAULT 0,\
+            generation_time_ms              INTEGER NOT NULL DEFAULT 0,\
+            error                           TEXT,\
+            created_at                      TEXT NOT NULL\
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Seed one row using the legacy column.
+    sqlx::query(
+        "INSERT INTO requests VALUES (\
+            'r-legacy', 'u', 'k', 'm', 'p', 1, 2, 0, 0, 0, 42, 0, 0, 0, NULL, ?\
+         )",
+    )
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Run the new migration — it should detect the legacy column and
+    // rename it in place without losing the row.
+    migrate(&pool).await?;
+
+    // Verify the row is reachable through the new column name.
+    let store = MeteringStore::new(pool);
+    let spend = store.get_spend("k", TimeWindow::ThisMonth).await?;
+    assert_eq!(spend, 42, "legacy row's spend is preserved across rename");
+    Ok(())
+}
+
 #[tokio::test]
 async fn failed_request_still_records_with_error() -> Result<()> {
     let pool = pool().await;

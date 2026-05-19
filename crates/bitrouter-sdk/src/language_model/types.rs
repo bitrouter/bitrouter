@@ -370,10 +370,12 @@ pub struct RoutingTarget {
     pub api_key: String,
     /// The wire protocol this target speaks.
     pub api_protocol: ApiProtocol,
-    /// BYOK key override. Set by `ByokRouteHook`. **Never** used to infer
-    /// `byok_used` — that signal comes from the `ByokKeyApplied` event.
+    /// Per-request key override. Set by a `RouteHook` that wants to
+    /// substitute the caller's own provider key (e.g. BYOK) for this hop.
+    /// The SDK itself is opinion-free about whether or how such a hook
+    /// exists; it just honours the override when set.
     pub api_key_override: Option<String>,
-    /// BYOK api-base override, paired with `api_key_override`.
+    /// Per-request api-base override, paired with `api_key_override`.
     pub api_base_override: Option<String>,
 }
 
