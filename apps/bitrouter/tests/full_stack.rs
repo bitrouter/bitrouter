@@ -266,10 +266,12 @@ async fn e2e_full_stack_streaming_redacts_and_meters() {
     .expect("metering wrote a row for the streamed request");
     assert_eq!(row.1, "test-model", "metering row records the routed model");
     assert_eq!(row.2, 1, "metering row marks the request as streamed");
-    assert!(
-        row.0 > 0,
-        "estimated_charge_micro_usd should reflect pricing × pipeline-observed tokens; got {}",
-        row.0,
+    // pricing 2µ$/prompt + 10µ$/completion × usage 11 + 7 = 92µ$.
+    // Exact match so a regression that quietly halves the rate can't
+    // sneak past with a > 0 check.
+    assert_eq!(
+        row.0, 92,
+        "estimated_charge_micro_usd should be 2*11 + 10*7 = 92µ$",
     );
 
     // ── PrometheusHook ran: counters incremented; both stream-part and
@@ -374,12 +376,18 @@ async fn e2e_full_stack_policy_denies_disallowed_tool_before_guardrails() {
 
 // ===== helpers =====
 
+/// Polling budget for the two async-side-effect waits. 5s is generous
+/// enough that loaded CI (cold-start of two MockServers + sqlite
+/// migrations + tokio task stalls) won't flake, but a real wiring
+/// failure still surfaces fast.
+const ASYNC_WAIT_BUDGET_MS: u64 = 5_000;
+const POLL_INTERVAL_MS: u64 = 50;
+
 /// Streaming settlement is detached after the response finishes — poll
-/// briefly for the metering row to appear so the test doesn't race the
-/// pipeline's background task. Caps at ~2s; if the row doesn't appear
-/// in that window something is genuinely broken.
+/// for the metering row to appear so the test doesn't race the pipeline's
+/// background task.
 async fn wait_for_metering_row(pool: &sqlx::SqlitePool, api_key_id: &str) {
-    for _ in 0..40 {
+    for _ in 0..(ASYNC_WAIT_BUDGET_MS / POLL_INTERVAL_MS) {
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM requests WHERE api_key_id = ?")
             .bind(api_key_id)
             .fetch_one(pool)
@@ -388,14 +396,17 @@ async fn wait_for_metering_row(pool: &sqlx::SqlitePool, api_key_id: &str) {
         if row.0 >= 1 {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
-    panic!("metering row never appeared within ~2s of stream completion");
+    panic!(
+        "metering row never appeared within {}ms of stream completion",
+        ASYNC_WAIT_BUDGET_MS
+    );
 }
 
 /// Poll the OTLP collector until it has seen at least one `/v1/traces` POST.
 async fn wait_for_otlp(collector: &MockServer) {
-    for _ in 0..40 {
+    for _ in 0..(ASYNC_WAIT_BUDGET_MS / POLL_INTERVAL_MS) {
         let n = collector
             .received_requests()
             .await
@@ -404,7 +415,10 @@ async fn wait_for_otlp(collector: &MockServer) {
         if n >= 1 {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
-    panic!("OTLP collector never received an export within ~2s");
+    panic!(
+        "OTLP collector never received an export within {}ms",
+        ASYNC_WAIT_BUDGET_MS
+    );
 }
