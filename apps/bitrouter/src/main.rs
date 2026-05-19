@@ -718,17 +718,14 @@ async fn reload(socket: &Path) -> Result<()> {
 }
 
 async fn status(socket: &Path) -> Result<()> {
+    let p = bitrouter::style::Palette::for_stdout();
     match daemon::send_command(socket, &DaemonCommand::Status).await {
         Ok(DaemonResponse::Status {
             pid,
             listen,
             models,
         }) => {
-            println!("running        : yes");
-            println!("pid            : {pid}");
-            println!("http listen    : {listen}");
-            println!("routable models: {models}");
-            println!("control socket : {}", socket.display());
+            print_status_running(&p, pid, &listen, models, socket);
             Ok(())
         }
         Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
@@ -737,13 +734,66 @@ async fn status(socket: &Path) -> Result<()> {
         // Anything else (permission denied, malformed response, …) is a
         // real failure and bubbles to the pretty reporter.
         Err(e) if daemon::is_not_reachable(&e) => {
-            println!("running        : no");
-            println!("control socket : {}", socket.display());
-            println!("hint           : run `bitrouter start` to launch the daemon");
+            print_status_stopped(&p, socket);
             Ok(())
         }
         Err(e) => Err(e),
     }
+}
+
+/// Render the running-daemon status block. Modelled on `systemctl
+/// status` — a coloured bullet + headline, then a short indented list
+/// of facts. Labels are dim so values are what the eye lands on.
+fn print_status_running(
+    p: &bitrouter::style::Palette,
+    pid: u32,
+    listen: &str,
+    models: usize,
+    socket: &Path,
+) {
+    println!(
+        "{green}●{reset} bitrouter is {bold}running{reset}",
+        green = p.green,
+        bold = p.bold,
+        reset = p.reset,
+    );
+    println!();
+    print_status_row(p, "pid", &pid.to_string());
+    print_status_row(p, "listen", listen);
+    print_status_row(p, "models", &format!("{models} routable"));
+    print_status_row(p, "socket", &socket.display().to_string());
+}
+
+/// Render the stopped-daemon status block. Hollow bullet (dim) +
+/// headline, the socket we *would* connect to, and a one-line next
+/// step. Exit code remains 0 — "stopped" is the answer to the
+/// question, not a failure.
+fn print_status_stopped(p: &bitrouter::style::Palette, socket: &Path) {
+    println!(
+        "{dim}○{reset} bitrouter is {bold}stopped{reset}",
+        dim = p.dim,
+        bold = p.bold,
+        reset = p.reset,
+    );
+    println!();
+    print_status_row(p, "socket", &socket.display().to_string());
+    println!();
+    println!(
+        "  {dim}Run `bitrouter start` to launch the daemon.{reset}",
+        dim = p.dim,
+        reset = p.reset,
+    );
+}
+
+/// One indented `label  value` row in a status block. The label column
+/// is left-padded to 8 chars so columns line up for the typical labels
+/// (`pid` / `listen` / `models` / `socket`).
+fn print_status_row(p: &bitrouter::style::Palette, label: &str, value: &str) {
+    println!(
+        "  {dim}{label:<8}{reset}  {value}",
+        dim = p.dim,
+        reset = p.reset,
+    );
 }
 
 async fn route(model: &str, config_path: &Path, socket: &Path) -> Result<()> {

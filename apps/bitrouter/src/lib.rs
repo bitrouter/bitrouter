@@ -20,6 +20,7 @@ pub mod error_report;
 pub mod metering;
 pub mod paths;
 pub mod policy;
+pub mod style;
 pub mod tools;
 
 pub use assemble::{Assembled, build_app, build_app_with_path};

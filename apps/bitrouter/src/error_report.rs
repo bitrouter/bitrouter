@@ -22,56 +22,9 @@
 //! Colours: red for `error:`, cyan for `info:`, dim for `while:` / `hint:`,
 //! emitted only when stderr is a TTY (so piping to a log file stays clean).
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 
-/// ANSI palette. The colour variant is selected by [`Palette::for_stderr`]
-/// when stderr is a TTY and `NO_COLOR` is unset; otherwise (and in tests)
-/// callers pass [`Palette::none`] to get a plain-text rendering.
-struct Palette {
-    red: &'static str,
-    cyan: &'static str,
-    bold: &'static str,
-    dim: &'static str,
-    reset: &'static str,
-}
-
-impl Palette {
-    /// ANSI-colour palette: red error / cyan info / dim while+hint / bold heads.
-    fn ansi() -> Self {
-        Self {
-            red: "\x1b[31m",
-            cyan: "\x1b[36m",
-            bold: "\x1b[1m",
-            dim: "\x1b[2m",
-            reset: "\x1b[0m",
-        }
-    }
-
-    /// Empty palette — every field is `""`. Used when stderr is not a
-    /// terminal or `NO_COLOR` is set, and in unit tests.
-    fn none() -> Self {
-        Self {
-            red: "",
-            cyan: "",
-            bold: "",
-            dim: "",
-            reset: "",
-        }
-    }
-
-    /// Pick the palette appropriate for the current stderr. Honours the
-    /// `NO_COLOR` de-facto convention (<https://no-color.org/>) — set
-    /// `NO_COLOR=1` (or anything non-empty) to disable colours even on a TTY.
-    /// Piping stderr automatically drops colours via [`IsTerminal`].
-    fn for_stderr() -> Self {
-        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-        if !no_color && std::io::stderr().is_terminal() {
-            Self::ansi()
-        } else {
-            Self::none()
-        }
-    }
-}
+use crate::style::Palette;
 
 /// Print an anyhow error chain to stderr in the documented CLI shape.
 /// Caller decides whether to `std::process::exit(1)` afterwards.
