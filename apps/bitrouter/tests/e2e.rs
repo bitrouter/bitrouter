@@ -1,11 +1,11 @@
-//! Phase-5 end-to-end integration tests.
+//! End-to-end integration tests.
 //!
 //! These build the **full assembled `App`** from a config — routing table,
-//! HTTP executor, auth, policy, settlement, the four inbound protocol routes —
+//! HTTP executor, auth, policy, metering, the four inbound protocol routes —
 //! and drive requests through it against a high-fidelity mock upstream
 //! (`wiremock`). This exercises the whole stack: inbound protocol parse →
 //! pipeline → routing → HttpExecutor → outbound protocol render → upstream →
-//! response parse → settlement → receipt.
+//! response parse → metering recorder.
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config;
@@ -219,9 +219,123 @@ async fn e2e_unknown_model_is_a_clean_404() {
     assert_eq!(err.status(), 404);
 }
 
-// `e2e_metering_drives_policy_spend_cap` replaces the v0 credits-charging
-// test in Phase 5 of the OSS-scope refactor (validates the auth → policy →
-// metering loop end-to-end with no charging code).
+#[tokio::test]
+async fn e2e_metering_drives_policy_spend_cap() {
+    // Validates the full OSS path with no charging code: a real `brvk_`
+    // key is bound to a policy with `max_spend_micro_usd: 50`. The first
+    // request (92 µ$ from pricing × tokens) is allowed because rolling
+    // spend reads 0µ$ at PolicyHook time; the second one is denied because
+    // the 92µ$ now in the requests table is ≥ the 50µ$ cap. (Spend cap is
+    // a rolling-window gate, not a per-request budget.)
+    use bitrouter::auth::{NewApiKey, db as auth_db, generate};
+
+    let upstream = mock_openai_upstream().await;
+
+    // Same provider/pricing as `config_for`, but augmented with a policy
+    // directory containing a single `pol_cap` policy with a 100µ$ ceiling.
+    let policy_dir = std::env::temp_dir().join(format!(
+        "bitrouter-e2e-policy-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    tokio::fs::create_dir_all(&policy_dir).await.unwrap();
+    tokio::fs::write(
+        policy_dir.join("pol_cap.yaml"),
+        "id: pol_cap\nmax_spend_micro_usd: 50\n",
+    )
+    .await
+    .unwrap();
+
+    let yaml = format!(
+        r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: false
+database:
+  url: "sqlite::memory:"
+providers:
+  mock:
+    api_base: {upstream}
+    api_key: test-key
+    api_protocol:
+      - "*": openai
+    models:
+      - id: test-model
+        pricing:
+          input_micro_usd_per_token: 2.0
+          output_micro_usd_per_token: 10.0
+plugins:
+  bitrouter-policy:
+    policy_dir: "{policy_path}"
+"#,
+        upstream = upstream.uri(),
+        policy_path = policy_dir.display(),
+    );
+    let cfg: config::Config = config::parse_with(&yaml, |_| None).expect("config parses");
+    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+
+    // Mint a `brvk_` key bound to `pol_cap`.
+    let user = "spender";
+    auth_db::upsert_user(&assembled.pool, user).await.unwrap();
+    let key = generate();
+    let key_id = "spender-key".to_string();
+    auth_db::insert_api_key(
+        &assembled.pool,
+        &NewApiKey {
+            id: key_id.clone(),
+            key_hash: key.hash.clone(),
+            user_id: user.to_string(),
+            spend_limit_micro_usd: None,
+            rpm_limit: None,
+            policy_id: Some("pol_cap".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let pipeline = assembled.app.language_model().unwrap().clone();
+
+    // First request: anonymous caller + bearer credential → AuthHook
+    // upgrades; PolicyHook sees 0µ$ accrued < 100µ$ cap → Allow; metering
+    // recorder writes 92µ$ row.
+    let mut req1 = PipelineRequest::new("test-model", CallerContext::anonymous(), chat_prompt());
+    req1.headers.insert(
+        "authorization",
+        format!("Bearer {}", key.secret).parse().unwrap(),
+    );
+    pipeline.execute(req1).await.expect("first request allowed");
+
+    // Confirm the row landed with the expected estimated charge.
+    let row: (i64,) =
+        sqlx::query_as("SELECT estimated_charge_micro_usd FROM requests WHERE api_key_id = ?")
+            .bind(&key_id)
+            .fetch_one(&assembled.pool)
+            .await
+            .expect("metering wrote a row");
+    assert_eq!(row.0, 92, "first request bills 92µ$ (11×2 + 7×10)");
+
+    // Second request: 92µ$ already accrued ≥ 50µ$ cap → PolicyHook denies
+    // at the `max_spend_micro_usd` check with 403.
+    let mut req2 = PipelineRequest::new("test-model", CallerContext::anonymous(), chat_prompt());
+    req2.headers.insert(
+        "authorization",
+        format!("Bearer {}", key.secret).parse().unwrap(),
+    );
+    let err = pipeline
+        .execute(req2)
+        .await
+        .expect_err("second request denied by spend cap");
+    assert_eq!(err.status(), 403, "spend-cap deny is 403");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("spend limit") && msg.contains("50"),
+        "deny reason should mention spend limit and cap: {msg}"
+    );
+
+    let _ = tokio::fs::remove_dir_all(&policy_dir).await;
+}
 
 #[tokio::test]
 async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
