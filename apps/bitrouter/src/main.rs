@@ -505,6 +505,19 @@ impl daemon::DaemonReloader for AppReloader {
 }
 
 async fn serve(config_path: &Path) -> Result<()> {
+    // Chdir to the bitrouter home directory (the config file's parent)
+    // so every relative path in the config — `database.url`,
+    // `server.control_socket`, policy / agent / mcp file references —
+    // interprets relative to one stable location instead of whichever
+    // CWD the launcher happened to be in. The daemon's runtime
+    // artefacts (db, socket, pid, log) all land alongside the config.
+    // `paths::resolve_config` returned an absolute path, so this is
+    // safe even when the user passed `-c ./foo.yaml`.
+    if let Some(home) = config_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::env::set_current_dir(home)
+            .with_context(|| format!("chdir to bitrouter home {}", home.display()))?;
+    }
+
     let cfg = config::load(config_path)
         .await
         .with_context(|| format!("loading {}", config_path.display()))?;

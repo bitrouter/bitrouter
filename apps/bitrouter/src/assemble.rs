@@ -6,8 +6,11 @@
 
 use std::sync::Arc;
 
+use std::str::FromStr;
+
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
+use sqlx::sqlite::SqliteConnectOptions;
 
 use bitrouter_sdk::App;
 use bitrouter_sdk::acp::{AcpStdioExecutor, ConfigAcpRoutingTable};
@@ -52,7 +55,17 @@ pub async fn build_app_with_path(
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
     // ---- database + migrations (each plugin owns its own tables) ----
-    let pool = SqlitePool::connect(&config.database.url)
+    // `SqlitePool::connect(url)` parses the DSN with sqlx's default
+    // open mode (read-write, *not* create), so a fresh
+    // `sqlite://./bitrouter.db` against a missing file errors with
+    // SQLITE_CANTOPEN. Parse the URL ourselves and force
+    // `create_if_missing(true)` so first-run works without forcing the
+    // user to write `?mode=rwc` into the DSN. The URL itself is still
+    // forwarded to sqlx verbatim — we only set a connection flag.
+    let connect_opts = SqliteConnectOptions::from_str(&config.database.url)
+        .with_context(|| format!("parsing database url {}", config.database.url))?
+        .create_if_missing(true);
+    let pool = SqlitePool::connect_with(connect_opts)
         .await
         .with_context(|| format!("connecting to database {}", config.database.url))?;
     crate::auth::migrate(&pool)

@@ -42,8 +42,8 @@ pub fn resolve_config(explicit: Option<&Path>) -> Result<PathBuf> {
         bitrouter_home.as_deref().map(Path::new),
         home.as_deref().map(Path::new),
     )?;
-    match outcome {
-        Resolution::Existing(path) => Ok(path),
+    let path = match outcome {
+        Resolution::Existing(path) => path,
         Resolution::ScaffoldDefault { home, config_file } => {
             scaffold_default_home(&home, &config_file)
                 .with_context(|| format!("scaffolding default home at {}", home.display()))?;
@@ -51,8 +51,28 @@ pub fn resolve_config(explicit: Option<&Path>) -> Result<PathBuf> {
                 "no config found in cwd or $BITROUTER_HOME; scaffolded a starter config at {}",
                 config_file.display()
             ));
-            Ok(config_file)
+            config_file
         }
+    };
+    // Always hand back an absolute path. Downstream code chdirs to the
+    // bitrouter home (the config file's parent) so the daemon doesn't
+    // depend on the launcher's CWD; a relative `-c ./foo.yaml` would
+    // get lost once the chdir happens. Absolutising here without
+    // following symlinks keeps the displayed path readable.
+    Ok(absolutize(path))
+}
+
+/// Make `path` absolute by joining it onto the current working
+/// directory if necessary. Does **not** follow symlinks
+/// (`std::fs::canonicalize` would, which on macOS turns `/tmp` into
+/// `/private/tmp` and surprises users).
+fn absolutize(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(path),
+        Err(_) => path,
     }
 }
 
