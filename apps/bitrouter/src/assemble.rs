@@ -16,11 +16,11 @@ use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
 use bitrouter_sdk::mcp::{ConfigMcpRoutingTable, RmcpExecutor};
 
-use bitrouter_auth::AuthHook;
 use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
 use bitrouter_observe::{OtlpExportHook, PrometheusHook};
 use bitrouter_sdk::MetricsRenderer;
 
+use crate::auth::AuthHook;
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 
@@ -55,9 +55,9 @@ pub async fn build_app_with_path(
     let pool = SqlitePool::connect(&config.database.url)
         .await
         .with_context(|| format!("connecting to database {}", config.database.url))?;
-    bitrouter_auth::migrate(&pool)
+    crate::auth::migrate(&pool)
         .await
-        .context("running bitrouter-auth migrations")?;
+        .context("running auth migrations")?;
     crate::metering::migrate(&pool)
         .await
         .context("running metering migrations")?;

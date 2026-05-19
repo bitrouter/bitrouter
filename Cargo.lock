@@ -616,7 +616,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "bitrouter-auth",
+ "base64 0.22.1",
  "bitrouter-guardrails",
  "bitrouter-observe",
  "bitrouter-providers",
@@ -624,34 +624,19 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "hex",
  "http 1.4.0",
+ "rand 0.9.4",
  "serde",
  "serde-saphyr",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "tower",
  "tracing",
  "tracing-subscriber",
  "wiremock",
-]
-
-[[package]]
-name = "bitrouter-auth"
-version = "1.0.0-alpha.1"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "bitrouter-sdk",
- "chrono",
- "hex",
- "rand 0.9.4",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tokio",
- "tracing",
 ]
 
 [[package]]

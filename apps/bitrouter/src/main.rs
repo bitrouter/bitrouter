@@ -20,7 +20,6 @@ use clap::{Parser, Subcommand};
 
 use bitrouter::commands;
 use bitrouter::daemon::{self, DEFAULT_CONTROL_SOCKET, DaemonCommand, DaemonResponse, RouteHop};
-use bitrouter_sdk::caller::PaymentMethod;
 use bitrouter_sdk::config;
 
 /// BitRouter — an LLM API router.
@@ -226,9 +225,6 @@ enum KeyAction {
         /// Database URL.
         #[arg(short, long, default_value = "sqlite://./bitrouter.db")]
         db: String,
-        /// Funding model for the key (`credits` / `mpp` / `byok` / `none`).
-        #[arg(short, long, default_value = "credits")]
-        payment_method: String,
         /// Optional policy id to bind to the key (the `policy_id` column).
         #[arg(long)]
         policy: Option<String>,
@@ -646,20 +642,8 @@ async fn init(config_path: &Path) -> Result<()> {
 
 async fn key(action: KeyAction) -> Result<()> {
     match action {
-        KeyAction::Sign {
-            user,
-            db,
-            payment_method,
-            policy,
-        } => {
-            let pm = match payment_method.as_str() {
-                "credits" => PaymentMethod::Credits,
-                "mpp" => PaymentMethod::Mpp,
-                "byok" => PaymentMethod::Byok,
-                "none" => PaymentMethod::None,
-                other => anyhow::bail!("unknown payment method '{other}'"),
-            };
-            let key = commands::key_sign(&db, &user, pm, policy.as_deref()).await?;
+        KeyAction::Sign { user, db, policy } => {
+            let key = commands::key_sign(&db, &user, policy.as_deref()).await?;
             println!("created virtual key {} for user '{user}'", key.id);
             println!();
             println!("  {}", key.secret);

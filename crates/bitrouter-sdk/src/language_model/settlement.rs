@@ -54,7 +54,12 @@ pub struct SettlementContext {
     pub error: Option<BitrouterError>,
     /// Events carried over from the request lifecycle (so recorders can
     /// inspect events emitted by earlier stages).
-    pub(crate) events: EventBus,
+    ///
+    /// `pub` so external test code can construct a context directly when
+    /// exercising a recorder in isolation; production recorders should read
+    /// through [`Self::has_event`] / [`Self::get_event`] /
+    /// [`Self::get_events`] rather than poking the bus directly.
+    pub events: EventBus,
 }
 
 impl SettlementContext {

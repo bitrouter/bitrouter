@@ -19,10 +19,14 @@ path = "src/main.rs"
 [dependencies]
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
 bitrouter-providers.workspace = true
-bitrouter-auth.workspace = true
 bitrouter-guardrails.workspace = true
-chrono.workspace = true
 bitrouter-observe = { workspace = true, features = ["otlp"] }
+chrono.workspace = true
+sha2.workspace = true
+base64.workspace = true
+rand.workspace = true
+hex.workspace = true
+serde-saphyr.workspace = true
 sqlx = { workspace = true, features = ["sqlite"] }
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true

@@ -5,12 +5,11 @@
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
-use bitrouter_sdk::caller::{CallerContext, PaymentMethod};
+use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
-use bitrouter_auth::{NewApiKey, db as auth_db, generate};
-
+use crate::auth::{NewApiKey, db as auth_db, generate};
 use crate::daemon::RouteHop;
 
 /// The starter `bitrouter.yaml` written by `bitrouter init`. Note `skip_auth:
@@ -101,7 +100,6 @@ pub struct GeneratedKey {
 pub async fn key_sign(
     db_url: &str,
     user_id: &str,
-    payment_method: PaymentMethod,
     policy_id: Option<&str>,
 ) -> Result<GeneratedKey> {
     let pool = SqlitePool::connect(db_url)
@@ -122,7 +120,6 @@ pub async fn key_sign(
             id: id.clone(),
             key_hash: key.hash.clone(),
             user_id: user_id.to_string(),
-            payment_method,
             spend_limit_micro_usd: None,
             rpm_limit: None,
             policy_id: policy_id.map(|s| s.to_string()),
@@ -249,8 +246,7 @@ pub async fn create_policy(policy_dir: &std::path::Path, id: &str) -> Result<std
          # denied_models: []\n\
          # max_spend_micro_usd: 1000000\n\
          # max_requests_per_minute: 60\n\
-         # allowed_tools: [search]\n\
-         # allowed_chains: [tempo]\n"
+         # allowed_tools: [search]\n"
     );
     tokio::fs::write(&path, body)
         .await
@@ -403,9 +399,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_sign_produces_brvk_secret_and_persists_only_hash() {
-        let key = key_sign("sqlite::memory:", "u1", PaymentMethod::Credits, Some("p1"))
-            .await
-            .unwrap();
+        let key = key_sign("sqlite::memory:", "u1", Some("p1")).await.unwrap();
         assert!(key.secret.starts_with("brvk_"));
         assert!(key.id.starts_with("brvk_id_"));
     }

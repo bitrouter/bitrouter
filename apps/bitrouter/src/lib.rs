@@ -13,6 +13,7 @@
 pub mod agent_proxy;
 pub mod agents;
 pub mod assemble;
+pub mod auth;
 pub mod commands;
 pub mod daemon;
 pub mod metering;

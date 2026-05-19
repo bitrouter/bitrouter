@@ -263,11 +263,10 @@ async fn spend_cap_is_enforced_via_metering_store() {
         .unwrap();
     let hook = PolicyHook::new(store.clone(), Some(metering.clone()));
     let mut c = ctx("gpt-5", Some("p1"));
-    assert!(matches!(
-        hook.check(&mut c).await.unwrap(),
-        HookDecision::Allow,
+    assert!(
+        matches!(hook.check(&mut c).await.unwrap(), HookDecision::Allow),
         "60µ$ < 100µ$ cap → allow"
-    ));
+    );
 
     // Push the rolling spend over the cap.
     metering

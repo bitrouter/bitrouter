@@ -8,6 +8,7 @@
 //! `MetricsStore` trait between them, just a concrete type call.
 
 pub mod hook;
+#[allow(clippy::module_inception)]
 pub mod policy;
 pub mod store;
 
