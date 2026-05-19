@@ -622,7 +622,7 @@ dependencies = [
  "bitrouter-policy",
  "bitrouter-providers",
  "bitrouter-sdk",
- "bitrouter-settlement",
+ "chrono",
  "clap",
  "futures",
  "http 1.4.0",
@@ -758,23 +758,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "bitrouter-settlement"
-version = "1.0.0-alpha.1"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "bitrouter-sdk",
- "chrono",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tokio",
- "tracing",
 ]
 
 [[package]]

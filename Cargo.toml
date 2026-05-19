@@ -17,7 +17,6 @@ bitrouter-bedrock = { path = "crates/bitrouter-bedrock", version = "1.0.0-alpha.
 bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.1" }
 bitrouter-auth = { path = "plugins/bitrouter-auth", version = "1.0.0-alpha.1" }
 bitrouter-policy = { path = "plugins/bitrouter-policy", version = "1.0.0-alpha.1" }
-bitrouter-settlement = { path = "plugins/bitrouter-settlement", version = "1.0.0-alpha.1", default-features = false }
 bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.1" }
 bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.1", default-features = false }
 
@@ -69,7 +68,7 @@ rmcp = { version = "1.7", default-features = false, features = [
 # source of truth: <https://agentclientprotocol.com/protocol/schema> +
 # <https://agentclientprotocol.com/protocol/transports>.
 
-# database (settlement plugin)
+# database (used by apps/bitrouter's auth + metering modules)
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "macros", "chrono"] }
 
 # crypto / encoding

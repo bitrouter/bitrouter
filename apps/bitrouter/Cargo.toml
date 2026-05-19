@@ -21,8 +21,8 @@ bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", 
 bitrouter-providers.workspace = true
 bitrouter-auth.workspace = true
 bitrouter-policy.workspace = true
-bitrouter-settlement = { workspace = true, features = ["sqlite", "mpp-tempo"] }
 bitrouter-guardrails.workspace = true
+chrono.workspace = true
 bitrouter-observe = { workspace = true, features = ["otlp"] }
 sqlx = { workspace = true, features = ["sqlite"] }
 tokio = { workspace = true, features = ["full"] }

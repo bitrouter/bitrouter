@@ -21,7 +21,8 @@ use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStr
 use bitrouter_observe::{OtlpExportHook, PrometheusHook};
 use bitrouter_policy::{PolicyHook, PolicyStore};
 use bitrouter_sdk::MetricsRenderer;
-use bitrouter_settlement::{ModelPricing, MppState, PricingTable, SettlementBundle};
+
+use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 
 /// A running application plus the database pool it was assembled over (the
 /// caller keeps the pool for management commands — key creation, etc.).
@@ -57,14 +58,13 @@ pub async fn build_app_with_path(
     bitrouter_auth::migrate(&pool)
         .await
         .context("running bitrouter-auth migrations")?;
-    bitrouter_settlement::migrate(&pool)
+    crate::metering::migrate(&pool)
         .await
-        .context("running bitrouter-settlement migrations")?;
-    // The SQLite database holds SHA-256 hashes of every virtual key, BYOK
-    // provider keys (currently plaintext — sealed-box is a follow-up), MPP
-    // balances, and the request audit trail. On Unix, tighten the file
-    // permissions to 0600 so a co-tenant on the host can't read it. The
-    // control socket already does the same in `daemon::run_control_socket`.
+        .context("running metering migrations")?;
+    // The SQLite database holds SHA-256 hashes of every virtual key, plus
+    // the metering audit trail. On Unix, tighten the file permissions to
+    // 0600 so a co-tenant on the host can't read it. The control socket
+    // already does the same in `daemon::run_control_socket`.
     #[cfg(unix)]
     if let Some(path) = sqlite_file_path(&config.database.url) {
         use std::os::unix::fs::PermissionsExt;
@@ -104,23 +104,15 @@ pub async fn build_app_with_path(
         .context("building the upstream HTTP executor")?,
     );
 
-    // ---- pricing, MPP, policy, guardrails — all derived from config ----
-    let pricing = build_pricing_table(config);
-    let mpp = build_mpp_state(config, &pool)?;
+    // ---- pricing, metering, policy, guardrails — all derived from config ----
+    let pricing = Arc::new(build_pricing_table(config));
+    let metering_store = MeteringStore::new(pool.clone());
+    let metering_store_for_policy = metering_store.clone();
+    let metering_store_for_recorder = metering_store.clone();
+    let pricing_for_recorder = pricing.clone();
     let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
     let policy_store_for_reload = policy_store.clone();
     let guardrail_rules = build_guardrail_rules(config)?;
-
-    // When MPP is enabled, the channel state doubles as `AuthHook`'s MPP
-    // credential verifier — the SDK's `MppVerifier` trait keeps
-    // bitrouter-auth from depending on bitrouter-settlement.
-    let mpp_verifier: Option<std::sync::Arc<dyn bitrouter_sdk::MppVerifier>> =
-        mpp.clone().map(|m| std::sync::Arc::new(m) as _);
-
-    // The settlement bundle owns the MetricsStore; share it with PolicyHook so
-    // spend ceilings can be enforced.
-    let settlement = SettlementBundle::new(pool.clone(), pricing, mpp);
-    let metrics_store = settlement.metrics_store();
 
     // Prometheus exporter. The same `Arc` is both an
     // `ObserveHook` (writes) and a `MetricsRenderer` (reads from `/metrics`).
@@ -177,17 +169,15 @@ pub async fn build_app_with_path(
     let pool_for_hooks = pool.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
-        .metrics_store(metrics_store.clone())
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
             // Stage 1, in order: auth → policy → guardrail (upstream).
-            let mut auth = AuthHook::new(pool_for_hooks.clone());
-            if let Some(verifier) = mpp_verifier {
-                auth = auth.with_mpp_verifier(verifier);
-            }
-            lm.pre_request_hook(auth);
-            lm.pre_request_hook(PolicyHook::new(policy_store.clone(), Some(metrics_store)));
+            lm.pre_request_hook(AuthHook::new(pool_for_hooks.clone()));
+            lm.pre_request_hook(PolicyHook::new(
+                policy_store.clone(),
+                Some(metering_store_for_policy),
+            ));
             if !guardrail_rules.is_empty() {
                 lm.pre_request_hook(GuardrailPreHook::new(guardrail_rules.clone()));
                 // StreamHook stage: guardrail downstream redaction / abort.
@@ -202,13 +192,15 @@ pub async fn build_app_with_path(
             if let Some(endpoint) = otlp_endpoint.as_ref() {
                 lm.observe_hook(OtlpExportHook::new(endpoint));
             }
-        })
-        // The settlement bundle installs BalanceCheckHook, ByokRouteHook,
-        // MppStreamHook, the ChargeStrategy chain and ReceiptRecorder.
-        // It is only wired onto the `language_model` pipeline; the MCP
-        // pipeline below stays pure-routing (no settlement) by design until
-        // the MCP-specific charge model lands.
-        .plugin(settlement);
+            // OSS metering recorder — writes one `requests` row per
+            // settled request with the estimated µUSD from the pricing
+            // table. The policy module reads back through `MeteringStore`
+            // for spend caps.
+            lm.settlement_recorder(MeteringRecorder::new(
+                metering_store_for_recorder,
+                pricing_for_recorder,
+            ));
+        });
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
     // had since v0.
@@ -235,7 +227,6 @@ pub async fn build_app_with_path(
     })
 }
 
-/// Build the settlement `PricingTable` from every provider's per-model pricing.
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
 /// provider whose credential flow needs more than the per-protocol
 /// `Transport::authorise` default (today: only GitHub Copilot).
@@ -269,36 +260,6 @@ fn build_pricing_table(config: &Config) -> PricingTable {
         }
     }
     table
-}
-
-/// Build the MPP state from `plugins.bitrouter-settlement` config. v1.0 wires
-/// the Tempo channel only; `solana` is rejected.
-fn build_mpp_state(config: &Config, pool: &SqlitePool) -> Result<Option<MppState>> {
-    let Some(settlement_cfg) = config.plugins.get("bitrouter-settlement") else {
-        return Ok(None);
-    };
-    let enabled = settlement_cfg
-        .get("mpp_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if !enabled {
-        return Ok(None);
-    }
-    match settlement_cfg
-        .get("mpp_channel")
-        .and_then(|v| v.as_str())
-        .unwrap_or("tempo")
-    {
-        "tempo" => Ok(Some(MppState::tempo(pool.clone()))),
-        "solana" => {
-            // Solana MPP is out of scope for v1.0 — fail loudly, do not
-            // silently fall back.
-            MppState::solana(pool.clone())
-                .map(Some)
-                .context("MPP channel 'solana' is not supported in v1.0")
-        }
-        other => anyhow::bail!("unknown MPP channel '{other}' (expected 'tempo')"),
-    }
 }
 
 /// Load the `PolicyStore` from `plugins.bitrouter-policy.policy_dir`, if set.
