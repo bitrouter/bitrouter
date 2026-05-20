@@ -679,12 +679,16 @@ impl StreamDecoder for ResponsesStreamDecoder {
             Ok(v) => v,
             Err(_) => return Ok(Vec::new()),
         };
-        // The event name lives in the `type` field (Responses puts it in both
-        // the SSE `event:` line and the JSON body).
-        let event_type = event
-            .event
-            .as_deref()
-            .or_else(|| json.get("type").and_then(|t| t.as_str()))
+        // The event name lives in the JSON body's `type` field; Responses also
+        // mirrors it onto the SSE `event:` line, but several upstreams (notably
+        // OpenRouter and stock OpenAI when fronted via gateways) emit only the
+        // `data:` line — the SSE spec then defaults `event` to "message",
+        // which would otherwise shadow the real event name. Always prefer the
+        // body `type` and fall back to the SSE header only when it's absent.
+        let event_type = json
+            .get("type")
+            .and_then(|t| t.as_str())
+            .or(event.event.as_deref())
             .unwrap_or_default();
 
         let mut parts = Vec::new();
