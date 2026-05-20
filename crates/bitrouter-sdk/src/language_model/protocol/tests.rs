@@ -1472,6 +1472,11 @@ fn google_generate_content_request_schema_is_stable() {
     assert_schema_snapshot::<google::GenerateContentRequest>("google_generate_content_request");
 }
 
+#[test]
+fn openai_responses_request_schema_is_stable() {
+    assert_schema_snapshot::<openai_responses::ResponsesRequest>("openai_responses_request");
+}
+
 /// `#[schemars(skip)]` on the `extra` `HashMap` must hide it from the published
 /// contract — the schema for the request should never expose
 /// `additionalProperties` of arbitrary JSON values. The exact wording belongs
@@ -1506,5 +1511,11 @@ fn extra_passthrough_field_is_not_in_schema() {
             .and_then(|p| p.get("extra"))
             .is_none(),
         "Google GoogleGenerationConfig schema must not expose `extra`",
+    );
+    let s =
+        serde_json::to_value(schemars::schema_for!(openai_responses::ResponsesRequest)).unwrap();
+    assert!(
+        s.get("properties").and_then(|p| p.get("extra")).is_none(),
+        "OpenAI ResponsesRequest schema must not expose `extra` (pass-through field)",
     );
 }
