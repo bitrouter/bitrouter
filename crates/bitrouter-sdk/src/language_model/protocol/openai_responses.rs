@@ -49,8 +49,8 @@ pub struct OpenAiResponsesTransport;
 ///
 /// `input` stays `serde_json::Value` on purpose — the Responses API accepts
 /// either a plain string or a heterogeneous item array (Codex multi-turn,
-/// #454-3), and the deeper walk happens in [`parse_input`]. Mirrors how
-/// Anthropic's `system` / `content` are typed.
+/// #454-3), and the deeper walk happens in `parse_input` (private). Mirrors
+/// how Anthropic's `system` / `content` are typed.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ResponsesRequest {
     #[serde(default)]
