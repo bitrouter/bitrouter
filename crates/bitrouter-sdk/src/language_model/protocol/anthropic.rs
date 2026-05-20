@@ -22,8 +22,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    RoutingTarget, StreamPart, Usage,
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
+    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
 /// The Anthropic Messages inbound + outbound protocol adapter.
@@ -284,6 +284,31 @@ impl InboundAdapter for AnthropicAdapter {
             })
             .collect();
 
+        // Anthropic's GA structured-outputs lives under
+        // `output_config.format`. Some clients still emit the deprecated flat
+        // `output_format` (vercel/ai#12298) — accept it as a graceful alias.
+        // Only the alias that actually matched is stripped from extras, so
+        // unknown siblings inside `output_config` survive opaquely if
+        // `output_format` was the source.
+        let mut extra = req.extra;
+        let response_format = if let Some(rf) = parse_output_config_format(&extra) {
+            if let Some(oc) = extra
+                .get_mut("output_config")
+                .and_then(|v| v.as_object_mut())
+            {
+                oc.remove("format");
+                if oc.is_empty() {
+                    extra.remove("output_config");
+                }
+            }
+            Some(rf)
+        } else if let Some(rf) = parse_legacy_output_format(&extra) {
+            extra.remove("output_format");
+            Some(rf)
+        } else {
+            None
+        };
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -294,8 +319,9 @@ impl InboundAdapter for AnthropicAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_tokens,
                 reasoning_effort: None,
-                extra: req.extra,
+                extra,
             },
+            response_format,
             stream: req.stream,
         })
     }
@@ -380,6 +406,16 @@ impl OutboundAdapter for AnthropicAdapter {
         if let Some(p) = prompt.params.top_p {
             req.insert("top_p".into(), p.into());
         }
+        // Render the canonical response_format into Anthropic's GA shape
+        // (`output_config.format`). `name` and `strict` are intentionally
+        // dropped — Anthropic's schema-constrained sampling has no concept of
+        // either and they would be rejected as unknown fields.
+        if let Some(rf) = &prompt.response_format {
+            req.insert(
+                "output_config".into(),
+                serde_json::json!({ "format": render_anthropic_response_format(rf) }),
+            );
+        }
         // Splat anthropic-specific extras (tool_choice, stop_sequences, …) back
         // into the outbound request. Typed fields win over same-named extras.
         for (k, v) in &prompt.params.extra {
@@ -446,6 +482,46 @@ impl OutboundAdapter for AnthropicAdapter {
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(AnthropicStreamDecoder::default())
     }
+
+    fn supports_response_format(&self) -> bool {
+        true
+    }
+}
+
+/// Lift Anthropic's GA `output_config.format: { type: "json_schema", schema }`
+/// into the canonical [`ResponseFormat`]. Anthropic's wire format carries no
+/// `name` / `strict` so both are `None`.
+fn parse_output_config_format(
+    extra: &std::collections::HashMap<String, serde_json::Value>,
+) -> Option<ResponseFormat> {
+    json_schema_from(extra.get("output_config")?.get("format")?)
+}
+
+/// Lift Anthropic's deprecated flat `output_format: { type: "json_schema", schema }`
+/// into the canonical [`ResponseFormat`]. Kept as a graceful alias for
+/// clients still emitting the pre-GA shape (vercel/ai#12298).
+fn parse_legacy_output_format(
+    extra: &std::collections::HashMap<String, serde_json::Value>,
+) -> Option<ResponseFormat> {
+    json_schema_from(extra.get("output_format")?)
+}
+
+fn json_schema_from(format: &serde_json::Value) -> Option<ResponseFormat> {
+    if format.get("type")?.as_str()? != "json_schema" {
+        return None;
+    }
+    Some(ResponseFormat::JsonSchema {
+        name: None,
+        strict: None,
+        schema: format.get("schema")?.clone(),
+    })
+}
+
+/// Render a canonical [`ResponseFormat`] into Anthropic's
+/// `{ type: "json_schema", schema }` body that sits under `output_config.format`.
+fn render_anthropic_response_format(rf: &ResponseFormat) -> serde_json::Value {
+    let ResponseFormat::JsonSchema { schema, .. } = rf;
+    serde_json::json!({ "type": "json_schema", "schema": schema })
 }
 
 #[async_trait]

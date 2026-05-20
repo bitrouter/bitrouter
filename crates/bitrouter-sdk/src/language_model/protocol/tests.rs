@@ -50,6 +50,7 @@ fn sample_prompt() -> Prompt {
             max_tokens: Some(256),
             ..Default::default()
         },
+        response_format: None,
         stream: false,
     }
 }
@@ -367,6 +368,395 @@ fn google_passes_through_uncommon_generation_config() {
             "Google generationConfig.{key} must survive parse/render"
         );
     }
+}
+
+// ===== structured outputs (response_format) =====
+
+/// A canonical prompt carrying a JSON-Schema response_format constraint.
+fn sample_prompt_with_schema() -> Prompt {
+    Prompt {
+        response_format: Some(ResponseFormat::JsonSchema {
+            name: Some("weather".to_string()),
+            strict: Some(true),
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"},
+                    "temperature": {"type": "number"}
+                },
+                "required": ["location", "temperature"],
+                "additionalProperties": false
+            }),
+        }),
+        ..sample_prompt()
+    }
+}
+
+#[test]
+fn openai_chat_inbound_promotes_json_schema_response_format() {
+    let adapter = adapter_for(ApiProtocol::Openai);
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "weather?"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "weather",
+                "strict": true,
+                "schema": {"type": "object", "properties": {"x": {"type": "string"}}}
+            }
+        }
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    match prompt.response_format {
+        Some(ResponseFormat::JsonSchema {
+            name,
+            strict,
+            schema,
+        }) => {
+            assert_eq!(name.as_deref(), Some("weather"));
+            assert_eq!(strict, Some(true));
+            assert_eq!(schema["properties"]["x"]["type"], "string");
+        }
+        other => panic!("expected JsonSchema, got {other:?}"),
+    }
+    // Promoted out of extras to avoid double-rendering.
+    assert!(!prompt.params.extra.contains_key("response_format"));
+}
+
+#[test]
+fn openai_chat_inbound_leaves_json_object_in_extras() {
+    // The legacy `{type: "json_object"}` JSON mode has no schema to translate,
+    // so it must keep passing through opaquely.
+    let adapter = adapter_for(ApiProtocol::Openai);
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "response_format": {"type": "json_object"}
+    });
+    let prompt = adapter.parse_request(body.clone()).unwrap();
+    assert!(prompt.response_format.is_none());
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["response_format"], body["response_format"]);
+}
+
+#[test]
+fn openai_chat_outbound_renders_json_schema() {
+    let adapter = adapter_for(ApiProtocol::Openai);
+    let rendered = adapter
+        .render_request(&sample_prompt_with_schema())
+        .unwrap();
+    assert_eq!(rendered["response_format"]["type"], "json_schema");
+    assert_eq!(
+        rendered["response_format"]["json_schema"]["name"],
+        "weather"
+    );
+    assert_eq!(rendered["response_format"]["json_schema"]["strict"], true);
+    assert_eq!(
+        rendered["response_format"]["json_schema"]["schema"]["properties"]["location"]["type"],
+        "string"
+    );
+}
+
+#[test]
+fn openai_chat_outbound_supplies_default_name() {
+    // OpenAI Chat requires `name`; renderer fills it when absent (e.g. when
+    // the inbound was Anthropic/Google which carry no name).
+    let adapter = adapter_for(ApiProtocol::Openai);
+    let prompt = Prompt {
+        response_format: Some(ResponseFormat::JsonSchema {
+            name: None,
+            strict: None,
+            schema: serde_json::json!({"type": "object"}),
+        }),
+        ..sample_prompt()
+    };
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(
+        rendered["response_format"]["json_schema"]["name"],
+        "response"
+    );
+    // strict is omitted (None) rather than serialised as null.
+    assert!(
+        rendered["response_format"]["json_schema"]
+            .get("strict")
+            .is_none()
+    );
+}
+
+#[test]
+fn anthropic_inbound_promotes_output_config_format() {
+    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-7",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "weather?"}],
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "schema": {"type": "object", "properties": {"x": {"type": "string"}}}
+            }
+        }
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    match prompt.response_format {
+        Some(ResponseFormat::JsonSchema { schema, .. }) => {
+            assert_eq!(schema["properties"]["x"]["type"], "string");
+        }
+        other => panic!("expected JsonSchema, got {other:?}"),
+    }
+    assert!(!prompt.params.extra.contains_key("output_config"));
+}
+
+#[test]
+fn anthropic_inbound_accepts_legacy_output_format_alias() {
+    // The deprecated flat `output_format` shape (pre-GA, still emitted by
+    // some clients — vercel/ai#12298) must still parse cleanly.
+    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-7",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "weather?"}],
+        "output_format": {
+            "type": "json_schema",
+            "schema": {"type": "object"}
+        }
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert!(matches!(
+        prompt.response_format,
+        Some(ResponseFormat::JsonSchema { .. })
+    ));
+    assert!(!prompt.params.extra.contains_key("output_format"));
+}
+
+#[test]
+fn anthropic_inbound_legacy_alias_does_not_disturb_output_config_siblings() {
+    // If the legacy `output_format` alias is what matched, an unrelated
+    // `output_config` blob the client supplied must be left fully intact in
+    // extras so its siblings (`unknown_key` here) survive the round trip.
+    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-7",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "weather?"}],
+        "output_config": {"unknown_key": "x"},
+        "output_format": {"type": "json_schema", "schema": {"type": "object"}}
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert!(matches!(
+        prompt.response_format,
+        Some(ResponseFormat::JsonSchema { .. })
+    ));
+    assert_eq!(prompt.params.extra["output_config"]["unknown_key"], "x");
+    assert!(!prompt.params.extra.contains_key("output_format"));
+}
+
+#[test]
+fn anthropic_outbound_renders_output_config_format() {
+    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let rendered = adapter
+        .render_request(&sample_prompt_with_schema())
+        .unwrap();
+    assert_eq!(rendered["output_config"]["format"]["type"], "json_schema");
+    assert_eq!(
+        rendered["output_config"]["format"]["schema"]["properties"]["location"]["type"],
+        "string"
+    );
+    // Anthropic carries no `name` / `strict` — confirm they're dropped, not
+    // forwarded as unknown fields.
+    assert!(rendered["output_config"]["format"].get("name").is_none());
+    assert!(rendered["output_config"]["format"].get("strict").is_none());
+}
+
+#[test]
+fn google_inbound_promotes_response_schema() {
+    let adapter = adapter_for(ApiProtocol::Google);
+    let body = serde_json::json!({
+        "model": "gemini-2.5-pro",
+        "contents": [{"role": "user", "parts": [{"text": "weather?"}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {"type": "object", "properties": {"x": {"type": "string"}}}
+        }
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    match prompt.response_format {
+        Some(ResponseFormat::JsonSchema { schema, .. }) => {
+            assert_eq!(schema["properties"]["x"]["type"], "string");
+        }
+        other => panic!("expected JsonSchema, got {other:?}"),
+    }
+    assert!(!prompt.params.extra.contains_key("responseSchema"));
+    assert!(!prompt.params.extra.contains_key("responseMimeType"));
+}
+
+#[test]
+fn google_inbound_leaves_enum_mime_in_extras() {
+    // `text/x.enum` has no JSON schema; must stay in extras for opaque
+    // Google-native pass-through.
+    let adapter = adapter_for(ApiProtocol::Google);
+    let body = serde_json::json!({
+        "model": "gemini-2.5-pro",
+        "contents": [{"role": "user", "parts": [{"text": "x"}]}],
+        "generationConfig": {
+            "responseMimeType": "text/x.enum"
+        }
+    });
+    let prompt = adapter.parse_request(body.clone()).unwrap();
+    assert!(prompt.response_format.is_none());
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(
+        rendered["generationConfig"]["responseMimeType"],
+        "text/x.enum"
+    );
+}
+
+#[test]
+fn google_outbound_renders_response_schema() {
+    let adapter = adapter_for(ApiProtocol::Google);
+    let rendered = adapter
+        .render_request(&sample_prompt_with_schema())
+        .unwrap();
+    let gc = &rendered["generationConfig"];
+    assert_eq!(gc["responseMimeType"], "application/json");
+    assert_eq!(
+        gc["responseSchema"]["properties"]["location"]["type"],
+        "string"
+    );
+}
+
+#[test]
+fn responses_inbound_promotes_text_format() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "input": "weather?",
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "weather",
+                "strict": true,
+                "schema": {"type": "object"}
+            },
+            "verbosity": "low"
+        }
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert!(matches!(
+        prompt.response_format,
+        Some(ResponseFormat::JsonSchema { .. })
+    ));
+    // Sibling keys under `text` survive opaquely (the `format` child was
+    // promoted, the rest of `text` stays in extras).
+    assert_eq!(prompt.params.extra["text"]["verbosity"], "low");
+    assert!(prompt.params.extra["text"].get("format").is_none());
+}
+
+#[test]
+fn responses_outbound_renders_text_format() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let rendered = adapter
+        .render_request(&sample_prompt_with_schema())
+        .unwrap();
+    assert_eq!(rendered["text"]["format"]["type"], "json_schema");
+    assert_eq!(rendered["text"]["format"]["name"], "weather");
+    assert_eq!(rendered["text"]["format"]["strict"], true);
+}
+
+#[test]
+fn responses_outbound_merges_text_siblings() {
+    // When an inbound supplied a `text` object with `verbosity` (or any
+    // other future sibling), the outbound render must preserve it alongside
+    // the synthesised `format`.
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut prompt = sample_prompt_with_schema();
+    prompt
+        .params
+        .extra
+        .insert("text".into(), serde_json::json!({ "verbosity": "low" }));
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["text"]["verbosity"], "low");
+    assert_eq!(rendered["text"]["format"]["type"], "json_schema");
+}
+
+#[test]
+fn response_format_survives_cross_protocol_routing() {
+    // Set the canonical field once and assert every outbound adapter emits
+    // the right native shape — this is the cross-protocol guarantee.
+    let prompt = sample_prompt_with_schema();
+    let schema = match prompt.response_format.as_ref().unwrap() {
+        ResponseFormat::JsonSchema { schema, .. } => schema.clone(),
+    };
+
+    // OpenAI Chat
+    let chat = adapter_for(ApiProtocol::Openai)
+        .render_request(&prompt)
+        .unwrap();
+    assert_eq!(chat["response_format"]["json_schema"]["schema"], schema);
+
+    // Anthropic
+    let ant = adapter_for(ApiProtocol::Anthropic)
+        .render_request(&prompt)
+        .unwrap();
+    assert_eq!(ant["output_config"]["format"]["schema"], schema);
+
+    // Google
+    let g = adapter_for(ApiProtocol::Google)
+        .render_request(&prompt)
+        .unwrap();
+    assert_eq!(g["generationConfig"]["responseSchema"], schema);
+    assert_eq!(
+        g["generationConfig"]["responseMimeType"],
+        "application/json"
+    );
+
+    // OpenAI Responses
+    let r = adapter_for(ApiProtocol::Responses)
+        .render_request(&prompt)
+        .unwrap();
+    assert_eq!(r["text"]["format"]["schema"], schema);
+}
+
+#[test]
+fn builtin_adapters_advertise_response_format_support() {
+    for proto in all_protocols() {
+        let a = adapter_for(proto.clone());
+        assert!(
+            a.supports_response_format(),
+            "{proto:?} should advertise response_format support"
+        );
+    }
+}
+
+#[test]
+fn anthropic_no_beta_header_is_emitted() {
+    // The deprecated `anthropic-beta: structured-outputs-2025-11-13` header
+    // is no longer required by the Anthropic GA endpoint and is actively
+    // rejected by Vertex AI (vercel/ai#10981). The Anthropic transport must
+    // not introduce it as a side effect of structured outputs.
+    use crate::language_model::protocol::Transport;
+    use crate::language_model::types::RoutingTarget;
+    let transport = crate::language_model::protocol::anthropic::AnthropicTransport;
+    let client = reqwest::Client::new();
+    let req = client
+        .post("http://example.invalid/v1/messages")
+        .build()
+        .unwrap();
+    let target = RoutingTarget {
+        provider_name: "anthropic".into(),
+        service_id: "claude-opus-4-7".into(),
+        api_base: "http://example.invalid".into(),
+        api_key: "k".into(),
+        api_protocol: ApiProtocol::Anthropic,
+        api_key_override: None,
+        api_base_override: None,
+    };
+    let req = futures::executor::block_on(transport.authorise(req, &target)).unwrap();
+    assert!(
+        req.headers().get("anthropic-beta").is_none(),
+        "anthropic-beta header must not be set by the transport (deprecated and Vertex-incompatible)"
+    );
 }
 
 #[test]

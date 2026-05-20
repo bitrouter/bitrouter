@@ -128,6 +128,7 @@ mod tests {
             messages: vec![Message::text(Role::User, "hi")],
             tools: Vec::new(),
             params: GenerationParams::default(),
+            response_format: None,
             stream: false,
         };
         PipelineContext::new(PipelineRequest::new(

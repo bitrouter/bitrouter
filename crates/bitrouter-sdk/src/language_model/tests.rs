@@ -40,6 +40,7 @@ fn request() -> PipelineRequest {
         messages: vec![Message::text(Role::User, "hi")],
         tools: Vec::new(),
         params: GenerationParams::default(),
+        response_format: None,
         stream: false,
     };
     PipelineRequest::new("test-model", CallerContext::new("k1", "u1"), prompt)
@@ -745,4 +746,89 @@ async fn counting_pre_hook_runs_once() {
     );
     pipeline.execute(request()).await.expect("ok");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn executor_rejects_response_format_on_unsupported_outbound() {
+    // A custom outbound adapter that doesn't override `supports_response_format`
+    // (so it defaults to `false`) must cause the executor to return a 400
+    // rather than silently dropping the structured-output schema upstream.
+    use crate::language_model::executor::HttpExecutor;
+    use crate::language_model::protocol::{
+        OutboundAdapter, OutboundDispatch, StreamDecoder, Transport,
+    };
+    use crate::language_model::types::ResponseFormat;
+
+    struct FakeAdapter;
+    impl OutboundAdapter for FakeAdapter {
+        fn protocol(&self) -> ApiProtocol {
+            ApiProtocol::Custom("fake".into())
+        }
+        fn render_request(&self, _: &Prompt) -> Result<serde_json::Value> {
+            unreachable!("gate must fire before render_request")
+        }
+        fn parse_response(&self, _: serde_json::Value) -> Result<GenerateResult> {
+            unreachable!()
+        }
+        fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
+            unreachable!()
+        }
+        // intentionally leaves `supports_response_format` at the default `false`
+    }
+
+    struct FakeTransport;
+    #[async_trait]
+    impl Transport for FakeTransport {
+        fn protocol(&self) -> ApiProtocol {
+            ApiProtocol::Custom("fake".into())
+        }
+        fn endpoint_url(&self, _: &RoutingTarget, _: bool) -> String {
+            "http://example.invalid".into()
+        }
+        async fn authorise(
+            &self,
+            r: reqwest::Request,
+            _: &RoutingTarget,
+        ) -> Result<reqwest::Request> {
+            Ok(r)
+        }
+    }
+
+    let mut dispatch = OutboundDispatch::empty();
+    dispatch.register(Arc::new(FakeAdapter), Arc::new(FakeTransport));
+    let executor =
+        HttpExecutor::with_dispatch(Default::default(), dispatch).expect("build executor");
+
+    let target = RoutingTarget {
+        provider_name: "fake".into(),
+        service_id: "m".into(),
+        api_base: "http://example.invalid".into(),
+        api_key: "k".into(),
+        api_protocol: ApiProtocol::Custom("fake".into()),
+        api_key_override: None,
+        api_base_override: None,
+    };
+    let prompt = Prompt {
+        model: "m".into(),
+        system: None,
+        messages: vec![Message::text(Role::User, "hi")],
+        tools: vec![],
+        params: GenerationParams::default(),
+        response_format: Some(ResponseFormat::JsonSchema {
+            name: None,
+            strict: None,
+            schema: serde_json::json!({"type": "object"}),
+        }),
+        stream: false,
+    };
+    let err = executor.execute(&target, &prompt).await.unwrap_err();
+    match err {
+        BitrouterError::BadRequest { message } => {
+            assert!(
+                message.contains("response_format"),
+                "error must mention response_format, got: {message}"
+            );
+        }
+        other => panic!("expected BadRequest, got {other:?}"),
+    }
 }

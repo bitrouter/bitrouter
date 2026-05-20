@@ -139,6 +139,15 @@ pub trait OutboundAdapter: Send + Sync {
     /// A fresh stateful decoder turning this protocol's SSE events into
     /// canonical [`StreamPart`]s.
     fn stream_decoder(&self) -> Box<dyn StreamDecoder>;
+
+    /// Whether this protocol can honour
+    /// [`Prompt::response_format`](crate::language_model::types::Prompt::response_format).
+    /// Default is `false` so out-of-tree custom adapters surface a clear 400
+    /// rather than silently dropping the schema. The four built-in adapters
+    /// override this to `true`.
+    fn supports_response_format(&self) -> bool {
+        false
+    }
 }
 
 /// Dispatch policy for one outbound provider — endpoint URL shape and

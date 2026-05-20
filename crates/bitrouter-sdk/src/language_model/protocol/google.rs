@@ -19,8 +19,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    RoutingTarget, StreamPart, Usage,
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
+    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
 /// The Google Generative AI protocol adapter.
@@ -280,6 +280,16 @@ impl InboundAdapter for GoogleAdapter {
                 extra: g.extra,
             })
             .unwrap_or_default();
+        // Promote `generationConfig.responseSchema` (paired with
+        // `responseMimeType: "application/json"`) into the canonical slot
+        // so cross-protocol routing can translate it. When `responseMimeType`
+        // is some other value (e.g. `text/x.enum`) we leave both fields in
+        // extras as an opaque Google-native pass-through.
+        let response_format = parse_google_response_format(&params.extra);
+        if response_format.is_some() {
+            params.extra.remove("responseMimeType");
+            params.extra.remove("responseSchema");
+        }
         // Preserve top-level Google fields (`toolConfig`, `safetySettings`,
         // `cachedContent`, …) across the round-trip. They're namespaced so they
         // don't collide with `generationConfig`-level extras above and only the
@@ -297,6 +307,7 @@ impl InboundAdapter for GoogleAdapter {
             messages,
             tools,
             params,
+            response_format,
             stream: req.stream,
         })
     }
@@ -370,10 +381,17 @@ impl OutboundAdapter for GoogleAdapter {
         if let Some(mt) = prompt.params.max_tokens {
             gen_config.insert("maxOutputTokens".into(), mt.into());
         }
-        // Splat Google generation-config extras (stopSequences, topK, seed,
-        // responseMimeType / responseSchema, …) back into the outbound config.
-        // Typed fields above win over a same-named extra; the sentinel key
-        // carries top-level fields and is skipped here.
+        // Render the canonical response_format into Google's generationConfig.
+        // `name` and `strict` are intentionally dropped — Google's
+        // schema-constrained sampling has no concept of either.
+        if let Some(rf) = &prompt.response_format {
+            let ResponseFormat::JsonSchema { schema, .. } = rf;
+            gen_config.insert("responseMimeType".into(), "application/json".into());
+            gen_config.insert("responseSchema".into(), schema.clone());
+        }
+        // Splat Google generation-config extras (stopSequences, topK, seed, …)
+        // back into the outbound config. Typed fields above win over a same-named
+        // extra; the sentinel key carries top-level fields and is skipped here.
         for (k, v) in &prompt.params.extra {
             if k == GOOGLE_TOP_LEVEL_EXTRA_KEY {
                 continue;
@@ -424,6 +442,28 @@ impl OutboundAdapter for GoogleAdapter {
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(GoogleStreamDecoder::default())
     }
+
+    fn supports_response_format(&self) -> bool {
+        true
+    }
+}
+
+/// Lift Google's structured-output fields out of `generationConfig` extras
+/// into the canonical [`ResponseFormat`]. Triggers only when
+/// `responseMimeType == "application/json"` *and* a `responseSchema` is set —
+/// other MIME modes (e.g. `text/x.enum`) have no schema to translate.
+fn parse_google_response_format(
+    extra: &std::collections::HashMap<String, serde_json::Value>,
+) -> Option<ResponseFormat> {
+    if extra.get("responseMimeType").and_then(|v| v.as_str()) != Some("application/json") {
+        return None;
+    }
+    let schema = extra.get("responseSchema")?.clone();
+    Some(ResponseFormat::JsonSchema {
+        name: None,
+        strict: None,
+        schema,
+    })
 }
 
 #[async_trait]

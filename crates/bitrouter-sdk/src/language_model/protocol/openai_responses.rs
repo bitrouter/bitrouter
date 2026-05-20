@@ -28,8 +28,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    RoutingTarget, StreamPart, Usage,
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
+    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
 /// The OpenAI Responses protocol adapter.
@@ -284,6 +284,20 @@ impl InboundAdapter for OpenAiResponsesAdapter {
             })
             .collect();
 
+        // Promote `text.format: { type: "json_schema", ... }` out of extras
+        // into the canonical slot. Other contents of `text` (e.g. `verbosity`)
+        // stay in extras and pass through opaquely.
+        let mut extra = req.extra;
+        let response_format = parse_responses_response_format(&extra);
+        if response_format.is_some()
+            && let Some(text) = extra.get_mut("text").and_then(|t| t.as_object_mut())
+        {
+            text.remove("format");
+            if text.is_empty() {
+                extra.remove("text");
+            }
+        }
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -298,8 +312,9 @@ impl InboundAdapter for OpenAiResponsesAdapter {
                 // tool_choice, parallel_tool_calls, max_tool_calls, metadata,
                 // include[], previous_response_id, store, stream_options, … —
                 // into `extra` so render_request can put them back.
-                extra: req.extra,
+                extra,
             },
+            response_format,
             stream: req.stream,
         })
     }
@@ -393,6 +408,19 @@ impl OutboundAdapter for OpenAiResponsesAdapter {
         if let Some(re) = &prompt.params.reasoning_effort {
             req.insert("reasoning".into(), serde_json::json!({ "effort": re }));
         }
+        // Render the canonical response_format into Responses' `text.format`.
+        // Merge with any extras-supplied `text` blob so caller-supplied
+        // sibling keys (e.g. `verbosity`) survive.
+        if let Some(rf) = &prompt.response_format {
+            let mut text = prompt
+                .params
+                .extra
+                .get("text")
+                .and_then(|t| t.as_object().cloned())
+                .unwrap_or_default();
+            text.insert("format".into(), render_responses_response_format(rf));
+            req.insert("text".into(), serde_json::Value::Object(text));
+        }
         // Splat Responses-API extras (tool_choice, parallel_tool_calls,
         // metadata, include, …) back onto the outbound request. Typed fields
         // win.
@@ -474,6 +502,55 @@ impl OutboundAdapter for OpenAiResponsesAdapter {
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(ResponsesStreamDecoder::default())
     }
+
+    fn supports_response_format(&self) -> bool {
+        true
+    }
+}
+
+/// Detect a `text.format: { type: "json_schema", ... }` blob in the inbound
+/// extras and lift it into the canonical [`ResponseFormat`]. Returns `None`
+/// for any other shape.
+fn parse_responses_response_format(
+    extra: &HashMap<String, serde_json::Value>,
+) -> Option<ResponseFormat> {
+    let format = extra.get("text")?.get("format")?;
+    if format.get("type")?.as_str()? != "json_schema" {
+        return None;
+    }
+    let schema = format.get("schema")?.clone();
+    Some(ResponseFormat::JsonSchema {
+        name: format
+            .get("name")
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string()),
+        strict: format.get("strict").and_then(|s| s.as_bool()),
+        schema,
+    })
+}
+
+/// Render a canonical [`ResponseFormat`] into Responses' native
+/// `{ type: "json_schema", name, strict, schema }` body that sits under
+/// `text.format`. OpenAI requires `name`; default it.
+fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
+    let ResponseFormat::JsonSchema {
+        name,
+        strict,
+        schema,
+    } = rf;
+    let mut obj = serde_json::Map::new();
+    obj.insert("type".into(), "json_schema".into());
+    obj.insert(
+        "name".into(),
+        name.clone()
+            .unwrap_or_else(|| "response".to_string())
+            .into(),
+    );
+    if let Some(strict) = strict {
+        obj.insert("strict".into(), (*strict).into());
+    }
+    obj.insert("schema".into(), schema.clone());
+    serde_json::Value::Object(obj)
 }
 
 #[async_trait]

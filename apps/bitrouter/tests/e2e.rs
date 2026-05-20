@@ -68,6 +68,7 @@ fn chat_prompt() -> Prompt {
         messages: vec![Message::text(Role::User, "hello")],
         tools: Vec::new(),
         params: GenerationParams::default(),
+        response_format: None,
         stream: false,
     }
 }
