@@ -180,10 +180,10 @@ impl InboundAdapter for OpenAiChatAdapter {
 
             let mut content = Vec::new();
             // reasoning first so its position before text is preserved (#454-1)
-            if let Some(reasoning) = m.reasoning_content {
-                if !reasoning.is_empty() {
-                    content.push(Content::Reasoning { text: reasoning });
-                }
+            if let Some(reasoning) = m.reasoning_content
+                && !reasoning.is_empty()
+            {
+                content.push(Content::Reasoning { text: reasoning });
             }
             if role == Role::Tool {
                 let result = m.content.as_ref().map(content_text).unwrap_or_default();
@@ -691,19 +691,19 @@ impl StreamDecoder for ChatStreamDecoder {
             .and_then(|c| c.first())
         {
             if let Some(delta) = choice.get("delta") {
-                if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
-                    if !text.is_empty() {
-                        parts.push(StreamPart::TextDelta {
-                            text: text.to_string(),
-                        });
-                    }
+                if let Some(text) = delta.get("content").and_then(|c| c.as_str())
+                    && !text.is_empty()
+                {
+                    parts.push(StreamPart::TextDelta {
+                        text: text.to_string(),
+                    });
                 }
-                if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
-                    if !reasoning.is_empty() {
-                        parts.push(StreamPart::ReasoningDelta {
-                            text: reasoning.to_string(),
-                        });
-                    }
+                if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_str())
+                    && !reasoning.is_empty()
+                {
+                    parts.push(StreamPart::ReasoningDelta {
+                        text: reasoning.to_string(),
+                    });
                 }
                 if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                     for tc in tool_calls {

@@ -172,10 +172,10 @@ impl EffectivePolicy {
         if self.denied_models.iter().any(|m| m == model) {
             return Err(PolicyViolation::ModelNotAllowed(model.to_string()));
         }
-        if let Some(allow) = &self.allowed_models {
-            if !allow.iter().any(|m| m == model) {
-                return Err(PolicyViolation::ModelNotAllowed(model.to_string()));
-            }
+        if let Some(allow) = &self.allowed_models
+            && !allow.iter().any(|m| m == model)
+        {
+            return Err(PolicyViolation::ModelNotAllowed(model.to_string()));
         }
         Ok(())
     }

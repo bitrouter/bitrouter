@@ -148,13 +148,13 @@ fn strip_status_prefix(msg: &str) -> &str {
 fn hint_for(root: &str) -> Option<String> {
     // Undefined config env-var. Pull the var name out so the hint can
     // name it explicitly.
-    if let Some(rest) = root.strip_prefix("config references undefined environment variable '") {
-        if let Some(var) = rest.strip_suffix("'") {
-            return Some(format!(
-                "Set `{var}` in your environment (e.g. `export {var}=…`),\n\
+    if let Some(rest) = root.strip_prefix("config references undefined environment variable '")
+        && let Some(var) = rest.strip_suffix("'")
+    {
+        return Some(format!(
+            "Set `{var}` in your environment (e.g. `export {var}=…`),\n\
                  or remove the `${{{var}}}` reference from bitrouter.yaml."
-            ));
-        }
+        ));
     }
     // `-c <missing>` user error.
     if root.contains("does not exist (passed via -c)") {

@@ -77,12 +77,12 @@ pub fn validate_upstream_url(raw: &str) -> Result<()> {
 
     // Literal IP? Apply the strict IP allow-list.
     let host_for_ip = host.trim_start_matches('[').trim_end_matches(']');
-    if let Ok(ip) = host_for_ip.parse::<IpAddr>() {
-        if is_blocked_ip(&ip) {
-            return Err(BitrouterError::bad_request(format!(
-                "host '{ip}' is in a non-routable / metadata range",
-            )));
-        }
+    if let Ok(ip) = host_for_ip.parse::<IpAddr>()
+        && is_blocked_ip(&ip)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "host '{ip}' is in a non-routable / metadata range",
+        )));
     }
 
     // Plain HTTP is only allowed for loopback.

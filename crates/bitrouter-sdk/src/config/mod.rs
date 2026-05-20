@@ -246,10 +246,10 @@ impl ProviderConfig {
     /// Resolve the effective rate limit for `model_id` and the bucket key
     /// (provider id + matched pattern) it should be counted under.
     pub fn rate_limit_for(&self, model_id: &str) -> Option<RateLimit> {
-        if let Some(m) = self.models.iter().find(|m| m.id == model_id) {
-            if let Some(rl) = m.rate_limits {
-                return Some(rl);
-            }
+        if let Some(m) = self.models.iter().find(|m| m.id == model_id)
+            && let Some(rl) = m.rate_limits
+        {
+            return Some(rl);
         }
         self.rate_limits.resolve(model_id).copied()
     }

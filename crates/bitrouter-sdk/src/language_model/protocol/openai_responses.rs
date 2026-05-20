@@ -685,31 +685,31 @@ impl StreamDecoder for ResponsesStreamDecoder {
             | "response.output_text.done"
             | "response.reasoning_summary_text.done" => {}
             "response.output_item.added" => {
-                if let Some(item) = json.get("item") {
-                    if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
-                        let item_id = item
-                            .get("id")
-                            .and_then(|i| i.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        let call_id = item
-                            .get("call_id")
-                            .and_then(|i| i.as_str())
-                            .unwrap_or(&item_id)
-                            .to_string();
-                        let name = item
-                            .get("name")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        self.function_items
-                            .push((item_id, call_id.clone(), name.clone()));
-                        parts.push(StreamPart::ToolCallDelta {
-                            id: call_id,
-                            name: Some(name),
-                            arguments: String::new(),
-                        });
-                    }
+                if let Some(item) = json.get("item")
+                    && item.get("type").and_then(|t| t.as_str()) == Some("function_call")
+                {
+                    let item_id = item
+                        .get("id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let call_id = item
+                        .get("call_id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or(&item_id)
+                        .to_string();
+                    let name = item
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    self.function_items
+                        .push((item_id, call_id.clone(), name.clone()));
+                    parts.push(StreamPart::ToolCallDelta {
+                        id: call_id,
+                        name: Some(name),
+                        arguments: String::new(),
+                    });
                 }
             }
             "response.output_text.delta" => {
@@ -732,14 +732,14 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     .get("item_id")
                     .and_then(|i| i.as_str())
                     .unwrap_or_default();
-                if let Some((call_id, _)) = self.call_for_item(item_id) {
-                    if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
-                        parts.push(StreamPart::ToolCallDelta {
-                            id: call_id,
-                            name: None,
-                            arguments: delta.to_string(),
-                        });
-                    }
+                if let Some((call_id, _)) = self.call_for_item(item_id)
+                    && let Some(delta) = json.get("delta").and_then(|d| d.as_str())
+                {
+                    parts.push(StreamPart::ToolCallDelta {
+                        id: call_id,
+                        name: None,
+                        arguments: delta.to_string(),
+                    });
                 }
             }
             // the `.done` event repeats the full arguments — do NOT re-emit

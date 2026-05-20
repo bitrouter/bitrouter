@@ -76,32 +76,32 @@ impl PreRequestHook for PolicyHook {
         }
 
         // 4. spend ceiling — only enforceable with a MeteringStore
-        if effective.max_spend_micro_usd.is_some() {
-            if let Some(metering) = &self.metering {
-                let spent = metering
-                    .get_spend(ctx.caller().api_key_id(), TimeWindow::ThisMonth)
-                    .await?;
-                if let Err(violation) = effective.check_spend(spent) {
-                    return Ok(HookDecision::Deny(DenyReason::Forbidden(
-                        violation.to_string(),
-                    )));
-                }
+        if effective.max_spend_micro_usd.is_some()
+            && let Some(metering) = &self.metering
+        {
+            let spent = metering
+                .get_spend(ctx.caller().api_key_id(), TimeWindow::ThisMonth)
+                .await?;
+            if let Err(violation) = effective.check_spend(spent) {
+                return Ok(HookDecision::Deny(DenyReason::Forbidden(
+                    violation.to_string(),
+                )));
             }
         }
 
         // 5. request-rate ceiling — also reads the MeteringStore. A rate
         //    violation maps to 429 (RateLimited) rather than 403, with a
         //    Retry-After hint.
-        if effective.max_requests_per_minute.is_some() {
-            if let Some(metering) = &self.metering {
-                let rate = metering.get_rate(ctx.caller().api_key_id()).await?;
-                let observed = rate.requests_per_minute.round().max(0.0) as u32;
-                if let Err(violation) = effective.check_rate(observed) {
-                    tracing::debug!(%violation, "policy rate limit hit");
-                    return Ok(HookDecision::Deny(DenyReason::RateLimited {
-                        retry_after: Some(60),
-                    }));
-                }
+        if effective.max_requests_per_minute.is_some()
+            && let Some(metering) = &self.metering
+        {
+            let rate = metering.get_rate(ctx.caller().api_key_id()).await?;
+            let observed = rate.requests_per_minute.round().max(0.0) as u32;
+            if let Err(violation) = effective.check_rate(observed) {
+                tracing::debug!(%violation, "policy rate limit hit");
+                return Ok(HookDecision::Deny(DenyReason::RateLimited {
+                    retry_after: Some(60),
+                }));
             }
         }
 

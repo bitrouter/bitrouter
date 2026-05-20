@@ -126,12 +126,12 @@ impl PreRequestHook for AuthHook {
                 "API key is inactive".to_string(),
             )));
         }
-        if let Some(expires_at) = record.expires_at {
-            if expires_at <= Utc::now() {
-                return Ok(HookDecision::Deny(DenyReason::Unauthorized(
-                    "API key has expired".to_string(),
-                )));
-            }
+        if let Some(expires_at) = record.expires_at
+            && expires_at <= Utc::now()
+        {
+            return Ok(HookDecision::Deny(DenyReason::Unauthorized(
+                "API key has expired".to_string(),
+            )));
         }
 
         // Establish identity: upgrade the pre-auth caller and broadcast it.

@@ -122,26 +122,25 @@ pub fn resolve_route_chain(
     merge_prefs(&mut prefs, caller_prefs);
 
     // ---- Strategy 1: provider:model_id direct route ----
-    if let Some((provider_id, model_id)) = clean.split_once(':') {
-        if let Some(provider) = config.providers.get(provider_id) {
-            if provider.active {
-                return Ok(vec![build_target(provider_id, provider, model_id)]);
-            }
-        }
+    if let Some((provider_id, model_id)) = clean.split_once(':')
+        && let Some(provider) = config.providers.get(provider_id)
+        && provider.active
+    {
+        return Ok(vec![build_target(provider_id, provider, model_id)]);
     }
 
     // ---- Strategy 2: explicit virtual model ----
     if let Some(virtual_model) = config.models.get(&clean) {
         let mut chain = Vec::new();
         for endpoint in &virtual_model.endpoints {
-            if let Some(provider) = config.providers.get(&endpoint.provider) {
-                if provider.active {
-                    chain.push(build_target(
-                        &endpoint.provider,
-                        provider,
-                        &endpoint.service_id,
-                    ));
-                }
+            if let Some(provider) = config.providers.get(&endpoint.provider)
+                && provider.active
+            {
+                chain.push(build_target(
+                    &endpoint.provider,
+                    provider,
+                    &endpoint.service_id,
+                ));
             }
         }
         if chain.is_empty() {
