@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GenerateContentRequest",
+  "description": "Google Generative AI `generateContent` request body\n(<https://ai.google.dev/api/generate-content>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
+  "type": "object",
+  "properties": {
+    "contents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GoogleContent"
+      }
+    },
+    "generationConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GoogleGenerationConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "model": {
+      "description": "Carried as a field so the inbound HTTP route's `{model}` path param can\noverride it; defaults empty.",
+      "type": "string",
+      "default": ""
+    },
+    "stream": {
+      "description": "Injected by `server::google_generate` from the path verb\n(`:streamGenerateContent` → true, `:generateContent` → false).",
+      "type": "boolean",
+      "default": false
+    },
+    "systemInstruction": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GoogleContent"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GoogleTool"
+      }
+    }
+  },
+  "required": [
+    "contents"
+  ],
+  "$defs": {
+    "GoogleContent": {
+      "description": "One element of [`GenerateContentRequest`]'s `contents` array — a turn\ncarrying optional role + `parts[]`.",
+      "type": "object",
+      "properties": {
+        "parts": {
+          "type": "array",
+          "default": [],
+          "items": true
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "GoogleFunctionDecl": {
+      "description": "One function declaration inside a [`GoogleTool`]: name + description +\nJSON-Schema parameters.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "parameters": {
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "GoogleGenerationConfig": {
+      "description": "`generationConfig` knobs on a [`GenerateContentRequest`].",
+      "type": "object",
+      "properties": {
+        "maxOutputTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        },
+        "temperature": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "topP": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        }
+      }
+    },
+    "GoogleTool": {
+      "description": "One element of [`GenerateContentRequest`]'s `tools` array — Google's\n`{ functionDeclarations: [...] }` envelope.",
+      "type": "object",
+      "properties": {
+        "functionDeclarations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GoogleFunctionDecl"
+          }
+        }
+      }
+    }
+  }
+}

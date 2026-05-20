@@ -9,6 +9,7 @@
 //! (v0 #454-1: such parts must not be dropped).
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
@@ -40,9 +41,14 @@ const GOOGLE_TOP_LEVEL_EXTRA_KEY: &str = "__google_top_level__";
 
 // ===== wire request types =====
 
-#[derive(Debug, Deserialize)]
+/// Google Generative AI `generateContent` request body
+/// (<https://ai.google.dev/api/generate-content>).
+///
+/// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
+/// OpenAPI schema from the canonical wire shape without redeclaring it.
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct GenerateContentRequest {
+pub struct GenerateContentRequest {
     /// Carried as a field so the inbound HTTP route's `{model}` path param can
     /// override it; defaults empty.
     #[serde(default)]
@@ -60,28 +66,37 @@ struct GenerateContentRequest {
     stream: bool,
     /// Top-level extras: `toolConfig`, `safetySettings`, `cachedContent`, … —
     /// preserve them across the inbound→outbound round-trip. Per
-    /// <https://ai.google.dev/api/generate-content>.
+    /// <https://ai.google.dev/api/generate-content>. Skipped from the
+    /// published schema so the documented contract is the set of typed
+    /// fields; pass-through behavior is preserved at runtime.
     #[serde(flatten)]
+    #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GoogleContent {
+/// One element of [`GenerateContentRequest`]'s `contents` array — a turn
+/// carrying optional role + `parts[]`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GoogleContent {
     #[serde(default)]
     role: Option<String>,
     #[serde(default)]
     parts: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+/// One element of [`GenerateContentRequest`]'s `tools` array — Google's
+/// `{ functionDeclarations: [...] }` envelope.
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct GoogleTool {
+pub struct GoogleTool {
     #[serde(default)]
     function_declarations: Vec<GoogleFunctionDecl>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GoogleFunctionDecl {
+/// One function declaration inside a [`GoogleTool`]: name + description +
+/// JSON-Schema parameters.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GoogleFunctionDecl {
     name: String,
     #[serde(default)]
     description: Option<String>,
@@ -89,9 +104,10 @@ struct GoogleFunctionDecl {
     parameters: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize)]
+/// `generationConfig` knobs on a [`GenerateContentRequest`].
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct GoogleGenerationConfig {
+pub struct GoogleGenerationConfig {
     #[serde(default)]
     temperature: Option<f64>,
     #[serde(default)]
@@ -101,8 +117,11 @@ struct GoogleGenerationConfig {
     /// `stopSequences`, `seed`, `topK`, `responseMimeType`, `responseSchema`,
     /// `responseLogprobs`, `presencePenalty`, `frequencyPenalty`, … — every
     /// generation-config knob without a typed slot rides via `extra` and is
-    /// splatted back into `generationConfig` on render. v0 passed these through.
+    /// splatted back into `generationConfig` on render. v0 passed these
+    /// through. Skipped from the published schema for the same reason as
+    /// the top-level `extra` on [`GenerateContentRequest`].
     #[serde(flatten)]
+    #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
 }
 

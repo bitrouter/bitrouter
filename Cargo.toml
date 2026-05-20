@@ -56,6 +56,11 @@ url = "2"
 serde-saphyr = "0.0.26"
 toml = "0.8"
 
+# JsonSchema derives for the wire-shape types in `bitrouter-sdk`. Used by
+# downstream crates (notably `bitrouter-cloud`) to publish an OpenAPI spec via
+# `aide` without duplicating the wire definitions.
+schemars = "1"
+
 # MCP (sdk `mcp` feature) — official Rust MCP SDK.
 # Source: <https://github.com/modelcontextprotocol/rust-sdk>
 rmcp = { version = "1.7", default-features = false, features = [
