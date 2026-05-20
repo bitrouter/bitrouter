@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
@@ -31,8 +32,13 @@ pub struct OpenAiChatTransport;
 
 // ===== wire request types =====
 
-#[derive(Debug, Deserialize)]
-struct ChatRequest {
+/// OpenAI Chat Completions request body
+/// (<https://platform.openai.com/docs/api-reference/chat/create>).
+///
+/// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
+/// OpenAPI schema from the canonical wire shape without redeclaring it.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     #[serde(default)]
@@ -53,13 +59,18 @@ struct ChatRequest {
     /// `response_format`, `n`, `presence_penalty`, `frequency_penalty`,
     /// `logit_bias`, `logprobs`, `top_logprobs`, `user`, `stream_options`,
     /// `parallel_tool_calls`, … — survives parse/render via `extra`. v0
-    /// passed these through; v1 must too.
+    /// passed these through; v1 must too. Skipped from the published schema
+    /// so the documented contract is the set of typed fields; pass-through
+    /// behavior is preserved at runtime.
     #[serde(flatten)]
+    #[schemars(skip)]
     extra: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatMessage {
+/// One element of [`ChatRequest`]'s `messages` array — a chat turn carrying
+/// role + optional content + optional tool calls / tool-call reply id.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChatMessage {
     role: String,
     /// `content` may be a plain string or an array of content parts, or absent
     /// (an assistant turn that is purely `tool_calls`).
@@ -80,29 +91,34 @@ struct ChatMessage {
     reasoning_content: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatToolCall {
+/// One assistant tool-call entry on a [`ChatMessage`].
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChatToolCall {
     id: String,
     #[serde(default)]
     function: ChatFunctionCall,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct ChatFunctionCall {
+/// The `function` payload of a [`ChatToolCall`]: name + raw JSON argument string.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ChatFunctionCall {
     #[serde(default)]
     name: String,
     #[serde(default)]
     arguments: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatTool {
+/// One element of [`ChatRequest`]'s `tools` array — a `{ function: { … } }` envelope.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChatTool {
     #[serde(default)]
     function: ChatToolFunction,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct ChatToolFunction {
+/// The `function` payload of a [`ChatTool`]: name + description + JSON-Schema
+/// parameters.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ChatToolFunction {
     name: String,
     #[serde(default)]
     description: Option<String>,

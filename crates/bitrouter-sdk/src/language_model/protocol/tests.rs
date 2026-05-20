@@ -1419,3 +1419,92 @@ fn regression_454_5_usage_zero_is_numeric_not_null() {
     assert!(chat["usage"]["prompt_tokens"].is_number());
     assert!(!chat["usage"]["total_tokens"].is_null());
 }
+
+// ===== JsonSchema snapshot tests =====
+//
+// These tests guard the OpenAPI contract derived from the wire-shape types.
+// `bitrouter-cloud` consumes these schemas (via `aide`) to publish the API
+// reference, so any unintended drift in the documented shape is a contract
+// change. The expected schema is stored under `snapshots/`; to update after a
+// deliberate change, re-run the test with `BITROUTER_BLESS=1` set and commit
+// the regenerated file.
+
+/// Generate the JsonSchema for `T`, pretty-print it, and compare against the
+/// fixture at `snapshots/<name>.json`. `BITROUTER_BLESS=1` rewrites the fixture.
+fn assert_schema_snapshot<T: schemars::JsonSchema>(name: &str) {
+    let schema = schemars::schema_for!(T);
+    let actual = serde_json::to_string_pretty(&schema).unwrap();
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/language_model/protocol/snapshots")
+        .join(format!("{name}.json"));
+
+    if std::env::var_os("BITROUTER_BLESS").is_some() {
+        std::fs::write(&path, format!("{actual}\n")).unwrap();
+        return;
+    }
+
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "snapshot {} not readable ({e}); re-run with BITROUTER_BLESS=1 to create.\n\
+             actual schema:\n{actual}",
+            path.display()
+        )
+    });
+    assert_eq!(
+        expected.trim(),
+        actual.trim(),
+        "schema snapshot for `{name}` drifted; re-run with BITROUTER_BLESS=1 to update"
+    );
+}
+
+#[test]
+fn anthropic_messages_request_schema_is_stable() {
+    assert_schema_snapshot::<anthropic::MessagesRequest>("anthropic_messages_request");
+}
+
+#[test]
+fn openai_chat_request_schema_is_stable() {
+    assert_schema_snapshot::<openai_chat::ChatRequest>("openai_chat_request");
+}
+
+#[test]
+fn google_generate_content_request_schema_is_stable() {
+    assert_schema_snapshot::<google::GenerateContentRequest>("google_generate_content_request");
+}
+
+/// `#[schemars(skip)]` on the `extra` `HashMap` must hide it from the published
+/// contract — the schema for the request should never expose
+/// `additionalProperties` of arbitrary JSON values. The exact wording belongs
+/// to the snapshots above; this asserts the negative behavior outright so a
+/// regression is obvious from the failure message.
+#[test]
+fn extra_passthrough_field_is_not_in_schema() {
+    let s = serde_json::to_value(schemars::schema_for!(anthropic::MessagesRequest)).unwrap();
+    assert!(
+        s.get("properties").and_then(|p| p.get("extra")).is_none(),
+        "Anthropic MessagesRequest schema must not expose `extra` (pass-through field)",
+    );
+    let s = serde_json::to_value(schemars::schema_for!(openai_chat::ChatRequest)).unwrap();
+    assert!(
+        s.get("properties").and_then(|p| p.get("extra")).is_none(),
+        "OpenAI ChatRequest schema must not expose `extra` (pass-through field)",
+    );
+    // Google has two `extra` fields — top-level and on `generationConfig`.
+    // Walk both points to make sure neither leaks.
+    let s = serde_json::to_value(schemars::schema_for!(google::GenerateContentRequest)).unwrap();
+    assert!(
+        s.get("properties").and_then(|p| p.get("extra")).is_none(),
+        "Google GenerateContentRequest schema must not expose top-level `extra`",
+    );
+    let gen_cfg = s
+        .get("$defs")
+        .and_then(|d| d.get("GoogleGenerationConfig"))
+        .expect("schema must include GoogleGenerationConfig in $defs");
+    assert!(
+        gen_cfg
+            .get("properties")
+            .and_then(|p| p.get("extra"))
+            .is_none(),
+        "Google GoogleGenerationConfig schema must not expose `extra`",
+    );
+}

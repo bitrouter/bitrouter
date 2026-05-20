@@ -10,6 +10,7 @@
 //! - #416: mixed text + tool_use blocks keep their order and never 502.
 //! - #422: inbound `ping` events are ignored, not treated as errors.
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use async_trait::async_trait;
@@ -36,8 +37,12 @@ pub struct AnthropicTransport;
 
 // ===== wire request types =====
 
-#[derive(Debug, Deserialize)]
-struct MessagesRequest {
+/// Anthropic Messages request body (<https://docs.anthropic.com/en/api/messages>).
+///
+/// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
+/// OpenAPI schema from the canonical wire shape without redeclaring it.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MessagesRequest {
     model: String,
     /// String or an array of `{type:"text", text}` blocks (#227 → #228).
     #[serde(default)]
@@ -55,19 +60,24 @@ struct MessagesRequest {
     stream: bool,
     /// Every other field — `tool_choice`, `stop_sequences`, `top_k`, `metadata`,
     /// `thinking`, … — rides along via `extra` and is splatted back on render.
+    /// Skipped from the published schema so the documented contract is the set
+    /// of typed fields; pass-through behavior is preserved at runtime.
     #[serde(flatten)]
+    #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-struct AnthropicMessage {
+/// One element of [`MessagesRequest`]'s `messages` array — a `{ role, content }` turn.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnthropicMessage {
     role: String,
     /// String or an array of content blocks.
     content: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize)]
-struct AnthropicTool {
+/// One element of [`MessagesRequest`]'s `tools` array — Anthropic's tool definition shape.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnthropicTool {
     name: String,
     #[serde(default)]
     description: Option<String>,
