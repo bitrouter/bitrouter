@@ -8,7 +8,10 @@ edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
 repository = "https://github.com/bitrouter/bitrouter"
-rust-version = "1.85"
+# MSRV — the oldest toolchain the dependency tree actually compiles on.
+# Floor set by `aws-sdk-sts` (needs 1.88) pulled in via bitrouter-bedrock;
+# `process-wrap` needs 1.87. The `msrv` CI job pins this exact version.
+rust-version = "1.88"
 
 [workspace.dependencies]
 # internal crates

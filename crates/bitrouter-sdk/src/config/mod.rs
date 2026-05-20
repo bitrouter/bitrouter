@@ -421,8 +421,9 @@ fn overrides() -> &'static std::sync::RwLock<std::collections::HashMap<String, S
 }
 
 /// Replace the in-memory override map atomically. Subsequent
-/// [`env_lookup`] / [`substitute_env`] / [`zero_config`] calls see the
-/// new values. Empty map clears all overrides.
+/// [`env_lookup`] / [`substitute_env`] calls — and
+/// `bitrouter_providers::zero_config`, which resolves through
+/// `env_lookup` — see the new values. Empty map clears all overrides.
 pub fn set_env_overrides(values: std::collections::HashMap<String, String>) {
     let mut w = overrides().write().expect("env override lock poisoned");
     *w = values;

@@ -75,8 +75,8 @@ impl ConfigRoutingTable {
     /// when there's no source file to re-read from (zero-config mode):
     /// the caller produces a fresh `Config` from
     /// `bitrouter_providers::zero_config` and hands it here. Holds the
-    /// same `reload_lock` as [`reload`] so the two paths serialise
-    /// against each other.
+    /// same `reload_lock` as the `RoutingTable::reload` impl so the two
+    /// paths serialise against each other.
     pub async fn replace_config(&self, fresh: Config) -> Result<()> {
         let _guard = self.reload_lock.lock().await;
         let mut fresh = fresh;

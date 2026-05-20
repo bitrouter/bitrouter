@@ -45,18 +45,23 @@ jobs:
   feature-isolation:
     name: feature-isolation
     runs-on: ubuntu-latest
-    # Verifies plugins do not pull the axum HTTP stack under default features.
+    # Verifies the SDK builds without its `server` feature, and that the
+    # hook plugins do not pull the axum HTTP stack into their dep tree —
+    # plugins are hook libraries, not servers.
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo check -p bitrouter-settlement --no-default-features
       - run: cargo check -p bitrouter-sdk --no-default-features
-      - name: assert axum not in plugin dep tree
+      - run: cargo check -p bitrouter-guardrails
+      - run: cargo check -p bitrouter-observe
+      - name: assert axum not in plugin dep trees
         run: |
-          if cargo tree -p bitrouter-settlement -i axum 2>/dev/null | grep -q axum; then
-            echo "::error::bitrouter-settlement must not depend on axum"
-            exit 1
-          fi
+          for crate in bitrouter-guardrails bitrouter-observe; do
+            if cargo tree -p "$crate" -i axum 2>/dev/null | grep -q '^axum'; then
+              echo "::error::$crate must not depend on axum"
+              exit 1
+            fi
+          done
 
   msrv:
     name: msrv
@@ -65,7 +70,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: "1.85"
+          toolchain: "1.88"
       - run: cargo check --workspace
 
   doc:
