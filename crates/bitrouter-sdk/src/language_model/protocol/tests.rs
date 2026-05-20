@@ -1299,6 +1299,37 @@ fn responses_completed_preserves_id_status_and_usage() {
     assert_eq!(completed["response"]["usage"]["input_tokens"], 12);
 }
 
+/// Upstreams that omit the SSE `event:` line (OpenRouter, vanilla OpenAI
+/// fronted via some gateways) cause the SSE parser to default the event
+/// name to `"message"`. The Responses decoder must trust the body `type`
+/// field in that case instead of treating `"message"` as the event name —
+/// otherwise every delta/lifecycle frame is silently dropped as "unknown".
+#[test]
+fn responses_stream_decoder_prefers_body_type_over_default_message_event() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut decoder = adapter.stream_decoder();
+
+    let event = SseEvent {
+        // SSE default event name when the upstream omits `event:`.
+        event: Some("message".to_string()),
+        data: serde_json::json!({
+            "type": "response.output_text.delta",
+            "delta": "pong",
+        })
+        .to_string(),
+    };
+    let parts = decoder
+        .decode(&event)
+        .expect("decoder must not error on default-named events");
+    assert!(
+        matches!(
+            parts.first(),
+            Some(StreamPart::TextDelta { text }) if text == "pong"
+        ),
+        "body `type` must win over the SSE default `message` event name; got {parts:?}"
+    );
+}
+
 /// #434 — Responses function-call stream items map `item_id` back to the
 /// canonical `call_id`, and the `.done` event does not duplicate the arguments.
 #[test]
@@ -1472,6 +1503,11 @@ fn google_generate_content_request_schema_is_stable() {
     assert_schema_snapshot::<google::GenerateContentRequest>("google_generate_content_request");
 }
 
+#[test]
+fn openai_responses_request_schema_is_stable() {
+    assert_schema_snapshot::<openai_responses::ResponsesRequest>("openai_responses_request");
+}
+
 /// `#[schemars(skip)]` on the `extra` `HashMap` must hide it from the published
 /// contract — the schema for the request should never expose
 /// `additionalProperties` of arbitrary JSON values. The exact wording belongs
@@ -1506,5 +1542,11 @@ fn extra_passthrough_field_is_not_in_schema() {
             .and_then(|p| p.get("extra"))
             .is_none(),
         "Google GoogleGenerationConfig schema must not expose `extra`",
+    );
+    let s =
+        serde_json::to_value(schemars::schema_for!(openai_responses::ResponsesRequest)).unwrap();
+    assert!(
+        s.get("properties").and_then(|p| p.get("extra")).is_none(),
+        "OpenAI ResponsesRequest schema must not expose `extra` (pass-through field)",
     );
 }
