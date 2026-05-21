@@ -116,14 +116,34 @@ async fn shutdown_signal() {
 /// never be an unbounded allocation.
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
+/// Options controlling which routes the SDK mounts. Hosts that ship their
+/// own richer variant of a built-in route (e.g. bitrouter-cloud's enriched
+/// `/v1/models`) opt out of the SDK's plainer version here so
+/// [`axum::Router::merge`] does not panic on the duplicate path.
+#[derive(Default, Clone, Copy)]
+pub struct RouterOptions {
+    /// When `true`, omit `GET /v1/models` from the returned router.
+    pub omit_v1_models: bool,
+}
+
 /// Build the axum router for the given state.
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    build_router_with_options(state, RouterOptions::default())
+}
+
+/// Like [`build_router`], but lets the caller opt out of specific routes
+/// before they are mounted (so a host can supply its own variant without
+/// tripping `Router::merge`'s duplicate-route panic).
+pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Router {
+    let mut router = Router::new()
         .route("/v1/messages", post(anthropic_messages))
         .route("/v1/chat/completions", post(openai_chat))
         .route("/v1/responses", post(openai_responses))
-        .route("/v1beta/models/{model_action}", post(google_generate))
-        .route("/v1/models", get(list_models))
+        .route("/v1beta/models/{model_action}", post(google_generate));
+    if !options.omit_v1_models {
+        router = router.route("/v1/models", get(list_models));
+    }
+    router
         .route("/mcp/{server}", post(mcp_invoke))
         .route("/metrics", get(prometheus_metrics))
         .route("/health", get(health))
