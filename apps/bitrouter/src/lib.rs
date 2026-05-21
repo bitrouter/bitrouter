@@ -16,6 +16,7 @@ pub mod assemble;
 pub mod auth;
 pub mod commands;
 pub mod daemon;
+pub mod db;
 pub mod error_report;
 pub mod metering;
 pub mod paths;

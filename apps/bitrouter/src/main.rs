@@ -266,7 +266,8 @@ enum KeyAction {
         /// The owning user id.
         #[arg(short, long)]
         user: String,
-        /// Database URL.
+        /// Database URL — any backend sea-orm supports
+        /// (`sqlite://…`, `postgres://…`, `mysql://…`).
         #[arg(short, long, default_value = "sqlite://./bitrouter.db")]
         db: String,
         /// Optional policy id to bind to the key (the `policy_id` column).

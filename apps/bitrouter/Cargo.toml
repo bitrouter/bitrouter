@@ -27,7 +27,8 @@ base64.workspace = true
 rand.workspace = true
 hex.workspace = true
 serde-saphyr.workspace = true
-sqlx = { workspace = true, features = ["sqlite"] }
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -172,15 +172,16 @@ fn hint_for(root: &str) -> Option<String> {
                 .into(),
         );
     }
-    // Sqlite path didn't open. Match the specific phrasing from
+    // The database wouldn't open. Match the specific phrasing from
     // `BitrouterError::internal(format!("connecting to database {url}: …"))`
-    // in `apps/bitrouter/src/{auth,metering}/db.rs` — broad substring
-    // matching against bare "sqlite" would false-positive on unrelated
-    // migration / policy-store messages.
+    // in `apps/bitrouter/src/db/mod.rs` — broad substring matching against
+    // bare "sqlite" would false-positive on unrelated migration /
+    // policy-store messages.
     if root.contains("connecting to database") {
         return Some(
-            "Check the `database.url` value in bitrouter.yaml. For local use,\n\
-             `sqlite://./bitrouter.db` is the default; the file is created on first run."
+            "Check the `database.url` value in bitrouter.yaml. sqlite, postgres\n\
+             and mysql URLs are all supported; `sqlite://./bitrouter.db` is the\n\
+             default and the file is created on first run."
                 .into(),
         );
     }

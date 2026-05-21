@@ -2,18 +2,16 @@
 
 use std::sync::Arc;
 
+use crate::metering::{MeteringStore, RequestMetric};
+use crate::policy::hook::PolicyHook;
+use crate::policy::policy::Policy;
+use crate::policy::store::PolicyStore;
 use bitrouter_sdk::PluginId;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{
     GenerationParams, HookDecision, Message, PipelineContext, PipelineRequest, PreRequestHook,
     Prompt, Role, Tool,
 };
-use sqlx::SqlitePool;
-
-use crate::metering::{MeteringStore, RequestMetric, migrate as metering_migrate};
-use crate::policy::hook::PolicyHook;
-use crate::policy::policy::Policy;
-use crate::policy::store::PolicyStore;
 
 fn ctx(model: &str, policy_id: Option<&str>) -> PipelineContext {
     let prompt = Prompt {
@@ -67,9 +65,9 @@ fn ctx_with_tools(tools: &[&str], policy_id: Option<&str>) -> PipelineContext {
 }
 
 async fn fresh_metering() -> MeteringStore {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    metering_migrate(&pool).await.unwrap();
-    MeteringStore::new(pool)
+    let db = crate::db::connect("sqlite::memory:").await.unwrap();
+    crate::db::run_migrations(&db).await.unwrap();
+    MeteringStore::new(db)
 }
 
 #[tokio::test]

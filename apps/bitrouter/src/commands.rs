@@ -3,7 +3,6 @@
 //! reuse it without dragging in the binary.
 
 use anyhow::{Context, Result};
-use sqlx::SqlitePool;
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
@@ -125,20 +124,20 @@ pub async fn key_sign(
     user_id: &str,
     policy_id: Option<&str>,
 ) -> Result<GeneratedKey> {
-    let pool = SqlitePool::connect(db_url)
+    let db = crate::db::connect(db_url)
         .await
         .with_context(|| format!("connecting to database {db_url}"))?;
-    auth_db::migrate(&pool)
+    crate::db::run_migrations(&db)
         .await
-        .context("running auth migrations")?;
-    auth_db::upsert_user(&pool, user_id)
+        .context("running database migrations")?;
+    auth_db::upsert_user(&db, user_id)
         .await
         .context("creating user row")?;
 
     let key = generate();
     let id = format!("brvk_id_{}", &key.hash[..16]);
     auth_db::insert_api_key(
-        &pool,
+        &db,
         &NewApiKey {
             id: id.clone(),
             key_hash: key.hash.clone(),

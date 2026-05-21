@@ -6,11 +6,8 @@
 
 use std::sync::Arc;
 
-use std::str::FromStr;
-
 use anyhow::{Context, Result};
-use sqlx::SqlitePool;
-use sqlx::sqlite::SqliteConnectOptions;
+use sea_orm::DatabaseConnection;
 
 use bitrouter_sdk::App;
 use bitrouter_sdk::acp::{AcpStdioExecutor, ConfigAcpRoutingTable};
@@ -27,13 +24,14 @@ use crate::auth::AuthHook;
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 
-/// A running application plus the database pool it was assembled over (the
-/// caller keeps the pool for management commands — key creation, etc.).
+/// A running application plus the database connection it was assembled
+/// over (the caller keeps the connection for management commands — key
+/// creation, etc.).
 pub struct Assembled {
     /// The fully wired application.
     pub app: App,
-    /// The shared database pool.
-    pub pool: SqlitePool,
+    /// The shared database connection.
+    pub db: DatabaseConnection,
     /// The policy store wired into the language_model pipeline. Held by the
     /// caller (the daemon) so `bitrouter reload` / SIGHUP can call
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
@@ -60,30 +58,24 @@ pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
-    // ---- database + migrations (each plugin owns its own tables) ----
-    // `SqlitePool::connect(url)` parses the DSN with sqlx's default
-    // open mode (read-write, *not* create), so a fresh
-    // `sqlite://./bitrouter.db` against a missing file errors with
-    // SQLITE_CANTOPEN. Parse the URL ourselves and force
-    // `create_if_missing(true)` so first-run works without forcing the
-    // user to write `?mode=rwc` into the DSN. The URL itself is still
-    // forwarded to sqlx verbatim — we only set a connection flag.
-    let connect_opts = SqliteConnectOptions::from_str(&config.database.url)
-        .with_context(|| format!("parsing database url {}", config.database.url))?
-        .create_if_missing(true);
-    let pool = SqlitePool::connect_with(connect_opts)
+    // ---- database + migrations ----
+    // `database.url` may name any backend sea-orm supports (sqlite /
+    // postgres / mysql); `crate::db::connect` handles the per-backend
+    // first-run conveniences (a SQLite file URL is created on demand).
+    // The schema is applied from `crate::db::migration` — Rust code, not
+    // SQL — so it lands identically on whichever backend is configured.
+    let db = crate::db::connect(&config.database.url)
         .await
         .with_context(|| format!("connecting to database {}", config.database.url))?;
-    crate::auth::migrate(&pool)
+    crate::db::run_migrations(&db)
         .await
-        .context("running auth migrations")?;
-    crate::metering::migrate(&pool)
-        .await
-        .context("running metering migrations")?;
-    // The SQLite database holds SHA-256 hashes of every virtual key, plus
-    // the metering audit trail. On Unix, tighten the file permissions to
-    // 0600 so a co-tenant on the host can't read it. The control socket
-    // already does the same in `daemon::run_control_socket`.
+        .context("running database migrations")?;
+    // A SQLite database file holds SHA-256 hashes of every virtual key,
+    // plus the metering audit trail. On Unix, tighten the file
+    // permissions to 0600 so a co-tenant on the host can't read it. The
+    // control socket already does the same in
+    // `daemon::run_control_socket`. Non-file backends (Postgres / MySQL)
+    // have no local file and govern access themselves.
     #[cfg(unix)]
     if let Some(path) = sqlite_file_path(&config.database.url) {
         use std::os::unix::fs::PermissionsExt;
@@ -129,7 +121,7 @@ pub async fn build_app_with_path(
 
     // ---- pricing, metering, policy, guardrails — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
-    let metering_store = MeteringStore::new(pool.clone());
+    let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
@@ -189,14 +181,14 @@ pub async fn build_app_with_path(
         .as_ref()
         .map(|_| Arc::new(AcpStdioExecutor::new()));
 
-    let pool_for_hooks = pool.clone();
+    let db_for_hooks = db.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
             // Stage 1, in order: auth → policy → guardrail (upstream).
-            lm.pre_request_hook(AuthHook::new(pool_for_hooks.clone()));
+            lm.pre_request_hook(AuthHook::new(db_for_hooks.clone()));
             lm.pre_request_hook(PolicyHook::new(
                 policy_store.clone(),
                 Some(metering_store_for_policy),
@@ -245,7 +237,7 @@ pub async fn build_app_with_path(
 
     Ok(Assembled {
         app,
-        pool,
+        db,
         policy_store: policy_store_for_reload,
         routing_table: routing_table_for_reload,
     })
@@ -370,16 +362,16 @@ impl bitrouter_sdk::language_model::ObserveHook for PrometheusObserve {
     }
 }
 
-/// Extract the file path from a sqlite URL. Returns `None` for `:memory:` or
-/// non-file URLs. Accepts the `sqlite://`, `sqlite:` and bare-path forms that
-/// `sqlx::SqlitePool::connect` accepts.
+/// Extract the file path from a SQLite URL. Returns `None` for `:memory:`
+/// and for any non-SQLite URL (Postgres / MySQL have no local file). Accepts
+/// the `sqlite://` and `sqlite:` forms.
 #[cfg(unix)]
 fn sqlite_file_path(url: &str) -> Option<std::path::PathBuf> {
+    // Only a SQLite URL names a local file — a Postgres / MySQL URL must
+    // never be mistaken for a path to chmod.
     let after_scheme = url
         .strip_prefix("sqlite://")
-        .or_else(|| url.strip_prefix("sqlite:"))
-        .unwrap_or(url);
-    // Strip a leading `//` (sqlite://path → /path; treat as filesystem path)
+        .or_else(|| url.strip_prefix("sqlite:"))?;
     let path = after_scheme.split('?').next().unwrap_or(after_scheme);
     if path.is_empty() || path == ":memory:" {
         return None;
@@ -408,5 +400,8 @@ mod sqlite_path_tests {
         );
         assert_eq!(sqlite_file_path(":memory:"), None);
         assert_eq!(sqlite_file_path("sqlite::memory:"), None);
+        // Non-SQLite URLs name no local file — never treated as a path.
+        assert_eq!(sqlite_file_path("postgres://u:p@host/bitrouter"), None);
+        assert_eq!(sqlite_file_path("mysql://u:p@host/bitrouter"), None);
     }
 }

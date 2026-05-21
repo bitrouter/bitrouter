@@ -1,47 +1,19 @@
 //! Database access for the OSS auth module. This module owns the `users`
 //! and `api_keys` tables; the rest of the binary coordinates via the
 //! `Authenticated` event instead of reading `api_keys` directly.
+//!
+//! The tables themselves are created by the sea-orm migrations in
+//! `crate::db::migration`; this module only reads and writes rows.
 
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
+};
 
 use bitrouter_sdk::{BitrouterError, Result};
 
-/// The SQL that creates this module's tables. Run once at startup.
-pub const MIGRATION_SQL: &str = r#"
-CREATE TABLE IF NOT EXISTS users (
-    id          TEXT PRIMARY KEY,
-    created_at  TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS api_keys (
-    id                     TEXT PRIMARY KEY,
-    key_hash               TEXT NOT NULL UNIQUE,
-    user_id                TEXT NOT NULL,
-    spend_limit_micro_usd  INTEGER,
-    rpm_limit              INTEGER,
-    policy_id              TEXT,
-    expires_at             TEXT,
-    active                 INTEGER NOT NULL DEFAULT 1,
-    created_at             TEXT NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
-"#;
-
-/// Create the auth tables on `pool`. Idempotent.
-pub async fn migrate(pool: &SqlitePool) -> Result<()> {
-    for stmt in MIGRATION_SQL.split(';') {
-        let stmt = stmt.trim();
-        if stmt.is_empty() {
-            continue;
-        }
-        sqlx::query(stmt)
-            .execute(pool)
-            .await
-            .map_err(|e| BitrouterError::internal(format!("auth migration: {e}")))?;
-    }
-    Ok(())
-}
+use crate::auth::entities::{api_keys, users};
 
 /// One row of the `api_keys` table, in typed form.
 #[derive(Debug, Clone)]
@@ -64,34 +36,34 @@ pub struct ApiKeyRecord {
     pub active: bool,
 }
 
-/// Look up an active api key by its SHA-256 hash. Only the **hash** is stored —
+/// Look up an api key by its SHA-256 hash. Only the **hash** is stored —
 /// the plaintext secret is never persisted.
-pub async fn find_key_by_hash(pool: &SqlitePool, key_hash: &str) -> Result<Option<ApiKeyRecord>> {
-    let row = sqlx::query(
-        "SELECT id, user_id, spend_limit_micro_usd, rpm_limit, \
-         policy_id, expires_at, active FROM api_keys WHERE key_hash = ?",
-    )
-    .bind(key_hash)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| BitrouterError::internal(format!("api_keys lookup: {e}")))?;
+pub async fn find_key_by_hash(
+    db: &DatabaseConnection,
+    key_hash: &str,
+) -> Result<Option<ApiKeyRecord>> {
+    let row = api_keys::Entity::find()
+        .filter(api_keys::Column::KeyHash.eq(key_hash))
+        .one(db)
+        .await
+        .map_err(|e| BitrouterError::internal(format!("api_keys lookup: {e}")))?;
 
     let Some(row) = row else {
         return Ok(None);
     };
-    let expires_at = row.get::<Option<String>, _>("expires_at").and_then(|s| {
-        DateTime::parse_from_rfc3339(&s)
+    let expires_at = row.expires_at.as_deref().and_then(|s| {
+        DateTime::parse_from_rfc3339(s)
             .ok()
             .map(|d| d.with_timezone(&Utc))
     });
     Ok(Some(ApiKeyRecord {
-        id: row.get("id"),
-        user_id: row.get("user_id"),
-        spend_limit_micro_usd: row.get("spend_limit_micro_usd"),
-        rpm_limit: row.get("rpm_limit"),
-        policy_id: row.get("policy_id"),
+        id: row.id,
+        user_id: row.user_id,
+        spend_limit_micro_usd: row.spend_limit_micro_usd,
+        rpm_limit: row.rpm_limit,
+        policy_id: row.policy_id,
         expires_at,
-        active: row.get::<i64, _>("active") != 0,
+        active: row.active != 0,
     }))
 }
 
@@ -109,19 +81,30 @@ pub fn is_reserved_user_id(user_id: &str) -> bool {
 
 /// Insert a user row (idempotent on conflict). Rejects [`is_reserved_user_id`]
 /// values — those names are owned by synthesised callers.
-pub async fn upsert_user(pool: &SqlitePool, user_id: &str) -> Result<()> {
+pub async fn upsert_user(db: &DatabaseConnection, user_id: &str) -> Result<()> {
     if is_reserved_user_id(user_id) {
         return Err(BitrouterError::bad_request(format!(
             "user id '{user_id}' is reserved for synthesised callers"
         )));
     }
-    sqlx::query("INSERT OR IGNORE INTO users (id, created_at) VALUES (?, ?)")
-        .bind(user_id)
-        .bind(Utc::now().to_rfc3339())
-        .execute(pool)
+    let row = users::ActiveModel {
+        id: Set(user_id.to_string()),
+        created_at: Set(Utc::now().to_rfc3339()),
+    };
+    // `do_nothing` makes this idempotent; on a conflict sea-orm reports
+    // `RecordNotInserted`, which here is the success path, not an error.
+    match users::Entity::insert(row)
+        .on_conflict(
+            OnConflict::column(users::Column::Id)
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec(db)
         .await
-        .map_err(|e| BitrouterError::internal(format!("upsert user: {e}")))?;
-    Ok(())
+    {
+        Ok(_) | Err(DbErr::RecordNotInserted) => Ok(()),
+        Err(e) => Err(BitrouterError::internal(format!("upsert user: {e}"))),
+    }
 }
 
 /// Parameters for inserting a new api key.
@@ -143,22 +126,20 @@ pub struct NewApiKey {
 
 /// Insert a new api key row. The caller is responsible for having created the
 /// `users` row first (or call [`upsert_user`]).
-pub async fn insert_api_key(pool: &SqlitePool, key: &NewApiKey) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO api_keys \
-         (id, key_hash, user_id, spend_limit_micro_usd, rpm_limit, \
-          policy_id, expires_at, active, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, NULL, 1, ?)",
-    )
-    .bind(&key.id)
-    .bind(&key.key_hash)
-    .bind(&key.user_id)
-    .bind(key.spend_limit_micro_usd)
-    .bind(key.rpm_limit)
-    .bind(&key.policy_id)
-    .bind(Utc::now().to_rfc3339())
-    .execute(pool)
-    .await
-    .map_err(|e| BitrouterError::internal(format!("insert api key: {e}")))?;
+pub async fn insert_api_key(db: &DatabaseConnection, key: &NewApiKey) -> Result<()> {
+    let row = api_keys::ActiveModel {
+        id: Set(key.id.clone()),
+        key_hash: Set(key.key_hash.clone()),
+        user_id: Set(key.user_id.clone()),
+        spend_limit_micro_usd: Set(key.spend_limit_micro_usd),
+        rpm_limit: Set(key.rpm_limit),
+        policy_id: Set(key.policy_id.clone()),
+        expires_at: Set(None),
+        active: Set(1),
+        created_at: Set(Utc::now().to_rfc3339()),
+    };
+    row.insert(db)
+        .await
+        .map_err(|e| BitrouterError::internal(format!("insert api key: {e}")))?;
     Ok(())
 }

@@ -1,14 +1,26 @@
-//! `MeteringStore` — SQLite read+write for the `requests` table.
+//! `MeteringStore` — read+write access to the `requests` table.
 //!
 //! Single writer ([`super::MeteringRecorder`]), multiple readers (the
 //! `policy` module's spend-cap enforcement; future analytics CLI).
+//!
+//! Every query goes through sea-orm, so the store works unchanged on
+//! whichever backend `database.url` selects (SQLite / Postgres / MySQL).
+//! The window rollups (`SUM` of charges / tokens) are folded in Rust
+//! rather than as a SQL aggregate: `SUM` returns a different value type
+//! per backend (`integer` / `numeric` / `decimal`), and folding the rows
+//! sidesteps that entirely. The metering windows are bounded (at most one
+//! month) so the row counts stay modest for a local-first deployment.
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
-use sqlx::{Row, SqlitePool};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QuerySelect, Set,
+};
 
 use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::metering::db::RequestMetric;
+use crate::metering::entities::requests;
 
 /// A rolling time window for usage queries.
 #[derive(Debug, Clone, Copy)]
@@ -52,52 +64,43 @@ pub struct RateMetrics {
     pub tokens_per_minute: f64,
 }
 
-/// SQLite-backed metering store.
+/// sea-orm-backed metering store.
 #[derive(Clone)]
 pub struct MeteringStore {
-    pool: SqlitePool,
+    db: DatabaseConnection,
 }
 
 impl MeteringStore {
-    /// Build a store over a sqlite pool. The pool must already carry the
-    /// `requests` table (`crate::metering::db::migrate`).
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-
-    /// Shared access to the underlying pool (used by tests and by sibling
-    /// OSS business modules that want to share the same DB).
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
+    /// Build a store over a database connection. The database must already
+    /// carry the `requests` table (`crate::db::run_migrations`).
+    pub fn new(db: DatabaseConnection) -> Self {
+        Self { db }
     }
 
     /// Total estimated spend (micro-USD) for `api_key_id` within `window`.
     pub async fn get_spend(&self, api_key_id: &str, window: TimeWindow) -> Result<u64> {
         let start = window_start(window).to_rfc3339();
-        let row = sqlx::query(
-            "SELECT COALESCE(SUM(estimated_charge_micro_usd), 0) AS total \
-             FROM requests WHERE api_key_id = ? AND created_at >= ?",
-        )
-        .bind(api_key_id)
-        .bind(&start)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| BitrouterError::internal(format!("get_spend: {e}")))?;
-        Ok(row.get::<i64, _>("total").max(0) as u64)
+        let charges: Vec<i64> = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::EstimatedChargeMicroUsd)
+            .filter(requests::Column::ApiKeyId.eq(api_key_id))
+            .filter(requests::Column::CreatedAt.gte(start))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("get_spend: {e}")))?;
+        Ok(charges.into_iter().map(|c| c.max(0) as u64).sum())
     }
 
     /// Total request count for `api_key_id` within `window`.
     pub async fn get_request_count(&self, api_key_id: &str, window: TimeWindow) -> Result<u64> {
         let start = window_start(window).to_rfc3339();
-        let row = sqlx::query(
-            "SELECT COUNT(*) AS n FROM requests WHERE api_key_id = ? AND created_at >= ?",
-        )
-        .bind(api_key_id)
-        .bind(&start)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| BitrouterError::internal(format!("get_request_count: {e}")))?;
-        Ok(row.get::<i64, _>("n").max(0) as u64)
+        requests::Entity::find()
+            .filter(requests::Column::ApiKeyId.eq(api_key_id))
+            .filter(requests::Column::CreatedAt.gte(start))
+            .count(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("get_request_count: {e}")))
     }
 
     /// Token usage for `api_key_id` on `model` within `window`.
@@ -108,19 +111,19 @@ impl MeteringStore {
         window: TimeWindow,
     ) -> Result<TokenUsage> {
         let start = window_start(window).to_rfc3339();
-        let row = sqlx::query(
-            "SELECT COALESCE(SUM(prompt_tokens), 0) AS pt, \
-             COALESCE(SUM(completion_tokens), 0) AS ct \
-             FROM requests WHERE api_key_id = ? AND model_id = ? AND created_at >= ?",
-        )
-        .bind(api_key_id)
-        .bind(model)
-        .bind(&start)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| BitrouterError::internal(format!("get_token_usage: {e}")))?;
-        let prompt = row.get::<i64, _>("pt").max(0) as u64;
-        let completion = row.get::<i64, _>("ct").max(0) as u64;
+        let rows: Vec<(i64, i64)> = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::PromptTokens)
+            .column(requests::Column::CompletionTokens)
+            .filter(requests::Column::ApiKeyId.eq(api_key_id))
+            .filter(requests::Column::ModelId.eq(model))
+            .filter(requests::Column::CreatedAt.gte(start))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("get_token_usage: {e}")))?;
+        let prompt: u64 = rows.iter().map(|(p, _)| (*p).max(0) as u64).sum();
+        let completion: u64 = rows.iter().map(|(_, c)| (*c).max(0) as u64).sum();
         Ok(TokenUsage {
             prompt_tokens: prompt,
             completion_tokens: completion,
@@ -131,70 +134,73 @@ impl MeteringStore {
     /// Current request/token rate for `api_key_id`.
     pub async fn get_rate(&self, api_key_id: &str) -> Result<RateMetrics> {
         let start = window_start(TimeWindow::LastMinute).to_rfc3339();
-        let row = sqlx::query(
-            "SELECT COUNT(*) AS n, \
-             COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS tok \
-             FROM requests WHERE api_key_id = ? AND created_at >= ?",
-        )
-        .bind(api_key_id)
-        .bind(&start)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| BitrouterError::internal(format!("get_rate: {e}")))?;
+        let rows: Vec<(i64, i64)> = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::PromptTokens)
+            .column(requests::Column::CompletionTokens)
+            .filter(requests::Column::ApiKeyId.eq(api_key_id))
+            .filter(requests::Column::CreatedAt.gte(start))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("get_rate: {e}")))?;
+        let tokens: u64 = rows
+            .iter()
+            .map(|(p, c)| (*p).max(0) as u64 + (*c).max(0) as u64)
+            .sum();
         Ok(RateMetrics {
-            requests_per_minute: row.get::<i64, _>("n").max(0) as f64,
-            tokens_per_minute: row.get::<i64, _>("tok").max(0) as f64,
+            requests_per_minute: rows.len() as f64,
+            tokens_per_minute: tokens as f64,
         })
     }
 
     /// Record one settled request. The single writer.
     pub async fn record_request(&self, record: RequestMetric) -> Result<()> {
+        let row = requests::ActiveModel {
+            request_id: Set(record.request_id),
+            user_id: Set(record.user_id),
+            api_key_id: Set(record.api_key_id),
+            model_id: Set(record.model_id),
+            provider_id: Set(record.provider_id),
+            prompt_tokens: Set(record.prompt_tokens as i64),
+            completion_tokens: Set(record.completion_tokens as i64),
+            reasoning_tokens: Set(record.reasoning_tokens as i64),
+            cache_read_tokens: Set(record.cache_read_tokens as i64),
+            cache_write_tokens: Set(record.cache_write_tokens as i64),
+            estimated_charge_micro_usd: Set(record.estimated_charge_micro_usd),
+            streamed: Set(record.streamed as i32),
+            latency_ms: Set(record.latency_ms as i64),
+            generation_time_ms: Set(record.generation_time_ms as i64),
+            error: Set(record.error),
+            created_at: Set(Utc::now().to_rfc3339()),
+        };
         // `ON CONFLICT(request_id) DO UPDATE` so a retried / streamed-then-
         // finalised write doesn't reset `created_at`; only mutable columns
         // refresh.
-        sqlx::query(
-            "INSERT INTO requests \
-             (request_id, user_id, api_key_id, model_id, provider_id, \
-              prompt_tokens, completion_tokens, reasoning_tokens, \
-              cache_read_tokens, cache_write_tokens, \
-              estimated_charge_micro_usd, streamed, \
-              latency_ms, generation_time_ms, error, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(request_id) DO UPDATE SET \
-                user_id = excluded.user_id, \
-                api_key_id = excluded.api_key_id, \
-                model_id = excluded.model_id, \
-                provider_id = excluded.provider_id, \
-                prompt_tokens = excluded.prompt_tokens, \
-                completion_tokens = excluded.completion_tokens, \
-                reasoning_tokens = excluded.reasoning_tokens, \
-                cache_read_tokens = excluded.cache_read_tokens, \
-                cache_write_tokens = excluded.cache_write_tokens, \
-                estimated_charge_micro_usd = excluded.estimated_charge_micro_usd, \
-                streamed = excluded.streamed, \
-                latency_ms = excluded.latency_ms, \
-                generation_time_ms = excluded.generation_time_ms, \
-                error = excluded.error",
-        )
-        .bind(&record.request_id)
-        .bind(&record.user_id)
-        .bind(&record.api_key_id)
-        .bind(&record.model_id)
-        .bind(&record.provider_id)
-        .bind(record.prompt_tokens as i64)
-        .bind(record.completion_tokens as i64)
-        .bind(record.reasoning_tokens as i64)
-        .bind(record.cache_read_tokens as i64)
-        .bind(record.cache_write_tokens as i64)
-        .bind(record.estimated_charge_micro_usd)
-        .bind(record.streamed as i64)
-        .bind(record.latency_ms as i64)
-        .bind(record.generation_time_ms as i64)
-        .bind(&record.error)
-        .bind(Utc::now().to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| BitrouterError::internal(format!("record_request: {e}")))?;
+        requests::Entity::insert(row)
+            .on_conflict(
+                OnConflict::column(requests::Column::RequestId)
+                    .update_columns([
+                        requests::Column::UserId,
+                        requests::Column::ApiKeyId,
+                        requests::Column::ModelId,
+                        requests::Column::ProviderId,
+                        requests::Column::PromptTokens,
+                        requests::Column::CompletionTokens,
+                        requests::Column::ReasoningTokens,
+                        requests::Column::CacheReadTokens,
+                        requests::Column::CacheWriteTokens,
+                        requests::Column::EstimatedChargeMicroUsd,
+                        requests::Column::Streamed,
+                        requests::Column::LatencyMs,
+                        requests::Column::GenerationTimeMs,
+                        requests::Column::Error,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("record_request: {e}")))?;
         Ok(())
     }
 }
