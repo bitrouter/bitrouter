@@ -1,18 +1,20 @@
-//! Metering integration tests against an in-memory SQLite pool.
+//! Metering integration tests against an in-memory SQLite database.
 
-use sqlx::SqlitePool;
 use std::sync::Arc;
+
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
 use bitrouter_sdk::Result;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 
-use super::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable, TimeWindow, migrate};
+use super::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable, TimeWindow};
+use crate::db;
 
-async fn pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    migrate(&pool).await.unwrap();
-    pool
+async fn pool() -> DatabaseConnection {
+    let db = db::connect("sqlite::memory:").await.unwrap();
+    db::run_migrations(&db).await.unwrap();
+    db
 }
 
 fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
@@ -101,12 +103,15 @@ async fn spend_isolates_by_api_key() -> Result<()> {
 /// the new recorder writes work end-to-end.
 #[tokio::test]
 async fn migrate_renames_legacy_final_charge_column() -> Result<()> {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let pool = db::connect("sqlite::memory:").await.unwrap();
     // Stand up the pre-refactor schema (final_charge_micro_usd, no
     // cache_read/write columns — the renamer only handles the legacy
     // column; missing columns elsewhere would require a full v2
-    // migration which v1.0 doesn't ship).
-    sqlx::query(
+    // migration which v1.0 doesn't ship). Raw DDL is used here only to
+    // fabricate a *pre-migration* database; production schema is all
+    // sea-orm migration code.
+    pool.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
         "CREATE TABLE requests (\
             request_id                      TEXT PRIMARY KEY,\
             user_id                         TEXT NOT NULL,\
@@ -125,25 +130,24 @@ async fn migrate_renames_legacy_final_charge_column() -> Result<()> {
             error                           TEXT,\
             created_at                      TEXT NOT NULL\
          )",
-    )
-    .execute(&pool)
+    ))
     .await
     .unwrap();
 
     // Seed one row using the legacy column.
-    sqlx::query(
+    pool.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
         "INSERT INTO requests VALUES (\
             'r-legacy', 'u', 'k', 'm', 'p', 1, 2, 0, 0, 0, 42, 0, 0, 0, NULL, ?\
          )",
-    )
-    .bind(chrono::Utc::now().to_rfc3339())
-    .execute(&pool)
+        [chrono::Utc::now().to_rfc3339().into()],
+    ))
     .await
     .unwrap();
 
-    // Run the new migration — it should detect the legacy column and
+    // Run the migrations — migration 3 should detect the legacy column and
     // rename it in place without losing the row.
-    migrate(&pool).await?;
+    db::run_migrations(&pool).await?;
 
     // Verify the row is reachable through the new column name.
     let store = MeteringStore::new(pool);

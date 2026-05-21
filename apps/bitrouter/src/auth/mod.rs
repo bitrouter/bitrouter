@@ -6,6 +6,7 @@
 //! against its own auth model.
 
 pub mod db;
+pub mod entities;
 pub mod events;
 pub mod hook;
 pub mod keys;
@@ -13,7 +14,7 @@ pub mod keys;
 #[cfg(test)]
 mod tests;
 
-pub use db::{ApiKeyRecord, NewApiKey, migrate};
+pub use db::{ApiKeyRecord, NewApiKey};
 pub use events::Authenticated;
 pub use hook::AuthHook;
 pub use keys::{GeneratedKey, KEY_PREFIX, generate, hash_key, looks_like_virtual_key};

@@ -1,6 +1,9 @@
 //! Auth tests: the `skip_auth` truth table and the `brvk_` validation flow.
 
-use sqlx::SqlitePool;
+use sea_orm::sea_query::Expr;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+
+use crate::auth::entities::api_keys;
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{
@@ -13,10 +16,10 @@ use crate::auth::events::Authenticated;
 use crate::auth::hook::AuthHook;
 use crate::auth::keys;
 
-async fn pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    db::migrate(&pool).await.unwrap();
-    pool
+async fn pool() -> DatabaseConnection {
+    let db = crate::db::connect("sqlite::memory:").await.unwrap();
+    crate::db::run_migrations(&db).await.unwrap();
+    db
 }
 
 fn prompt() -> Prompt {
@@ -43,7 +46,7 @@ fn ctx_with(caller: CallerContext, bearer: Option<&str>) -> PipelineContext {
 }
 
 /// Insert a fresh active key, returning its plaintext secret + id.
-async fn insert_active_key(pool: &SqlitePool, user: &str) -> (String, String) {
+async fn insert_active_key(pool: &DatabaseConnection, user: &str) -> (String, String) {
     db::upsert_user(pool, user).await.unwrap();
     let key = keys::generate();
     let id = format!("key_{user}");
@@ -193,8 +196,10 @@ async fn inactive_key_is_denied() {
     .await
     .unwrap();
     // flip it inactive
-    sqlx::query("UPDATE api_keys SET active = 0 WHERE id = 'key_inactive'")
-        .execute(&pool)
+    api_keys::Entity::update_many()
+        .col_expr(api_keys::Column::Active, Expr::value(0))
+        .filter(api_keys::Column::Id.eq("key_inactive"))
+        .exec(&pool)
         .await
         .unwrap();
 

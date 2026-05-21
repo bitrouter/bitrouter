@@ -14,10 +14,12 @@
 //! rather than in its own file.
 
 use axum_test::TestServer;
+use bitrouter::metering::entities::requests;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config;
 use bitrouter_sdk::language_model::{GenerationParams, Message, PipelineRequest, Prompt, Role};
 use bitrouter_sdk::server::{AppState, build_router};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -112,14 +114,20 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() {
     assert_eq!(text, "hello from the mock upstream");
 
     // metering ran — a metering row exists with the full identity context.
-    let row: (i64, String) =
-        sqlx::query_as("SELECT estimated_charge_micro_usd, model_id FROM requests LIMIT 1")
-            .fetch_one(&assembled.pool)
-            .await
-            .expect("a metering row was written");
-    assert_eq!(row.1, "test-model", "metering row records the routed model");
+    let row = requests::Entity::find()
+        .one(&assembled.db)
+        .await
+        .expect("metering query runs")
+        .expect("a metering row was written");
+    assert_eq!(
+        row.model_id, "test-model",
+        "metering row records the routed model"
+    );
     // 11 prompt × 2 + 7 completion × 10 = 92 µ$
-    assert_eq!(row.0, 92, "estimated charge derived from pricing × tokens");
+    assert_eq!(
+        row.estimated_charge_micro_usd, 92,
+        "estimated charge derived from pricing × tokens"
+    );
 }
 
 #[tokio::test]
@@ -247,11 +255,11 @@ plugins:
 
     // Mint a `brvk_` key bound to `pol_cap`.
     let user = "spender";
-    auth_db::upsert_user(&assembled.pool, user).await.unwrap();
+    auth_db::upsert_user(&assembled.db, user).await.unwrap();
     let key = generate();
     let key_id = "spender-key".to_string();
     auth_db::insert_api_key(
-        &assembled.pool,
+        &assembled.db,
         &NewApiKey {
             id: key_id.clone(),
             key_hash: key.hash.clone(),
@@ -277,13 +285,16 @@ plugins:
     pipeline.execute(req1).await.expect("first request allowed");
 
     // Confirm the row landed with the expected estimated charge.
-    let row: (i64,) =
-        sqlx::query_as("SELECT estimated_charge_micro_usd FROM requests WHERE api_key_id = ?")
-            .bind(&key_id)
-            .fetch_one(&assembled.pool)
-            .await
-            .expect("metering wrote a row");
-    assert_eq!(row.0, 92, "first request bills 92µ$ (11×2 + 7×10)");
+    let row = requests::Entity::find()
+        .filter(requests::Column::ApiKeyId.eq(&key_id))
+        .one(&assembled.db)
+        .await
+        .expect("metering query runs")
+        .expect("metering wrote a row");
+    assert_eq!(
+        row.estimated_charge_micro_usd, 92,
+        "first request bills 92µ$ (11×2 + 7×10)"
+    );
 
     // Second request: 92µ$ already accrued ≥ 50µ$ cap → PolicyHook denies
     // at the `max_spend_micro_usd` check with 403.
