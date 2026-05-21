@@ -27,7 +27,7 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sqlx::SqlitePool;
+use sea_orm::DatabaseConnection;
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
@@ -49,14 +49,14 @@ pub fn plugin_id() -> PluginId {
 /// virtual key). Owns no routing or settlement behaviour — it only
 /// establishes identity.
 pub struct AuthHook {
-    pool: SqlitePool,
+    db: DatabaseConnection,
 }
 
 impl AuthHook {
-    /// Build an `AuthHook` over a sqlite pool. The pool must already have
-    /// this module's tables (`crate::auth::db::migrate`).
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    /// Build an `AuthHook` over a database connection. The database must
+    /// already carry this module's tables (`crate::db::run_migrations`).
+    pub fn new(db: DatabaseConnection) -> Self {
+        Self { db }
     }
 
     /// Extract a presented API-key credential from the request headers.
@@ -114,7 +114,7 @@ impl PreRequestHook for AuthHook {
         }
 
         let hash = keys::hash_key(&credential);
-        let record = db::find_key_by_hash(&self.pool, &hash).await?;
+        let record = db::find_key_by_hash(&self.db, &hash).await?;
         let Some(record) = record else {
             return Ok(HookDecision::Deny(DenyReason::Unauthorized(
                 "unknown API key".to_string(),

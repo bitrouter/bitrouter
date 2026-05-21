@@ -78,11 +78,23 @@ rmcp = { version = "1.7", default-features = false, features = [
 # source of truth: <https://agentclientprotocol.com/protocol/schema> +
 # <https://agentclientprotocol.com/protocol/transports>.
 
-# database (used by apps/bitrouter's auth + metering modules)
-sqlx = { version = "0.8", default-features = false, features = [
-    "runtime-tokio",
+# database — sea-orm is the only database dependency in the workspace.
+# bitrouter depends on this high-level ORM abstraction, never on a concrete
+# driver: enabling `sqlx-sqlite` / `sqlx-postgres` / `sqlx-mysql` here lets
+# the `bitrouter` binary talk to every backend sea-orm supports from one
+# build. The schema is defined as `sea-orm-migration` Rust code, not SQL.
+sea-orm = { version = "1", default-features = false, features = [
     "macros",
-    "chrono",
+    "sqlx-sqlite",
+    "sqlx-postgres",
+    "sqlx-mysql",
+    "runtime-tokio-rustls",
+] }
+sea-orm-migration = { version = "1", default-features = false, features = [
+    "sqlx-sqlite",
+    "sqlx-postgres",
+    "sqlx-mysql",
+    "runtime-tokio-rustls",
 ] }
 
 # crypto / encoding

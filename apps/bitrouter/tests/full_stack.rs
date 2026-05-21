@@ -28,13 +28,15 @@ use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
+use bitrouter::metering::entities::requests;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 
 // ===== shared setup =====
 
 /// Everything one full-stack test needs after assembly.
 struct FullStack {
     server: TestServer,
-    pool: sqlx::SqlitePool,
+    db: DatabaseConnection,
     brvk_secret: String,
     upstream: MockServer,
     otlp_collector: MockServer,
@@ -137,11 +139,11 @@ plugins:
 
     // ── mint a brvk_ key bound to pol_main ──
     let user = "fullstack-user";
-    auth_db::upsert_user(&assembled.pool, user).await.unwrap();
+    auth_db::upsert_user(&assembled.db, user).await.unwrap();
     let key = generate();
     let key_id = "fullstack-key".to_string();
     auth_db::insert_api_key(
-        &assembled.pool,
+        &assembled.db,
         &NewApiKey {
             id: key_id,
             key_hash: key.hash.clone(),
@@ -166,7 +168,7 @@ plugins:
 
     FullStack {
         server,
-        pool: assembled.pool,
+        db: assembled.db,
         brvk_secret: key.secret,
         upstream,
         otlp_collector,
@@ -254,23 +256,28 @@ async fn e2e_full_stack_streaming_redacts_and_meters() {
 
     // The streaming pipeline finalises settlement asynchronously after
     // the last byte is sent; give the detached task a moment to land.
-    wait_for_metering_row(&fs.pool, "fullstack-key").await;
+    wait_for_metering_row(&fs.db, "fullstack-key").await;
 
     // ── MeteringRecorder ran: one row with streamed=1, identity intact ──
-    let row: (i64, String, i64) = sqlx::query_as(
-        "SELECT estimated_charge_micro_usd, model_id, streamed FROM requests \
-         WHERE api_key_id = 'fullstack-key' LIMIT 1",
-    )
-    .fetch_one(&fs.pool)
-    .await
-    .expect("metering wrote a row for the streamed request");
-    assert_eq!(row.1, "test-model", "metering row records the routed model");
-    assert_eq!(row.2, 1, "metering row marks the request as streamed");
+    let row = requests::Entity::find()
+        .filter(requests::Column::ApiKeyId.eq("fullstack-key"))
+        .one(&fs.db)
+        .await
+        .expect("metering query runs")
+        .expect("metering wrote a row for the streamed request");
+    assert_eq!(
+        row.model_id, "test-model",
+        "metering row records the routed model"
+    );
+    assert_eq!(
+        row.streamed, 1,
+        "metering row marks the request as streamed"
+    );
     // pricing 2µ$/prompt + 10µ$/completion × usage 11 + 7 = 92µ$.
     // Exact match so a regression that quietly halves the rate can't
     // sneak past with a > 0 check.
     assert_eq!(
-        row.0, 92,
+        row.estimated_charge_micro_usd, 92,
         "estimated_charge_micro_usd should be 2*11 + 10*7 = 92µ$",
     );
 
@@ -323,13 +330,13 @@ async fn e2e_full_stack_guardrail_blocks_at_pre_request() {
     );
 
     // No metering row.
-    let row_count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM requests WHERE api_key_id = 'fullstack-key'")
-            .fetch_one(&fs.pool)
-            .await
-            .expect("count query runs");
+    let row_count = requests::Entity::find()
+        .filter(requests::Column::ApiKeyId.eq("fullstack-key"))
+        .count(&fs.db)
+        .await
+        .expect("count query runs");
     assert_eq!(
-        row_count.0, 0,
+        row_count, 0,
         "blocked request must not produce a metering row",
     );
 }
@@ -366,12 +373,12 @@ async fn e2e_full_stack_policy_denies_disallowed_tool_before_guardrails() {
     // No upstream call, no metering row.
     let upstream_requests = fs.upstream.received_requests().await.unwrap_or_default();
     assert!(upstream_requests.is_empty());
-    let row_count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM requests WHERE api_key_id = 'fullstack-key'")
-            .fetch_one(&fs.pool)
-            .await
-            .expect("count query runs");
-    assert_eq!(row_count.0, 0);
+    let row_count = requests::Entity::find()
+        .filter(requests::Column::ApiKeyId.eq("fullstack-key"))
+        .count(&fs.db)
+        .await
+        .expect("count query runs");
+    assert_eq!(row_count, 0);
 }
 
 // ===== helpers =====
@@ -386,14 +393,14 @@ const POLL_INTERVAL_MS: u64 = 50;
 /// Streaming settlement is detached after the response finishes — poll
 /// for the metering row to appear so the test doesn't race the pipeline's
 /// background task.
-async fn wait_for_metering_row(pool: &sqlx::SqlitePool, api_key_id: &str) {
+async fn wait_for_metering_row(db: &DatabaseConnection, api_key_id: &str) {
     for _ in 0..(ASYNC_WAIT_BUDGET_MS / POLL_INTERVAL_MS) {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM requests WHERE api_key_id = ?")
-            .bind(api_key_id)
-            .fetch_one(pool)
+        let count = requests::Entity::find()
+            .filter(requests::Column::ApiKeyId.eq(api_key_id))
+            .count(db)
             .await
             .expect("count query runs");
-        if row.0 >= 1 {
+        if count >= 1 {
             return;
         }
         tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
