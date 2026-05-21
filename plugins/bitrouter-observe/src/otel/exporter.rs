@@ -1,30 +1,46 @@
 //! OpenTelemetry exporter implementation with multi-tenant attribution.
+//!
+//! Two spans per request:
+//! - `chat {model}` (root, `SERVER`) — carries the full GenAI semconv set.
+//! - `bitrouter.execution` (child, `CLIENT`) — routing details.
+//!
+//! Span names follow the GenAI semconv: `{gen_ai.operation.name} {gen_ai.request.model}`.
+//!
+//! W3C `traceparent` propagation is registered at construction (`global::set_text_map_propagator`).
+//! Without that, `global::get_text_map_propagator(...)` returns a no-op and inbound trace
+//! context is silently dropped — the exact v0 bug the issue called out.
+//!
+//! In-flight spans are tracked in a [`DashMap`] keyed by request id, not a global
+//! `Mutex<HashMap>`. The previous draft held a process-wide mutex across every
+//! stream part on the hot path.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use dashmap::DashMap;
+use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{
-    global,
-    propagation::{Extractor, TextMapPropagator},
-    trace::{Span, SpanKind, Status, TraceContextExt, Tracer, TracerProvider},
-    Context, KeyValue,
+    Context, KeyValue, global,
+    propagation::Extractor,
+    trace::{Span, SpanKind, Status, TraceContextExt, Tracer},
 };
-use opentelemetry_sdk::{
-    trace::{self, RandomIdGenerator, Sampler},
-    Resource,
+use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::trace::{
+    BatchConfigBuilder, BatchSpanProcessor, RandomIdGenerator, Sampler, Tracer as SdkTracer,
+    TracerProvider,
 };
-use opentelemetry_semantic_conventions::{
-    attribute::{SERVICE_NAME, SERVICE_VERSION},
-    SCHEMA_URL,
-};
+use opentelemetry_sdk::{Resource, runtime};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
+use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 
 use bitrouter_sdk::language_model::{
     ObserveHook, Phase, PipelineContext, RequestOutcome, StreamContext, StreamInterest, StreamPart,
 };
 
-use crate::otel::{cardinality::CardinalityLimiter, config::OtelConfig, metrics::OtelMetrics};
+use crate::otel::cardinality::CardinalityLimiter;
+use crate::otel::config::{OtelConfig, SamplerKind};
 
 /// HTTP header extractor for W3C trace context propagation.
 struct HeaderExtractor<'a>(&'a http::HeaderMap);
@@ -33,13 +49,12 @@ impl<'a> Extractor for HeaderExtractor<'a> {
     fn get(&self, key: &str) -> Option<&str> {
         self.0.get(key).and_then(|v| v.to_str().ok())
     }
-    
+
     fn keys(&self) -> Vec<&str> {
-        self.0.keys().filter_map(|k| k.as_str()).collect()
+        self.0.keys().map(http::HeaderName::as_str).collect()
     }
 }
 
-/// Entry for tracking active spans with creation timestamp for cleanup.
 struct SpanEntry {
     context: Context,
     created_at: Instant,
@@ -47,75 +62,64 @@ struct SpanEntry {
 
 /// OpenTelemetry exporter with multi-tenant attribution.
 pub struct OtelExporter {
-    tracer: Box<dyn Tracer + Send + Sync>,
-    metrics: Option<OtelMetrics>,
-    config: OtelConfig,
-    
-    // Cardinality limiters for high-cardinality dimensions
+    tracer: SdkTracer,
+    provider: TracerProvider,
+    metrics: Option<crate::otel::metrics::OtelMetrics>,
+
+    /// Cardinality limiters — applied to *metric* attributes only. Spans
+    /// carry raw values: cardinality is a metrics-storage concern, not a
+    /// tracing one, and capping spans loses per-tenant debug fidelity.
     api_key_limiter: Arc<CardinalityLimiter>,
     user_id_limiter: Arc<CardinalityLimiter>,
-    
-    // Active spans tracked by request_id with timestamps for cleanup
-    active_spans: Arc<Mutex<HashMap<String, SpanEntry>>>,
-    
-    // Maximum time to keep a span before automatic cleanup
+
+    /// In-flight spans, keyed by request id.
+    active_spans: Arc<DashMap<String, SpanEntry>>,
+
+    /// Maximum time to keep a span before automatic cleanup.
     span_timeout: Duration,
 }
 
 impl OtelExporter {
-    /// Create a new exporter with the given configuration.
+    /// Create a new exporter, install the W3C propagator globally, and build
+    /// a per-exporter `TracerProvider` (not installed globally — we hand out
+    /// our own `BoxedTracer`).
     pub fn new(mut config: OtelConfig) -> Result<Self, Box<dyn std::error::Error>> {
-        // Apply environment variable overrides
         config = config.with_env_overrides();
-        
-        // Build resource attributes
-        let resource = Resource::from_schema_url(
-            [
-                KeyValue::new(SERVICE_NAME, "bitrouter"),
-                KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
-            ],
-            SCHEMA_URL,
-        );
-        
-        // Create cardinality limiters first (before they're moved)
+
+        // Install the W3C TraceContext propagator so inbound `traceparent`
+        // can actually be extracted. Without this, `get_text_map_propagator`
+        // returns a no-op and propagation is silently dropped.
+        global::set_text_map_propagator(TraceContextPropagator::new());
+
+        let resource = build_resource(&config);
+
+        let span_exporter: SpanExporter = SpanExporter::builder()
+            .with_http()
+            .with_endpoint(&config.endpoint)
+            .with_headers(config.headers.clone())
+            .build()?;
+
+        let batch_config = BatchConfigBuilder::default()
+            .with_max_queue_size(config.traces.batch.max_queue_size)
+            .with_scheduled_delay(Duration::from_millis(config.traces.batch.flush_ms))
+            .build();
+        let processor = BatchSpanProcessor::builder(span_exporter, runtime::Tokio)
+            .with_batch_config(batch_config)
+            .build();
+
+        let provider = TracerProvider::builder()
+            .with_span_processor(processor)
+            .with_sampler(build_sampler(&config))
+            .with_id_generator(RandomIdGenerator::default())
+            .with_resource(resource.clone())
+            .build();
+        let tracer = provider.tracer("bitrouter");
+
         let api_key_limiter = Arc::new(CardinalityLimiter::new(config.metrics.api_key_id_cap));
         let user_id_limiter = Arc::new(CardinalityLimiter::new(config.metrics.user_id_cap));
-        
-        // Configure tracer
-        let tracer = match config.protocol {
-            crate::otel::config::OtelProtocol::HttpProtobuf => {
-                opentelemetry_otlp::new_pipeline()
-                    .tracing()
-                    .with_exporter(
-                        opentelemetry_otlp::new_exporter()
-                            .http()
-                            .with_endpoint(&config.endpoint)
-                            .with_headers(config.headers.clone()),
-                    )
-                    .with_trace_config(
-                        trace::config()
-                            .with_sampler(Sampler::AlwaysOn) // MVP: sample everything
-                            .with_id_generator(RandomIdGenerator::default())
-                            .with_resource(resource.clone()),
-                    )
-                    .with_batch_config(
-                        trace::BatchConfig::default()
-                            .with_max_queue_size(config.traces.batch.max_spans)
-                            .with_scheduled_delay(std::time::Duration::from_millis(
-                                config.traces.batch.flush_ms,
-                            )),
-                    )
-                    .install_batch(opentelemetry_sdk::runtime::Tokio)?
-            }
-            _ => {
-                // TODO: Implement HTTP/JSON and gRPC protocols
-                return Err("Only http/protobuf protocol is currently implemented".into());
-            }
-        };
-        
-        // Initialize metrics if enabled
+
         let metrics = if config.metrics.enabled {
-            Some(OtelMetrics::new(
+            Some(crate::otel::metrics::OtelMetrics::new(
                 &config,
                 resource,
                 Arc::clone(&api_key_limiter),
@@ -124,52 +128,48 @@ impl OtelExporter {
         } else {
             None
         };
-        
+
         Ok(Self {
-            tracer: tracer.tracer("bitrouter"),
+            tracer,
+            provider,
             metrics,
-            config,
             api_key_limiter,
             user_id_limiter,
-            active_spans: Arc::new(Mutex::new(HashMap::new())),
-            span_timeout: Duration::from_secs(300), // 5 minute timeout for abandoned spans
+            active_spans: Arc::new(DashMap::new()),
+            span_timeout: Duration::from_secs(300),
         })
     }
-    
-    /// Create a no-op exporter for benchmarking (doesn't actually export).
-    #[cfg(test)]
-    pub fn new_noop() -> Self {
-        use opentelemetry::global;
-        
-        Self {
-            tracer: global::tracer("noop"),
-            metrics: None,
-            config: OtelConfig::default(),
-            api_key_limiter: Arc::new(CardinalityLimiter::new(1024)),
-            user_id_limiter: Arc::new(CardinalityLimiter::new(256)),
-            active_spans: Arc::new(Mutex::new(HashMap::new())),
-            span_timeout: Duration::from_secs(300),
-        }
-    }
-    
-    /// Get cardinality statistics for monitoring.
+
+    /// Cardinality statistics for monitoring.
     pub fn cardinality_stats(&self) -> CardinalityStats {
         CardinalityStats {
             api_key_count: self.api_key_limiter.cardinality(),
             user_id_count: self.user_id_limiter.cardinality(),
-            api_key_cap: self.config.metrics.api_key_id_cap,
-            user_id_cap: self.config.metrics.user_id_cap,
         }
+    }
+
+    /// Flush and shut down both the tracer and the metric provider. The
+    /// caller drives this from app shutdown.
+    pub fn shutdown(&self) {
+        let _ = self.provider.force_flush();
+        let _ = self.provider.shutdown();
+        if let Some(m) = &self.metrics {
+            m.shutdown();
+        }
+    }
+
+    fn gc_expired_spans(&self) {
+        let now = Instant::now();
+        let timeout = self.span_timeout;
+        self.active_spans
+            .retain(|_, entry| now.duration_since(entry.created_at) < timeout);
     }
 }
 
-/// Cardinality statistics for monitoring.
 #[derive(Debug, Clone)]
 pub struct CardinalityStats {
     pub api_key_count: usize,
     pub user_id_count: usize,
-    pub api_key_cap: usize,
-    pub user_id_cap: usize,
 }
 
 #[async_trait]
@@ -177,74 +177,65 @@ impl ObserveHook for OtelExporter {
     async fn after_phase(&self, phase: Phase, ctx: &PipelineContext) {
         match phase {
             Phase::PreRequest => {
-                // Create root span at the start of the request
-                // Extract W3C trace context from headers if present
-                let parent_context = global::get_text_map_propagator(|propagator| {
-                    propagator.extract(&HeaderExtractor(ctx.headers()))
-                });
-                
-                // Create root span with parent context if available
-                let mut builder = self
+                // Extract inbound W3C trace context, if any.
+                let parent_context =
+                    global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(ctx.headers())));
+
+                let model = ctx.model().to_string();
+                // GenAI semconv span name: "{operation} {model}".
+                let span_name = format!("chat {model}");
+
+                let attributes = vec![
+                    KeyValue::new("bitrouter.request_id", ctx.request_id().to_string()),
+                    // Raw values on spans — capping is a metrics concern.
+                    KeyValue::new(
+                        "bitrouter.api_key_id",
+                        ctx.caller().api_key_id().to_string(),
+                    ),
+                    KeyValue::new("bitrouter.user_id", ctx.caller().user_id().to_string()),
+                    // GenAI semconv from the start so the operation is
+                    // identifiable even when execution never completes.
+                    KeyValue::new("gen_ai.operation.name", "chat"),
+                    KeyValue::new("gen_ai.request.model", model),
+                ];
+
+                let builder = self
                     .tracer
-                    .span_builder("bitrouter.request")
+                    .span_builder(span_name)
                     .with_kind(SpanKind::Server)
-                    .with_attributes(vec![
-                        KeyValue::new("bitrouter.request_id", ctx.request_id().to_string()),
-                        KeyValue::new("bitrouter.model", ctx.model().to_string()),
-                        // Multi-tenant attribution from the start
-                        KeyValue::new(
-                            "bitrouter.api_key_id",
-                            self.api_key_limiter.cap(ctx.caller().api_key_id()),
-                        ),
-                        KeyValue::new(
-                            "bitrouter.user_id",
-                            self.user_id_limiter.cap(ctx.caller().user_id()),
-                        ),
-                    ]);
-                
-                // Set parent context if we extracted one
+                    .with_attributes(attributes);
+
                 let span = if parent_context.span().span_context().is_valid() {
-                    builder.start_with_context(&*self.tracer, &parent_context)
+                    builder.start_with_context(&self.tracer, &parent_context)
                 } else {
-                    builder.start(&*self.tracer)
+                    builder.start(&self.tracer)
                 };
-                
-                // Store span context for child spans with timestamp
+
                 let cx = Context::current_with_span(span);
-                let entry = SpanEntry {
-                    context: cx,
-                    created_at: Instant::now(),
-                };
-                
-                // Clean up old spans while we have the lock
-                if let Ok(mut spans) = self.active_spans.lock() {
-                    // Remove spans older than timeout
-                    let now = Instant::now();
-                    spans.retain(|_, entry| now.duration_since(entry.created_at) < self.span_timeout);
-                    
-                    // Insert new span
-                    spans.insert(ctx.request_id().to_string(), entry);
-                }
+                self.active_spans.insert(
+                    ctx.request_id().to_string(),
+                    SpanEntry {
+                        context: cx,
+                        created_at: Instant::now(),
+                    },
+                );
+                // Best-effort GC — only walks the map, not held across awaits.
+                self.gc_expired_spans();
             }
             Phase::Execution => {
-                // Create child span for execution
-                if let Ok(spans) = self.active_spans.lock() {
-                    if let Some(entry) = spans.get(ctx.request_id()) {
-                        let _guard = entry.context.clone().attach();
-                    
+                if let Some(entry) = self.active_spans.get(ctx.request_id()) {
+                    let _guard = entry.context.clone().attach();
                     let mut span = self
                         .tracer
                         .span_builder("bitrouter.execution")
                         .with_kind(SpanKind::Client)
-                        .start(&*self.tracer);
-                    
-                    // Add routing details if available
+                        .start(&self.tracer);
+
                     if let Some(chain) = &ctx.route_chain {
                         span.set_attribute(KeyValue::new(
                             "bitrouter.route_chain_length",
                             chain.len() as i64,
                         ));
-                        
                         if let Some(target) = chain.first() {
                             span.set_attribute(KeyValue::new(
                                 "bitrouter.target_provider",
@@ -256,157 +247,190 @@ impl ObserveHook for OtelExporter {
                             ));
                         }
                     }
-                    
-                        span.end();
-                    }
+                    span.end();
                 }
             }
-            _ => {} // Skip other phases for MVP
+            _ => {}
         }
     }
-    
+
     fn stream_interest(&self) -> StreamInterest {
-        // MVP: Don't trace every token, but do count stream events
         StreamInterest::all()
     }
-    
+
     async fn on_stream_part(&self, ctx: &StreamContext, part: &StreamPart) {
-        // Count stream parts in metrics if enabled
         if let Some(metrics) = &self.metrics {
             metrics.record_stream_part(part);
         }
-        
-        // Add important events to the active span
-        if let Ok(spans) = self.active_spans.lock() {
-            if let Some(entry) = spans.get(ctx.request_id()) {
-                let _guard = entry.context.clone().attach();
-            
+
+        if let Some(entry) = self.active_spans.get(&ctx.request_id) {
+            let _guard = entry.context.clone().attach();
             match part {
-                StreamPart::ToolCallDelta { name, .. } if name.is_some() => {
-                    // Record tool call start as an event
+                StreamPart::ToolCallDelta {
+                    name: Some(name), ..
+                } => {
                     opentelemetry::trace::get_active_span(|span| {
                         span.add_event(
                             "tool_call.started",
-                            vec![KeyValue::new("tool.name", name.clone().unwrap())],
+                            vec![KeyValue::new("tool.name", name.clone())],
                         );
                     });
                 }
                 StreamPart::Usage { usage } => {
-                    // Update span with incremental usage
                     opentelemetry::trace::get_active_span(|span| {
                         span.set_attribute(KeyValue::new(
                             "gen_ai.usage.stream_tokens",
-                            usage.total_tokens() as i64,
+                            usage.total() as i64,
                         ));
                     });
                 }
-                _ => {} // Most stream parts don't need events
-            }
+                _ => {}
             }
         }
     }
-    
+
     async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
-        // Complete root span with all details
-        let entry = match self.active_spans.lock() {
-            Ok(mut spans) => spans.remove(ctx.request_id()),
-            Err(poisoned) => {
-                tracing::warn!("Active spans mutex poisoned during request end");
-                poisoned.into_inner().remove(ctx.request_id())
+        // `DashMap::remove` returns `Option<(K, V)>`.
+        let Some((_, entry)) = self.active_spans.remove(ctx.request_id()) else {
+            // No matching span — request may have failed before `PreRequest`
+            // or been GC'd. Still record metrics below.
+            if let Some(metrics) = &self.metrics {
+                metrics.record_request(ctx, outcome);
             }
+            return;
         };
-        
-        if let Some(entry) = entry {
-            let _guard = entry.context.clone().attach();
-            
-            opentelemetry::trace::get_active_span(|span| {
-                // Add execution results if available
-                if let Some(result) = &ctx.execution_result {
+
+        let _guard = entry.context.clone().attach();
+        opentelemetry::trace::get_active_span(|span| {
+            if let Some(result) = &ctx.execution_result {
+                span.set_attribute(KeyValue::new(
+                    "bitrouter.provider_id",
+                    result.provider_id.clone(),
+                ));
+                span.set_attribute(KeyValue::new("bitrouter.model_id", result.model_id.clone()));
+                span.set_attribute(KeyValue::new(
+                    "bitrouter.latency_ms",
+                    result.latency_ms as i64,
+                ));
+                span.set_attribute(KeyValue::new(
+                    "bitrouter.generation_time_ms",
+                    result.generation_time_ms as i64,
+                ));
+                if let Some(label) = &result.account_label {
+                    span.set_attribute(KeyValue::new("bitrouter.account_label", label.clone()));
+                }
+
+                // GenAI semconv.
+                span.set_attribute(KeyValue::new("gen_ai.system", result.provider_id.clone()));
+                span.set_attribute(KeyValue::new(
+                    "gen_ai.response.model",
+                    result.model_id.clone(),
+                ));
+
+                if let Some(usage) = &result.result.usage {
                     span.set_attribute(KeyValue::new(
-                        "bitrouter.provider_id",
-                        result.provider_id.clone(),
+                        "gen_ai.usage.input_tokens",
+                        usage.prompt_tokens as i64,
                     ));
                     span.set_attribute(KeyValue::new(
-                        "bitrouter.model_id",
-                        result.model_id.clone(),
+                        "gen_ai.usage.output_tokens",
+                        usage.completion_tokens as i64,
                     ));
-                    span.set_attribute(KeyValue::new(
-                        "bitrouter.latency_ms",
-                        result.latency_ms as i64,
-                    ));
-                    span.set_attribute(KeyValue::new(
-                        "bitrouter.generation_time_ms",
-                        result.generation_time_ms as i64,
-                    ));
-                    
-                    // Multi-account provider label if present
-                    if let Some(label) = &result.account_label {
-                        span.set_attribute(KeyValue::new("bitrouter.account_label", label.clone()));
-                    }
-                    
-                    // GenAI semantic conventions
-                    span.set_attribute(KeyValue::new("gen_ai.system", result.provider_id.clone()));
-                    span.set_attribute(KeyValue::new("gen_ai.request.model", ctx.model().to_string()));
-                    span.set_attribute(KeyValue::new(
-                        "gen_ai.response.model",
-                        result.model_id.clone(),
-                    ));
-                    
-                    // Token usage if reported
-                    if let Some(usage) = &result.result.usage {
+                    if usage.reasoning_tokens > 0 {
                         span.set_attribute(KeyValue::new(
-                            "gen_ai.usage.input_tokens",
-                            usage.prompt_tokens as i64,
-                        ));
-                        span.set_attribute(KeyValue::new(
-                            "gen_ai.usage.output_tokens",
-                            usage.completion_tokens as i64,
-                        ));
-                        if usage.reasoning_tokens > 0 {
-                            span.set_attribute(KeyValue::new(
-                                "gen_ai.usage.reasoning_tokens",
-                                usage.reasoning_tokens as i64,
-                            ));
-                        }
-                    }
-                    
-                    // Finish reason if present
-                    if let Some(reason) = &result.result.finish_reason {
-                        span.set_attribute(KeyValue::new(
-                            "gen_ai.response.finish_reason",
-                            format!("{:?}", reason),
+                            "gen_ai.usage.reasoning_tokens",
+                            usage.reasoning_tokens as i64,
                         ));
                     }
                 }
-                
-                // Set span status based on outcome
-                match outcome {
-                    RequestOutcome::Completed => {
-                        span.set_status(Status::Ok);
-                        span.set_attribute(KeyValue::new("bitrouter.outcome", "completed"));
-                    }
-                    RequestOutcome::Failed(err) => {
-                        span.set_status(Status::error(err.to_string()));
-                        span.set_attribute(KeyValue::new("bitrouter.outcome", "failed"));
-                        span.set_attribute(KeyValue::new("error.message", err.to_string()));
-                    }
-                    RequestOutcome::ClientDisconnected => {
-                        span.set_status(Status::error("client_disconnected"));
-                        span.set_attribute(KeyValue::new("bitrouter.outcome", "disconnected"));
-                    }
+
+                // Spec: gen_ai.response.finish_reasons is an array of strings.
+                if let Some(reason) = &result.result.finish_reason {
+                    span.set_attribute(KeyValue::new(
+                        "gen_ai.response.finish_reasons",
+                        opentelemetry::Value::Array(opentelemetry::Array::String(vec![
+                            finish_reason_to_str(reason).into(),
+                        ])),
+                    ));
                 }
-                
-                span.end();
-            });
-        }
-        
-        // Record metrics if enabled
+            }
+
+            match outcome {
+                RequestOutcome::Completed => {
+                    span.set_status(Status::Ok);
+                    span.set_attribute(KeyValue::new("bitrouter.outcome", "completed"));
+                }
+                RequestOutcome::Failed(err) => {
+                    span.set_status(Status::error(err.to_string()));
+                    span.set_attribute(KeyValue::new("bitrouter.outcome", "failed"));
+                    // OTel exceptions semconv: error.type identifies the
+                    // failure class.
+                    span.set_attribute(KeyValue::new("error.type", error_type(err)));
+                    span.set_attribute(KeyValue::new("error.message", err.to_string()));
+                }
+                RequestOutcome::ClientDisconnected => {
+                    span.set_status(Status::error("client_disconnected"));
+                    span.set_attribute(KeyValue::new("bitrouter.outcome", "disconnected"));
+                    span.set_attribute(KeyValue::new("error.type", "client_disconnected"));
+                }
+            }
+            span.end();
+        });
+
         if let Some(metrics) = &self.metrics {
             metrics.record_request(ctx, outcome);
         }
     }
 }
 
-// Note: We don't implement Drop to call global::shutdown_tracer_provider()
-// because that affects ALL tracer instances globally, not just this one.
-// Proper shutdown should be handled at application level.
+fn build_resource(config: &OtelConfig) -> Resource {
+    let mut attrs = vec![
+        KeyValue::new(SERVICE_NAME, config.service_name.clone()),
+        KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
+    ];
+    for (k, v) in &config.resource_attributes {
+        // Skip keys we already set explicitly — OTel-spec lets the env var
+        // override, but we already merged that into `config.service_name`.
+        if k == SERVICE_NAME || k == SERVICE_VERSION {
+            continue;
+        }
+        attrs.push(KeyValue::new(k.clone(), v.clone()));
+    }
+    Resource::from_schema_url(attrs, SCHEMA_URL)
+}
+
+fn build_sampler(config: &OtelConfig) -> Sampler {
+    let ratio = config.sampler_arg.unwrap_or(1.0).clamp(0.0, 1.0);
+    match config.sampler {
+        SamplerKind::AlwaysOn => Sampler::AlwaysOn,
+        SamplerKind::AlwaysOff => Sampler::AlwaysOff,
+        SamplerKind::TraceIdRatio => Sampler::TraceIdRatioBased(ratio),
+        SamplerKind::ParentBasedAlwaysOn => Sampler::ParentBased(Box::new(Sampler::AlwaysOn)),
+        SamplerKind::ParentBasedAlwaysOff => Sampler::ParentBased(Box::new(Sampler::AlwaysOff)),
+        SamplerKind::ParentBasedTraceIdRatio => {
+            Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(ratio)))
+        }
+    }
+}
+
+fn finish_reason_to_str(reason: &bitrouter_sdk::language_model::FinishReason) -> String {
+    use bitrouter_sdk::language_model::FinishReason::*;
+    match reason {
+        Stop => "stop".to_string(),
+        Length => "length".to_string(),
+        ToolCalls => "tool_calls".to_string(),
+        ContentFilter => "content_filter".to_string(),
+        Other(s) => s.clone(),
+        Error(_) => "error".to_string(),
+    }
+}
+
+fn error_type(err: &bitrouter_sdk::error::BitrouterError) -> String {
+    // BitrouterError variants are unit-ish; the Debug name is the class.
+    // We strip the payload so the attribute stays low-cardinality.
+    let dbg = format!("{err:?}");
+    dbg.split(['(', ' ', '{'])
+        .next()
+        .unwrap_or("error")
+        .to_string()
+}

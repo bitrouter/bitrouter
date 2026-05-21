@@ -1,40 +1,36 @@
 //! OpenTelemetry metrics with multi-tenant dimensions.
+//!
+//! Owns a private [`SdkMeterProvider`] (we don't install one globally — that
+//! would clobber any other consumer of the OTel globals in the process).
+//! Shutdown happens explicitly via [`OtelMetrics::shutdown`], not in `Drop`,
+//! because `Drop` would race the tokio runtime if the exporter still has
+//! in-flight work.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use opentelemetry::{
-    global,
-    metrics::{Counter, Histogram, Meter, MeterProvider},
-    KeyValue,
-};
-use opentelemetry_sdk::{
-    metrics::{self, Aggregation, PeriodicReader, SdkMeterProvider},
-    Resource,
-};
+use opentelemetry::KeyValue;
+use opentelemetry::metrics::{Counter, Histogram, Meter, MeterProvider};
+use opentelemetry_otlp::{MetricExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 
-use bitrouter_sdk::language_model::{
-    PipelineContext, RequestOutcome, StreamPart,
-};
+use bitrouter_sdk::language_model::{PipelineContext, RequestOutcome, StreamPart};
 
-use crate::otel::{cardinality::CardinalityLimiter, config::OtelConfig};
+use crate::otel::cardinality::CardinalityLimiter;
+use crate::otel::config::OtelConfig;
 
 /// OpenTelemetry metrics with multi-tenant attribution.
 pub struct OtelMetrics {
-    meter: Meter,
-    
-    // Core metrics
+    provider: SdkMeterProvider,
+
     request_counter: Counter<u64>,
     latency_histogram: Histogram<f64>,
-    token_counter: Counter<u64>,
+    input_tokens: Counter<u64>,
+    output_tokens: Counter<u64>,
     error_counter: Counter<u64>,
     stream_parts_counter: Counter<u64>,
-    
-    // Observability health metrics
-    spans_dropped: Counter<u64>,
-    metrics_dropped: Counter<u64>,
-    
-    // Cardinality limiters (shared with tracer)
+
     api_key_limiter: Arc<CardinalityLimiter>,
     user_id_limiter: Arc<CardinalityLimiter>,
 }
@@ -47,159 +43,126 @@ impl OtelMetrics {
         api_key_limiter: Arc<CardinalityLimiter>,
         user_id_limiter: Arc<CardinalityLimiter>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Configure metrics exporter
-        let exporter = match config.protocol {
-            crate::otel::config::OtelProtocol::HttpProtobuf => {
-                opentelemetry_otlp::new_exporter()
-                    .http()
-                    .with_endpoint(&config.endpoint)
-                    .with_headers(config.headers.clone())
-                    .build_metrics_exporter(
-                        Box::new(Aggregation::default()),
-                        Box::new(opentelemetry_sdk::runtime::Tokio),
-                    )?
-            }
-            _ => {
-                return Err("Only http/protobuf protocol is currently implemented for metrics".into());
-            }
-        };
-        
-        // Create periodic reader
+        let exporter = MetricExporter::builder()
+            .with_http()
+            .with_endpoint(&config.endpoint)
+            .with_headers(config.headers.clone())
+            .build()?;
+
         let reader = PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
             .with_interval(Duration::from_millis(config.metrics.export_interval_ms))
             .build();
-        
-        // Build meter provider
+
         let provider = SdkMeterProvider::builder()
             .with_reader(reader)
             .with_resource(resource)
             .build();
-        
-        // Set as global default
-        global::set_meter_provider(provider.clone());
-        
-        let meter = provider.meter("bitrouter");
-        
-        // Initialize metrics
+
+        let meter: Meter = provider.meter("bitrouter");
+
         let request_counter = meter
             .u64_counter("bitrouter.requests")
             .with_description("Total requests processed")
             .with_unit("1")
-            .init();
-        
+            .build();
         let latency_histogram = meter
-            .f64_histogram("bitrouter.request.latency")
-            .with_description("Request latency in milliseconds")
-            .with_unit("ms")
-            .init();
-        
-        let token_counter = meter
-            .u64_counter("bitrouter.tokens")
-            .with_description("Total tokens processed")
-            .with_unit("token")
-            .init();
-        
+            .f64_histogram("gen_ai.client.operation.duration")
+            .with_description("GenAI client operation duration")
+            .with_unit("s")
+            .build();
+        let input_tokens = meter
+            .u64_counter("gen_ai.client.token.usage")
+            .with_description("Input token usage")
+            .with_unit("{token}")
+            .build();
+        let output_tokens = meter
+            .u64_counter("gen_ai.client.token.usage")
+            .with_description("Output token usage")
+            .with_unit("{token}")
+            .build();
         let error_counter = meter
             .u64_counter("bitrouter.errors")
             .with_description("Total errors encountered")
             .with_unit("1")
-            .init();
-        
+            .build();
         let stream_parts_counter = meter
             .u64_counter("bitrouter.stream_parts")
             .with_description("Total stream parts processed")
             .with_unit("1")
-            .init();
-        
-        let spans_dropped = meter
-            .u64_counter("bitrouter.otel.spans_dropped")
-            .with_description("Spans dropped due to buffer overflow")
-            .with_unit("1")
-            .init();
-        
-        let metrics_dropped = meter
-            .u64_counter("bitrouter.otel.metrics_dropped")
-            .with_description("Metrics dropped due to buffer overflow")
-            .with_unit("1")
-            .init();
-        
+            .build();
+
         Ok(Self {
-            meter,
+            provider,
             request_counter,
             latency_histogram,
-            token_counter,
+            input_tokens,
+            output_tokens,
             error_counter,
             stream_parts_counter,
-            spans_dropped,
-            metrics_dropped,
             api_key_limiter,
             user_id_limiter,
         })
     }
-    
+
     /// Record a completed request.
     pub fn record_request(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
         let mut attributes = self.build_base_attributes(ctx);
-        
-        // Add outcome
+
         let outcome_str = match outcome {
             RequestOutcome::Completed => "completed",
             RequestOutcome::Failed(_) => "failed",
             RequestOutcome::ClientDisconnected => "disconnected",
         };
         attributes.push(KeyValue::new("outcome", outcome_str));
-        
-        // Add execution details if available
+
         if let Some(result) = &ctx.execution_result {
-            attributes.push(KeyValue::new("provider_id", result.provider_id.clone()));
-            attributes.push(KeyValue::new("model", result.model_id.clone()));
-            
+            attributes.push(KeyValue::new("gen_ai.system", result.provider_id.clone()));
+            attributes.push(KeyValue::new(
+                "gen_ai.response.model",
+                result.model_id.clone(),
+            ));
             if let Some(label) = &result.account_label {
-                attributes.push(KeyValue::new("account_label", label.clone()));
+                attributes.push(KeyValue::new("bitrouter.account_label", label.clone()));
             }
-            
-            // Record latency
+
+            // GenAI semconv: operation.duration is a histogram in seconds.
             self.latency_histogram
-                .record(result.latency_ms as f64, &attributes);
-            
-            // Record token usage
+                .record(result.latency_ms as f64 / 1000.0, &attributes);
+
             if let Some(usage) = &result.result.usage {
-                self.token_counter
-                    .add(usage.total_tokens() as u64, &attributes);
+                let mut input_attrs = attributes.clone();
+                input_attrs.push(KeyValue::new("gen_ai.token.type", "input"));
+                self.input_tokens.add(usage.prompt_tokens, &input_attrs);
+
+                let mut output_attrs = attributes.clone();
+                output_attrs.push(KeyValue::new("gen_ai.token.type", "output"));
+                self.output_tokens
+                    .add(usage.completion_tokens, &output_attrs);
             }
         }
-        
-        // Increment request counter
+
         self.request_counter.add(1, &attributes);
-        
-        // Record errors
+
         if matches!(outcome, RequestOutcome::Failed(_)) {
             self.error_counter.add(1, &attributes);
         }
     }
-    
+
     /// Record a stream part.
     pub fn record_stream_part(&self, part: &StreamPart) {
-        // Simple counter for now - could add more granular metrics later
-        self.stream_parts_counter.add(
-            1,
-            &[KeyValue::new("part_type", stream_part_type(part))],
-        );
+        self.stream_parts_counter
+            .add(1, &[KeyValue::new("part_type", stream_part_type(part))]);
     }
-    
-    /// Record dropped spans (called by exporter on buffer overflow).
-    pub fn record_spans_dropped(&self, count: u64, reason: &str) {
-        self.spans_dropped
-            .add(count, &[KeyValue::new("reason", reason.to_string())]);
+
+    /// Flush pending metrics and shut down the meter provider. The caller
+    /// drives this — see the note on [`OtelMetrics`].
+    pub fn shutdown(&self) {
+        // Both calls are best-effort; surfacing an error here would just
+        // double-log the SDK's own warning.
+        let _ = self.provider.force_flush();
+        let _ = self.provider.shutdown();
     }
-    
-    /// Record dropped metrics (called on buffer overflow).
-    pub fn record_metrics_dropped(&self, count: u64, reason: &str) {
-        self.metrics_dropped
-            .add(count, &[KeyValue::new("reason", reason.to_string())]);
-    }
-    
-    /// Build base attributes with tenant information.
+
     fn build_base_attributes(&self, ctx: &PipelineContext) -> Vec<KeyValue> {
         let caller = ctx.caller();
         vec![
@@ -209,7 +172,6 @@ impl OtelMetrics {
     }
 }
 
-/// Get the type name for a stream part.
 fn stream_part_type(part: &StreamPart) -> &'static str {
     match part {
         StreamPart::TextDelta { .. } => "text_delta",
@@ -218,12 +180,5 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
         StreamPart::Usage { .. } => "usage",
         StreamPart::Finish { .. } => "finish",
         StreamPart::ResponseCompleted { .. } => "response_completed",
-    }
-}
-
-impl Drop for OtelMetrics {
-    fn drop(&mut self) {
-        // Ensure remaining metrics are exported
-        global::shutdown_meter_provider();
     }
 }

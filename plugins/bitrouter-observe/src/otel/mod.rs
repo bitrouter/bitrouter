@@ -1,17 +1,14 @@
 //! OpenTelemetry exporter with multi-tenant attribution.
 //!
-//! Provides traces and metrics via OTLP with tenant-aware attributes
-//! (api_key_id, user_id) and provider account labels. MVP implementation
-//! with two spans: request (root) and execution (child).
+//! Two spans per request (request root + execution child), GenAI-semconv
+//! attributes, W3C `traceparent` propagation, and OTLP/HTTP+protobuf push for
+//! both traces and metrics.
 
+mod cardinality;
 mod config;
 mod exporter;
 mod metrics;
-mod cardinality;
 
-pub use config::OtelConfig;
-pub use exporter::OtelExporter;
-
-// Re-export for use in benchmarks
-#[cfg(test)]
 pub use cardinality::CardinalityLimiter;
+pub use config::{BatchConfig, MetricsConfig, OtelConfig, SamplerKind, TraceConfig};
+pub use exporter::{CardinalityStats, OtelExporter};

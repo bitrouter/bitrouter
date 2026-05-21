@@ -17,7 +17,7 @@ impl CardinalityLimiter {
             cap,
         }
     }
-    
+
     /// Cap a value - returns the value if under limit, "other" if over.
     /// Thread-safe and handles poisoned mutex gracefully.
     pub fn cap(&self, value: &str) -> String {
@@ -29,22 +29,22 @@ impl CardinalityLimiter {
                 poisoned.into_inner()
             }
         };
-        
+
         // Check if value exists or can be inserted atomically
         if seen.contains(value) {
             return value.to_string();
         }
-        
+
         // At capacity - bucket as "other"
         if seen.len() >= self.cap {
             return "other".to_string();
         }
-        
+
         // New value under cap - remember and pass through
         seen.insert(value.to_string());
         value.to_string()
     }
-    
+
     /// Get current cardinality count.
     pub fn cardinality(&self) -> usize {
         match self.seen.lock() {
@@ -52,7 +52,7 @@ impl CardinalityLimiter {
             Err(poisoned) => poisoned.into_inner().len(),
         }
     }
-    
+
     /// Clear all seen values (useful for testing).
     #[cfg(test)]
     pub fn clear(&self) {
@@ -63,25 +63,25 @@ impl CardinalityLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_cardinality_capping() {
         let limiter = CardinalityLimiter::new(3);
-        
+
         // First 3 values pass through
         assert_eq!(limiter.cap("key1"), "key1");
         assert_eq!(limiter.cap("key2"), "key2");
         assert_eq!(limiter.cap("key3"), "key3");
         assert_eq!(limiter.cardinality(), 3);
-        
+
         // 4th unique value gets bucketed
         assert_eq!(limiter.cap("key4"), "other");
         assert_eq!(limiter.cardinality(), 3);
-        
+
         // Repeated values still pass through
         assert_eq!(limiter.cap("key1"), "key1");
         assert_eq!(limiter.cap("key2"), "key2");
-        
+
         // New values still get bucketed
         assert_eq!(limiter.cap("key5"), "other");
     }

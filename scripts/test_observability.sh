@@ -81,11 +81,10 @@ plugins:
   bitrouter-observe:
     otel:
       endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
-      protocol: "http/protobuf"
+      sampler: parentbased_always_on
       traces:
-        include_bodies: false
         batch:
-          max_spans: 100
+          max_queue_size: 2048
           flush_ms: 1000
       metrics:
         enabled: true

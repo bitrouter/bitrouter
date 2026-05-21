@@ -30,16 +30,18 @@ plugins:
       endpoint: "https://api.honeycomb.io"
       headers:
         x-honeycomb-team: "${HONEYCOMB_API_KEY}"
+      service_name: "bitrouter"
+      sampler: parentbased_always_on   # OTel-spec sampler kinds
+      # sampler_arg: 0.1               # only used by *_traceidratio
       traces:
-        include_bodies: false
         batch:
-          max_spans: 512
+          max_queue_size: 2048
           flush_ms: 5000
       metrics:
         enabled: true
         export_interval_ms: 60000
-        api_key_id_cap: 1024  # Limit unique API keys
-        user_id_cap: 256      # Limit unique user IDs
+        api_key_id_cap: 1024  # only applies to *metric* dimensions; spans always carry the raw value
+        user_id_cap: 256
 ```
 
 ### Environment Variables
@@ -49,8 +51,10 @@ Standard OpenTelemetry environment variables are supported and take precedence:
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=secret"
-export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 export OTEL_SERVICE_NAME=bitrouter
+export OTEL_RESOURCE_ATTRIBUTES="deployment.environment=prod,team=platform"
+export OTEL_TRACES_SAMPLER=parentbased_traceidratio
+export OTEL_TRACES_SAMPLER_ARG=0.1
 ```
 
 ## Tenant Attribution
@@ -164,57 +168,66 @@ This will:
 
 ## Span Structure
 
-MVP design with two spans per request:
+Two spans per request. Span names follow the GenAI semconv:
+`{gen_ai.operation.name} {gen_ai.request.model}`.
 
 ```
-bitrouter.request (root span)
-├── Attributes:
-│   ├── bitrouter.request_id
-│   ├── bitrouter.model
-│   ├── bitrouter.api_key_id (capped)
-│   ├── bitrouter.user_id (capped)
-│   ├── bitrouter.provider_id
-│   ├── bitrouter.account_label (if multi-account)
-│   ├── bitrouter.latency_ms
-│   ├── gen_ai.usage.input_tokens
-│   └── gen_ai.usage.output_tokens
-│
-└── bitrouter.execution (child span)
-    └── Attributes:
+chat <model>                           (root, SpanKind=SERVER)
+├── bitrouter.request_id
+├── bitrouter.api_key_id               (raw value — capping is metrics-only)
+├── bitrouter.user_id
+├── bitrouter.provider_id
+├── bitrouter.account_label            (multi-account providers)
+├── bitrouter.latency_ms
+├── bitrouter.generation_time_ms
+├── bitrouter.outcome                  (completed | failed | disconnected)
+├── gen_ai.operation.name              ("chat")
+├── gen_ai.system                      (provider_id)
+├── gen_ai.request.model
+├── gen_ai.response.model
+├── gen_ai.response.finish_reasons     (array)
+├── gen_ai.usage.input_tokens
+├── gen_ai.usage.output_tokens
+├── gen_ai.usage.reasoning_tokens      (when > 0)
+├── error.type                         (on failures)
+└── error.message                      (on failures)
+    │
+    └── bitrouter.execution            (child, SpanKind=CLIENT)
         ├── bitrouter.route_chain_length
         ├── bitrouter.target_provider
         └── bitrouter.target_model
 ```
 
+Inbound W3C `traceparent` is parsed and used as the parent context.
+
 ## Metrics
 
-The following metrics are exported with tenant dimensions:
+Standard GenAI-semconv instruments:
 
-- `bitrouter.requests`: Request counter with outcome
-- `bitrouter.request.latency`: Latency histogram in milliseconds
-- `bitrouter.tokens`: Token usage counter
-- `bitrouter.errors`: Error counter
-- `bitrouter.stream_parts`: Stream parts processed
-- `bitrouter.otel.spans_dropped`: Observability health metric
-- `bitrouter.otel.metrics_dropped`: Observability health metric
+- `gen_ai.client.operation.duration` — histogram, seconds
+- `gen_ai.client.token.usage` — counter, split by `gen_ai.token.type` (`input` / `output`)
 
-Each metric includes dimensions:
-- `api_key_id` (cardinality capped)
-- `user_id` (cardinality capped)  
-- `provider_id`
-- `model`
-- `outcome` (completed/failed/disconnected)
-- `account_label` (for multi-account providers)
+Plus a small set of router-specific instruments:
 
-## Future Enhancements (Not in MVP)
+- `bitrouter.requests` — counter (with `outcome`)
+- `bitrouter.errors` — counter
+- `bitrouter.stream_parts` — counter (with `part_type`)
 
-- [ ] CLI integration (`bitrouter observe status`)
-- [ ] Configurable sampling ratios
-- [ ] OTLP/gRPC protocol support
-- [ ] OTLP/HTTP+JSON protocol support
-- [ ] Log correlation via trace IDs
-- [ ] Custom span attributes via config
-- [ ] Per-tenant OTLP routing (stays in bitrouter-cloud)
+Each metric carries the tenant attribute set:
+- `api_key_id` (cardinality-capped)
+- `user_id` (cardinality-capped)
+- `gen_ai.system` (provider id)
+- `gen_ai.response.model`
+- `outcome` (completed / failed / disconnected)
+- `bitrouter.account_label` (multi-account providers)
+
+## Not yet implemented
+
+- `bitrouter observe status` CLI + `DaemonCommand::ObserveStatus`
+- `AppReloader::reload` rebuilding the observe hook stack
+- OTLP/gRPC and OTLP/HTTP+JSON protocol selection (only HTTP+protobuf today)
+- Log correlation via trace IDs (waiting on `opentelemetry-appender-tracing`)
+- Per-tenant OTLP fan-out (lives in `bitrouter-cloud`, not here)
 
 ## License
 

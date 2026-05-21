@@ -197,12 +197,17 @@ pub async fn build_app_with_path(
                 // StreamHook stage: guardrail downstream redaction / abort.
                 lm.stream_hook(GuardrailStreamHook::new(guardrail_rules));
             }
-            // OpenTelemetry exporter - handles both traces and metrics with multi-tenant attribution
-            // Configured via plugins.bitrouter-observe.otel or environment variables
+            // OpenTelemetry exporter — traces + metrics with multi-tenant
+            // attribution. Configured via plugins.bitrouter-observe.otel or
+            // standard OTel env vars (OTEL_EXPORTER_OTLP_ENDPOINT et al).
             if let Some(otel_config) = build_otel_config(config) {
                 match OtelExporter::new(otel_config) {
-                    Ok(exporter) => lm.observe_hook(exporter),
-                    Err(e) => tracing::error!("Failed to initialize OpenTelemetry: {}", e),
+                    Ok(exporter) => {
+                        lm.observe_hook(exporter);
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to initialise OpenTelemetry: {e}");
+                    }
                 }
             }
             // OSS metering recorder — writes one `requests` row per
@@ -331,32 +336,52 @@ struct EmptyMetricsRenderer;
 
 impl MetricsRenderer for EmptyMetricsRenderer {
     fn render(&self) -> String {
-        "# Prometheus metrics have been removed in favor of OpenTelemetry.\n".to_string() +
-        "# Configure OTLP export via plugins.bitrouter-observe.otel\n"
+        "# Prometheus metrics have been removed in favor of OpenTelemetry.\n".to_string()
+            + "# Configure OTLP export via plugins.bitrouter-observe.otel\n"
     }
 }
 
-/// Build OpenTelemetry configuration from the app config.
-fn build_otel_config(config: &config::Config) -> Option<OtelConfig> {
-    // Check for otel config in plugins.bitrouter-observe.otel
-    if let Some(observe_config) = config.plugins.get("bitrouter-observe") {
-        if let Some(otel) = observe_config.get("otel").and_then(|v| v.as_object()) {
-            // Parse the otel config
-            if otel.get("endpoint").is_some() || std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
-                return Some(OtelConfig::default().with_env_overrides());
+/// Build OpenTelemetry configuration from the app config. Returns `None` when
+/// neither YAML nor env vars opt the exporter in.
+///
+/// Precedence: env vars > `plugins.bitrouter-observe.otel` > the legacy flat
+/// `plugins.bitrouter-observe.otlp_endpoint` shim (v0 carry-over; will be
+/// removed in v1.1).
+fn build_otel_config(config: &Config) -> Option<OtelConfig> {
+    let observe = config.plugins.get("bitrouter-observe");
+
+    // 1. New nested `otel: { … }` block.
+    if let Some(otel_value) = observe.and_then(|c| c.get("otel")) {
+        match serde_json::from_value::<OtelConfig>(otel_value.clone()) {
+            Ok(cfg) => return Some(cfg.with_env_overrides()),
+            Err(e) => {
+                tracing::error!("plugins.bitrouter-observe.otel failed to parse: {e}");
+                // Fall through to env-var-only path below.
             }
         }
-        // Legacy support: check for old otlp_endpoint field  
-        if let Some(endpoint) = observe_config.get("otlp_endpoint").and_then(|v| v.as_str()) {
-            let mut config = OtelConfig::default();
-            config.endpoint = endpoint.to_string();
-            return Some(config.with_env_overrides());
-        }
     }
-    // Also enable if OTEL_EXPORTER_OTLP_ENDPOINT is set
+
+    // 2. Legacy flat `otlp_endpoint` shim — drops the cardinality / sampler /
+    //    batch knobs, but lets a v0 YAML keep working until v1.1.
+    if let Some(endpoint) = observe
+        .and_then(|c| c.get("otlp_endpoint"))
+        .and_then(|v| v.as_str())
+    {
+        let cfg = OtelConfig {
+            endpoint: endpoint.to_string(),
+            ..OtelConfig::default()
+        };
+        tracing::warn!(
+            "plugins.bitrouter-observe.otlp_endpoint is deprecated; switch to plugins.bitrouter-observe.otel",
+        );
+        return Some(cfg.with_env_overrides());
+    }
+
+    // 3. Env-var-only opt-in.
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
         return Some(OtelConfig::default().with_env_overrides());
     }
+
     None
 }
 

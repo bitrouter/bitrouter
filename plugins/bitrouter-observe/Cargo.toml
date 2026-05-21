@@ -15,24 +15,27 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
-# OpenTelemetry stack for OTLP export (traces + metrics)
+# OpenTelemetry stack for OTLP export (traces + metrics).
+# Pinned to 0.27.x — the API churns minor-to-minor in this stack.
 opentelemetry = { version = "0.27", optional = true }
 opentelemetry_sdk = { version = "0.27", optional = true, features = ["rt-tokio", "trace", "metrics"] }
-opentelemetry-otlp = { version = "0.27", optional = true, features = ["http-proto", "trace", "metrics"] }
+opentelemetry-otlp = { version = "0.27", optional = true, features = ["http-proto", "reqwest-client", "reqwest-rustls", "trace", "metrics"] }
 opentelemetry-semantic-conventions = { version = "0.27", optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 http = { workspace = true, optional = true }
+dashmap = { version = "6", optional = true }
 
 [features]
 default = []
-# OpenTelemetry exporter - traces and metrics with multi-tenant attribution
+# OpenTelemetry exporter — traces and metrics with multi-tenant attribution.
 otel = [
     "dep:opentelemetry",
-    "dep:opentelemetry_sdk", 
+    "dep:opentelemetry_sdk",
     "dep:opentelemetry-otlp",
     "dep:opentelemetry-semantic-conventions",
     "dep:tokio",
-    "dep:http"
+    "dep:http",
+    "dep:dashmap",
 ]
 
 [dev-dependencies]
@@ -42,3 +45,4 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 [[bench]]
 name = "observe_overhead"
 harness = false
+required-features = ["otel"]
