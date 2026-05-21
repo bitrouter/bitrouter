@@ -20,7 +20,7 @@ use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
 use bitrouter_sdk::mcp::{ConfigMcpRoutingTable, RmcpExecutor};
 
 use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
-use bitrouter_observe::{OtlpExportHook, PrometheusHook};
+use bitrouter_observe::otel::{OtelConfig, OtelExporter};
 use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
@@ -137,20 +137,11 @@ pub async fn build_app_with_path(
     let policy_store_for_reload = policy_store.clone();
     let guardrail_rules = build_guardrail_rules(config)?;
 
-    // Prometheus exporter. The same `Arc` is both an
-    // `ObserveHook` (writes) and a `MetricsRenderer` (reads from `/metrics`).
-    let prometheus: Arc<PrometheusHook> = Arc::new(PrometheusHook::new());
-    let prometheus_for_observe = prometheus.clone();
-    let metrics_renderer: Arc<dyn MetricsRenderer> = prometheus;
+    // Metrics are now pushed via OTLP, not pulled from /metrics
+    // Keep metrics_renderer for compatibility but return empty response
+    let metrics_renderer: Arc<dyn MetricsRenderer> = Arc::new(EmptyMetricsRenderer);
 
-    // Optional OTLP/HTTP JSON tracer. Configured under
-    // `plugins.bitrouter-observe.otlp_endpoint`; absent → exporter not wired.
-    let otlp_endpoint: Option<String> = config
-        .plugins
-        .get("bitrouter-observe")
-        .and_then(|c| c.get("otlp_endpoint"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    // OpenTelemetry configuration is now handled via build_otel_config()
 
     // Optional MCP pure-routing pipeline — wired only when the config
     // declares at least one upstream MCP server. The pipeline is independent
@@ -206,14 +197,13 @@ pub async fn build_app_with_path(
                 // StreamHook stage: guardrail downstream redaction / abort.
                 lm.stream_hook(GuardrailStreamHook::new(guardrail_rules));
             }
-            // The Prometheus hook is registered through Arc cloning so the
-            // server's /metrics route reads the same accumulator the pipeline
-            // writes to. ObserveHook is read-only / error-swallowing so a
-            // wiring problem never affects the request path.
-            lm.observe_hook(PrometheusObserve(prometheus_for_observe.clone()));
-            // Optional OTLP exporter — wired only when configured.
-            if let Some(endpoint) = otlp_endpoint.as_ref() {
-                lm.observe_hook(OtlpExportHook::new(endpoint));
+            // OpenTelemetry exporter - handles both traces and metrics with multi-tenant attribution
+            // Configured via plugins.bitrouter-observe.otel or environment variables
+            if let Some(otel_config) = build_otel_config(config) {
+                match OtelExporter::new(otel_config) {
+                    Ok(exporter) => lm.observe_hook(exporter),
+                    Err(e) => tracing::error!("Failed to initialize OpenTelemetry: {}", e),
+                }
             }
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
@@ -335,39 +325,39 @@ fn build_guardrail_rules(config: &Config) -> Result<RuleSet> {
     Ok(set)
 }
 
-/// A `language_model::ObserveHook` that delegates to a shared `Arc<PrometheusHook>`.
-/// We need this wrapper because `PipelineBuilder::observe_hook` takes a hook by
-/// value (and wraps it in an internal `Arc`), but we want to *share* the same
-/// `Arc<PrometheusHook>` between the writer (the pipeline) and the reader
-/// (`GET /metrics`) so both see the same accumulator.
-struct PrometheusObserve(Arc<PrometheusHook>);
+/// Empty metrics renderer for /metrics endpoint compatibility.
+/// Returns empty response since metrics are now pushed via OTLP.
+struct EmptyMetricsRenderer;
 
-#[async_trait::async_trait]
-impl bitrouter_sdk::language_model::ObserveHook for PrometheusObserve {
-    async fn after_phase(
-        &self,
-        phase: bitrouter_sdk::language_model::Phase,
-        ctx: &bitrouter_sdk::language_model::PipelineContext,
-    ) {
-        self.0.after_phase(phase, ctx).await
+impl MetricsRenderer for EmptyMetricsRenderer {
+    fn render(&self) -> String {
+        "# Prometheus metrics have been removed in favor of OpenTelemetry.\n".to_string() +
+        "# Configure OTLP export via plugins.bitrouter-observe.otel\n"
     }
-    fn stream_interest(&self) -> bitrouter_sdk::language_model::StreamInterest {
-        self.0.stream_interest()
+}
+
+/// Build OpenTelemetry configuration from the app config.
+fn build_otel_config(config: &config::Config) -> Option<OtelConfig> {
+    // Check for otel config in plugins.bitrouter-observe.otel
+    if let Some(observe_config) = config.plugins.get("bitrouter-observe") {
+        if let Some(otel) = observe_config.get("otel").and_then(|v| v.as_object()) {
+            // Parse the otel config
+            if otel.get("endpoint").is_some() || std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+                return Some(OtelConfig::default().with_env_overrides());
+            }
+        }
+        // Legacy support: check for old otlp_endpoint field  
+        if let Some(endpoint) = observe_config.get("otlp_endpoint").and_then(|v| v.as_str()) {
+            let mut config = OtelConfig::default();
+            config.endpoint = endpoint.to_string();
+            return Some(config.with_env_overrides());
+        }
     }
-    async fn on_stream_part(
-        &self,
-        ctx: &bitrouter_sdk::language_model::StreamContext,
-        part: &bitrouter_sdk::language_model::StreamPart,
-    ) {
-        self.0.on_stream_part(ctx, part).await
+    // Also enable if OTEL_EXPORTER_OTLP_ENDPOINT is set
+    if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+        return Some(OtelConfig::default().with_env_overrides());
     }
-    async fn on_request_end(
-        &self,
-        ctx: &bitrouter_sdk::language_model::PipelineContext,
-        outcome: &bitrouter_sdk::language_model::RequestOutcome,
-    ) {
-        self.0.on_request_end(ctx, outcome).await
-    }
+    None
 }
 
 /// Extract the file path from a sqlite URL. Returns `None` for `:memory:` or

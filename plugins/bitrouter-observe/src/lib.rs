@@ -1,24 +1,13 @@
 //! # bitrouter-observe
 //!
-//! Observability plugin. Provides `ObserveHook` implementations:
-//! - [`PrometheusHook`] — always available, dependency-free, renders the
-//!   Prometheus text exposition format;
-//! - [`otlp::OtlpExportHook`] — behind the `otlp` feature, a self-contained
-//!   OTLP/HTTP JSON trace exporter that completes v0's unfinished #409.
-//!
-//! Every hook here is read-only and error-swallowing.
+//! Observability plugin providing OpenTelemetry traces and metrics with
+//! multi-tenant attribution. All observability is read-only and error-swallowing
+//! to ensure it never impacts request processing.
 
 #![forbid(unsafe_code)]
 
-pub mod prometheus;
+#[cfg(feature = "otel")]
+pub mod otel;
 
-#[cfg(feature = "otlp")]
-pub mod otlp;
-
-pub use prometheus::PrometheusHook;
-
-#[cfg(feature = "otlp")]
-pub use otlp::OtlpExportHook;
-
-/// Whether the OTLP exporter is compiled in.
-pub const OTLP_ENABLED: bool = cfg!(feature = "otlp");
+/// Whether the OpenTelemetry exporter is compiled in.
+pub const OTEL_ENABLED: bool = cfg!(feature = "otel");
