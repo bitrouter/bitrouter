@@ -209,6 +209,72 @@ providers:
     let _ = tokio::fs::remove_dir_all(&dir).await;
 }
 
+/// Regression: the production `AppReloader` must re-apply the built-in
+/// provider catalog on a file reload. `openai` here is declared with no
+/// `api_base` — it comes from the compiled-in catalog at assembly time.
+/// If the reload path swapped in a bare file re-read (skipping
+/// `apply_builtin_defaults`), the provider would come back with an empty
+/// `api_base`, and an `auto_discover` provider would then silently drop
+/// every model. The SDK's own `RoutingTable::reload` cannot fix this — it
+/// sits below `bitrouter-providers` — so the reloader rebuilds the config
+/// in the app layer.
+#[tokio::test]
+async fn reload_re_applies_builtin_provider_catalog() {
+    use bitrouter::daemon::DaemonReloader;
+    use bitrouter::reload::{AppReloader, ReloadSource};
+
+    let dir = tempdir("reload-builtin");
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let cfg_path = dir.join("bitrouter.yaml");
+    // `openai` is a built-in: `api_base` is omitted and must be filled
+    // from the catalog. Explicit `models` keep discovery off the network.
+    let yaml = r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+inherit_defaults: true
+providers:
+  openai:
+    api_key: k1
+    models: [{ id: gpt-5 }]
+"#;
+    tokio::fs::write(&cfg_path, yaml).await.unwrap();
+
+    let cfg = config::load(&cfg_path).await.unwrap();
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+
+    // Sanity: assembly already filled the catalog `api_base`.
+    assert_eq!(
+        assembled.routing_table.snapshot_config().providers["openai"].api_base,
+        "https://api.openai.com/v1",
+    );
+
+    let reloader = AppReloader::new(
+        assembled.policy_store.clone(),
+        assembled.routing_table.clone(),
+        ReloadSource::File(cfg_path.clone()),
+    );
+    reloader.reload().await.expect("reload succeeds");
+
+    // The reloaded config must STILL carry the catalog `api_base` and
+    // `api_protocol` — the reload re-applies `apply_builtin_defaults`,
+    // not just a bare file re-read.
+    let after = assembled.routing_table.snapshot_config();
+    let openai = after.providers.get("openai").expect("openai still present");
+    assert_eq!(
+        openai.api_base, "https://api.openai.com/v1",
+        "built-in `api_base` must survive a file reload",
+    );
+    assert!(
+        !openai.api_protocol.is_empty(),
+        "built-in `api_protocol` must survive a file reload",
+    );
+
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+}
+
 #[tokio::test]
 async fn route_for_unknown_model_returns_a_clean_error() {
     let dir = tempdir("noroute");

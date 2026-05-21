@@ -21,6 +21,7 @@ pub mod error_report;
 pub mod metering;
 pub mod paths;
 pub mod policy;
+pub mod reload;
 pub mod style;
 pub mod tools;
 

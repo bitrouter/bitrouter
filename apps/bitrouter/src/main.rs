@@ -496,76 +496,6 @@ async fn resolve_client_socket_from(
     }
 }
 
-/// Whether the daemon is running against a `bitrouter.yaml` on disk
-/// (re-readable on reload) or a zero-config in-memory default
-/// (rebuilt by re-running [`bitrouter_providers::zero_config`]).
-enum ReloadSource {
-    /// File-backed; the routing table's own `reload` re-reads from
-    /// `path` and re-substitutes `${VAR}` references.
-    File,
-    /// In-memory zero-config; the reloader rebuilds the Config from
-    /// scratch and hands it to the routing table via
-    /// `replace_config`.
-    Default,
-}
-
-/// Fan out a daemon `Reload` (and SIGHUP) to every reloadable subsystem the
-/// running daemon owns. Failures from any single subsystem are accumulated and
-/// reported together so an unrelated subsystem (e.g. a missing policy dir)
-/// doesn't mask a fixable routing-table reload.
-struct AppReloader {
-    app: Arc<bitrouter_sdk::App>,
-    policy_store: Arc<bitrouter::policy::PolicyStore>,
-    /// Concrete handle on the routing table, used for zero-config
-    /// rebuilds where the pipeline's `&dyn RoutingTable` can't reach
-    /// `ConfigRoutingTable::replace_config`.
-    routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
-    source: ReloadSource,
-}
-
-#[async_trait::async_trait]
-impl daemon::DaemonReloader for AppReloader {
-    async fn reload(&self) -> anyhow::Result<()> {
-        let mut errors: Vec<String> = Vec::new();
-        let routing_outcome = match self.source {
-            // File source: the routing table knows its own path and
-            // re-reads YAML there. `${VAR}` substitution flows through
-            // `env_lookup`, so any env override the CLI just installed
-            // takes effect.
-            ReloadSource::File => {
-                if let Some(pipeline) = self.app.language_model() {
-                    pipeline.routing_table().reload().await
-                } else {
-                    Ok(())
-                }
-            }
-            // Default source: no file to re-read. Rebuild a fresh
-            // zero-config `Config` (which goes through `env_lookup`
-            // too), then apply built-in catalog defaults so every
-            // newly-auto-enabled provider has its `api_base` /
-            // `api_protocol` / `api_key` filled — `replace_config`
-            // calls `discover_models`, which needs `api_base` to talk
-            // to `/models`.
-            ReloadSource::Default => {
-                let mut fresh = bitrouter_providers::zero_config();
-                bitrouter_providers::apply_builtin_defaults(&mut fresh);
-                self.routing_table.replace_config(fresh).await
-            }
-        };
-        if let Err(e) = routing_outcome {
-            errors.push(format!("routing table: {e}"));
-        }
-        if let Err(e) = self.policy_store.reload().await {
-            errors.push(format!("policy store: {e}"));
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!(errors.join("; ")))
-        }
-    }
-}
-
 async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // Ensure the bitrouter home directory exists (zero-config first-run
     // creates `~/.bitrouter` on demand) and chdir into it. Every
@@ -600,17 +530,17 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     let assembled = bitrouter::build_app_with_path(&cfg, config_path_for_reload).await?;
     let app = Arc::new(assembled.app);
     let policy_store = assembled.policy_store;
-    let reload_source = if source.is_default() {
-        ReloadSource::Default
-    } else {
-        ReloadSource::File
+    let reload_source = match source {
+        bitrouter::paths::ConfigSource::File(path) => {
+            bitrouter::reload::ReloadSource::File(path.clone())
+        }
+        bitrouter::paths::ConfigSource::Default { .. } => bitrouter::reload::ReloadSource::Default,
     };
-    let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(AppReloader {
-        app: app.clone(),
-        policy_store: policy_store.clone(),
-        routing_table: assembled.routing_table,
-        source: reload_source,
-    });
+    let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(bitrouter::reload::AppReloader::new(
+        policy_store.clone(),
+        assembled.routing_table,
+        reload_source,
+    ));
 
     daemon::write_pid_file(&pid_path).await?;
     println!(
