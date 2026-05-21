@@ -30,6 +30,10 @@ pub struct SettlementContext {
     pub model_id: String,
     /// Resolved provider id.
     pub provider_id: String,
+    /// Which account of a multi-account provider served the request —
+    /// `None` for a single-credential provider. Reflects any failover
+    /// hop.
+    pub account_label: Option<String>,
     /// Prompt tokens consumed.
     pub prompt_tokens: u64,
     /// Completion tokens consumed.

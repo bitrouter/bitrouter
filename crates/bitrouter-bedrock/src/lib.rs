@@ -182,6 +182,7 @@ impl Executor for BedrockExecutor {
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
             result: GenerateResult {
                 content,
                 usage,

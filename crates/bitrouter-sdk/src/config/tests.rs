@@ -218,3 +218,61 @@ variants:
     assert_eq!(careful.routing.require_tags, vec!["paid"]);
     assert!(cfg.variants.contains_key("free"));
 }
+
+#[test]
+fn parses_multi_account_provider() {
+    let yaml = r#"
+providers:
+  opencode-go:
+    api_base: https://opencode.ai/zen/go/v1
+    account_strategy: balance
+    accounts:
+      - { api_key: key-a, label: sub-a }
+      - { api_key: key-b }
+"#;
+    let cfg = parse(yaml).unwrap();
+    let p = &cfg.providers["opencode-go"];
+    assert_eq!(p.accounts.len(), 2);
+    assert_eq!(p.account_strategy, AccountStrategy::Balance);
+    assert_eq!(p.accounts[0].api_key, "key-a");
+    assert_eq!(p.accounts[0].label, "sub-a");
+    assert!(p.accounts[1].label.is_empty());
+}
+
+#[test]
+fn account_strategy_defaults_to_failover() {
+    // A provider with `accounts:` and no explicit strategy.
+    let cfg = parse("providers:\n  p:\n    accounts:\n      - { api_key: k }\n").unwrap();
+    assert_eq!(
+        cfg.providers["p"].account_strategy,
+        AccountStrategy::Failover
+    );
+}
+
+#[test]
+fn primary_api_key_prefers_top_level_then_first_account() {
+    // Top-level key wins when set.
+    let mut p = ProviderConfig {
+        api_key: "top".to_string(),
+        ..ProviderConfig::default()
+    };
+    p.accounts = vec![ProviderAccount {
+        api_key: "acct".to_string(),
+        ..ProviderAccount::default()
+    }];
+    assert_eq!(p.primary_api_key(), "top");
+
+    // Falls back to the first non-empty account key when there's no
+    // top-level key — the account-managed case (used by model discovery).
+    let p2 = ProviderConfig {
+        accounts: vec![
+            ProviderAccount::default(),
+            ProviderAccount {
+                api_key: "second".to_string(),
+                ..ProviderAccount::default()
+            },
+        ],
+        ..ProviderConfig::default()
+    };
+    assert_eq!(p2.primary_api_key(), "second");
+}

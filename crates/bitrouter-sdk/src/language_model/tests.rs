@@ -22,6 +22,7 @@ fn target(provider: &str) -> RoutingTarget {
         api_base: "https://example.invalid".to_string(),
         api_key: "k".to_string(),
         api_protocol: ApiProtocol::Openai,
+        account_label: None,
         api_key_override: None,
         api_base_override: None,
     }
@@ -339,6 +340,42 @@ async fn fallback_tries_next_on_5xx_then_succeeds() {
         resp.result.content,
         vec![Content::Text {
             text: "from b".into()
+        }]
+    );
+}
+
+#[tokio::test]
+async fn fallback_tries_next_on_payment_required_then_succeeds() {
+    // The account-failover path: the first target is out of credits
+    // (`PaymentRequired`), routing must drop to the next account, which
+    // serves the request. A single `routing_table` with two providers
+    // stands in for one provider's two accounts — the pipeline only
+    // sees a 2-target chain either way.
+    let pipeline = pipeline_with(
+        routing_table(&["account-a", "account-b"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::PaymentRequired(
+                "Insufficient balance.".into(),
+            )),
+            MockResponse::Generate(GenerateResult {
+                content: vec![Content::Text {
+                    text: "from account b".into(),
+                }],
+                usage: None,
+                finish_reason: Some(FinishReason::Stop),
+            }),
+        ])),
+        |_b| {},
+    );
+
+    let resp = pipeline
+        .execute(request())
+        .await
+        .expect("credit exhaustion on the first account falls back to the second");
+    assert_eq!(
+        resp.result.content,
+        vec![Content::Text {
+            text: "from account b".into()
         }]
     );
 }

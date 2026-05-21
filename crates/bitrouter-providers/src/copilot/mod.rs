@@ -214,6 +214,7 @@ mod tests {
             api_base: "https://api.githubcopilot.com".to_string(),
             api_key: String::new(),
             api_protocol: ApiProtocol::Anthropic,
+            account_label: None,
             api_key_override: None,
             api_base_override: None,
         }

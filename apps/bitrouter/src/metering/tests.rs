@@ -22,6 +22,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         target: None,
         model_id: "gpt-5".into(),
         provider_id: "openai".into(),
+        account_label: None,
         prompt_tokens: prompt,
         completion_tokens: completion,
         reasoning_tokens: 0,

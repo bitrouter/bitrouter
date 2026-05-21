@@ -194,6 +194,7 @@ impl PipelineContext {
             target,
             model_id: exec.map(|e| e.model_id.clone()).unwrap_or_default(),
             provider_id: exec.map(|e| e.provider_id.clone()).unwrap_or_default(),
+            account_label: exec.and_then(|e| e.account_label.clone()),
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             reasoning_tokens: usage.reasoning_tokens,

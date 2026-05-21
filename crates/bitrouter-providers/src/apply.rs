@@ -103,6 +103,13 @@ pub fn apply_builtin_defaults(config: &mut Config) {
         if provider.api_protocol.is_empty() {
             provider.api_protocol = protocol_mapping_to_pattern_map(&builtin.api_protocol);
         }
+        // A multi-account provider carries its credentials in `accounts`,
+        // not the top-level `api_key`. Skip both the env-var fill and the
+        // inactive guard for it — it is explicitly account-managed and
+        // already credentialed.
+        if !provider.accounts.is_empty() {
+            continue;
+        }
         if provider.api_key.is_empty()
             && let Some(env_var) = builtin.auth.env_var()
             && let Some(value) = bitrouter_sdk::config::env_lookup(env_var)

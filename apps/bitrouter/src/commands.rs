@@ -52,6 +52,11 @@ providers:
   openrouter: {}    # uses OPENROUTER_API_KEY
   # github-copilot needs `bitrouter login github-copilot` first:
   # github-copilot: {}
+  # A provider can hold multiple accounts — e.g. two subscriptions to
+  # the same upstream. `account_strategy` is `failover` (try the first,
+  # drop to the next on a retryable / out-of-credits error — default)
+  # or `balance` (spread load evenly across accounts):
+  # opencode-go: { account_strategy: failover, accounts: [{ api_key: "${OPENCODE_GO_KEY_A}", label: primary }, { api_key: "${OPENCODE_GO_KEY_B}", label: backup }] }
 
 # Upstream MCP (Model Context Protocol) servers — `bitrouter tools
 # list/status` reads this, and `POST /mcp/<name>` proxies JSON-RPC

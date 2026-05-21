@@ -185,6 +185,67 @@ pub struct ProviderConfig {
     /// fields; explicit fields here win. Resolved by
     /// [`resolve_derivations`] after the config is parsed.
     pub derives: Option<String>,
+    /// Multiple credentials for this one provider — e.g. two
+    /// subscriptions to the same upstream. When non-empty, the routing
+    /// table expands the provider into one [`RoutingTarget`] per
+    /// account; [`account_strategy`](Self::account_strategy) decides
+    /// their order. Empty = a single-credential provider keyed off the
+    /// top-level [`api_key`](Self::api_key) (the common case).
+    pub accounts: Vec<ProviderAccount>,
+    /// How the per-account targets are ordered when `accounts` is set.
+    pub account_strategy: AccountStrategy,
+}
+
+/// One credential within a multi-account provider. An account varies
+/// only the credential (and optionally the base URL) — the protocol,
+/// model catalog, and rate limits are the provider's.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ProviderAccount {
+    /// This account's API key (often a `${VAR}` reference).
+    pub api_key: String,
+    /// Optional per-account `api_base` override. Empty inherits the
+    /// provider's `api_base` — set it only for multi-region / multi-org
+    /// deployments where each account lives on a different host.
+    pub api_base: String,
+    /// Optional human label, surfaced in the request log so an operator
+    /// can see which account served a request. Defaults to
+    /// `account-<n>` (1-based) when empty.
+    pub label: String,
+}
+
+impl std::fmt::Debug for ProviderAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redact the key for the same reason `ProviderConfig` does.
+        f.debug_struct("ProviderAccount")
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("api_base", &self.api_base)
+            .field("label", &self.label)
+            .finish()
+    }
+}
+
+/// How a multi-account provider's per-account targets are ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountStrategy {
+    /// Accounts in declared order — the first is primary; routing drops
+    /// to the next on a retryable failure (5xx / 429 / timeout) or a
+    /// payment / credit-exhaustion error. The default.
+    #[default]
+    Failover,
+    /// Accounts ordered with a process-random rotation so the primary
+    /// (and therefore the load) spreads evenly across accounts. The
+    /// remaining accounts still act as failover targets for that
+    /// request.
+    Balance,
 }
 
 impl std::fmt::Debug for ProviderConfig {
@@ -206,6 +267,8 @@ impl std::fmt::Debug for ProviderConfig {
             .field("active", &self.active)
             .field("tags", &self.tags)
             .field("derives", &self.derives)
+            .field("accounts", &self.accounts)
+            .field("account_strategy", &self.account_strategy)
             .finish()
     }
 }
@@ -222,7 +285,27 @@ impl Default for ProviderConfig {
             active: true,
             tags: Vec::new(),
             derives: None,
+            accounts: Vec::new(),
+            account_strategy: AccountStrategy::default(),
         }
+    }
+}
+
+impl ProviderConfig {
+    /// The API key for provider-level operations that aren't tied to a
+    /// specific routed request — currently model discovery's `/models`
+    /// probe. Returns the top-level [`api_key`](Self::api_key), or the
+    /// first account's key when the provider is account-based and has
+    /// no top-level key.
+    pub fn primary_api_key(&self) -> &str {
+        if !self.api_key.is_empty() {
+            return &self.api_key;
+        }
+        self.accounts
+            .iter()
+            .map(|a| a.api_key.as_str())
+            .find(|k| !k.is_empty())
+            .unwrap_or("")
     }
 }
 
@@ -570,7 +653,7 @@ pub async fn discover_models(config: &mut Config) {
         let result = async {
             let resp = client
                 .get(&url)
-                .bearer_auth(&provider.api_key)
+                .bearer_auth(provider.primary_api_key())
                 .send()
                 .await
                 .ok()?;

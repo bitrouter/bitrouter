@@ -86,20 +86,93 @@ impl ConfigRoutingTable {
     }
 }
 
-fn build_target(
+/// Build the routing target(s) for one `(provider, model)` pair.
+///
+/// A single-credential provider yields exactly one target. A
+/// multi-account provider (`accounts:` set) yields one target per
+/// account: `failover` keeps the declared order, `balance` applies a
+/// round-robin rotation so the primary advances by one each request
+/// and the load splits evenly. Either way the remaining accounts sit
+/// later in the chain that `execute_with_fallback` walks, so they act
+/// as failover targets for that request.
+fn build_targets(
     provider_id: &str,
     provider: &crate::config::ProviderConfig,
     model_id: &str,
-) -> RoutingTarget {
-    RoutingTarget {
-        provider_name: provider_id.to_string(),
-        service_id: model_id.to_string(),
-        api_base: provider.api_base.clone(),
-        api_key: provider.api_key.clone(),
-        api_protocol: provider.protocol_for(model_id),
-        api_key_override: None,
-        api_base_override: None,
+) -> Vec<RoutingTarget> {
+    let protocol = provider.protocol_for(model_id);
+    if provider.accounts.is_empty() {
+        return vec![RoutingTarget {
+            provider_name: provider_id.to_string(),
+            service_id: model_id.to_string(),
+            api_base: provider.api_base.clone(),
+            api_key: provider.api_key.clone(),
+            api_protocol: protocol,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+        }];
     }
+
+    let n = provider.accounts.len();
+    let offset = match provider.account_strategy {
+        crate::config::AccountStrategy::Failover => 0,
+        crate::config::AccountStrategy::Balance => balance_offset(provider_id, n),
+    };
+    (0..n)
+        .map(|i| {
+            let idx = (i + offset) % n;
+            let account = &provider.accounts[idx];
+            let label = if account.label.is_empty() {
+                format!("account-{}", idx + 1)
+            } else {
+                account.label.clone()
+            };
+            let api_base = if account.api_base.is_empty() {
+                provider.api_base.clone()
+            } else {
+                account.api_base.clone()
+            };
+            RoutingTarget {
+                provider_name: provider_id.to_string(),
+                service_id: model_id.to_string(),
+                api_base,
+                api_key: account.api_key.clone(),
+                api_protocol: protocol.clone(),
+                account_label: Some(label),
+                api_key_override: None,
+                api_base_override: None,
+            }
+        })
+        .collect()
+}
+
+/// The rotation offset in `0..n` for a `balance` provider's next
+/// request — a round-robin counter, so the primary account advances by
+/// one each call and the load splits *exactly* evenly.
+///
+/// The counter is keyed per provider id (a `balance` provider with 2
+/// accounts and one with 3 must each cycle over their own `n`, not a
+/// shared sequence) and lives in a process-global map. A wall-clock
+/// seed was tried first but fails on platforms whose `SystemTime` has
+/// only microsecond granularity — `subsec_nanos() % 2` is then always
+/// `0`. The brief `Mutex` (one `HashMap` lookup + increment) is the
+/// one bit of state in this otherwise-pure resolution path.
+fn balance_offset(provider_id: &str, n: usize) -> usize {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static COUNTERS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+    if n <= 1 {
+        return 0;
+    }
+    let mut counters = COUNTERS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("balance counter lock poisoned");
+    let counter = counters.entry(provider_id.to_string()).or_insert(0);
+    let offset = *counter % n;
+    *counter = counter.wrapping_add(1);
+    offset
 }
 
 /// Whether a provider carries every tag in `require_tags`.
@@ -126,7 +199,7 @@ pub fn resolve_route_chain(
         && let Some(provider) = config.providers.get(provider_id)
         && provider.active
     {
-        return Ok(vec![build_target(provider_id, provider, model_id)]);
+        return Ok(build_targets(provider_id, provider, model_id));
     }
 
     // ---- Strategy 2: explicit virtual model ----
@@ -136,7 +209,7 @@ pub fn resolve_route_chain(
             if let Some(provider) = config.providers.get(&endpoint.provider)
                 && provider.active
             {
-                chain.push(build_target(
+                chain.extend(build_targets(
                     &endpoint.provider,
                     provider,
                     &endpoint.service_id,
@@ -152,7 +225,9 @@ pub fn resolve_route_chain(
     }
 
     // ---- Strategy 3: auto-cascade across every provider declaring it ----
-    let mut chain: Vec<(String, RoutingTarget)> = Vec::new();
+    // Collect per-provider so the cascade sort is by provider id; each
+    // provider then contributes one-or-more (account-expanded) targets.
+    let mut chain: Vec<(String, Vec<RoutingTarget>)> = Vec::new();
     for (provider_id, provider) in &config.providers {
         if !provider.active {
             continue;
@@ -169,7 +244,7 @@ pub fn resolve_route_chain(
         if provider.models.iter().any(|m| m.id == clean) {
             chain.push((
                 provider_id.clone(),
-                build_target(provider_id, provider, &clean),
+                build_targets(provider_id, provider, &clean),
             ));
         }
     }
@@ -182,13 +257,14 @@ pub fn resolve_route_chain(
     }
 
     // Order the cascade. `Latency` / `Cost` have no metrics source yet, so
-    // they fall back to the alphabetical initial sort.
+    // they fall back to the alphabetical initial sort. Account-expanded
+    // targets within one provider keep their build order.
     match prefs.sort {
         SortOrder::Alphabetical | SortOrder::Latency | SortOrder::Cost => {
             chain.sort_by(|a, b| a.0.cmp(&b.0));
         }
     }
-    Ok(chain.into_iter().map(|(_, t)| t).collect())
+    Ok(chain.into_iter().flat_map(|(_, t)| t).collect())
 }
 
 /// List models for a config (the §5.7 aggregation logic, shared by both tables).
@@ -486,5 +562,190 @@ presets:
             .unwrap();
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].provider_name, "paid");
+    }
+
+    // ===== multi-account provider =====
+
+    const TWO_ACCOUNTS: &str = r#"
+providers:
+  opencode-go:
+    api_base: https://opencode.ai/zen/go/v1
+    models: [{ id: glm-5.1 }]
+    accounts:
+      - { api_key: key-a, label: sub-a }
+      - { api_key: key-b, label: sub-b }
+"#;
+
+    #[tokio::test]
+    async fn multi_account_expands_into_one_target_per_account() {
+        // A provider:model route to a 2-account provider yields a
+        // 2-target chain — execute_with_fallback walks it as failover.
+        let t = table(TWO_ACCOUNTS);
+        let chain = t
+            .route_chain(
+                "opencode-go:glm-5.1",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 2, "one target per account");
+        // failover (the default) keeps declared order.
+        assert_eq!(chain[0].api_key, "key-a");
+        assert_eq!(chain[0].account_label.as_deref(), Some("sub-a"));
+        assert_eq!(chain[1].api_key, "key-b");
+        assert_eq!(chain[1].account_label.as_deref(), Some("sub-b"));
+        // every target keeps the provider identity + service id.
+        for hop in &chain {
+            assert_eq!(hop.provider_name, "opencode-go");
+            assert_eq!(hop.service_id, "glm-5.1");
+            assert_eq!(hop.api_base, "https://opencode.ai/zen/go/v1");
+        }
+    }
+
+    #[tokio::test]
+    async fn single_credential_provider_still_yields_one_target() {
+        // Regression: a provider with no `accounts:` is unchanged — one
+        // target, `account_label` is None.
+        let t = table(PROVIDERS);
+        let chain = t
+            .route_chain(
+                "openai:gpt-5",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].api_key, "k-openai");
+        assert!(chain[0].account_label.is_none());
+    }
+
+    #[tokio::test]
+    async fn balance_strategy_keeps_every_account_in_the_chain() {
+        // `balance` rotates the primary; the chain still contains all
+        // accounts (the rest are that request's failover targets).
+        let yaml = r#"
+providers:
+  opencode-go:
+    api_base: https://opencode.ai/zen/go/v1
+    models: [{ id: glm-5.1 }]
+    account_strategy: balance
+    accounts:
+      - { api_key: key-a }
+      - { api_key: key-b }
+"#;
+        let t = table(yaml);
+        let chain = t
+            .route_chain(
+                "opencode-go:glm-5.1",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 2);
+        let keys: std::collections::HashSet<&str> =
+            chain.iter().map(|t| t.api_key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["key-a", "key-b"].into_iter().collect(),
+            "both accounts present regardless of rotation"
+        );
+        // unlabelled accounts get a positional `account-<n>` label.
+        for hop in &chain {
+            assert!(
+                hop.account_label
+                    .as_deref()
+                    .is_some_and(|l| l.starts_with("account-")),
+                "default label: {:?}",
+                hop.account_label
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn balance_strategy_rotates_the_primary_round_robin() {
+        // The whole point of `balance` — consecutive requests must not
+        // all land on the same primary account. Use a provider id
+        // unique to this test so the round-robin counter starts clean.
+        let yaml = r#"
+providers:
+  bal-rr-provider:
+    api_base: https://example.invalid/v1
+    models: [{ id: m }]
+    account_strategy: balance
+    accounts:
+      - { api_key: key-a, label: a }
+      - { api_key: key-b, label: b }
+"#;
+        let t = table(yaml);
+        let mut primaries = Vec::new();
+        for _ in 0..4 {
+            let chain = t
+                .route_chain(
+                    "bal-rr-provider:m",
+                    &RoutingPrefs::default(),
+                    &CallerContext::local(),
+                )
+                .await
+                .unwrap();
+            primaries.push(chain[0].account_label.clone().unwrap());
+        }
+        // Round-robin over 2 accounts → strict a, b, a, b.
+        assert_eq!(primaries, vec!["a", "b", "a", "b"], "round-robin rotation");
+    }
+
+    #[tokio::test]
+    async fn account_api_base_override_wins_over_provider_base() {
+        // A per-account `api_base` covers multi-region / multi-org
+        // setups; an empty one inherits the provider base.
+        let yaml = r#"
+providers:
+  acme:
+    api_base: https://default.example/v1
+    models: [{ id: m1 }]
+    accounts:
+      - { api_key: key-a, api_base: "https://us.example/v1" }
+      - { api_key: key-b }
+"#;
+        let t = table(yaml);
+        let chain = t
+            .route_chain("acme:m1", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        assert_eq!(chain[0].api_base, "https://us.example/v1");
+        assert_eq!(chain[1].api_base, "https://default.example/v1");
+    }
+
+    #[tokio::test]
+    async fn auto_cascade_expands_accounts_in_place() {
+        // `shared` is declared by a single-credential provider and a
+        // 2-account provider — the cascade is provider-ordered, and the
+        // multi-account provider contributes both of its accounts.
+        let yaml = r#"
+providers:
+  alpha:
+    api_base: https://alpha.example/v1
+    api_key: k-alpha
+    models: [{ id: shared }]
+  zeta:
+    api_base: https://zeta.example/v1
+    models: [{ id: shared }]
+    accounts:
+      - { api_key: z1 }
+      - { api_key: z2 }
+"#;
+        let t = table(yaml);
+        let chain = t
+            .route_chain("shared", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 3, "alpha + zeta×2");
+        assert_eq!(chain[0].provider_name, "alpha");
+        assert_eq!(chain[1].provider_name, "zeta");
+        assert_eq!(chain[2].provider_name, "zeta");
+        assert_eq!(chain[1].api_key, "z1");
+        assert_eq!(chain[2].api_key, "z2");
     }
 }

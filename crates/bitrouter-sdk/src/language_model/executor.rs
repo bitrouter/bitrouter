@@ -93,6 +93,7 @@ impl Executor for MockExecutor {
             MockResponse::Generate(result) => Ok(ExecutionResult {
                 provider_id: target.provider_name.clone(),
                 model_id: target.service_id.clone(),
+                account_label: target.account_label.clone(),
                 result,
                 latency_ms: 1,
                 generation_time_ms: 1,
@@ -166,6 +167,39 @@ fn truncate_upstream_message(text: &str) -> String {
     } else {
         truncated
     }
+}
+
+/// Turn a non-2xx upstream response into the right [`BitrouterError`].
+///
+/// Most non-2xx maps to [`BitrouterError::Upstream`] carrying the
+/// status. The exception: credit / balance exhaustion. Some gateways
+/// signal it cleanly with `402`, but others (e.g. opencode) return a
+/// `401`/`403` with a `CreditsError` / "insufficient balance" body —
+/// which would otherwise be misread as an auth failure. Recognise that
+/// family and map it to [`BitrouterError::PaymentRequired`] so the
+/// fallback policy drops to the next account / provider instead of
+/// failing the request outright.
+fn classify_upstream_error(status: u16, body: &str) -> BitrouterError {
+    if matches!(status, 401..=403) && looks_like_credit_exhaustion(body) {
+        return BitrouterError::PaymentRequired(truncate_upstream_message(body));
+    }
+    BitrouterError::Upstream {
+        status,
+        message: truncate_upstream_message(body),
+    }
+}
+
+/// Heuristic: does this upstream error body describe a depleted
+/// credit / balance? Matches the stable phrase family rather than any
+/// one provider's exact wording — string matching is unavoidable here
+/// because the signal is not in the HTTP status.
+fn looks_like_credit_exhaustion(body: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    b.contains("creditserror")
+        || b.contains("insufficient balance")
+        || b.contains("insufficient credit")
+        || b.contains("insufficient funds")
+        || b.contains("out of credit")
 }
 
 /// The default upstream [`Executor`] — dispatches a canonical
@@ -296,10 +330,7 @@ impl Executor for HttpExecutor {
             })?;
 
         if !status.is_success() {
-            return Err(BitrouterError::Upstream {
-                status: status.as_u16(),
-                message: truncate_upstream_message(&text),
-            });
+            return Err(classify_upstream_error(status.as_u16(), &text));
         }
 
         let json: serde_json::Value =
@@ -313,6 +344,7 @@ impl Executor for HttpExecutor {
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
             result,
             latency_ms: elapsed,
             generation_time_ms: elapsed,
@@ -356,10 +388,7 @@ impl Executor for HttpExecutor {
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
-            return Err(BitrouterError::Upstream {
-                status: status.as_u16(),
-                message: truncate_upstream_message(&text),
-            });
+            return Err(classify_upstream_error(status.as_u16(), &text));
         }
 
         // Parse the upstream SSE byte stream into canonical stream parts via
@@ -516,5 +545,55 @@ impl Executor for DispatchExecutor {
             .cloned()
             .unwrap_or_else(|| self.default.clone());
         executor.execute_stream(target, prompt).await
+    }
+}
+
+#[cfg(test)]
+mod error_classification_tests {
+    use super::*;
+
+    #[test]
+    fn credit_exhaustion_401_maps_to_payment_required() {
+        // opencode signals a drained balance with a 401 + CreditsError
+        // body — must map to PaymentRequired so failover drops to the
+        // next account rather than treating it as an auth failure.
+        let body =
+            r#"{"type":"error","error":{"type":"CreditsError","message":"Insufficient balance."}}"#;
+        match classify_upstream_error(401, body) {
+            BitrouterError::PaymentRequired(_) => {}
+            other => panic!("expected PaymentRequired, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_401_stays_an_upstream_error() {
+        // A genuine auth failure (no credit signal) must NOT become
+        // PaymentRequired — it should fail the request, not silently
+        // fall through to the next account.
+        match classify_upstream_error(401, r#"{"error":"invalid api key"}"#) {
+            BitrouterError::Upstream { status, .. } => assert_eq!(status, 401),
+            other => panic!("expected Upstream(401), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn server_error_stays_an_upstream_error() {
+        match classify_upstream_error(503, "service unavailable") {
+            BitrouterError::Upstream { status, .. } => assert_eq!(status, 503),
+            other => panic!("expected Upstream(503), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn credit_phrase_family_is_recognised() {
+        assert!(looks_like_credit_exhaustion("Insufficient balance"));
+        assert!(looks_like_credit_exhaustion(
+            "INSUFFICIENT CREDIT remaining"
+        ));
+        assert!(looks_like_credit_exhaustion("you are out of credits"));
+        assert!(looks_like_credit_exhaustion(
+            r#"{"error":{"type":"CreditsError"}}"#
+        ));
+        assert!(!looks_like_credit_exhaustion("invalid request: bad model"));
     }
 }

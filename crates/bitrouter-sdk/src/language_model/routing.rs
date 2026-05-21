@@ -116,8 +116,9 @@ pub trait FallbackPolicy: Send + Sync {
     fn classify(&self, err: &BitrouterError, attempted: &RoutingTarget) -> FallbackDecision;
 }
 
-/// The default policy: 5xx / 408 / 429 / transport errors → try next; other
-/// 4xx → fail. Mirrors v0's `DefaultFallbackPolicy`.
+/// The default policy: 5xx / 408 / 429 / transport / payment-exhaustion
+/// errors → try next; other 4xx → fail. Mirrors v0's
+/// `DefaultFallbackPolicy`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultFallbackPolicy;
 
@@ -130,6 +131,13 @@ impl FallbackPolicy for DefaultFallbackPolicy {
             }
             BitrouterError::UpstreamTimeout => FallbackDecision::TryNext,
             BitrouterError::RateLimited { .. } => FallbackDecision::TryNext,
+            // Payment / credit exhaustion → try the next target. For a
+            // multi-account provider this drops to the next account
+            // (the "fall back when a subscription runs out" path); for
+            // a plain cascade it tries the next provider, which may
+            // still have funds. If every target is drained the chain
+            // exhausts and the original error is returned.
+            BitrouterError::PaymentRequired(_) => FallbackDecision::TryNext,
             // Any other error is the request's own fault — do not retry; the
             // original error is preserved.
             other => FallbackDecision::Fail(other.clone()),

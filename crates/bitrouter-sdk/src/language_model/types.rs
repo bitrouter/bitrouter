@@ -345,6 +345,10 @@ pub struct ExecutionResult {
     pub provider_id: String,
     /// The model/service id at that provider.
     pub model_id: String,
+    /// Which account of a multi-account provider served the request —
+    /// `None` for a single-credential provider. Reflects any failover
+    /// hop, so it can differ from the chain's primary account.
+    pub account_label: Option<String>,
     /// The generation result.
     pub result: GenerateResult,
     /// End-to-end latency in milliseconds.
@@ -370,6 +374,11 @@ pub struct RoutingTarget {
     pub api_key: String,
     /// The wire protocol this target speaks.
     pub api_protocol: ApiProtocol,
+    /// Which account of a multi-account provider this target came from
+    /// — `None` for a single-credential provider. Surfaced in the
+    /// request log so an operator can see which subscription served a
+    /// request; carries no routing behaviour itself.
+    pub account_label: Option<String>,
     /// Per-request key override. Set by a `RouteHook` that wants to
     /// substitute the caller's own provider key (e.g. BYOK) for this hop.
     /// The SDK itself is opinion-free about whether or how such a hook
@@ -387,6 +396,7 @@ impl std::fmt::Debug for RoutingTarget {
             .field("api_base", &self.api_base)
             .field("api_key", &redacted(&self.api_key))
             .field("api_protocol", &self.api_protocol)
+            .field("account_label", &self.account_label)
             .field(
                 "api_key_override",
                 &self.api_key_override.as_deref().map(redacted),

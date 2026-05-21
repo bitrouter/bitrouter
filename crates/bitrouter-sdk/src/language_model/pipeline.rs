@@ -169,6 +169,7 @@ impl Pipeline {
             ctx.execution_result = Some(ExecutionResult {
                 provider_id: target.provider_name.clone(),
                 model_id: target.service_id.clone(),
+                account_label: target.account_label.clone(),
                 result: crate::language_model::types::GenerateResult {
                     content: Vec::new(),
                     usage: None,
@@ -498,12 +499,17 @@ fn log_request_received(ctx: &PipelineContext, head: Option<&RoutingTarget>, str
     let (provider, model) = head
         .map(|t| (t.provider_name.as_str(), t.service_id.as_str()))
         .unwrap_or(("-", "-"));
+    // The account of the *primary* target — for a multi-account
+    // provider this is the one routing will try first; failover may
+    // land on a different one (see the "request finished" line).
+    let account = head.and_then(|t| t.account_label.as_deref()).unwrap_or("-");
     tracing::info!(
         request_id = %ctx.request_id(),
         user_id = ctx.caller().user_id(),
         route = ctx.model(),
         provider,
         model,
+        account,
         stream,
         "request received"
     );
@@ -529,12 +535,17 @@ fn log_request_resolve_failed(ctx: &PipelineContext, error: &BitrouterError) {
 /// streamed flag — plus `status` (200 / inferred from error) so a
 /// log-collector can build dashboards without parsing the message.
 fn log_request_finished(settle: &SettlementContext) {
+    // The account that actually served the request — for a
+    // multi-account provider this reflects any failover hop, so it can
+    // differ from the "request received" line's primary account.
+    let account = settle.account_label.as_deref().unwrap_or("-");
     match &settle.error {
         None => tracing::info!(
             request_id = %settle.request_id,
             user_id = settle.caller.user_id(),
             provider = %settle.provider_id,
             model = %settle.model_id,
+            account,
             stream = settle.streamed,
             status = 200,
             latency_ms = settle.latency_ms,
@@ -547,6 +558,7 @@ fn log_request_finished(settle: &SettlementContext) {
             user_id = settle.caller.user_id(),
             provider = %settle.provider_id,
             model = %settle.model_id,
+            account,
             stream = settle.streamed,
             latency_ms = settle.latency_ms,
             error = %err,
