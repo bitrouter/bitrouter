@@ -161,6 +161,35 @@ pub struct Tool {
     pub parameters: serde_json::Value,
 }
 
+/// Constraint on the shape of the model's response.
+///
+/// Today the only variant is [`Self::JsonSchema`]; future variants (`json_object`,
+/// `text`, `regex`) can be added without breaking existing call sites.
+///
+/// Each inbound adapter promotes the provider-native field into this typed
+/// slot at `parse_request` time (e.g. OpenAI Chat's `response_format`,
+/// Anthropic's `output_config.format`, Google's `generationConfig.responseSchema`).
+/// Each outbound adapter renders it back into the upstream's native shape on
+/// `render_request`. Cross-protocol routing therefore works automatically:
+/// an OpenAI-Chat client asking for `json_schema` against an Anthropic upstream
+/// emits `output_config.format`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseFormat {
+    /// Constrain output to a JSON Schema.
+    JsonSchema {
+        /// Schema name. Required by OpenAI Chat / Responses; ignored by
+        /// Anthropic and Google.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        /// Strict-mode flag. OpenAI-only; Anthropic and Google are always strict.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strict: Option<bool>,
+        /// The JSON Schema.
+        schema: serde_json::Value,
+    },
+}
+
 /// Sampling / generation parameters, carried verbatim where possible.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GenerationParams {
@@ -199,6 +228,11 @@ pub struct Prompt {
     /// Generation parameters.
     #[serde(default)]
     pub params: GenerationParams,
+    /// Constraint on the model's response shape (e.g. a JSON Schema). Inbound
+    /// adapters promote the provider-native field into this slot; outbound
+    /// adapters render it back natively.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
     /// Whether the caller requested a streaming response.
     pub stream: bool,
 }

@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatRequest",
+  "description": "OpenAI Chat Completions request body\n(<https://platform.openai.com/docs/api-reference/chat/create>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
+  "type": "object",
+  "properties": {
+    "max_completion_tokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "minimum": 0
+    },
+    "max_tokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "minimum": 0
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ChatMessage"
+      }
+    },
+    "model": {
+      "type": "string"
+    },
+    "reasoning_effort": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "stream": {
+      "type": "boolean",
+      "default": false
+    },
+    "temperature": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ChatTool"
+      }
+    },
+    "top_p": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    }
+  },
+  "required": [
+    "model",
+    "messages"
+  ],
+  "$defs": {
+    "ChatFunctionCall": {
+      "description": "The `function` payload of a [`ChatToolCall`]: name + raw JSON argument string.",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "type": "string",
+          "default": ""
+        },
+        "name": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "ChatMessage": {
+      "description": "One element of [`ChatRequest`]'s `messages` array — a chat turn carrying\nrole + optional content + optional tool calls / tool-call reply id.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "`content` may be a plain string or an array of content parts, or absent\n(an assistant turn that is purely `tool_calls`).",
+          "default": null
+        },
+        "reasoning_content": {
+          "description": "Reasoning content — **not** in OpenAI's Chat Completions spec; this is\na vendor extension used by DeepSeek\n(<https://api-docs.deepseek.com/api/create-chat-completion>), Moonshot\n(Kimi), Qwen, and other OpenAI-compatible providers that expose the\nmodel's chain-of-thought on the Chat envelope. v0 #454-1: it must\nnot be dropped. `parse_response` additionally accepts `reasoning`\n(some OpenRouter passthroughs) and `thinking` (Aliyun) as aliases.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "role": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChatToolCall"
+          }
+        }
+      },
+      "required": [
+        "role"
+      ]
+    },
+    "ChatTool": {
+      "description": "One element of [`ChatRequest`]'s `tools` array — a `{ function: { … } }` envelope.",
+      "type": "object",
+      "properties": {
+        "function": {
+          "$ref": "#/$defs/ChatToolFunction"
+        }
+      }
+    },
+    "ChatToolCall": {
+      "description": "One assistant tool-call entry on a [`ChatMessage`].",
+      "type": "object",
+      "properties": {
+        "function": {
+          "$ref": "#/$defs/ChatFunctionCall"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ChatToolFunction": {
+      "description": "The `function` payload of a [`ChatTool`]: name + description + JSON-Schema\nparameters.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "parameters": {
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

@@ -9,6 +9,7 @@
 //! (v0 #454-1: such parts must not be dropped).
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
@@ -18,8 +19,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    RoutingTarget, StreamPart, Usage,
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
+    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
 /// The Google Generative AI protocol adapter.
@@ -40,9 +41,14 @@ const GOOGLE_TOP_LEVEL_EXTRA_KEY: &str = "__google_top_level__";
 
 // ===== wire request types =====
 
-#[derive(Debug, Deserialize)]
+/// Google Generative AI `generateContent` request body
+/// (<https://ai.google.dev/api/generate-content>).
+///
+/// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
+/// OpenAPI schema from the canonical wire shape without redeclaring it.
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct GenerateContentRequest {
+pub struct GenerateContentRequest {
     /// Carried as a field so the inbound HTTP route's `{model}` path param can
     /// override it; defaults empty.
     #[serde(default)]
@@ -60,28 +66,37 @@ struct GenerateContentRequest {
     stream: bool,
     /// Top-level extras: `toolConfig`, `safetySettings`, `cachedContent`, … —
     /// preserve them across the inbound→outbound round-trip. Per
-    /// <https://ai.google.dev/api/generate-content>.
+    /// <https://ai.google.dev/api/generate-content>. Skipped from the
+    /// published schema so the documented contract is the set of typed
+    /// fields; pass-through behavior is preserved at runtime.
     #[serde(flatten)]
+    #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GoogleContent {
+/// One element of [`GenerateContentRequest`]'s `contents` array — a turn
+/// carrying optional role + `parts[]`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GoogleContent {
     #[serde(default)]
     role: Option<String>,
     #[serde(default)]
     parts: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+/// One element of [`GenerateContentRequest`]'s `tools` array — Google's
+/// `{ functionDeclarations: [...] }` envelope.
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct GoogleTool {
+pub struct GoogleTool {
     #[serde(default)]
     function_declarations: Vec<GoogleFunctionDecl>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GoogleFunctionDecl {
+/// One function declaration inside a [`GoogleTool`]: name + description +
+/// JSON-Schema parameters.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GoogleFunctionDecl {
     name: String,
     #[serde(default)]
     description: Option<String>,
@@ -89,9 +104,10 @@ struct GoogleFunctionDecl {
     parameters: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize)]
+/// `generationConfig` knobs on a [`GenerateContentRequest`].
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct GoogleGenerationConfig {
+pub struct GoogleGenerationConfig {
     #[serde(default)]
     temperature: Option<f64>,
     #[serde(default)]
@@ -101,8 +117,11 @@ struct GoogleGenerationConfig {
     /// `stopSequences`, `seed`, `topK`, `responseMimeType`, `responseSchema`,
     /// `responseLogprobs`, `presencePenalty`, `frequencyPenalty`, … — every
     /// generation-config knob without a typed slot rides via `extra` and is
-    /// splatted back into `generationConfig` on render. v0 passed these through.
+    /// splatted back into `generationConfig` on render. v0 passed these
+    /// through. Skipped from the published schema for the same reason as
+    /// the top-level `extra` on [`GenerateContentRequest`].
     #[serde(flatten)]
+    #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
@@ -261,6 +280,16 @@ impl InboundAdapter for GoogleAdapter {
                 extra: g.extra,
             })
             .unwrap_or_default();
+        // Promote `generationConfig.responseSchema` (paired with
+        // `responseMimeType: "application/json"`) into the canonical slot
+        // so cross-protocol routing can translate it. When `responseMimeType`
+        // is some other value (e.g. `text/x.enum`) we leave both fields in
+        // extras as an opaque Google-native pass-through.
+        let response_format = parse_google_response_format(&params.extra);
+        if response_format.is_some() {
+            params.extra.remove("responseMimeType");
+            params.extra.remove("responseSchema");
+        }
         // Preserve top-level Google fields (`toolConfig`, `safetySettings`,
         // `cachedContent`, …) across the round-trip. They're namespaced so they
         // don't collide with `generationConfig`-level extras above and only the
@@ -278,6 +307,7 @@ impl InboundAdapter for GoogleAdapter {
             messages,
             tools,
             params,
+            response_format,
             stream: req.stream,
         })
     }
@@ -351,10 +381,17 @@ impl OutboundAdapter for GoogleAdapter {
         if let Some(mt) = prompt.params.max_tokens {
             gen_config.insert("maxOutputTokens".into(), mt.into());
         }
-        // Splat Google generation-config extras (stopSequences, topK, seed,
-        // responseMimeType / responseSchema, …) back into the outbound config.
-        // Typed fields above win over a same-named extra; the sentinel key
-        // carries top-level fields and is skipped here.
+        // Render the canonical response_format into Google's generationConfig.
+        // `name` and `strict` are intentionally dropped — Google's
+        // schema-constrained sampling has no concept of either.
+        if let Some(rf) = &prompt.response_format {
+            let ResponseFormat::JsonSchema { schema, .. } = rf;
+            gen_config.insert("responseMimeType".into(), "application/json".into());
+            gen_config.insert("responseSchema".into(), schema.clone());
+        }
+        // Splat Google generation-config extras (stopSequences, topK, seed, …)
+        // back into the outbound config. Typed fields above win over a same-named
+        // extra; the sentinel key carries top-level fields and is skipped here.
         for (k, v) in &prompt.params.extra {
             if k == GOOGLE_TOP_LEVEL_EXTRA_KEY {
                 continue;
@@ -405,6 +442,28 @@ impl OutboundAdapter for GoogleAdapter {
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(GoogleStreamDecoder::default())
     }
+
+    fn supports_response_format(&self) -> bool {
+        true
+    }
+}
+
+/// Lift Google's structured-output fields out of `generationConfig` extras
+/// into the canonical [`ResponseFormat`]. Triggers only when
+/// `responseMimeType == "application/json"` *and* a `responseSchema` is set —
+/// other MIME modes (e.g. `text/x.enum`) have no schema to translate.
+fn parse_google_response_format(
+    extra: &std::collections::HashMap<String, serde_json::Value>,
+) -> Option<ResponseFormat> {
+    if extra.get("responseMimeType").and_then(|v| v.as_str()) != Some("application/json") {
+        return None;
+    }
+    let schema = extra.get("responseSchema")?.clone();
+    Some(ResponseFormat::JsonSchema {
+        name: None,
+        strict: None,
+        schema,
+    })
 }
 
 #[async_trait]

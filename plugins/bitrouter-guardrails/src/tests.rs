@@ -27,6 +27,7 @@ fn prompt(text: &str, stream: bool) -> Prompt {
         messages: vec![Message::text(Role::User, text)],
         tools: Vec::new(),
         params: GenerationParams::default(),
+        response_format: None,
         stream,
     }
 }

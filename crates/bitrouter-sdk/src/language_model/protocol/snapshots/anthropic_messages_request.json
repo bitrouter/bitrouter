@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MessagesRequest",
+  "description": "Anthropic Messages request body (<https://docs.anthropic.com/en/api/messages>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
+  "type": "object",
+  "properties": {
+    "max_tokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "minimum": 0
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AnthropicMessage"
+      }
+    },
+    "model": {
+      "type": "string"
+    },
+    "stream": {
+      "type": "boolean",
+      "default": false
+    },
+    "system": {
+      "description": "String or an array of `{type:\"text\", text}` blocks (#227 → #228).",
+      "default": null
+    },
+    "temperature": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AnthropicTool"
+      }
+    },
+    "top_p": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    }
+  },
+  "required": [
+    "model",
+    "messages"
+  ],
+  "$defs": {
+    "AnthropicMessage": {
+      "description": "One element of [`MessagesRequest`]'s `messages` array — a `{ role, content }` turn.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "String or an array of content blocks."
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "AnthropicTool": {
+      "description": "One element of [`MessagesRequest`]'s `tools` array — Anthropic's tool definition shape.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "input_schema": {
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

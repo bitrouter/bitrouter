@@ -6,11 +6,19 @@
 //! (`wiremock`). This exercises the whole stack: inbound protocol parse →
 //! pipeline → routing → HttpExecutor → outbound protocol render → upstream →
 //! response parse → metering recorder.
+//!
+//! The `structured_outputs_matrix` block at the bottom of this file is a
+//! 4×4 (inbound × outbound) sweep for `response_format` (PR #472). It uses
+//! the same assembled-router + wiremock setup as the other tests but with
+//! a four-protocol upstream and a four-provider config, so it lives here
+//! rather than in its own file.
 
+use axum_test::TestServer;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config;
 use bitrouter_sdk::language_model::{GenerationParams, Message, PipelineRequest, Prompt, Role};
 use bitrouter_sdk::server::{AppState, build_router};
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -68,6 +76,7 @@ fn chat_prompt() -> Prompt {
         messages: vec![Message::text(Role::User, "hello")],
         tools: Vec::new(),
         params: GenerationParams::default(),
+        response_format: None,
         stream: false,
     }
 }
@@ -505,4 +514,496 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     assert_eq!(json["jsonrpc"], "2.0");
     assert_eq!(json["id"], 1);
     assert_eq!(json["error"]["code"], -32601);
+}
+
+// ============================================================================
+// structured outputs — the 4×4 inbound-protocol × outbound-protocol matrix
+// for `response_format` (PR #472).
+//
+// Same assembly model as the tests above (assembled router + wiremock
+// upstream + axum_test). The matrix supplies the same JSON schema in each
+// inbound protocol's native shape and asserts it lands at the right native
+// field on the wire to the upstream:
+//
+//   OpenAI Chat:      response_format.json_schema.schema
+//   OpenAI Responses: text.format.schema
+//   Anthropic:        output_config.format.schema
+//   Google:           generationConfig.responseSchema  (paired with
+//                     responseMimeType == "application/json")
+//
+// `name` / `strict` are dropped on the outbound to Anthropic and Google
+// because those native APIs don't carry them.
+//
+// Capability-gate coverage (a `Custom` outbound adapter without
+// `supports_response_format()` produces a 400) lives at the SDK level in
+// `crates/bitrouter-sdk/src/language_model/tests.rs ::
+// executor_rejects_response_format_on_unsupported_outbound`. We don't
+// duplicate it here because the gate fires inside `HttpExecutor` before
+// any HTTP-level transport detail (URL, auth) matters.
+// ============================================================================
+
+/// The schema attached to every matrix request. Small but recognisable so
+/// the per-outbound assertions can compare on `properties.city.type`.
+fn matrix_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "city": { "type": "string" } },
+        "required": ["city"],
+        "additionalProperties": false,
+    })
+}
+
+/// Model id → outbound `api_protocol`. Same upstream serves all four; the
+/// chosen model id picks the provider (and therefore the outbound protocol).
+const MODEL_VIA_OPENAI: &str = "model-via-openai";
+const MODEL_VIA_ANTHROPIC: &str = "model-via-anthropic";
+const MODEL_VIA_RESPONSES: &str = "model-via-responses";
+const MODEL_VIA_GOOGLE: &str = "model-via-google";
+
+/// Stand up one MockServer that speaks all four outbound wire formats on the
+/// path each provider's transport actually hits.
+async fn upstream_for_all_protocols() -> MockServer {
+    let server = MockServer::start().await;
+
+    // OpenAI Chat — POST /chat/completions
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "model": "test",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "{\"city\":\"sf\"}" },
+                "finish_reason": "stop",
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
+        })))
+        .mount(&server)
+        .await;
+
+    // OpenAI Responses — POST /responses
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "resp-1",
+            "object": "response",
+            "status": "completed",
+            "model": "test",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "{\"city\":\"sf\"}" }],
+            }],
+            "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 },
+        })))
+        .mount(&server)
+        .await;
+
+    // Anthropic Messages — POST /messages
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg-1",
+            "type": "message",
+            "role": "assistant",
+            "model": "test",
+            "content": [{ "type": "text", "text": "{\"city\":\"sf\"}" }],
+            "stop_reason": "end_turn",
+            "usage": { "input_tokens": 1, "output_tokens": 1 },
+        })))
+        .mount(&server)
+        .await;
+
+    // Google — POST /models/{model}:generateContent (model id varies per
+    // test; match on path prefix + suffix).
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::path_regex(
+            r"^/models/[^/]+:generateContent$",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "candidates": [{
+                "content": { "role": "model", "parts": [{ "text": "{\"city\":\"sf\"}" }] },
+                "finishReason": "STOP",
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 1,
+                "totalTokenCount": 2,
+            },
+        })))
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Build a config with four providers, each speaking one outbound protocol
+/// and each routing one named model.
+fn config_for_matrix(upstream: &str) -> config::Config {
+    let yaml = format!(
+        r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+providers:
+  via_openai:
+    api_base: {upstream}
+    api_key: test-key
+    api_protocol:
+      - "*": openai
+    models:
+      - id: {MODEL_VIA_OPENAI}
+  via_anthropic:
+    api_base: {upstream}
+    api_key: test-key
+    api_protocol:
+      - "*": anthropic
+    models:
+      - id: {MODEL_VIA_ANTHROPIC}
+  via_responses:
+    api_base: {upstream}
+    api_key: test-key
+    api_protocol:
+      - "*": responses
+    models:
+      - id: {MODEL_VIA_RESPONSES}
+  via_google:
+    api_base: {upstream}
+    api_key: test-key
+    api_protocol:
+      - "*": google
+    models:
+      - id: {MODEL_VIA_GOOGLE}
+"#
+    );
+    config::parse_with(&yaml, |_| None).expect("config parses")
+}
+
+/// Assemble app + router + axum_test server with the matrix config.
+async fn matrix_server() -> (TestServer, MockServer) {
+    let upstream = upstream_for_all_protocols().await;
+    let cfg = config_for_matrix(&upstream.uri());
+    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let state = AppState {
+        language_model: assembled.app.language_model().unwrap().clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+    };
+    (TestServer::new(build_router(state)), upstream)
+}
+
+// ----- inbound request builders (one per inbound protocol) -----
+
+fn inbound_openai_chat(model: &str) -> Value {
+    json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": "weather?" }],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "weather",
+                "strict": true,
+                "schema": matrix_schema(),
+            },
+        },
+    })
+}
+
+fn inbound_anthropic(model: &str) -> Value {
+    json!({
+        "model": model,
+        "max_tokens": 256,
+        "messages": [{ "role": "user", "content": "weather?" }],
+        "output_config": {
+            "format": { "type": "json_schema", "schema": matrix_schema() },
+        },
+    })
+}
+
+fn inbound_openai_responses(model: &str) -> Value {
+    json!({
+        "model": model,
+        "input": "weather?",
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "weather",
+                "strict": true,
+                "schema": matrix_schema(),
+            },
+        },
+    })
+}
+
+fn inbound_google() -> Value {
+    // Google carries the model in the URL, not the body.
+    json!({
+        "contents": [{ "role": "user", "parts": [{ "text": "weather?" }] }],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": matrix_schema(),
+        },
+    })
+}
+
+#[derive(Clone, Copy)]
+enum Inbound {
+    OpenAiChat,
+    Anthropic,
+    OpenAiResponses,
+    Google,
+}
+
+#[derive(Clone, Copy)]
+enum Outbound {
+    OpenAiChat,
+    Anthropic,
+    OpenAiResponses,
+    Google,
+}
+
+impl Outbound {
+    fn model(self) -> &'static str {
+        match self {
+            Outbound::OpenAiChat => MODEL_VIA_OPENAI,
+            Outbound::Anthropic => MODEL_VIA_ANTHROPIC,
+            Outbound::OpenAiResponses => MODEL_VIA_RESPONSES,
+            Outbound::Google => MODEL_VIA_GOOGLE,
+        }
+    }
+
+    fn path_segment(self) -> &'static str {
+        match self {
+            Outbound::OpenAiChat => "/chat/completions",
+            Outbound::Anthropic => "/messages",
+            Outbound::OpenAiResponses => "/responses",
+            // Google's path contains the model id; matched via prefix below.
+            Outbound::Google => "/models/",
+        }
+    }
+}
+
+/// POST `body` to the inbound route matching `inbound`.
+async fn post_inbound(server: &TestServer, inbound: Inbound, model: &str, body: &Value) {
+    let response = match inbound {
+        Inbound::OpenAiChat => server.post("/v1/chat/completions").json(body).await,
+        Inbound::Anthropic => server.post("/v1/messages").json(body).await,
+        Inbound::OpenAiResponses => server.post("/v1/responses").json(body).await,
+        Inbound::Google => {
+            server
+                .post(&format!("/v1beta/models/{model}:generateContent"))
+                .json(body)
+                .await
+        }
+    };
+    response.assert_status_ok();
+}
+
+/// Pull the single upstream request that landed at the path expected for the
+/// outbound protocol. Panics with a useful message if zero or more than one
+/// matched — a wrong-path call would otherwise look like a successful test.
+async fn captured_outbound(upstream: &MockServer, outbound: Outbound) -> Value {
+    let received = upstream.received_requests().await.unwrap_or_default();
+    let suffix = match outbound {
+        Outbound::Google => ":generateContent",
+        _ => "",
+    };
+    let matches: Vec<_> = received
+        .iter()
+        .filter(|r| {
+            let p = r.url.path();
+            p.starts_with(outbound.path_segment()) && p.ends_with(suffix)
+        })
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected exactly one upstream request to outbound {:?} (path starts with {:?}); saw {} \
+         total requests, paths: {:?}",
+        outbound.path_segment(),
+        outbound.path_segment(),
+        received.len(),
+        received.iter().map(|r| r.url.path()).collect::<Vec<_>>(),
+    );
+    serde_json::from_slice(&matches[0].body).expect("upstream body is JSON")
+}
+
+/// Assert the upstream body carries the schema at the outbound protocol's
+/// native location. Encodes the per-protocol contract from PR #472.
+fn assert_native_schema(outbound: Outbound, body: &Value) {
+    let want = matrix_schema();
+    match outbound {
+        Outbound::OpenAiChat => {
+            assert_eq!(
+                body["response_format"]["type"], "json_schema",
+                "openai chat outbound must set response_format.type=json_schema; body: {body}",
+            );
+            assert_eq!(
+                body["response_format"]["json_schema"]["schema"], want,
+                "openai chat outbound must carry the schema under \
+                 response_format.json_schema.schema; body: {body}",
+            );
+            // OpenAI Chat requires `name`; the renderer must supply a default
+            // when the inbound (Anthropic, Google) didn't carry one. Either
+            // the caller-supplied name or the default `"response"` is fine.
+            assert!(
+                body["response_format"]["json_schema"]["name"].is_string(),
+                "openai chat outbound must always set a name; body: {body}",
+            );
+        }
+        Outbound::Anthropic => {
+            assert_eq!(
+                body["output_config"]["format"]["type"], "json_schema",
+                "anthropic outbound must set output_config.format.type=json_schema; body: {body}",
+            );
+            assert_eq!(
+                body["output_config"]["format"]["schema"], want,
+                "anthropic outbound must carry the schema under \
+                 output_config.format.schema; body: {body}",
+            );
+            // Anthropic's GA shape doesn't carry name/strict — the renderer
+            // must drop them, not forward them as unknown fields.
+            assert!(
+                body["output_config"]["format"].get("name").is_none(),
+                "anthropic outbound must NOT carry `name` (not in GA shape); body: {body}",
+            );
+            assert!(
+                body["output_config"]["format"].get("strict").is_none(),
+                "anthropic outbound must NOT carry `strict` (not in GA shape); body: {body}",
+            );
+            // The deprecated flat alias must never appear on the outbound.
+            assert!(
+                body.get("output_format").is_none(),
+                "anthropic outbound must not emit the deprecated `output_format` alias; \
+                 body: {body}",
+            );
+        }
+        Outbound::OpenAiResponses => {
+            assert_eq!(
+                body["text"]["format"]["type"], "json_schema",
+                "responses outbound must set text.format.type=json_schema; body: {body}",
+            );
+            assert_eq!(
+                body["text"]["format"]["schema"], want,
+                "responses outbound must carry the schema under text.format.schema; body: {body}",
+            );
+            assert!(
+                body["text"]["format"]["name"].is_string(),
+                "responses outbound must always set a name; body: {body}",
+            );
+        }
+        Outbound::Google => {
+            assert_eq!(
+                body["generationConfig"]["responseMimeType"], "application/json",
+                "google outbound must set generationConfig.responseMimeType=application/json; \
+                 body: {body}",
+            );
+            assert_eq!(
+                body["generationConfig"]["responseSchema"], want,
+                "google outbound must carry the schema under \
+                 generationConfig.responseSchema; body: {body}",
+            );
+        }
+    }
+}
+
+/// Drive one matrix cell end-to-end.
+async fn run_cell(inbound: Inbound, outbound: Outbound) {
+    let (server, upstream) = matrix_server().await;
+    let model = outbound.model();
+    let body = match inbound {
+        Inbound::OpenAiChat => inbound_openai_chat(model),
+        Inbound::Anthropic => inbound_anthropic(model),
+        Inbound::OpenAiResponses => inbound_openai_responses(model),
+        Inbound::Google => inbound_google(),
+    };
+    post_inbound(&server, inbound, model, &body).await;
+    let upstream_body = captured_outbound(&upstream, outbound).await;
+    assert_native_schema(outbound, &upstream_body);
+}
+
+// ----- 4×4 matrix -----
+
+#[tokio::test]
+async fn e2e_response_format_openai_chat_in_to_openai_chat_out() {
+    run_cell(Inbound::OpenAiChat, Outbound::OpenAiChat).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_openai_chat_in_to_anthropic_out() {
+    run_cell(Inbound::OpenAiChat, Outbound::Anthropic).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_openai_chat_in_to_responses_out() {
+    run_cell(Inbound::OpenAiChat, Outbound::OpenAiResponses).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_openai_chat_in_to_google_out() {
+    run_cell(Inbound::OpenAiChat, Outbound::Google).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_anthropic_in_to_openai_chat_out() {
+    run_cell(Inbound::Anthropic, Outbound::OpenAiChat).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_anthropic_in_to_anthropic_out() {
+    run_cell(Inbound::Anthropic, Outbound::Anthropic).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_anthropic_in_to_responses_out() {
+    run_cell(Inbound::Anthropic, Outbound::OpenAiResponses).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_anthropic_in_to_google_out() {
+    run_cell(Inbound::Anthropic, Outbound::Google).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_responses_in_to_openai_chat_out() {
+    run_cell(Inbound::OpenAiResponses, Outbound::OpenAiChat).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_responses_in_to_anthropic_out() {
+    run_cell(Inbound::OpenAiResponses, Outbound::Anthropic).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_responses_in_to_responses_out() {
+    run_cell(Inbound::OpenAiResponses, Outbound::OpenAiResponses).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_responses_in_to_google_out() {
+    run_cell(Inbound::OpenAiResponses, Outbound::Google).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_google_in_to_openai_chat_out() {
+    run_cell(Inbound::Google, Outbound::OpenAiChat).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_google_in_to_anthropic_out() {
+    run_cell(Inbound::Google, Outbound::Anthropic).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_google_in_to_responses_out() {
+    run_cell(Inbound::Google, Outbound::OpenAiResponses).await;
+}
+
+#[tokio::test]
+async fn e2e_response_format_google_in_to_google_out() {
+    run_cell(Inbound::Google, Outbound::Google).await;
 }

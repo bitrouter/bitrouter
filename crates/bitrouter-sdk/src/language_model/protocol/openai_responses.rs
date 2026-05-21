@@ -15,7 +15,11 @@
 //! - #434: function-call stream items map `item_id` back to `call_id`, and
 //!   argument deltas are not duplicated.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
@@ -24,8 +28,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    RoutingTarget, StreamPart, Usage,
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
+    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
 /// The OpenAI Responses protocol adapter.
@@ -34,6 +38,70 @@ pub struct OpenAiResponsesAdapter;
 /// HTTP transport for OpenAI Responses: `POST {api_base}/responses` with
 /// `Authorization: Bearer <api_key>`.
 pub struct OpenAiResponsesTransport;
+
+// ===== wire request types =====
+
+/// OpenAI Responses request body
+/// (<https://platform.openai.com/docs/api-reference/responses/create>).
+///
+/// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
+/// OpenAPI schema from the canonical wire shape without redeclaring it.
+///
+/// `input` stays `serde_json::Value` on purpose — the Responses API accepts
+/// either a plain string or a heterogeneous item array (Codex multi-turn,
+/// #454-3), and the deeper walk happens in `parse_input` (private). Mirrors
+/// how Anthropic's `system` / `content` are typed.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ResponsesRequest {
+    #[serde(default)]
+    model: String,
+    input: serde_json::Value,
+    #[serde(default)]
+    instructions: Option<String>,
+    #[serde(default)]
+    tools: Vec<ResponsesTool>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    top_p: Option<f64>,
+    #[serde(default)]
+    max_output_tokens: Option<u32>,
+    #[serde(default)]
+    reasoning: Option<ResponsesReasoningConfig>,
+    #[serde(default)]
+    stream: bool,
+    /// Every other field — `tool_choice`, `parallel_tool_calls`,
+    /// `max_tool_calls`, `metadata`, `include[]`, `previous_response_id`,
+    /// `store`, `stream_options`, … — rides through here and is splatted
+    /// back on render. Skipped from the published schema so the documented
+    /// contract is the set of typed fields; pass-through behavior is
+    /// preserved at runtime.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+/// One element of [`ResponsesRequest`]'s `tools` array — the Responses-flavoured
+/// flat tool definition (`{ type: "function", name, description, parameters }`).
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ResponsesTool {
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    parameters: serde_json::Value,
+}
+
+/// `reasoning` knob on [`ResponsesRequest`] — only `effort` is read; other
+/// fields (`summary`, …) round-trip via no slot today (matching v0 behavior).
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ResponsesReasoningConfig {
+    #[serde(default)]
+    effort: Option<String>,
+}
 
 fn parse_role(role: &str) -> Result<Role> {
     match role {
@@ -192,104 +260,62 @@ impl InboundAdapter for OpenAiResponsesAdapter {
     }
 
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
-        // Parsed field-by-field (not via a strict struct) so unexpected
-        // Codex-style item shapes never cause a hard 400 (#454-3).
-        let model = body
-            .get("model")
-            .and_then(|m| m.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let input = body.get("input").ok_or_else(|| {
-            describe_deser_error(
-                "ResponsesRequest",
-                &serde::de::Error::missing_field("input"),
-                &body,
-            )
-        })?;
-        let messages = parse_input(input)?;
-        let system = body
-            .get("instructions")
-            .and_then(|i| i.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+        // The envelope deserializes strictly; `input` stays `Value` and is
+        // walked leniently by `parse_input` so unexpected Codex-style item
+        // shapes never cause a hard 400 (#454-3).
+        let req: ResponsesRequest = serde_json::from_value(body.clone())
+            .map_err(|e| describe_deser_error("ResponsesRequest", &e, &body))?;
 
-        let tools = body
-            .get("tools")
-            .and_then(|t| t.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter(|t| {
-                        t.get("type").and_then(|ty| ty.as_str()) == Some("function")
-                            || t.get("name").is_some()
-                    })
-                    .map(|t| crate::language_model::types::Tool {
-                        name: t
-                            .get("name")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or_default()
-                            .to_string(),
-                        description: t
-                            .get("description")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string()),
-                        parameters: t
-                            .get("parameters")
-                            .cloned()
-                            .unwrap_or(serde_json::json!({})),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let messages = parse_input(&req.input)?;
+        let system = req.instructions.filter(|s| !s.is_empty());
 
-        // Collect every Responses-API field we don't have a typed slot for —
-        // tool_choice, parallel_tool_calls, max_tool_calls, metadata,
-        // include[], previous_response_id, store, stream_options, etc. — into
-        // `extra` so render_request can splat them back. The parser walks the
-        // body field-by-field (#454-3) so we explicitly subtract the known set.
-        const KNOWN: &[&str] = &[
-            "model",
-            "input",
-            "instructions",
-            "tools",
-            "temperature",
-            "top_p",
-            "max_output_tokens",
-            "reasoning",
-            "stream",
-        ];
-        let extra: std::collections::HashMap<String, serde_json::Value> = body
-            .as_object()
-            .map(|obj| {
-                obj.iter()
-                    .filter(|(k, _)| !KNOWN.contains(&k.as_str()))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect()
+        let tools = req
+            .tools
+            .into_iter()
+            .filter(|t| t.kind.as_deref() == Some("function") || t.name.is_some())
+            .map(|t| crate::language_model::types::Tool {
+                name: t.name.unwrap_or_default(),
+                description: t.description,
+                parameters: if t.parameters.is_null() {
+                    serde_json::json!({})
+                } else {
+                    t.parameters
+                },
             })
-            .unwrap_or_default();
+            .collect();
+
+        // Promote `text.format: { type: "json_schema", ... }` out of extras
+        // into the canonical slot. Other contents of `text` (e.g. `verbosity`)
+        // stay in extras and pass through opaquely.
+        let mut extra = req.extra;
+        let response_format = parse_responses_response_format(&extra);
+        if response_format.is_some()
+            && let Some(text) = extra.get_mut("text").and_then(|t| t.as_object_mut())
+        {
+            text.remove("format");
+            if text.is_empty() {
+                extra.remove("text");
+            }
+        }
 
         Ok(Prompt {
-            model,
+            model: req.model,
             system,
             messages,
             tools,
             params: GenerationParams {
-                temperature: body.get("temperature").and_then(|t| t.as_f64()),
-                top_p: body.get("top_p").and_then(|t| t.as_f64()),
-                max_tokens: body
-                    .get("max_output_tokens")
-                    .and_then(|m| m.as_u64())
-                    .map(|m| m as u32),
-                reasoning_effort: body
-                    .get("reasoning")
-                    .and_then(|r| r.get("effort"))
-                    .and_then(|e| e.as_str())
-                    .map(|s| s.to_string()),
+                temperature: req.temperature,
+                top_p: req.top_p,
+                max_tokens: req.max_output_tokens,
+                reasoning_effort: req.reasoning.and_then(|r| r.effort),
+                // Splat every Responses-API field without a typed slot —
+                // tool_choice, parallel_tool_calls, max_tool_calls, metadata,
+                // include[], previous_response_id, store, stream_options, … —
+                // into `extra` so render_request can put them back.
                 extra,
             },
-            stream: body
-                .get("stream")
-                .and_then(|s| s.as_bool())
-                .unwrap_or(false),
+            response_format,
+            stream: req.stream,
         })
     }
 
@@ -382,6 +408,19 @@ impl OutboundAdapter for OpenAiResponsesAdapter {
         if let Some(re) = &prompt.params.reasoning_effort {
             req.insert("reasoning".into(), serde_json::json!({ "effort": re }));
         }
+        // Render the canonical response_format into Responses' `text.format`.
+        // Merge with any extras-supplied `text` blob so caller-supplied
+        // sibling keys (e.g. `verbosity`) survive.
+        if let Some(rf) = &prompt.response_format {
+            let mut text = prompt
+                .params
+                .extra
+                .get("text")
+                .and_then(|t| t.as_object().cloned())
+                .unwrap_or_default();
+            text.insert("format".into(), render_responses_response_format(rf));
+            req.insert("text".into(), serde_json::Value::Object(text));
+        }
         // Splat Responses-API extras (tool_choice, parallel_tool_calls,
         // metadata, include, …) back onto the outbound request. Typed fields
         // win.
@@ -463,6 +502,55 @@ impl OutboundAdapter for OpenAiResponsesAdapter {
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(ResponsesStreamDecoder::default())
     }
+
+    fn supports_response_format(&self) -> bool {
+        true
+    }
+}
+
+/// Detect a `text.format: { type: "json_schema", ... }` blob in the inbound
+/// extras and lift it into the canonical [`ResponseFormat`]. Returns `None`
+/// for any other shape.
+fn parse_responses_response_format(
+    extra: &HashMap<String, serde_json::Value>,
+) -> Option<ResponseFormat> {
+    let format = extra.get("text")?.get("format")?;
+    if format.get("type")?.as_str()? != "json_schema" {
+        return None;
+    }
+    let schema = format.get("schema")?.clone();
+    Some(ResponseFormat::JsonSchema {
+        name: format
+            .get("name")
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string()),
+        strict: format.get("strict").and_then(|s| s.as_bool()),
+        schema,
+    })
+}
+
+/// Render a canonical [`ResponseFormat`] into Responses' native
+/// `{ type: "json_schema", name, strict, schema }` body that sits under
+/// `text.format`. OpenAI requires `name`; default it.
+fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
+    let ResponseFormat::JsonSchema {
+        name,
+        strict,
+        schema,
+    } = rf;
+    let mut obj = serde_json::Map::new();
+    obj.insert("type".into(), "json_schema".into());
+    obj.insert(
+        "name".into(),
+        name.clone()
+            .unwrap_or_else(|| "response".to_string())
+            .into(),
+    );
+    if let Some(strict) = strict {
+        obj.insert("strict".into(), (*strict).into());
+    }
+    obj.insert("schema".into(), schema.clone());
+    serde_json::Value::Object(obj)
 }
 
 #[async_trait]
@@ -668,12 +756,16 @@ impl StreamDecoder for ResponsesStreamDecoder {
             Ok(v) => v,
             Err(_) => return Ok(Vec::new()),
         };
-        // The event name lives in the `type` field (Responses puts it in both
-        // the SSE `event:` line and the JSON body).
-        let event_type = event
-            .event
-            .as_deref()
-            .or_else(|| json.get("type").and_then(|t| t.as_str()))
+        // The event name lives in the JSON body's `type` field; Responses also
+        // mirrors it onto the SSE `event:` line, but several upstreams (notably
+        // OpenRouter and stock OpenAI when fronted via gateways) emit only the
+        // `data:` line — the SSE spec then defaults `event` to "message",
+        // which would otherwise shadow the real event name. Always prefer the
+        // body `type` and fall back to the SSE header only when it's absent.
+        let event_type = json
+            .get("type")
+            .and_then(|t| t.as_str())
+            .or(event.event.as_deref())
             .unwrap_or_default();
 
         let mut parts = Vec::new();

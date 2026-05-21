@@ -22,6 +22,7 @@ fn ctx(model: &str, policy_id: Option<&str>) -> PipelineContext {
         messages: vec![Message::text(Role::User, "hi")],
         tools: Vec::new(),
         params: GenerationParams::default(),
+        response_format: None,
         stream: false,
     };
     let req = PipelineRequest::new(model, CallerContext::new("k1", "u1"), prompt);
@@ -51,6 +52,7 @@ fn ctx_with_tools(tools: &[&str], policy_id: Option<&str>) -> PipelineContext {
             })
             .collect(),
         params: GenerationParams::default(),
+        response_format: None,
         stream: false,
     };
     let req = PipelineRequest::new("m", CallerContext::new("k1", "u1"), prompt);

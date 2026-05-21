@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResponsesRequest",
+  "description": "OpenAI Responses request body\n(<https://platform.openai.com/docs/api-reference/responses/create>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.\n\n`input` stays `serde_json::Value` on purpose — the Responses API accepts\neither a plain string or a heterogeneous item array (Codex multi-turn,\n#454-3), and the deeper walk happens in `parse_input` (private). Mirrors\nhow Anthropic's `system` / `content` are typed.",
+  "type": "object",
+  "properties": {
+    "input": true,
+    "instructions": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "max_output_tokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "minimum": 0
+    },
+    "model": {
+      "type": "string",
+      "default": ""
+    },
+    "reasoning": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResponsesReasoningConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stream": {
+      "type": "boolean",
+      "default": false
+    },
+    "temperature": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ResponsesTool"
+      }
+    },
+    "top_p": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    }
+  },
+  "required": [
+    "input"
+  ],
+  "$defs": {
+    "ResponsesReasoningConfig": {
+      "description": "`reasoning` knob on [`ResponsesRequest`] — only `effort` is read; other\nfields (`summary`, …) round-trip via no slot today (matching v0 behavior).",
+      "type": "object",
+      "properties": {
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "ResponsesTool": {
+      "description": "One element of [`ResponsesRequest`]'s `tools` array — the Responses-flavoured\nflat tool definition (`{ type: \"function\", name, description, parameters }`).",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "parameters": {
+          "default": null
+        },
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    }
+  }
+}

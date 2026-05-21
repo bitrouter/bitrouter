@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
@@ -18,8 +19,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt, Role,
-    RoutingTarget, StreamPart, Usage,
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
+    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
 /// The OpenAI Chat Completions inbound + outbound protocol adapter.
@@ -31,8 +32,13 @@ pub struct OpenAiChatTransport;
 
 // ===== wire request types =====
 
-#[derive(Debug, Deserialize)]
-struct ChatRequest {
+/// OpenAI Chat Completions request body
+/// (<https://platform.openai.com/docs/api-reference/chat/create>).
+///
+/// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
+/// OpenAPI schema from the canonical wire shape without redeclaring it.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     #[serde(default)]
@@ -53,13 +59,18 @@ struct ChatRequest {
     /// `response_format`, `n`, `presence_penalty`, `frequency_penalty`,
     /// `logit_bias`, `logprobs`, `top_logprobs`, `user`, `stream_options`,
     /// `parallel_tool_calls`, … — survives parse/render via `extra`. v0
-    /// passed these through; v1 must too.
+    /// passed these through; v1 must too. Skipped from the published schema
+    /// so the documented contract is the set of typed fields; pass-through
+    /// behavior is preserved at runtime.
     #[serde(flatten)]
+    #[schemars(skip)]
     extra: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatMessage {
+/// One element of [`ChatRequest`]'s `messages` array — a chat turn carrying
+/// role + optional content + optional tool calls / tool-call reply id.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChatMessage {
     role: String,
     /// `content` may be a plain string or an array of content parts, or absent
     /// (an assistant turn that is purely `tool_calls`).
@@ -80,29 +91,34 @@ struct ChatMessage {
     reasoning_content: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatToolCall {
+/// One assistant tool-call entry on a [`ChatMessage`].
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChatToolCall {
     id: String,
     #[serde(default)]
     function: ChatFunctionCall,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct ChatFunctionCall {
+/// The `function` payload of a [`ChatToolCall`]: name + raw JSON argument string.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ChatFunctionCall {
     #[serde(default)]
     name: String,
     #[serde(default)]
     arguments: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatTool {
+/// One element of [`ChatRequest`]'s `tools` array — a `{ function: { … } }` envelope.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChatTool {
     #[serde(default)]
     function: ChatToolFunction,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct ChatToolFunction {
+/// The `function` payload of a [`ChatTool`]: name + description + JSON-Schema
+/// parameters.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ChatToolFunction {
     name: String,
     #[serde(default)]
     description: Option<String>,
@@ -222,6 +238,16 @@ impl InboundAdapter for OpenAiChatAdapter {
             })
             .collect();
 
+        // Promote `response_format: { type: "json_schema", ... }` out of the
+        // extras splat into the canonical slot so cross-protocol routing can
+        // translate it. The legacy `{ type: "json_object" }` JSON mode is left
+        // in extras (it has no schema to translate and passes through opaquely).
+        let mut extra = req.extra;
+        let response_format = parse_chat_response_format(&extra);
+        if response_format.is_some() {
+            extra.remove("response_format");
+        }
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -233,11 +259,15 @@ impl InboundAdapter for OpenAiChatAdapter {
                 max_tokens: req.max_tokens.or(req.max_completion_tokens),
                 reasoning_effort: req.reasoning_effort,
                 // Every OpenAI-Chat field we don't have a typed slot for —
-                // tool_choice, stop / stop_sequences, seed, response_format,
-                // n, presence/frequency_penalty, logit_bias, … — rides along
-                // in `extra` and is splatted back on render.
-                extra: req.extra,
+                // tool_choice, stop / stop_sequences, seed, n,
+                // presence/frequency_penalty, logit_bias, … — rides along
+                // in `extra` and is splatted back on render. Note:
+                // `response_format` with `type:"json_schema"` is promoted into
+                // `Prompt::response_format` above; other shapes (e.g.
+                // `type:"json_object"`) stay in extras.
+                extra,
             },
+            response_format,
             stream: req.stream,
         })
     }
@@ -372,9 +402,16 @@ impl OutboundAdapter for OpenAiChatAdapter {
         if let Some(re) = &prompt.params.reasoning_effort {
             req.insert("reasoning_effort".into(), re.clone().into());
         }
+        // Render the canonical response_format into OpenAI Chat's native shape.
+        // Inserted before the extras splat so it wins over any legacy
+        // `response_format` left in extras (typed slot wins, matching how
+        // other params are handled).
+        if let Some(rf) = &prompt.response_format {
+            req.insert("response_format".into(), render_chat_response_format(rf));
+        }
         // Splat the extras back into the outbound request — this is how
-        // `tool_choice`, `stop`, `seed`, `response_format`, etc. survive the
-        // round trip. Typed fields above win over any same-named extra.
+        // `tool_choice`, `stop`, `seed`, etc. survive the round trip. Typed
+        // fields above win over any same-named extra.
         for (k, v) in &prompt.params.extra {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -499,6 +536,56 @@ impl OutboundAdapter for OpenAiChatAdapter {
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
         Box::new(ChatStreamDecoder::default())
     }
+
+    fn supports_response_format(&self) -> bool {
+        true
+    }
+}
+
+/// Detect a `response_format: { type: "json_schema", json_schema: {...} }`
+/// blob in the inbound extras and lift it into the canonical [`ResponseFormat`].
+/// Returns `None` for any other shape (notably `{ type: "json_object" }`,
+/// which is the older JSON-mode and has no schema to translate).
+fn parse_chat_response_format(
+    extra: &HashMap<String, serde_json::Value>,
+) -> Option<ResponseFormat> {
+    let rf = extra.get("response_format")?;
+    if rf.get("type")?.as_str()? != "json_schema" {
+        return None;
+    }
+    let js = rf.get("json_schema")?;
+    let schema = js.get("schema")?.clone();
+    Some(ResponseFormat::JsonSchema {
+        name: js
+            .get("name")
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string()),
+        strict: js.get("strict").and_then(|s| s.as_bool()),
+        schema,
+    })
+}
+
+/// Render a canonical [`ResponseFormat`] into OpenAI Chat's native
+/// `{ type: "json_schema", json_schema: { name, strict, schema } }`. OpenAI
+/// requires `name`; supply a stable default when the caller didn't set one.
+fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
+    let ResponseFormat::JsonSchema {
+        name,
+        strict,
+        schema,
+    } = rf;
+    let mut js = serde_json::Map::new();
+    js.insert(
+        "name".into(),
+        name.clone()
+            .unwrap_or_else(|| "response".to_string())
+            .into(),
+    );
+    if let Some(strict) = strict {
+        js.insert("strict".into(), (*strict).into());
+    }
+    js.insert("schema".into(), schema.clone());
+    serde_json::json!({ "type": "json_schema", "json_schema": serde_json::Value::Object(js) })
 }
 
 #[async_trait]

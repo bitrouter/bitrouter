@@ -303,6 +303,7 @@ mod tests {
             }],
             tools: vec![],
             params: Default::default(),
+            response_format: None,
             stream: false,
         }
     }

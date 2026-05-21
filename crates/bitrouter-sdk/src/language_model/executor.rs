@@ -285,6 +285,25 @@ impl HttpExecutor {
             target.api_protocol, target.provider_name,
         ))
     }
+
+    /// Refuse to silently drop a caller-supplied `response_format` when the
+    /// resolved outbound protocol cannot honour it. Built-in adapters all
+    /// support it; only out-of-tree [`ApiProtocol::Custom`] targets that
+    /// haven't implemented translation hit this 400.
+    fn check_response_format(
+        prompt: &Prompt,
+        adapter: &Arc<dyn crate::language_model::protocol::OutboundAdapter>,
+        target: &RoutingTarget,
+    ) -> Result<()> {
+        if prompt.response_format.is_some() && !adapter.supports_response_format() {
+            return Err(BitrouterError::bad_request(format!(
+                "response_format requested but outbound protocol '{}' \
+                 (target provider '{}') does not support structured outputs",
+                target.api_protocol, target.provider_name,
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -294,6 +313,8 @@ impl Executor for HttpExecutor {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| Self::no_dispatch_error(target))?;
+
+        Self::check_response_format(prompt, adapter, target)?;
 
         let mut upstream_prompt = prompt.clone();
         upstream_prompt.model = target.service_id.clone();
@@ -360,6 +381,8 @@ impl Executor for HttpExecutor {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| Self::no_dispatch_error(target))?;
+
+        Self::check_response_format(prompt, adapter, target)?;
 
         let mut upstream_prompt = prompt.clone();
         upstream_prompt.model = target.service_id.clone();
