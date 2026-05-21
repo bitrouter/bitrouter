@@ -187,9 +187,9 @@ pub struct ProviderConfig {
     pub derives: Option<String>,
     /// Multiple credentials for this one provider — e.g. two
     /// subscriptions to the same upstream. When non-empty, the routing
-    /// table expands the provider into one [`RoutingTarget`] per
-    /// account; [`account_strategy`](Self::account_strategy) decides
-    /// their order. Empty = a single-credential provider keyed off the
+    /// table expands the provider into one routing target per account;
+    /// [`account_strategy`](Self::account_strategy) decides their
+    /// order. Empty = a single-credential provider keyed off the
     /// top-level [`api_key`](Self::api_key) (the common case).
     pub accounts: Vec<ProviderAccount>,
     /// How the per-account targets are ordered when `accounts` is set.

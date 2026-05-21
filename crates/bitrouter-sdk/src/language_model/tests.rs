@@ -842,6 +842,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         api_base: "http://example.invalid".into(),
         api_key: "k".into(),
         api_protocol: ApiProtocol::Custom("fake".into()),
+        account_label: None,
         api_key_override: None,
         api_base_override: None,
     };

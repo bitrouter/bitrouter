@@ -749,6 +749,7 @@ fn anthropic_no_beta_header_is_emitted() {
         api_base: "http://example.invalid".into(),
         api_key: "k".into(),
         api_protocol: ApiProtocol::Anthropic,
+        account_label: None,
         api_key_override: None,
         api_base_override: None,
     };
