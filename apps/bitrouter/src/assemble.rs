@@ -490,3 +490,55 @@ mod sqlite_path_tests {
         assert_eq!(sqlite_file_path("mysql://u:p@host/bitrouter"), None);
     }
 }
+
+#[cfg(test)]
+mod otel_config_tests {
+    use super::{Config, build_otel_config};
+
+    /// Build a `Config` carrying a single `bitrouter-observe` plugin value.
+    /// Constructed directly (no YAML round-trip) so the test never touches
+    /// the process environment that `build_otel_config`'s env-only path
+    /// would read.
+    fn config_with_observe(observe: serde_json::Value) -> Config {
+        let mut config = Config::default();
+        config
+            .plugins
+            .insert("bitrouter-observe".to_string(), observe);
+        config
+    }
+
+    #[test]
+    fn malformed_otel_block_is_a_hard_error() {
+        // `sampler` is a closed enum — an unknown variant fails to parse.
+        // An explicit opt-in must surface that, not silently fall through.
+        let config = config_with_observe(serde_json::json!({
+            "otel": { "sampler": "not_a_real_sampler" }
+        }));
+        assert!(
+            build_otel_config(&config).is_err(),
+            "a malformed otel block must be a hard error",
+        );
+    }
+
+    #[test]
+    fn valid_otel_block_parses() {
+        let config = config_with_observe(serde_json::json!({
+            "otel": { "endpoint": "http://collector:4318" }
+        }));
+        let cfg = build_otel_config(&config)
+            .expect("valid otel block is Ok")
+            .expect("valid otel block yields Some");
+        assert_eq!(cfg.endpoint, "http://collector:4318");
+    }
+
+    #[test]
+    fn legacy_otlp_endpoint_shim_still_works() {
+        let config = config_with_observe(serde_json::json!({
+            "otlp_endpoint": "http://legacy:4318"
+        }));
+        let cfg = build_otel_config(&config)
+            .expect("legacy shim is Ok")
+            .expect("legacy shim yields Some");
+        assert_eq!(cfg.endpoint, "http://legacy:4318");
+    }
+}
