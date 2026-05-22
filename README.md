@@ -1,6 +1,6 @@
-# BitRouter - Open Intelligence Router for LLM Agents
+# BitRouter
 
-> The agentic proxy for modern agent runtimes. Smart, safe, agent-controlled routing across LLMs, tools, and agents.
+> The local proxy built for AI agent runtimes — one endpoint to reach any LLM provider, with automatic cross-protocol translation and failover.
 
 [![Build status](https://github.com/bitrouter/bitrouter/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bitrouter/bitrouter/actions)
 [![Crates.io](https://img.shields.io/crates/v/bitrouter)](https://crates.io/crates/bitrouter)
@@ -11,128 +11,136 @@
 
 ## Overview
 
-As LLM agents grow more autonomous, humans can no longer hand-pick the best model, tool, or sub-agent for every runtime decision. BitRouter is a proxy layer purpose-built for LLM agents (OpenClaw, OpenCode, etc.) to discover and route to LLMs, tools, and other agents autonomously — with agent-native control, guardrails, and observability via CLI + TUI, backed by a high-performance Rust proxy that optimizes for performance, cost, and safety during runtime.
+AI agent runtimes need to route to different LLM providers without reconfiguration. BitRouter is a local Rust proxy that gives your agent a single endpoint at `http://localhost:8787` — configure your providers once, then route freely. Any client protocol (OpenAI, Anthropic, Google) can transparently target any upstream, with ~10ms overhead and no cloud dependency required.
 
-## Features
+## Install
 
-- **Multi-provider routing** — unified access to OpenAI, Anthropic, Google, and custom providers with cost/performance-aware routing ([`core`](bitrouter-core/) · [`providers`](bitrouter-providers/) · [`config`](bitrouter-config/))
-- **Tools as a service** — discover, aggregate, and route tool calls across MCP servers and REST APIs with the same config-driven routing used for models ([`core`](bitrouter-core/) · [`providers`](bitrouter-providers/) · [`config`](bitrouter-config/))
-- **Streaming & non-streaming** — first-class support for both modes across all providers
-- **Agent firewall** — inspect, warn, redact, or block risky content at the proxy layer ([`guardrails`](bitrouter-guardrails/))
-- **MCP gateway** — proxy for MCP servers, agents discover and call tools across hosts ([`providers`](bitrouter-providers/) · [`api`](bitrouter-api/))
-- **Skills registry** — track and expose agent skills following the [agentskills.io](https://agentskills.io) standard ([`providers`](bitrouter-providers/))
-- **Agentic payment** — 402/MPP payment handling for LLMs, tools, and APIs ([`api`](bitrouter-api/) · [`accounts`](bitrouter-accounts/))
-- **Observability** — per-request spend tracking, metrics, and cost calculation ([`observe`](bitrouter-observe/))
-- **CLI + TUI** — monitor and control agent sessions in real time, with live ACP (Agent Client Protocol) integration for managing coding agents ([`cli`](bitrouter/) · [`tui`](bitrouter-tui/))
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/latest/download/bitrouter-installer.sh | sh
 
-## Documentation
+# Homebrew
+brew install bitrouter/tap/bitrouter
 
-- [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and server composition details
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
-- [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
+# npm
+npm install -g bitrouter
+```
 
-## Quick Start
-
-### Install
+<details>
+<summary>From source (Cargo)</summary>
 
 ```bash
 cargo install bitrouter
 ```
 
-### Default (setup wizard)
+</details>
+
+## Quick Start
+
+### Local (BYOK)
+
+Set your provider API keys and start:
 
 ```bash
-bitrouter
+export OPENAI_API_KEY=sk-...    # ANTHROPIC_API_KEY / GOOGLE_API_KEY also work
+bitrouter start
+# Proxy running at http://localhost:8787
 ```
 
-On first launch, BitRouter runs an interactive setup wizard with two modes:
+BitRouter auto-detects any key set in the environment — no config file needed. Point your agent runtime at `http://localhost:8787` and any provider whose key is present is immediately available.
 
-- **Cloud** — connect to BitRouter Cloud with x402/Solana wallet payments
-- **BYOK** — bring your own API keys for OpenAI, Anthropic, Google, or custom providers
-
-After setup, the TUI and API server start at `http://localhost:8787`.
-
-You can re-run the wizard at any time with `bitrouter reset`.
-
-### BYOK (bring your own keys)
-
-If you already have provider API keys in your environment, BitRouter auto-detects them — no config file needed:
+For advanced routing rules, guardrails, or multi-account failover, scaffold a config file:
 
 ```bash
-export OPENAI_API_KEY=sk-...
-bitrouter
-# Routes to "openai:gpt-4o" at http://localhost:8787
+bitrouter init          # writes ~/.bitrouter/bitrouter.yaml
+bitrouter start
 ```
 
-For a foreground server without the TUI, use `bitrouter serve`.
+### Cloud
 
-### Agent Skills
+To use BitRouter Cloud (managed routing without local API keys), sign up at [cloud.bitrouter.ai](https://cloud.bitrouter.ai) and follow the cloud setup guide.
 
-Install [Agent Skills](https://github.com/bitrouter/agent-skills) to give your AI agent the knowledge to register on the BitRouter network, configure services, and start serving requests:
+## Features
 
-```bash
-# Any agent (Claude Code, Copilot, Cursor, Codex, etc.)
-npx skills add BitRouterAI/agent-skills
-```
+- **Multi-provider routing** — unified access to OpenAI, Anthropic, Google, OpenRouter, OpenCode, and Amazon Bedrock; configure multiple accounts per provider with failover or round-robin load-balancing ([`sdk`](crates/bitrouter-sdk/) · [`providers`](crates/bitrouter-providers/))
+- **Cross-protocol routing** — any client protocol (OpenAI Chat, OpenAI Responses, Anthropic Messages, Google Gemini) against any upstream; BitRouter translates transparently ([`sdk`](crates/bitrouter-sdk/))
+- **Zero-config** — auto-detects providers from environment variables; no config file needed to get started ([`providers`](crates/bitrouter-providers/))
+- **MCP gateway** — proxy for MCP servers; agents discover and call tools across hosts ([`sdk`](crates/bitrouter-sdk/))
+- **ACP integration** — manage coding agent sessions (Claude Code, OpenCode, OpenClaw) via the CLI ([`sdk`](crates/bitrouter-sdk/))
+- **Agent guardrails** — inspect, redact, or block risky content at the proxy layer ([`guardrails`](plugins/bitrouter-guardrails/))
+- **Observability** — per-request spend tracking, Prometheus metrics, and OTLP export ([`observe`](plugins/bitrouter-observe/))
+- **Virtual keys** — mint scoped `brvk_` API keys with `bitrouter key sign`, persisted to SQLite, PostgreSQL, or MySQL
+- **Custom providers** — add any OpenAI-compatible or Anthropic-compatible upstream via config
 
 ## Supported Providers
 
-| Provider   | Status | Notes                            |
-| ---------- | ------ | -------------------------------- |
-| OpenAI     | ✅     | Chat Completions + Responses API |
-| Anthropic  | ✅     | Messages API                     |
-| Google     | ✅     | Generative AI API                |
-| OpenRouter | ✅     | Chat Completions + Responses API |
-| OpenCode Zen | ✅  | Curated models across OpenAI, Anthropic, Google protocols |
-| OpenCode Go  | ✅  | Low-cost subscription for open coding models |
+| Provider       | Status | Notes                                                     |
+| -------------- | ------ | --------------------------------------------------------- |
+| OpenAI         | ✅     | Chat Completions + Responses API                          |
+| Anthropic      | ✅     | Messages API                                              |
+| Google         | ✅     | Generative AI API                                         |
+| Amazon Bedrock | ✅     | Via AWS SDK (opt-in)                                      |
+| OpenRouter     | ✅     | Chat Completions + Responses API                          |
+| OpenCode Zen   | ✅     | Curated models across OpenAI, Anthropic, Google protocols |
+| OpenCode Go    | ✅     | Low-cost subscription for open coding models              |
 
-Want to see another provider supported? [Open an issue](https://github.com/bitrouter/bitrouter/issues) or submit a PR — contributions are welcome. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
+Want to see another provider? [Open an issue](https://github.com/bitrouter/bitrouter/issues) or submit a PR. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
 
-## Supported Agent Runtimes
-
-BitRouter works as a drop-in proxy for agent runtimes that support custom API base URLs. Point your runtime at `http://localhost:8787` and route to any configured provider.
-
-| Runtime                                                  | Integration                                                      |
-| -------------------------------------------------------- | ---------------------------------------------------------------- |
-| [OpenClaw](https://github.com/openclaw/openclaw)         | [Native plugin](https://github.com/bitrouter/bitrouter-openclaw) |
-| [Claude Code](https://github.com/anthropics/claude-code) | CLI + Skills                                                     |
-| [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw)    | CLI + Skills                                                     |
-| [Codex CLI](https://github.com/openai/codex)             | CLI + Skills                                                     |
-| [OpenCode](https://github.com/opencode-ai/opencode)      | CLI + Skills                                                     |
-| [Kilo Code](https://github.com/Kilo-Org/kilocode)        | CLI + Skills                                                     |
-
-Any agent runtime that can target a custom OpenAI or Anthropic base URL works with BitRouter out of the box. **Building an agent runtime or framework?** We partner with teams to build native BitRouter integrations — reach out on [Discord](https://discord.gg/G3zVrZDa5C) or [open an issue](https://github.com/bitrouter/bitrouter/issues).
+Any agent runtime that supports a custom OpenAI or Anthropic base URL works with BitRouter out of the box — point it at `http://localhost:8787`. **Building an agent runtime?** We partner with teams on native integrations — email [contact@bitrouter.ai](mailto:contact@bitrouter.ai) or [book a meeting with the founder](https://cal.com/kelsenliu/founder-meeting).
 
 ## Comparison
 
-| | **BitRouter** | **OpenRouter** | **LiteLLM** |
-| --- | --- | --- | --- |
-| **Architecture** | Local-first proxy + optional cloud | Cloud-only SaaS | Local proxy (Python) |
-| **Language** | Rust | Closed-source | Python |
-| **Self-hosted** | Yes | No | Yes |
-| **Agent-native** | Yes — built for autonomous agent runtimes | No — human-facing API gateway | Partial — SDK-oriented |
-| **Agent protocols** | MCP + Skills + ACP | No | MCP |
-| **Agent firewall** | Built-in guardrails (inspect, redact, block) | Yes | Yes |
-| **Cross-protocol routing** | Yes (e.g. OpenAI format → Anthropic provider) | Provider-specific | Yes (unified interface) |
-| **Agentic payments** | Stablecoin (402/MPP) + Fiat| Credit-based billing | No |
-| **Observability** | CLI + TUI + per-request cost tracking | Web dashboard | Logging + callbacks + WebUI |
-| **Extensibility** | Trait-based SDK — import and compose crates | API only | Python middleware |
-| **Performance** | ~10ms | ~30ms (cloud) | ~500ms |
-| **License** | Apache 2.0 | Proprietary | Apache 2.0 |
+|                           | **BitRouter**                               | **OpenRouter**            | **LiteLLM**                    |
+| ------------------------- | ------------------------------------------- | ------------------------- | ------------------------------ |
+| **Architecture**          | Local-first proxy + optional cloud          | Cloud-only SaaS           | Local proxy (Python)           |
+| **Language**              | Rust                                        | Closed-source             | Python                         |
+| **Self-hosted**           | Yes                                         | No                        | Yes                            |
+| **Agent-native**          | Yes — built for autonomous agent runtimes   | No — human-facing gateway | Partial — SDK-oriented         |
+| **Agent protocols**       | MCP + ACP                                   | No                        | MCP                            |
+| **Agent guardrails**      | Built-in (inspect, redact, block)           | Yes                       | Yes                            |
+| **Cross-protocol routing**| Yes (e.g. OpenAI format → Anthropic upstream)| Provider-specific        | Yes (unified interface)        |
+| **Observability**         | CLI + per-request cost tracking + Prometheus| Web dashboard             | Logging + callbacks + WebUI    |
+| **Extensibility**         | Trait-based SDK — import and compose crates | API only                  | Python middleware               |
+| **Performance**           | ~10ms                                       | ~30ms (cloud)             | ~500ms                         |
+| **License**               | Apache 2.0                                  | Proprietary               | Apache 2.0                     |
 
-**TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM is a Python proxy for unifying provider SDKs. BitRouter is a Rust-native proxy purpose-built for autonomous agents — with unified model and tool routing, agent protocols (MCP, Skills), guardrails, and agentic payments out of the box.
+**TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM is a Python proxy for unifying provider SDKs. BitRouter is a Rust-native proxy purpose-built for autonomous agents — with cross-protocol routing, MCP and ACP support, and guardrails out of the box.
+
+## CLI
+
+```bash
+bitrouter start / stop / restart / reload      # daemon lifecycle
+bitrouter status                               # pid, listen address, active models
+bitrouter route <model>                        # trace how a model name resolves
+bitrouter models [--provider <id>]            # list routable models
+bitrouter providers list                       # list configured providers
+bitrouter tools list / status / discover       # MCP server introspection
+bitrouter agents list / check / install        # ACP agent management
+bitrouter key sign --user <id>                 # mint a scoped brvk_ API key
+bitrouter policy create <id>                   # scaffold a routing policy
+bitrouter init                                 # scaffold bitrouter.yaml
+bitrouter login <provider>                     # OAuth login (e.g. github-copilot)
+```
+
+See [`CLI.md`](CLI.md) for flags, config resolution, and examples.
+
+## Documentation
+
+- [`CLI.md`](CLI.md) — full CLI reference with flags and examples
+- [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
+- [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
 
 ## Roadmap
 
 - [x] Core routing engine and provider abstractions
-- [x] OpenAI, Anthropic, and Google adapters
-- [x] Interactive setup wizard (`bitrouter init`) with auto-detection
+- [x] OpenAI, Anthropic, Google, and Amazon Bedrock adapters
+- [x] Zero-config auto-detection from environment variables
 - [x] Custom provider support (OpenAI-compatible / Anthropic-compatible)
 - [x] Cross-protocol routing (e.g. OpenAI format → Anthropic provider)
-- [x] MCP & Skills protocol support
-- [x] Tools as a service — config-driven tool routing across MCP and REST providers
-- [x] ACP (Agent Client Protocol) integration — manage coding agents (Claude Code, OpenCode, OpenClaw) via the TUI
-- [ ] TUI observability dashboard
+- [x] MCP gateway and ACP agent integration
+- [x] Multiple accounts per provider — failover + load-balancing
+- [x] Virtual key management (`bitrouter key`) backed by SQLite / PostgreSQL / MySQL
 - [ ] Telemetry and usage analytics
 - [ ] Provider & model routing policy customization
 
