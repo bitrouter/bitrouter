@@ -189,14 +189,16 @@ pub async fn build_app_with_path(
     // `Arc` to it for `observe status` queries. The pipeline closure
     // below registers a hook view of the same `Arc`; both Drop at app
     // shutdown.
-    let otel_exporter: Option<Arc<OtelExporter>> =
-        build_otel_config(config).and_then(|c| match OtelExporter::new(c) {
+    let otel_exporter: Option<Arc<OtelExporter>> = match build_otel_config(config)? {
+        Some(c) => match OtelExporter::new(c) {
             Ok(exporter) => Some(Arc::new(exporter)),
             Err(e) => {
                 tracing::error!("failed to initialise OpenTelemetry: {e}");
                 None
             }
-        });
+        },
+        None => None,
+    };
     let observe_provider: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
         Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
         None => Arc::new(NoopObserveStatus {
@@ -403,18 +405,22 @@ impl MetricsRenderer for EmptyMetricsRenderer {
 /// Precedence: env vars > `plugins.bitrouter-observe.otel` > the legacy flat
 /// `plugins.bitrouter-observe.otlp_endpoint` shim (v0 carry-over; will be
 /// removed in v1.1).
-fn build_otel_config(config: &Config) -> Option<OtelConfig> {
+fn build_otel_config(config: &Config) -> Result<Option<OtelConfig>> {
     let observe = config.plugins.get("bitrouter-observe");
 
-    // 1. New nested `otel: { … }` block.
+    // Env-var overrides are *not* applied here — `OtelExporter::new` runs
+    // `with_env_overrides` on whatever config it is handed, so the
+    // env > YAML precedence holds for every path below without this
+    // function having to re-apply it.
+
+    // 1. New nested `otel: { … }` block. A malformed block is a hard error:
+    //    the operator explicitly opted in, so silently falling back to the
+    //    legacy shim / env-only path would hide their mistake and start the
+    //    exporter with a config they never asked for.
     if let Some(otel_value) = observe.and_then(|c| c.get("otel")) {
-        match serde_json::from_value::<OtelConfig>(otel_value.clone()) {
-            Ok(cfg) => return Some(cfg.with_env_overrides()),
-            Err(e) => {
-                tracing::error!("plugins.bitrouter-observe.otel failed to parse: {e}");
-                // Fall through to env-var-only path below.
-            }
-        }
+        let cfg = serde_json::from_value::<OtelConfig>(otel_value.clone())
+            .context("plugins.bitrouter-observe.otel failed to parse")?;
+        return Ok(Some(cfg));
     }
 
     // 2. Legacy flat `otlp_endpoint` shim — drops the cardinality / sampler /
@@ -430,15 +436,15 @@ fn build_otel_config(config: &Config) -> Option<OtelConfig> {
         tracing::warn!(
             "plugins.bitrouter-observe.otlp_endpoint is deprecated; switch to plugins.bitrouter-observe.otel",
         );
-        return Some(cfg.with_env_overrides());
+        return Ok(Some(cfg));
     }
 
     // 3. Env-var-only opt-in.
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
-        return Some(OtelConfig::default().with_env_overrides());
+        return Ok(Some(OtelConfig::default()));
     }
 
-    None
+    Ok(None)
 }
 
 /// Extract the file path from a SQLite URL. Returns `None` for `:memory:`

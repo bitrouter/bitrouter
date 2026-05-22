@@ -26,8 +26,10 @@ pub struct OtelMetrics {
 
     request_counter: Counter<u64>,
     latency_histogram: Histogram<f64>,
-    input_tokens: Counter<u64>,
-    output_tokens: Counter<u64>,
+    /// GenAI-semconv `gen_ai.client.token.usage` — a single histogram;
+    /// input vs. output is distinguished by the `gen_ai.token.type`
+    /// attribute, never by a second same-named instrument.
+    token_usage: Histogram<u64>,
     error_counter: Counter<u64>,
     stream_parts_counter: Counter<u64>,
 
@@ -70,14 +72,13 @@ impl OtelMetrics {
             .with_description("GenAI client operation duration")
             .with_unit("s")
             .build();
-        let input_tokens = meter
-            .u64_counter("gen_ai.client.token.usage")
-            .with_description("Input token usage")
-            .with_unit("{token}")
-            .build();
-        let output_tokens = meter
-            .u64_counter("gen_ai.client.token.usage")
-            .with_description("Output token usage")
+        // Per the GenAI semconv, `gen_ai.client.token.usage` is a single
+        // histogram; input vs. output is a `gen_ai.token.type` attribute.
+        // Registering it twice (once per direction) is a duplicate-instrument
+        // conflict the SDK warns about and merges anyway.
+        let token_usage = meter
+            .u64_histogram("gen_ai.client.token.usage")
+            .with_description("Number of tokens used, by token type")
             .with_unit("{token}")
             .build();
         let error_counter = meter
@@ -95,8 +96,7 @@ impl OtelMetrics {
             provider,
             request_counter,
             latency_histogram,
-            input_tokens,
-            output_tokens,
+            token_usage,
             error_counter,
             stream_parts_counter,
             api_key_limiter,
@@ -132,12 +132,12 @@ impl OtelMetrics {
             if let Some(usage) = &result.result.usage {
                 let mut input_attrs = attributes.clone();
                 input_attrs.push(KeyValue::new("gen_ai.token.type", "input"));
-                self.input_tokens.add(usage.prompt_tokens, &input_attrs);
+                self.token_usage.record(usage.prompt_tokens, &input_attrs);
 
                 let mut output_attrs = attributes.clone();
                 output_attrs.push(KeyValue::new("gen_ai.token.type", "output"));
-                self.output_tokens
-                    .add(usage.completion_tokens, &output_attrs);
+                self.token_usage
+                    .record(usage.completion_tokens, &output_attrs);
             }
         }
 

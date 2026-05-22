@@ -154,14 +154,6 @@ impl OtelExporter {
         })
     }
 
-    /// Cardinality statistics for monitoring.
-    pub fn cardinality_stats(&self) -> CardinalityStats {
-        CardinalityStats {
-            api_key_count: self.api_key_limiter.cardinality(),
-            user_id_count: self.user_id_limiter.cardinality(),
-        }
-    }
-
     /// Snapshot of what's wired — fed to `bitrouter observe status` via
     /// the daemon control socket. Cheap to call; no allocation beyond the
     /// owned strings.
@@ -215,12 +207,6 @@ impl OtelExporter {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct CardinalityStats {
-    pub api_key_count: usize,
-    pub user_id_count: usize,
-}
-
 /// Serializable snapshot of the OTel exporter's state. Returned by
 /// [`OtelExporter::status`] and surfaced through the daemon control socket
 /// for `bitrouter observe status`. Field names match the YAML / env-var
@@ -259,29 +245,6 @@ pub struct OtelStatus {
     pub user_id_cap: usize,
     /// Number of in-flight spans currently tracked.
     pub active_spans: usize,
-}
-
-impl OtelStatus {
-    /// Snapshot for a process where the `otel` feature is compiled in but
-    /// no exporter is wired (no YAML / no env var opt-in).
-    pub fn unwired(compiled_in: bool) -> Self {
-        Self {
-            compiled_in,
-            exporter_wired: false,
-            endpoint: None,
-            header_count: 0,
-            service_name: None,
-            resource_attribute_count: 0,
-            sampler: None,
-            sampler_arg: None,
-            metrics_enabled: false,
-            api_key_count: 0,
-            api_key_cap: 0,
-            user_id_count: 0,
-            user_id_cap: 0,
-            active_spans: 0,
-        }
-    }
 }
 
 fn sampler_kind_str(s: SamplerKind) -> &'static str {

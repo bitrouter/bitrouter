@@ -11,4 +11,4 @@ mod metrics;
 
 pub use cardinality::CardinalityLimiter;
 pub use config::{BatchConfig, MetricsConfig, OtelConfig, SamplerKind, TraceConfig};
-pub use exporter::{CardinalityStats, OtelExporter, OtelObserveHook, OtelStatus};
+pub use exporter::{OtelExporter, OtelObserveHook, OtelStatus};

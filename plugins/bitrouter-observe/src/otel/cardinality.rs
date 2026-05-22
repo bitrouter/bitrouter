@@ -4,6 +4,16 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 
 /// Limits cardinality of a dimension by capping unique values.
+///
+/// Known limitation: the `seen` set is append-only — entries are never
+/// evicted. Once `cap` distinct values have been observed, every *new*
+/// value buckets to `"other"` for the lifetime of the process, even if
+/// earlier values are now stale (e.g. a rotated API key). For a
+/// long-lived daemon with heavy key rotation this degrades over time; a
+/// follow-up should replace the `HashSet` with an LRU or a periodic
+/// reset. The cap still does its job — bounding metric dimension
+/// cardinality — so this is a fidelity limitation, not a correctness or
+/// memory-safety one.
 pub struct CardinalityLimiter {
     seen: Mutex<HashSet<String>>,
     cap: usize,
