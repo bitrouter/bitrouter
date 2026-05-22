@@ -17,10 +17,12 @@ use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
 use bitrouter_sdk::mcp::{ConfigMcpRoutingTable, RmcpExecutor};
 
 use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
-use bitrouter_observe::otel::{OtelConfig, OtelExporter};
+use bitrouter_observe::OTEL_ENABLED;
+use bitrouter_observe::otel::{OtelConfig, OtelExporter, OtelObserveHook};
 use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
+use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvider};
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 
@@ -43,6 +45,56 @@ pub struct Assembled {
     /// [`ConfigRoutingTable::replace_config`] when there's no source
     /// file to re-read from (zero-config mode).
     pub routing_table: Arc<ConfigRoutingTable>,
+    /// Snapshot provider for `bitrouter observe status`. When the OTel
+    /// exporter is wired, this reports its live state; when not, it
+    /// reports `compiled_in` truthfully and everything else blank.
+    pub observe: Arc<dyn ObserveStatusProvider>,
+}
+
+/// `ObserveStatusProvider` impl backed by a real [`OtelExporter`]. The
+/// payload type lives in the daemon module (wire format), and the
+/// observe-side `OtelStatus` lives in the plugin (no daemon dep); this
+/// adapter does the field-by-field copy so neither crate has to import
+/// the other's type.
+struct OtelExporterStatus {
+    exporter: Arc<OtelExporter>,
+}
+
+#[async_trait::async_trait]
+impl ObserveStatusProvider for OtelExporterStatus {
+    fn status(&self) -> ObserveStatusPayload {
+        let s = self.exporter.status();
+        ObserveStatusPayload {
+            compiled_in: s.compiled_in,
+            exporter_wired: s.exporter_wired,
+            endpoint: s.endpoint,
+            header_count: s.header_count,
+            service_name: s.service_name,
+            resource_attribute_count: s.resource_attribute_count,
+            sampler: s.sampler,
+            sampler_arg: s.sampler_arg,
+            metrics_enabled: s.metrics_enabled,
+            api_key_count: s.api_key_count,
+            api_key_cap: s.api_key_cap,
+            user_id_count: s.user_id_count,
+            user_id_cap: s.user_id_cap,
+            active_spans: s.active_spans,
+        }
+    }
+
+    async fn shutdown(&self) {
+        // `OtelExporter::shutdown` is synchronous and blocks the calling
+        // thread on the OTel SDK's internal channels. Driving it from an
+        // async context directly would park the tokio worker that the
+        // SDK's `rt-tokio` background tasks need to make progress —
+        // deadlock on a single-threaded runtime, latency hit on any
+        // runtime. `spawn_blocking` moves the wait to tokio's blocking
+        // pool so async workers stay free to drain the SDK.
+        let exporter = self.exporter.clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || exporter.shutdown()).await {
+            tracing::warn!(error = %e, "OTel exporter shutdown task panicked");
+        }
+    }
 }
 
 /// Assemble an [`App`] from a parsed config: connect the database, run every
@@ -133,7 +185,25 @@ pub async fn build_app_with_path(
     // Keep metrics_renderer for compatibility but return empty response
     let metrics_renderer: Arc<dyn MetricsRenderer> = Arc::new(EmptyMetricsRenderer);
 
-    // OpenTelemetry configuration is now handled via build_otel_config()
+    // Build the OTel exporter (if any) out here so the daemon can hold an
+    // `Arc` to it for `observe status` queries. The pipeline closure
+    // below registers a hook view of the same `Arc`; both Drop at app
+    // shutdown.
+    let otel_exporter: Option<Arc<OtelExporter>> =
+        build_otel_config(config).and_then(|c| match OtelExporter::new(c) {
+            Ok(exporter) => Some(Arc::new(exporter)),
+            Err(e) => {
+                tracing::error!("failed to initialise OpenTelemetry: {e}");
+                None
+            }
+        });
+    let observe_provider: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
+        Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
+        None => Arc::new(NoopObserveStatus {
+            compiled_in: OTEL_ENABLED,
+        }),
+    };
+    let otel_for_hook = otel_exporter;
 
     // Optional MCP pure-routing pipeline — wired only when the config
     // declares at least one upstream MCP server. The pipeline is independent
@@ -189,18 +259,11 @@ pub async fn build_app_with_path(
                 // StreamHook stage: guardrail downstream redaction / abort.
                 lm.stream_hook(GuardrailStreamHook::new(guardrail_rules));
             }
-            // OpenTelemetry exporter — traces + metrics with multi-tenant
-            // attribution. Configured via plugins.bitrouter-observe.otel or
-            // standard OTel env vars (OTEL_EXPORTER_OTLP_ENDPOINT et al).
-            if let Some(otel_config) = build_otel_config(config) {
-                match OtelExporter::new(otel_config) {
-                    Ok(exporter) => {
-                        lm.observe_hook(exporter);
-                    }
-                    Err(e) => {
-                        tracing::error!("failed to initialise OpenTelemetry: {e}");
-                    }
-                }
+            // OpenTelemetry exporter — register the *same* Arc as a hook
+            // here. Construction happened above so `Assembled.observe`
+            // can hold a query handle on it.
+            if let Some(exporter) = otel_for_hook {
+                lm.observe_hook(OtelObserveHook::new(exporter));
             }
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
@@ -235,6 +298,7 @@ pub async fn build_app_with_path(
         db,
         policy_store: policy_store_for_reload,
         routing_table: routing_table_for_reload,
+        observe: observe_provider,
     })
 }
 

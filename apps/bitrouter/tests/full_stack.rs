@@ -9,9 +9,8 @@
 //! - `crate::policy::PolicyHook` (binary module: model + tool + spend)
 //! - `bitrouter_guardrails::*` (shared plugin: pre-request block +
 //!   stream-stage redact)
-//! - `bitrouter_observe::PrometheusHook` (shared plugin: ObserveHook +
-//!   MetricsRenderer)
-//! - `bitrouter_observe::OtlpExportHook` (shared plugin: per-request export)
+//! - `bitrouter_observe::OtelObserveHook` (shared plugin: per-request OTLP
+//!   trace + metric export)
 //! - `crate::metering::MeteringRecorder` (binary module: SettlementRecorder)
 //!
 //! These tests are the canonical "did anyone break the assembly?" gate —
@@ -19,6 +18,7 @@
 //! between writer and renderer, etc., shows up here even when every unit
 //! test still passes.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum_test::TestServer;
@@ -28,6 +28,7 @@ use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
+use bitrouter::daemon::ObserveStatusProvider;
 use bitrouter::metering::entities::requests;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 
@@ -40,7 +41,25 @@ struct FullStack {
     brvk_secret: String,
     upstream: MockServer,
     otlp_collector: MockServer,
+    /// Same provider production assembles. Held here so each test can
+    /// call `teardown()` and drive the OTel SDK's flush via
+    /// `spawn_blocking` before this struct drops — otherwise the
+    /// SDK's `Drop` parks the tokio worker on its `rt-tokio`
+    /// background-task channel and deadlocks on a `current_thread`
+    /// test runtime.
+    observe: Arc<dyn ObserveStatusProvider>,
     _policy_dir: PolicyDir,
+}
+
+impl FullStack {
+    /// Flush OTel state and drop the harness. Each test MUST call this
+    /// before returning; the test runtime is `current_thread`, so the
+    /// SDK's implicit `Drop` shutdown deadlocks if this is skipped.
+    async fn teardown(self) {
+        self.observe.shutdown().await;
+        // Remaining fields drop synchronously; their Drop impls do not
+        // touch the OTel SDK.
+    }
 }
 
 /// Owns the temp policy directory and removes it on drop so a test failure
@@ -136,6 +155,7 @@ plugins:
     );
     let cfg: config::Config = config::parse_with(&yaml, |_| None).expect("config parses");
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let observe = assembled.observe.clone();
 
     // ── mint a brvk_ key bound to pol_main ──
     let user = "fullstack-user";
@@ -172,6 +192,7 @@ plugins:
         brvk_secret: key.secret,
         upstream,
         otlp_collector,
+        observe,
         _policy_dir: PolicyDir(policy_dir),
     }
 }
@@ -281,23 +302,11 @@ async fn e2e_full_stack_streaming_redacts_and_meters() {
         "estimated_charge_micro_usd should be 2*11 + 10*7 = 92µ$",
     );
 
-    // ── PrometheusHook ran: counters incremented; both stream-part and
-    //    request counters present, so the same Arc is read + written. ──
-    let metrics_resp = fs.server.get("/metrics").await;
-    metrics_resp.assert_status_ok();
-    let metrics_body = metrics_resp.text();
-    assert!(
-        metrics_body.contains("bitrouter_requests_total{outcome=\"completed\"} 1"),
-        "Prometheus should expose the completed-request counter:\n{metrics_body}"
-    );
-    assert!(
-        metrics_body.contains("bitrouter_stream_parts_total"),
-        "Prometheus should expose stream-part totals when a stream ran:\n{metrics_body}"
-    );
-
     // ── OtlpExportHook ran at least once. The exporter batches with a
     //    short interval; wait briefly for the collector to see it. ──
     wait_for_otlp(&fs.otlp_collector).await;
+
+    fs.teardown().await;
 }
 
 // ===== Test 2 — guardrail block at pre-request =====
@@ -339,6 +348,8 @@ async fn e2e_full_stack_guardrail_blocks_at_pre_request() {
         row_count, 0,
         "blocked request must not produce a metering row",
     );
+
+    fs.teardown().await;
 }
 
 // ===== Test 3 — policy tool restriction (ordering proof) =====
@@ -379,6 +390,8 @@ async fn e2e_full_stack_policy_denies_disallowed_tool_before_guardrails() {
         .await
         .expect("count query runs");
     assert_eq!(row_count, 0);
+
+    fs.teardown().await;
 }
 
 // ===== helpers =====

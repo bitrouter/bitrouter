@@ -14,7 +14,7 @@
 //! `Mutex<HashMap>`. The previous draft held a process-wide mutex across every
 //! stream part on the hot path.
 
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -34,6 +34,7 @@ use opentelemetry_sdk::trace::{
 use opentelemetry_sdk::{Resource, runtime};
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
+use serde::{Deserialize, Serialize};
 
 use bitrouter_sdk::language_model::{
     ObserveHook, Phase, PipelineContext, RequestOutcome, StreamContext, StreamInterest, StreamPart,
@@ -66,6 +67,10 @@ pub struct OtelExporter {
     provider: TracerProvider,
     metrics: Option<crate::otel::metrics::OtelMetrics>,
 
+    /// Snapshot of the config the exporter was built from. Kept so
+    /// `status()` can report what's wired without re-reading the YAML.
+    config: OtelConfig,
+
     /// Cardinality limiters — applied to *metric* attributes only. Spans
     /// carry raw values: cardinality is a metrics-storage concern, not a
     /// tracing one, and capping spans loses per-tenant debug fidelity.
@@ -77,6 +82,13 @@ pub struct OtelExporter {
 
     /// Maximum time to keep a span before automatic cleanup.
     span_timeout: Duration,
+
+    /// Idempotency guard for [`shutdown`](Self::shutdown). The OTel SDK's
+    /// `TracerProvider`/`SdkMeterProvider` panic on a double `shutdown()`,
+    /// and the implicit Drop after an explicit shutdown would do exactly
+    /// that. `Once` makes the call cheap and safe to invoke from both the
+    /// graceful path and any belt-and-braces Drop hook later.
+    shutdown_once: Once,
 }
 
 impl OtelExporter {
@@ -133,10 +145,12 @@ impl OtelExporter {
             tracer,
             provider,
             metrics,
+            config,
             api_key_limiter,
             user_id_limiter,
             active_spans: Arc::new(DashMap::new()),
             span_timeout: Duration::from_secs(300),
+            shutdown_once: Once::new(),
         })
     }
 
@@ -148,14 +162,49 @@ impl OtelExporter {
         }
     }
 
-    /// Flush and shut down both the tracer and the metric provider. The
-    /// caller drives this from app shutdown.
-    pub fn shutdown(&self) {
-        let _ = self.provider.force_flush();
-        let _ = self.provider.shutdown();
-        if let Some(m) = &self.metrics {
-            m.shutdown();
+    /// Snapshot of what's wired — fed to `bitrouter observe status` via
+    /// the daemon control socket. Cheap to call; no allocation beyond the
+    /// owned strings.
+    pub fn status(&self) -> OtelStatus {
+        OtelStatus {
+            compiled_in: true,
+            exporter_wired: true,
+            endpoint: Some(self.config.endpoint.clone()),
+            header_count: self.config.headers.len(),
+            service_name: Some(self.config.service_name.clone()),
+            resource_attribute_count: self.config.resource_attributes.len(),
+            sampler: Some(sampler_kind_str(self.config.sampler).to_string()),
+            sampler_arg: self.config.sampler_arg,
+            metrics_enabled: self.config.metrics.enabled,
+            api_key_count: self.api_key_limiter.cardinality(),
+            api_key_cap: self.config.metrics.api_key_id_cap,
+            user_id_count: self.user_id_limiter.cardinality(),
+            user_id_cap: self.config.metrics.user_id_cap,
+            active_spans: self.active_spans.len(),
         }
+    }
+
+    /// Flush and shut down both the tracer and the metric provider.
+    ///
+    /// **Synchronous** — must be driven from a context that can park: a
+    /// dedicated thread, `tokio::task::spawn_blocking`, or a
+    /// non‑async `main`. Calling it directly from an `async fn` parks
+    /// the tokio worker that the SDK's `rt-tokio` background tasks need
+    /// to make progress, and on a `current_thread` runtime that's a
+    /// deadlock. The `OtelObserveHook` adapter in the bin crate wraps
+    /// this in `spawn_blocking` for the async path.
+    ///
+    /// Idempotent: subsequent calls are no‑ops. The SDK itself panics
+    /// on double-shutdown; the `Once` guard makes "shutdown then Drop"
+    /// safe.
+    pub fn shutdown(&self) {
+        self.shutdown_once.call_once(|| {
+            let _ = self.provider.force_flush();
+            let _ = self.provider.shutdown();
+            if let Some(m) = &self.metrics {
+                m.shutdown();
+            }
+        });
     }
 
     fn gc_expired_spans(&self) {
@@ -170,6 +219,117 @@ impl OtelExporter {
 pub struct CardinalityStats {
     pub api_key_count: usize,
     pub user_id_count: usize,
+}
+
+/// Serializable snapshot of the OTel exporter's state. Returned by
+/// [`OtelExporter::status`] and surfaced through the daemon control socket
+/// for `bitrouter observe status`. Field names match the YAML / env-var
+/// vocabulary so the output reads as "this is what the exporter sees."
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OtelStatus {
+    /// Whether the `otel` feature was compiled in. Always `true` on a
+    /// snapshot produced by an `OtelExporter`; the daemon may emit a
+    /// snapshot with `compiled_in: false` when the feature is off.
+    pub compiled_in: bool,
+    /// Whether an exporter is actually wired (YAML / env opt-in fired).
+    pub exporter_wired: bool,
+    /// OTLP/HTTP+protobuf endpoint.
+    pub endpoint: Option<String>,
+    /// Number of additional headers configured (count only; values not
+    /// surfaced to avoid leaking credentials).
+    pub header_count: usize,
+    /// Service name reported on the resource.
+    pub service_name: Option<String>,
+    /// Number of `OTEL_RESOURCE_ATTRIBUTES` entries merged in.
+    pub resource_attribute_count: usize,
+    /// Sampler kind (e.g. `parentbased_always_on`).
+    pub sampler: Option<String>,
+    /// Sampler ratio argument (only set for `*_traceidratio`).
+    pub sampler_arg: Option<f64>,
+    /// Whether metrics export is enabled.
+    pub metrics_enabled: bool,
+    /// Distinct `api_key_id` values currently seen by the cardinality
+    /// limiter.
+    pub api_key_count: usize,
+    /// Cardinality cap for the `api_key_id` metric dimension.
+    pub api_key_cap: usize,
+    /// Distinct `user_id` values currently seen.
+    pub user_id_count: usize,
+    /// Cardinality cap for the `user_id` metric dimension.
+    pub user_id_cap: usize,
+    /// Number of in-flight spans currently tracked.
+    pub active_spans: usize,
+}
+
+impl OtelStatus {
+    /// Snapshot for a process where the `otel` feature is compiled in but
+    /// no exporter is wired (no YAML / no env var opt-in).
+    pub fn unwired(compiled_in: bool) -> Self {
+        Self {
+            compiled_in,
+            exporter_wired: false,
+            endpoint: None,
+            header_count: 0,
+            service_name: None,
+            resource_attribute_count: 0,
+            sampler: None,
+            sampler_arg: None,
+            metrics_enabled: false,
+            api_key_count: 0,
+            api_key_cap: 0,
+            user_id_count: 0,
+            user_id_cap: 0,
+            active_spans: 0,
+        }
+    }
+}
+
+fn sampler_kind_str(s: SamplerKind) -> &'static str {
+    match s {
+        SamplerKind::AlwaysOn => "always_on",
+        SamplerKind::AlwaysOff => "always_off",
+        SamplerKind::TraceIdRatio => "traceidratio",
+        SamplerKind::ParentBasedAlwaysOn => "parentbased_always_on",
+        SamplerKind::ParentBasedAlwaysOff => "parentbased_always_off",
+        SamplerKind::ParentBasedTraceIdRatio => "parentbased_traceidratio",
+    }
+}
+
+/// Transparent newtype around `Arc<OtelExporter>` so the same exporter
+/// instance can be registered with the pipeline builder *and* held by
+/// the daemon dispatcher for `observe status` queries. Without this, the
+/// builder's `observe_hook(impl ObserveHook + 'static)` would move the
+/// exporter in, making it unreachable from anywhere else.
+///
+/// Orphan rules forbid `impl ObserveHook for Arc<OtelExporter>` directly
+/// (both types are foreign to this crate); the newtype is the standard
+/// workaround.
+pub struct OtelObserveHook(Arc<OtelExporter>);
+
+impl OtelObserveHook {
+    /// Build a hook handle from a shared exporter.
+    pub fn new(exporter: Arc<OtelExporter>) -> Self {
+        Self(exporter)
+    }
+}
+
+#[async_trait]
+impl ObserveHook for OtelObserveHook {
+    async fn after_phase(&self, phase: Phase, ctx: &PipelineContext) {
+        self.0.after_phase(phase, ctx).await
+    }
+
+    fn stream_interest(&self) -> StreamInterest {
+        self.0.stream_interest()
+    }
+
+    async fn on_stream_part(&self, ctx: &StreamContext, part: &StreamPart) {
+        self.0.on_stream_part(ctx, part).await
+    }
+
+    async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
+        self.0.on_request_end(ctx, outcome).await
+    }
 }
 
 #[async_trait]
