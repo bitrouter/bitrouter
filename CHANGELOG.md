@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.2](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.1...v1.0.0-alpha.2)
+
+
+### ⛰️ Features
+
+- *(routing)* Multiple accounts per provider — failover + load-balance ([#473](https://github.com/bitrouter/bitrouter/pull/473)) - ([a248fd3](https://github.com/bitrouter/bitrouter/commit/a248fd3644b08aebbde8b64f24bfe05716a536e0))
+- *(sdk)* Structured outputs (response_format) for all 4 protocols ([#472](https://github.com/bitrouter/bitrouter/pull/472)) - ([8d4dc54](https://github.com/bitrouter/bitrouter/commit/8d4dc542e65f28ab751b38c1633839d8e9e4c243))
+- *(sdk)* Add RouterOptions to opt out of built-in routes ([#478](https://github.com/bitrouter/bitrouter/pull/478)) - ([c548527](https://github.com/bitrouter/bitrouter/commit/c5485279531f351d4ebd2422435c4fb968bc9bb1))
+- *(sdk)* Derive JsonSchema on wire types ([#467](https://github.com/bitrouter/bitrouter/pull/467)) ([#469](https://github.com/bitrouter/bitrouter/pull/469)) - ([901ec3e](https://github.com/bitrouter/bitrouter/commit/901ec3e83fdbbe689f3943cee46de2a3c0f46cdb))
+
+### 🐛 Bug Fixes
+
+- *(daemon)* Re-apply built-in provider catalog on file reload ([#476](https://github.com/bitrouter/bitrouter/pull/476)) - ([0bd11aa](https://github.com/bitrouter/bitrouter/commit/0bd11aaf84bf115fd6e9bfd4315400b33dfff166))
+
+### 🚜 Refactor
+
+- *(db)* Sea-orm migrations + all backends, no concrete driver ([#474](https://github.com/bitrouter/bitrouter/pull/474)) - ([f6a28dd](https://github.com/bitrouter/bitrouter/commit/f6a28dd78b52f1d038de2538b2a699e82d388888))
+
+
 ## [0.33.0](https://github.com/bitrouter/bitrouter/compare/v0.32.0...v0.33.0)
 
 

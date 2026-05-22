@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "plugins/*", "apps/*"]
 
 [workspace.package]
-version = "1.0.0-alpha.1"
+version = "1.0.0-alpha.2"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -15,11 +15,11 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 # internal crates
-bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.1", default-features = false }
-bitrouter-bedrock = { path = "crates/bitrouter-bedrock", version = "1.0.0-alpha.1" }
-bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.1" }
-bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.1" }
-bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.1", default-features = false }
+bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.2", default-features = false }
+bitrouter-bedrock = { path = "crates/bitrouter-bedrock", version = "1.0.0-alpha.2" }
+bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.2" }
+bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.2" }
+bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.2", default-features = false }
 
 # shared third-party
 async-trait = "0.1"
