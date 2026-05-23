@@ -249,9 +249,10 @@ pub async fn build_app_with_path(
 fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
     let mut appliers = AuthAppliers::new();
     if config.providers.contains_key("github-copilot") {
-        let token_store_path = bitrouter_providers::oauth::TokenStore::default_path()
-            .map(|s| s.path().to_path_buf())
-            .context("resolving OAuth token store path for github-copilot")?;
+        let token_store_path =
+            bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+                .map(|s| s.path().to_path_buf())
+                .context("resolving credential store path for github-copilot")?;
         let applier = bitrouter_providers::copilot::CopilotAuthApplier::new(token_store_path)
             .context("building the github-copilot AuthApplier")?;
         appliers.register("github-copilot", Arc::new(applier));

@@ -1,0 +1,55 @@
+# OpenAI Codex — ChatGPT Plus/Pro subscription route, OAuth-only.
+#
+# This is **not** the same as the `openai` provider. Codex lives at a
+# different host (`chatgpt.com/backend-api/codex`) and is reachable only
+# with credentials minted by the user's ChatGPT subscription via the
+# `bitrouter login openai-codex` PKCE flow against `auth.openai.com`. The
+# resulting `sk-…` Bearer is a JWT — the Codex backend additionally
+# requires a `chatgpt-account-id` request header pulled from the JWT's
+# `https://api.openai.com/auth` claim block, the
+# `OpenAI-Beta: responses=experimental` opt-in, and an `originator` tag.
+# All of that is wired up by `bitrouter_providers::codex::OpenAiCodexAuthApplier`,
+# which is registered for `provider_name == "openai-codex"` at app
+# startup whenever this provider appears in `bitrouter.yaml`.
+#
+# Reference implementations (public OAuth client + endpoints, header
+# shape):
+# - OpenAI's Codex CLI:
+#   https://developers.openai.com/codex/auth
+# - OpenCode plugin:
+#   https://github.com/sst/opencode/blob/dev/packages/opencode/src/plugin/codex.ts
+# - OpenClaw Codex OAuth runtime:
+#   https://github.com/openclaw/openclaw/blob/main/extensions/openai/openai-codex-oauth.runtime.ts
+#
+# Wire protocol: Codex speaks the OpenAI Responses API exclusively. The
+# `openai` Chat Completions endpoint is not reachable from this base URL,
+# so `api_protocol` is pinned to `responses` (no glob fan-out needed).
+#
+# Auth scheme: `kind = "oauth"` with `handler = "openai-codex"`. The
+# handler string is unused by the SDK's auth path (the AuthApplier
+# wins), but kept for parity with `github-copilot.toml` so any future
+# generic introspection of the catalog ("does this provider need
+# login?") works uniformly.
+
+id = "openai-codex"
+display_name = "OpenAI Codex"
+api_base = "https://chatgpt.com/backend-api/codex"
+api_protocol = "responses"
+doc_url = "https://developers.openai.com/codex/auth"
+
+[auth]
+kind = "oauth"
+handler = "openai-codex"
+
+[auth.params]
+# OAuth client id of the official Codex CLI. Confirmed in OpenCode's
+# `plugin/codex.ts` (CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann") and
+# OpenClaw's `openai-codex-device-code.ts`. Reused here because
+# bitrouter doesn't have its own registered OpenAI OAuth app yet.
+client_id = "app_EMoamEEZ73f0CkXaXp7hrann"
+scope = "openid profile email offline_access"
+authorize_endpoint = "https://auth.openai.com/oauth/authorize"
+token_endpoint = "https://auth.openai.com/oauth/token"
+# Loopback redirect on a pinned port — registered against the OAuth
+# client. Dynamic ports will be rejected.
+redirect_uri = "http://localhost:1455/auth/callback"

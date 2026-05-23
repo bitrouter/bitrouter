@@ -67,9 +67,13 @@
 
 #![deny(missing_docs)]
 
+#[cfg(feature = "pkce")]
+pub mod anthropic;
 mod apply;
 pub mod builtin;
 pub mod catalog;
+#[cfg(feature = "pkce")]
+pub mod codex;
 pub mod copilot;
 mod entry;
 pub mod oauth;

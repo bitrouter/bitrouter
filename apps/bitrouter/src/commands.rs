@@ -379,10 +379,14 @@ pub async fn login_provider(provider_id: &str) -> Result<()> {
         }
     };
 
-    let mut store = bitrouter_providers::oauth::TokenStore::default_path()
-        .context("opening OAuth token store")?;
+    let mut store = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+        .context("opening credential store")?;
     store
-        .set(provider_id, token)
+        .set(
+            provider_id,
+            bitrouter_providers::oauth::credential_store::DEFAULT_LABEL,
+            bitrouter_providers::oauth::credential_store::Credential::from_oauth_token(token),
+        )
         .with_context(|| format!("persisting OAuth token for {provider_id}"))?;
 
     eprintln!("  ✓ Authorized. Token saved to {}", store.path().display());
@@ -390,16 +394,17 @@ pub async fn login_provider(provider_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// `bitrouter logout <provider>` — drop the stored OAuth token, if any.
+/// `bitrouter logout <provider>` — drop every stored credential for the
+/// provider (subscription OAuth or pasted API key), if any.
 pub async fn logout_provider(provider_id: &str) -> Result<()> {
-    let mut store = bitrouter_providers::oauth::TokenStore::default_path()
-        .context("opening OAuth token store")?;
-    match store
-        .remove(provider_id)
-        .with_context(|| format!("removing OAuth token for {provider_id}"))?
-    {
-        Some(_) => eprintln!("  ✓ Removed stored OAuth token for {provider_id}."),
-        None => eprintln!("  No stored OAuth token for {provider_id}; nothing to remove."),
+    let mut store = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+        .context("opening credential store")?;
+    let removed = store
+        .remove_all_for(provider_id)
+        .with_context(|| format!("removing stored credentials for {provider_id}"))?;
+    match removed {
+        0 => eprintln!("  No stored credentials for {provider_id}; nothing to remove."),
+        n => eprintln!("  ✓ Removed {n} stored credential(s) for {provider_id}."),
     }
     Ok(())
 }
