@@ -69,6 +69,7 @@ pub struct App {
     metrics_renderer: Option<Arc<dyn MetricsRenderer>>,
     migrations: Vec<MigrationItem>,
     skip_auth: bool,
+    mcp_aggregate_route: Option<String>,
 }
 
 impl App {
@@ -111,6 +112,13 @@ impl App {
     pub fn metrics_renderer(&self) -> Option<&Arc<dyn MetricsRenderer>> {
         self.metrics_renderer.as_ref()
     }
+
+    /// HTTP path for the MCP aggregate route, when configured (`POST <path>`
+    /// fans out across every `aggregate: true` MCP server). `None` means
+    /// only per-server routes (`POST /mcp/{server}`) are mounted.
+    pub fn mcp_aggregate_route(&self) -> Option<&str> {
+        self.mcp_aggregate_route.as_deref()
+    }
 }
 
 /// Configures an [`App`]. Each protocol is configured through its own
@@ -123,6 +131,7 @@ pub struct AppBuilder {
     metrics_renderer: Option<Arc<dyn MetricsRenderer>>,
     migrations: Vec<MigrationItem>,
     skip_auth: bool,
+    mcp_aggregate_route: Option<String>,
 }
 
 impl AppBuilder {
@@ -135,7 +144,17 @@ impl AppBuilder {
             metrics_renderer: None,
             migrations: Vec::new(),
             skip_auth: false,
+            mcp_aggregate_route: None,
         }
+    }
+
+    /// Path for the MCP aggregate fan-out endpoint (e.g. `/mcp`). When set,
+    /// `App::serve` mounts a `POST <path>` handler that fans out across every
+    /// `aggregate: true` MCP server. Has no effect unless the MCP pipeline is
+    /// also configured.
+    pub fn mcp_aggregate_route(mut self, path: impl Into<String>) -> Self {
+        self.mcp_aggregate_route = Some(path.into());
+        self
     }
 
     /// Set the SDK-level `skip_auth` flag (code default `false`). When `true`,
@@ -227,6 +246,16 @@ impl AppBuilder {
 
         self.migrations.sort_by_key(|m| m.version);
 
+        // The aggregate route only makes sense alongside an MCP pipeline —
+        // drop it silently if no MCP pipeline was configured (keeps
+        // `mcp_aggregate_route(...)` from accidentally mounting a 404-only
+        // handler in apps that don't use MCP).
+        let mcp_aggregate_route = if mcp.is_some() {
+            self.mcp_aggregate_route
+        } else {
+            None
+        };
+
         Ok(App {
             language_model,
             mcp,
@@ -234,6 +263,7 @@ impl AppBuilder {
             metrics_renderer: self.metrics_renderer,
             migrations: self.migrations,
             skip_auth: self.skip_auth,
+            mcp_aggregate_route,
         })
     }
 }

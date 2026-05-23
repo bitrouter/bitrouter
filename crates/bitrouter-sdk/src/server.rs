@@ -63,7 +63,11 @@ impl App {
             skip_auth: self.skip_auth(),
             metrics_renderer: self.metrics_renderer().cloned(),
         };
-        let router = build_router(state);
+        let options = RouterOptions {
+            omit_v1_models: false,
+            mcp_aggregate_route: self.mcp_aggregate_route().map(String::from),
+        };
+        let router = build_router_with_options(state, options);
         let listener = tokio::net::TcpListener::bind(listen)
             .await
             .map_err(|e| BitrouterError::internal(format!("bind {listen}: {e}")))?;
@@ -120,10 +124,14 @@ const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 /// own richer variant of a built-in route (e.g. bitrouter-cloud's enriched
 /// `/v1/models`) opt out of the SDK's plainer version here so
 /// [`axum::Router::merge`] does not panic on the duplicate path.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 pub struct RouterOptions {
     /// When `true`, omit `GET /v1/models` from the returned router.
     pub omit_v1_models: bool,
+    /// Path for the aggregate MCP endpoint (`Some("/mcp")` by typical
+    /// convention). `None` omits the aggregate route — only per-server routes
+    /// (`/mcp/{server}`) are mounted.
+    pub mcp_aggregate_route: Option<String>,
 }
 
 /// Build the axum router for the given state.
@@ -143,8 +151,11 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
     if !options.omit_v1_models {
         router = router.route("/v1/models", get(list_models));
     }
+    router = router.route("/mcp/{server}", post(mcp_invoke));
+    if let Some(path) = options.mcp_aggregate_route {
+        router = router.route(&path, post(mcp_invoke_aggregate));
+    }
     router
-        .route("/mcp/{server}", post(mcp_invoke))
         .route("/metrics", get(prometheus_metrics))
         .route("/health", get(health))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -184,6 +195,25 @@ async fn mcp_invoke(
     Path(server): Path<String>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
+) -> Response {
+    mcp_invoke_inner(state, mcp::ServerSelector::Direct(server), headers, body).await
+}
+
+/// `POST /mcp` — the aggregate (fan-out) MCP endpoint. Mounted only when
+/// `RouterOptions.mcp_aggregate_route` is `Some(path)`.
+async fn mcp_invoke_aggregate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    mcp_invoke_inner(state, mcp::ServerSelector::Aggregate, headers, body).await
+}
+
+async fn mcp_invoke_inner(
+    state: AppState,
+    selector: mcp::ServerSelector,
+    headers: HeaderMap,
+    body: serde_json::Value,
 ) -> Response {
     let Some(pipeline) = state.mcp.clone() else {
         return BitrouterError::NotFound("mcp pipeline not configured".to_string()).into_response();
@@ -227,7 +257,23 @@ async fn mcp_invoke(
     } else {
         CallerContext::anonymous()
     };
-    let request = mcp::McpRequest::new(server, method, params, caller);
+    let request = match selector {
+        mcp::ServerSelector::Direct(server) => {
+            mcp::McpRequest::direct(server, method, params, caller)
+        }
+        mcp::ServerSelector::Aggregate => mcp::McpRequest::aggregate(method, params, caller),
+    };
+
+    // SSE branch per the MCP Streamable HTTP spec — if the client opts in via
+    // `Accept: text/event-stream` we return the JSON-RPC frames as `data:`
+    // events. JSON clients get the buffered JSON shape (the existing path).
+    if accepts_event_stream(&headers) {
+        return match pipeline.execute_streaming(request).await {
+            Ok(stream) => sse_response(inbound_id, stream),
+            Err(e) => mcp_pipeline_error_response(inbound_id, &e),
+        };
+    }
+
     match pipeline.execute(request).await {
         Ok(response) => Json(serde_json::json!({
             "jsonrpc": "2.0",
@@ -235,40 +281,95 @@ async fn mcp_invoke(
             "result": response.result,
         }))
         .into_response(),
-        Err(e) => {
-            // JSON-RPC error envelope (see spec link above). Pipeline failures
-            // are returned at HTTP 200 with `error.code` mapped from the
-            // BitrouterError variant; unknown-server (`NotFound` from
-            // `RoutingTable::resolve`) maps to JSON-RPC "Method not found"
-            // (-32601). Pre-request denies / upstream errors keep their HTTP
-            // status so MCP-unaware proxies still surface them — but the body
-            // remains a JSON-RPC error object for the spec-aware client.
-            let (status, code) = match &e {
-                BitrouterError::NotFound(_) => (axum::http::StatusCode::NOT_FOUND, -32601),
-                BitrouterError::BadRequest { .. } => (axum::http::StatusCode::BAD_REQUEST, -32602),
-                BitrouterError::Unauthorized(_) => (axum::http::StatusCode::UNAUTHORIZED, -32000),
-                BitrouterError::Forbidden(_) => (axum::http::StatusCode::FORBIDDEN, -32000),
-                BitrouterError::PaymentRequired(_) => {
-                    (axum::http::StatusCode::PAYMENT_REQUIRED, -32000)
-                }
-                _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, -32603),
-            };
-            (
-                status,
-                Json(serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": inbound_id,
-                    "error": { "code": code, "message": e.to_string() },
-                })),
-            )
-                .into_response()
-        }
+        Err(e) => mcp_pipeline_error_response(inbound_id, &e),
     }
 }
 
+/// Map a [`BitrouterError`] from the MCP pipeline into the JSON-RPC error
+/// envelope. Pipeline failures are returned with `error.code` mapped from the
+/// `BitrouterError` variant; unknown-server (`NotFound` from
+/// `RoutingTable::resolve`) maps to JSON-RPC "Method not found" (-32601).
+/// Pre-request denies / upstream errors keep their HTTP status so MCP-unaware
+/// proxies still surface them — but the body remains a JSON-RPC error object
+/// for the spec-aware client.
+fn mcp_pipeline_error_response(inbound_id: serde_json::Value, e: &BitrouterError) -> Response {
+    let (status, code) = match e {
+        BitrouterError::NotFound(_) => (axum::http::StatusCode::NOT_FOUND, -32601),
+        BitrouterError::BadRequest { .. } => (axum::http::StatusCode::BAD_REQUEST, -32602),
+        BitrouterError::Unauthorized(_) => (axum::http::StatusCode::UNAUTHORIZED, -32000),
+        BitrouterError::Forbidden(_) => (axum::http::StatusCode::FORBIDDEN, -32000),
+        BitrouterError::PaymentRequired(_) => (axum::http::StatusCode::PAYMENT_REQUIRED, -32000),
+        _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, -32603),
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": inbound_id,
+            "error": { "code": code, "message": e.to_string() },
+        })),
+    )
+        .into_response()
+}
+
+/// True if the client opted into the SSE response variant.
+fn accepts_event_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|s| {
+            s.split(',')
+                .any(|p| p.trim().starts_with("text/event-stream"))
+        })
+}
+
+/// Build an `Sse` response from a stream of [`mcp::McpStreamPart`]s. Each part
+/// becomes one SSE `data:` event carrying the JSON-RPC notification or
+/// response. The stream closes after the terminating `Final` is sent.
+fn sse_response(
+    inbound_id: serde_json::Value,
+    stream: futures::stream::BoxStream<'static, crate::error::Result<mcp::McpStreamPart>>,
+) -> Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    let inbound_id = Arc::new(inbound_id);
+    let event_stream = stream.map(move |item| {
+        let inbound_id = inbound_id.clone();
+        match item {
+            Ok(mcp::McpStreamPart::Notification { method, params }) => {
+                let payload = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": method,
+                    "params": params,
+                });
+                Ok::<_, Infallible>(Event::default().data(payload.to_string()))
+            }
+            Ok(mcp::McpStreamPart::Final(response)) => {
+                let payload = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": &*inbound_id,
+                    "result": response.result,
+                });
+                Ok(Event::default().data(payload.to_string()))
+            }
+            Err(e) => {
+                let payload = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": &*inbound_id,
+                    "error": { "code": -32603, "message": e.to_string() },
+                });
+                Ok(Event::default().data(payload.to_string()))
+            }
+        }
+    });
+    Sse::new(event_stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
 /// MCP supported transport protocol versions. Update when adding spec revisions.
-/// See <https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle>.
-const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+/// See <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
+const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
+    &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// Validates the MCP Streamable HTTP transport headers per the spec at
 /// <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports>.

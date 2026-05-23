@@ -329,7 +329,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     use async_trait::async_trait;
     use bitrouter_sdk::App;
     use bitrouter_sdk::mcp::{
-        Executor, McpRequest, McpResponse, McpTarget, McpTransport, RoutingTable,
+        Executor, McpRequest, McpResponse, McpTarget, McpTransport, RoutingTable, ServerSelector,
     };
     use http::Request;
     use std::sync::Arc;
@@ -342,22 +342,22 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     impl RoutingTable for StaticTable {
         async fn resolve(
             &self,
-            server: &str,
+            selector: &ServerSelector,
             _caller: &bitrouter_sdk::caller::CallerContext,
         ) -> bitrouter_sdk::Result<McpTarget> {
-            if server == "known" {
-                Ok(McpTarget {
-                    server_name: server.to_string(),
+            match selector {
+                ServerSelector::Direct(name) if name == "known" => Ok(McpTarget::Direct {
+                    server_name: name.clone(),
                     transport: McpTransport::Stdio {
                         command: "/bin/true".into(),
                         args: vec![],
                         env: Default::default(),
                     },
-                })
-            } else {
-                Err(bitrouter_sdk::BitrouterError::NotFound(format!(
-                    "unknown mcp server '{server}'"
-                )))
+                }),
+                ServerSelector::Direct(name) => Err(bitrouter_sdk::BitrouterError::NotFound(
+                    format!("unknown mcp server '{name}'"),
+                )),
+                ServerSelector::Aggregate => Ok(McpTarget::Aggregate { members: vec![] }),
             }
         }
     }
@@ -369,11 +369,15 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
             target: &McpTarget,
             request: &McpRequest,
         ) -> bitrouter_sdk::Result<McpResponse> {
+            let server = match target {
+                McpTarget::Direct { server_name, .. } => server_name.clone(),
+                McpTarget::Aggregate { .. } => "<aggregate>".to_string(),
+            };
             Ok(McpResponse {
                 request_id: request.request_id.clone(),
                 result: serde_json::json!({
                     "method": request.method,
-                    "server": target.server_name,
+                    "server": server,
                     "params_seen": request.params,
                 }),
             })
@@ -532,6 +536,210 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     assert_eq!(json["jsonrpc"], "2.0");
     assert_eq!(json["id"], 1);
     assert_eq!(json["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn e2e_mcp_aggregate_and_sse_endpoints() {
+    use async_trait::async_trait;
+    use bitrouter_sdk::App;
+    use bitrouter_sdk::mcp::{
+        AggregateMember, Executor, McpRequest, McpResponse, McpTarget, McpTransport, RoutingTable,
+        ServerSelector,
+    };
+    use bitrouter_sdk::server::{RouterOptions, build_router_with_options};
+    use http::Request;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    // Two-member aggregate table. The executor branches on Direct vs
+    // Aggregate so we test the SDK's AggregatingExecutor through its real
+    // wiring rather than reimplementing fan-out in the fixture.
+    struct TwoServerTable;
+    #[async_trait]
+    impl RoutingTable for TwoServerTable {
+        async fn resolve(
+            &self,
+            selector: &ServerSelector,
+            _caller: &bitrouter_sdk::caller::CallerContext,
+        ) -> bitrouter_sdk::Result<McpTarget> {
+            let stub = McpTransport::Stdio {
+                command: "/bin/true".into(),
+                args: vec![],
+                env: Default::default(),
+            };
+            match selector {
+                ServerSelector::Direct(name) => Ok(McpTarget::Direct {
+                    server_name: name.clone(),
+                    transport: stub,
+                }),
+                ServerSelector::Aggregate => Ok(McpTarget::Aggregate {
+                    members: vec![
+                        AggregateMember {
+                            server_name: "a".into(),
+                            tool_prefix: "a__".into(),
+                            transport: stub.clone(),
+                        },
+                        AggregateMember {
+                            server_name: "b".into(),
+                            tool_prefix: "b__".into(),
+                            transport: stub,
+                        },
+                    ],
+                }),
+            }
+        }
+    }
+
+    struct StaticToolsExecutor;
+    #[async_trait]
+    impl Executor for StaticToolsExecutor {
+        async fn execute(
+            &self,
+            target: &McpTarget,
+            request: &McpRequest,
+        ) -> bitrouter_sdk::Result<McpResponse> {
+            let server = match target {
+                McpTarget::Direct { server_name, .. } => server_name.clone(),
+                McpTarget::Aggregate { .. } => unreachable!("AggregatingExecutor must intercept"),
+            };
+            let tools = serde_json::json!([
+                { "name": "search", "description": format!("from {server}") },
+            ]);
+            Ok(McpResponse {
+                request_id: request.request_id.clone(),
+                result: serde_json::json!({ "tools": tools }),
+            })
+        }
+    }
+
+    struct UnusedLmExecutor;
+    #[async_trait]
+    impl bitrouter_sdk::language_model::Executor for UnusedLmExecutor {
+        async fn execute(
+            &self,
+            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _prompt: &bitrouter_sdk::language_model::Prompt,
+        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
+            Err(bitrouter_sdk::BitrouterError::internal("unused"))
+        }
+        async fn execute_stream(
+            &self,
+            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _prompt: &bitrouter_sdk::language_model::Prompt,
+        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+            Err(bitrouter_sdk::BitrouterError::internal("unused"))
+        }
+    }
+
+    let app = App::builder()
+        .language_model(|lm| {
+            lm.routing_table(Arc::new(
+                bitrouter_sdk::language_model::StaticRoutingTable::new(),
+            ))
+            .executor(Arc::new(UnusedLmExecutor));
+        })
+        .mcp(|m| {
+            // The pipeline-level executor is the real AggregatingExecutor,
+            // wrapping our canned StaticToolsExecutor at the leaves.
+            let inner: Arc<StaticToolsExecutor> = Arc::new(StaticToolsExecutor);
+            let agg = bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor::new(inner);
+            m.routing_table(Arc::new(TwoServerTable))
+                .executor(Arc::new(agg));
+        })
+        .mcp_aggregate_route("/mcp")
+        .skip_auth(true)
+        .build()
+        .expect("app builds");
+
+    let state = AppState {
+        language_model: app.language_model().unwrap().clone(),
+        mcp: app.mcp().cloned(),
+        skip_auth: true,
+        metrics_renderer: None,
+    };
+    let options = RouterOptions {
+        omit_v1_models: false,
+        mcp_aggregate_route: app.mcp_aggregate_route().map(String::from),
+    };
+    let router = build_router_with_options(state, options);
+
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    });
+
+    // (1) POST /mcp returns merged tools/list with `{prefix}{name}`.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let names: Vec<String> = json["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, vec!["a__search", "b__search"]);
+
+    // (2) Accept: text/event-stream on the aggregate route returns SSE.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("accept", "text/event-stream")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let content_type = response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .expect("SSE response must carry Content-Type")
+        .to_str()
+        .unwrap();
+    assert!(
+        content_type.starts_with("text/event-stream"),
+        "expected SSE Content-Type, got: {content_type}"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+    // SSE body contains at least one `data:` line carrying the JSON-RPC result.
+    let data_line = body_str
+        .lines()
+        .find(|l| l.starts_with("data: "))
+        .expect("SSE stream must include a data event");
+    let payload: serde_json::Value =
+        serde_json::from_str(data_line.trim_start_matches("data: ")).unwrap();
+    assert_eq!(payload["jsonrpc"], "2.0");
+    assert_eq!(payload["id"], 1);
+    assert_eq!(payload["result"]["tools"][0]["name"], "a__search");
+
+    // (3) JSON path on the per-server route still works after refactor.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/a")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["result"]["tools"][0]["name"], "search");
 }
 
 // ============================================================================

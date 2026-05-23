@@ -62,6 +62,33 @@ pub struct McpServerConfig {
     pub name: String,
     /// Wire transport.
     pub transport: McpTransport,
+    /// Whether this server participates in the aggregate fan-out endpoint
+    /// (typically `POST /mcp`). Default: `true`.
+    #[serde(default = "default_true")]
+    pub aggregate: bool,
+    /// Prefix prepended to upstream tool/prompt names when this server
+    /// participates in aggregate fan-out. When `None`, the config-load layer
+    /// fills in `{server_name}__`.
+    #[serde(default)]
+    pub tool_prefix: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl McpServerConfig {
+    /// Build a server config with default aggregation settings (`aggregate:
+    /// true`, `tool_prefix: None` so the config-load layer fills in
+    /// `{name}__`). Convenience for tests and programmatic config builders.
+    pub fn with_defaults(name: impl Into<String>, transport: McpTransport) -> Self {
+        Self {
+            name: name.into(),
+            transport,
+            aggregate: true,
+            tool_prefix: None,
+        }
+    }
 }
 
 /// Errors returned by [`McpServerConfig::validate`].
@@ -132,15 +159,15 @@ mod tests {
 
     #[test]
     fn http_transport_round_trips_through_serde() {
-        let cfg = McpServerConfig {
-            name: "ctx7".into(),
-            transport: McpTransport::Http {
+        let cfg = McpServerConfig::with_defaults(
+            "ctx7",
+            McpTransport::Http {
                 url: "https://mcp.example.com/v1/mcp".into(),
                 headers: [("Authorization".to_string(), "Bearer x".to_string())]
                     .into_iter()
                     .collect(),
             },
-        };
+        );
         let json = serde_json::to_value(&cfg).unwrap();
         assert_eq!(json["transport"]["type"], "http");
         assert_eq!(json["transport"]["url"], "https://mcp.example.com/v1/mcp");
@@ -150,14 +177,14 @@ mod tests {
 
     #[test]
     fn stdio_transport_round_trips_through_serde() {
-        let cfg = McpServerConfig {
-            name: "local-git".into(),
-            transport: McpTransport::Stdio {
+        let cfg = McpServerConfig::with_defaults(
+            "local-git",
+            McpTransport::Stdio {
                 command: "uvx".into(),
                 args: vec!["mcp-server-git".into()],
                 env: Default::default(),
             },
-        };
+        );
         let json = serde_json::to_value(&cfg).unwrap();
         assert_eq!(json["transport"]["type"], "stdio");
         assert_eq!(json["transport"]["command"], "uvx");
@@ -166,14 +193,43 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_and_tool_prefix_defaults_when_omitted() {
+        // Bare entry — `aggregate` and `tool_prefix` are absent in the YAML
+        // shape but must materialise as the documented defaults.
+        let json = serde_json::json!({
+            "name": "x",
+            "transport": { "type": "http", "url": "https://x" }
+        });
+        let cfg: McpServerConfig = serde_json::from_value(json).unwrap();
+        assert!(cfg.aggregate, "aggregate must default to true");
+        assert!(
+            cfg.tool_prefix.is_none(),
+            "tool_prefix must default to None so the config-load layer fills in '{{name}}__'"
+        );
+    }
+
+    #[test]
+    fn aggregate_opt_out_round_trips() {
+        let json = serde_json::json!({
+            "name": "linear",
+            "transport": { "type": "http", "url": "https://linear" },
+            "aggregate": false,
+            "tool_prefix": "lin__"
+        });
+        let cfg: McpServerConfig = serde_json::from_value(json).unwrap();
+        assert!(!cfg.aggregate);
+        assert_eq!(cfg.tool_prefix.as_deref(), Some("lin__"));
+    }
+
+    #[test]
     fn validate_rejects_empty_name() {
-        let cfg = McpServerConfig {
-            name: String::new(),
-            transport: McpTransport::Http {
+        let cfg = McpServerConfig::with_defaults(
+            String::new(),
+            McpTransport::Http {
                 url: "https://x".into(),
                 headers: Default::default(),
             },
-        };
+        );
         assert!(matches!(
             cfg.validate(),
             Err(McpConfigError::InvalidName { .. })
@@ -182,13 +238,13 @@ mod tests {
 
     #[test]
     fn validate_rejects_slash_in_name() {
-        let cfg = McpServerConfig {
-            name: "foo/bar".into(),
-            transport: McpTransport::Http {
+        let cfg = McpServerConfig::with_defaults(
+            "foo/bar",
+            McpTransport::Http {
                 url: "https://x".into(),
                 headers: Default::default(),
             },
-        };
+        );
         assert!(matches!(
             cfg.validate(),
             Err(McpConfigError::InvalidName { .. })
@@ -197,13 +253,13 @@ mod tests {
 
     #[test]
     fn validate_rejects_reserved_sse_name() {
-        let cfg = McpServerConfig {
-            name: "sse".into(),
-            transport: McpTransport::Http {
+        let cfg = McpServerConfig::with_defaults(
+            "sse",
+            McpTransport::Http {
                 url: "https://x".into(),
                 headers: Default::default(),
             },
-        };
+        );
         assert!(matches!(
             cfg.validate(),
             Err(McpConfigError::InvalidName { .. })
@@ -212,13 +268,13 @@ mod tests {
 
     #[test]
     fn validate_rejects_empty_http_url() {
-        let cfg = McpServerConfig {
-            name: "x".into(),
-            transport: McpTransport::Http {
+        let cfg = McpServerConfig::with_defaults(
+            "x",
+            McpTransport::Http {
                 url: String::new(),
                 headers: Default::default(),
             },
-        };
+        );
         assert!(matches!(
             cfg.validate(),
             Err(McpConfigError::EmptyHttpUrl { .. })
@@ -227,14 +283,14 @@ mod tests {
 
     #[test]
     fn validate_rejects_empty_stdio_command() {
-        let cfg = McpServerConfig {
-            name: "x".into(),
-            transport: McpTransport::Stdio {
+        let cfg = McpServerConfig::with_defaults(
+            "x",
+            McpTransport::Stdio {
                 command: String::new(),
                 args: vec![],
                 env: Default::default(),
             },
-        };
+        );
         assert!(matches!(
             cfg.validate(),
             Err(McpConfigError::EmptyStdioCommand { .. })
@@ -244,25 +300,25 @@ mod tests {
     #[test]
     fn validate_accepts_well_formed_http_and_stdio() {
         assert!(
-            McpServerConfig {
-                name: "ctx7".into(),
-                transport: McpTransport::Http {
+            McpServerConfig::with_defaults(
+                "ctx7",
+                McpTransport::Http {
                     url: "https://x".into(),
                     headers: Default::default(),
                 },
-            }
+            )
             .validate()
             .is_ok()
         );
         assert!(
-            McpServerConfig {
-                name: "git".into(),
-                transport: McpTransport::Stdio {
+            McpServerConfig::with_defaults(
+                "git",
+                McpTransport::Stdio {
                     command: "uvx".into(),
                     args: vec!["mcp-server-git".into()],
                     env: Default::default(),
                 },
-            }
+            )
             .validate()
             .is_ok()
         );
