@@ -143,8 +143,8 @@ pub struct McpResponse {
 }
 
 /// One member of an aggregate fan-out — the per-server view used by
-/// [`AggregatingExecutor`] when dispatching `tools/list` / `tools/call` / etc.
-/// across multiple upstreams.
+/// [`aggregating_executor::AggregatingExecutor`] when dispatching
+/// `tools/list` / `tools/call` / etc. across multiple upstreams.
 #[derive(Debug, Clone)]
 pub struct AggregateMember {
     /// The upstream MCP server name.

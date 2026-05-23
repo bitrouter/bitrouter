@@ -1,19 +1,20 @@
-//! TTL-cached [`Executor`](super::Executor) — wraps another executor with a
-//! per-server cache for cheap list calls (`tools/list`, `resources/list`,
+//! TTL-cached [`Executor`] — wraps another executor with a per-server cache
+//! for cheap list calls (`tools/list`, `resources/list`,
 //! `resources/templates/list`, `prompts/list`).
 //!
 //! Non-list methods (`tools/call`, `resources/read`, `prompts/get`) and
 //! aggregate targets pass straight through.
 //!
 //! Cache entries expire on TTL. When the inner executor is hooked up to a
-//! `notifications/*_list_changed` source via [`with_invalidation`], affected
-//! entries are also evicted on demand. The TTL on each entry honours the MCP
-//! spec's `ttlMs` cache-control hint when present in the upstream `_meta`.
+//! `notifications/*_list_changed` source via
+//! [`CachingExecutor::with_invalidation`], affected entries are also evicted
+//! on demand. The TTL on each entry honours the MCP spec's `ttlMs`
+//! cache-control hint when present in the upstream `_meta`.
 //!
 //! Caching applies per [`McpTarget::Direct`] member; when used inside an
-//! [`super::AggregatingExecutor`], the cache key includes the per-member
-//! server name so a cold aggregate fan-out warms each leaf cache
-//! independently.
+//! [`super::aggregating_executor::AggregatingExecutor`], the cache key
+//! includes the per-member server name so a cold aggregate fan-out warms
+//! each leaf cache independently.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};

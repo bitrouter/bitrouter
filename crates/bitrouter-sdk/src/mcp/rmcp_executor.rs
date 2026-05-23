@@ -226,7 +226,7 @@ impl RmcpExecutor {
     /// Subscribe to upstream cache-invalidation notifications. Each
     /// `notifications/tools/list_changed` (or sibling) from any pooled server
     /// produces one event on this channel — typically consumed by a
-    /// [`super::CachingExecutor`].
+    /// [`super::caching_executor::CachingExecutor`].
     pub fn invalidation_receiver(&self) -> broadcast::Receiver<InvalidationEvent> {
         self.invalidation_tx.subscribe()
     }
