@@ -38,7 +38,9 @@ pub trait LoginUx: Send + Sync {
 pub enum LoginError {
     /// Loopback listener bind failed AND the provider doesn't expose a
     /// manual-paste fallback.
-    #[error("could not bind loopback listener for {provider} and no manual fallback is configured: {source}")]
+    #[error(
+        "could not bind loopback listener for {provider} and no manual fallback is configured: {source}"
+    )]
     NoListenerNoFallback {
         /// Provider id whose flow failed.
         provider: &'static str,
@@ -110,23 +112,21 @@ pub async fn run_login(
 
     // Attempt loopback bind on the preferred port (or OS-assigned when
     // `loopback_port` is None).
-    let bound = match LoopbackListener::bind(
-        provider.loopback_port.unwrap_or(0),
-        provider.redirect_path,
-    )
-    .await
-    {
-        Ok(l) => Some(l),
-        Err(e) => match provider.manual_redirect_uri {
-            Some(_) => None, // fall back to manual paste
-            None => {
-                return Err(LoginError::NoListenerNoFallback {
-                    provider: provider.provider_id,
-                    source: e,
-                });
-            }
-        },
-    };
+    let bound =
+        match LoopbackListener::bind(provider.loopback_port.unwrap_or(0), provider.redirect_path)
+            .await
+        {
+            Ok(l) => Some(l),
+            Err(e) => match provider.manual_redirect_uri {
+                Some(_) => None, // fall back to manual paste
+                None => {
+                    return Err(LoginError::NoListenerNoFallback {
+                        provider: provider.provider_id,
+                        source: e,
+                    });
+                }
+            },
+        };
 
     let (redirect_uri, manual_only) = match (&bound, provider.manual_redirect_uri) {
         (Some(l), _) => (l.redirect_uri().to_string(), false),
@@ -134,12 +134,7 @@ pub async fn run_login(
         (None, None) => unreachable!("guarded by the match above"),
     };
 
-    let url = build_authorize_url(
-        &provider.auth,
-        &redirect_uri,
-        &state,
-        &pkce_pair.challenge,
-    )?;
+    let url = build_authorize_url(&provider.auth, &redirect_uri, &state, &pkce_pair.challenge)?;
     let hint = if manual_only {
         "After signing in, paste the redirect URL here."
     } else {
@@ -204,9 +199,7 @@ fn parse_listener_outcome(
     match outcome {
         CallbackOutcome::Success { code, state } => Ok((code, state)),
         CallbackOutcome::Error {
-            error,
-            description,
-            ..
+            error, description, ..
         } => Err(LoginError::Server { error, description }),
     }
 }

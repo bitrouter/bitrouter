@@ -40,5 +40,5 @@ pub mod registry;
 // Legacy re-exports — predate the credential-store rename. Kept so existing
 // `use bitrouter_providers::oauth::{DeviceCodeFlow, OAuthToken, …}` paths
 // keep compiling. New code should reach into the submodule directly.
-pub use device_code::{DeviceCodeFlow, DeviceCodeParams, DeviceCodeResponse, FlowError, FlowEvent};
 pub use credential_store::OAuthToken;
+pub use device_code::{DeviceCodeFlow, DeviceCodeParams, DeviceCodeResponse, FlowError, FlowEvent};

@@ -40,9 +40,7 @@ use bitrouter_sdk::language_model::types::RoutingTarget;
 use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::oauth::auth_code::AuthCodeError;
-use crate::oauth::credential_store::{
-    Credential, CredentialStore, DEFAULT_LABEL, OAuthToken,
-};
+use crate::oauth::credential_store::{Credential, CredentialStore, DEFAULT_LABEL, OAuthToken};
 use crate::oauth::refresh::{needs_refresh, refresh};
 
 /// Provider id this applier is registered under.
@@ -71,9 +69,7 @@ impl OpenAiCodexAuthApplier {
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| {
-                BitrouterError::internal(format!(
-                    "building Codex OAuth refresh HTTP client: {e}"
-                ))
+                BitrouterError::internal(format!("building Codex OAuth refresh HTTP client: {e}"))
             })?;
         Ok(Self {
             store_path: store_path.into(),
@@ -132,15 +128,16 @@ impl OpenAiCodexAuthApplier {
                      run `bitrouter login openai-codex`"
                 ),
             })?;
-        let token = stored.as_oauth().cloned().ok_or_else(|| {
-            BitrouterError::Upstream {
+        let token = stored
+            .as_oauth()
+            .cloned()
+            .ok_or_else(|| BitrouterError::Upstream {
                 status: 401,
                 message: format!(
                     "openai-codex credential for '{label}' is an API key — \
                      this provider only accepts subscription OAuth tokens"
                 ),
-            }
-        })?;
+            })?;
         if needs_refresh(&token) {
             let refreshed = refresh(
                 &self.refresh_client,
@@ -251,10 +248,8 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "bitrouter-codex-test-{}-{id}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("bitrouter-codex-test-{}-{id}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("creds.json")
@@ -340,10 +335,7 @@ mod tests {
             .post("https://chatgpt.com/backend-api/codex/responses")
             .build()
             .unwrap();
-        let err = applier
-            .apply(req, &codex_target(None))
-            .await
-            .unwrap_err();
+        let err = applier.apply(req, &codex_target(None)).await.unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("bitrouter login openai-codex"),
@@ -365,10 +357,7 @@ mod tests {
             .post("https://chatgpt.com/backend-api/codex/responses")
             .build()
             .unwrap();
-        let err = applier
-            .apply(req, &codex_target(None))
-            .await
-            .unwrap_err();
+        let err = applier.apply(req, &codex_target(None)).await.unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("subscription OAuth"),
@@ -402,6 +391,11 @@ mod tests {
             .unwrap();
         let authed = applier.apply(req, &codex_target(None)).await.unwrap();
         assert!(authed.headers().get("chatgpt-account-id").is_none());
-        assert!(authed.headers().get(reqwest::header::AUTHORIZATION).is_some());
+        assert!(
+            authed
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .is_some()
+        );
     }
 }

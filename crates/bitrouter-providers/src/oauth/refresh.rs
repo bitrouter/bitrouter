@@ -32,11 +32,13 @@ pub async fn refresh(
     if !token_endpoint.starts_with("https://") {
         return Err(AuthCodeError::InsecureEndpoint(token_endpoint.to_string()));
     }
-    let refresh_token = current.refresh_token.as_deref().ok_or_else(|| {
-        AuthCodeError::Malformed {
-            message: "stored credential has no refresh_token — re-run `bitrouter login`".into(),
-        }
-    })?;
+    let refresh_token =
+        current
+            .refresh_token
+            .as_deref()
+            .ok_or_else(|| AuthCodeError::Malformed {
+                message: "stored credential has no refresh_token — re-run `bitrouter login`".into(),
+            })?;
     let form = [
         ("grant_type", "refresh_token"),
         ("client_id", client_id),

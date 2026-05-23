@@ -155,19 +155,34 @@ enum Command {
     },
     /// OWS wallet integration — not implemented in v1.0.
     Wallet,
-    /// Log in to an upstream provider. Today: `bitrouter login github-copilot`
-    /// runs the GitHub OAuth Device Authorization Grant + stores the
-    /// resulting token under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`.
-    /// Cloud login (no argument) is not in v1.0 scope.
+    /// Log in to an upstream provider — interactive credential setup.
+    ///
+    /// Per-provider available methods are auto-derived from the catalog:
+    /// `anthropic` prompts for **subscription** (Claude Pro/Max browser
+    /// PKCE) **or** **API key** paste; `openai-codex` runs the ChatGPT
+    /// subscription PKCE flow; `github-copilot` runs the GitHub device
+    /// code flow; everything else accepts a pasted API key. The
+    /// resulting credential is stored under
+    /// `$XDG_DATA_HOME/bitrouter/oauth-tokens.json` keyed by
+    /// `(provider_id, label)`. Cloud login (no argument) is not in v1.0
+    /// scope.
     Login {
-        /// Provider id to log in to (e.g. `github-copilot`). Omit for the
-        /// v0-style cloud login flow (not implemented in v1.0).
+        /// Provider id to log in to (e.g. `anthropic`, `openai-codex`,
+        /// `github-copilot`). Omit for the v0-style cloud login flow
+        /// (not implemented in v1.0).
         provider: Option<String>,
+        /// Account label this credential is stored under. Defaults to
+        /// `default`. Use a non-default label to keep multiple accounts
+        /// of the same provider side by side — reference them from
+        /// `accounts:` entries in `bitrouter.yaml`.
+        #[arg(short, long, default_value = "default")]
+        label: String,
     },
-    /// Log out of an upstream provider — clears the OAuth token from disk.
+    /// Log out of an upstream provider — clears every stored credential
+    /// for the provider (subscription OAuth and pasted API keys alike).
     /// Cloud logout (no argument) is not in v1.0 scope.
     Logout {
-        /// Provider id whose stored OAuth token should be removed.
+        /// Provider id whose stored credentials should be removed.
         provider: Option<String>,
     },
     /// Print the authenticated cloud identity — not implemented in v1.0.
@@ -389,13 +404,13 @@ async fn run() -> Result<()> {
             );
             Ok(())
         }
-        Command::Login { provider } => match provider.as_deref() {
-            Some(name) => bitrouter::commands::login_provider(name).await,
+        Command::Login { provider, label } => match provider.as_deref() {
+            Some(name) => bitrouter::commands::login_provider(name, &label).await,
             None => {
                 print_unimplemented(
                     "login",
                     "Cloud login is not in v1.0 scope. Run\n\
-                     `bitrouter login <provider>` for per-provider OAuth (today: github-copilot),\n\
+                     `bitrouter login <provider>` for per-provider auth (anthropic, openai-codex, github-copilot, …),\n\
                      or mint a local virtual key with `bitrouter key sign --user <id>`.",
                 );
                 Ok(())

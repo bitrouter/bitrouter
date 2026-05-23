@@ -151,24 +151,19 @@ impl LoopbackListener {
     }
 }
 
-const SUCCESS_BODY: &str =
-    "<!doctype html><meta charset=utf-8><title>bitrouter — signed in</title>\
+const SUCCESS_BODY: &str = "<!doctype html><meta charset=utf-8><title>bitrouter — signed in</title>\
      <body style='font:14px system-ui;padding:2rem;max-width:32rem'>\
      <h1>You're signed in 👍</h1>\
      <p>You can close this tab and return to your terminal.</p></body>";
 
-const ERROR_BODY: &str =
-    "<!doctype html><meta charset=utf-8><title>bitrouter — sign-in failed</title>\
+const ERROR_BODY: &str = "<!doctype html><meta charset=utf-8><title>bitrouter — sign-in failed</title>\
      <body style='font:14px system-ui;padding:2rem;max-width:32rem'>\
      <h1>Sign-in failed</h1>\
      <p>The authorization server reported an error. Check the terminal for details.</p></body>";
 
 /// Parse the redirect's query string out of a raw HTTP request head.
 /// Pulled out so tests can hammer it without a real TCP connection.
-fn parse_redirect_query(
-    head: &str,
-    expected_path: &str,
-) -> Result<CallbackOutcome, ListenerError> {
+fn parse_redirect_query(head: &str, expected_path: &str) -> Result<CallbackOutcome, ListenerError> {
     // The request line is the first line of the buffer. Shape:
     //   GET /auth/callback?code=…&state=… HTTP/1.1
     let request_line = head
@@ -213,7 +208,9 @@ fn parse_redirect_query(
         });
     }
     let code = code.ok_or_else(|| {
-        ListenerError::Malformed(format!("redirect missing both `code` and `error` in: {query}"))
+        ListenerError::Malformed(format!(
+            "redirect missing both `code` and `error` in: {query}"
+        ))
     })?;
     Ok(CallbackOutcome::Success { code, state })
 }
@@ -257,8 +254,7 @@ mod tests {
 
     #[test]
     fn parses_success_redirect() {
-        let head =
-            "GET /auth/callback?code=abc-123&state=xyz HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let head = "GET /auth/callback?code=abc-123&state=xyz HTTP/1.1\r\nHost: localhost\r\n\r\n";
         let got = parse_redirect_query(head, "/auth/callback").unwrap();
         assert_eq!(
             got,

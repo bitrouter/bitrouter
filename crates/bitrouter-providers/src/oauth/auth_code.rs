@@ -156,10 +156,13 @@ pub(crate) async fn parse_token_reply(
     response: reqwest::Response,
     endpoint: &str,
 ) -> Result<OAuthToken, AuthCodeError> {
-    let body = response.text().await.map_err(|source| AuthCodeError::Network {
-        endpoint: endpoint.to_string(),
-        source,
-    })?;
+    let body = response
+        .text()
+        .await
+        .map_err(|source| AuthCodeError::Network {
+            endpoint: endpoint.to_string(),
+            source,
+        })?;
     let parsed: TokenReply = serde_json::from_str(&body).map_err(|e| AuthCodeError::Malformed {
         message: format!("token response: {e}; body preview: {}", preview(&body)),
     })?;
@@ -169,12 +172,14 @@ pub(crate) async fn parse_token_reply(
             description: parsed.error_description,
         });
     }
-    let access_token = parsed.access_token.ok_or_else(|| AuthCodeError::Malformed {
-        message: format!(
-            "token reply has neither access_token nor error: {}",
-            preview(&body)
-        ),
-    })?;
+    let access_token = parsed
+        .access_token
+        .ok_or_else(|| AuthCodeError::Malformed {
+            message: format!(
+                "token reply has neither access_token nor error: {}",
+                preview(&body)
+            ),
+        })?;
     let expires_at = if parsed.expires_in > 0 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -338,8 +343,8 @@ mod tests {
             .mount(&server)
             .await;
         let mut p = params();
-        p.authorize_endpoint = format!("{}/oauth/authorize", server.uri())
-            .replace("http://", "https://"); // formality — not used here
+        p.authorize_endpoint =
+            format!("{}/oauth/authorize", server.uri()).replace("http://", "https://"); // formality — not used here
         p.token_endpoint = format!("{}/oauth/token", server.uri());
         // Bypass HTTPS check for the wiremock server.
         let result = wiremock_exchange(&p, "AUTHCODE", "VERIFIER", "http://127.0.0.1/cb").await;
@@ -367,10 +372,7 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            AuthCodeError::OAuthError {
-                error,
-                description,
-            } => {
+            AuthCodeError::OAuthError { error, description } => {
                 assert_eq!(error, "invalid_grant");
                 assert_eq!(description.as_deref(), Some("code already redeemed"));
             }
@@ -411,8 +413,7 @@ mod tests {
     #[test]
     fn parses_pasted_full_url() {
         let got =
-            parse_pasted_redirect("http://127.0.0.1:1455/auth/callback?code=AC&state=ST")
-                .unwrap();
+            parse_pasted_redirect("http://127.0.0.1:1455/auth/callback?code=AC&state=ST").unwrap();
         assert_eq!(got.code, "AC");
         assert_eq!(got.state.as_deref(), Some("ST"));
     }

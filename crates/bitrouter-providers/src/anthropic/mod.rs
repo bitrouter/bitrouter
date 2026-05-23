@@ -47,9 +47,7 @@ use bitrouter_sdk::language_model::types::RoutingTarget;
 use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::oauth::auth_code::AuthCodeError;
-use crate::oauth::credential_store::{
-    Credential, CredentialStore, DEFAULT_LABEL, OAuthToken,
-};
+use crate::oauth::credential_store::{Credential, CredentialStore, DEFAULT_LABEL, OAuthToken};
 use crate::oauth::refresh::{needs_refresh, refresh};
 
 /// Provider id this applier is registered under.
@@ -193,18 +191,13 @@ impl AnthropicOAuthApplier {
         store
             .set(PROVIDER_ID, label, Credential::from_oauth_token(token))
             .map_err(|e| {
-                BitrouterError::internal(format!(
-                    "persisting refreshed anthropic OAuth token: {e}"
-                ))
+                BitrouterError::internal(format!("persisting refreshed anthropic OAuth token: {e}"))
             })?;
         Ok(())
     }
 
     fn label_for<'a>(&self, target: &'a RoutingTarget) -> &'a str {
-        target
-            .account_label
-            .as_deref()
-            .unwrap_or(DEFAULT_LABEL)
+        target.account_label.as_deref().unwrap_or(DEFAULT_LABEL)
     }
 }
 
@@ -219,9 +212,7 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
             status: 401,
             message: format!(
                 "anthropic OAuth refresh failed ({error}{}). Re-run `bitrouter login anthropic`.",
-                description
-                    .map(|d| format!(": {d}"))
-                    .unwrap_or_default()
+                description.map(|d| format!(": {d}")).unwrap_or_default()
             ),
         },
         other => BitrouterError::Upstream {
@@ -278,10 +269,9 @@ impl AuthApplier for AnthropicOAuthApplier {
                 if key.is_empty() {
                     return Err(BitrouterError::Upstream {
                         status: 401,
-                        message:
-                            "no anthropic credential — set ANTHROPIC_API_KEY or run \
+                        message: "no anthropic credential — set ANTHROPIC_API_KEY or run \
                              `bitrouter login anthropic`"
-                                .into(),
+                            .into(),
                     });
                 }
                 apply_api_key_header(&mut request, key)?;
@@ -443,10 +433,7 @@ mod tests {
         // path must strip it.
         req.headers_mut()
             .insert("x-api-key", HeaderValue::from_static("stale-key"));
-        let authed = applier
-            .apply(req, &anthropic_target(None))
-            .await
-            .unwrap();
+        let authed = applier.apply(req, &anthropic_target(None)).await.unwrap();
         let h = authed.headers();
         assert_eq!(
             h.get(reqwest::header::AUTHORIZATION)
@@ -454,7 +441,10 @@ mod tests {
             Some("Bearer sk-ant-oat-fresh")
         );
         assert!(h.get("x-api-key").is_none());
-        let beta = h.get("anthropic-beta").and_then(|v| v.to_str().ok()).unwrap();
+        let beta = h
+            .get("anthropic-beta")
+            .and_then(|v| v.to_str().ok())
+            .unwrap();
         assert!(beta.contains("oauth-2025-04-20"));
         assert!(beta.contains("claude-code-20250219"));
     }
@@ -497,10 +487,7 @@ mod tests {
             .post("https://api.anthropic.com/v1/messages")
             .build()
             .unwrap();
-        let authed = applier
-            .apply(req, &anthropic_target(None))
-            .await
-            .unwrap();
+        let authed = applier.apply(req, &anthropic_target(None)).await.unwrap();
         assert_eq!(
             authed
                 .headers()
@@ -516,18 +503,10 @@ mod tests {
         {
             let mut store = CredentialStore::load(&path).unwrap();
             store
-                .set(
-                    PROVIDER_ID,
-                    "pro-max",
-                    Credential::api_key("for-pro-max"),
-                )
+                .set(PROVIDER_ID, "pro-max", Credential::api_key("for-pro-max"))
                 .unwrap();
             store
-                .set(
-                    PROVIDER_ID,
-                    "work-key",
-                    Credential::api_key("for-work"),
-                )
+                .set(PROVIDER_ID, "work-key", Credential::api_key("for-work"))
                 .unwrap();
         }
         let applier = AnthropicOAuthApplier::new(&path).unwrap();

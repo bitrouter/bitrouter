@@ -287,57 +287,213 @@ pub async fn create_policy(policy_dir: &std::path::Path, id: &str) -> Result<std
     Ok(path)
 }
 
-/// `bitrouter login <provider>` — run the provider's OAuth flow + persist a
-/// token. Today only `github-copilot` is wired; other oauth providers can
-/// register via [`bitrouter_providers::builtin`].
-pub async fn login_provider(provider_id: &str) -> Result<()> {
-    use bitrouter_providers::{AuthScheme, builtin};
+/// One auth method offered for a provider — derived from the catalog +
+/// the PKCE registry. The CLI shows users only the methods the provider
+/// actually supports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthMethod {
+    /// Browser-based PKCE Authorization Code flow — Anthropic Claude
+    /// Pro/Max, OpenAI Codex / ChatGPT.
+    PkceSubscription,
+    /// RFC 8628 Device Authorization Grant — GitHub Copilot's flow.
+    DeviceCode,
+    /// User pastes a static API key (sk-…, sk-ant-…).
+    ApiKey,
+}
+
+impl AuthMethod {
+    fn label(self) -> &'static str {
+        match self {
+            AuthMethod::PkceSubscription => "Subscription (browser sign-in)",
+            AuthMethod::DeviceCode => "Device-code OAuth (show a code in browser)",
+            AuthMethod::ApiKey => "API key (paste a static credential)",
+        }
+    }
+}
+
+/// Decide which auth methods are wired for `entry`. Order matters — the
+/// first entry is what runs when the user hits enter on the prompt.
+fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMethod> {
+    use bitrouter_providers::AuthScheme;
+    let mut methods = Vec::new();
+    let has_pkce = bitrouter_providers::oauth::registry::has_pkce_flow(&entry.id);
+    if has_pkce {
+        methods.push(AuthMethod::PkceSubscription);
+    }
+    match &entry.auth {
+        AuthScheme::Bearer { .. } | AuthScheme::Header { .. } => {
+            methods.push(AuthMethod::ApiKey);
+        }
+        AuthScheme::Oauth { params, .. } => {
+            // Device-code is only viable when the TOML carries the
+            // device authorization endpoint — PKCE-only providers
+            // (`openai-codex`) skip this even though their auth scheme
+            // is `oauth`.
+            let has_device = params
+                .get("device_authorization_endpoint")
+                .and_then(|v| v.as_str())
+                .is_some();
+            if has_device {
+                methods.push(AuthMethod::DeviceCode);
+            }
+            // OAuth-only providers don't accept pasted API keys (the
+            // Codex backend literally rejects sk-… credentials), so
+            // there's no API-key fallback to offer.
+        }
+        AuthScheme::Native { .. } => {}
+    }
+    methods
+}
+
+/// Prompt for an integer choice between `[1, options.len()]`. Re-prompts
+/// on invalid input. EOF or empty line picks option 1.
+fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMethod> {
+    use std::io::BufRead;
+    eprintln!();
+    eprintln!("How would you like to authenticate to {provider}?");
+    for (i, m) in options.iter().enumerate() {
+        eprintln!("  {}) {}", i + 1, m.label());
+    }
+    eprint!("Choose [1]: ");
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    stdin
+        .lock()
+        .read_line(&mut line)
+        .context("reading method choice from stdin")?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(options[0]);
+    }
+    let n: usize = trimmed
+        .parse()
+        .with_context(|| format!("'{trimmed}' is not a number"))?;
+    if !(1..=options.len()).contains(&n) {
+        anyhow::bail!("choice must be between 1 and {}", options.len());
+    }
+    Ok(options[n - 1])
+}
+
+/// `bitrouter login <provider> [--label <name>]` — interactive credential
+/// setup.
+///
+/// Resolves which auth methods are wired for `provider_id` (subscription
+/// PKCE / device-code / API key paste), prompts the user to pick when
+/// there's more than one, runs the chosen flow, and persists the
+/// resulting [`bitrouter_providers::oauth::credential_store::Credential`]
+/// under `(provider_id, label)`.
+pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
+    use bitrouter_providers::builtin;
 
     let entry = builtin::find(provider_id).ok_or_else(|| {
         anyhow::anyhow!(
             "unknown provider '{provider_id}' — try `bitrouter providers list` for the catalog"
         )
     })?;
-    let (client_id, scope, device_url, token_url) = match &entry.auth {
-        AuthScheme::Oauth { params, .. } => {
-            let client_id = params
-                .get("client_id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "provider '{provider_id}': auth.params.client_id is missing in the TOML"
-                    )
-                })?
-                .to_string();
-            let scope = params
-                .get("scope")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-            let device_url = params
-                .get("device_authorization_endpoint")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "provider '{provider_id}': auth.params.device_authorization_endpoint is missing"
-                    )
-                })?
-                .to_string();
-            let token_url = params
-                .get("token_endpoint")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "provider '{provider_id}': auth.params.token_endpoint is missing"
-                    )
-                })?
-                .to_string();
-            (client_id, scope, device_url, token_url)
-        }
-        other => anyhow::bail!(
-            "provider '{provider_id}' is not OAuth (auth scheme: {:?})",
-            std::mem::discriminant(other)
-        ),
+    let methods = available_methods(entry);
+    if methods.is_empty() {
+        anyhow::bail!(
+            "provider '{provider_id}' has no interactive login path \
+             (auth scheme: {:?})",
+            std::mem::discriminant(&entry.auth)
+        );
+    }
+    let chosen = if methods.len() == 1 {
+        methods[0]
+    } else {
+        prompt_method_choice(&entry.display_name, &methods)?
     };
+    eprintln!();
+    eprintln!(
+        "  Logging in to {} via {}",
+        entry.display_name,
+        chosen.label()
+    );
+
+    let credential = match chosen {
+        AuthMethod::PkceSubscription => run_pkce_subscription(provider_id).await?,
+        AuthMethod::DeviceCode => run_device_code(provider_id, entry).await?,
+        AuthMethod::ApiKey => run_api_key_paste(&entry.display_name)?,
+    };
+
+    let mut store = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+        .context("opening credential store")?;
+    let kind = credential.kind_label();
+    store
+        .set(provider_id, label, credential)
+        .with_context(|| format!("persisting credential for {provider_id} ({label})"))?;
+    eprintln!(
+        "  ✓ Saved {kind} credential for {provider_id} (label: {label}) at {}",
+        store.path().display()
+    );
+    eprintln!();
+    Ok(())
+}
+
+/// Run the browser-based PKCE Authorization Code flow against the
+/// PKCE-registered provider. Errors when the provider isn't in
+/// `bitrouter_providers::oauth::registry`.
+async fn run_pkce_subscription(
+    provider_id: &str,
+) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
+    let registry = bitrouter_providers::oauth::registry::find(provider_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "provider '{provider_id}' has no PKCE login registration — \
+             this should have been caught by available_methods()"
+        )
+    })?;
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("bitrouter/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("building HTTP client for PKCE login")?;
+    let ux = StderrLoginUx;
+    let outcome = bitrouter_providers::oauth::login::run_login(
+        &client,
+        &registry,
+        &ux,
+        bitrouter_providers::oauth::auth_code::MANUAL_PASTE_TIMEOUT,
+    )
+    .await
+    .with_context(|| format!("PKCE login for {provider_id}"))?;
+    if outcome.manual_fallback_used {
+        eprintln!("  (used manual paste fallback)");
+    }
+    Ok(bitrouter_providers::oauth::credential_store::Credential::from_oauth_token(outcome.token))
+}
+
+/// Run the RFC 8628 Device Authorization Grant — the existing
+/// `github-copilot` flow, lifted out of the old `login_provider`.
+async fn run_device_code(
+    provider_id: &str,
+    entry: &bitrouter_providers::ProviderEntry,
+) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
+    use bitrouter_providers::AuthScheme;
+    let params = match &entry.auth {
+        AuthScheme::Oauth { params, .. } => params,
+        _ => anyhow::bail!("provider '{provider_id}' is not OAuth — refusing device flow"),
+    };
+    let client_id = params
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("'{provider_id}': auth.params.client_id is missing"))?
+        .to_string();
+    let scope = params
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let device_url = params
+        .get("device_authorization_endpoint")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!("'{provider_id}': auth.params.device_authorization_endpoint is missing")
+        })?
+        .to_string();
+    let token_url = params
+        .get("token_endpoint")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("'{provider_id}': auth.params.token_endpoint is missing"))?
+        .to_string();
 
     let flow = bitrouter_providers::oauth::DeviceCodeFlow::new(
         bitrouter_providers::oauth::DeviceCodeParams {
@@ -378,20 +534,77 @@ pub async fn login_provider(provider_id: &str) -> Result<()> {
             }
         }
     };
+    Ok(bitrouter_providers::oauth::credential_store::Credential::from_oauth_token(token))
+}
 
-    let mut store = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
-        .context("opening credential store")?;
-    store
-        .set(
-            provider_id,
-            bitrouter_providers::oauth::credential_store::DEFAULT_LABEL,
-            bitrouter_providers::oauth::credential_store::Credential::from_oauth_token(token),
-        )
-        .with_context(|| format!("persisting OAuth token for {provider_id}"))?;
-
-    eprintln!("  ✓ Authorized. Token saved to {}", store.path().display());
+/// Read a static API key from stdin. Input is **not** masked — the user
+/// sees what they're pasting, which is the simplest correct UX and
+/// matches `gh auth login --with-token`. Future work could wire
+/// `rpassword` for a hidden prompt.
+fn run_api_key_paste(
+    display_name: &str,
+) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
+    use std::io::BufRead;
     eprintln!();
-    Ok(())
+    eprintln!("  Paste your {display_name} API key, then press enter:");
+    eprint!("  > ");
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    stdin
+        .lock()
+        .read_line(&mut line)
+        .context("reading API key from stdin")?;
+    let key = line.trim();
+    if key.is_empty() {
+        anyhow::bail!("no API key entered — aborting login");
+    }
+    Ok(bitrouter_providers::oauth::credential_store::Credential::api_key(key))
+}
+
+/// `LoginUx` implementation that drives stderr + stdin. Used by the
+/// `bitrouter login` CLI; library tests provide their own scripted UX.
+struct StderrLoginUx;
+
+#[async_trait::async_trait]
+impl bitrouter_providers::oauth::login::LoginUx for StderrLoginUx {
+    async fn show_authorize_url(&self, url: &str, hint: &str) {
+        eprintln!();
+        eprintln!("  Open this URL in your browser to continue:");
+        eprintln!();
+        eprintln!("    {url}");
+        eprintln!();
+        eprintln!("  {hint}");
+    }
+
+    async fn prompt_pasted_redirect(
+        &self,
+    ) -> std::result::Result<String, bitrouter_providers::oauth::login::LoginError> {
+        // The login flow races this future against the loopback
+        // listener. If the listener wins we never read stdin, so a
+        // blocking read here would normally pin a thread for the whole
+        // OAuth round trip. Run the read on a blocking thread so
+        // cancellation (the `tokio::select!` in `run_login` dropping
+        // this future when the listener finishes) actually frees it.
+        let pasted = tokio::task::spawn_blocking(|| {
+            use std::io::BufRead;
+            eprint!("  Paste redirect URL (or just the code): ");
+            let stdin = std::io::stdin();
+            let mut line = String::new();
+            stdin.lock().read_line(&mut line).map_err(|e| {
+                bitrouter_providers::oauth::login::LoginError::UserIo(format!(
+                    "reading pasted redirect: {e}"
+                ))
+            })?;
+            Ok::<_, bitrouter_providers::oauth::login::LoginError>(line)
+        })
+        .await
+        .map_err(|e| {
+            bitrouter_providers::oauth::login::LoginError::UserIo(format!(
+                "join error reading pasted redirect: {e}"
+            ))
+        })??;
+        Ok(pasted)
+    }
 }
 
 /// `bitrouter logout <provider>` — drop every stored credential for the

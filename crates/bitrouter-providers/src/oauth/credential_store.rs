@@ -338,15 +338,8 @@ impl CredentialStore {
 
     /// Remove every credential for `provider_id`. Returns the number of
     /// credentials that were removed.
-    pub fn remove_all_for(
-        &mut self,
-        provider_id: &str,
-    ) -> Result<usize, CredentialStoreError> {
-        let removed = self
-            .creds
-            .remove(provider_id)
-            .map(|m| m.len())
-            .unwrap_or(0);
+    pub fn remove_all_for(&mut self, provider_id: &str) -> Result<usize, CredentialStoreError> {
+        let removed = self.creds.remove(provider_id).map(|m| m.len()).unwrap_or(0);
         if removed > 0 {
             self.flush()?;
         }

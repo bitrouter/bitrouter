@@ -162,11 +162,17 @@ mod tests {
     fn openai_codex_carries_id_token_extras() {
         let p = find("openai-codex").unwrap();
         assert_eq!(
-            p.auth.extra_authorize.get("id_token_add_organizations").map(String::as_str),
+            p.auth
+                .extra_authorize
+                .get("id_token_add_organizations")
+                .map(String::as_str),
             Some("true")
         );
         assert_eq!(
-            p.auth.extra_authorize.get("codex_cli_simplified_flow").map(String::as_str),
+            p.auth
+                .extra_authorize
+                .get("codex_cli_simplified_flow")
+                .map(String::as_str),
             Some("true")
         );
     }
