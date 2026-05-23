@@ -193,6 +193,50 @@ enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Sign in / out of an OAuth 2.0 Authorization Server via the
+    /// Device Authorization Grant (RFC 8628). Distinct from the
+    /// per-provider `bitrouter login <provider>` flow above: this signs
+    /// the CLI in *as a user* to a user-supplied AS.
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthAction {
+    /// Run the device-authorization grant against the configured AS and
+    /// persist the resulting tokens.
+    Login {
+        /// OAuth 2.0 Authorization Server base URL (RFC 6749). Falls
+        /// back to `$BITROUTER_OAUTH_AS`.
+        #[arg(long = "oauth-as", value_name = "URL")]
+        authorization_server: Option<String>,
+        /// Public OAuth client id registered with the AS. Falls back
+        /// to `$BITROUTER_OAUTH_CLIENT_ID`.
+        #[arg(long = "client-id", value_name = "ID")]
+        client_id: Option<String>,
+        /// Space-delimited OAuth `scope` (RFC 6749 §3.3). Falls back
+        /// to `$BITROUTER_OAUTH_SCOPE`, then to the built-in default.
+        #[arg(long, value_name = "SCOPE")]
+        scope: Option<String>,
+    },
+    /// Revoke the stored tokens (best-effort, RFC 7009) and delete the
+    /// local credentials file.
+    Logout {
+        /// Override the AS URL recorded in the credentials file (for
+        /// the revocation call). Defaults to whatever AS the file
+        /// records.
+        #[arg(long = "oauth-as", value_name = "URL")]
+        authorization_server: Option<String>,
+        /// Override the recorded client id for the revocation call.
+        #[arg(long = "client-id", value_name = "ID")]
+        client_id: Option<String>,
+    },
+    /// Print the locally stored subject identifier (if any) and whether
+    /// the access token is currently within its TTL. Does NOT call the
+    /// AS — answers from the credentials file only.
+    Whoami,
 }
 
 #[derive(Subcommand)]
@@ -425,6 +469,40 @@ async fn run() -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             agent_proxy_cmd(&agent, &source).await
         }
+        Command::Auth { action } => auth_cmd(action).await,
+    }
+}
+
+// ===== `bitrouter auth …` (OAuth 2.0 device flow against a user-supplied AS) =====
+
+async fn auth_cmd(action: AuthAction) -> Result<()> {
+    use bitrouter::account::commands::{LoginInputs, login, logout, whoami};
+    match action {
+        AuthAction::Login {
+            authorization_server,
+            client_id,
+            scope,
+        } => {
+            login(LoginInputs {
+                authorization_server,
+                client_id,
+                scope,
+            })
+            .await?;
+            Ok(())
+        }
+        AuthAction::Logout {
+            authorization_server,
+            client_id,
+        } => {
+            logout(LoginInputs {
+                authorization_server,
+                client_id,
+                scope: None,
+            })
+            .await
+        }
+        AuthAction::Whoami => whoami().await,
     }
 }
 
