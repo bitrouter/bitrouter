@@ -11,10 +11,10 @@ use anyhow::{Context, Result};
 
 /// Default `scope` value used when neither the flag nor the env var
 /// supplies one. Per RFC 6749 §3.3, scope is a space-delimited list of
-/// strings. These two scopes match the typical bitrouter cloud-style
-/// resource surface (invoke an inference request, read usage). Users
-/// whose authorization server uses different scope names override with
-/// `--scope` or [`SCOPE_ENV`].
+/// strings. These two scopes cover the most common API-key shape
+/// (invoke an inference request, read usage). Users whose authorization
+/// server uses different scope names override with `--scope` or
+/// [`SCOPE_ENV`].
 pub const DEFAULT_SCOPE: &str = "inference:invoke usage:read";
 
 /// Environment variable for the authorization server base URL.
