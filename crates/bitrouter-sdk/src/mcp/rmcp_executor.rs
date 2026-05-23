@@ -22,12 +22,15 @@ use rmcp::ServiceExt;
 use rmcp::handler::client::ClientHandler;
 use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
-    CallToolRequestParams, ClientInfo, CreateElicitationRequestParams, CreateElicitationResult,
-    CreateMessageRequestParams, CreateMessageResult, ErrorCode, ErrorData as McpError,
-    GetPromptRequestParams, Implementation, ListRootsResult, NumberOrString,
-    ProgressNotificationParam, ProgressToken, ReadResourceRequestParams,
+    CallToolRequest, CallToolRequestParams, ClientInfo, ClientRequest,
+    CreateElicitationRequestParams, CreateElicitationResult, CreateMessageRequestParams,
+    CreateMessageResult, ErrorCode, ErrorData as McpError, GetPromptRequestParams, Implementation,
+    ListRootsResult, ProgressNotificationParam, ReadResourceRequestParams, ServerResult,
 };
-use rmcp::service::{NotificationContext, Peer, RequestContext, RoleClient, RunningService};
+use rmcp::service::{
+    NotificationContext, Peer, PeerRequestOptions, RequestContext, RoleClient, RunningService,
+    ServiceError,
+};
 use tokio::sync::{Mutex, broadcast};
 
 use super::transport::McpTransport;
@@ -378,54 +381,50 @@ fn direct_target(target: &McpTarget) -> Result<(&str, &McpTransport)> {
     }
 }
 
-/// Drive `tools/call` with a parallel progress-notification stream. The
-/// caller-supplied params get a `_meta.progressToken` injected so the upstream
-/// knows it may emit progress; notifications matching that token are yielded
-/// as [`McpStreamPart::Notification`] frames before the terminal
-/// [`McpStreamPart::Final`].
+/// Drive `tools/call` with a parallel progress-notification stream.
+///
+/// rmcp's `Peer::call_tool` shorthand goes through `send_request`, which
+/// **unconditionally overwrites** `_meta.progressToken` with the service's own
+/// provider value (see `service.rs::send_request_with_option`). That means
+/// any token we inject at the params layer is silently clobbered before the
+/// request hits the wire. We use `send_cancellable_request` instead so the
+/// returned `RequestHandle` tells us the token rmcp actually chose, then
+/// subscribe to it on the [`ProgressDispatcher`] before awaiting the response.
 fn stream_tools_call(
     conn: PooledConnection,
     server_name: String,
     request: McpRequest,
 ) -> impl futures::Stream<Item = Result<McpStreamPart>> + Send + 'static {
     async_stream::stream! {
-        // Generate a fresh progress token and inject it into params._meta so
-        // the upstream is opted-in. The MCP spec carries progressToken in
-        // `_meta.progressToken`; the client picks the value, the server echoes
-        // it on every notifications/progress.
-        let token_string = uuid::Uuid::new_v4().to_string();
-        let token = ProgressToken(NumberOrString::String(token_string.clone().into()));
+        let call_params: CallToolRequestParams =
+            match serde_json::from_value(request.params.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    yield Err(bad_params(&server_name, "tools/call", e));
+                    return;
+                }
+            };
+        let call_request = ClientRequest::CallToolRequest(CallToolRequest::new(call_params));
 
-        let mut params_value = request.params.clone();
-        if !params_value.is_object() {
-            params_value = serde_json::json!({});
-        }
-        if let Some(obj) = params_value.as_object_mut() {
-            let meta = obj
-                .entry("_meta".to_string())
-                .or_insert(serde_json::json!({}));
-            if let Some(meta_obj) = meta.as_object_mut() {
-                meta_obj
-                    .entry("progressToken".to_string())
-                    .or_insert(serde_json::Value::String(token_string));
-            }
-        }
-        let call_params: CallToolRequestParams = match serde_json::from_value(params_value) {
-            Ok(p) => p,
+        let peer = conn.service.peer().clone();
+        let handle = match peer
+            .send_cancellable_request(call_request, PeerRequestOptions::no_options())
+            .await
+        {
+            Ok(h) => h,
             Err(e) => {
-                yield Err(bad_params(&server_name, "tools/call", e));
+                yield Err(upstream(&server_name, format!("tools/call: {e}")));
                 return;
             }
         };
-
-        let mut subscriber = conn.progress.subscribe(token).await;
-        let peer = conn.service.peer().clone();
+        let mut subscriber = conn.progress.subscribe(handle.progress_token.clone()).await;
         let request_id = request.request_id.clone();
         let server = server_name.clone();
         let call_fut = async move {
-            peer.call_tool(call_params)
-                .await
-                .map_err(|e| upstream(&server, format!("tools/call: {e}")))
+            handle.await_response().await.map_err(|e| match e {
+                ServiceError::McpError(err) => upstream(&server, format!("tools/call: {err}")),
+                other => upstream(&server, format!("tools/call: {other}")),
+            })
         };
         tokio::pin!(call_fut);
 
@@ -450,12 +449,18 @@ fn stream_tools_call(
                 }
                 call_result = &mut call_fut => {
                     match call_result {
-                        Ok(result) => {
+                        Ok(ServerResult::CallToolResult(result)) => {
                             let value = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
                             yield Ok(McpStreamPart::Final(McpResponse {
                                 request_id,
                                 result: value,
                             }));
+                        }
+                        Ok(other) => {
+                            yield Err(upstream(
+                                &server_name,
+                                format!("tools/call: unexpected server result {other:?}"),
+                            ));
                         }
                         Err(e) => yield Err(e),
                     }
