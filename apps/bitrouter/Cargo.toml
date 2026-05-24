@@ -38,7 +38,6 @@ serde_json.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
 anyhow = "1"
-reqwest = { workspace = true }
 thiserror.workspace = true
 
 [dev-dependencies]
