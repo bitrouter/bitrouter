@@ -8,4 +8,4 @@
 
 mod applier;
 
-pub use applier::{BitrouterCloudAuthApplier, PROVIDER_ID};
+pub use applier::{BitrouterCloudAuthApplier, PROVIDER_ID, onboarding_hint};
