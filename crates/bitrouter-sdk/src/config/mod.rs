@@ -64,7 +64,7 @@ pub struct Config {
     /// Upstream MCP servers, keyed by server id. The id is what appears in
     /// `POST /mcp/{id}` and what the `mcp` pipeline's routing table looks up.
     /// Empty by default — when empty, the binary does not mount the MCP route.
-    pub mcp_servers: HashMap<String, crate::mcp::McpServerConfig>,
+    pub mcp_servers: HashMap<String, crate::mcp::transport::McpServerConfig>,
     /// Upstream ACP agents, keyed by agent id. Looked up by the `acp`
     /// pipeline's routing table; the `bitrouter agent-proxy <id>` CLI
     /// dispatches against this. Empty by default.
