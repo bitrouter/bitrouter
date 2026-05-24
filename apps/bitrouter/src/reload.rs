@@ -93,6 +93,10 @@ impl DaemonReloader for AppReloader {
             // to `/models`.
             ReloadSource::Default => {
                 let mut fresh = bitrouter_providers::zero_config();
+                // Layered on top of the env-var-driven auto-enable: a
+                // signed-in user gets bitrouter-cloud even when no
+                // `$BITROUTER_API_KEY` is in the daemon's env-override map.
+                crate::cloud::enable_in_zero_config(&mut fresh);
                 bitrouter_providers::apply_builtin_defaults(&mut fresh);
                 self.routing_table.replace_config(fresh).await
             }

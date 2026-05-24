@@ -14,6 +14,7 @@ pub mod agent_proxy;
 pub mod agents;
 pub mod assemble;
 pub mod auth;
+pub mod cloud;
 pub mod commands;
 pub mod daemon;
 pub mod db;
