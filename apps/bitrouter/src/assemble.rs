@@ -17,10 +17,12 @@ use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
 use bitrouter_sdk::mcp::{ConfigMcpRoutingTable, RmcpExecutor};
 
 use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
-use bitrouter_observe::{OtlpExportHook, PrometheusHook};
+use bitrouter_observe::OTEL_ENABLED;
+use bitrouter_observe::otel::{OtelConfig, OtelExporter, OtelObserveHook};
 use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
+use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvider};
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 
@@ -43,6 +45,56 @@ pub struct Assembled {
     /// [`ConfigRoutingTable::replace_config`] when there's no source
     /// file to re-read from (zero-config mode).
     pub routing_table: Arc<ConfigRoutingTable>,
+    /// Snapshot provider for `bitrouter observe status`. When the OTel
+    /// exporter is wired, this reports its live state; when not, it
+    /// reports `compiled_in` truthfully and everything else blank.
+    pub observe: Arc<dyn ObserveStatusProvider>,
+}
+
+/// `ObserveStatusProvider` impl backed by a real [`OtelExporter`]. The
+/// payload type lives in the daemon module (wire format), and the
+/// observe-side `OtelStatus` lives in the plugin (no daemon dep); this
+/// adapter does the field-by-field copy so neither crate has to import
+/// the other's type.
+struct OtelExporterStatus {
+    exporter: Arc<OtelExporter>,
+}
+
+#[async_trait::async_trait]
+impl ObserveStatusProvider for OtelExporterStatus {
+    fn status(&self) -> ObserveStatusPayload {
+        let s = self.exporter.status();
+        ObserveStatusPayload {
+            compiled_in: s.compiled_in,
+            exporter_wired: s.exporter_wired,
+            endpoint: s.endpoint,
+            header_count: s.header_count,
+            service_name: s.service_name,
+            resource_attribute_count: s.resource_attribute_count,
+            sampler: s.sampler,
+            sampler_arg: s.sampler_arg,
+            metrics_enabled: s.metrics_enabled,
+            api_key_count: s.api_key_count,
+            api_key_cap: s.api_key_cap,
+            user_id_count: s.user_id_count,
+            user_id_cap: s.user_id_cap,
+            active_spans: s.active_spans,
+        }
+    }
+
+    async fn shutdown(&self) {
+        // `OtelExporter::shutdown` is synchronous and blocks the calling
+        // thread on the OTel SDK's internal channels. Driving it from an
+        // async context directly would park the tokio worker that the
+        // SDK's `rt-tokio` background tasks need to make progress —
+        // deadlock on a single-threaded runtime, latency hit on any
+        // runtime. `spawn_blocking` moves the wait to tokio's blocking
+        // pool so async workers stay free to drain the SDK.
+        let exporter = self.exporter.clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || exporter.shutdown()).await {
+            tracing::warn!(error = %e, "OTel exporter shutdown task panicked");
+        }
+    }
 }
 
 /// Assemble an [`App`] from a parsed config: connect the database, run every
@@ -129,20 +181,31 @@ pub async fn build_app_with_path(
     let policy_store_for_reload = policy_store.clone();
     let guardrail_rules = build_guardrail_rules(config)?;
 
-    // Prometheus exporter. The same `Arc` is both an
-    // `ObserveHook` (writes) and a `MetricsRenderer` (reads from `/metrics`).
-    let prometheus: Arc<PrometheusHook> = Arc::new(PrometheusHook::new());
-    let prometheus_for_observe = prometheus.clone();
-    let metrics_renderer: Arc<dyn MetricsRenderer> = prometheus;
+    // Metrics are now pushed via OTLP, not pulled from /metrics
+    // Keep metrics_renderer for compatibility but return empty response
+    let metrics_renderer: Arc<dyn MetricsRenderer> = Arc::new(EmptyMetricsRenderer);
 
-    // Optional OTLP/HTTP JSON tracer. Configured under
-    // `plugins.bitrouter-observe.otlp_endpoint`; absent → exporter not wired.
-    let otlp_endpoint: Option<String> = config
-        .plugins
-        .get("bitrouter-observe")
-        .and_then(|c| c.get("otlp_endpoint"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    // Build the OTel exporter (if any) out here so the daemon can hold an
+    // `Arc` to it for `observe status` queries. The pipeline closure
+    // below registers a hook view of the same `Arc`; both Drop at app
+    // shutdown.
+    let otel_exporter: Option<Arc<OtelExporter>> = match build_otel_config(config)? {
+        Some(c) => match OtelExporter::new(c) {
+            Ok(exporter) => Some(Arc::new(exporter)),
+            Err(e) => {
+                tracing::error!("failed to initialise OpenTelemetry: {e}");
+                None
+            }
+        },
+        None => None,
+    };
+    let observe_provider: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
+        Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
+        None => Arc::new(NoopObserveStatus {
+            compiled_in: OTEL_ENABLED,
+        }),
+    };
+    let otel_for_hook = otel_exporter;
 
     // Optional MCP pure-routing pipeline — wired only when the config
     // declares at least one upstream MCP server. The pipeline is independent
@@ -198,14 +261,11 @@ pub async fn build_app_with_path(
                 // StreamHook stage: guardrail downstream redaction / abort.
                 lm.stream_hook(GuardrailStreamHook::new(guardrail_rules));
             }
-            // The Prometheus hook is registered through Arc cloning so the
-            // server's /metrics route reads the same accumulator the pipeline
-            // writes to. ObserveHook is read-only / error-swallowing so a
-            // wiring problem never affects the request path.
-            lm.observe_hook(PrometheusObserve(prometheus_for_observe.clone()));
-            // Optional OTLP exporter — wired only when configured.
-            if let Some(endpoint) = otlp_endpoint.as_ref() {
-                lm.observe_hook(OtlpExportHook::new(endpoint));
+            // OpenTelemetry exporter — register the *same* Arc as a hook
+            // here. Construction happened above so `Assembled.observe`
+            // can hold a query handle on it.
+            if let Some(exporter) = otel_for_hook {
+                lm.observe_hook(OtelObserveHook::new(exporter));
             }
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
@@ -240,6 +300,7 @@ pub async fn build_app_with_path(
         db,
         policy_store: policy_store_for_reload,
         routing_table: routing_table_for_reload,
+        observe: observe_provider,
     })
 }
 
@@ -343,39 +404,63 @@ fn build_guardrail_rules(config: &Config) -> Result<RuleSet> {
     Ok(set)
 }
 
-/// A `language_model::ObserveHook` that delegates to a shared `Arc<PrometheusHook>`.
-/// We need this wrapper because `PipelineBuilder::observe_hook` takes a hook by
-/// value (and wraps it in an internal `Arc`), but we want to *share* the same
-/// `Arc<PrometheusHook>` between the writer (the pipeline) and the reader
-/// (`GET /metrics`) so both see the same accumulator.
-struct PrometheusObserve(Arc<PrometheusHook>);
+/// Empty metrics renderer for /metrics endpoint compatibility.
+/// Returns empty response since metrics are now pushed via OTLP.
+struct EmptyMetricsRenderer;
 
-#[async_trait::async_trait]
-impl bitrouter_sdk::language_model::ObserveHook for PrometheusObserve {
-    async fn after_phase(
-        &self,
-        phase: bitrouter_sdk::language_model::Phase,
-        ctx: &bitrouter_sdk::language_model::PipelineContext,
-    ) {
-        self.0.after_phase(phase, ctx).await
+impl MetricsRenderer for EmptyMetricsRenderer {
+    fn render(&self) -> String {
+        "# Prometheus metrics have been removed in favor of OpenTelemetry.\n".to_string()
+            + "# Configure OTLP export via plugins.bitrouter-observe.otel\n"
     }
-    fn stream_interest(&self) -> bitrouter_sdk::language_model::StreamInterest {
-        self.0.stream_interest()
+}
+
+/// Build OpenTelemetry configuration from the app config. Returns `None` when
+/// neither YAML nor env vars opt the exporter in.
+///
+/// Precedence: env vars > `plugins.bitrouter-observe.otel` > the legacy flat
+/// `plugins.bitrouter-observe.otlp_endpoint` shim (v0 carry-over; will be
+/// removed in v1.1).
+fn build_otel_config(config: &Config) -> Result<Option<OtelConfig>> {
+    let observe = config.plugins.get("bitrouter-observe");
+
+    // Env-var overrides are *not* applied here — `OtelExporter::new` runs
+    // `with_env_overrides` on whatever config it is handed, so the
+    // env > YAML precedence holds for every path below without this
+    // function having to re-apply it.
+
+    // 1. New nested `otel: { … }` block. A malformed block is a hard error:
+    //    the operator explicitly opted in, so silently falling back to the
+    //    legacy shim / env-only path would hide their mistake and start the
+    //    exporter with a config they never asked for.
+    if let Some(otel_value) = observe.and_then(|c| c.get("otel")) {
+        let cfg = serde_json::from_value::<OtelConfig>(otel_value.clone())
+            .context("plugins.bitrouter-observe.otel failed to parse")?;
+        return Ok(Some(cfg));
     }
-    async fn on_stream_part(
-        &self,
-        ctx: &bitrouter_sdk::language_model::StreamContext,
-        part: &bitrouter_sdk::language_model::StreamPart,
-    ) {
-        self.0.on_stream_part(ctx, part).await
+
+    // 2. Legacy flat `otlp_endpoint` shim — drops the cardinality / sampler /
+    //    batch knobs, but lets a v0 YAML keep working until v1.1.
+    if let Some(endpoint) = observe
+        .and_then(|c| c.get("otlp_endpoint"))
+        .and_then(|v| v.as_str())
+    {
+        let cfg = OtelConfig {
+            endpoint: endpoint.to_string(),
+            ..OtelConfig::default()
+        };
+        tracing::warn!(
+            "plugins.bitrouter-observe.otlp_endpoint is deprecated; switch to plugins.bitrouter-observe.otel",
+        );
+        return Ok(Some(cfg));
     }
-    async fn on_request_end(
-        &self,
-        ctx: &bitrouter_sdk::language_model::PipelineContext,
-        outcome: &bitrouter_sdk::language_model::RequestOutcome,
-    ) {
-        self.0.on_request_end(ctx, outcome).await
+
+    // 3. Env-var-only opt-in.
+    if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+        return Ok(Some(OtelConfig::default()));
     }
+
+    Ok(None)
 }
 
 /// Extract the file path from a SQLite URL. Returns `None` for `:memory:`
@@ -419,5 +504,57 @@ mod sqlite_path_tests {
         // Non-SQLite URLs name no local file — never treated as a path.
         assert_eq!(sqlite_file_path("postgres://u:p@host/bitrouter"), None);
         assert_eq!(sqlite_file_path("mysql://u:p@host/bitrouter"), None);
+    }
+}
+
+#[cfg(test)]
+mod otel_config_tests {
+    use super::{Config, build_otel_config};
+
+    /// Build a `Config` carrying a single `bitrouter-observe` plugin value.
+    /// Constructed directly (no YAML round-trip) so the test never touches
+    /// the process environment that `build_otel_config`'s env-only path
+    /// would read.
+    fn config_with_observe(observe: serde_json::Value) -> Config {
+        let mut config = Config::default();
+        config
+            .plugins
+            .insert("bitrouter-observe".to_string(), observe);
+        config
+    }
+
+    #[test]
+    fn malformed_otel_block_is_a_hard_error() {
+        // `sampler` is a closed enum — an unknown variant fails to parse.
+        // An explicit opt-in must surface that, not silently fall through.
+        let config = config_with_observe(serde_json::json!({
+            "otel": { "sampler": "not_a_real_sampler" }
+        }));
+        assert!(
+            build_otel_config(&config).is_err(),
+            "a malformed otel block must be a hard error",
+        );
+    }
+
+    #[test]
+    fn valid_otel_block_parses() {
+        let config = config_with_observe(serde_json::json!({
+            "otel": { "endpoint": "http://collector:4318" }
+        }));
+        let cfg = build_otel_config(&config)
+            .expect("valid otel block is Ok")
+            .expect("valid otel block yields Some");
+        assert_eq!(cfg.endpoint, "http://collector:4318");
+    }
+
+    #[test]
+    fn legacy_otlp_endpoint_shim_still_works() {
+        let config = config_with_observe(serde_json::json!({
+            "otlp_endpoint": "http://legacy:4318"
+        }));
+        let cfg = build_otel_config(&config)
+            .expect("legacy shim is Ok")
+            .expect("legacy shim yields Some");
+        assert_eq!(cfg.endpoint, "http://legacy:4318");
     }
 }

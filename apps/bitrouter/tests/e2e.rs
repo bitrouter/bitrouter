@@ -164,20 +164,27 @@ async fn e2e_http_server_chat_completions_end_to_end() {
     let health = server.get("/health").await;
     health.assert_status_ok();
 
-    // /metrics renders the Prometheus exposition that the pipeline just
-    // accumulated. The earlier /chat/completions request fed the observer,
-    // so the requests_total{outcome="completed"} counter is at least 1.
+    // `/metrics` no longer serves Prometheus exposition — metrics are pushed
+    // via OTLP. The route remains bound (so existing scraper config does not
+    // 404 on upgrade) and renders a deprecation banner steering operators
+    // toward OTLP push. Live emission is exercised separately via
+    // `scripts/test_observability.sh` against a real OTel collector — this
+    // e2e test has no OTLP mock and is not the place to assert it.
     let metrics = server.get("/metrics").await;
     metrics.assert_status_ok();
     let ct = metrics.header("content-type");
     assert!(
         ct.to_str().unwrap().starts_with("text/plain"),
-        "Prometheus content-type must be text/plain (got {ct:?})"
+        "/metrics content-type stays text/plain (got {ct:?})"
     );
     let text = metrics.text();
     assert!(
-        text.contains("bitrouter_requests_total{outcome=\"completed\"}"),
-        "/metrics should expose the completed-request counter; got:\n{text}"
+        text.contains("Prometheus metrics have been removed"),
+        "/metrics should render the OTLP-migration banner; got:\n{text}"
+    );
+    assert!(
+        text.contains("bitrouter-observe.otel"),
+        "/metrics banner should point at the new config key; got:\n{text}"
     );
 }
 

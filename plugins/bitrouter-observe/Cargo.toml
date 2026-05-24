@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-observe"
-description = "BitRouter observability plugin: ObserveHook implementations (Prometheus; OTLP behind feature)"
+description = "BitRouter observability plugin: OTLP traces and metrics with multi-tenant attribution"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,17 +15,34 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
-# `otlp` feature — a minimal OTLP/HTTP JSON span exporter (completes v0's #409).
-reqwest = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true, features = ["rt", "sync", "macros"] }
-rand = { workspace = true, optional = true }
-hex = { workspace = true, optional = true }
+# OpenTelemetry stack for OTLP export (traces + metrics).
+# Pinned to 0.27.x — the API churns minor-to-minor in this stack.
+opentelemetry = { version = "0.27", optional = true }
+opentelemetry_sdk = { version = "0.27", optional = true, features = ["rt-tokio", "trace", "metrics"] }
+opentelemetry-otlp = { version = "0.27", optional = true, features = ["http-proto", "reqwest-client", "reqwest-rustls", "trace", "metrics"] }
+opentelemetry-semantic-conventions = { version = "0.27", optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
+http = { workspace = true, optional = true }
+dashmap = { version = "6", optional = true }
 
 [features]
 default = []
-# OTLP exporter — a self-contained OTLP/HTTP JSON trace exporter. Completes
-# v0's unfinished #409. Kept feature-gated because it pulls in reqwest.
-otlp = ["dep:reqwest", "dep:tokio", "dep:rand", "dep:hex"]
+# OpenTelemetry exporter — traces and metrics with multi-tenant attribution.
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tokio",
+    "dep:http",
+    "dep:dashmap",
+]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "observe_overhead"
+harness = false
+required-features = ["otel"]

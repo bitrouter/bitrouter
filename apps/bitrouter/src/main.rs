@@ -143,6 +143,11 @@ enum Command {
         #[command(subcommand)]
         action: ToolsAction,
     },
+    /// Observability inspection (OTel exporter state, cardinality usage).
+    Observe {
+        #[command(subcommand)]
+        action: ObserveAction,
+    },
     /// Policy management.
     Policy {
         #[command(subcommand)]
@@ -236,6 +241,25 @@ enum AgentsAction {
     Install {
         /// Agent id from the catalog (see `bitrouter agents list`).
         id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ObserveAction {
+    /// Report the OTel exporter's current state (endpoint, sampler,
+    /// cardinality usage, in-flight spans). Queries the running daemon
+    /// over the control socket; reports "stopped" + the compile-time
+    /// `OTEL_ENABLED` flag when no daemon is reachable.
+    Status {
+        /// Path to `bitrouter.yaml` (used to locate the control socket).
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit control socket path. Overrides the config-derived path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Emit the snapshot as JSON instead of the human-readable block.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -394,6 +418,7 @@ async fn run() -> Result<()> {
             models(&source, provider.as_deref()).await
         }
         Command::Tools { action } => tools(action).await,
+        Command::Observe { action } => observe(action).await,
         Command::Policy { action } => policy(action).await,
         Command::Providers { action } => providers(action).await,
         Command::Wallet => {
@@ -545,6 +570,11 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     let assembled = bitrouter::build_app_with_path(&cfg, config_path_for_reload).await?;
     let app = Arc::new(assembled.app);
     let policy_store = assembled.policy_store;
+    // Clone before moving the original into `run_control_socket` — we
+    // need a handle here too so the shutdown path below can drive the
+    // exporter flush before the runtime tears down.
+    let observe_provider = assembled.observe;
+    let observe_for_shutdown = observe_provider.clone();
     let reload_source = match source {
         bitrouter::paths::ConfigSource::File(path) => {
             bitrouter::reload::ReloadSource::File(path.clone())
@@ -572,7 +602,13 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             .await
             .map_err(anyhow::Error::from)
     };
-    let control = daemon::run_control_socket(socket_path, app.clone(), listen, reloader.clone());
+    let control = daemon::run_control_socket(
+        socket_path,
+        app.clone(),
+        listen,
+        reloader.clone(),
+        observe_provider,
+    );
 
     // SIGHUP triggers a config reload — per, reload should be
     // available via either `bitrouter reload` (the socket path) *or* a HUP
@@ -595,6 +631,21 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         }
     };
 
+    // SIGINT (ctrl-C) and SIGTERM (systemd / `kill`) end the loop the
+    // same way `bitrouter stop` does — so the shutdown path below
+    // (observe flush, pid-file cleanup) runs in every termination
+    // mode except SIGKILL.
+    let term = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigint = signal(SignalKind::interrupt()).map_err(anyhow::Error::from)?;
+        let mut sigterm = signal(SignalKind::terminate()).map_err(anyhow::Error::from)?;
+        tokio::select! {
+            _ = sigint.recv() => tracing::info!("SIGINT — shutting down"),
+            _ = sigterm.recv() => tracing::info!("SIGTERM — shutting down"),
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+
     let result = tokio::select! {
         r = http => r,
         r = control => r,
@@ -604,7 +655,19 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             Ok(()) => Ok(()),
             Err(e) => { tracing::warn!(error = %e, "SIGHUP listener unavailable"); Ok(()) }
         },
+        r = term => match r {
+            Ok(()) => Ok(()),
+            Err(e) => { tracing::warn!(error = %e, "SIGINT/SIGTERM listener unavailable"); Ok(()) }
+        },
     };
+
+    // Drive the OTel exporter's flush before anything else drops — its
+    // `rt-tokio` background tasks need a live async runtime to drain,
+    // and `spawn_blocking` (inside the provider's `shutdown`) parks on
+    // a dedicated thread so the runtime is free to keep ticking. The
+    // impl is idempotent: a follow-up Drop is a no-op.
+    observe_for_shutdown.shutdown().await;
+
     daemon::remove_pid_file(&pid_path).await;
     result
 }
@@ -1154,6 +1217,133 @@ async fn tools(action: ToolsAction) -> Result<()> {
 async fn agent_proxy_cmd(agent: &str, source: &bitrouter::paths::ConfigSource) -> Result<()> {
     let cfg = bitrouter::paths::load_config(source).await?;
     bitrouter::agent_proxy::run(cfg, agent).await
+}
+
+// ===== observe =====
+
+async fn observe(action: ObserveAction) -> Result<()> {
+    match action {
+        ObserveAction::Status {
+            config,
+            socket,
+            json,
+        } => {
+            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            observe_status(&socket, json).await
+        }
+    }
+}
+
+/// `bitrouter observe status` — ask the running daemon for the OTel
+/// exporter snapshot, pretty-print (or JSON-dump) the result. When no
+/// daemon is reachable, fall back to a "stopped" report that still
+/// carries the compile-time `OTEL_ENABLED` flag so the user can tell
+/// "feature off" from "daemon down."
+async fn observe_status(socket: &Path, as_json: bool) -> Result<()> {
+    use bitrouter_observe::OTEL_ENABLED;
+
+    let payload = match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {
+        Ok(DaemonResponse::ObserveStatus { payload }) => Some(payload),
+        Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
+        Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
+        Err(e) if daemon::is_not_reachable(&e) => None,
+        Err(e) => return Err(e),
+    };
+
+    if as_json {
+        let snapshot =
+            payload.unwrap_or_else(|| daemon::ObserveStatusPayload::unwired(OTEL_ENABLED));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&snapshot).context("rendering observe status as JSON")?
+        );
+        return Ok(());
+    }
+
+    let p = bitrouter::style::Palette::for_stdout();
+    match payload {
+        Some(s) => print_observe_running(&p, &s, socket),
+        None => print_observe_stopped(&p, socket),
+    }
+    Ok(())
+}
+
+fn print_observe_running(
+    p: &bitrouter::style::Palette,
+    s: &daemon::ObserveStatusPayload,
+    socket: &Path,
+) {
+    let (bullet, headline) = if s.exporter_wired {
+        (
+            format!("{green}●{reset}", green = p.green, reset = p.reset),
+            "OTel exporter is wired",
+        )
+    } else if s.compiled_in {
+        (
+            format!("{dim}○{reset}", dim = p.dim, reset = p.reset),
+            "OTel feature compiled in, exporter not configured",
+        )
+    } else {
+        (
+            format!("{dim}○{reset}", dim = p.dim, reset = p.reset),
+            "OTel feature not compiled in",
+        )
+    };
+    println!(
+        "{bullet} bitrouter observe — {bold}{headline}{reset}",
+        bold = p.bold,
+        reset = p.reset,
+    );
+    println!();
+    print_status_row(p, "compiled", if s.compiled_in { "yes" } else { "no" });
+    print_status_row(p, "wired", if s.exporter_wired { "yes" } else { "no" });
+    if let Some(endpoint) = &s.endpoint {
+        print_status_row(p, "endpoint", endpoint);
+    }
+    if let Some(service) = &s.service_name {
+        print_status_row(p, "service", service);
+    }
+    if let Some(sampler) = &s.sampler {
+        let val = match s.sampler_arg {
+            Some(arg) => format!("{sampler} (arg={arg})"),
+            None => sampler.clone(),
+        };
+        print_status_row(p, "sampler", &val);
+    }
+    print_status_row(p, "metrics", if s.metrics_enabled { "on" } else { "off" });
+    print_status_row(p, "headers", &s.header_count.to_string());
+    print_status_row(p, "res-attrs", &s.resource_attribute_count.to_string());
+    print_status_row(
+        p,
+        "api-keys",
+        &format!("{} / {}", s.api_key_count, s.api_key_cap),
+    );
+    print_status_row(
+        p,
+        "users",
+        &format!("{} / {}", s.user_id_count, s.user_id_cap),
+    );
+    print_status_row(p, "in-flight", &s.active_spans.to_string());
+    print_status_row(p, "socket", &socket.display().to_string());
+}
+
+fn print_observe_stopped(p: &bitrouter::style::Palette, socket: &Path) {
+    use bitrouter_observe::OTEL_ENABLED;
+    println!(
+        "{dim}○{reset} bitrouter observe — {bold}daemon stopped{reset}",
+        dim = p.dim,
+        bold = p.bold,
+        reset = p.reset,
+    );
+    println!();
+    print_status_row(p, "compiled", if OTEL_ENABLED { "yes" } else { "no" });
+    print_status_row(p, "socket", &socket.display().to_string());
+    println!();
+    println!(
+        "  {dim}Run `bitrouter start` to launch the daemon, then re-run this command.{reset}",
+        dim = p.dim,
+        reset = p.reset,
+    );
 }
 
 async fn agents_cmd(action: AgentsAction) -> Result<()> {

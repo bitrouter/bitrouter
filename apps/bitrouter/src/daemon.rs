@@ -65,6 +65,11 @@ pub enum DaemonCommand {
         /// The model name to resolve.
         model: String,
     },
+    /// Report the OTel exporter's current state — what's wired, current
+    /// cardinality usage, in-flight span count. Returned as a JSON
+    /// snapshot. The wire format is the same `ObserveStatusPayload` the
+    /// CLI pretty-prints for `bitrouter observe status`.
+    ObserveStatus,
 }
 
 /// One resolved hop of a route chain.
@@ -98,11 +103,122 @@ pub enum DaemonResponse {
         /// The ordered fallback chain.
         chain: Vec<RouteHop>,
     },
+    /// OTel exporter snapshot.
+    ObserveStatus {
+        /// The serialized exporter state.
+        payload: ObserveStatusPayload,
+    },
     /// The command failed.
     Error {
         /// Human-readable failure detail.
         message: String,
     },
+}
+
+/// Serializable snapshot of the OTel exporter's state, transported over
+/// the daemon control socket. Fields mirror `bitrouter_observe::otel::OtelStatus`
+/// — this module re-states the wire format so the daemon crate doesn't
+/// need to depend on the observe crate's type when the `otel` feature is
+/// off (and so the JSON shape stays stable if the observe-side type
+/// ever moves).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObserveStatusPayload {
+    /// Whether the `otel` feature was compiled in.
+    pub compiled_in: bool,
+    /// Whether an exporter is actually wired.
+    pub exporter_wired: bool,
+    /// OTLP/HTTP+protobuf endpoint.
+    pub endpoint: Option<String>,
+    /// Number of additional headers (count only — no credential leak).
+    pub header_count: usize,
+    /// Service name reported on the resource.
+    pub service_name: Option<String>,
+    /// Number of `OTEL_RESOURCE_ATTRIBUTES` entries merged in.
+    pub resource_attribute_count: usize,
+    /// Sampler kind (e.g. `parentbased_always_on`).
+    pub sampler: Option<String>,
+    /// Sampler ratio argument (only for `*_traceidratio`).
+    pub sampler_arg: Option<f64>,
+    /// Whether metrics export is enabled.
+    pub metrics_enabled: bool,
+    /// Distinct `api_key_id` values seen by the cardinality limiter.
+    pub api_key_count: usize,
+    /// Cardinality cap for the `api_key_id` metric dimension.
+    pub api_key_cap: usize,
+    /// Distinct `user_id` values seen.
+    pub user_id_count: usize,
+    /// Cardinality cap for the `user_id` metric dimension.
+    pub user_id_cap: usize,
+    /// In-flight spans currently tracked.
+    pub active_spans: usize,
+}
+
+impl ObserveStatusPayload {
+    /// Payload for "feature compiled in but no exporter wired" — used by
+    /// the noop provider and by the CLI's stopped-daemon fallback.
+    pub fn unwired(compiled_in: bool) -> Self {
+        Self {
+            compiled_in,
+            exporter_wired: false,
+            endpoint: None,
+            header_count: 0,
+            service_name: None,
+            resource_attribute_count: 0,
+            sampler: None,
+            sampler_arg: None,
+            metrics_enabled: false,
+            api_key_count: 0,
+            api_key_cap: 0,
+            user_id_count: 0,
+            user_id_cap: 0,
+            active_spans: 0,
+        }
+    }
+}
+
+/// Source of truth for the OTel exporter's current state, *and* the
+/// lifecycle hook the daemon's shutdown path calls to flush pending
+/// telemetry before the runtime tears down. Mirrors the
+/// [`DaemonReloader`] pattern: the daemon module holds a trait object,
+/// the app's assembly layer provides the concrete impl (which reads
+/// from — and drives — the running `OtelExporter`).
+///
+/// Status and shutdown share a trait because they share a singleton:
+/// each `serve()` has exactly one observe provider, with one address
+/// and one set of background tasks. Splitting them would duplicate the
+/// `Arc<dyn …>` plumbing without buying separation of concerns.
+#[async_trait::async_trait]
+pub trait ObserveStatusProvider: Send + Sync {
+    /// Snapshot what the exporter looks like right now.
+    fn status(&self) -> ObserveStatusPayload;
+
+    /// Flush in-flight telemetry and tear down the exporter's background
+    /// tasks. Must be driven from an async context that allows
+    /// `spawn_blocking`, because the underlying SDK shutdown is
+    /// synchronous and needs a separate thread to park on while the
+    /// `rt-tokio` worker drains the SDK's internal channels.
+    ///
+    /// Default impl is a no-op so providers that own nothing
+    /// (the noop / test variants) don't need to implement it.
+    async fn shutdown(&self) {}
+}
+
+/// Provider that reports "not wired" — used when no exporter is built
+/// (no YAML opt-in, no env var). `compiled_in` is plumbed through so the
+/// caller can still distinguish "feature off" from "feature on but no
+/// config."
+pub struct NoopObserveStatus {
+    /// Whether the `otel` feature was compiled into the binary.
+    pub compiled_in: bool,
+}
+
+#[async_trait::async_trait]
+impl ObserveStatusProvider for NoopObserveStatus {
+    fn status(&self) -> ObserveStatusPayload {
+        ObserveStatusPayload::unwired(self.compiled_in)
+    }
+    // `shutdown` falls back to the trait's default no-op — there is no
+    // exporter to flush.
 }
 
 /// The default control-socket path when the config does not set one.
@@ -164,6 +280,7 @@ pub async fn run_control_socket(
     app: Arc<App>,
     listen: String,
     reloader: Arc<dyn DaemonReloader>,
+    observe: Arc<dyn ObserveStatusProvider>,
 ) -> Result<()> {
     // A stale socket file from a crashed daemon would block the bind.
     let _ = tokio::fs::remove_file(&socket_path).await;
@@ -178,7 +295,7 @@ pub async fn run_control_socket(
         .with_context(|| format!("chmod 0600 {}", socket_path.display()))?;
     tracing::info!(socket = %socket_path.display(), "control socket listening (mode 0600)");
 
-    let result = accept_loop(&listener, &app, &listen, &reloader).await;
+    let result = accept_loop(&listener, &app, &listen, &reloader, &observe).await;
     let _ = tokio::fs::remove_file(&socket_path).await;
     result
 }
@@ -188,6 +305,7 @@ async fn accept_loop(
     app: &Arc<App>,
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
+    observe: &Arc<dyn ObserveStatusProvider>,
 ) -> Result<()> {
     loop {
         let (stream, _addr) = listener
@@ -196,7 +314,7 @@ async fn accept_loop(
             .context("accepting control-socket connection")?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
-        if handle_connection(stream, app, listen, reloader).await? {
+        if handle_connection(stream, app, listen, reloader, observe).await? {
             tracing::info!("stop command received — shutting down");
             return Ok(());
         }
@@ -209,6 +327,7 @@ async fn handle_connection(
     app: &Arc<App>,
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
+    observe: &Arc<dyn ObserveStatusProvider>,
 ) -> Result<bool> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -230,7 +349,7 @@ async fn handle_connection(
     };
 
     let is_stop = matches!(command, DaemonCommand::Stop);
-    let response = dispatch(command, app, listen, reloader).await;
+    let response = dispatch(command, app, listen, reloader, observe).await;
     write_response(reader.get_mut(), &response).await?;
     Ok(is_stop)
 }
@@ -240,6 +359,7 @@ async fn dispatch(
     app: &Arc<App>,
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
+    observe: &Arc<dyn ObserveStatusProvider>,
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
@@ -301,6 +421,9 @@ async fn dispatch(
                 },
             }
         }
+        DaemonCommand::ObserveStatus => DaemonResponse::ObserveStatus {
+            payload: observe.status(),
+        },
     }
 }
 
@@ -373,12 +496,55 @@ mod tests {
             DaemonCommand::Route {
                 model: "gpt-5".to_string(),
             },
+            DaemonCommand::ObserveStatus,
         ] {
             let json = serde_json::to_string(&cmd).unwrap();
             let back: DaemonCommand = serde_json::from_str(&json).unwrap();
             // tag-based round trip
             assert_eq!(std::mem::discriminant(&cmd), std::mem::discriminant(&back));
         }
+    }
+
+    #[test]
+    fn observe_status_payload_round_trips() {
+        let payload = ObserveStatusPayload {
+            compiled_in: true,
+            exporter_wired: true,
+            endpoint: Some("http://collector:4318".to_string()),
+            header_count: 2,
+            service_name: Some("bitrouter".to_string()),
+            resource_attribute_count: 1,
+            sampler: Some("parentbased_always_on".to_string()),
+            sampler_arg: None,
+            metrics_enabled: true,
+            api_key_count: 42,
+            api_key_cap: 1024,
+            user_id_count: 7,
+            user_id_cap: 256,
+            active_spans: 3,
+        };
+        let json = serde_json::to_string(&DaemonResponse::ObserveStatus {
+            payload: payload.clone(),
+        })
+        .unwrap();
+        let back: DaemonResponse = serde_json::from_str(&json).unwrap();
+        match back {
+            DaemonResponse::ObserveStatus { payload: p } => {
+                assert_eq!(p.endpoint, payload.endpoint);
+                assert_eq!(p.api_key_count, 42);
+                assert_eq!(p.active_spans, 3);
+            }
+            other => panic!("expected ObserveStatus, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn noop_observe_status_reports_unwired() {
+        let p = NoopObserveStatus { compiled_in: true }.status();
+        assert!(p.compiled_in);
+        assert!(!p.exporter_wired);
+        assert!(p.endpoint.is_none());
+        assert_eq!(p.api_key_count, 0);
     }
 
     #[test]
