@@ -47,16 +47,22 @@ pub async fn login(inputs: LoginInputs) -> Result<Credentials> {
         .await
         .with_context(|| format!("fetching AS metadata for {}", settings.authorization_server))?;
     let token_set = flow::run_device_flow(&client, &metadata, &settings, |device| {
-        let target = device
-            .verification_uri_complete
-            .as_deref()
-            .unwrap_or(&device.verification_uri);
+        // RFC 8628 §3.2 — when the AS returns `verification_uri_complete`
+        // (the URL with `user_code` already embedded as a query
+        // parameter), the approval page auto-fills the code, so the
+        // user only opens the link. Showing both the URL and "and
+        // enter the code …" in that case is confusing — the page
+        // already did. Only print the separate-code prompt when we
+        // fall back to the bare `verification_uri`.
         eprintln!();
-        eprintln!("  Open this URL in your browser:");
-        eprintln!("    {target}");
-        eprintln!();
-        eprintln!("  And enter the code:");
-        eprintln!("    {}", device.user_code);
+        if let Some(complete) = device.verification_uri_complete.as_deref() {
+            eprintln!("  Open this URL in your browser:");
+            eprintln!("    {complete}");
+        } else {
+            eprintln!("  Open this URL in your browser, then enter the code:");
+            eprintln!("    {}", device.verification_uri);
+            eprintln!("    Code: {}", device.user_code);
+        }
         eprintln!();
         eprintln!(
             "  Waiting for authorization (the code expires in {}s)…",
