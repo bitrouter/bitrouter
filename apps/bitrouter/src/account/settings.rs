@@ -2,12 +2,23 @@
 //! flag → env var → built-in default. This is the only place each input
 //! is read, so the precedence rule lives in exactly one location.
 //!
-//! The AS URL and client id are intentionally NOT defaulted to any
-//! particular deployment — bitrouter is an open-source project and the
-//! device-flow client must work against any RFC 8628 compliant
-//! authorization server the operator chooses.
+//! Defaults are set to the project's hosted authorization server so a
+//! plain `bitrouter auth login` works out of the box. The
+//! implementation is a generic RFC 8628 client — anyone running their
+//! own authorization server overrides the defaults via flags or env
+//! vars.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+
+/// Default authorization server URL. Points at the project's hosted
+/// service so `bitrouter auth login` works with no flags. Override
+/// with `--oauth-as` or [`AS_ENV`] to target a different deployment.
+pub const DEFAULT_AS: &str = "https://api.bitrouter.ai";
+
+/// Default public OAuth client id, registered with the default
+/// authorization server. Override with `--client-id` or
+/// [`CLIENT_ID_ENV`] for any other deployment.
+pub const DEFAULT_CLIENT_ID: &str = "bitrouter-cli";
 
 /// Default `scope` value used when neither the flag nor the env var
 /// supplies one. Per RFC 6749 §3.3, scope is a space-delimited list of
@@ -50,20 +61,12 @@ pub fn resolve(
     env_scope: Option<&str>,
 ) -> Result<Settings> {
     let authorization_server = first_non_empty(flag_authorization_server, env_authorization_server)
-        .with_context(|| {
-            format!(
-                "no authorization server set — pass `--oauth-as <URL>` or set the {AS_ENV} env var"
-            )
-        })?
+        .unwrap_or(DEFAULT_AS)
         .trim_end_matches('/')
         .to_string();
     require_secure_url(&authorization_server)?;
     let client_id = first_non_empty(flag_client_id, env_client_id)
-        .with_context(|| {
-            format!(
-                "no OAuth client id set — pass `--client-id <ID>` or set the {CLIENT_ID_ENV} env var"
-            )
-        })?
+        .unwrap_or(DEFAULT_CLIENT_ID)
         .to_string();
     let scope = first_non_empty(flag_scope, env_scope)
         .unwrap_or(DEFAULT_SCOPE)
@@ -157,25 +160,34 @@ mod tests {
     }
 
     #[test]
-    fn missing_as_url_errors_clearly() {
-        let err = resolve(None, Some("cid"), None, None, None, None).unwrap_err();
-        let msg = format!("{err}");
-        assert!(msg.contains("BITROUTER_OAUTH_AS"), "msg: {msg}");
+    fn no_inputs_fall_back_to_defaults() {
+        let r = resolve(None, None, None, None, None, None).unwrap();
+        assert_eq!(r.authorization_server, DEFAULT_AS);
+        assert_eq!(r.client_id, DEFAULT_CLIENT_ID);
+        assert_eq!(r.scope, DEFAULT_SCOPE);
     }
 
     #[test]
-    fn missing_client_id_errors_clearly() {
-        let err =
-            resolve(Some("https://as.example.com"), None, None, None, None, None).unwrap_err();
-        let msg = format!("{err}");
-        assert!(msg.contains("BITROUTER_OAUTH_CLIENT_ID"), "msg: {msg}");
+    fn only_as_overridden_keeps_default_client_id() {
+        let r = resolve(
+            Some("https://self-hosted.example.com"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(r.authorization_server, "https://self-hosted.example.com");
+        assert_eq!(r.client_id, DEFAULT_CLIENT_ID);
     }
 
     #[test]
-    fn empty_strings_treated_as_unset() {
-        let err = resolve(Some(""), Some("cid"), None, None, None, None).unwrap_err();
-        let msg = format!("{err}");
-        assert!(msg.contains("authorization server"), "msg: {msg}");
+    fn empty_strings_fall_through_to_defaults() {
+        let r = resolve(Some(""), Some(""), Some(""), None, None, None).unwrap();
+        assert_eq!(r.authorization_server, DEFAULT_AS);
+        assert_eq!(r.client_id, DEFAULT_CLIENT_ID);
+        assert_eq!(r.scope, DEFAULT_SCOPE);
     }
 
     #[test]
