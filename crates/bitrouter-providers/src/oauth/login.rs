@@ -2,7 +2,7 @@
 //! provider — bind the loopback listener, build the `/authorize` URL,
 //! tell the user to open it, race the listener against a manual-paste
 //! fallback, verify `state`, and exchange the code for an
-//! [`OAuthToken`](crate::oauth::credential_store::OAuthToken).
+//! [`OAuthToken`].
 //!
 //! The caller wires the user interaction (where to print the URL, how to
 //! read a pasted redirect) through the [`LoginUx`] trait so this module

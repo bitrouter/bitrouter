@@ -1,6 +1,6 @@
 //! OAuth 2.0 Authorization Code Flow + PKCE — RFC 6749 §4.1, RFC 7636.
 //!
-//! 1. Mint a [`pkce::PkcePair`] and a [`pkce::generate_state`] nonce.
+//! 1. Mint a [`super::pkce::PkcePair`] and a [`super::pkce::generate_state`] nonce.
 //! 2. Build the `/authorize` URL with [`build_authorize_url`] and open it
 //!    in the user's browser (or print it for them to paste).
 //! 3. Catch the redirect on a [`super::listener::LoopbackListener`], or
