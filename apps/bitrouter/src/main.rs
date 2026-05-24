@@ -198,6 +198,55 @@ enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Sign in to bitrouter from this terminal.
+    ///
+    /// After `bitrouter auth login`, this CLI uses your account credentials
+    /// automatically for inference, key management, billing, BYOK, and the
+    /// rest of the management surface.
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthAction {
+    /// Sign in to bitrouter.
+    ///
+    /// Prints a verification URL — open it in your browser, approve, and
+    /// this CLI receives an access token it stores locally and refreshes
+    /// automatically.
+    Login {
+        /// Authorization server URL. Defaults to https://api.bitrouter.ai;
+        /// override only for a self-hosted deployment (env: BITROUTER_OAUTH_AS).
+        #[arg(long = "oauth-as", value_name = "URL")]
+        authorization_server: Option<String>,
+        /// OAuth client id. Defaults to `bitrouter-cli`; override only for a
+        /// self-hosted deployment (env: BITROUTER_OAUTH_CLIENT_ID).
+        #[arg(long = "client-id", value_name = "ID")]
+        client_id: Option<String>,
+        /// Permissions to request, as a space-delimited list. Defaults to a
+        /// broad "developer" set (inference, key management, billing-read,
+        /// policy, BYOK, account-read); pass a narrower or wider list to
+        /// override (env: BITROUTER_OAUTH_SCOPE).
+        #[arg(long, value_name = "SCOPE")]
+        scope: Option<String>,
+    },
+    /// Sign out: revoke the stored token at the server (best-effort) and
+    /// delete the local credentials file.
+    Logout {
+        /// Override the authorization server URL recorded in the
+        /// credentials file for the revocation call.
+        #[arg(long = "oauth-as", value_name = "URL")]
+        authorization_server: Option<String>,
+        /// Override the recorded OAuth client id for the revocation call.
+        #[arg(long = "client-id", value_name = "ID")]
+        client_id: Option<String>,
+    },
+    /// Show who is signed in on this machine.
+    ///
+    /// Reads the locally stored credentials — no network call.
+    Whoami,
 }
 
 #[derive(Subcommand)]
@@ -450,6 +499,40 @@ async fn run() -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             agent_proxy_cmd(&agent, &source).await
         }
+        Command::Auth { action } => auth_cmd(action).await,
+    }
+}
+
+// ===== `bitrouter auth …` (OAuth 2.0 device flow against a user-supplied AS) =====
+
+async fn auth_cmd(action: AuthAction) -> Result<()> {
+    use bitrouter::account::commands::{LoginInputs, login, logout, whoami};
+    match action {
+        AuthAction::Login {
+            authorization_server,
+            client_id,
+            scope,
+        } => {
+            login(LoginInputs {
+                authorization_server,
+                client_id,
+                scope,
+            })
+            .await?;
+            Ok(())
+        }
+        AuthAction::Logout {
+            authorization_server,
+            client_id,
+        } => {
+            logout(LoginInputs {
+                authorization_server,
+                client_id,
+                scope: None,
+            })
+            .await
+        }
+        AuthAction::Whoami => whoami().await,
     }
 }
 

@@ -37,6 +37,8 @@ serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 anyhow = "1"
+reqwest = { workspace = true }
+thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
