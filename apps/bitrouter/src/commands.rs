@@ -345,8 +345,11 @@ fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMeth
     methods
 }
 
-/// Prompt for an integer choice between `[1, options.len()]`. Re-prompts
-/// on invalid input. EOF or empty line picks option 1.
+/// Prompt for an integer choice between `[1, options.len()]`. Empty
+/// input (or just <enter>) picks option 1. Invalid input (non-number,
+/// out-of-range) prints a one-line error and re-prompts; a true EOF on
+/// stdin (read_line returns 0 bytes) bails so the caller doesn't loop
+/// forever in non-interactive contexts.
 fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMethod> {
     use std::io::BufRead;
     eprintln!();
@@ -354,24 +357,27 @@ fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMe
     for (i, m) in options.iter().enumerate() {
         eprintln!("  {}) {}", i + 1, m.label());
     }
-    eprint!("Choose [1]: ");
     let stdin = std::io::stdin();
-    let mut line = String::new();
-    stdin
-        .lock()
-        .read_line(&mut line)
-        .context("reading method choice from stdin")?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return Ok(options[0]);
+    let mut handle = stdin.lock();
+    loop {
+        eprint!("Choose [1]: ");
+        let mut line = String::new();
+        let n_bytes = handle
+            .read_line(&mut line)
+            .context("reading method choice from stdin")?;
+        if n_bytes == 0 {
+            anyhow::bail!("stdin closed before a choice was made");
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(options[0]);
+        }
+        match trimmed.parse::<usize>() {
+            Ok(n) if (1..=options.len()).contains(&n) => return Ok(options[n - 1]),
+            Ok(n) => eprintln!("  choice must be between 1 and {}, got {n}", options.len()),
+            Err(_) => eprintln!("  '{trimmed}' is not a number"),
+        }
     }
-    let n: usize = trimmed
-        .parse()
-        .with_context(|| format!("'{trimmed}' is not a number"))?;
-    if !(1..=options.len()).contains(&n) {
-        anyhow::bail!("choice must be between 1 and {}", options.len());
-    }
-    Ok(options[n - 1])
 }
 
 /// `bitrouter login <provider> [--label <name>]` — interactive credential

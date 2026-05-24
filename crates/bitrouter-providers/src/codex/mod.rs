@@ -53,6 +53,11 @@ pub struct OpenAiCodexAuthApplier {
     client_id: String,
     token_endpoint: String,
     cache: Arc<Mutex<std::collections::HashMap<String, OAuthToken>>>,
+    /// Per-label single-flight gate around disk-read → refresh →
+    /// persist. See [`crate::anthropic::AnthropicOAuthApplier`] for the
+    /// rationale (concurrent refreshes can have the older refresh_token
+    /// invalidated per RFC 6749 §6).
+    refresh_gates: Arc<Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 impl OpenAiCodexAuthApplier {
@@ -77,12 +82,13 @@ impl OpenAiCodexAuthApplier {
             client_id: registry.auth.client_id,
             token_endpoint: registry.auth.token_endpoint,
             cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            refresh_gates: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
 
     /// Tests override the refresh client + endpoint.
     #[cfg(test)]
-    pub fn with_client_and_endpoint(
+    pub(crate) fn with_client_and_endpoint(
         store_path: impl Into<std::path::PathBuf>,
         refresh_client: reqwest::Client,
         client_id: impl Into<String>,
@@ -94,7 +100,20 @@ impl OpenAiCodexAuthApplier {
             client_id: client_id.into(),
             token_endpoint: token_endpoint.into(),
             cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            refresh_gates: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Per-label single-flight gate — same shape as the Anthropic applier.
+    fn refresh_gate(&self, label: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut guard = self
+            .refresh_gates
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard
+            .entry(label.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     fn cached_fresh(&self, label: &str) -> Option<OAuthToken> {
@@ -110,6 +129,15 @@ impl OpenAiCodexAuthApplier {
     }
 
     async fn resolve_token(&self, label: &str) -> Result<OAuthToken> {
+        // 1. Lock-free cache hit.
+        if let Some(cached) = self.cached_fresh(label) {
+            return Ok(cached);
+        }
+        // 2. Acquire the per-label gate before any disk or network work.
+        let gate = self.refresh_gate(label);
+        let _guard = gate.lock().await;
+        // 3. Double-checked locking — another task may have refreshed
+        //    while we were waiting on the gate.
         if let Some(cached) = self.cached_fresh(label) {
             return Ok(cached);
         }

@@ -150,13 +150,24 @@ mod tests {
         assert_eq!(refreshed.refresh_token.as_deref(), Some("RT"));
     }
 
-    #[test]
-    fn refusing_http_endpoint_is_a_typed_error() {
-        // We can't construct a reqwest::Client easily without async, so
-        // just sanity-check the precondition with a sync test on the
-        // string check that `refresh` performs.
-        let endpoint = "http://insecure.example.com/oauth/token";
-        assert!(!endpoint.starts_with("https://"));
+    #[tokio::test]
+    async fn refusing_http_endpoint_is_a_typed_error() {
+        // `refresh` checks the scheme before touching the network, so no
+        // server is needed — we just confirm the typed error variant.
+        let client = reqwest::Client::new();
+        let token = token_with_refresh("RT");
+        let err = refresh(
+            &client,
+            "http://insecure.example.com/oauth/token",
+            "client-1",
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, AuthCodeError::InsecureEndpoint(ref u) if u == "http://insecure.example.com/oauth/token"),
+            "expected InsecureEndpoint, got: {err:?}"
+        );
     }
 
     #[test]
@@ -199,8 +210,33 @@ mod tests {
         assert!(!needs_refresh(&token));
     }
 
-    #[test]
-    fn missing_refresh_token_surfaces_helpful_error() {
-        let _ = token_with_refresh("ignored"); // touch
+    #[tokio::test]
+    async fn missing_refresh_token_surfaces_helpful_error() {
+        // OAuthToken with no refresh_token → refresh() bails before any
+        // network call with a `Malformed` containing the user-facing
+        // "re-run `bitrouter login`" hint.
+        let client = reqwest::Client::new();
+        let token = OAuthToken {
+            access_token: "stale".into(),
+            expires_at: 1,
+            refresh_token: None,
+        };
+        let err = refresh(
+            &client,
+            "https://example.com/oauth/token",
+            "client-1",
+            &token,
+        )
+        .await
+        .unwrap_err();
+        match err {
+            AuthCodeError::Malformed { message } => {
+                assert!(
+                    message.contains("no refresh_token") && message.contains("bitrouter login"),
+                    "expected re-login hint, got: {message}"
+                );
+            }
+            other => panic!("expected Malformed, got: {other:?}"),
+        }
     }
 }

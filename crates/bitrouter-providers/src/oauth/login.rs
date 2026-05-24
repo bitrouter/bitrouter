@@ -48,6 +48,25 @@ pub enum LoginError {
         #[source]
         source: ListenerError,
     },
+    /// A provider with a pinned loopback port (the port is registered
+    /// against the upstream OAuth client; dynamic ports are rejected)
+    /// couldn't bind because another process holds it. Common cause: the
+    /// official vendor CLI (e.g. `codex login`) is running concurrently
+    /// against the same port.
+    #[error(
+        "{provider} requires loopback port {port} but it's already in use — \
+         quit any other client signing in to this provider (e.g. the official \
+         vendor CLI) and retry. ({source})"
+    )]
+    PinnedPortInUse {
+        /// Provider id whose flow failed.
+        provider: &'static str,
+        /// The port the provider pinned in its OAuth client registration.
+        port: u16,
+        /// Underlying listener bind error.
+        #[source]
+        source: ListenerError,
+    },
     /// User pasted nothing (or only whitespace) in manual-fallback mode.
     #[error("manual redirect paste was empty — re-run `bitrouter login` to try again")]
     EmptyPaste,
@@ -120,6 +139,18 @@ pub async fn run_login(
             Err(e) => match provider.manual_redirect_uri {
                 Some(_) => None, // fall back to manual paste
                 None => {
+                    // Pinned-port providers (e.g. openai-codex on 1455)
+                    // can't recover by trying a different port — the
+                    // OAuth client registration rejects mismatched
+                    // redirect URIs. Surface the conflict explicitly so
+                    // users know to quit the colliding process.
+                    if let (Some(port), ListenerError::Bind { .. }) = (provider.loopback_port, &e) {
+                        return Err(LoginError::PinnedPortInUse {
+                            provider: provider.provider_id,
+                            port,
+                            source: e,
+                        });
+                    }
                     return Err(LoginError::NoListenerNoFallback {
                         provider: provider.provider_id,
                         source: e,
@@ -167,16 +198,7 @@ pub async fn run_login(
         }
     };
 
-    // Compare echoed state (when present) — the RFC strongly recommends
-    // this but doesn't make it mandatory for the public-client / PKCE
-    // case. Reject mismatches; accept absence on manual paste because
-    // some redirect display surfaces (Anthropic's console code page)
-    // show `code#state` and users sometimes paste only the `code`.
-    if let Some(returned) = returned_state.as_deref()
-        && returned != state
-    {
-        return Err(LoginError::StateMismatch);
-    }
+    validate_state(returned_state.as_deref(), &state, used_manual)?;
 
     let token = exchange_code(
         client,
@@ -207,6 +229,34 @@ fn parse_listener_outcome(
 fn parse_pasted(input: &str) -> Result<(String, Option<String>), LoginError> {
     let parsed = parse_pasted_redirect(input).ok_or(LoginError::EmptyPaste)?;
     Ok((parsed.code, parsed.state))
+}
+
+/// Compare the `state` parameter we sent on `/authorize` to whatever the
+/// flow echoed back. Behaviour differs by branch:
+///
+/// - **Loopback listener** (`used_manual == false`): state MUST be
+///   present and match. The browser always includes whatever query
+///   params the authorization server placed on the redirect, so a
+///   missing `state` here means a third-party hit our
+///   `127.0.0.1:<port>/callback` directly with a forged `code=…`.
+///   Without this guard, a malicious local process could redeem a code
+///   on the user's behalf — defeats the point of `state`.
+///
+/// - **Manual paste** (`used_manual == true`): state MAY be absent. Some
+///   redirect display surfaces (e.g. Anthropic's
+///   `console.anthropic.com/oauth/code/callback` page) show `code#state`
+///   and users sometimes paste only the `code`. We accept that and rely
+///   on PKCE alone — the verifier is still bound to this process.
+fn validate_state(
+    returned: Option<&str>,
+    expected: &str,
+    used_manual: bool,
+) -> Result<(), LoginError> {
+    match returned {
+        Some(r) if r != expected => Err(LoginError::StateMismatch),
+        None if !used_manual => Err(LoginError::StateMismatch),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -333,5 +383,91 @@ mod tests {
     fn parse_pasted_rejects_empty() {
         let err = parse_pasted("").unwrap_err();
         assert!(matches!(err, LoginError::EmptyPaste));
+    }
+
+    /// Provider whose pinned loopback port can't be bound and which
+    /// offers no manual-paste fallback — exercises the `PinnedPortInUse`
+    /// branch.
+    fn pinned_port_provider(port: u16) -> PkceProvider {
+        PkceProvider {
+            provider_id: "test-pinned",
+            display_name: "Test Pinned",
+            loopback_port: Some(port),
+            redirect_path: "/auth/callback",
+            manual_redirect_uri: None,
+            auth: AuthCodeParams {
+                client_id: "client-pinned".into(),
+                authorize_endpoint: "https://example.com/oauth/authorize".into(),
+                token_endpoint: "https://example.com/oauth/token".into(),
+                scope: "read".into(),
+                extra_authorize: BTreeMap::new(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn pinned_port_collision_surfaces_specific_error() {
+        // Bind the port ourselves so the run_login bind attempt fails
+        // with EADDRINUSE. Use 0 to get an OS-assigned port, then read
+        // it back — avoids hard-coding a port that might be in use on
+        // the dev box.
+        let blocker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = blocker.local_addr().unwrap().port();
+        let provider = pinned_port_provider(port);
+        let ux = Arc::new(ScriptedUx::with_paste("ignored"));
+        let err = run_login(
+            &reqwest::Client::new(),
+            &provider,
+            ux.as_ref(),
+            Duration::from_millis(50),
+        )
+        .await
+        .unwrap_err();
+        match err {
+            LoginError::PinnedPortInUse {
+                provider: p,
+                port: returned_port,
+                ..
+            } => {
+                assert_eq!(p, "test-pinned");
+                assert_eq!(returned_port, port);
+            }
+            other => panic!("expected PinnedPortInUse, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_state_listener_branch_requires_match() {
+        // Loopback listener (used_manual = false): the browser always
+        // forwards every query param, so `None` here means a third
+        // party hit our callback directly. Reject.
+        assert!(matches!(
+            validate_state(None, "EXPECTED", false),
+            Err(LoginError::StateMismatch)
+        ));
+        // Mismatch is always a rejection.
+        assert!(matches!(
+            validate_state(Some("WRONG"), "EXPECTED", false),
+            Err(LoginError::StateMismatch)
+        ));
+        // Matching state passes.
+        assert!(validate_state(Some("EXPECTED"), "EXPECTED", false).is_ok());
+    }
+
+    #[test]
+    fn validate_state_manual_paste_branch_tolerates_missing_state() {
+        // Manual paste (used_manual = true): missing state is OK
+        // because some console pages (e.g. Anthropic's
+        // `console.anthropic.com/oauth/code/callback`) render
+        // `code#state` and users sometimes paste only the `code`. PKCE
+        // is still binding.
+        assert!(validate_state(None, "EXPECTED", true).is_ok());
+        // But a wrong state is still a rejection — CSRF protection
+        // applies when the user actually pastes one.
+        assert!(matches!(
+            validate_state(Some("WRONG"), "EXPECTED", true),
+            Err(LoginError::StateMismatch)
+        ));
+        assert!(validate_state(Some("EXPECTED"), "EXPECTED", true).is_ok());
     }
 }

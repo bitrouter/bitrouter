@@ -75,6 +75,15 @@ pub struct AnthropicOAuthApplier {
     /// refresh; subsequent requests within the validity window reuse it
     /// without touching disk or the refresh endpoint.
     cache: Arc<Mutex<std::collections::HashMap<String, OAuthToken>>>,
+    /// Per-label single-flight gate around the disk-read → refresh →
+    /// persist sequence. RFC 6749 §6 lets the server invalidate older
+    /// refresh tokens once a new one is minted, so two concurrent refreshes
+    /// of the same label can silently log the user out. Holding this
+    /// `tokio::sync::Mutex` across the refresh `await` serialises them;
+    /// the second waiter re-checks the cache after acquiring the lock
+    /// (double-checked locking) and skips the refresh if the first one
+    /// already populated it.
+    refresh_gates: Arc<Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 impl AnthropicOAuthApplier {
@@ -102,13 +111,14 @@ impl AnthropicOAuthApplier {
             client_id: registry.auth.client_id,
             token_endpoint: registry.auth.token_endpoint,
             cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            refresh_gates: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
 
     /// Override the refresh client + token endpoint (tests use this against
     /// `wiremock`).
     #[cfg(test)]
-    pub fn with_client_and_endpoint(
+    pub(crate) fn with_client_and_endpoint(
         store_path: impl Into<std::path::PathBuf>,
         refresh_client: reqwest::Client,
         client_id: impl Into<String>,
@@ -120,7 +130,22 @@ impl AnthropicOAuthApplier {
             client_id: client_id.into(),
             token_endpoint: token_endpoint.into(),
             cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            refresh_gates: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Per-label single-flight gate. Cloned out under the std mutex (no
+    /// awaits held); the returned `tokio::sync::Mutex` serialises the
+    /// disk-read → refresh → persist sequence for that label.
+    fn refresh_gate(&self, label: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut guard = self
+            .refresh_gates
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard
+            .entry(label.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     fn cached_fresh(&self, label: &str) -> Option<OAuthToken> {
@@ -139,12 +164,30 @@ impl AnthropicOAuthApplier {
     /// the inner OAuth access token if it's within the refresh window.
     /// Returns `None` when no credential is stored under that label —
     /// callers fall through to the routing-target's inline `api_key`.
+    ///
+    /// Concurrency: cache hits are lock-free. The disk-read → refresh →
+    /// persist sequence is single-flighted per label via
+    /// [`Self::refresh_gate`] so concurrent requests don't both POST to
+    /// the token endpoint (and risk having the server invalidate the
+    /// older refresh token, per RFC 6749 §6).
     async fn resolve_credential(&self, label: &str) -> Result<Option<ResolvedCredential>> {
-        // 1. Cheap in-memory cache check for the OAuth case.
+        // 1. Cheap in-memory cache check — no locks held across awaits.
         if let Some(cached) = self.cached_fresh(label) {
             return Ok(Some(ResolvedCredential::Oauth(cached)));
         }
-        // 2. Disk read.
+        // 2. Acquire the per-label single-flight gate before any disk
+        //    read or refresh POST. If another task is mid-refresh for
+        //    this label, we wait here and then short-circuit on the
+        //    cache.
+        let gate = self.refresh_gate(label);
+        let _guard = gate.lock().await;
+        // 3. Double-checked locking — another task may have just
+        //    refreshed and populated the cache while we were waiting on
+        //    the gate.
+        if let Some(cached) = self.cached_fresh(label) {
+            return Ok(Some(ResolvedCredential::Oauth(cached)));
+        }
+        // 4. Disk read.
         let store = CredentialStore::load(&self.store_path).map_err(|e| {
             BitrouterError::internal(format!(
                 "reading credential store at {}: {e}",
@@ -155,14 +198,14 @@ impl AnthropicOAuthApplier {
             Some(c) => c.clone(),
             None => return Ok(None),
         };
-        // 3. ApiKey: no refresh logic, return as-is.
+        // 5. ApiKey: no refresh logic, return as-is.
         let token = match cred {
             Credential::ApiKey { value } => {
                 return Ok(Some(ResolvedCredential::ApiKey(value)));
             }
             Credential::Oauth(t) => t,
         };
-        // 4. OAuth: refresh if expiring.
+        // 6. OAuth: refresh if expiring.
         if needs_refresh(&token) {
             let refreshed = refresh(
                 &self.refresh_client,

@@ -15,7 +15,7 @@ rust-version.workspace = true
 # `bitrouter-providers` (`bitrouter-cloud`, downstream crates) don't pull
 # `sha2` / `base64` / `rand` they don't use. `apps/bitrouter` enables it.
 default = []
-pkce = ["dep:sha2", "dep:base64", "dep:rand", "dep:url", "tokio/net", "tokio/io-util"]
+pkce = ["dep:sha2", "dep:base64", "dep:rand", "dep:url", "tokio/net", "tokio/io-util", "tokio/sync"]
 
 [dependencies]
 # `config_file` for `bitrouter_sdk::config::{Config, ProviderConfig, PatternMap}`
@@ -39,5 +39,5 @@ rand = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "io-util"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "sync"] }
 wiremock = "0.6"
