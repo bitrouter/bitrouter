@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::Config;
-use bitrouter_sdk::mcp::{Executor, McpRequest, McpTarget, McpTransport, RmcpExecutor};
+use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
+use bitrouter_sdk::mcp::transport::McpTransport;
+use bitrouter_sdk::mcp::{Executor, McpRequest, McpTarget};
 
 /// One row in `bitrouter tools list`.
 #[derive(Debug, Clone)]
@@ -224,7 +226,7 @@ fn render_discovery(server: &str, transport: &McpTransport, tools: &[ToolSummary
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_sdk::mcp::McpServerConfig;
+    use bitrouter_sdk::mcp::transport::McpServerConfig;
     use std::collections::HashMap;
 
     fn cfg_with(server_id: &str, server_cfg: McpServerConfig) -> Config {

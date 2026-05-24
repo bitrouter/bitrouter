@@ -328,8 +328,9 @@ plugins:
 async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     use async_trait::async_trait;
     use bitrouter_sdk::App;
+    use bitrouter_sdk::mcp::transport::McpTransport;
     use bitrouter_sdk::mcp::{
-        Executor, McpRequest, McpResponse, McpTarget, McpTransport, RoutingTable, ServerSelector,
+        Executor, McpRequest, McpResponse, McpTarget, RoutingTable, ServerSelector,
     };
     use http::Request;
     use std::sync::Arc;
@@ -542,9 +543,9 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
 async fn e2e_mcp_aggregate_and_sse_endpoints() {
     use async_trait::async_trait;
     use bitrouter_sdk::App;
+    use bitrouter_sdk::mcp::transport::McpTransport;
     use bitrouter_sdk::mcp::{
-        AggregateMember, Executor, McpRequest, McpResponse, McpTarget, McpTransport, RoutingTable,
-        ServerSelector,
+        AggregateMember, Executor, McpRequest, McpResponse, McpTarget, RoutingTable, ServerSelector,
     };
     use bitrouter_sdk::server::{RouterOptions, build_router_with_options};
     use http::Request;

@@ -16,8 +16,8 @@ use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
 use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
 use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
-use bitrouter_sdk::mcp::config_routing::McpServerAggregateConfig;
-use bitrouter_sdk::mcp::{ConfigMcpRoutingTable, RmcpExecutor};
+use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
+use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
 use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
 use bitrouter_observe::OTEL_ENABLED;

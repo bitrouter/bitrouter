@@ -55,26 +55,18 @@ pub mod config_routing;
 #[cfg(feature = "mcp")]
 pub mod rmcp_executor;
 
-pub use transport::{McpServerConfig, McpTransport};
-
-#[cfg(feature = "mcp")]
-pub use config_routing::ConfigMcpRoutingTable;
-#[cfg(feature = "mcp")]
-pub use rmcp_executor::RmcpExecutor;
-// `AggregatingExecutor`, `CachingExecutor`, `CacheTtls` are intentionally
-// not re-exported here — guideline #2 in CLAUDE.md (no `pub use` inside a
-// `pub mod`). Reach them via their submodule paths
-// (`mcp::aggregating_executor::AggregatingExecutor`,
-// `mcp::caching_executor::{CacheTtls, CachingExecutor}`).
+// Per CLAUDE.md guideline #2 we do not `pub use` from these submodules.
+// Downstream code reaches the types directly:
+// - `mcp::transport::{McpServerConfig, McpTransport}`
+// - `mcp::config_routing::ConfigMcpRoutingTable`
+// - `mcp::rmcp_executor::RmcpExecutor`
+// - `mcp::aggregating_executor::AggregatingExecutor`
+// - `mcp::caching_executor::{CacheTtls, CachingExecutor}`
 //
-// TODO(mcp-reexport-cleanup): the `McpServerConfig`, `McpTransport`,
-// `ConfigMcpRoutingTable`, and `RmcpExecutor` re-exports above predate
-// guideline #2 and currently violate it. They are kept for source-compat
-// with downstream consumers (e.g. `bitrouter-cloud` imports
-// `bitrouter_sdk::mcp::RmcpExecutor`). Removing them is a breaking change
-// for the SDK public surface, so it is intentionally deferred to its own
-// PR rather than bundled into this feature work — the cleanup PR must
-// rewrite every downstream import site in one shot.
+// `McpTransport` is named in this file's own type definitions
+// (`AggregateMember`, `McpTarget`), so a private `use` brings it into local
+// scope without re-exporting it.
+use transport::McpTransport;
 
 /// Which upstream(s) an inbound MCP request targets.
 ///
