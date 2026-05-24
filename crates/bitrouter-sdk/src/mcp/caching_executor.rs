@@ -171,6 +171,11 @@ pub struct CachingExecutor<E: Executor> {
     inner: Arc<E>,
     ttls: CacheTtls,
     caches: Arc<Mutex<HashMap<String, ServerCache>>>,
+    /// `Some` once [`with_invalidation`] has spawned the receiver loop. Held so
+    /// `Drop` can `abort()` it — otherwise the task would outlive the
+    /// executor whenever the broadcast sender (typically on the inner
+    /// `RmcpExecutor`) lives longer than this wrapper.
+    invalidation_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl<E: Executor + 'static> CachingExecutor<E> {
@@ -180,15 +185,16 @@ impl<E: Executor + 'static> CachingExecutor<E> {
             inner,
             ttls,
             caches: Arc::new(Mutex::new(HashMap::new())),
+            invalidation_task: None,
         }
     }
 
     /// Subscribe the cache to an [`InvalidationEvent`] stream — typically
     /// [`super::RmcpExecutor::invalidation_receiver`]. Returns `self` so the
     /// builder reads naturally.
-    pub fn with_invalidation(self, mut rx: broadcast::Receiver<InvalidationEvent>) -> Self {
+    pub fn with_invalidation(mut self, mut rx: broadcast::Receiver<InvalidationEvent>) -> Self {
         let caches = self.caches.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(event) => apply_invalidation(&caches, &event),
@@ -206,6 +212,7 @@ impl<E: Executor + 'static> CachingExecutor<E> {
                 }
             }
         });
+        self.invalidation_task = Some(handle);
         self
     }
 
@@ -230,6 +237,14 @@ impl<E: Executor + 'static> CachingExecutor<E> {
                 ttl,
             },
         );
+    }
+}
+
+impl<E: Executor> Drop for CachingExecutor<E> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.invalidation_task.take() {
+            handle.abort();
+        }
     }
 }
 
@@ -277,11 +292,55 @@ fn extract_ttl_hint(result: &serde_json::Value) -> Option<Duration> {
 
 fn params_hash(params: &serde_json::Value) -> u64 {
     use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let s = serde_json::to_string(params).unwrap_or_default();
+    use std::hash::Hasher;
     let mut h = DefaultHasher::new();
-    s.hash(&mut h);
+    hash_value(params, &mut h);
     h.finish()
+}
+
+/// Stable, key-order-independent hash of a JSON value. Object entries are
+/// sorted lexicographically before hashing so two semantically equal payloads
+/// (`{"a":1,"b":2}` and `{"b":2,"a":1}`) collide on the same cache key
+/// regardless of whether `serde_json`'s `preserve_order` feature is enabled
+/// anywhere in the workspace (the feature is additive — any transitive dep
+/// can flip the default `Map` from `BTreeMap` to `IndexMap`).
+///
+/// A per-variant discriminator byte and a length prefix on collections keep
+/// the hash unambiguous across types (`null` vs `"null"`, `[1,2]` vs `[1,[2]]`).
+fn hash_value<H: std::hash::Hasher>(value: &serde_json::Value, hasher: &mut H) {
+    use std::hash::Hash;
+    match value {
+        serde_json::Value::Null => 0u8.hash(hasher),
+        serde_json::Value::Bool(b) => {
+            1u8.hash(hasher);
+            b.hash(hasher);
+        }
+        serde_json::Value::Number(n) => {
+            2u8.hash(hasher);
+            n.to_string().hash(hasher);
+        }
+        serde_json::Value::String(s) => {
+            3u8.hash(hasher);
+            s.hash(hasher);
+        }
+        serde_json::Value::Array(arr) => {
+            4u8.hash(hasher);
+            (arr.len() as u64).hash(hasher);
+            for v in arr {
+                hash_value(v, hasher);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            5u8.hash(hasher);
+            let mut entries: Vec<(&String, &serde_json::Value)> = obj.iter().collect();
+            entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+            (entries.len() as u64).hash(hasher);
+            for (k, v) in entries {
+                k.hash(hasher);
+                hash_value(v, hasher);
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -552,6 +611,25 @@ mod tests {
         );
         assert_eq!(derived.prompts_list, coded.prompts_list);
         assert_eq!(derived.max_entries_per_server, coded.max_entries_per_server);
+    }
+
+    #[test]
+    fn params_hash_is_canonical_across_key_order() {
+        // Two semantically-equal params with different key insertion order
+        // must hash identically — otherwise `resources/list` with a
+        // `{cursor, filter}` shape would suffer surprising cache misses
+        // depending on how the inbound client built the JSON.
+        let a = serde_json::json!({"a": 1, "b": {"x": [1, 2], "y": "z"}});
+        let b = serde_json::json!({"b": {"y": "z", "x": [1, 2]}, "a": 1});
+        assert_eq!(params_hash(&a), params_hash(&b));
+        // Different values must still differ.
+        let c = serde_json::json!({"a": 1, "b": {"y": "z", "x": [1, 3]}});
+        assert_ne!(params_hash(&a), params_hash(&c));
+        // Type discrimination: `null` vs the string "null".
+        assert_ne!(
+            params_hash(&serde_json::Value::Null),
+            params_hash(&serde_json::json!("null"))
+        );
     }
 
     #[tokio::test]

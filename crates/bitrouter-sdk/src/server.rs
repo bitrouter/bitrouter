@@ -325,14 +325,30 @@ fn accepts_event_stream(headers: &HeaderMap) -> bool {
 
 /// Build an `Sse` response from a stream of [`mcp::McpStreamPart`]s. Each part
 /// becomes one SSE `data:` event carrying the JSON-RPC notification or
-/// response. The stream closes after the terminating `Final` is sent.
+/// response. The stream closes after the terminating frame — either the
+/// `Final` result or the first error — so JSON-RPC semantics hold (one
+/// terminal frame per `id`) and a client that has already seen the answer
+/// never sits on an open connection waiting for nothing.
 fn sse_response(
     inbound_id: serde_json::Value,
     stream: futures::stream::BoxStream<'static, crate::error::Result<mcp::McpStreamPart>>,
 ) -> Response {
     use axum::response::sse::{Event, KeepAlive, Sse};
     let inbound_id = Arc::new(inbound_id);
-    let event_stream = stream.map(move |item| {
+    // `scan` carries a "have we emitted the terminal frame?" flag. Once true,
+    // the next poll returns `None` and the SSE stream closes — `take_while`
+    // would drop the terminal frame itself, and `futures` has no
+    // `take_while_inclusive`, so this is the portable equivalent.
+    let terminated_stream = stream.scan(false, |done, item| {
+        if *done {
+            return std::future::ready(None);
+        }
+        if matches!(item, Ok(mcp::McpStreamPart::Final(_)) | Err(_)) {
+            *done = true;
+        }
+        std::future::ready(Some(item))
+    });
+    let event_stream = terminated_stream.map(move |item| {
         let inbound_id = inbound_id.clone();
         match item {
             Ok(mcp::McpStreamPart::Notification { method, params }) => {

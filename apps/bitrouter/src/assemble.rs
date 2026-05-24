@@ -224,11 +224,22 @@ pub async fn build_app_with_path(
         // matches the aggregate's last path segment. Trim trailing slashes
         // first — a route written as `/mcp/` in YAML must still trigger the
         // check.
+        //
+        // This is a shallow heuristic: the only collision shape it catches is
+        // `{aggregate_route}/{server}` overlapping with `/mcp/{server}` when
+        // the aggregate route's tail equals a server name. Stranger
+        // collisions (e.g. an aggregate route that re-introduces `/mcp` as a
+        // non-tail segment) fall through and are caught later by axum's
+        // route-registration panic at mount time. Surfacing this case early
+        // gives the operator a config-shaped error rather than a startup
+        // panic for the most common misconfiguration.
         let agg_last = route.trim_end_matches('/').rsplit('/').next().unwrap_or("");
         if !agg_last.is_empty() && config.mcp_servers.keys().any(|k| k.as_str() == agg_last) {
             anyhow::bail!(
-                "mcp_servers entry '{agg_last}' collides with the aggregate route '{route}' — \
-                 rename the server or move the aggregate route"
+                "mcp_servers entry '{agg_last}' would be shadowed by the per-server mount at \
+                 '{route}/{agg_last}' (derived from the aggregate route '{route}'). Rename the \
+                 server or move the aggregate route. Note: this check only catches the \
+                 last-segment overlap; axum mounts may still reject other shapes at startup."
             );
         }
     }

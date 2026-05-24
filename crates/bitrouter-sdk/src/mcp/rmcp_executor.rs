@@ -417,7 +417,7 @@ fn stream_tools_call(
                 return;
             }
         };
-        let mut subscriber = conn.progress.subscribe(handle.progress_token.clone()).await;
+        let mut subscriber = Some(conn.progress.subscribe(handle.progress_token.clone()).await);
         let request_id = request.request_id.clone();
         let server = server_name.clone();
         let call_fut = async move {
@@ -429,9 +429,20 @@ fn stream_tools_call(
         tokio::pin!(call_fut);
 
         loop {
+            // The progress arm awaits `pending()` once the subscriber has
+            // closed — that future is `Poll::Pending` forever, so the `biased`
+            // select stops hot-polling this branch and waits cleanly for
+            // `call_fut` to resolve. (A bare `subscriber.next().await` would
+            // resolve to `None` instantly each tick and burn CPU.)
+            let next_notif = async {
+                match subscriber.as_mut() {
+                    Some(s) => s.next().await,
+                    None => std::future::pending::<Option<_>>().await,
+                }
+            };
             tokio::select! {
                 biased;
-                notif = subscriber.next() => {
+                notif = next_notif => {
                     match notif {
                         Some(n) => {
                             let params = serde_json::to_value(&n).unwrap_or(serde_json::Value::Null);
@@ -441,9 +452,10 @@ fn stream_tools_call(
                             });
                         }
                         None => {
-                            // Subscriber closed before the call returned — keep
-                            // polling the call future; no more notifications
-                            // will arrive but the response still might.
+                            // Subscriber closed before the call returned —
+                            // drop it so subsequent iterations sit on
+                            // `pending()` instead of re-polling a closed stream.
+                            subscriber = None;
                         }
                     }
                 }

@@ -22,8 +22,9 @@
 //!
 //! Failure semantics for fan-out: **partial-success** by default. Servers that
 //! responded contribute their results; servers that failed are listed under
-//! `result._errors = [{server, error}]`. The `_` prefix marks the field as
-//! gateway-injected (not part of the MCP spec for the underlying method).
+//! `result._bitrouterErrors = [{server, error}]`. The `_bitrouter` prefix
+//! namespaces gateway-injected fields so they cannot collide with anything the
+//! upstream method's result schema may carry now or later.
 
 use std::sync::Arc;
 
@@ -77,12 +78,22 @@ impl<E: Executor> AggregatingExecutor<E> {
         list_key: &str,
         prefix_field: Option<&str>,
     ) -> Result<McpResponse> {
-        let mut items: Vec<serde_json::Value> = Vec::new();
-        let mut errors: Vec<serde_json::Value> = Vec::new();
-        for member in members {
+        // Fan out concurrently — cold-cache latency is Σ→max(per-server). Errors
+        // are collected as data (partial-success semantics), so there is no
+        // short-circuit and `join_all` is correct here. Order of members is
+        // preserved in the merged result because `join_all` returns results in
+        // input order regardless of completion order.
+        let calls = members.iter().map(|member| {
             let sub_req = Self::direct_request(request, member);
             let target = Self::direct_target(member);
-            match self.inner.execute(&target, &sub_req).await {
+            async move { (member, self.inner.execute(&target, &sub_req).await) }
+        });
+        let outcomes = futures::future::join_all(calls).await;
+
+        let mut items: Vec<serde_json::Value> = Vec::new();
+        let mut errors: Vec<serde_json::Value> = Vec::new();
+        for (member, outcome) in outcomes {
+            match outcome {
                 Ok(resp) => match resp.result.get(list_key).and_then(|v| v.as_array()) {
                     Some(arr) => {
                         for entry in arr {
@@ -112,7 +123,7 @@ impl<E: Executor> AggregatingExecutor<E> {
         }
         let mut result = serde_json::json!({ list_key: items });
         if !errors.is_empty() {
-            result["_errors"] = serde_json::Value::Array(errors);
+            result["_bitrouterErrors"] = serde_json::Value::Array(errors);
         }
         Ok(McpResponse {
             request_id: request.request_id.clone(),
@@ -380,7 +391,7 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(names, vec!["a__search", "a__fetch", "b__noop"]);
-        assert!(resp.result.get("_errors").is_none());
+        assert!(resp.result.get("_bitrouterErrors").is_none());
     }
 
     #[tokio::test]
@@ -403,7 +414,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.result["tools"][0]["name"], "a__ok");
-        let errors = resp.result["_errors"].as_array().unwrap();
+        let errors = resp.result["_bitrouterErrors"].as_array().unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0]["server"], "b");
     }

@@ -66,9 +66,15 @@ pub use rmcp_executor::RmcpExecutor;
 // `pub mod`). Reach them via their submodule paths
 // (`mcp::aggregating_executor::AggregatingExecutor`,
 // `mcp::caching_executor::{CacheTtls, CachingExecutor}`).
-// The pre-existing `transport`, `config_routing`, and `rmcp_executor`
-// re-exports above predate this rule and are kept for source-compat with
-// downstream consumers; cleaning them up is tracked separately.
+//
+// TODO(mcp-reexport-cleanup): the `McpServerConfig`, `McpTransport`,
+// `ConfigMcpRoutingTable`, and `RmcpExecutor` re-exports above predate
+// guideline #2 and currently violate it. They are kept for source-compat
+// with downstream consumers (e.g. `bitrouter-cloud` imports
+// `bitrouter_sdk::mcp::RmcpExecutor`). Removing them is a breaking change
+// for the SDK public surface, so it is intentionally deferred to its own
+// PR rather than bundled into this feature work — the cleanup PR must
+// rewrite every downstream import site in one shot.
 
 /// Which upstream(s) an inbound MCP request targets.
 ///
