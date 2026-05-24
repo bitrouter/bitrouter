@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
-bitrouter-providers.workspace = true
+bitrouter-providers = { workspace = true, features = ["pkce"] }
 bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true, features = ["otel"] }
 chrono.workspace = true
@@ -36,6 +36,7 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
+reqwest.workspace = true
 anyhow = "1"
 reqwest = { workspace = true }
 thiserror.workspace = true

@@ -5,7 +5,7 @@
 //! 1. The user runs `bitrouter login github-copilot` once, which drives the
 //!    OAuth Device Authorization Grant against `github.com` and stores a
 //!    long-lived GitHub user-to-server access token (e.g. `ghu_…`) in the
-//!    [`crate::oauth::TokenStore`].
+//!    [`crate::oauth::credential_store::CredentialStore`].
 //! 2. At request time, [`CopilotAuthApplier`] reads that GitHub token and
 //!    exchanges it for a short-lived Copilot "internal" token via
 //!    `GET https://api.github.com/copilot_internal/v2/token`. The Copilot
@@ -37,8 +37,7 @@ use bitrouter_sdk::language_model::AuthApplier;
 use bitrouter_sdk::language_model::types::RoutingTarget;
 use bitrouter_sdk::{BitrouterError, Result};
 
-use crate::oauth::TokenStore;
-use crate::oauth::token_store::OAuthToken;
+use crate::oauth::credential_store::{CredentialStore, DEFAULT_LABEL, OAuthToken};
 use exchange::{CopilotToken, TOKEN_EXCHANGE_URL, exchange_for_copilot_token_at};
 
 /// Provider id used throughout the codebase. Matches the TOML filename stem.
@@ -113,15 +112,19 @@ impl CopilotAuthApplier {
     }
 
     fn read_github_token(&self) -> Result<OAuthToken> {
-        let store = TokenStore::load(&self.token_store_path).map_err(|e| {
+        let store = CredentialStore::load(&self.token_store_path).map_err(|e| {
             BitrouterError::internal(format!(
-                "reading OAuth token store at {}: {e}",
+                "reading credential store at {}: {e}",
                 self.token_store_path.display()
             ))
         })?;
+        // The github-copilot login stores a single OAuth credential under
+        // the default label — no multi-account support, because the
+        // upstream user-to-server token doesn't carry an account identifier
+        // the downstream pipeline could fan out on.
         store
-            .get(PROVIDER_ID)
-            .cloned()
+            .get_any(PROVIDER_ID, DEFAULT_LABEL)
+            .and_then(|c| c.as_oauth().cloned())
             .ok_or_else(|| BitrouterError::Upstream {
                 status: 401,
                 message: "no GitHub Copilot OAuth token — run `bitrouter login github-copilot`"
@@ -192,7 +195,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::oauth::TokenStore;
+    use crate::oauth::credential_store::{Credential, CredentialStore};
 
     fn tmp_token_store_path() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -240,15 +243,16 @@ mod tests {
     async fn exchanges_github_token_and_injects_headers() {
         // Seed a stored GitHub OAuth token.
         let store_path = tmp_token_store_path();
-        let mut store = TokenStore::load(&store_path).unwrap();
+        let mut store = CredentialStore::load(&store_path).unwrap();
         store
             .set(
                 PROVIDER_ID,
-                crate::oauth::OAuthToken {
+                DEFAULT_LABEL,
+                Credential::from_oauth_token(OAuthToken {
                     access_token: "ghu_test_github_oauth".into(),
                     expires_at: 0,
                     refresh_token: None,
-                },
+                }),
             )
             .unwrap();
 

@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-use crate::oauth::token_store::OAuthToken;
+use crate::oauth::credential_store::OAuthToken;
 
 /// Inputs the device-code flow needs. Both URLs MUST be HTTPS — sending an
 /// OAuth credential over `http://` would leak it to anyone on the path.

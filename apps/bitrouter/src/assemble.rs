@@ -306,16 +306,32 @@ pub async fn build_app_with_path(
 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
 /// provider whose credential flow needs more than the per-protocol
-/// `Transport::authorise` default (today: only GitHub Copilot).
+/// `Transport::authorise` default — today: GitHub Copilot (device-code
+/// OAuth + token exchange), Anthropic (dual API-key / Pro/Max
+/// subscription OAuth), OpenAI Codex (ChatGPT-subscription OAuth).
 fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
     let mut appliers = AuthAppliers::new();
+    let store_path = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+        .map(|s| s.path().to_path_buf())
+        .context("resolving credential store path")?;
     if config.providers.contains_key("github-copilot") {
-        let token_store_path = bitrouter_providers::oauth::TokenStore::default_path()
-            .map(|s| s.path().to_path_buf())
-            .context("resolving OAuth token store path for github-copilot")?;
-        let applier = bitrouter_providers::copilot::CopilotAuthApplier::new(token_store_path)
+        let applier = bitrouter_providers::copilot::CopilotAuthApplier::new(&store_path)
             .context("building the github-copilot AuthApplier")?;
         appliers.register("github-copilot", Arc::new(applier));
+    }
+    // The Anthropic applier is registered unconditionally when the
+    // provider is configured, so an existing `${ANTHROPIC_API_KEY}` user
+    // gets the same fallthrough behaviour as before — the applier
+    // forwards the inline key when no OAuth credential is in the store.
+    if config.providers.contains_key("anthropic") {
+        let applier = bitrouter_providers::anthropic::AnthropicOAuthApplier::new(&store_path)
+            .context("building the anthropic AuthApplier")?;
+        appliers.register("anthropic", Arc::new(applier));
+    }
+    if config.providers.contains_key("openai-codex") {
+        let applier = bitrouter_providers::codex::OpenAiCodexAuthApplier::new(&store_path)
+            .context("building the openai-codex AuthApplier")?;
+        appliers.register("openai-codex", Arc::new(applier));
     }
     Ok(appliers)
 }

@@ -13,6 +13,10 @@ use crate::entry::ProviderEntry;
 /// MUST match the `id` field inside the TOML (enforced at load time).
 const EMBEDDED: &[(&str, &str)] = &[
     ("openai", include_str!("../providers/openai.toml")),
+    (
+        "openai-codex",
+        include_str!("../providers/openai-codex.toml"),
+    ),
     ("anthropic", include_str!("../providers/anthropic.toml")),
     ("google", include_str!("../providers/google.toml")),
     ("openrouter", include_str!("../providers/openrouter.toml")),
@@ -75,12 +79,13 @@ mod tests {
         let entries = load_embedded().expect("embedded TOML files must parse");
         // Bump this when adding a new provider — keeps the test honest about
         // catalog growth.
-        assert_eq!(entries.len(), 7);
+        assert_eq!(entries.len(), 8);
     }
 
     #[test]
     fn looks_up_by_id() {
         assert!(find("openai").is_some());
+        assert!(find("openai-codex").is_some());
         assert!(find("anthropic").is_some());
         assert!(find("google").is_some());
         assert!(find("openrouter").is_some());

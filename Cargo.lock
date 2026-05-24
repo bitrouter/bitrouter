@@ -782,13 +782,17 @@ name = "bitrouter-providers"
 version = "1.0.0-alpha.2"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bitrouter-sdk",
+ "rand 0.9.4",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "url",
  "wiremock",
 ]
 
