@@ -193,10 +193,11 @@ enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Sign in / out of an OAuth 2.0 Authorization Server via the
-    /// Device Authorization Grant (RFC 8628). Distinct from the
-    /// per-provider `bitrouter login <provider>` flow above: this signs
-    /// the CLI in *as a user* to a user-supplied AS.
+    /// Sign in to bitrouter from this terminal.
+    ///
+    /// After `bitrouter auth login`, this CLI uses your account credentials
+    /// automatically for inference, key management, billing, BYOK, and the
+    /// rest of the management surface.
     Auth {
         #[command(subcommand)]
         action: AuthAction,
@@ -205,37 +206,41 @@ enum Command {
 
 #[derive(Subcommand)]
 enum AuthAction {
-    /// Run the device-authorization grant against the configured AS and
-    /// persist the resulting tokens.
+    /// Sign in to bitrouter.
+    ///
+    /// Prints a verification URL — open it in your browser, approve, and
+    /// this CLI receives an access token it stores locally and refreshes
+    /// automatically.
     Login {
-        /// OAuth 2.0 Authorization Server base URL (RFC 6749). Falls
-        /// back to `$BITROUTER_OAUTH_AS`.
+        /// Authorization server URL. Defaults to https://api.bitrouter.ai;
+        /// override only for a self-hosted deployment (env: BITROUTER_OAUTH_AS).
         #[arg(long = "oauth-as", value_name = "URL")]
         authorization_server: Option<String>,
-        /// Public OAuth client id registered with the AS. Falls back
-        /// to `$BITROUTER_OAUTH_CLIENT_ID`.
+        /// OAuth client id. Defaults to `bitrouter-cli`; override only for a
+        /// self-hosted deployment (env: BITROUTER_OAUTH_CLIENT_ID).
         #[arg(long = "client-id", value_name = "ID")]
         client_id: Option<String>,
-        /// Space-delimited OAuth `scope` (RFC 6749 §3.3). Falls back
-        /// to `$BITROUTER_OAUTH_SCOPE`, then to the built-in default.
+        /// Permissions to request, as a space-delimited list. Defaults to a
+        /// broad "developer" set (inference, key management, billing-read,
+        /// policy, BYOK, account-read); pass a narrower or wider list to
+        /// override (env: BITROUTER_OAUTH_SCOPE).
         #[arg(long, value_name = "SCOPE")]
         scope: Option<String>,
     },
-    /// Revoke the stored tokens (best-effort, RFC 7009) and delete the
-    /// local credentials file.
+    /// Sign out: revoke the stored token at the server (best-effort) and
+    /// delete the local credentials file.
     Logout {
-        /// Override the AS URL recorded in the credentials file (for
-        /// the revocation call). Defaults to whatever AS the file
-        /// records.
+        /// Override the authorization server URL recorded in the
+        /// credentials file for the revocation call.
         #[arg(long = "oauth-as", value_name = "URL")]
         authorization_server: Option<String>,
-        /// Override the recorded client id for the revocation call.
+        /// Override the recorded OAuth client id for the revocation call.
         #[arg(long = "client-id", value_name = "ID")]
         client_id: Option<String>,
     },
-    /// Print the locally stored subject identifier (if any) and whether
-    /// the access token is currently within its TTL. Does NOT call the
-    /// AS — answers from the credentials file only.
+    /// Show who is signed in on this machine.
+    ///
+    /// Reads the locally stored credentials — no network call.
     Whoami,
 }
 
