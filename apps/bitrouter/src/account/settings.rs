@@ -21,12 +21,28 @@ pub const DEFAULT_AS: &str = "https://api.bitrouter.ai";
 pub const DEFAULT_CLIENT_ID: &str = "bitrouter-cli";
 
 /// Default `scope` value used when neither the flag nor the env var
-/// supplies one. Per RFC 6749 §3.3, scope is a space-delimited list of
-/// strings. These two scopes cover the most common API-key shape
-/// (invoke an inference request, read usage). Users whose authorization
-/// server uses different scope names override with `--scope` or
-/// [`SCOPE_ENV`].
-pub const DEFAULT_SCOPE: &str = "inference:invoke usage:read";
+/// supplies one. Per RFC 6749 §3.3, scope is a space-delimited list
+/// of strings.
+///
+/// The set follows the `gh auth login` heuristic: grant the broad
+/// "work" scopes a developer expects from a terminal session, hold
+/// back the truly sensitive ones behind an explicit `--scope`. Sensitive
+/// scopes deliberately left out (opt in with `--scope` if you need
+/// them):
+///   - `billing:write` — initiates a Stripe checkout flow
+///   - `account:write` — account settings, including deletion
+///   - `clients:read` / `clients:write` — registering OAuth clients
+///
+/// The actual issued scope is still the intersection
+/// `caller_role ∩ client_allowed_scopes ∩ requested`, so a user
+/// without the role for one of these scopes silently drops it at
+/// issuance — they only get the broad set their role admits.
+pub const DEFAULT_SCOPE: &str = "inference:invoke usage:read \
+                                 keys:read keys:write \
+                                 billing:read \
+                                 policy:read policy:write \
+                                 byok:read byok:write \
+                                 account:read";
 
 /// Environment variable for the authorization server base URL.
 pub const AS_ENV: &str = "BITROUTER_OAUTH_AS";
