@@ -521,7 +521,7 @@ async fn run() -> Result<()> {
 // ===== `bitrouter auth …` (OAuth 2.0 device flow against a user-supplied AS) =====
 
 async fn auth_cmd(action: AuthAction) -> Result<()> {
-    use bitrouter::account::commands::{LoginInputs, login, logout, whoami};
+    use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login, logout, whoami};
     match action {
         AuthAction::Login {
             authorization_server,

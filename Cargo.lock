@@ -705,6 +705,7 @@ dependencies = [
  "axum 0.8.9",
  "axum-test",
  "base64 0.22.1",
+ "bitrouter-cloud-sdk",
  "bitrouter-guardrails",
  "bitrouter-observe",
  "bitrouter-providers",
@@ -722,7 +723,7 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
  "tower 0.5.3",
  "tracing",
@@ -742,6 +743,25 @@ dependencies = [
  "bitrouter-sdk",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "bitrouter-cloud-sdk"
+version = "1.0.0-alpha.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bitrouter-sdk",
+ "chrono",
+ "rand 0.9.4",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]

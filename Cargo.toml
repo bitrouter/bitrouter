@@ -17,6 +17,7 @@ rust-version = "1.88"
 # internal crates
 bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.2", default-features = false }
 bitrouter-bedrock = { path = "crates/bitrouter-bedrock", version = "1.0.0-alpha.2" }
+bitrouter-cloud-sdk = { path = "crates/bitrouter-cloud-sdk", version = "1.0.0-alpha.2" }
 bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.2" }
 bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.2" }
 bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.2", default-features = false }

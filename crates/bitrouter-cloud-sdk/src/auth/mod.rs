@@ -1,10 +1,17 @@
-//! Sign-in to an OAuth 2.0 Authorization Server via the Device Authorization
-//! Grant (RFC 8628). The "account" namespace is distinct from the local
-//! `apps/bitrouter/src/auth/` module — that one mints local `brvk_` virtual
-//! keys for callers of the bitrouter HTTP API. This one signs the CLI *into*
-//! a user account on a remote AS.
+//! Sign-in to the BitRouter Cloud OAuth 2.0 Authorization Server via the
+//! Device Authorization Grant (RFC 8628). This module is distinct from the
+//! upstream-provider OAuth code in `bitrouter-providers`:
 //!
-//! Central references:
+//! - `bitrouter-providers` ships device-code + auth-code clients used to
+//!   sign the user *into a third-party LLM vendor* (Anthropic Pro/Max,
+//!   ChatGPT, GitHub Copilot). Those tokens authenticate outbound calls
+//!   to the vendor's API.
+//! - This module signs the CLI *into a BitRouter user account* on the
+//!   configured authorization server. The resulting bearer authenticates
+//!   inbound calls to the BitRouter Cloud `/v1/*` surface (inference,
+//!   key management, BYOK, policy, billing, …).
+//!
+//! Authoritative references:
 //! - RFC 8628 — Device Authorization Grant: <https://www.rfc-editor.org/rfc/rfc8628>
 //! - RFC 6749 — The OAuth 2.0 Authorization Framework: <https://www.rfc-editor.org/rfc/rfc6749>
 //! - RFC 6750 — Bearer Token Usage: <https://www.rfc-editor.org/rfc/rfc6750>
