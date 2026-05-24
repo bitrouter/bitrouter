@@ -190,8 +190,8 @@ impl<E: Executor + 'static> CachingExecutor<E> {
     }
 
     /// Subscribe the cache to an [`InvalidationEvent`] stream — typically
-    /// [`super::RmcpExecutor::invalidation_receiver`]. Returns `self` so the
-    /// builder reads naturally.
+    /// [`super::rmcp_executor::RmcpExecutor::invalidation_receiver`]. Returns
+    /// `self` so the builder reads naturally.
     pub fn with_invalidation(mut self, mut rx: broadcast::Receiver<InvalidationEvent>) -> Self {
         let caches = self.caches.clone();
         let handle = tokio::spawn(async move {
