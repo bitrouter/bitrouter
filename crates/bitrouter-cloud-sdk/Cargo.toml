@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-cloud-sdk"
-description = "Client SDK for the BitRouter Cloud control plane: OAuth 2.0 device-flow sign-in (RFC 8628) and a bitrouter-cloud LLM provider AuthApplier."
+description = "Client SDK for the BitRouter Cloud control plane: OAuth 2.0 device-flow sign-in (RFC 8628) and a `bitrouter` LLM provider AuthApplier."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

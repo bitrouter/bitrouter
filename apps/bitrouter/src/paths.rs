@@ -197,8 +197,8 @@ pub async fn load_config(source: &ConfigSource) -> Result<bitrouter_sdk::config:
         ConfigSource::Default { .. } => {
             let mut cfg = bitrouter_providers::zero_config();
             // Layered on top of the env-var-driven auto-enable: a signed-in
-            // user (credentials file present) gets the bitrouter-cloud
-            // provider even without `$BITROUTER_API_KEY` in their shell.
+            // user (credentials file present) gets the `bitrouter` provider
+            // even without `$BITROUTER_API_KEY` in their shell.
             crate::cloud::enable_in_zero_config(&mut cfg);
             Ok(cfg)
         }

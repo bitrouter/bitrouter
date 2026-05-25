@@ -306,19 +306,19 @@ pub async fn build_app_with_path(
 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
 /// provider whose credential flow needs more than the per-protocol
-/// `Transport::authorise` default — today: bitrouter-cloud (OAuth user
-/// account from `bitrouter auth login`, with a `BITROUTER_API_KEY`
-/// fallback), GitHub Copilot (device-code OAuth + token exchange),
-/// Anthropic (dual API-key / Pro/Max subscription OAuth), OpenAI Codex
-/// (ChatGPT-subscription OAuth).
+/// `Transport::authorise` default — today: `bitrouter` (the official
+/// hosted gateway; OAuth from `bitrouter auth login` with a
+/// `BITROUTER_API_KEY` fallback), GitHub Copilot (device-code OAuth +
+/// token exchange), Anthropic (dual API-key / Pro/Max subscription
+/// OAuth), OpenAI Codex (ChatGPT-subscription OAuth).
 fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
     let mut appliers = AuthAppliers::new();
     let store_path = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
         .map(|s| s.path().to_path_buf())
         .context("resolving credential store path")?;
-    // bitrouter-cloud's applier reads the user-account credentials store
-    // (separate from the upstream-provider store above), so it lives in its
-    // own crate and is registered via the `crate::cloud` glue module.
+    // The `bitrouter` provider's applier reads the user-account credentials
+    // store (separate from the upstream-provider store above), so it lives
+    // in its own crate and is registered via the `crate::cloud` glue module.
     crate::cloud::register_if_configured(config, &mut appliers)?;
     if config.providers.contains_key("github-copilot") {
         let applier = bitrouter_providers::copilot::CopilotAuthApplier::new(&store_path)

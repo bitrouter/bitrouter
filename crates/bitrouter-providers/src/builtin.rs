@@ -14,14 +14,13 @@ use crate::entry::ProviderEntry;
 ///
 /// Order matters for user-facing output: callers that iterate this list to
 /// render a list of providers (e.g. the zero-config onboarding hint) take
-/// the first entry as the recommended default. `bitrouter-cloud` is
-/// deliberately first — it is the project's official hosted gateway and
-/// gives a new user one credential covering every supported model.
+/// the first entry as the recommended default. `bitrouter` is deliberately
+/// first — it is the project's official hosted gateway and gives a new
+/// user one credential covering every supported model. The id is the
+/// short, brand-aligned form so model addressing reads naturally:
+/// `bitrouter:gpt-5.5`, `bitrouter:claude-sonnet-4.6`, …
 const EMBEDDED: &[(&str, &str)] = &[
-    (
-        "bitrouter-cloud",
-        include_str!("../providers/bitrouter-cloud.toml"),
-    ),
+    ("bitrouter", include_str!("../providers/bitrouter.toml")),
     ("openai", include_str!("../providers/openai.toml")),
     (
         "openai-codex",
@@ -93,19 +92,19 @@ mod tests {
     }
 
     #[test]
-    fn bitrouter_cloud_is_first_for_onboarding_priority() {
+    fn bitrouter_is_first_for_onboarding_priority() {
         let entries = load_embedded().expect("embedded TOML files must parse");
         assert_eq!(
             entries.first().map(|e| e.id.as_str()),
-            Some("bitrouter-cloud"),
-            "bitrouter-cloud must lead the catalog so the zero-config hint \
-             recommends it first"
+            Some("bitrouter"),
+            "`bitrouter` must lead the catalog so the zero-config hint \
+             recommends the hosted gateway first"
         );
     }
 
     #[test]
-    fn bitrouter_cloud_parses_with_bearer_env_var() {
-        let entry = find("bitrouter-cloud").expect("bitrouter-cloud must be in the catalog");
+    fn bitrouter_parses_with_bearer_env_var() {
+        let entry = find("bitrouter").expect("`bitrouter` must be in the catalog");
         assert_eq!(entry.api_base, "https://api.bitrouter.ai/v1");
         assert_eq!(entry.auth.env_var(), Some("BITROUTER_API_KEY"));
         use bitrouter_sdk::language_model::types::ApiProtocol;
@@ -117,7 +116,7 @@ mod tests {
 
     #[test]
     fn looks_up_by_id() {
-        assert!(find("bitrouter-cloud").is_some());
+        assert!(find("bitrouter").is_some());
         assert!(find("openai").is_some());
         assert!(find("openai-codex").is_some());
         assert!(find("anthropic").is_some());

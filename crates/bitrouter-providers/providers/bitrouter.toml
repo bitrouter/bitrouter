@@ -24,7 +24,7 @@
 #   https://www.rfc-editor.org/rfc/rfc8628
 # - BitRouter docs: https://docs.bitrouter.ai
 
-id = "bitrouter-cloud"
+id = "bitrouter"
 display_name = "BitRouter Cloud"
 api_base = "https://api.bitrouter.ai/v1"
 api_protocol = "openai"

@@ -13,7 +13,9 @@
 //!    `bitrouter auth login` / `logout` / `whoami` subcommands wire to the
 //!    entry points in [`auth::commands`].
 //! 2. [`provider`] — a [`bitrouter_sdk::language_model::AuthApplier`]
-//!    implementation for the `bitrouter-cloud` provider. Prefers an OAuth
+//!    implementation for the `bitrouter` provider (the official hosted
+//!    gateway whose user-facing addressing is `bitrouter:<model-id>`).
+//!    Prefers an OAuth
 //!    access token from the credentials store (auto-refreshed within
 //!    [`auth::credentials::REFRESH_WINDOW`] of expiry); falls back to a
 //!    static `brk_…` API key carried on the routing target; otherwise

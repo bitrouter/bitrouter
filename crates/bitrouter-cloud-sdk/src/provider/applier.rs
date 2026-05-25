@@ -16,7 +16,7 @@
 //!    older refresh token once a new one is minted, so two concurrent
 //!    refreshes can silently log the user out.
 //! 2. **Inline `brk_…` API key** carried on the [`RoutingTarget`]. The
-//!    bitrouter-cloud entry in `bitrouter-providers` advertises
+//!    `bitrouter` entry in `bitrouter-providers` advertises
 //!    `auth.env = "BITROUTER_API_KEY"`, so
 //!    `bitrouter_providers::apply_builtin_defaults` populates
 //!    `RoutingTarget::api_key` from the process environment at config
@@ -56,18 +56,22 @@ use bitrouter_sdk::{BitrouterError, Result};
 use crate::auth::credentials::CredentialsStore;
 use crate::auth::metadata::{self, AsMetadata};
 
-/// Provider id this applier is registered under.
-pub const PROVIDER_ID: &str = "bitrouter-cloud";
+/// Provider id this applier is registered under. Short and brand-aligned
+/// so model addressing reads naturally: `bitrouter:gpt-5.5`,
+/// `bitrouter:claude-sonnet-4.6`, etc. The crate name keeps the longer
+/// `bitrouter-cloud-sdk` form to disambiguate from the local bitrouter
+/// binary.
+pub const PROVIDER_ID: &str = "bitrouter";
 
 /// Onboarding text emitted when neither an OAuth credential nor a
 /// `BITROUTER_API_KEY` is available. Kept short for the 401 response body
 /// the CLI prints back to the user; the longer multi-step prompt at zero
 /// config time is rendered separately by `apps/bitrouter`.
 pub fn onboarding_hint() -> &'static str {
-    "no bitrouter-cloud credential — run `bitrouter auth login` or set BITROUTER_API_KEY=brk_…"
+    "no BitRouter Cloud credential — run `bitrouter auth login` or set BITROUTER_API_KEY=brk_…"
 }
 
-/// `AuthApplier` for `provider_name == "bitrouter-cloud"`.
+/// `AuthApplier` for `provider_name == "bitrouter"`.
 ///
 /// The applier is constructed once during [`apps/bitrouter`'s
 /// `build_auth_appliers`](../../../bitrouter/index.html) call and
@@ -105,7 +109,7 @@ impl BitrouterCloudAuthApplier {
             .build()
             .map_err(|e| {
                 BitrouterError::internal(format!(
-                    "building bitrouter-cloud refresh HTTP client: {e}"
+                    "building BitRouter Cloud refresh HTTP client: {e}"
                 ))
             })?;
         Ok(Self {
@@ -142,7 +146,7 @@ impl BitrouterCloudAuthApplier {
             .await
             .map_err(|e| BitrouterError::Upstream {
                 status: 502,
-                message: format!("fetching bitrouter-cloud AS metadata at {as_url}: {e:#}"),
+                message: format!("fetching BitRouter Cloud AS metadata at {as_url}: {e:#}"),
             })?;
         *self.metadata_cache.write().await = Some(CachedMetadata {
             as_url: as_url.to_string(),
@@ -181,7 +185,7 @@ impl BitrouterCloudAuthApplier {
             .await
             .map_err(|e| BitrouterError::Upstream {
                 status: 401,
-                message: format!("bitrouter-cloud token refresh failed: {e:#}"),
+                message: format!("BitRouter Cloud token refresh failed: {e:#}"),
             })?;
         Ok(Some(token))
     }
@@ -214,7 +218,7 @@ impl AuthApplier for BitrouterCloudAuthApplier {
         };
         let value = HeaderValue::from_str(&format!("Bearer {bearer}")).map_err(|e| {
             BitrouterError::internal(format!(
-                "invalid bitrouter-cloud bearer for Authorization: {e}"
+                "invalid BitRouter Cloud bearer for Authorization: {e}"
             ))
         })?;
         request

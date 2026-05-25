@@ -1,8 +1,8 @@
 //! Glue between [`bitrouter_cloud_sdk`] and the bitrouter assembly layer.
 //!
-//! Two responsibilities, both keyed on the `"bitrouter-cloud"` provider id:
+//! Two responsibilities, both keyed on the `"bitrouter"` provider id:
 //!
-//! - [`enable_in_zero_config`] — auto-add `bitrouter-cloud` to the in-memory
+//! - [`enable_in_zero_config`] — auto-add the `bitrouter` provider to the in-memory
 //!   zero-config `providers:` map when the user has signed in via
 //!   `bitrouter auth login` (an `account-credentials.json` file is present
 //!   at the default path). The env-var path (`$BITROUTER_API_KEY`) is
@@ -25,9 +25,9 @@ use bitrouter_cloud_sdk::provider::PROVIDER_ID;
 use bitrouter_sdk::config::{Config, ProviderConfig};
 use bitrouter_sdk::language_model::{AuthApplier, auth::AuthAppliers};
 
-/// Insert the `bitrouter-cloud` provider into `config.providers` when the
-/// user has run `bitrouter auth login` (i.e. the credentials file exists at
-/// the default path) and the entry is not already present.
+/// Insert the `bitrouter` provider into `config.providers` when the user
+/// has run `bitrouter auth login` (i.e. the credentials file exists at the
+/// default path) and the entry is not already present.
 ///
 /// No-op when the credentials file is absent — `bitrouter_providers::zero_config`
 /// already handles the `$BITROUTER_API_KEY` env-var path. Together the two
@@ -58,18 +58,17 @@ fn enable_in_zero_config_with_path(config: &mut Config, credentials_path: &std::
     );
 }
 
-/// Build the bitrouter-cloud `AuthApplier`. Reads the credentials file at
+/// Build the BitRouter Cloud `AuthApplier`. Reads the credentials file at
 /// [`bitrouter_cloud_sdk::auth::credentials::default_credentials_path`].
 pub fn build_auth_applier() -> Result<Arc<dyn AuthApplier>> {
-    let path = default_credentials_path().context("resolving bitrouter-cloud credentials path")?;
+    let path = default_credentials_path().context("resolving BitRouter Cloud credentials path")?;
     let applier =
-        BitrouterCloudAuthApplier::new(path).context("building the bitrouter-cloud AuthApplier")?;
+        BitrouterCloudAuthApplier::new(path).context("building the BitRouter Cloud AuthApplier")?;
     Ok(Arc::new(applier))
 }
 
-/// Register the bitrouter-cloud applier on `appliers` when the
-/// `bitrouter-cloud` provider appears in `config.providers`. No-op
-/// otherwise.
+/// Register the BitRouter Cloud applier on `appliers` when the `bitrouter`
+/// provider appears in `config.providers`. No-op otherwise.
 pub fn register_if_configured(config: &Config, appliers: &mut AuthAppliers) -> Result<()> {
     if !config.providers.contains_key(PROVIDER_ID) {
         return Ok(());
@@ -115,7 +114,7 @@ mod tests {
         let provider = config
             .providers
             .get(PROVIDER_ID)
-            .expect("bitrouter-cloud should be auto-enabled when creds file is present");
+            .expect("`bitrouter` provider should be auto-enabled when creds file is present");
         assert!(
             provider.auto_discover,
             "auto_discover should be true so /models populates the routable list"
