@@ -3,7 +3,7 @@
 //! taxonomy without depending on the server crate.
 //!
 //! The server response shape is `{ "error": <code>, "error_description":
-//! <msg> }` per [`bitrouter_cloud::v1::http::management::error`]. Codes
+//! <msg> }` per `bitrouter_cloud::v1::http::management::error`. Codes
 //! are: `bad_request | unauthorized | forbidden | not_found | conflict |
 //! internal`.
 
