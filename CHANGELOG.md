@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.3](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.2...v1.0.0-alpha.3)
+
+
+### ⛰️ Features
+
+- *(cli)* Bitrouter cloud subcommand for /v1/* management ([#489](https://github.com/bitrouter/bitrouter/pull/489)) - ([c0dc761](https://github.com/bitrouter/bitrouter/commit/c0dc761b824777c8b3e36483a3328746e525c824))
+- *(cli)* OAuth 2.0 device-flow auth subcommand ([#480](https://github.com/bitrouter/bitrouter/pull/480)) - ([f5cba27](https://github.com/bitrouter/bitrouter/commit/f5cba270795ace61eec682eee449c60fe2e11c7b))
+- *(mcp)* Aggregation + caching + SSE + sampling-deny ([#484](https://github.com/bitrouter/bitrouter/pull/484)) - ([f1ab313](https://github.com/bitrouter/bitrouter/commit/f1ab313582bc92655c9eec9c27524a0622e3e063))
+- *(observe)* Migrate to OpenTelemetry with multi-tenant attribution ([#475](https://github.com/bitrouter/bitrouter/pull/475)) - ([be513cf](https://github.com/bitrouter/bitrouter/commit/be513cf631b121a86fe57decc4ef89509802e73f))
+- Bitrouter-cloud SDK + LLM provider with OAuth or API-key onboarding ([#486](https://github.com/bitrouter/bitrouter/pull/486)) - ([35e8894](https://github.com/bitrouter/bitrouter/commit/35e8894a461088a78540b7536c50137a1703d414))
+- PKCE OAuth login for Anthropic and OpenAI Codex ([#481](https://github.com/bitrouter/bitrouter/pull/481)) - ([62d3b29](https://github.com/bitrouter/bitrouter/commit/62d3b29855039c51828a35e003a454cac457df18))
+
+### 🐛 Bug Fixes
+
+- *(bitrouter)* Drop duplicate reqwest dep entry ([#485](https://github.com/bitrouter/bitrouter/pull/485)) - ([d65fd1b](https://github.com/bitrouter/bitrouter/commit/d65fd1b6a2a3389f4707676de658c8a40a8488fb))
+
+
 ## [1.0.0-alpha.2](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.1...v1.0.0-alpha.2)
 
 
