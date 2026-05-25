@@ -23,11 +23,11 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use bitrouter::account::commands::{LoginInputs, http_client};
-use bitrouter::account::credentials::{Credentials, CredentialsStore, REFRESH_WINDOW};
-use bitrouter::account::flow;
-use bitrouter::account::metadata;
-use bitrouter::account::settings::Settings;
+use bitrouter_cloud_sdk::auth::commands::{LoginInputs, http_client};
+use bitrouter_cloud_sdk::auth::credentials::{Credentials, CredentialsStore, REFRESH_WINDOW};
+use bitrouter_cloud_sdk::auth::flow;
+use bitrouter_cloud_sdk::auth::metadata;
+use bitrouter_cloud_sdk::auth::settings::Settings;
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, method, path};

@@ -13,6 +13,7 @@ changelog_path = "CHANGELOG.md" # Single changelog at the repository root
 changelog_update = true
 changelog_include = [           # Include commits from the SDK and built-in plugins in the bitrouter changelog
     "bitrouter-sdk",
+    "bitrouter-cloud-sdk",
     "bitrouter-guardrails",
     "bitrouter-observe",
 ]

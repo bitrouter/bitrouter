@@ -1,0 +1,35 @@
+# BitRouter Cloud — the official hosted gateway. The router speaks every
+# bitrouter-supported LLM protocol on the same base URL; the default mapping
+# below sends every model id over OpenAI Chat Completions. Users who want
+# the same model over Anthropic Messages or OpenAI Responses can override
+# `api_protocol` in their bitrouter.yaml.
+#
+# Authentication uses RFC 6750 Bearer credentials. Two sources are supported
+# at runtime, resolved by `BitrouterCloudAuthApplier` (registered when this
+# provider is configured):
+#
+#   1. An OAuth 2.0 access token minted via `bitrouter auth login` (RFC 8628
+#      Device Authorization Grant against the cloud authorization server).
+#      Refreshed automatically per RFC 6749 §6.
+#   2. A long-lived `brk_…` API key exposed via `BITROUTER_API_KEY`. This is
+#      the `auth.env` advertised in the TOML so `apply_builtin_defaults`
+#      populates the routing target's `api_key` from the environment.
+#
+# Public references:
+# - RFC 6749 — The OAuth 2.0 Authorization Framework:
+#   https://www.rfc-editor.org/rfc/rfc6749
+# - RFC 6750 — Bearer Token Usage:
+#   https://www.rfc-editor.org/rfc/rfc6750
+# - RFC 8628 — Device Authorization Grant:
+#   https://www.rfc-editor.org/rfc/rfc8628
+# - BitRouter docs: https://docs.bitrouter.ai
+
+id = "bitrouter"
+display_name = "BitRouter Cloud"
+api_base = "https://api.bitrouter.ai/v1"
+api_protocol = "openai"
+doc_url = "https://docs.bitrouter.ai"
+
+[auth]
+kind = "bearer"
+env = "BITROUTER_API_KEY"

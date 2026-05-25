@@ -521,7 +521,7 @@ async fn run() -> Result<()> {
 // ===== `bitrouter auth …` (OAuth 2.0 device flow against a user-supplied AS) =====
 
 async fn auth_cmd(action: AuthAction) -> Result<()> {
-    use bitrouter::account::commands::{LoginInputs, login, logout, whoami};
+    use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login, logout, whoami};
     match action {
         AuthAction::Login {
             authorization_server,
@@ -853,25 +853,68 @@ fn announce_zero_config(
     }
     let enabled: Vec<&str> = cfg.providers.keys().map(String::as_str).collect();
     if enabled.is_empty() {
-        // Multiple providers can share one env var (opencode-zen and
-        // opencode-go both read `OPENCODE_ZEN_API_KEY`), so the hint
-        // would otherwise list the same name twice.
-        let mut hint: Vec<String> = bitrouter_providers::zero_config_env_var_providers()
-            .into_iter()
-            .map(|(_, env)| env.to_string())
-            .collect();
-        hint.sort();
-        hint.dedup();
-        bitrouter::error_report::info(format_args!(
-            "zero-config mode — no provider env vars set (try {})",
-            hint.join(" / ")
-        ));
+        print_onboarding_hint();
     } else {
         bitrouter::error_report::info(format_args!(
             "zero-config mode — auto-enabled providers: {}",
             enabled.join(", ")
         ));
     }
+}
+
+/// Multi-line guidance shown when zero-config detects no credential of any
+/// kind. The recommendation chain is intentional:
+///
+///   1. `bitrouter auth login` — one OAuth account, every supported model.
+///   2. `BITROUTER_API_KEY` — long-lived `brk_…` key, same coverage.
+///   3. Any upstream provider the user already pays for, locally.
+///
+/// Rendered directly (not through `error_report::info`) because that helper
+/// is single-line by design.
+fn print_onboarding_hint() {
+    let p = bitrouter::style::Palette::for_stderr();
+    eprintln!(
+        "{cyan}{bold}info:{reset} no providers are configured yet. Choose one:",
+        cyan = p.cyan,
+        bold = p.bold,
+        reset = p.reset,
+    );
+    eprintln!();
+    eprintln!("  1. Sign in to BitRouter Cloud — one account covers every model:");
+    eprintln!();
+    eprintln!("       bitrouter auth login");
+    eprintln!();
+    eprintln!("  2. Or paste a BitRouter API key:");
+    eprintln!();
+    eprintln!("       export BITROUTER_API_KEY=brk_…");
+    eprintln!();
+    eprintln!("  3. Or use a provider you already pay for, locally:");
+    eprintln!();
+    eprintln!("       bitrouter login anthropic            # Claude Pro/Max subscription");
+    eprintln!("       bitrouter login github-copilot       # GitHub Copilot subscription");
+    eprintln!("       bitrouter login openai-codex         # ChatGPT subscription");
+    eprintln!();
+    eprintln!("     …or set an API-key env var:");
+    eprintln!();
+    let env_vars = other_provider_env_var_hints();
+    for var in &env_vars {
+        eprintln!("       export {var}=…");
+    }
+    eprintln!();
+}
+
+/// Deduplicated, sorted env-var names for every built-in provider except
+/// `BITROUTER_API_KEY` (rendered separately as step 2). Used by the
+/// onboarding hint.
+fn other_provider_env_var_hints() -> Vec<String> {
+    let mut vars: Vec<String> = bitrouter_providers::zero_config_env_var_providers()
+        .into_iter()
+        .map(|(_, env)| env.to_string())
+        .filter(|v| v != "BITROUTER_API_KEY")
+        .collect();
+    vars.sort();
+    vars.dedup();
+    vars
 }
 
 /// Read the daemon log from `offset` to end. Used to recover the

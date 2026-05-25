@@ -11,7 +11,16 @@ use crate::entry::ProviderEntry;
 
 /// One embedded TOML file: `(filename_stem, contents)`. The filename stem
 /// MUST match the `id` field inside the TOML (enforced at load time).
+///
+/// Order matters for user-facing output: callers that iterate this list to
+/// render a list of providers (e.g. the zero-config onboarding hint) take
+/// the first entry as the recommended default. `bitrouter` is deliberately
+/// first — it is the project's official hosted gateway and gives a new
+/// user one credential covering every supported model. The id is the
+/// short, brand-aligned form so model addressing reads naturally:
+/// `bitrouter:gpt-5.5`, `bitrouter:claude-sonnet-4.6`, …
 const EMBEDDED: &[(&str, &str)] = &[
+    ("bitrouter", include_str!("../providers/bitrouter.toml")),
     ("openai", include_str!("../providers/openai.toml")),
     (
         "openai-codex",
@@ -79,11 +88,35 @@ mod tests {
         let entries = load_embedded().expect("embedded TOML files must parse");
         // Bump this when adding a new provider — keeps the test honest about
         // catalog growth.
-        assert_eq!(entries.len(), 8);
+        assert_eq!(entries.len(), 9);
+    }
+
+    #[test]
+    fn bitrouter_is_first_for_onboarding_priority() {
+        let entries = load_embedded().expect("embedded TOML files must parse");
+        assert_eq!(
+            entries.first().map(|e| e.id.as_str()),
+            Some("bitrouter"),
+            "`bitrouter` must lead the catalog so the zero-config hint \
+             recommends the hosted gateway first"
+        );
+    }
+
+    #[test]
+    fn bitrouter_parses_with_bearer_env_var() {
+        let entry = find("bitrouter").expect("`bitrouter` must be in the catalog");
+        assert_eq!(entry.api_base, "https://api.bitrouter.ai/v1");
+        assert_eq!(entry.auth.env_var(), Some("BITROUTER_API_KEY"));
+        use bitrouter_sdk::language_model::types::ApiProtocol;
+        assert_eq!(
+            entry.api_protocol.resolve("gpt-4o"),
+            Some(ApiProtocol::Openai)
+        );
     }
 
     #[test]
     fn looks_up_by_id() {
+        assert!(find("bitrouter").is_some());
         assert!(find("openai").is_some());
         assert!(find("openai-codex").is_some());
         assert!(find("anthropic").is_some());

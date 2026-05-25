@@ -1,0 +1,31 @@
+[package]
+name = "bitrouter-cloud-sdk"
+description = "Client SDK for the BitRouter Cloud control plane: OAuth 2.0 device-flow sign-in (RFC 8628) and a `bitrouter` LLM provider AuthApplier."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The `AuthApplier` trait + RoutingTarget + Result/BitrouterError surface that
+# the provider applier implements. No other SDK features are needed.
+bitrouter-sdk = { workspace = true }
+
+async-trait.workspace = true
+anyhow = "1"
+thiserror.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+base64.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+wiremock = "0.6"
+serde_json.workspace = true
