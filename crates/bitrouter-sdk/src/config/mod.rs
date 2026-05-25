@@ -58,10 +58,13 @@ pub struct Config {
     pub variants: HashMap<String, VariantConfig>,
     /// Plugin config, keyed by plugin / bundle id.
     pub plugins: HashMap<String, serde_json::Value>,
+    /// Top-level MCP gateway settings (aggregation, caching). All fields
+    /// default — `mcp:` is optional in `bitrouter.yaml`.
+    pub mcp: McpConfig,
     /// Upstream MCP servers, keyed by server id. The id is what appears in
     /// `POST /mcp/{id}` and what the `mcp` pipeline's routing table looks up.
     /// Empty by default — when empty, the binary does not mount the MCP route.
-    pub mcp_servers: HashMap<String, crate::mcp::McpServerConfig>,
+    pub mcp_servers: HashMap<String, crate::mcp::transport::McpServerConfig>,
     /// Upstream ACP agents, keyed by agent id. Looked up by the `acp`
     /// pipeline's routing table; the `bitrouter agent-proxy <id>` CLI
     /// dispatches against this. Empty by default.
@@ -80,9 +83,74 @@ impl Default for Config {
             presets: HashMap::new(),
             variants: HashMap::new(),
             plugins: HashMap::new(),
+            mcp: McpConfig::default(),
             mcp_servers: HashMap::new(),
             agents: HashMap::new(),
             inherit_defaults: true,
+        }
+    }
+}
+
+/// Top-level MCP gateway settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    /// Aggregation (fan-out) endpoint settings.
+    pub aggregate: McpAggregateConfig,
+    /// List-call cache settings.
+    pub cache: McpCacheConfig,
+}
+
+/// `mcp.aggregate` — the virtual aggregate endpoint.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct McpAggregateConfig {
+    /// When `true` (the default), mount the aggregate route. When `false`,
+    /// only per-server routes (`/mcp/{server}`) are mounted.
+    pub enabled: bool,
+    /// HTTP path for the aggregate endpoint. Default `/mcp`.
+    pub route: String,
+}
+
+impl Default for McpAggregateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            route: "/mcp".to_string(),
+        }
+    }
+}
+
+/// `mcp.cache` — the TTL cache wrapping cheap list calls.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct McpCacheConfig {
+    /// When `false`, the cache layer is not installed.
+    pub enabled: bool,
+    /// TTL for `tools/list`. `0` disables for this method.
+    pub tools_list_ttl_secs: u64,
+    /// TTL for `resources/list`. `0` disables for this method.
+    pub resources_list_ttl_secs: u64,
+    /// TTL for `resources/templates/list`. `0` disables for this method.
+    pub resources_templates_list_ttl_secs: u64,
+    /// TTL for `prompts/list`. `0` disables for this method.
+    pub prompts_list_ttl_secs: u64,
+    /// LRU safety bound — max entries per server.
+    pub max_entries_per_server: usize,
+}
+
+impl Default for McpCacheConfig {
+    fn default() -> Self {
+        // Defaults below are kept in lockstep with `mcp::CacheTtls::default()`.
+        // `mcp_cache_config_defaults_match_cache_ttls` (caching_executor tests)
+        // fails the build if these drift apart.
+        Self {
+            enabled: true,
+            tools_list_ttl_secs: 60,
+            resources_list_ttl_secs: 60,
+            resources_templates_list_ttl_secs: 300,
+            prompts_list_ttl_secs: 300,
+            max_entries_per_server: 64,
         }
     }
 }

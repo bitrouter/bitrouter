@@ -14,7 +14,10 @@ use bitrouter_sdk::acp::{AcpStdioExecutor, ConfigAcpRoutingTable};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
-use bitrouter_sdk::mcp::{ConfigMcpRoutingTable, RmcpExecutor};
+use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
+use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
+use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
+use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
 use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
 use bitrouter_observe::OTEL_ENABLED;
@@ -211,21 +214,71 @@ pub async fn build_app_with_path(
     // declares at least one upstream MCP server. The pipeline is independent
     // of the language_model pipeline (different hook traits, different
     // routing table) and carries no settlement.
+    let mcp_aggregate_route = if config.mcp.aggregate.enabled {
+        Some(config.mcp.aggregate.route.clone())
+    } else {
+        None
+    };
+    if let Some(route) = mcp_aggregate_route.as_deref() {
+        // URL collision: a per-server route would be shadowed if its name
+        // matches the aggregate's last path segment. Trim trailing slashes
+        // first — a route written as `/mcp/` in YAML must still trigger the
+        // check.
+        //
+        // This is a shallow heuristic: the only collision shape it catches is
+        // `{aggregate_route}/{server}` overlapping with `/mcp/{server}` when
+        // the aggregate route's tail equals a server name. Stranger
+        // collisions (e.g. an aggregate route that re-introduces `/mcp` as a
+        // non-tail segment) fall through and are caught later by axum's
+        // route-registration panic at mount time. Surfacing this case early
+        // gives the operator a config-shaped error rather than a startup
+        // panic for the most common misconfiguration.
+        let agg_last = route.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+        if !agg_last.is_empty() && config.mcp_servers.keys().any(|k| k.as_str() == agg_last) {
+            anyhow::bail!(
+                "mcp_servers entry '{agg_last}' would be shadowed by the per-server mount at \
+                 '{route}/{agg_last}' (derived from the aggregate route '{route}'). Rename the \
+                 server or move the aggregate route. Note: this check only catches the \
+                 last-segment overlap; axum mounts may still reject other shapes at startup."
+            );
+        }
+    }
+
     let mcp_routing = if config.mcp_servers.is_empty() {
         None
     } else {
         Some(Arc::new(
-            ConfigMcpRoutingTable::from_configs(
-                config
-                    .mcp_servers
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone())),
-            )
+            ConfigMcpRoutingTable::from_configs(config.mcp_servers.iter().map(|(k, v)| {
+                let agg = McpServerAggregateConfig {
+                    aggregate: v.aggregate,
+                    tool_prefix: v.tool_prefix.clone().unwrap_or_else(|| format!("{k}__")),
+                };
+                (k.clone(), v.clone(), agg)
+            }))
             .context("building the MCP routing table from config.mcp_servers")?,
         ))
     };
-    let mcp_executor: Option<Arc<RmcpExecutor>> =
-        mcp_routing.as_ref().map(|_| Arc::new(RmcpExecutor::new()));
+    // The MCP executor stack — composed innermost-out so a single
+    // `/mcp tools/list` with cold caches dials N servers once, after which
+    // it's all cache hits:
+    //   AggregatingExecutor → CachingExecutor → RmcpExecutor
+    // Caches sit at the leaves so a single-server `notifications/*` only
+    // invalidates that server's slice.
+    let mcp_executor = mcp_routing.as_ref().map(|_| {
+        let rmcp: Arc<RmcpExecutor> = Arc::new(RmcpExecutor::new());
+        let inner_for_cache: Arc<RmcpExecutor> = rmcp.clone();
+        if config.mcp.cache.enabled {
+            let ttls: CacheTtls = (&config.mcp.cache).into();
+            let cached: Arc<CachingExecutor<RmcpExecutor>> = Arc::new(
+                CachingExecutor::new(inner_for_cache, ttls)
+                    .with_invalidation(rmcp.invalidation_receiver()),
+            );
+            Arc::new(AggregatingExecutor::new(cached)) as Arc<dyn bitrouter_sdk::mcp::Executor>
+        } else {
+            Arc::new(AggregatingExecutor::new(inner_for_cache))
+                as Arc<dyn bitrouter_sdk::mcp::Executor>
+        }
+    });
 
     // Optional ACP pure-routing pipeline — wired only when the config
     // declares at least one upstream agent. Mirrors the MCP wiring above;
@@ -280,9 +333,16 @@ pub async fn build_app_with_path(
     // so the language_model configuration above stays the same shape it has
     // had since v0.
     let app = match (mcp_routing, mcp_executor) {
-        (Some(table), Some(exec)) => app.mcp(move |m| {
-            m.routing_table(table).executor(exec);
-        }),
+        (Some(table), Some(exec)) => {
+            let app = app.mcp(move |m| {
+                m.routing_table(table).executor(exec);
+            });
+            if let Some(route) = mcp_aggregate_route {
+                app.mcp_aggregate_route(route)
+            } else {
+                app
+            }
+        }
         _ => app,
     };
     // ACP pipeline — separate match because it's an independent optional

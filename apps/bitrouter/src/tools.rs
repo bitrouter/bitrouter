@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::Config;
-use bitrouter_sdk::mcp::{Executor, McpRequest, McpTarget, McpTransport, RmcpExecutor};
+use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
+use bitrouter_sdk::mcp::transport::McpTransport;
+use bitrouter_sdk::mcp::{Executor, McpRequest, McpTarget};
 
 /// One row in `bitrouter tools list`.
 #[derive(Debug, Clone)]
@@ -58,11 +60,11 @@ pub async fn list(config: &Config) -> Vec<ServerTools> {
     let mut servers: Vec<_> = config.mcp_servers.iter().collect();
     servers.sort_by(|a, b| a.0.cmp(b.0));
     for (name, server_cfg) in servers {
-        let target = McpTarget {
+        let target = McpTarget::Direct {
             server_name: name.clone(),
             transport: server_cfg.transport.clone(),
         };
-        let req = McpRequest::new(
+        let req = McpRequest::direct(
             name,
             "tools/list",
             serde_json::json!({}),
@@ -89,11 +91,11 @@ pub async fn status(config: &Config) -> Vec<ServerStatus> {
     let mut servers: Vec<_> = config.mcp_servers.iter().collect();
     servers.sort_by(|a, b| a.0.cmp(b.0));
     for (name, server_cfg) in servers {
-        let target = McpTarget {
+        let target = McpTarget::Direct {
             server_name: name.clone(),
             transport: server_cfg.transport.clone(),
         };
-        let req = McpRequest::new(
+        let req = McpRequest::direct(
             name,
             "tools/list",
             serde_json::json!({}),
@@ -122,11 +124,11 @@ pub async fn discover(config: &Config, server: &str) -> Result<String, String> {
         .get(server)
         .ok_or_else(|| format!("no mcp server configured for '{server}'"))?;
     let executor = RmcpExecutor::new();
-    let target = McpTarget {
+    let target = McpTarget::Direct {
         server_name: server.to_string(),
         transport: server_cfg.transport.clone(),
     };
-    let req = McpRequest::new(
+    let req = McpRequest::direct(
         server,
         "tools/list",
         serde_json::json!({}),
@@ -224,7 +226,7 @@ fn render_discovery(server: &str, transport: &McpTransport, tools: &[ToolSummary
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_sdk::mcp::McpServerConfig;
+    use bitrouter_sdk::mcp::transport::McpServerConfig;
     use std::collections::HashMap;
 
     fn cfg_with(server_id: &str, server_cfg: McpServerConfig) -> Config {
@@ -234,14 +236,14 @@ mod tests {
     }
 
     fn stdio_target(server: &str, cmd: &str) -> McpServerConfig {
-        McpServerConfig {
-            name: server.to_string(),
-            transport: McpTransport::Stdio {
+        McpServerConfig::with_defaults(
+            server,
+            McpTransport::Stdio {
                 command: cmd.into(),
                 args: vec![],
                 env: HashMap::new(),
             },
-        }
+        )
     }
 
     #[tokio::test]

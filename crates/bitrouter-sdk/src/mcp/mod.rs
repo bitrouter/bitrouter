@@ -10,14 +10,15 @@
 //! `language_model::Pipeline` (compile-time protocol isolation). Reuse of
 //! cross-cutting logic is via shared crate-root library code, not shared traits.
 //!
-//! Spec refs (revision pinned to `2025-06-18`):
+//! Spec refs (latest accepted: `2025-11-25`; earlier `2025-06-18`,
+//! `2025-03-26`, `2024-11-05` still negotiable):
 //! - JSON-RPC envelope (Request / Response / Notification / Error):
-//!   <https://modelcontextprotocol.io/specification/2025-06-18/basic>
+//!   <https://modelcontextprotocol.io/specification/2025-11-25/basic>
 //! - Streamable HTTP transport (`Origin`, `MCP-Session-Id`,
 //!   `MCP-Protocol-Version`, SSE response variant):
-//!   <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports>
+//!   <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
 //! - Method catalogue (`tools/list`, `tools/call`, etc.):
-//!   <https://modelcontextprotocol.io/specification/2025-06-18>
+//!   <https://modelcontextprotocol.io/specification/2025-11-25>
 //!
 //! The HTTP server (`crates/bitrouter-sdk/src/server.rs::mcp_invoke`) handles
 //! the wire-format concerns — `id` round-trip, error envelope, Origin
@@ -37,6 +38,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::stream::{self, BoxStream, StreamExt};
 
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
@@ -45,24 +47,49 @@ use crate::language_model::HookDecision;
 pub mod transport;
 
 #[cfg(feature = "mcp")]
+pub mod aggregating_executor;
+#[cfg(feature = "mcp")]
+pub mod caching_executor;
+#[cfg(feature = "mcp")]
 pub mod config_routing;
 #[cfg(feature = "mcp")]
 pub mod rmcp_executor;
 
-pub use transport::{McpServerConfig, McpTransport};
+// Per CLAUDE.md guideline #2 we do not `pub use` from these submodules.
+// Downstream code reaches the types directly:
+// - `mcp::transport::{McpServerConfig, McpTransport}`
+// - `mcp::config_routing::ConfigMcpRoutingTable`
+// - `mcp::rmcp_executor::RmcpExecutor`
+// - `mcp::aggregating_executor::AggregatingExecutor`
+// - `mcp::caching_executor::{CacheTtls, CachingExecutor}`
+//
+// `McpTransport` is named in this file's own type definitions
+// (`AggregateMember`, `McpTarget`), so a private `use` brings it into local
+// scope without re-exporting it.
+use transport::McpTransport;
 
-#[cfg(feature = "mcp")]
-pub use config_routing::ConfigMcpRoutingTable;
-#[cfg(feature = "mcp")]
-pub use rmcp_executor::RmcpExecutor;
+/// Which upstream(s) an inbound MCP request targets.
+///
+/// `Direct(name)` corresponds to `POST /mcp/{name}` and dispatches to one
+/// configured server. `Aggregate` corresponds to the virtual aggregate endpoint
+/// (typically `POST /mcp`) and fans out across every server marked
+/// `aggregate: true` in `bitrouter.yaml`.
+#[derive(Debug, Clone)]
+pub enum ServerSelector {
+    /// `POST /mcp/{name}` — single named upstream.
+    Direct(String),
+    /// `POST /mcp` (or the configured aggregate route) — fan out across every
+    /// server with `aggregate: true`.
+    Aggregate,
+}
 
-/// An inbound MCP request — a JSON-RPC call against a named MCP server.
+/// An inbound MCP request — a JSON-RPC call against one or more MCP servers.
 #[derive(Debug, Clone)]
 pub struct McpRequest {
     /// Unique request id.
     pub request_id: String,
-    /// The MCP server name being addressed (`/mcp/{name}`).
-    pub server: String,
+    /// Which upstream(s) this request targets.
+    pub selector: ServerSelector,
     /// The JSON-RPC method (e.g. `tools/call`, `tools/list`).
     pub method: String,
     /// The JSON-RPC params.
@@ -72,8 +99,8 @@ pub struct McpRequest {
 }
 
 impl McpRequest {
-    /// Build a request with a fresh uuid id.
-    pub fn new(
+    /// Build a direct (single-server) request with a fresh uuid id.
+    pub fn direct(
         server: impl Into<String>,
         method: impl Into<String>,
         params: serde_json::Value,
@@ -81,7 +108,22 @@ impl McpRequest {
     ) -> Self {
         Self {
             request_id: uuid::Uuid::new_v4().to_string(),
-            server: server.into(),
+            selector: ServerSelector::Direct(server.into()),
+            method: method.into(),
+            params,
+            caller,
+        }
+    }
+
+    /// Build an aggregate (fan-out) request with a fresh uuid id.
+    pub fn aggregate(
+        method: impl Into<String>,
+        params: serde_json::Value,
+        caller: CallerContext,
+    ) -> Self {
+        Self {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            selector: ServerSelector::Aggregate,
             method: method.into(),
             params,
             caller,
@@ -98,20 +140,94 @@ pub struct McpResponse {
     pub result: serde_json::Value,
 }
 
-/// One resolved MCP routing target — a concrete upstream MCP server.
+/// One member of an aggregate fan-out — the per-server view used by
+/// [`aggregating_executor::AggregatingExecutor`] when dispatching
+/// `tools/list` / `tools/call` / etc. across multiple upstreams.
 #[derive(Debug, Clone)]
-pub struct McpTarget {
+pub struct AggregateMember {
     /// The upstream MCP server name.
     pub server_name: String,
+    /// Prepended verbatim to upstream tool/prompt names.
+    /// Default at config-load time: `{server_name}__`.
+    pub tool_prefix: String,
     /// How to reach the upstream — Streamable HTTP or stdio child-process.
     pub transport: McpTransport,
 }
 
-/// Resolves an MCP server name into a routing target.
+/// One resolved MCP routing target.
+///
+/// `Direct` is one upstream; `Aggregate` is a fan-out across N upstreams (its
+/// members are the servers marked `aggregate: true` in `bitrouter.yaml`).
+#[derive(Debug, Clone)]
+pub enum McpTarget {
+    /// One named upstream.
+    Direct {
+        /// The upstream server name.
+        server_name: String,
+        /// How to reach the upstream.
+        transport: McpTransport,
+    },
+    /// Fan-out across many upstreams.
+    Aggregate {
+        /// The per-server members of the aggregate.
+        members: Vec<AggregateMember>,
+    },
+}
+
+/// Resolves a [`ServerSelector`] into a routing target.
 #[async_trait]
 pub trait RoutingTable: Send + Sync {
-    /// Resolve `server` into a target.
-    async fn resolve(&self, server: &str, caller: &CallerContext) -> Result<McpTarget>;
+    /// Resolve `selector` into a target.
+    async fn resolve(&self, selector: &ServerSelector, caller: &CallerContext)
+    -> Result<McpTarget>;
+}
+
+/// One cache-invalidation event published by the upstream-side handler
+/// (typically [`rmcp_executor::RmcpExecutor`]) when an MCP server sends a
+/// `notifications/*` indicating its tool/resource/prompt list changed. The
+/// [`caching_executor::CachingExecutor`] subscribes to this stream and evicts
+/// the affected cache entries.
+#[derive(Debug, Clone)]
+pub struct InvalidationEvent {
+    /// The MCP server whose state changed.
+    pub server_name: String,
+    /// Which slice of cached state changed.
+    pub kind: InvalidationKind,
+}
+
+/// Which slice of cached state an [`InvalidationEvent`] is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidationKind {
+    /// `notifications/tools/list_changed` — drop the server's `tools/list`
+    /// cache.
+    ToolsListChanged,
+    /// `notifications/resources/list_changed` — drop the server's
+    /// `resources/list` (and `resources/templates/list`) caches.
+    ResourcesListChanged,
+    /// `notifications/prompts/list_changed` — drop the server's
+    /// `prompts/list` cache.
+    PromptsListChanged,
+    /// The connection re-handshook — drop every cached entry for the server.
+    Reinitialized,
+}
+
+/// One frame of a streaming MCP execution.
+///
+/// `Final` terminates the stream — exactly one per stream, after which no more
+/// items follow. [`ExecutionHook::on_success`] fires once `Final` arrives, so
+/// implementers of [`Executor::execute_streaming`] MUST end every successful
+/// stream with `Final` and MUST NOT emit `Final` more than once.
+#[derive(Debug, Clone)]
+pub enum McpStreamPart {
+    /// JSON-RPC notification with no `id` (progress / log / etc.).
+    Notification {
+        /// The JSON-RPC method (e.g. `notifications/progress`).
+        method: String,
+        /// The JSON-RPC params.
+        params: serde_json::Value,
+    },
+    /// JSON-RPC response — terminates the stream.
+    Final(McpResponse),
 }
 
 /// Performs the actual upstream MCP JSON-RPC call.
@@ -119,6 +235,21 @@ pub trait RoutingTable: Send + Sync {
 pub trait Executor: Send + Sync {
     /// Execute `request` against `target`.
     async fn execute(&self, target: &McpTarget, request: &McpRequest) -> Result<McpResponse>;
+
+    /// Streaming variant.
+    ///
+    /// The default impl wraps [`execute`](Self::execute) into a one-item
+    /// stream so existing executors keep compiling unchanged. Override to
+    /// emit `notifications/progress` (or other server→client notifications)
+    /// before the final response.
+    async fn execute_streaming(
+        &self,
+        target: &McpTarget,
+        request: &McpRequest,
+    ) -> Result<BoxStream<'static, Result<McpStreamPart>>> {
+        let response = self.execute(target, request).await?;
+        Ok(stream::once(async move { Ok(McpStreamPart::Final(response)) }).boxed())
+    }
 }
 
 /// Stage 1 — MCP pre-request checks (auth / policy). Independent of
@@ -194,6 +325,49 @@ pub struct Pipeline {
 impl Pipeline {
     /// Execute an MCP request through the three-stage pure-routing pipeline.
     pub async fn execute(&self, request: McpRequest) -> Result<McpResponse> {
+        let (mut ctx, target) = self.prepare(request).await?;
+        let response = self.executor.execute(&target, &ctx.request).await?;
+        for hook in &self.execution_hooks {
+            hook.on_success(&ctx, &response).await?;
+        }
+        // Consume `ctx` so it's gone after hooks fire — keeps the unused
+        // `target` slot from leaking past the call.
+        let _ = ctx.target.take();
+        Ok(response)
+    }
+
+    /// Streaming variant of [`execute`](Self::execute). The first two stages
+    /// (pre-request hooks, route resolution) run synchronously before the
+    /// stream is returned; the stream itself yields the execution frames.
+    /// [`ExecutionHook::on_success`] fires once the terminating
+    /// [`McpStreamPart::Final`] is observed.
+    pub async fn execute_streaming(
+        &self,
+        request: McpRequest,
+    ) -> Result<BoxStream<'static, Result<McpStreamPart>>> {
+        let (ctx, target) = self.prepare(request).await?;
+        let inner = self
+            .executor
+            .execute_streaming(&target, &ctx.request)
+            .await?;
+        let hooks = self.execution_hooks.clone();
+        let ctx = Arc::new(ctx);
+        let stream = inner.then(move |item| {
+            let hooks = hooks.clone();
+            let ctx = ctx.clone();
+            async move {
+                if let Ok(McpStreamPart::Final(ref response)) = item {
+                    for hook in hooks.iter() {
+                        hook.on_success(&ctx, response).await?;
+                    }
+                }
+                item
+            }
+        });
+        Ok(stream.boxed())
+    }
+
+    async fn prepare(&self, request: McpRequest) -> Result<(McpContext, McpTarget)> {
         let mut ctx = McpContext::new(request);
 
         // Stage 1 — pre-request checks.
@@ -207,19 +381,14 @@ impl Pipeline {
         // Stage 2 — route resolution.
         let mut target = self
             .routing_table
-            .resolve(&ctx.request.server, ctx.caller())
+            .resolve(&ctx.request.selector, ctx.caller())
             .await?;
         for hook in &self.route_hooks {
             hook.resolve(&mut target, &mut ctx).await?;
         }
         ctx.target = Some(target.clone());
 
-        // Stage 3 — execute.
-        let response = self.executor.execute(&target, &ctx.request).await?;
-        for hook in &self.execution_hooks {
-            hook.on_success(&ctx, &response).await?;
-        }
-        Ok(response)
+        Ok((ctx, target))
     }
 }
 
@@ -298,20 +467,24 @@ mod tests {
     struct StaticTable;
     #[async_trait]
     impl RoutingTable for StaticTable {
-        async fn resolve(&self, server: &str, _caller: &CallerContext) -> Result<McpTarget> {
-            if server == "known" {
-                Ok(McpTarget {
-                    server_name: server.to_string(),
+        async fn resolve(
+            &self,
+            selector: &ServerSelector,
+            _caller: &CallerContext,
+        ) -> Result<McpTarget> {
+            match selector {
+                ServerSelector::Direct(name) if name == "known" => Ok(McpTarget::Direct {
+                    server_name: name.clone(),
                     transport: McpTransport::Stdio {
                         command: "/bin/true".into(),
                         args: vec![],
                         env: Default::default(),
                     },
-                })
-            } else {
-                Err(BitrouterError::NotFound(format!(
-                    "no mcp server '{server}'"
-                )))
+                }),
+                ServerSelector::Direct(name) => {
+                    Err(BitrouterError::NotFound(format!("no mcp server '{name}'")))
+                }
+                ServerSelector::Aggregate => Ok(McpTarget::Aggregate { members: vec![] }),
             }
         }
     }
@@ -338,7 +511,7 @@ mod tests {
     }
 
     fn req(server: &str) -> McpRequest {
-        McpRequest::new(
+        McpRequest::direct(
             server,
             "tools/list",
             serde_json::json!({}),
@@ -375,5 +548,25 @@ mod tests {
         let pipeline = b.build().unwrap();
         let err = pipeline.execute(req("known")).await.unwrap_err();
         assert_eq!(err.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn mcp_streaming_default_wraps_execute_into_single_final() {
+        let mut b = PipelineBuilder::new();
+        b.routing_table(Arc::new(StaticTable))
+            .executor(Arc::new(EchoExecutor));
+        let pipeline = b.build().unwrap();
+        let mut stream = pipeline.execute_streaming(req("known")).await.unwrap();
+        let mut frames = Vec::new();
+        while let Some(item) = stream.next().await {
+            frames.push(item.unwrap());
+        }
+        assert_eq!(frames.len(), 1);
+        match &frames[0] {
+            McpStreamPart::Final(resp) => {
+                assert_eq!(resp.result["echoed"], "tools/list");
+            }
+            McpStreamPart::Notification { .. } => panic!("expected Final, got Notification"),
+        }
     }
 }
