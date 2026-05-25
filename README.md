@@ -11,7 +11,7 @@
 
 ## Overview
 
-AI agent runtimes need to route to different LLM providers without reconfiguration. BitRouter is a local Rust proxy that gives your agent a single endpoint at `http://localhost:8787` — configure your providers once, then route freely. Any client protocol (OpenAI, Anthropic, Google) can transparently target any upstream, with ~10ms overhead and no cloud dependency required.
+AI agent runtimes need to route to different LLM providers without reconfiguration. BitRouter is a local Rust proxy that gives your agent a single endpoint at `http://localhost:4356` — configure your providers once, then route freely. Any client protocol (OpenAI, Anthropic, Google) can transparently target any upstream, with ~10ms overhead and no cloud dependency required.
 
 ## Install
 
@@ -44,29 +44,36 @@ Set your provider API keys and start:
 ```bash
 export OPENAI_API_KEY=sk-...    # ANTHROPIC_API_KEY / GOOGLE_API_KEY also work
 bitrouter start
-# Proxy running at http://localhost:8787
+# Proxy running at http://localhost:4356
 ```
 
-BitRouter auto-detects any key set in the environment — no config file needed. Point your agent runtime at `http://localhost:8787` and any provider whose key is present is immediately available.
+BitRouter auto-detects any key set in the environment — no config file needed. Point your agent runtime at `http://localhost:4356` and any provider whose key is present is immediately available.
 
 For advanced routing rules, guardrails, or multi-account failover, scaffold a config file:
 
 ```bash
-bitrouter init          # writes ~/.bitrouter/bitrouter.yaml
+bitrouter init          # writes ./bitrouter.yaml (override with `-c <path>`)
 bitrouter start
 ```
 
 ### Cloud
 
-To use BitRouter Cloud (managed routing without local API keys), sign up at [cloud.bitrouter.ai](https://cloud.bitrouter.ai) and follow the cloud setup guide.
+Sign in to your BitRouter Cloud account from the terminal — one OAuth account covers every model the gateway offers, no upstream provider keys required:
+
+```bash
+bitrouter auth login    # RFC 8628 device flow against api.bitrouter.ai
+bitrouter start         # `bitrouter` provider auto-enables once signed in
+```
+
+Manage keys, usage, billing, policies, and BYOK from the same CLI — see `bitrouter cloud --help` or [`CLI.md`](CLI.md#cloud-account-management).
 
 ## Features
 
-- **Multi-provider routing** — unified access to OpenAI, Anthropic, Google, OpenRouter, OpenCode, and Amazon Bedrock; configure multiple accounts per provider with failover or round-robin load-balancing ([`sdk`](crates/bitrouter-sdk/) · [`providers`](crates/bitrouter-providers/))
+- **Multi-provider routing** — unified access to OpenAI, Anthropic, Google, OpenRouter, OpenCode Zen / Go, BitRouter Cloud, GitHub Copilot, ChatGPT Codex, and Amazon Bedrock; configure multiple accounts per provider with failover or round-robin load-balancing ([`sdk`](crates/bitrouter-sdk/) · [`providers`](crates/bitrouter-providers/))
 - **Cross-protocol routing** — any client protocol (OpenAI Chat, OpenAI Responses, Anthropic Messages, Google Gemini) against any upstream; BitRouter translates transparently ([`sdk`](crates/bitrouter-sdk/))
 - **Zero-config** — auto-detects providers from environment variables; no config file needed to get started ([`providers`](crates/bitrouter-providers/))
 - **MCP gateway** — proxy for MCP servers; agents discover and call tools across hosts ([`sdk`](crates/bitrouter-sdk/))
-- **ACP integration** — manage coding agent sessions (Claude Code, OpenCode, OpenClaw) via the CLI ([`sdk`](crates/bitrouter-sdk/))
+- **ACP integration** — manage coding agent sessions (Claude Code, OpenAI Codex, Gemini CLI) via the CLI ([`sdk`](crates/bitrouter-sdk/))
 - **Agent guardrails** — inspect, redact, or block risky content at the proxy layer ([`guardrails`](plugins/bitrouter-guardrails/))
 - **Observability** — per-request spend tracking, Prometheus metrics, and OTLP export ([`observe`](plugins/bitrouter-observe/))
 - **Virtual keys** — mint scoped `brvk_` API keys with `bitrouter key sign`, persisted to SQLite, PostgreSQL, or MySQL
@@ -74,19 +81,22 @@ To use BitRouter Cloud (managed routing without local API keys), sign up at [clo
 
 ## Supported Providers
 
-| Provider       | Status | Notes                                                     |
-| -------------- | ------ | --------------------------------------------------------- |
-| OpenAI         | ✅     | Chat Completions + Responses API                          |
-| Anthropic      | ✅     | Messages API                                              |
-| Google         | ✅     | Generative AI API                                         |
-| Amazon Bedrock | ✅     | Via AWS SDK (opt-in)                                      |
-| OpenRouter     | ✅     | Chat Completions + Responses API                          |
-| OpenCode Zen   | ✅     | Curated models across OpenAI, Anthropic, Google protocols |
-| OpenCode Go    | ✅     | Low-cost subscription for open coding models              |
+| Provider        | Status | Notes                                                          |
+| --------------- | ------ | -------------------------------------------------------------- |
+| OpenAI          | ✅     | Chat Completions + Responses API                               |
+| Anthropic       | ✅     | Messages API + Claude Pro/Max subscription (PKCE)              |
+| Google          | ✅     | Generative AI API                                              |
+| Amazon Bedrock  | ✅     | Via AWS SDK (opt-in)                                           |
+| OpenRouter      | ✅     | Chat Completions + Responses API                               |
+| OpenCode Zen    | ✅     | Curated models across OpenAI, Anthropic, Google protocols      |
+| OpenCode Go     | ✅     | Low-cost subscription for open coding models                   |
+| BitRouter Cloud | ✅     | OAuth sign-in (`bitrouter auth login`); cloud-managed routing  |
+| GitHub Copilot  | ✅     | GitHub OAuth device flow (`bitrouter login github-copilot`)    |
+| ChatGPT Codex   | ✅     | ChatGPT subscription PKCE (`bitrouter login openai-codex`)     |
 
 Want to see another provider? [Open an issue](https://github.com/bitrouter/bitrouter/issues) or submit a PR. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
 
-Any agent runtime that supports a custom OpenAI or Anthropic base URL works with BitRouter out of the box — point it at `http://localhost:8787`. **Building an agent runtime?** We partner with teams on native integrations — email [contact@bitrouter.ai](mailto:contact@bitrouter.ai) or [book a meeting with the founder](https://cal.com/kelsenliu/founder-meeting).
+Any agent runtime that supports a custom OpenAI or Anthropic base URL works with BitRouter out of the box — point it at `http://localhost:4356`. **Building an agent runtime?** We partner with teams on native integrations — email [contact@bitrouter.ai](mailto:contact@bitrouter.ai) or [book a meeting with the founder](https://cal.com/kelsenliu/founder-meeting).
 
 ## Comparison
 

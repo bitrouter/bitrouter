@@ -25,7 +25,7 @@ Run the HTTP server and control socket **in the foreground**.
 bitrouter serve [-c <path>]
 ```
 
-Starts the proxy on the configured listen address (default `127.0.0.1:8787`) and opens a Unix domain control socket. Logs to stdout.
+Starts the proxy on the configured listen address (default `127.0.0.1:4356`) and opens a Unix domain control socket. Logs to stdout.
 
 ### `bitrouter start`
 
@@ -35,7 +35,7 @@ Spawn `serve` as a **detached background daemon**.
 bitrouter start [-c <path>] [--log <path>]
 ```
 
-Logs default to `~/.bitrouter/bitrouter.log`. Refuses to start if a daemon is already running.
+Logs default to `bitrouter.log` next to the config file (e.g. `~/.bitrouter/bitrouter.log` when the config resolved to `~/.bitrouter/bitrouter.yaml`). Refuses to start if a daemon is already running.
 
 ### `bitrouter stop`
 
@@ -194,13 +194,12 @@ Mints a scoped `brvk_` virtual key for a user. The plaintext secret is printed o
 ### `bitrouter login <provider>`
 
 ```
-bitrouter login github-copilot
 bitrouter login anthropic            # Claude Pro/Max subscription PKCE flow
 bitrouter login openai-codex         # ChatGPT subscription PKCE flow
 bitrouter login github-copilot       # GitHub device-code flow
 ```
 
-Runs the provider's OAuth flow (PKCE in a browser or device-code, depending on provider) and stores the token in `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The slot is keyed by `(provider_id, label)` — pass `--label <name>` to keep multiple accounts of the same provider side by side. Other providers fall back to a pasted API key.
+Runs the provider's OAuth flow (PKCE in a browser or device-code, depending on provider) and stores the token in `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The slot is keyed by `(provider_id, label)` — pass `--label <name>` (defaults to `default`) to keep multiple accounts of the same provider side by side. Other providers fall back to a pasted API key.
 
 For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter auth login`](#bitrouter-auth-login--logout--whoami) below.
 
