@@ -119,7 +119,9 @@ bitrouter agents list / check / install        # ACP agent management
 bitrouter key sign --user <id>                 # mint a scoped brvk_ API key
 bitrouter policy create <id>                   # scaffold a routing policy
 bitrouter init                                 # scaffold bitrouter.yaml
-bitrouter login <provider>                     # OAuth login (e.g. github-copilot)
+bitrouter login <provider>                     # upstream-provider OAuth (anthropic, openai-codex, github-copilot, …)
+bitrouter auth login / logout / whoami         # BitRouter Cloud sign-in (RFC 8628 device flow)
+bitrouter cloud keys / usage / billing / …     # manage keys, usage, billing, policies, BYOK against BitRouter Cloud
 ```
 
 See [`CLI.md`](CLI.md) for flags, config resolution, and examples.
