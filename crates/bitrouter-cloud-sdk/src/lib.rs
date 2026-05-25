@@ -4,7 +4,7 @@
 //!
 //! ## Scope
 //!
-//! Today this crate ships two pieces of functionality:
+//! Today this crate ships three pieces of functionality:
 //!
 //! 1. [`auth`] — OAuth 2.0 sign-in for the CLI against the BitRouter Cloud
 //!    authorization server. Implements RFC 8628 device-flow login,
@@ -20,6 +20,13 @@
 //!    [`auth::credentials::REFRESH_WINDOW`] of expiry); falls back to a
 //!    static `brk_…` API key carried on the routing target; otherwise
 //!    returns a 401 with onboarding guidance.
+//! 3. [`management`] — a typed HTTP client for the BitRouter Cloud
+//!    `/v1/*` management surface (`keys`, `usage`, `billing`, `policies`,
+//!    `budgets`, `presets`, `byok`, `oauth_clients`). Shares the auth
+//!    module's credentials store, so it transparently picks up the
+//!    bearer that `bitrouter auth login` persisted and refreshes it on
+//!    the same RFC 6749 §6 / §4.14 schedule. Drives the
+//!    `bitrouter cloud` CLI subcommands.
 //!
 //! ## Authoritative references
 //!
@@ -29,19 +36,12 @@
 //! - RFC 8414 — Authorization Server Metadata: <https://www.rfc-editor.org/rfc/rfc8414>
 //! - RFC 8628 — Device Authorization Grant: <https://www.rfc-editor.org/rfc/rfc8628>
 //! - RFC 9700 — OAuth 2.0 Security Best Current Practice: <https://www.rfc-editor.org/rfc/rfc9700>
-//!
-//! ## Future scope
-//!
-//! A typed client for the BitRouter Cloud management surface
-//! (`/v1/keys`, `/v1/policies`, `/v1/byok`, `/v1/billing`, `/v1/usage`,
-//! `/v1/oauth_clients`, …) will land here as a parallel module — the same
-//! shape as `gh` / `vercel` / `railway` ship their CLI clients. Not in
-//! scope for this release.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 pub mod auth;
+pub mod management;
 pub mod provider;
 
 pub use provider::BitrouterCloudAuthApplier;

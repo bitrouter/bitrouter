@@ -169,12 +169,13 @@ enum Command {
     /// code flow; everything else accepts a pasted API key. The
     /// resulting credential is stored under
     /// `$XDG_DATA_HOME/bitrouter/oauth-tokens.json` keyed by
-    /// `(provider_id, label)`. Cloud login (no argument) is not in v1.0
-    /// scope.
+    /// `(provider_id, label)`. For cloud sign-in (no argument), see
+    /// `bitrouter auth login` instead — kept separate so the per-
+    /// provider and cloud flows don't share a flag surface.
     Login {
         /// Provider id to log in to (e.g. `anthropic`, `openai-codex`,
-        /// `github-copilot`). Omit for the v0-style cloud login flow
-        /// (not implemented in v1.0).
+        /// `github-copilot`). Omit and the CLI redirects you to
+        /// `bitrouter auth login` for the cloud flow.
         provider: Option<String>,
         /// Account label this credential is stored under. Defaults to
         /// `default`. Use a non-default label to keep multiple accounts
@@ -185,12 +186,15 @@ enum Command {
     },
     /// Log out of an upstream provider — clears every stored credential
     /// for the provider (subscription OAuth and pasted API keys alike).
-    /// Cloud logout (no argument) is not in v1.0 scope.
+    /// For cloud sign-out (no argument), see `bitrouter auth logout`.
     Logout {
         /// Provider id whose stored credentials should be removed.
+        /// Omit and the CLI redirects you to `bitrouter auth logout`.
         provider: Option<String>,
     },
-    /// Print the authenticated cloud identity — not implemented in v1.0.
+    /// Legacy shim. Cloud identity now lives under
+    /// `bitrouter auth whoami` (local) and `bitrouter cloud whoami`
+    /// (local + base URL); this prints a pointer to those.
     Whoami,
     /// ACP agent lifecycle — list the catalog, check configured agents,
     /// print install stubs. `bitrouter agent-proxy <id>` is the separate
@@ -221,6 +225,13 @@ enum Command {
     Auth {
         #[command(subcommand)]
         action: AuthAction,
+    },
+    /// Manage your BitRouter Cloud account — API keys, usage, billing,
+    /// policies, BYOK, OAuth clients. Requires `bitrouter auth login`
+    /// first.
+    Cloud {
+        #[command(subcommand)]
+        action: bitrouter::cloud::cli::CloudAction,
     },
 }
 
@@ -483,9 +494,9 @@ async fn run() -> Result<()> {
             None => {
                 print_unimplemented(
                     "login",
-                    "Cloud login is not in v1.0 scope. Run\n\
-                     `bitrouter login <provider>` for per-provider auth (anthropic, openai-codex, github-copilot, …),\n\
-                     or mint a local virtual key with `bitrouter key sign --user <id>`.",
+                    "`bitrouter login` is the per-provider OAuth surface.\n\
+                     For cloud sign-in, run `bitrouter auth login`.\n\
+                     For a local virtual key, run `bitrouter key sign --user <id>`.",
                 );
                 Ok(())
             }
@@ -495,8 +506,8 @@ async fn run() -> Result<()> {
             None => {
                 print_unimplemented(
                     "logout",
-                    "See `bitrouter logout <provider>` for per-provider OAuth logout.\n\
-                     No cloud session in v1.0.",
+                    "`bitrouter logout` is the per-provider OAuth surface.\n\
+                     For cloud sign-out, run `bitrouter auth logout`.",
                 );
                 Ok(())
             }
@@ -504,8 +515,9 @@ async fn run() -> Result<()> {
         Command::Whoami => {
             print_unimplemented(
                 "whoami",
-                "Cloud identity is not in v1.0 scope. Local callers are identified\n\
-                 by the `brvk_` virtual key (see `bitrouter key sign`).",
+                "`bitrouter whoami` (top-level) is a legacy shim. Use:\n\
+                 - `bitrouter auth whoami`  — local cloud identity (offline read).\n\
+                 - `bitrouter cloud whoami` — same identity plus the configured /v1/* base URL.",
             );
             Ok(())
         }
@@ -515,6 +527,7 @@ async fn run() -> Result<()> {
             agent_proxy_cmd(&agent, &source).await
         }
         Command::Auth { action } => auth_cmd(action).await,
+        Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
     }
 }
 
@@ -883,6 +896,7 @@ fn print_onboarding_hint() {
     eprintln!("  1. Sign in to BitRouter Cloud — one account covers every model:");
     eprintln!();
     eprintln!("       bitrouter auth login");
+    eprintln!("       bitrouter cloud --help        # manage keys, usage, policies, billing");
     eprintln!();
     eprintln!("  2. Or paste a BitRouter API key:");
     eprintln!();

@@ -1,6 +1,8 @@
-//! Glue between [`bitrouter_cloud_sdk`] and the bitrouter assembly layer.
+//! Glue between [`bitrouter_cloud_sdk`] and the bitrouter assembly
+//! layer, plus the `bitrouter cloud …` CLI entry points (see [`cli`]).
 //!
-//! Two responsibilities, both keyed on the `"bitrouter"` provider id:
+//! Two daemon-side responsibilities, both keyed on the `"bitrouter"`
+//! provider id:
 //!
 //! - [`enable_in_zero_config`] — auto-add the `bitrouter` provider to the in-memory
 //!   zero-config `providers:` map when the user has signed in via
@@ -15,6 +17,12 @@
 //! the providers crate stays free of any dependency on
 //! `bitrouter-cloud-sdk`; the SDK and the catalog can be consumed
 //! independently by downstream tooling.
+//!
+//! The [`cli`] sub-module owns the `bitrouter cloud` subcommand surface
+//! — typed wrappers around every endpoint on
+//! [`bitrouter_cloud_sdk::management::ManagementClient`].
+
+pub mod cli;
 
 use std::sync::Arc;
 
