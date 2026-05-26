@@ -607,6 +607,9 @@ fn render_message(m: &Message) -> serde_json::Value {
 }
 
 fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
+    if value.get("input_tokens").is_none() && value.get("output_tokens").is_none() {
+        return None;
+    }
     let input = value
         .get("input_tokens")
         .and_then(|v| v.as_u64())
@@ -615,12 +618,23 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .get("output_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    if value.get("input_tokens").is_none() && value.get("output_tokens").is_none() {
-        return None;
-    }
     // Cache fields are Anthropic-specific; absent on providers that don't
     // implement prompt caching. Ref:
     // <https://docs.anthropic.com/en/api/messages> → `usage` object.
+    //
+    // Wire vs SDK contract: Anthropic's `input_tokens` is the *uncached*
+    // portion of the prompt and is reported **alongside** (not inclusive
+    // of) `cache_read_input_tokens` / `cache_creation_input_tokens`. The
+    // canonical [`Usage::cache_read_tokens`] / [`Usage::cache_write_tokens`]
+    // are documented as subsets of [`Usage::prompt_tokens`] — matching how
+    // OpenAI Chat / Responses and Google report cached prompt tokens.
+    //
+    // Without folding the cache buckets back into `prompt_tokens` here,
+    // downstream billing layers that derive `no_cache = prompt_tokens -
+    // cache_read - cache_write` would saturate to 0 on a cache-heavy
+    // request and silently undercharge the uncached portion. Fold them
+    // (saturating against `u64::MAX` so a malicious upstream can't
+    // overflow the sum) so the canonical IR matches its own contract.
     let cache_read = value
         .get("cache_read_input_tokens")
         .and_then(|v| v.as_u64())
@@ -630,7 +644,7 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     Some(Usage {
-        prompt_tokens: input,
+        prompt_tokens: input.saturating_add(cache_read).saturating_add(cache_write),
         completion_tokens: output,
         reasoning_tokens: 0,
         cache_read_tokens: cache_read,
@@ -755,33 +769,41 @@ impl StreamDecoder for AnthropicStreamDecoder {
             }
             "content_block_stop" => {}
             "message_delta" => {
-                if let Some(output) = json
-                    .get("usage")
-                    .and_then(|u| u.get("output_tokens"))
-                    .and_then(|v| v.as_u64())
-                {
-                    self.usage.completion_tokens = output;
-                }
-                if let Some(input) = json
-                    .get("usage")
-                    .and_then(|u| u.get("input_tokens"))
-                    .and_then(|v| v.as_u64())
-                {
-                    self.usage.prompt_tokens = input;
-                }
-                if let Some(cache_read) = json
-                    .get("usage")
-                    .and_then(|u| u.get("cache_read_input_tokens"))
-                    .and_then(|v| v.as_u64())
-                {
-                    self.usage.cache_read_tokens = cache_read;
-                }
-                if let Some(cache_write) = json
-                    .get("usage")
-                    .and_then(|u| u.get("cache_creation_input_tokens"))
-                    .and_then(|v| v.as_u64())
-                {
-                    self.usage.cache_write_tokens = cache_write;
+                // `message_delta.usage` carries the cumulative final counts.
+                // Anthropic emits its wire-level `input_tokens` (the
+                // *uncached* portion) alongside the cache buckets; the
+                // canonical [`Usage::prompt_tokens`] is inclusive of those
+                // buckets (matches `parse_usage` above). Back out the prior
+                // exclusive input from the inclusive total so a delta that
+                // only refreshes a subset of fields still recomputes
+                // `prompt_tokens` consistently.
+                if let Some(u) = json.get("usage") {
+                    let prior_excl_input = self
+                        .usage
+                        .prompt_tokens
+                        .saturating_sub(self.usage.cache_read_tokens)
+                        .saturating_sub(self.usage.cache_write_tokens);
+                    let new_excl_input = u
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(prior_excl_input);
+                    if let Some(cache_read) =
+                        u.get("cache_read_input_tokens").and_then(|v| v.as_u64())
+                    {
+                        self.usage.cache_read_tokens = cache_read;
+                    }
+                    if let Some(cache_write) = u
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_u64())
+                    {
+                        self.usage.cache_write_tokens = cache_write;
+                    }
+                    if let Some(output) = u.get("output_tokens").and_then(|v| v.as_u64()) {
+                        self.usage.completion_tokens = output;
+                    }
+                    self.usage.prompt_tokens = new_excl_input
+                        .saturating_add(self.usage.cache_read_tokens)
+                        .saturating_add(self.usage.cache_write_tokens);
                 }
                 if let Some(reason) = json
                     .get("delta")
@@ -935,9 +957,23 @@ impl AnthropicStreamEncoder {
 
 /// Build an Anthropic-shaped `usage` object that always emits
 /// `input_tokens` / `output_tokens` and adds the cache fields when non-zero.
+///
+/// Wire format note: Anthropic reports `input_tokens` as the *uncached*
+/// portion of the prompt — the cache buckets are reported alongside, not
+/// included in `input_tokens`. The canonical [`Usage::prompt_tokens`] is
+/// the **inclusive** total (matches OpenAI / Google semantics; see
+/// `parse_usage`), so we subtract the cache buckets back out here to
+/// reconstruct the wire format. Saturating-sub guards against a caller
+/// constructing a `Usage` whose cache totals exceed `prompt_tokens` —
+/// shouldn't happen in practice, but a malformed canonical IR shouldn't
+/// underflow the wire payload either.
 fn render_usage(u: &Usage) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    map.insert("input_tokens".into(), u.prompt_tokens.into());
+    let excl_input = u
+        .prompt_tokens
+        .saturating_sub(u.cache_read_tokens)
+        .saturating_sub(u.cache_write_tokens);
+    map.insert("input_tokens".into(), excl_input.into());
     map.insert("output_tokens".into(), u.completion_tokens.into());
     if u.cache_read_tokens > 0 {
         map.insert("cache_read_input_tokens".into(), u.cache_read_tokens.into());

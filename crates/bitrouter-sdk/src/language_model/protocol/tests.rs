@@ -766,6 +766,13 @@ fn anthropic_cache_tokens_round_trip() {
     // `cache_creation_input_tokens` in `usage`. Parser captures them, encoder
     // emits them on the non-streaming response, and on `message_delta` they
     // accompany the streaming finalisation.
+    //
+    // SDK contract: `cache_read_tokens` / `cache_write_tokens` are **subsets
+    // of** `prompt_tokens` (matches OpenAI / Google). Anthropic's wire format
+    // is the opposite — `input_tokens` is the uncached portion, reported
+    // alongside the cache buckets — so the parser folds the cache totals
+    // back into `prompt_tokens` and the renderer unfolds them when writing
+    // the wire payload.
     let adapter = adapter_for(ApiProtocol::Anthropic);
     let body = serde_json::json!({
         "id": "msg_1",
@@ -785,13 +792,147 @@ fn anthropic_cache_tokens_round_trip() {
     let usage = result.usage.unwrap();
     assert_eq!(usage.cache_read_tokens, 80);
     assert_eq!(usage.cache_write_tokens, 20);
+    // Canonical IR: prompt_tokens is the inclusive total (100 + 80 + 20).
+    assert_eq!(usage.prompt_tokens, 200);
     let rendered = adapter
         .render_response(&result, &sample_prompt(), "msg_1")
         .unwrap();
     assert_eq!(rendered["usage"]["cache_read_input_tokens"], 80);
     assert_eq!(rendered["usage"]["cache_creation_input_tokens"], 20);
-    // input_tokens still emitted alongside (audit1 §13).
+    // Wire format: input_tokens excludes the cache buckets (audit1 §13).
+    // Round-trips to the same 100 the upstream sent.
     assert_eq!(rendered["usage"]["input_tokens"], 100);
+}
+
+#[test]
+fn anthropic_cache_tokens_match_subset_contract() {
+    // Regression: the canonical `Usage` doc-comment states that
+    // `cache_read_tokens` and `cache_write_tokens` are **subsets of**
+    // `prompt_tokens`. Anthropic's wire payload uses the opposite
+    // convention (uncached `input_tokens` + sibling cache fields), so
+    // the parser must fold the cache buckets into `prompt_tokens` or
+    // downstream billing layers that compute `no_cache = prompt_tokens
+    // - cache_read - cache_write` saturate to 0 on cache-heavy
+    // requests and silently undercharge the uncached portion.
+    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            // A realistic cache-hit-heavy request: 5K uncached prompt,
+            // 30K cache reads, 0 cache writes. Without folding into
+            // `prompt_tokens`, the billing-layer subtraction (5000 -
+            // 30000 - 0) saturates to 0 and the 5000 uncached tokens
+            // get billed at $0.
+            "input_tokens": 5_000,
+            "output_tokens": 200,
+            "cache_read_input_tokens": 30_000,
+        }
+    });
+    let usage = adapter.parse_response(body).unwrap().usage.unwrap();
+    assert_eq!(usage.cache_read_tokens, 30_000);
+    assert_eq!(usage.cache_write_tokens, 0);
+    assert_eq!(usage.prompt_tokens, 35_000);
+    // Holds the doc-comment invariant byte-for-byte.
+    assert!(
+        usage.prompt_tokens >= usage.cache_read_tokens + usage.cache_write_tokens,
+        "Usage::prompt_tokens must be inclusive of cache buckets: \
+         got prompt={} cache_read={} cache_write={}",
+        usage.prompt_tokens,
+        usage.cache_read_tokens,
+        usage.cache_write_tokens,
+    );
+}
+
+#[test]
+fn anthropic_usage_with_no_cache_fields_keeps_prompt_tokens_unchanged() {
+    // Belt-and-braces: when an upstream omits the cache fields entirely
+    // (the common case for non-Anthropic Anthropic-API-compatible
+    // upstreams, or Anthropic requests without prompt caching), the
+    // canonical `prompt_tokens` must equal Anthropic's wire-level
+    // `input_tokens` — the cache-fold is a no-op when both cache
+    // totals are 0.
+    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 1_234,
+            "output_tokens": 56,
+        }
+    });
+    let usage = adapter.parse_response(body).unwrap().usage.unwrap();
+    assert_eq!(usage.prompt_tokens, 1_234);
+    assert_eq!(usage.cache_read_tokens, 0);
+    assert_eq!(usage.cache_write_tokens, 0);
+}
+
+#[test]
+fn anthropic_stream_preserves_cache_inclusive_prompt_tokens() {
+    // The stream decoder receives `message_start` (which carries the
+    // full cache breakdown) and `message_delta` (which typically only
+    // refreshes `output_tokens`). The terminal Usage frame must reflect
+    // the inclusive prompt_tokens contract — the test pins this so a
+    // future refactor of the delta path can't quietly drop the
+    // cache-fold and undercharge again.
+    let decoder = adapter_for(ApiProtocol::Anthropic);
+    let mut stream_decoder = decoder.stream_decoder();
+
+    let start = SseEvent {
+        event: Some("message_start".into()),
+        data: serde_json::json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4",
+                "content": [],
+                "stop_reason": null,
+                "usage": {
+                    "input_tokens": 5_000,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 30_000,
+                    "cache_creation_input_tokens": 20,
+                }
+            }
+        })
+        .to_string(),
+    };
+    let _ = stream_decoder.decode(&start).unwrap();
+
+    // A message_delta that only carries `output_tokens` (the common
+    // shape per Anthropic streaming docs) must NOT zero out the cache
+    // buckets nor revert prompt_tokens to the wire-level exclusive value.
+    let delta = SseEvent {
+        event: Some("message_delta".into()),
+        data: serde_json::json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": { "output_tokens": 200 }
+        })
+        .to_string(),
+    };
+    let parts = stream_decoder.decode(&delta).unwrap();
+    let usage = parts
+        .iter()
+        .find_map(|p| match p {
+            StreamPart::Usage { usage } => Some(*usage),
+            _ => None,
+        })
+        .expect("terminal Usage frame missing");
+    assert_eq!(usage.cache_read_tokens, 30_000);
+    assert_eq!(usage.cache_write_tokens, 20);
+    assert_eq!(usage.completion_tokens, 200);
+    assert_eq!(usage.prompt_tokens, 5_000 + 30_000 + 20);
 }
 
 #[test]
