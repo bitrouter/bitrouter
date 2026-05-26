@@ -8,8 +8,8 @@
 //! The transport is platform-specific but the wire protocol is identical:
 //! a **Unix domain socket** (mode `0600`) on Unix, and a **Windows named
 //! pipe** (`\\.\pipe\bitrouter-…`, secured by its default owner-only DACL)
-//! on Windows. Both are encapsulated by the private [`transport`] module so
-//! the rest of this file — and every caller — is platform-agnostic.
+//! on Windows. Both are encapsulated by a private `transport` module so the
+//! rest of this file — and every caller — is platform-agnostic.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

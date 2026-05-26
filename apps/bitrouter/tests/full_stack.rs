@@ -141,7 +141,10 @@ providers:
           output_micro_usd_per_token: 10.0
 plugins:
   bitrouter-policy:
-    policy_dir: "{policy_path}"
+    # Single-quoted scalar — double quotes would interpret the backslashes
+    # in a Windows temp path (`C:\Users\…`) as escape sequences and trip
+    # the parser on `\U`. Single quotes treat the value literally.
+    policy_dir: '{policy_path}'
   bitrouter-guardrails:
     custom_patterns:
       - {{ name: ssn,       pattern: '\d{{3}}-\d{{2}}-\d{{4}}', action: redact }}
