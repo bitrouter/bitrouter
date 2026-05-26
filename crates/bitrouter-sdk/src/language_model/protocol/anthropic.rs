@@ -619,13 +619,23 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     // Cache fields are Anthropic-specific; absent on providers that don't
-    // implement prompt caching. Ref:
-    // <https://docs.anthropic.com/en/api/messages> → `usage` object.
+    // implement prompt caching. Refs:
+    // - <https://docs.anthropic.com/en/api/messages> → `usage` object
+    // - <https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching>
+    //   → "Tracking cache performance"
     //
     // Wire vs SDK contract: Anthropic's `input_tokens` is the *uncached*
-    // portion of the prompt and is reported **alongside** (not inclusive
-    // of) `cache_read_input_tokens` / `cache_creation_input_tokens`. The
-    // canonical [`Usage::cache_read_tokens`] / [`Usage::cache_write_tokens`]
+    // portion of the prompt (tokens after the last cache breakpoint) and
+    // is reported **alongside** (not inclusive of) `cache_read_input_tokens`
+    // / `cache_creation_input_tokens`. The prompt-caching guide documents
+    // the relationship explicitly:
+    //
+    //     total_input_tokens
+    //         = cache_read_input_tokens
+    //         + cache_creation_input_tokens
+    //         + input_tokens
+    //
+    // The canonical [`Usage::cache_read_tokens`] / [`Usage::cache_write_tokens`]
     // are documented as subsets of [`Usage::prompt_tokens`] — matching how
     // OpenAI Chat / Responses and Google report cached prompt tokens.
     //
@@ -769,13 +779,16 @@ impl StreamDecoder for AnthropicStreamDecoder {
             }
             "content_block_stop" => {}
             "message_delta" => {
-                // `message_delta.usage` carries the cumulative final counts.
+                // `message_delta.usage` carries the cumulative final counts
+                // (<https://docs.anthropic.com/en/api/messages-streaming>).
                 // Anthropic emits its wire-level `input_tokens` (the
-                // *uncached* portion) alongside the cache buckets; the
-                // canonical [`Usage::prompt_tokens`] is inclusive of those
-                // buckets (matches `parse_usage` above). Back out the prior
-                // exclusive input from the inclusive total so a delta that
-                // only refreshes a subset of fields still recomputes
+                // *uncached* portion, per
+                // <https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching>)
+                // alongside the cache buckets; the canonical
+                // [`Usage::prompt_tokens`] is inclusive of those buckets
+                // (matches `parse_usage` above). Back out the prior exclusive
+                // input from the inclusive total so a delta that only
+                // refreshes a subset of fields still recomputes
                 // `prompt_tokens` consistently.
                 if let Some(u) = json.get("usage") {
                     let prior_excl_input = self
@@ -960,8 +973,11 @@ impl AnthropicStreamEncoder {
 ///
 /// Wire format note: Anthropic reports `input_tokens` as the *uncached*
 /// portion of the prompt — the cache buckets are reported alongside, not
-/// included in `input_tokens`. The canonical [`Usage::prompt_tokens`] is
-/// the **inclusive** total (matches OpenAI / Google semantics; see
+/// included in `input_tokens`. The prompt-caching guide documents the
+/// relationship as `total = cache_read + cache_creation + input_tokens`
+/// (<https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching>
+/// → "Tracking cache performance"). The canonical [`Usage::prompt_tokens`]
+/// is the **inclusive** total (matches OpenAI / Google semantics; see
 /// `parse_usage`), so we subtract the cache buckets back out here to
 /// reconstruct the wire format. Saturating-sub guards against a caller
 /// constructing a `Usage` whose cache totals exceed `prompt_tokens` —
