@@ -605,6 +605,7 @@ mod tests {
     /// `/bin/false` exits before any handshake — the writer or reader task
     /// observes the EOF, the reaper drains pending requests, and the
     /// caller sees a clean 502.
+    #[cfg(unix)]
     #[tokio::test]
     async fn child_that_dies_immediately_surfaces_as_502() {
         let exec = AcpStdioExecutor::new();
@@ -637,6 +638,12 @@ mod tests {
     /// script reads one JSON line, echoes a `{result: ...}` response, then
     /// exits. We verify: ids round-trip, params arrive at the upstream,
     /// the result returns to the caller.
+    ///
+    /// `cfg(unix)`: the stub agent is a POSIX shell one-liner (`bash`,
+    /// `sed`, `printf`). The production code under test is platform-neutral
+    /// — spawning whatever upstream the operator configures works fine on
+    /// Windows — but we don't ship a Windows-native stub here.
+    #[cfg(unix)]
     #[tokio::test]
     async fn echo_agent_round_trips_a_request_response() {
         // A POSIX shell one-liner that:
@@ -667,6 +674,7 @@ mod tests {
 
     /// Same as above but the upstream returns a JSON-RPC `error` body. We
     /// surface it as a 502 Upstream so the caller can react.
+    #[cfg(unix)]
     #[tokio::test]
     async fn upstream_jsonrpc_error_surfaces_as_502() {
         let script = r#"
@@ -699,6 +707,7 @@ mod tests {
     /// and the next request must respawn transparently. Before the fix,
     /// the second request would either hang or be silently rejected by
     /// the pool's reuse of the corpse.
+    #[cfg(unix)]
     #[tokio::test]
     async fn pool_evicts_dead_connection_and_respawns_on_next_request() {
         // First child: answer once and exit. Second child: answer once
@@ -740,6 +749,7 @@ mod tests {
     /// emit > MAX_LINE_BYTES of bytes with no newline. The reader loop
     /// observes the cap error and exits without panicking. The pending
     /// request is then drained by the reaper when the child exits.
+    #[cfg(unix)]
     #[tokio::test]
     async fn reader_caps_oversized_line_without_unbounded_allocation() {
         // Emit 17 MiB of `x` bytes without a newline, then exit. v1's
@@ -769,6 +779,7 @@ mod tests {
     /// Notifications (no id) flow out via the broadcast channel rather than
     /// the response oneshot. Subscribe first, then drive a request that
     /// triggers an upstream notification before the response.
+    #[cfg(unix)]
     #[tokio::test]
     async fn server_notifications_reach_subscribers() {
         let script = r#"
