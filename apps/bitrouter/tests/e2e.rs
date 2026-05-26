@@ -394,6 +394,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
             &self,
             _target: &bitrouter_sdk::language_model::RoutingTarget,
             _prompt: &bitrouter_sdk::language_model::Prompt,
+            _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
             Err(bitrouter_sdk::BitrouterError::internal(
                 "unused in this test",
@@ -403,6 +404,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
             &self,
             _target: &bitrouter_sdk::language_model::RoutingTarget,
             _prompt: &bitrouter_sdk::language_model::Prompt,
+            _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
             Err(bitrouter_sdk::BitrouterError::internal(
                 "unused in this test",
@@ -620,6 +622,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
             &self,
             _target: &bitrouter_sdk::language_model::RoutingTarget,
             _prompt: &bitrouter_sdk::language_model::Prompt,
+            _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
             Err(bitrouter_sdk::BitrouterError::internal("unused"))
         }
@@ -627,6 +630,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
             &self,
             _target: &bitrouter_sdk::language_model::RoutingTarget,
             _prompt: &bitrouter_sdk::language_model::Prompt,
+            _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
             Err(bitrouter_sdk::BitrouterError::internal("unused"))
         }
@@ -661,6 +665,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
     let options = RouterOptions {
         omit_v1_models: false,
         mcp_aggregate_route: app.mcp_aggregate_route().map(String::from),
+        router_wrapper: None,
     };
     let router = build_router_with_options(state, options);
 

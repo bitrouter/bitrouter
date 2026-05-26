@@ -91,8 +91,8 @@ use aws_smithy_types::event_stream::RawMessage;
 use bedrock::error::SdkError;
 
 use bitrouter_sdk::language_model::{
-    Content, ExecutionResult, Executor, FinishReason, GenerateResult, Prompt, Role, RoutingTarget,
-    StreamPart, StreamPartStream, Usage,
+    Content, ExecutionResult, Executor, FinishReason, GenerateResult, PipelineContext, Prompt,
+    Role, RoutingTarget, StreamPart, StreamPartStream, Usage,
 };
 use bitrouter_sdk::{BitrouterError, Result};
 
@@ -131,7 +131,12 @@ impl BedrockExecutor {
 
 #[async_trait]
 impl Executor for BedrockExecutor {
-    async fn execute(&self, target: &RoutingTarget, prompt: &Prompt) -> Result<ExecutionResult> {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
         // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         let mut builder = self.client.converse().model_id(&target.service_id);
 
@@ -197,6 +202,7 @@ impl Executor for BedrockExecutor {
         &self,
         target: &RoutingTarget,
         prompt: &Prompt,
+        _ctx: &PipelineContext,
     ) -> Result<StreamPartStream> {
         // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
         let mut builder = self.client.converse_stream().model_id(&target.service_id);

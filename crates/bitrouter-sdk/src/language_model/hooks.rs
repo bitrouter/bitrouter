@@ -147,6 +147,25 @@ pub enum RequestOutcome {
     ClientDisconnected,
 }
 
+/// Outcome of a single upstream hop, passed to [`ObserveHook::on_hop_end`].
+///
+/// The pipeline fires `on_hop_start` / `on_hop_end` once per attempt in the
+/// fallback chain — a chain of length N produces N hop-end events. This
+/// lets observers attribute latency / failure / cost per upstream attempt
+/// (otherwise multi-account or multi-provider failover is invisible).
+#[derive(Debug, Clone, Copy)]
+pub enum HopOutcome<'a> {
+    /// Non-streaming hop completed; the response body was parsed.
+    Generated(&'a ExecutionResult),
+    /// Streaming hop reached TTFB (response headers received); the body
+    /// stream is still in flight. Body-level signals (token usage, finish
+    /// reason) arrive later via [`ObserveHook::on_stream_part`] and the
+    /// terminal [`ObserveHook::on_request_end`].
+    StreamStarted,
+    /// Hop failed before it could complete.
+    Failed(&'a BitrouterError),
+}
+
 /// A cross-cutting, read-only observation hook. Invoked at every stage boundary
 /// (including the StreamHook stage). It returns no decision, cannot mutate data,
 /// and **errors / panics inside it never affect the request** — the pipeline
@@ -155,6 +174,32 @@ pub enum RequestOutcome {
 pub trait ObserveHook: Send + Sync {
     /// Called after each non-streaming stage completes.
     async fn after_phase(&self, phase: Phase, ctx: &PipelineContext);
+
+    /// Called when a single upstream hop starts — once per attempt in the
+    /// fallback chain. Default: no-op.
+    ///
+    /// The observer may write outbound HTTP headers via
+    /// [`PipelineContext::set_outbound_trace_headers`]; the executor merges
+    /// them into the request just before issuing it. This is the seam
+    /// through which W3C trace-context propagation (`traceparent` /
+    /// `tracestate`) reaches upstream providers without coupling the SDK to
+    /// OpenTelemetry types.
+    ///
+    /// Spec: <https://www.w3.org/TR/trace-context/>
+    async fn on_hop_start(&self, _ctx: &PipelineContext, _target: &RoutingTarget) {
+        let _ = (_ctx, _target);
+    }
+
+    /// Called when a single upstream hop ends — success or failure — once
+    /// per attempt in the fallback chain. Default: no-op.
+    async fn on_hop_end(
+        &self,
+        _ctx: &PipelineContext,
+        _target: &RoutingTarget,
+        _outcome: HopOutcome<'_>,
+    ) {
+        let _ = (_ctx, _target, _outcome);
+    }
 
     /// Which stream part kinds this hook wants observed. Defaults to none.
     fn stream_interest(&self) -> StreamInterest {

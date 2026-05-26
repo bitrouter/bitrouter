@@ -66,6 +66,7 @@ impl App {
         let options = RouterOptions {
             omit_v1_models: false,
             mcp_aggregate_route: self.mcp_aggregate_route().map(String::from),
+            router_wrapper: None,
         };
         let router = build_router_with_options(state, options);
         let listener = tokio::net::TcpListener::bind(listen)
@@ -120,10 +121,19 @@ async fn shutdown_signal() {
 /// never be an unbounded allocation.
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
+/// A router-wrapper closure. The wrapper runs after the SDK has mounted
+/// every route and applied every built-in layer, so a host can wrap the
+/// whole router in additional middleware (e.g. a `tower-http`
+/// `TraceLayer` that creates the SERVER span at HTTP ingress).
+///
+/// Held behind an `Arc<dyn Fn>` so [`RouterOptions`] remains `Clone`.
+/// `Fn` (not `FnOnce`) lets the same options be applied more than once.
+pub type RouterWrapper = Arc<dyn Fn(Router) -> Router + Send + Sync>;
+
 /// Options controlling which routes the SDK mounts. Hosts that ship their
-/// own richer variant of a built-in route (e.g. bitrouter-cloud's enriched
-/// `/v1/models`) opt out of the SDK's plainer version here so
-/// [`axum::Router::merge`] does not panic on the duplicate path.
+/// own richer variant of a built-in route opt out of the SDK's plainer
+/// version here so [`axum::Router::merge`] does not panic on the duplicate
+/// path.
 #[derive(Default, Clone)]
 pub struct RouterOptions {
     /// When `true`, omit `GET /v1/models` from the returned router.
@@ -132,6 +142,23 @@ pub struct RouterOptions {
     /// convention). `None` omits the aggregate route — only per-server routes
     /// (`/mcp/{server}`) are mounted.
     pub mcp_aggregate_route: Option<String>,
+    /// Optional wrapper applied to the fully-built router. Set via
+    /// [`RouterOptions::with_router_wrapper`].
+    pub router_wrapper: Option<RouterWrapper>,
+}
+
+impl RouterOptions {
+    /// Install a router-wrapper closure that runs after the SDK has mounted
+    /// every route. Used to add an inbound HTTP `tower::Layer` (e.g. the
+    /// observe plugin's `tower-http::trace::TraceLayer`) without coupling
+    /// the SDK to OpenTelemetry or any other tracing backend.
+    pub fn with_router_wrapper<F>(mut self, wrapper: F) -> Self
+    where
+        F: Fn(Router) -> Router + Send + Sync + 'static,
+    {
+        self.router_wrapper = Some(Arc::new(wrapper));
+        self
+    }
 }
 
 /// Build the axum router for the given state.
@@ -155,11 +182,15 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
     if let Some(path) = options.mcp_aggregate_route {
         router = router.route(&path, post(mcp_invoke_aggregate));
     }
-    router
+    let router = router
         .route("/metrics", get(prometheus_metrics))
         .route("/health", get(health))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .with_state(state)
+        .with_state(state);
+    match options.router_wrapper {
+        Some(wrapper) => wrapper(router),
+        None => router,
+    }
 }
 
 async fn health() -> impl IntoResponse {

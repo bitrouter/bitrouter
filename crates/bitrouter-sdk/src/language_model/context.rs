@@ -4,6 +4,7 @@
 //! [`crate::language_model::settlement`].
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
@@ -37,6 +38,17 @@ pub struct PipelineContext {
 
     // ===== typed event bus =====
     events: EventBus,
+
+    /// Outbound HTTP headers stashed by an `ObserveHook::on_hop_start` for
+    /// the executor to merge into the next upstream request. The slot is
+    /// cleared on `take_outbound_trace_headers`, so each hop starts clean.
+    ///
+    /// Carrier for W3C trace-context propagation
+    /// (`traceparent` / `tracestate`) without coupling the SDK to
+    /// OpenTelemetry types.
+    ///
+    /// Spec: <https://www.w3.org/TR/trace-context/>
+    outbound_trace_headers: Mutex<Option<http::HeaderMap>>,
 }
 
 impl PipelineContext {
@@ -52,7 +64,32 @@ impl PipelineContext {
             execution_result: None,
             metadata: HashMap::new(),
             events: EventBus::new(),
+            outbound_trace_headers: Mutex::new(None),
         }
+    }
+
+    /// Store outbound HTTP headers for the next upstream request. The
+    /// executor merges them into the request just before issuing it.
+    /// Typically called by an `ObserveHook` from `on_hop_start` to inject
+    /// W3C trace context. Replaces any previously-set headers (whole-map
+    /// overwrite, not merge).
+    pub fn set_outbound_trace_headers(&self, headers: http::HeaderMap) {
+        let mut slot = match self.outbound_trace_headers.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = Some(headers);
+    }
+
+    /// Take any pending outbound trace headers. Called by the executor
+    /// right before issuing the upstream request — clears the slot so a
+    /// subsequent hop in the same request starts with no leftover headers.
+    pub fn take_outbound_trace_headers(&self) -> Option<http::HeaderMap> {
+        let mut slot = match self.outbound_trace_headers.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        slot.take()
     }
 
     /// The request id.

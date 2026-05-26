@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::auth::AuthAppliers;
+use crate::language_model::context::PipelineContext;
 use crate::language_model::protocol::{OutboundDispatch, SseEvent};
 use crate::language_model::types::{
     ApiProtocol, ExecutionResult, GenerateResult, Prompt, RoutingTarget, StreamPart,
@@ -24,16 +25,27 @@ use crate::language_model::types::{
 pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>;
 
 /// Performs the actual upstream call for one routing target.
+///
+/// `ctx` is the live [`PipelineContext`]; the executor reads any pending
+/// outbound headers via [`PipelineContext::take_outbound_trace_headers`] to
+/// propagate W3C trace context (`traceparent` / `tracestate`) into the
+/// upstream call. Custom executors that don't need propagation can ignore it.
 #[async_trait]
 pub trait Executor: Send + Sync {
     /// Execute a non-streaming request against `target`.
-    async fn execute(&self, target: &RoutingTarget, prompt: &Prompt) -> Result<ExecutionResult>;
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult>;
 
     /// Start a streaming request against `target`.
     async fn execute_stream(
         &self,
         target: &RoutingTarget,
         prompt: &Prompt,
+        ctx: &PipelineContext,
     ) -> Result<StreamPartStream>;
 }
 
@@ -88,7 +100,12 @@ impl MockExecutor {
 
 #[async_trait]
 impl Executor for MockExecutor {
-    async fn execute(&self, target: &RoutingTarget, _prompt: &Prompt) -> Result<ExecutionResult> {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
         match self.next()? {
             MockResponse::Generate(result) => Ok(ExecutionResult {
                 provider_id: target.provider_name.clone(),
@@ -109,6 +126,7 @@ impl Executor for MockExecutor {
         &self,
         _target: &RoutingTarget,
         _prompt: &Prompt,
+        _ctx: &PipelineContext,
     ) -> Result<StreamPartStream> {
         match self.next()? {
             MockResponse::Stream(parts) => {
@@ -306,9 +324,32 @@ impl HttpExecutor {
     }
 }
 
+/// Merge any outbound headers that an `ObserveHook::on_hop_start` stashed
+/// on the context (typically W3C `traceparent` / `tracestate`) into the
+/// outbound request, **after** auth has been applied so observability
+/// never silently overrides credential headers. Caller-set headers do
+/// overwrite same-name auth headers — but the propagator-injected set
+/// only ever names W3C trace headers, which auth appliers never touch.
+///
+/// Spec: <https://www.w3.org/TR/trace-context/>
+fn merge_outbound_trace_headers(request: &mut reqwest::Request, ctx: &PipelineContext) {
+    let Some(headers) = ctx.take_outbound_trace_headers() else {
+        return;
+    };
+    let dest = request.headers_mut();
+    for (name, value) in headers.iter() {
+        dest.insert(name.clone(), value.clone());
+    }
+}
+
 #[async_trait]
 impl Executor for HttpExecutor {
-    async fn execute(&self, target: &RoutingTarget, prompt: &Prompt) -> Result<ExecutionResult> {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
         let (adapter, transport) = self
             .dispatch
             .lookup(&target.api_protocol)
@@ -329,7 +370,8 @@ impl Executor for HttpExecutor {
             .json(&body)
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
-        let request = self.apply_auth(request, target, transport).await?;
+        let mut request = self.apply_auth(request, target, transport).await?;
+        merge_outbound_trace_headers(&mut request, ctx);
         let response = self.client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
                 BitrouterError::UpstreamTimeout
@@ -376,6 +418,7 @@ impl Executor for HttpExecutor {
         &self,
         target: &RoutingTarget,
         prompt: &Prompt,
+        ctx: &PipelineContext,
     ) -> Result<StreamPartStream> {
         let (adapter, transport) = self
             .dispatch
@@ -396,7 +439,8 @@ impl Executor for HttpExecutor {
             .json(&body)
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
-        let request = self.apply_auth(request, target, transport).await?;
+        let mut request = self.apply_auth(request, target, transport).await?;
+        merge_outbound_trace_headers(&mut request, ctx);
         let response = self.client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
                 BitrouterError::UpstreamTimeout
@@ -493,6 +537,7 @@ impl Executor for HttpExecutor {
 /// #         &self,
 /// #         _: &bitrouter_sdk::language_model::RoutingTarget,
 /// #         _: &bitrouter_sdk::language_model::Prompt,
+/// #         _: &bitrouter_sdk::language_model::PipelineContext,
 /// #     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
 /// #         unimplemented!()
 /// #     }
@@ -500,6 +545,7 @@ impl Executor for HttpExecutor {
 /// #         &self,
 /// #         _: &bitrouter_sdk::language_model::RoutingTarget,
 /// #         _: &bitrouter_sdk::language_model::Prompt,
+/// #         _: &bitrouter_sdk::language_model::PipelineContext,
 /// #     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
 /// #         unimplemented!()
 /// #     }
@@ -548,26 +594,32 @@ impl DispatchExecutor {
 
 #[async_trait]
 impl Executor for DispatchExecutor {
-    async fn execute(&self, target: &RoutingTarget, prompt: &Prompt) -> Result<ExecutionResult> {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
         let executor = self
             .by_protocol
             .get(&target.api_protocol)
             .cloned()
             .unwrap_or_else(|| self.default.clone());
-        executor.execute(target, prompt).await
+        executor.execute(target, prompt, ctx).await
     }
 
     async fn execute_stream(
         &self,
         target: &RoutingTarget,
         prompt: &Prompt,
+        ctx: &PipelineContext,
     ) -> Result<StreamPartStream> {
         let executor = self
             .by_protocol
             .get(&target.api_protocol)
             .cloned()
             .unwrap_or_else(|| self.default.clone());
-        executor.execute_stream(target, prompt).await
+        executor.execute_stream(target, prompt, ctx).await
     }
 }
 

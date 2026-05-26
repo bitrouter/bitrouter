@@ -859,7 +859,9 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         }),
         stream: false,
     };
-    let err = executor.execute(&target, &prompt).await.unwrap_err();
+    let req = PipelineRequest::new("m", CallerContext::new("k", "u"), prompt.clone());
+    let ctx = PipelineContext::new(req);
+    let err = executor.execute(&target, &prompt, &ctx).await.unwrap_err();
     match err {
         BitrouterError::BadRequest { message } => {
             assert!(
