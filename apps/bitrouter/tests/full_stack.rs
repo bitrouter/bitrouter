@@ -442,3 +442,64 @@ async fn wait_for_otlp(collector: &MockServer) {
         ASYNC_WAIT_BUDGET_MS
     );
 }
+
+// ===== Test 4 — outbound W3C trace-context propagation =====
+//
+// The detailed span-shape assertions (root `chat` INTERNAL, `route` /
+// `settle` siblings, per-hop CLIENT span with GenAI attrs, hop failure
+// `exception` event) live in the observe plugin's unit tests, which run
+// against an in-process span processor and don't need OTLP/HTTP+protobuf
+// decoding. The integration check below is narrower: it proves the SDK
+// seam — `ObserveHook::on_hop_start` populates outbound headers and
+// `HttpExecutor` merges them — is actually wired through to the upstream
+// HTTP request in a real assembled binary.
+
+#[tokio::test]
+async fn e2e_full_stack_outbound_traceparent_propagation() {
+    let fs = assemble_full_stack().await;
+
+    // Send a streaming request carrying an inbound W3C `traceparent`.
+    // Format: 00-<32-hex trace_id>-<16-hex span_id>-<flags>. Spec:
+    // https://www.w3.org/TR/trace-context/
+    let inbound_trace_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let inbound_traceparent = format!("00-{inbound_trace_id}-bbbbbbbbbbbbbbbb-01");
+    let resp = fs
+        .server
+        .post("/v1/chat/completions")
+        .add_header("authorization", format!("Bearer {}", fs.brvk_secret))
+        .add_header("accept", "text/event-stream")
+        .add_header("traceparent", inbound_traceparent.clone())
+        .json(&clean_body(true))
+        .await;
+    resp.assert_status_ok();
+    // Drain the stream so the pipeline runs to completion.
+    let _ = resp.text();
+
+    wait_for_metering_row(&fs.db, "fullstack-key").await;
+
+    // Outbound traceparent injection: the upstream wiremock saw a
+    // `traceparent` carrying the same trace_id as the inbound one
+    // (W3C continuation through the proxy). The span_id portion of the
+    // outbound traceparent points at the per-hop CLIENT span — we only
+    // assert the trace_id prefix here since per-span IDs are non-deterministic.
+    let upstream_reqs = fs
+        .upstream
+        .received_requests()
+        .await
+        .expect("upstream received at least one request");
+    let upstream = upstream_reqs
+        .first()
+        .expect("upstream got the chat completion call");
+    let tp = upstream
+        .headers
+        .get("traceparent")
+        .expect("`HttpExecutor` must merge an outbound `traceparent` set by the observe hook")
+        .to_str()
+        .expect("`traceparent` is ASCII");
+    assert!(
+        tp.starts_with(&format!("00-{inbound_trace_id}-")),
+        "outbound traceparent must continue the inbound trace_id; got {tp}"
+    );
+
+    fs.teardown().await;
+}

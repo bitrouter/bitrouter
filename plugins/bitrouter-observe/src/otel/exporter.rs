@@ -906,3 +906,314 @@ fn error_type(err: &bitrouter_sdk::error::BitrouterError) -> String {
         .unwrap_or("error")
         .to_string()
 }
+
+#[cfg(test)]
+mod hop_tests {
+    //! Unit tests for the per-hop `ObserveHook` surface added by issue #477.
+    //! These drive the trait methods against an in-process span processor
+    //! that captures every exported [`SpanData`], so the assertions look at
+    //! span structure directly instead of decoding OTLP wire bytes.
+
+    use super::*;
+
+    use std::sync::Mutex;
+
+    use opentelemetry::Value;
+    use opentelemetry::trace::TraceResult;
+    use opentelemetry_sdk::export::trace::SpanData;
+    use opentelemetry_sdk::trace::{Span as SdkSpan, SpanProcessor};
+
+    use bitrouter_sdk::caller::CallerContext;
+    use bitrouter_sdk::error::BitrouterError;
+    use bitrouter_sdk::language_model::{
+        ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message,
+        PipelineRequest, Prompt, Role, Usage,
+    };
+
+    /// In-process span processor that appends every ended span to a shared
+    /// vector. Replaces the OTLP/HTTP exporter for tests so assertions can
+    /// inspect span structure (names, kinds, parents, attributes, events)
+    /// without doing protobuf decoding.
+    #[derive(Clone, Debug)]
+    struct CapturingProcessor {
+        captured: Arc<Mutex<Vec<SpanData>>>,
+    }
+
+    impl SpanProcessor for CapturingProcessor {
+        fn on_start(&self, _span: &mut SdkSpan, _cx: &Context) {}
+
+        fn on_end(&self, span: SpanData) {
+            let mut guard = match self.captured.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            guard.push(span);
+        }
+
+        fn force_flush(&self) -> TraceResult<()> {
+            Ok(())
+        }
+
+        fn shutdown(&self) -> TraceResult<()> {
+            Ok(())
+        }
+    }
+
+    /// Build an [`OtelExporter`] backed by an in-process span processor.
+    /// Bypasses [`OtelExporter::new`] (which insists on an OTLP HTTP
+    /// endpoint) by constructing the struct directly — possible here
+    /// because the test lives in the same module and sees private fields.
+    fn make_test_exporter() -> (OtelExporter, Arc<Mutex<Vec<SpanData>>>) {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let processor = CapturingProcessor {
+            captured: captured.clone(),
+        };
+        global::set_text_map_propagator(TraceContextPropagator::new());
+
+        let provider = TracerProvider::builder()
+            .with_span_processor(processor)
+            .with_sampler(Sampler::AlwaysOn)
+            .with_id_generator(RandomIdGenerator::default())
+            .build();
+        let scope = InstrumentationScope::builder("io.bitrouter.observe.test").build();
+        let tracer = provider.tracer_with_scope(scope);
+
+        let exporter = OtelExporter {
+            tracer,
+            provider,
+            metrics: None,
+            config: OtelConfig::default(),
+            api_key_limiter: Arc::new(CardinalityLimiter::new(100)),
+            user_id_limiter: Arc::new(CardinalityLimiter::new(100)),
+            active_spans: Arc::new(DashMap::new()),
+            span_timeout: Duration::from_secs(300),
+            shutdown_once: Once::new(),
+        };
+        (exporter, captured)
+    }
+
+    fn fresh_target(provider: &str) -> RoutingTarget {
+        RoutingTarget {
+            provider_name: provider.to_string(),
+            service_id: "test-model".to_string(),
+            api_base: "https://api.example.test:8443/v1".to_string(),
+            api_key: "k".to_string(),
+            api_protocol: ApiProtocol::Openai,
+            account_label: Some("primary".to_string()),
+            api_key_override: None,
+            api_base_override: None,
+        }
+    }
+
+    fn fresh_request() -> PipelineRequest {
+        let params = GenerationParams {
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            max_tokens: Some(256),
+            ..Default::default()
+        };
+        let prompt = Prompt {
+            model: "test-model".to_string(),
+            system: None,
+            messages: vec![Message::text(Role::User, "hi")],
+            tools: Vec::new(),
+            params,
+            response_format: None,
+            stream: false,
+        };
+        PipelineRequest::new("test-model", CallerContext::new("k1", "u1"), prompt)
+    }
+
+    fn fresh_result(target: &RoutingTarget) -> ExecutionResult {
+        ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: GenerateResult {
+                content: vec![Content::Text { text: "ok".into() }],
+                usage: Some(Usage {
+                    prompt_tokens: 11,
+                    completion_tokens: 7,
+                    ..Default::default()
+                }),
+                finish_reason: Some(FinishReason::Stop),
+            },
+            latency_ms: 42,
+            generation_time_ms: 40,
+        }
+    }
+
+    /// Look up a string-valued attribute on a captured SpanData.
+    fn str_attr<'a>(span: &'a SpanData, key: &str) -> Option<&'a str> {
+        span.attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == key)
+            .and_then(|kv| match &kv.value {
+                Value::String(s) => Some(s.as_str()),
+                _ => None,
+            })
+    }
+
+    fn i64_attr(span: &SpanData, key: &str) -> Option<i64> {
+        span.attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == key)
+            .and_then(|kv| match kv.value {
+                Value::I64(v) => Some(v),
+                _ => None,
+            })
+    }
+
+    #[tokio::test]
+    async fn on_hop_start_populates_outbound_trace_headers() {
+        // `ObserveHook::on_hop_start` must write a W3C-shaped header map onto
+        // `PipelineContext::set_outbound_trace_headers` so `HttpExecutor`
+        // can merge it into the upstream HTTP request.
+        let (exporter, _captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+
+        let headers = ctx
+            .take_outbound_trace_headers()
+            .expect("on_hop_start must stash outbound headers");
+        let tp = headers
+            .get("traceparent")
+            .expect("traceparent header injected")
+            .to_str()
+            .expect("traceparent is ASCII");
+        // Format: 00-<32-hex trace_id>-<16-hex span_id>-<flags>.
+        // https://www.w3.org/TR/trace-context/
+        assert!(
+            tp.starts_with("00-") && tp.len() == 55,
+            "traceparent must be a valid W3C v0 string; got {tp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn on_hop_end_writes_genai_attrs_and_parents_on_root_chat() {
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+        let result = fresh_result(&target);
+        exporter
+            .on_hop_end(&ctx, &target, HopOutcome::Generated(&result))
+            .await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        let hop_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Client)
+            .expect("per-hop chat CLIENT span");
+
+        // Hop parents on root chat.
+        assert_eq!(
+            hop_chat.parent_span_id,
+            root_chat.span_context.span_id(),
+            "per-hop CLIENT span parents on the root chat INTERNAL span"
+        );
+        // Same trace.
+        assert_eq!(
+            hop_chat.span_context.trace_id(),
+            root_chat.span_context.trace_id()
+        );
+
+        // Required GenAI request-side attributes:
+        // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
+        assert_eq!(str_attr(hop_chat, "gen_ai.operation.name"), Some("chat"));
+        assert_eq!(str_attr(hop_chat, "gen_ai.provider.name"), Some("openai"));
+        assert_eq!(
+            str_attr(hop_chat, "gen_ai.request.model"),
+            Some("test-model")
+        );
+        assert_eq!(
+            str_attr(hop_chat, "server.address"),
+            Some("api.example.test")
+        );
+        assert_eq!(i64_attr(hop_chat, "server.port"), Some(8443));
+        assert_eq!(
+            str_attr(hop_chat, "bitrouter.account_label"),
+            Some("primary")
+        );
+
+        // Response-side attributes populated on success.
+        assert_eq!(
+            str_attr(hop_chat, "gen_ai.response.model"),
+            Some("test-model")
+        );
+        assert_eq!(i64_attr(hop_chat, "gen_ai.usage.input_tokens"), Some(11));
+        assert_eq!(i64_attr(hop_chat, "gen_ai.usage.output_tokens"), Some(7));
+    }
+
+    #[tokio::test]
+    async fn on_hop_end_records_exception_event_on_failure() {
+        // Per OTel exceptions semconv
+        // (https://opentelemetry.io/docs/specs/semconv/exceptions/), a
+        // failing hop attaches an `exception` event carrying
+        // `exception.type` / `exception.message` plus an `error.type`
+        // attribute for low-cardinality metric dimensions.
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+        let err = BitrouterError::Upstream {
+            status: 503,
+            message: "upstream down".into(),
+        };
+        exporter
+            .on_hop_end(&ctx, &target, HopOutcome::Failed(&err))
+            .await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Failed(err.clone()))
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let hop_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Client)
+            .expect("per-hop chat CLIENT span");
+
+        assert!(
+            str_attr(hop_chat, "error.type").is_some(),
+            "failed hop must carry low-cardinality `error.type`"
+        );
+        let exception_event = hop_chat
+            .events
+            .iter()
+            .find(|e| e.name == "exception")
+            .expect("hop carries an `exception` event on failure");
+        let event_attr = |key: &str| {
+            exception_event
+                .attributes
+                .iter()
+                .find(|kv| kv.key.as_str() == key)
+                .and_then(|kv| match &kv.value {
+                    Value::String(s) => Some(s.as_str().to_string()),
+                    _ => None,
+                })
+        };
+        assert!(event_attr("exception.type").is_some());
+        assert!(
+            event_attr("exception.message")
+                .map(|m| m.contains("upstream down") || m.contains("Upstream"))
+                .unwrap_or(false),
+            "exception.message should carry the upstream error text"
+        );
+    }
+}
