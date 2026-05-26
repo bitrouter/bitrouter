@@ -20,7 +20,6 @@
 //! - W3C Trace Context: <https://www.w3.org/TR/trace-context/>
 //! - OTel HTTP semantic conventions: <https://opentelemetry.io/docs/specs/semconv/http/>
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -51,13 +50,7 @@ impl<'a> Extractor for HeaderExtractor<'a> {
 /// inbound W3C trace-context propagation onto the host's axum [`Router`].
 /// Pass the returned closure to
 /// [`bitrouter_sdk::server::RouterOptions::with_router_wrapper`].
-///
-/// The exporter is taken by reference so future per-tenant sampling hints
-/// on the SERVER span can read exporter state without re-wiring the call
-/// chain. The wrapper itself does not currently dereference it.
-pub fn router_wrapper(
-    _exporter: Arc<OtelExporter>,
-) -> impl Fn(Router) -> Router + Send + Sync + 'static {
+pub fn router_wrapper() -> impl Fn(Router) -> Router + Send + Sync + 'static {
     move |router: Router| {
         router.layer(
             TraceLayer::new_for_http()
