@@ -1,0 +1,22 @@
+# Default: detect text vs binary and normalise text to LF in the index,
+# leave working-copy line endings to the platform. The exceptions below
+# pin specific file groups to LF in the working copy too — any file whose
+# bytes are compared verbatim by a test must stay LF on Windows so git's
+# autocrlf doesn't rewrite \n → \r\n on checkout and cause spurious diffs.
+* text=auto
+
+# Schema-snapshot fixtures (`crates/bitrouter-sdk/src/language_model/protocol/snapshots/*.json`)
+# are read byte-for-byte by `assert_schema_snapshot` and compared against
+# freshly-generated JSON. Pin them to LF everywhere so the test passes on
+# Windows runners regardless of the user's `core.autocrlf` setting.
+*.json text eol=lf
+
+# Source files: LF everywhere. Avoids accidental CRLF creeping into the
+# repo via a Windows contributor's editor, which would otherwise confuse
+# rustfmt and a handful of macro span diagnostics.
+*.rs       text eol=lf
+*.toml     text eol=lf
+*.yaml     text eol=lf
+*.yml      text eol=lf
+*.md       text eol=lf
+*.sh       text eol=lf
