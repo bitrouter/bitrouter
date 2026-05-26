@@ -96,6 +96,9 @@ pub struct McpRequest {
     pub params: serde_json::Value,
     /// The authenticated / synthesised caller.
     pub caller: CallerContext,
+    /// Inbound HTTP headers. Populated by the HTTP adapter; defaults to empty
+    /// for programmatic / internal callers.
+    pub headers: http::HeaderMap,
 }
 
 impl McpRequest {
@@ -112,6 +115,7 @@ impl McpRequest {
             method: method.into(),
             params,
             caller,
+            headers: http::HeaderMap::new(),
         }
     }
 
@@ -127,7 +131,16 @@ impl McpRequest {
             method: method.into(),
             params,
             caller,
+            headers: http::HeaderMap::new(),
         }
+    }
+
+    /// Attach inbound HTTP headers. Used by the HTTP adapter to surface
+    /// `Authorization` / `x-api-key` (and any other request header) to
+    /// [`PreRequestHook`]s via [`McpContext::headers`].
+    pub fn with_headers(mut self, headers: http::HeaderMap) -> Self {
+        self.headers = headers;
+        self
     }
 }
 
@@ -300,6 +313,24 @@ impl McpContext {
     /// The caller.
     pub fn caller(&self) -> &CallerContext {
         &self.request.caller
+    }
+
+    /// Replace the caller. The one Stage-1 exception to the water-flow model:
+    /// a [`PreRequestHook`] validates the inbound credential (read via
+    /// [`headers`](Self::headers)) and upgrades the pre-auth anonymous
+    /// placeholder to the real authenticated identity. No later stage may call
+    /// this — by Stage 2 the caller is established and read-only, and
+    /// [`RoutingTable::resolve`] observes the upgraded caller.
+    pub fn set_caller(&mut self, caller: CallerContext) {
+        self.request.caller = caller;
+    }
+
+    /// Inbound HTTP headers. A [`PreRequestHook`] reads `Authorization` /
+    /// `x-api-key` (and any other request header) here to extract the
+    /// credential it then resolves into a [`CallerContext`] via
+    /// [`set_caller`](Self::set_caller).
+    pub fn headers(&self) -> &http::HeaderMap {
+        &self.request.headers
     }
 
     /// Emit a typed pipeline event.
@@ -547,6 +578,104 @@ mod tests {
             .pre_request_hook(DenyHook);
         let pipeline = b.build().unwrap();
         let err = pipeline.execute(req("known")).await.unwrap_err();
+        assert_eq!(err.status(), 401);
+    }
+
+    /// A `PreRequestHook` that extracts an `x-test-auth: <user>` header and
+    /// upgrades the anonymous caller to an authenticated one. Mirrors the
+    /// `language_model::PreRequestHook` auth pattern.
+    struct HeaderAuthHook;
+    #[async_trait]
+    impl PreRequestHook for HeaderAuthHook {
+        async fn check(&self, ctx: &mut McpContext) -> Result<HookDecision> {
+            let user = ctx
+                .headers()
+                .get("x-test-auth")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            match user {
+                Some(user) => {
+                    ctx.set_caller(CallerContext::new("test-key", user));
+                    Ok(HookDecision::Allow)
+                }
+                None => Ok(HookDecision::Deny(
+                    crate::language_model::DenyReason::Unauthorized(
+                        "missing x-test-auth header".into(),
+                    ),
+                )),
+            }
+        }
+    }
+
+    /// Routing table that fails closed when the caller is still anonymous.
+    /// Used to assert that `RoutingTable::resolve` observes the upgraded
+    /// caller produced by a Stage-1 hook.
+    struct CallerAwareTable;
+    #[async_trait]
+    impl RoutingTable for CallerAwareTable {
+        async fn resolve(
+            &self,
+            selector: &ServerSelector,
+            caller: &CallerContext,
+        ) -> Result<McpTarget> {
+            if caller.is_anonymous() {
+                return Err(BitrouterError::Unauthorized(
+                    "routing table saw anonymous caller".into(),
+                ));
+            }
+            match selector {
+                ServerSelector::Direct(name) => Ok(McpTarget::Direct {
+                    server_name: name.clone(),
+                    transport: McpTransport::Stdio {
+                        command: "/bin/true".into(),
+                        args: vec![],
+                        env: Default::default(),
+                    },
+                }),
+                ServerSelector::Aggregate => Ok(McpTarget::Aggregate { members: vec![] }),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_pre_request_hook_reads_headers_and_upgrades_caller() {
+        let mut b = PipelineBuilder::new();
+        b.routing_table(Arc::new(CallerAwareTable))
+            .executor(Arc::new(EchoExecutor))
+            .pre_request_hook(HeaderAuthHook);
+        let pipeline = b.build().unwrap();
+
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-test-auth", "alice".parse().unwrap());
+        let request = McpRequest::direct(
+            "server-a",
+            "tools/list",
+            serde_json::json!({}),
+            CallerContext::anonymous(),
+        )
+        .with_headers(headers);
+
+        let resp = pipeline.execute(request).await.unwrap();
+        assert_eq!(resp.result["echoed"], "tools/list");
+    }
+
+    #[tokio::test]
+    async fn mcp_pre_request_hook_denies_when_header_missing() {
+        let mut b = PipelineBuilder::new();
+        b.routing_table(Arc::new(CallerAwareTable))
+            .executor(Arc::new(EchoExecutor))
+            .pre_request_hook(HeaderAuthHook);
+        let pipeline = b.build().unwrap();
+
+        // No x-test-auth header; default headers are empty.
+        let request = McpRequest::direct(
+            "server-a",
+            "tools/list",
+            serde_json::json!({}),
+            CallerContext::anonymous(),
+        );
+
+        let err = pipeline.execute(request).await.unwrap_err();
         assert_eq!(err.status(), 401);
     }
 

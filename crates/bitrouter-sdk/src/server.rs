@@ -252,6 +252,9 @@ async fn mcp_invoke_inner(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
+    // Default caller: `local` when auth is disabled, otherwise an `anonymous`
+    // placeholder that a downstream `mcp::PreRequestHook` may upgrade to the
+    // real identity by reading `ctx.headers()` and calling `ctx.set_caller()`.
     let caller = if state.skip_auth {
         CallerContext::local()
     } else {
@@ -262,7 +265,8 @@ async fn mcp_invoke_inner(
             mcp::McpRequest::direct(server, method, params, caller)
         }
         mcp::ServerSelector::Aggregate => mcp::McpRequest::aggregate(method, params, caller),
-    };
+    }
+    .with_headers(headers.clone());
 
     // SSE branch per the MCP Streamable HTTP spec — if the client opts in via
     // `Accept: text/event-stream` we return the JSON-RPC frames as `data:`
