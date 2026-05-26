@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.4](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.3...v1.0.0-alpha.4)
+
+
+### ⛰️ Features
+
+- *(bitrouter)* Windows support for the daemon control surface ([#490](https://github.com/bitrouter/bitrouter/pull/490)) - ([9a960df](https://github.com/bitrouter/bitrouter/commit/9a960df6e8e65555e62db979fb1cfd19e5330609))
+- *(sdk/mcp)* Expose headers, set_caller, evict for auth ([#494](https://github.com/bitrouter/bitrouter/pull/494)) - ([7bf6e76](https://github.com/bitrouter/bitrouter/commit/7bf6e76efc9ceecfcaf3da80efc5bedfb0a184f8))
+
+### 🐛 Bug Fixes
+
+- *(sdk/anthropic)* Fold cache buckets into prompt_tokens (Usage subset contract) ([#492](https://github.com/bitrouter/bitrouter/pull/492)) - ([5ee6921](https://github.com/bitrouter/bitrouter/commit/5ee6921a3125f6d2245338f23bff98640b71d1cc))
+
+
 ## [1.0.0-alpha.3](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.2...v1.0.0-alpha.3)
 
 
