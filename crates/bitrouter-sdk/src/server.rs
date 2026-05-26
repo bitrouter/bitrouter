@@ -51,6 +51,20 @@ pub struct AppState {
 impl App {
     /// Serve this app's HTTP API on `listen` (e.g. `"0.0.0.0:4356"`).
     pub async fn serve(&self, listen: &str) -> Result<()> {
+        self.serve_inner(listen, None).await
+    }
+
+    /// Like [`App::serve`], but with a host-supplied router wrapper applied
+    /// after the SDK has mounted every route — used by `bitrouter-observe`
+    /// to install a `tower-http` `TraceLayer` at HTTP ingress.
+    pub async fn serve_with_router_wrapper<F>(&self, listen: &str, wrapper: F) -> Result<()>
+    where
+        F: Fn(Router) -> Router + Send + Sync + 'static,
+    {
+        self.serve_inner(listen, Some(Arc::new(wrapper))).await
+    }
+
+    async fn serve_inner(&self, listen: &str, wrapper: Option<RouterWrapper>) -> Result<()> {
         let pipeline = self
             .language_model()
             .ok_or_else(|| {
@@ -66,7 +80,7 @@ impl App {
         let options = RouterOptions {
             omit_v1_models: false,
             mcp_aggregate_route: self.mcp_aggregate_route().map(String::from),
-            router_wrapper: None,
+            router_wrapper: wrapper,
         };
         let router = build_router_with_options(state, options);
         let listener = tokio::net::TcpListener::bind(listen)

@@ -207,7 +207,7 @@ impl OtelExporter {
         })
     }
 
-    /// Clone the underlying OTel tracer. Used by
+    /// Clone the underlying OTel SDK tracer. Used by
     /// [`crate::otel::http_layer::tracing_subscriber_layer`] to build the
     /// `tracing` ↔ OTel bridge. Crate-scoped so the tracer type does not
     /// leak across the plugin boundary.

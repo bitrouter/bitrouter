@@ -98,6 +98,14 @@ fn record_http_response_status<B>(response: &http::Response<B>, _latency: Durati
 /// the OTel tracer behind `exporter`. Install on the global tracing
 /// subscriber alongside any `fmt` / file layers.
 ///
+/// `tracing_opentelemetry::OpenTelemetryLayer` captures its tracer at
+/// construction, and `tracing-opentelemetry` only implements
+/// `PreSampledTracer` for [`opentelemetry_sdk::trace::Tracer`] /
+/// [`opentelemetry::trace::noop::NoopTracer`] (not for the
+/// `BoxedTracer` you would get from `global::tracer`) — so this helper
+/// takes the exporter directly and hands the bridge its concrete SDK
+/// tracer. The host binary calls this after building the exporter.
+///
 /// Returning the concrete `OpenTelemetryLayer` type (rather than
 /// `impl Layer`) keeps the registry chain types nameable on the binary
 /// side. The generic `S` is the subscriber the layer is composed onto.

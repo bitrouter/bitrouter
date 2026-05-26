@@ -422,14 +422,21 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
     let cli = Cli::parse();
+    // Subscriber init splits by command: the long-running `serve` defers
+    // its init until after the OTel exporter has installed a real tracer
+    // provider globally (see `serve` below). Every other command — and
+    // the foreground supervisor in `start` — gets a basic fmt subscriber
+    // here so config-loading errors surface as log lines.
+    //
+    // `tracing-opentelemetry`'s bridge layer captures its tracer at
+    // construction, so registering it before the exporter exists would
+    // lock the bridge to the default no-op and silently drop every later
+    // span. The two-stage init is the simplest way around that.
+    if !matches!(cli.command, Command::Serve { .. }) {
+        init_basic_tracing_subscriber();
+    }
+
     match cli.command {
         Command::Serve { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -601,6 +608,41 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 /// runtime artefacts — config, socket, pid file, log — all live in one
 /// directory. The legacy default of `./bitrouter.log` would land the
 /// log file in whichever CWD the launcher happened to be in.
+/// Install a basic fmt-only tracing subscriber. Used for every command
+/// except `serve` — see [`init_serve_tracing_subscriber`].
+fn init_basic_tracing_subscriber() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+}
+
+/// Install the full tracing subscriber for the `serve` command: fmt plus
+/// — when OTel is configured — the bridge layer that mirrors `tracing`
+/// spans into OTel via the supplied exporter's SDK tracer.
+///
+/// `tracing-opentelemetry`'s bridge layer captures its tracer eagerly,
+/// so this MUST be called after [`bitrouter_observe::otel::OtelExporter::new`]
+/// has built the real exporter; passing `None` (OTel disabled in config)
+/// installs the fmt-only registry.
+fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_observe::otel::OtelExporter>) {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer());
+    match exporter {
+        Some(exp) => registry
+            .with(bitrouter_observe::otel::http_layer::tracing_subscriber_layer(exp))
+            .init(),
+        None => registry.init(),
+    }
+}
+
 fn resolve_log_path(home: &Path, log: Option<&Path>) -> PathBuf {
     if let Some(l) = log {
         return l.to_path_buf();
@@ -664,6 +706,11 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         bitrouter::paths::ConfigSource::Default { .. } => None,
     };
     let assembled = bitrouter::build_app_with_path(&cfg, config_path_for_reload).await?;
+    // The OTel exporter was just constructed (inside `build_app_with_path`).
+    // Hand its SDK tracer to the `tracing-opentelemetry` bridge layer now
+    // — the bridge captures its tracer at construction, so this can only
+    // happen after the exporter exists.
+    init_serve_tracing_subscriber(assembled.otel_exporter.as_deref());
     let app = Arc::new(assembled.app);
     let policy_store = assembled.policy_store;
     // Clone before moving the original into `run_control_socket` — we
@@ -693,8 +740,14 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     let http_app = app.clone();
     let http_listen = listen.clone();
     let http = async move {
+        // Wrap the SDK router in tower-http's TraceLayer (plus inbound W3C
+        // trace-context propagation) so the inbound HTTP request becomes
+        // the SERVER span parent of the bitrouter `chat` INTERNAL span.
         http_app
-            .serve(&http_listen)
+            .serve_with_router_wrapper(
+                &http_listen,
+                bitrouter_observe::otel::http_layer::router_wrapper(),
+            )
             .await
             .map_err(anyhow::Error::from)
     };

@@ -52,6 +52,11 @@ pub struct Assembled {
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
     pub observe: Arc<dyn ObserveStatusProvider>,
+    /// Live OTel exporter handle, when one is wired. Held so the binary
+    /// can hand it to the `tracing-opentelemetry` bridge layer at
+    /// subscriber-init time (the bridge captures its tracer eagerly).
+    /// `None` when OTel is disabled in config.
+    pub otel_exporter: Option<Arc<OtelExporter>>,
 }
 
 /// `ObserveStatusProvider` impl backed by a real [`OtelExporter`]. The
@@ -208,7 +213,11 @@ pub async fn build_app_with_path(
             compiled_in: OTEL_ENABLED,
         }),
     };
-    let otel_for_hook = otel_exporter;
+    // Two handles to the same exporter: one moves into the pipeline as an
+    // `ObserveHook`, the other lands on `Assembled` so the binary can hand
+    // it to the `tracing-opentelemetry` bridge layer.
+    let otel_for_hook = otel_exporter.clone();
+    let otel_for_assembled = otel_exporter;
 
     // Optional MCP pure-routing pipeline — wired only when the config
     // declares at least one upstream MCP server. The pipeline is independent
@@ -361,6 +370,7 @@ pub async fn build_app_with_path(
         policy_store: policy_store_for_reload,
         routing_table: routing_table_for_reload,
         observe: observe_provider,
+        otel_exporter: otel_for_assembled,
     })
 }
 
