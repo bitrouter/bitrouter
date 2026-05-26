@@ -21,6 +21,16 @@ opentelemetry = { version = "0.27", optional = true }
 opentelemetry_sdk = { version = "0.27", optional = true, features = ["rt-tokio", "trace", "metrics"] }
 opentelemetry-otlp = { version = "0.27", optional = true, features = ["http-proto", "reqwest-client", "reqwest-rustls", "trace", "metrics"] }
 opentelemetry-semantic-conventions = { version = "0.27", optional = true }
+# tracing ↔ OpenTelemetry bridge. Pinned to the 0.28.x line, which targets
+# opentelemetry 0.27. https://crates.io/crates/tracing-opentelemetry
+tracing-opentelemetry = { version = "0.28", optional = true }
+# Inbound HTTP TraceLayer for the SERVER span. Inherits the workspace
+# pin (0.6) with the `trace` feature.
+# https://docs.rs/tower-http/latest/tower_http/trace/index.html
+tower-http = { workspace = true, optional = true }
+# axum is the host's HTTP framework; we wrap its Router with the TraceLayer.
+axum = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 http = { workspace = true, optional = true }
 dashmap = { version = "6", optional = true }
@@ -33,6 +43,10 @@ otel = [
     "dep:opentelemetry_sdk",
     "dep:opentelemetry-otlp",
     "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:tower-http",
+    "dep:axum",
+    "dep:tracing-subscriber",
     "dep:tokio",
     "dep:http",
     "dep:dashmap",
