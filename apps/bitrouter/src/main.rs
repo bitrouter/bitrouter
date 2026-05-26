@@ -3,9 +3,9 @@
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `route` / `init` / `key sign` / `models` / `tools` /
 //! `policy create` / `providers (list|use)` / `wallet` / `login` / `logout` /
-//! `whoami` / `agents`. Daemon control runs over a Unix socket —
-//! `start` spawns `serve` detached; the client subcommands send one
-//! [`DaemonCommand`] each.
+//! `whoami` / `agents`. Daemon control runs over a local IPC endpoint
+//! (a Unix domain socket, or a Windows named pipe) — `start` spawns
+//! `serve` detached; the client subcommands send one [`DaemonCommand`] each.
 //!
 //! v1.0 ships the routing / settlement subsystems wired here. Subsystems that
 //! belong to *other* services (OWS wallet, cloud login, ACP runtime) print an
@@ -693,54 +693,86 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         observe_provider,
     );
 
-    // SIGHUP triggers a config reload — per, reload should be
-    // available via either `bitrouter reload` (the socket path) *or* a HUP
-    // signal. Same fan-out as the Reload command — every reloadable subsystem.
+    // SIGHUP triggers a config reload — reload should be available via either
+    // `bitrouter reload` (the control endpoint) *or* a HUP signal. Same fan-out
+    // as the Reload command — every reloadable subsystem. SIGHUP is Unix-only;
+    // on Windows there is no equivalent, so the HUP future stays pending and
+    // reload is reached exclusively through `bitrouter reload`.
     let hup_reloader = reloader.clone();
     let hup = async move {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut hup = match signal(SignalKind::hangup()) {
-            Ok(s) => s,
-            Err(e) => return Err::<(), _>(anyhow::Error::from(e)),
-        };
-        loop {
-            if hup.recv().await.is_none() {
-                return Ok(());
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut hup = match signal(SignalKind::hangup()) {
+                Ok(s) => s,
+                Err(e) => return Err::<(), anyhow::Error>(anyhow::Error::from(e)),
+            };
+            loop {
+                if hup.recv().await.is_none() {
+                    return Ok(());
+                }
+                match hup_reloader.reload().await {
+                    Ok(()) => tracing::info!("SIGHUP — reload succeeded"),
+                    Err(e) => tracing::warn!(error = %e, "SIGHUP reload failed"),
+                }
             }
-            match hup_reloader.reload().await {
-                Ok(()) => tracing::info!("SIGHUP — reload succeeded"),
-                Err(e) => tracing::warn!(error = %e, "SIGHUP reload failed"),
-            }
+        }
+        #[cfg(not(unix))]
+        {
+            // No SIGHUP on this platform — keep the reloader handle alive and
+            // park forever so the `select!` arm below never fires.
+            let _keep = &hup_reloader;
+            std::future::pending::<()>().await;
+            Ok::<(), anyhow::Error>(())
         }
     };
 
-    // SIGINT (ctrl-C) and SIGTERM (systemd / `kill`) end the loop the
-    // same way `bitrouter stop` does — so the shutdown path below
-    // (observe flush, pid-file cleanup) runs in every termination
-    // mode except SIGKILL.
+    // Termination signals end the loop the same way `bitrouter stop` does — so
+    // the shutdown path below (observe flush, pid-file cleanup) runs in every
+    // graceful termination mode. On Unix that's SIGINT (ctrl-C) and SIGTERM
+    // (systemd / `kill`); on Windows it's the console control events
+    // (Ctrl-C / Ctrl-Break / window close / system shutdown).
     let term = async {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut sigint = signal(SignalKind::interrupt()).map_err(anyhow::Error::from)?;
-        let mut sigterm = signal(SignalKind::terminate()).map_err(anyhow::Error::from)?;
-        tokio::select! {
-            _ = sigint.recv() => tracing::info!("SIGINT — shutting down"),
-            _ = sigterm.recv() => tracing::info!("SIGTERM — shutting down"),
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigint = signal(SignalKind::interrupt()).map_err(anyhow::Error::from)?;
+            let mut sigterm = signal(SignalKind::terminate()).map_err(anyhow::Error::from)?;
+            tokio::select! {
+                _ = sigint.recv() => tracing::info!("SIGINT — shutting down"),
+                _ = sigterm.recv() => tracing::info!("SIGTERM — shutting down"),
+            }
+            Ok::<(), anyhow::Error>(())
         }
-        Ok::<(), anyhow::Error>(())
+        #[cfg(windows)]
+        {
+            use tokio::signal::windows;
+            let mut ctrl_c = windows::ctrl_c().map_err(anyhow::Error::from)?;
+            let mut ctrl_break = windows::ctrl_break().map_err(anyhow::Error::from)?;
+            let mut ctrl_close = windows::ctrl_close().map_err(anyhow::Error::from)?;
+            let mut ctrl_shutdown = windows::ctrl_shutdown().map_err(anyhow::Error::from)?;
+            tokio::select! {
+                _ = ctrl_c.recv() => tracing::info!("Ctrl-C — shutting down"),
+                _ = ctrl_break.recv() => tracing::info!("Ctrl-Break — shutting down"),
+                _ = ctrl_close.recv() => tracing::info!("console close — shutting down"),
+                _ = ctrl_shutdown.recv() => tracing::info!("system shutdown — shutting down"),
+            }
+            Ok::<(), anyhow::Error>(())
+        }
     };
 
     let result = tokio::select! {
         r = http => r,
         r = control => r,
-        // SIGHUP loop never returns Ok by design; an error from signal setup
-        // is logged and we keep serving.
+        // HUP loop never returns Ok by design (Unix); an error from signal
+        // setup is logged and we keep serving. On Windows this arm is pending.
         r = hup => match r {
             Ok(()) => Ok(()),
             Err(e) => { tracing::warn!(error = %e, "SIGHUP listener unavailable"); Ok(()) }
         },
         r = term => match r {
             Ok(()) => Ok(()),
-            Err(e) => { tracing::warn!(error = %e, "SIGINT/SIGTERM listener unavailable"); Ok(()) }
+            Err(e) => { tracing::warn!(error = %e, "termination-signal listener unavailable"); Ok(()) }
         },
     };
 
@@ -801,11 +833,14 @@ async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Resu
         .try_clone()
         .context("duplicating log handle for stderr")?;
 
-    // Detach the child into its own process group so the parent shell's
-    // SIGHUP (terminal close) does not propagate to it. Otherwise closing the
-    // tab would kill the daemon. Pattern from
+    // Detach the child so the launcher's console / terminal lifecycle does not
+    // take the daemon down with it. On Unix that means a new process group so
+    // the parent shell's SIGHUP (terminal close) does not propagate — otherwise
+    // closing the tab would kill the daemon. Pattern from
     // https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.process_group
-    use std::os::unix::process::CommandExt;
+    // On Windows the equivalent is DETACHED_PROCESS (the child gets no inherited
+    // console) plus CREATE_NEW_PROCESS_GROUP (a Ctrl-C / Ctrl-Break in the
+    // launcher's console is not delivered to the daemon).
     let mut cmd = std::process::Command::new(&exe);
     cmd.arg("serve");
     // For a `File` source pass `--config <abs path>` so the child
@@ -816,13 +851,23 @@ async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Resu
     if let bitrouter::paths::ConfigSource::File(path) = source {
         cmd.arg("--config").arg(path);
     }
-    let mut child = cmd
-        .stdout(std::process::Stdio::from(log))
+    cmd.stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(log_err))
-        .stdin(std::process::Stdio::null())
-        .process_group(0)
-        .spawn()
-        .context("spawning detached `bitrouter serve`")?;
+        .stdin(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Winbase.h constants — avoid pulling in a `windows`/`winapi` crate.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    let mut child = cmd.spawn().context("spawning detached `bitrouter serve`")?;
 
     // Liveness grace period: if the child explodes immediately (bad config,
     // port already in use, …) we want the user to know now, not in the log.
@@ -931,8 +976,10 @@ async fn restart(
     log_path: &Path,
 ) -> Result<()> {
     // Stop is best-effort — a missing daemon is fine, we just go straight to
-    // start. Any other error from the running daemon is fatal.
-    if socket.exists() {
+    // start. Any other error from the running daemon is fatal. `endpoint_in_use`
+    // abstracts "is a daemon bound here?" across the Unix socket file and the
+    // Windows named pipe.
+    if daemon::endpoint_in_use(socket) {
         match daemon::send_command(socket, &DaemonCommand::Stop).await {
             Ok(DaemonResponse::Ok) => println!("daemon stopped"),
             Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
@@ -940,16 +987,16 @@ async fn restart(
             Err(e) => tracing::warn!(error = %e, "stop failed — proceeding to start"),
         }
         //.2 allows in-flight requests up to 30s to drain. Wait that
-        // long for the socket to be released. If it still isn't, escalate to
-        // SIGKILL on the recorded pid — otherwise `start` would race the old
-        // process for the same socket and one of them would die silently.
+        // long for the endpoint to be released. If it still isn't, escalate to
+        // a forced kill of the recorded pid — otherwise `start` would race the
+        // old process for the same endpoint and one of them would die silently.
         let pid_path = pid_path_for(socket);
         if !wait_for_socket_release(socket, std::time::Duration::from_secs(30)).await {
-            tracing::warn!("socket still held after 30s — escalating to SIGKILL on pid file");
+            tracing::warn!("endpoint still held after 30s — escalating to force-kill on pid file");
             if let Some(pid) = daemon::read_pid_file(&pid_path).await {
                 force_kill(pid).await;
             }
-            // One more brief wait so the kernel cleans up the socket inode.
+            // One more brief wait so the OS cleans up the endpoint.
             wait_for_socket_release(socket, std::time::Duration::from_secs(2)).await;
             // The killed daemon never removed its pid file; do it now.
             daemon::remove_pid_file(&pid_path).await;
@@ -958,17 +1005,18 @@ async fn restart(
     start(source, log_path).await
 }
 
-/// Poll until the socket file is gone (the old daemon removes it on exit), up
-/// to `timeout`. Returns true on success, false on timeout.
+/// Poll until the control endpoint is released (the old daemon drops the Unix
+/// socket file / closes the last named-pipe instance on exit), up to
+/// `timeout`. Returns true on success, false on timeout.
 async fn wait_for_socket_release(socket: &Path, timeout: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if !socket.exists() {
+        if !daemon::endpoint_in_use(socket) {
             return true;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    !socket.exists()
+    !daemon::endpoint_in_use(socket)
 }
 
 async fn reload(socket: &Path) -> Result<()> {
@@ -1079,7 +1127,7 @@ fn print_status_row(p: &bitrouter::style::Palette, label: &str, value: &str) {
 
 async fn route(model: &str, source: &bitrouter::paths::ConfigSource, socket: &Path) -> Result<()> {
     // Try the running daemon first — its routing table reflects any `reload`s.
-    if socket.exists() {
+    if daemon::endpoint_in_use(socket) {
         match daemon::send_command(
             socket,
             &DaemonCommand::Route {
@@ -1501,9 +1549,10 @@ fn print_unimplemented(name: &str, detail: &str) {
     }
 }
 
-/// Liveness check: `kill -0 <pid>` returns success iff the pid is reachable
-/// (i.e. exists and we have permission to signal it). No actual signal is
-/// sent. We shell out to keep `apps/bitrouter` `#![forbid(unsafe_code)]`.
+/// Liveness check: on Unix `kill -0 <pid>` returns success iff the pid is
+/// reachable (i.e. exists and we have permission to signal it). No actual
+/// signal is sent. We shell out to keep `apps/bitrouter` `#![forbid(unsafe_code)]`.
+#[cfg(unix)]
 fn process_is_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
@@ -1514,11 +1563,45 @@ fn process_is_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// Send SIGKILL to `pid`. Best-effort — if the process is already gone the
-/// kernel returns ESRCH and we silently move on.
+/// Liveness check on Windows: `tasklist` filtered to the pid. `tasklist` ships
+/// on every Windows install, so we shell out (rather than calling the Win32
+/// API) to keep `apps/bitrouter` free of `unsafe`. When no process matches,
+/// `tasklist` prints an informational line instead of a CSV row — so we look
+/// for the quoted pid the CSV format emits (`"<pid>"`).
+#[cfg(windows)]
+fn process_is_alive(pid: u32) -> bool {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output();
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.contains(&format!("\"{pid}\""))
+        }
+        Err(_) => false,
+    }
+}
+
+/// Forcibly terminate `pid`. Best-effort — if the process is already gone we
+/// silently move on. On Unix this is SIGKILL (the kernel returns ESRCH for a
+/// dead pid); on Windows it's `taskkill /F`.
+#[cfg(unix)]
 async fn force_kill(pid: u32) {
     let _ = tokio::process::Command::new("kill")
         .args(["-9", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+}
+
+/// Forcibly terminate `pid` on Windows via `taskkill /F`. Best-effort.
+#[cfg(windows)]
+async fn force_kill(pid: u32) {
+    let _ = tokio::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()

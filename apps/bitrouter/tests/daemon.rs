@@ -1,6 +1,9 @@
-//! Integration tests for the Unix-socket daemon control surface:
-//! roundtrip `Status` / `Route` / `Reload` / `Stop` against a fully assembled
-//! `App`. Bare-bones — no HTTP server, just the control socket.
+//! Integration tests for the daemon control surface: roundtrip
+//! `Status` / `Route` / `Reload` / `Stop` against a fully assembled `App`.
+//! Bare-bones — no HTTP server, just the control endpoint. The transport is
+//! platform-specific (a Unix domain socket, or a Windows named pipe), but
+//! these tests drive it through the platform-agnostic `daemon` API so they
+//! run unchanged on both.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,13 +63,19 @@ async fn write_config(dir: &std::path::Path, db_url: &str) -> std::path::PathBuf
 
 /// Build a fresh tempdir scoped to this test run.
 ///
-/// We deliberately use `/tmp` rather than `std::env::temp_dir()` (which is
-/// `$TMPDIR` = `/var/folders/.../T/` on macOS, ~48 chars by itself). Unix
-/// domain socket paths are capped at `SUN_LEN` (104 bytes on macOS, 108 on
+/// On Unix we deliberately use `/tmp` rather than `std::env::temp_dir()`
+/// (which is `$TMPDIR` = `/var/folders/.../T/` on macOS, ~48 chars by itself).
+/// Unix domain socket paths are capped at `SUN_LEN` (104 bytes on macOS, 108 on
 /// Linux); the long mac TMPDIR plus a nanosecond suffix plus `bitrouter.sock`
 /// would overflow. `/tmp` keeps every test socket comfortably under the cap.
+/// On Windows the control endpoint is a named pipe (no path-length cap on the
+/// backing file), so the platform temp dir is fine.
 fn tempdir(tag: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from("/tmp").join(format!(
+    #[cfg(unix)]
+    let base = std::path::PathBuf::from("/tmp");
+    #[cfg(not(unix))]
+    let base = std::env::temp_dir();
+    base.join(format!(
         "brd-{tag}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
@@ -74,6 +83,21 @@ fn tempdir(tag: &str) -> std::path::PathBuf {
             .unwrap()
             .as_nanos()
     ))
+}
+
+/// Wait until the daemon's control endpoint answers, so a test doesn't race
+/// the listener's bind. Cross-platform: a connect failure (listener not up
+/// yet) simply retries. `Status` is read-only, so probing with it is harmless.
+async fn wait_until_ready(socket: &std::path::Path) {
+    for _ in 0..100 {
+        if daemon::send_command(socket, &DaemonCommand::Status)
+            .await
+            .is_ok()
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]
@@ -94,12 +118,7 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
     ));
 
     // Wait for the listener to be ready (bind is fast but not synchronous).
-    for _ in 0..50 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_until_ready(&socket).await;
 
     // Status → reports a real model count from the routing table.
     let status = daemon::send_command(&socket, &DaemonCommand::Status)
@@ -144,15 +163,15 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
         other => panic!("expected ObserveStatus, got {other:?}"),
     }
 
-    // Stop → server returns and the socket file is removed.
+    // Stop → server returns and the control endpoint is released.
     let stop = daemon::send_command(&socket, &DaemonCommand::Stop)
         .await
         .unwrap();
     assert!(matches!(stop, DaemonResponse::Ok));
     server.await.unwrap().unwrap();
     assert!(
-        !socket.exists(),
-        "socket file should be removed on shutdown"
+        !daemon::endpoint_in_use(&socket),
+        "control endpoint should be released on shutdown"
     );
 
     let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -174,12 +193,7 @@ async fn reload_re_reads_the_config_file() {
         Arc::new(RoutingTableReloader(app.clone())),
         Arc::new(NoopObserveStatus { compiled_in: false }),
     ));
-    for _ in 0..50 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_until_ready(&socket).await;
 
     // Rewrite the config to drop the anthropic provider.
     let new_yaml = r#"
@@ -306,12 +320,7 @@ async fn route_for_unknown_model_returns_a_clean_error() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
     ));
-    for _ in 0..50 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_until_ready(&socket).await;
 
     let resp = daemon::send_command(
         &socket,
@@ -350,12 +359,7 @@ async fn concurrent_clients_are_all_served() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
     ));
-    for _ in 0..50 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_until_ready(&socket).await;
 
     let s1 = socket.clone();
     let s2 = socket.clone();
@@ -395,18 +399,13 @@ async fn malformed_input_does_not_take_the_server_down() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
     ));
-    for _ in 0..50 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_until_ready(&socket).await;
 
     // Send garbage directly — bypass send_command's JSON serialisation.
     {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        use tokio::net::UnixStream;
-        let mut s = BufReader::new(UnixStream::connect(&socket).await.unwrap());
+        let stream = daemon::connect_control(&socket).await.unwrap();
+        let mut s = BufReader::new(stream);
         s.get_mut().write_all(b"not-json-at-all\n").await.unwrap();
         s.get_mut().flush().await.unwrap();
         let mut line = String::new();
@@ -448,12 +447,7 @@ async fn reload_returns_error_when_the_config_is_broken() {
         Arc::new(RoutingTableReloader(app.clone())),
         Arc::new(NoopObserveStatus { compiled_in: false }),
     ));
-    for _ in 0..50 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_until_ready(&socket).await;
 
     // Corrupt the config on disk.
     tokio::fs::write(&cfg_path, "this: is: not: valid: yaml: [{")
@@ -483,6 +477,11 @@ async fn reload_returns_error_when_the_config_is_broken() {
     let _ = tokio::fs::remove_dir_all(&dir).await;
 }
 
+// Unix-only: this asserts the `0600` file mode. On Windows the control
+// endpoint is a named pipe whose default security descriptor already restricts
+// access to the creating user and administrators — there is no file mode to
+// check, so the test does not apply.
+#[cfg(unix)]
 #[tokio::test]
 async fn socket_file_has_owner_only_permissions() {
     // Anyone-on-the-host shouldn't be able to talk to our daemon. Verify the
@@ -502,12 +501,7 @@ async fn socket_file_has_owner_only_permissions() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
     ));
-    for _ in 0..50 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_until_ready(&socket).await;
 
     let meta = tokio::fs::metadata(&socket).await.unwrap();
     let mode = meta.permissions().mode() & 0o777;

@@ -21,9 +21,11 @@
 //! subcommand can decide whether to load from disk or build from
 //! [`bitrouter_providers::zero_config`].
 //!
-//! On Windows / non-Unix without `$HOME`, step 5 degrades to a clear
-//! error pointing at `$BITROUTER_HOME`. Tests should always pass
-//! `-c <path>` explicitly so they never depend on the live env.
+//! On Windows `$HOME` is usually unset, so step 4/5 fall back to
+//! `%USERPROFILE%` (→ `C:\Users\<name>\.bitrouter`). With neither set,
+//! step 5 degrades to a clear error pointing at `$BITROUTER_HOME`. Tests
+//! should always pass `-c <path>` explicitly so they never depend on the
+//! live env.
 
 use std::path::{Path, PathBuf};
 
@@ -73,7 +75,8 @@ impl ConfigSource {
 }
 
 /// Resolve the config source according to the documented order. Reads
-/// the live environment (`current_dir`, `$BITROUTER_HOME`, `$HOME`).
+/// the live environment (`current_dir`, `$BITROUTER_HOME`, `$HOME`, and
+/// `%USERPROFILE%` on Windows as the `$HOME` fallback).
 /// Does **not** write anything to disk — the [`ConfigSource::Default`]
 /// branch is purely in-memory until a caller (typically `serve`) chdirs
 /// into the implicit home.
@@ -84,6 +87,12 @@ pub fn resolve_config(explicit: Option<&Path>) -> Result<ConfigSource> {
     let cwd = std::env::current_dir().ok();
     let bitrouter_home = std::env::var_os("BITROUTER_HOME").filter(|v| !v.is_empty());
     let home = std::env::var_os("HOME").filter(|v| !v.is_empty());
+    // Windows doesn't set `$HOME`; fall back to `%USERPROFILE%` so
+    // `~/.bitrouter` resolves to `C:\Users\<name>\.bitrouter` and the daemon's
+    // runtime artefacts (socket/pipe, pid, log, db) get a stable home without
+    // the operator having to set `$BITROUTER_HOME` by hand.
+    #[cfg(windows)]
+    let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()));
     let outcome = resolve_config_with(
         explicit,
         cwd.as_deref(),
