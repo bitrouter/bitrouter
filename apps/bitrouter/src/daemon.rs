@@ -1,17 +1,22 @@
-//! Daemon control over a Unix domain socket.
+//! Daemon control over a local IPC channel.
 //!
-//! A running `bitrouter serve` listens on a control socket alongside the HTTP
-//! API. The CLI's `stop` / `restart` / `reload` / `status` / `route`
+//! A running `bitrouter serve` listens on a control endpoint alongside the
+//! HTTP API. The CLI's `stop` / `restart` / `reload` / `status` / `route`
 //! subcommands are thin clients that connect, send one newline-delimited JSON
 //! [`DaemonCommand`], and read one [`DaemonResponse`].
+//!
+//! The transport is platform-specific but the wire protocol is identical:
+//! a **Unix domain socket** (mode `0600`) on Unix, and a **Windows named
+//! pipe** (`\\.\pipe\bitrouter-…`, secured by its default owner-only DACL)
+//! on Windows. Both are encapsulated by a private `transport` module so the
+//! rest of this file — and every caller — is platform-agnostic.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
@@ -249,11 +254,12 @@ pub fn resolve_socket_path(config_path: &Path, cfg_socket: &str) -> PathBuf {
     }
 }
 
-/// True when `err` came from connecting to a Unix socket that nothing
+/// True when `err` came from connecting to a control endpoint that nothing
 /// is listening on — i.e. the daemon is stopped, not that something
 /// else went wrong. Inspects the chain for an io error of kind
-/// `NotFound` (socket file absent) or `ConnectionRefused` (file present
-/// but no acceptor, e.g. stale after a crash).
+/// `NotFound` (socket file / pipe absent) or `ConnectionRefused` (endpoint
+/// present but no acceptor, e.g. stale after a crash). On Windows a missing
+/// named pipe surfaces as `ERROR_FILE_NOT_FOUND`, which maps to `NotFound`.
 pub fn is_not_reachable(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         cause
@@ -270,11 +276,12 @@ pub fn is_not_reachable(err: &anyhow::Error) -> bool {
 
 // ===== server side =====
 
-/// Run the control-socket listener until a `Stop` command is received (then it
+/// Run the control listener until a `Stop` command is received (then it
 /// returns) — run this alongside `App::serve` under a `tokio::select!`.
 ///
-/// `listen` is the HTTP address (reported in `Status`); the socket is bound at
-/// `socket_path` and removed on return.
+/// `listen` is the HTTP address (reported in `Status`); the endpoint is bound
+/// at `socket_path` (a Unix socket file, or a named pipe derived from the path
+/// on Windows) and torn down on return.
 pub async fn run_control_socket(
     socket_path: PathBuf,
     app: Arc<App>,
@@ -282,36 +289,21 @@ pub async fn run_control_socket(
     reloader: Arc<dyn DaemonReloader>,
     observe: Arc<dyn ObserveStatusProvider>,
 ) -> Result<()> {
-    // A stale socket file from a crashed daemon would block the bind.
-    let _ = tokio::fs::remove_file(&socket_path).await;
-    let listener = UnixListener::bind(&socket_path)
-        .with_context(|| format!("binding control socket {}", socket_path.display()))?;
-    // The control surface includes Stop / Reload — only the daemon owner may
-    // reach it. UnixListener::bind respects the process umask (typically 022 →
-    // 0755); tighten to 0600 explicitly so any other local user is excluded.
-    use std::os::unix::fs::PermissionsExt;
-    tokio::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
-        .await
-        .with_context(|| format!("chmod 0600 {}", socket_path.display()))?;
-    tracing::info!(socket = %socket_path.display(), "control socket listening (mode 0600)");
-
-    let result = accept_loop(&listener, &app, &listen, &reloader, &observe).await;
-    let _ = tokio::fs::remove_file(&socket_path).await;
+    let mut listener = transport::bind(&socket_path).await?;
+    let result = accept_loop(&mut listener, &app, &listen, &reloader, &observe).await;
+    listener.cleanup().await;
     result
 }
 
 async fn accept_loop(
-    listener: &UnixListener,
+    listener: &mut transport::ControlListener,
     app: &Arc<App>,
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
 ) -> Result<()> {
     loop {
-        let (stream, _addr) = listener
-            .accept()
-            .await
-            .context("accepting control-socket connection")?;
+        let stream = listener.accept().await?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
         if handle_connection(stream, app, listen, reloader, observe).await? {
@@ -322,13 +314,20 @@ async fn accept_loop(
 }
 
 /// Handle one connection. Returns `Ok(true)` if it was a `Stop` command.
-async fn handle_connection(
-    stream: UnixStream,
+///
+/// Generic over the concrete stream so the same logic drives a Unix
+/// `UnixStream` and a Windows `NamedPipeServer` — both implement the tokio
+/// async IO traits.
+async fn handle_connection<S>(
+    stream: S,
     app: &Arc<App>,
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-) -> Result<bool> {
+) -> Result<bool>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     if reader.read_line(&mut line).await? == 0 {
@@ -427,7 +426,10 @@ async fn dispatch(
     }
 }
 
-async fn write_response(stream: &mut UnixStream, response: &DaemonResponse) -> Result<()> {
+async fn write_response<S>(stream: &mut S, response: &DaemonResponse) -> Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     let mut json = serde_json::to_string(response).context("serialising daemon response")?;
     json.push('\n');
     stream.write_all(json.as_bytes()).await?;
@@ -437,15 +439,27 @@ async fn write_response(stream: &mut UnixStream, response: &DaemonResponse) -> R
 
 // ===== client side =====
 
-/// Connect to a running daemon's control socket, send `command`, return its
+/// Connect to a running daemon's control endpoint and hand back the raw
+/// stream. Used by [`send_command`] and by integration tests that need to
+/// push bytes the normal client wouldn't (e.g. malformed input). Fails
+/// clearly if no daemon is listening.
+pub async fn connect_control(socket_path: &Path) -> Result<impl AsyncRead + AsyncWrite + Unpin> {
+    transport::connect(socket_path).await
+}
+
+/// True when something is already bound to the control endpoint at `path`
+/// (i.e. a daemon is — or was — running). On Unix this is "the socket file
+/// exists"; on Windows it probes the named pipe. `restart` uses it to decide
+/// whether to send a `Stop` and to wait for the old daemon to release the
+/// endpoint before the replacement binds.
+pub fn endpoint_in_use(path: &Path) -> bool {
+    transport::endpoint_in_use(path)
+}
+
+/// Connect to a running daemon's control endpoint, send `command`, return its
 /// response. Fails clearly if no daemon is listening.
 pub async fn send_command(socket_path: &Path, command: &DaemonCommand) -> Result<DaemonResponse> {
-    let stream = UnixStream::connect(socket_path).await.with_context(|| {
-        format!(
-            "connecting to {} — is the daemon running? (`bitrouter start`)",
-            socket_path.display()
-        )
-    })?;
+    let stream = transport::connect(socket_path).await?;
     let mut reader = BufReader::new(stream);
     let mut json = serde_json::to_string(command).context("serialising command")?;
     json.push('\n');
@@ -461,6 +475,250 @@ pub async fn send_command(socket_path: &Path, command: &DaemonCommand) -> Result
         anyhow::bail!("daemon closed the connection without responding");
     }
     serde_json::from_str(line.trim()).context("parsing daemon response")
+}
+
+// ===== platform transport =====
+
+/// Unix transport: a `tokio::net::UnixListener` bound to the socket path,
+/// tightened to mode `0600`. The socket file is removed on teardown.
+#[cfg(unix)]
+mod transport {
+    use std::path::{Path, PathBuf};
+
+    use anyhow::{Context, Result};
+    use tokio::net::{UnixListener, UnixStream};
+
+    /// Server-side listener wrapping a bound Unix socket.
+    pub struct ControlListener {
+        listener: UnixListener,
+        path: PathBuf,
+    }
+
+    /// Bind the control socket, removing any stale file first and tightening
+    /// permissions to owner-only.
+    pub async fn bind(path: &Path) -> Result<ControlListener> {
+        // A stale socket file from a crashed daemon would block the bind.
+        let _ = tokio::fs::remove_file(path).await;
+        let listener = UnixListener::bind(path)
+            .with_context(|| format!("binding control socket {}", path.display()))?;
+        // The control surface includes Stop / Reload — only the daemon owner
+        // may reach it. `UnixListener::bind` respects the process umask
+        // (typically 022 → 0755); tighten to 0600 explicitly so any other
+        // local user is excluded.
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .await
+            .with_context(|| format!("chmod 0600 {}", path.display()))?;
+        tracing::info!(socket = %path.display(), "control socket listening (mode 0600)");
+        Ok(ControlListener {
+            listener,
+            path: path.to_path_buf(),
+        })
+    }
+
+    impl ControlListener {
+        /// Accept the next client connection.
+        pub async fn accept(&mut self) -> Result<UnixStream> {
+            let (stream, _addr) = self
+                .listener
+                .accept()
+                .await
+                .context("accepting control-socket connection")?;
+            Ok(stream)
+        }
+
+        /// Remove the socket file on shutdown.
+        pub async fn cleanup(self) {
+            let _ = tokio::fs::remove_file(&self.path).await;
+        }
+    }
+
+    /// Connect to the control socket.
+    pub async fn connect(path: &Path) -> Result<UnixStream> {
+        UnixStream::connect(path).await.with_context(|| {
+            format!(
+                "connecting to {} — is the daemon running? (`bitrouter start`)",
+                path.display()
+            )
+        })
+    }
+
+    /// On Unix the socket is a real file: its presence means a daemon bound it.
+    pub fn endpoint_in_use(path: &Path) -> bool {
+        path.exists()
+    }
+}
+
+/// Windows transport: a named pipe whose name is derived from the control
+/// path.
+///
+/// Security: the pipe is created with the **default** security descriptor.
+/// That grants full control to the creating user, `LocalSystem` and
+/// administrators, and only `GENERIC_READ` to `Everyone` — so a co-tenant
+/// non-admin user cannot perform the read+write open a control client needs
+/// (it is denied with `ERROR_ACCESS_DENIED`) and therefore cannot issue
+/// `Stop` / `Reload`. This is the practical analog of the Unix socket's
+/// `0600` mode. Tightening to a literally owner-only DACL would require a
+/// custom `SECURITY_ATTRIBUTES` pointer via
+/// `ServerOptions::create_with_security_attributes_raw`, which is `unsafe` —
+/// and this crate is `#![forbid(unsafe_code)]`, so we rely on the default
+/// descriptor instead.
+#[cfg(windows)]
+mod transport {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use anyhow::{Context, Result};
+    use tokio::net::windows::named_pipe::{
+        ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+    };
+
+    /// `ERROR_PIPE_BUSY` — every pipe instance is currently connected. The
+    /// server re-arms a fresh instance immediately after each accept, so this
+    /// is a transient race the client retries through.
+    const ERROR_PIPE_BUSY: i32 = 231;
+
+    /// Map a filesystem-style control path to a named-pipe name. An explicit
+    /// `\\.\pipe\…` path is honoured verbatim; any other path is hashed into a
+    /// stable, valid pipe name so the daemon and every client agree on the
+    /// same endpoint regardless of the launcher's working directory. Windows
+    /// paths are case-insensitive, so the name is case-folded before hashing.
+    pub fn pipe_name(path: &Path) -> String {
+        let raw = path.to_string_lossy();
+        let lower = raw.to_ascii_lowercase();
+        if lower.starts_with(r"\\.\pipe\") || lower.starts_with(r"\\?\pipe\") {
+            return raw.into_owned();
+        }
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(lower.as_bytes());
+        let digest = hasher.finalize();
+        format!(r"\\.\pipe\bitrouter-{}", hex::encode(&digest[..16]))
+    }
+
+    /// Server-side listener wrapping the currently-waiting pipe instance.
+    pub struct ControlListener {
+        name: String,
+        /// The next instance waiting for a client. `accept` hands this out and
+        /// re-arms a replacement so there is no window with no listener.
+        server: NamedPipeServer,
+    }
+
+    /// Create the first pipe instance. `first_pipe_instance(true)` makes this
+    /// fail loudly if another process already owns the name (e.g. a second
+    /// daemon racing the same control path) rather than silently sharing it.
+    pub async fn bind(path: &Path) -> Result<ControlListener> {
+        let name = pipe_name(path);
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&name)
+            .with_context(|| format!("creating control pipe {name}"))?;
+        tracing::info!(pipe = %name, "control pipe listening");
+        Ok(ControlListener { name, server })
+    }
+
+    impl ControlListener {
+        /// Wait for the next client, then re-arm a fresh instance and return
+        /// the connected one. Mirrors a `UnixListener::accept`.
+        pub async fn accept(&mut self) -> Result<NamedPipeServer> {
+            self.server
+                .connect()
+                .await
+                .context("waiting for control-pipe client")?;
+            let next = ServerOptions::new()
+                .create(&self.name)
+                .with_context(|| format!("re-arming control pipe {}", self.name))?;
+            Ok(std::mem::replace(&mut self.server, next))
+        }
+
+        /// Nothing to unlink — a named pipe disappears when its last instance
+        /// handle closes.
+        pub async fn cleanup(self) {}
+    }
+
+    /// Connect to the control pipe, retrying briefly through the `ERROR_PIPE_BUSY`
+    /// window the server opens while re-arming between clients.
+    pub async fn connect(path: &Path) -> Result<NamedPipeClient> {
+        let name = pipe_name(path);
+        let mut last_busy: Option<std::io::Error> = None;
+        for _ in 0..50 {
+            match ClientOptions::new().open(&name) {
+                Ok(client) => return Ok(client),
+                Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                    last_busy = Some(e);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("connecting to {name} — is the daemon running? (`bitrouter start`)")
+                    });
+                }
+            }
+        }
+        let e = last_busy.unwrap_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "control pipe busy")
+        });
+        Err(e).with_context(|| format!("connecting to {name} — daemon stayed busy"))
+    }
+
+    /// Probe whether a daemon currently owns the pipe. A successful open (or a
+    /// busy reply) means it does; "not found" means it has been released.
+    pub fn endpoint_in_use(path: &Path) -> bool {
+        let name = pipe_name(path);
+        match ClientOptions::new().open(&name) {
+            Ok(_client) => true,
+            Err(e) => e.raw_os_error() == Some(ERROR_PIPE_BUSY),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::pipe_name;
+        use std::path::PathBuf;
+
+        #[test]
+        fn explicit_pipe_path_is_returned_verbatim() {
+            // `\\.\pipe\…` is already a valid pipe name — pass it through so an
+            // operator can override the derived name in `server.control_socket`.
+            let p = PathBuf::from(r"\\.\pipe\bitrouter-custom");
+            assert_eq!(pipe_name(&p), r"\\.\pipe\bitrouter-custom");
+        }
+
+        #[test]
+        fn nt_style_pipe_path_is_returned_verbatim() {
+            let p = PathBuf::from(r"\\?\pipe\bitrouter-custom");
+            assert_eq!(pipe_name(&p), r"\\?\pipe\bitrouter-custom");
+        }
+
+        #[test]
+        fn filesystem_path_maps_to_deterministic_pipe_name() {
+            // The hash must be stable so the daemon (which binds) and the
+            // client (which connects from a possibly-different CWD) agree.
+            let a = pipe_name(&PathBuf::from(r"C:\Users\alice\.bitrouter\bitrouter.sock"));
+            let b = pipe_name(&PathBuf::from(r"C:\Users\alice\.bitrouter\bitrouter.sock"));
+            assert_eq!(a, b);
+            assert!(
+                a.starts_with(r"\\.\pipe\bitrouter-"),
+                "unexpected pipe name {a}"
+            );
+        }
+
+        #[test]
+        fn case_differences_collapse_to_one_name() {
+            // Windows paths are case-insensitive. If two invocations capitalise
+            // the drive letter differently, they must still find the same pipe.
+            let lower = pipe_name(&PathBuf::from(r"c:\users\alice\.bitrouter\bitrouter.sock"));
+            let upper = pipe_name(&PathBuf::from(r"C:\Users\Alice\.BitRouter\bitrouter.sock"));
+            assert_eq!(lower, upper);
+        }
+
+        #[test]
+        fn different_paths_map_to_different_pipe_names() {
+            let a = pipe_name(&PathBuf::from(r"C:\Users\alice\.bitrouter\bitrouter.sock"));
+            let b = pipe_name(&PathBuf::from(r"C:\Users\bob\.bitrouter\bitrouter.sock"));
+            assert_ne!(a, b);
+        }
+    }
 }
 
 // ===== PID file =====

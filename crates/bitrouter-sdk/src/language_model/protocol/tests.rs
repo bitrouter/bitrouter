@@ -1872,6 +1872,13 @@ fn assert_schema_snapshot<T: schemars::JsonSchema>(name: &str) {
             path.display()
         )
     });
+    // Normalise CRLF → LF before comparing. `.gitattributes` pins the
+    // snapshot files to LF, but a contributor without an autocrlf-aware
+    // setup (or a checkout made before that pin landed) can still end up
+    // with CRLF on disk on Windows. The freshly-generated `actual` always
+    // uses LF, so without this normalise step the test fails for a reason
+    // that has nothing to do with the schema.
+    let expected = expected.replace("\r\n", "\n");
     assert_eq!(
         expected.trim(),
         actual.trim(),

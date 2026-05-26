@@ -23,19 +23,32 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  # Linux, macOS, and Windows are all first-class platforms — clippy and test
+  # run on each, no "primary" OS. The daemon control surface in particular has
+  # platform-specific code (Unix domain socket vs Windows named pipe, SIGHUP /
+  # SIGTERM vs ctrl_c, kill vs taskkill) and the matrix catches a regression in
+  # any one of them at PR time.
   clippy:
-    name: clippy
-    runs-on: ubuntu-latest
+    name: clippy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
-      - run: cargo clippy --workspace --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-features --tests -- -D warnings
 
   test:
-    name: test
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1

@@ -252,9 +252,13 @@ providers:
           output_micro_usd_per_token: 10.0
 plugins:
   bitrouter-policy:
-    policy_dir: "{policy_path}"
+    policy_dir: '{policy_path}'
 "#,
         upstream = upstream.uri(),
+        // Single-quoted YAML scalar — double quotes would interpret the
+        // backslashes in a Windows temp path (`C:\Users\…`) as escape
+        // sequences and trip the parser on `\U`. Single quotes treat the
+        // value literally; `temp_dir()` paths never contain a single quote.
         policy_path = policy_dir.display(),
     );
     let cfg: config::Config = config::parse_with(&yaml, |_| None).expect("config parses");
