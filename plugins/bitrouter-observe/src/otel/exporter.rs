@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{
-    Context, KeyValue, global,
+    Context, InstrumentationScope, KeyValue, global,
     propagation::Extractor,
     trace::{Span, SpanKind, Status, TraceContextExt, Tracer},
 };
@@ -125,7 +125,16 @@ impl OtelExporter {
             .with_id_generator(RandomIdGenerator::default())
             .with_resource(resource.clone())
             .build();
-        let tracer = provider.tracer("bitrouter");
+        // Versioned instrumentation scope so backends can filter spans by
+        // instrumentation library + version. Schema URL pins the semantic
+        // conventions snapshot the exporter targets.
+        //
+        // Spec: https://opentelemetry.io/docs/specs/otel/glossary/#instrumentation-scope
+        let scope = InstrumentationScope::builder("io.bitrouter.observe")
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build();
+        let tracer = provider.tracer_with_scope(scope);
 
         let api_key_limiter = Arc::new(CardinalityLimiter::new(config.metrics.api_key_id_cap));
         let user_id_limiter = Arc::new(CardinalityLimiter::new(config.metrics.user_id_cap));
@@ -388,27 +397,22 @@ impl ObserveHook for OtelExporter {
 
         if let Some(entry) = self.active_spans.get(&ctx.request_id) {
             let _guard = entry.context.clone().attach();
-            match part {
-                StreamPart::ToolCallDelta {
-                    name: Some(name), ..
-                } => {
-                    opentelemetry::trace::get_active_span(|span| {
-                        span.add_event(
-                            "tool_call.started",
-                            vec![KeyValue::new("tool.name", name.clone())],
-                        );
-                    });
-                }
-                StreamPart::Usage { usage } => {
-                    opentelemetry::trace::get_active_span(|span| {
-                        span.set_attribute(KeyValue::new(
-                            "gen_ai.usage.stream_tokens",
-                            usage.total() as i64,
-                        ));
-                    });
-                }
-                _ => {}
+            if let StreamPart::ToolCallDelta {
+                name: Some(name), ..
+            } = part
+            {
+                opentelemetry::trace::get_active_span(|span| {
+                    span.add_event(
+                        "tool_call.started",
+                        vec![KeyValue::new("tool.name", name.clone())],
+                    );
+                });
             }
+            // Token usage from `StreamPart::Usage` is intentionally NOT
+            // written to the span here. The GenAI semconv does not define
+            // a per-delta usage attribute, and last-write-wins on a span
+            // attribute would be meaningless. Final aggregate usage is
+            // recorded once on the terminal `on_request_end`.
         }
     }
 
@@ -486,10 +490,20 @@ impl ObserveHook for OtelExporter {
                 RequestOutcome::Failed(err) => {
                     span.set_status(Status::error(err.to_string()));
                     span.set_attribute(KeyValue::new("bitrouter.outcome", "failed"));
-                    // OTel exceptions semconv: error.type identifies the
-                    // failure class.
+                    // OTel error.type stays as a low-cardinality attribute
+                    // (used by metric dimensions); the human-readable error
+                    // message moves into a spec-shaped `exception` event,
+                    // alongside any future stack trace.
+                    //
+                    // Spec: https://opentelemetry.io/docs/specs/semconv/exceptions/
                     span.set_attribute(KeyValue::new("error.type", error_type(err)));
-                    span.set_attribute(KeyValue::new("error.message", err.to_string()));
+                    span.add_event(
+                        "exception",
+                        vec![
+                            KeyValue::new("exception.type", error_type(err)),
+                            KeyValue::new("exception.message", err.to_string()),
+                        ],
+                    );
                 }
                 RequestOutcome::ClientDisconnected => {
                     span.set_status(Status::error("client_disconnected"));
