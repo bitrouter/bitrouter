@@ -602,12 +602,8 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
     }
 }
 
-/// Resolve the `bitrouter.log` path for `start` / `restart`. An
-/// explicit `--log` override wins; otherwise we place the log next to
-/// the config file (e.g. `~/.bitrouter/bitrouter.log`) so the daemon's
-/// runtime artefacts — config, socket, pid file, log — all live in one
-/// directory. The legacy default of `./bitrouter.log` would land the
-/// log file in whichever CWD the launcher happened to be in.
+// ===== tracing subscriber init =====
+
 /// Install a basic fmt-only tracing subscriber. Used for every command
 /// except `serve` — see [`init_serve_tracing_subscriber`].
 fn init_basic_tracing_subscriber() {
@@ -643,6 +639,12 @@ fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_observe::otel::Otel
     }
 }
 
+/// Resolve the `bitrouter.log` path for `start` / `restart`. An
+/// explicit `--log` override wins; otherwise we place the log next to
+/// the config file (e.g. `~/.bitrouter/bitrouter.log`) so the daemon's
+/// runtime artefacts — config, socket, pid file, log — all live in one
+/// directory. The legacy default of `./bitrouter.log` would land the
+/// log file in whichever CWD the launcher happened to be in.
 fn resolve_log_path(home: &Path, log: Option<&Path>) -> PathBuf {
     if let Some(l) = log {
         return l.to_path_buf();
@@ -711,6 +713,10 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // — the bridge captures its tracer at construction, so this can only
     // happen after the exporter exists.
     init_serve_tracing_subscriber(assembled.otel_exporter.as_deref());
+    // Surface any deferred OTel-init failure now that the subscriber is up.
+    if let Some(msg) = &assembled.otel_init_error {
+        tracing::error!("{msg}");
+    }
     let app = Arc::new(assembled.app);
     let policy_store = assembled.policy_store;
     // Clone before moving the original into `run_control_socket` — we

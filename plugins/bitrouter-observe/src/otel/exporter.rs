@@ -374,13 +374,22 @@ impl ObserveHook for OtelExporter {
     async fn after_phase(&self, phase: Phase, ctx: &PipelineContext) {
         match phase {
             Phase::PreRequest => {
-                // Extract inbound W3C trace context, if any. The host's HTTP
-                // ingress layer (tower-http TraceLayer + tracing-opentelemetry
-                // bridge) creates the SERVER span; we still extract here so
-                // the root `chat` INTERNAL span parents correctly when the
-                // exporter is used without that ingress layer (e.g. tests).
-                let parent_context =
-                    global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(ctx.headers())));
+                // Pick a parent for the root `chat` INTERNAL span:
+                //   1. If a SERVER span is currently active (the host's
+                //      tower-http + tracing-opentelemetry bridge attaches one
+                //      for the duration of every inbound request), nest under
+                //      it — that's the canonical "service maps see bitrouter
+                //      as a service" shape.
+                //   2. Otherwise (no ingress layer wired — typical in tests),
+                //      fall back to extracting an inbound `traceparent` from
+                //      the request headers via the W3C propagator. Spec:
+                //      https://www.w3.org/TR/trace-context/
+                let current = Context::current();
+                let parent_context = if current.span().span_context().is_valid() {
+                    current
+                } else {
+                    global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(ctx.headers())))
+                };
 
                 let model = ctx.model().to_string();
                 // GenAI semconv span name: "{operation} {model}".

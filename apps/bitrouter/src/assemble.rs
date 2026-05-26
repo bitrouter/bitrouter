@@ -57,6 +57,12 @@ pub struct Assembled {
     /// subscriber-init time (the bridge captures its tracer eagerly).
     /// `None` when OTel is disabled in config.
     pub otel_exporter: Option<Arc<OtelExporter>>,
+    /// Captured `OtelExporter::new` failure message, when one occurred.
+    /// Surfaced as a `tracing::error!` line by the binary after the full
+    /// subscriber is installed — `OtelExporter::new` itself runs before
+    /// the subscriber on the `serve` path, so logging directly here
+    /// would be dropped.
+    pub otel_init_error: Option<String>,
 }
 
 /// `ObserveStatusProvider` impl backed by a real [`OtelExporter`]. The
@@ -197,16 +203,22 @@ pub async fn build_app_with_path(
     // `Arc` to it for `observe status` queries. The pipeline closure
     // below registers a hook view of the same `Arc`; both Drop at app
     // shutdown.
-    let otel_exporter: Option<Arc<OtelExporter>> = match build_otel_config(config)? {
-        Some(c) => match OtelExporter::new(c) {
-            Ok(exporter) => Some(Arc::new(exporter)),
-            Err(e) => {
-                tracing::error!("failed to initialise OpenTelemetry: {e}");
-                None
-            }
-        },
-        None => None,
-    };
+    // Capture an `OtelExporter::new` failure as a message string instead
+    // of emitting a `tracing::error!` directly: on the `serve` path the
+    // subscriber is not installed yet (it depends on the exporter being
+    // built first), so a tracing line here would be dropped. The binary
+    // surfaces this once the subscriber is up.
+    let (otel_exporter, otel_init_error): (Option<Arc<OtelExporter>>, Option<String>) =
+        match build_otel_config(config)? {
+            Some(c) => match OtelExporter::new(c) {
+                Ok(exporter) => (Some(Arc::new(exporter)), None),
+                Err(e) => (
+                    None,
+                    Some(format!("failed to initialise OpenTelemetry: {e}")),
+                ),
+            },
+            None => (None, None),
+        };
     let observe_provider: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
         Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
         None => Arc::new(NoopObserveStatus {
@@ -371,6 +383,7 @@ pub async fn build_app_with_path(
         routing_table: routing_table_for_reload,
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
+        otel_init_error,
     })
 }
 
