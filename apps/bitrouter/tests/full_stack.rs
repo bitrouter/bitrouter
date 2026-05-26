@@ -500,6 +500,15 @@ async fn e2e_full_stack_outbound_traceparent_propagation() {
         tp.starts_with(&format!("00-{inbound_trace_id}-")),
         "outbound traceparent must continue the inbound trace_id; got {tp}"
     );
+    // W3C v0: `00-<32-hex trace_id>-<16-hex span_id>-<2-hex flags>` ⇒
+    // 2 + 1 + 32 + 1 + 16 + 1 + 2 = 55 chars total. Pin the length so a
+    // regression that mangles the span_id or flags portion can't slip
+    // through the trace_id prefix check.
+    assert_eq!(
+        tp.len(),
+        55,
+        "outbound traceparent must be 55 chars; got {tp}"
+    );
 
     fs.teardown().await;
 }

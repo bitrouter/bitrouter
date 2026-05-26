@@ -1159,6 +1159,210 @@ mod hop_tests {
     }
 
     #[tokio::test]
+    async fn route_and_settle_internal_spans_parent_on_root_chat() {
+        // The exporter emits brief `route` and `settle` INTERNAL spans at
+        // their respective phase boundaries; they should sit alongside the
+        // hop CLIENT span as children of the root `chat` INTERNAL span.
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        // `route` opens + closes synchronously at the Route phase boundary.
+        // The exporter reads `ctx.route_chain`, so populate it first.
+        let mut ctx = ctx;
+        ctx.route_chain = Some(vec![target.clone()]);
+        let result = fresh_result(&target);
+        ctx.execution_result = Some(result.clone());
+        exporter.after_phase(Phase::Route, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+        exporter
+            .on_hop_end(&ctx, &target, HopOutcome::Generated(&result))
+            .await;
+        exporter.after_phase(Phase::Settlement, &ctx).await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat span");
+        let route = spans
+            .iter()
+            .find(|s| s.name == "route")
+            .expect("route INTERNAL span present");
+        let settle = spans
+            .iter()
+            .find(|s| s.name == "settle")
+            .expect("settle INTERNAL span present");
+
+        assert_eq!(route.span_kind, SpanKind::Internal);
+        assert_eq!(settle.span_kind, SpanKind::Internal);
+        assert_eq!(
+            route.parent_span_id,
+            root_chat.span_context.span_id(),
+            "`route` parents on root chat"
+        );
+        assert_eq!(
+            settle.parent_span_id,
+            root_chat.span_context.span_id(),
+            "`settle` parents on root chat"
+        );
+        assert_eq!(
+            route.span_context.trace_id(),
+            root_chat.span_context.trace_id()
+        );
+        assert_eq!(
+            settle.span_context.trace_id(),
+            root_chat.span_context.trace_id()
+        );
+        // route carries the routing summary.
+        assert_eq!(i64_attr(route, "bitrouter.route_chain_length"), Some(1));
+        assert_eq!(
+            str_attr(route, "bitrouter.route_head_provider"),
+            Some("openai")
+        );
+        // settle carries the per-request usage and provider.
+        assert_eq!(str_attr(settle, "bitrouter.provider_id"), Some("openai"));
+        assert_eq!(i64_attr(settle, "gen_ai.usage.input_tokens"), Some(11));
+        assert_eq!(i64_attr(settle, "gen_ai.usage.output_tokens"), Some(7));
+    }
+
+    #[tokio::test]
+    async fn streaming_hop_propagates_ttfb_to_root_chat() {
+        // `HopOutcome::StreamStarted` is the TTFB moment for a streaming
+        // request. The exporter writes `gen_ai.response.time_to_first_chunk`
+        // (seconds) on the root chat INTERNAL span, not the hop CLIENT span.
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+        // Brief sleep so the elapsed time TTFB is > 0 — the attribute is
+        // an `f64` of seconds; even a few milliseconds is enough to make
+        // a non-zero assertion meaningful.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        exporter
+            .on_hop_end(&ctx, &target, HopOutcome::StreamStarted)
+            .await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat span");
+        let hop_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Client)
+            .expect("per-hop chat CLIENT span");
+
+        // TTFB lives on the ROOT chat span, not on the hop.
+        let ttfb = root_chat
+            .attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == "gen_ai.response.time_to_first_chunk")
+            .and_then(|kv| match kv.value {
+                Value::F64(v) => Some(v),
+                _ => None,
+            })
+            .expect("root chat carries gen_ai.response.time_to_first_chunk on stream start");
+        assert!(
+            ttfb > 0.0,
+            "time_to_first_chunk should be positive seconds; got {ttfb}"
+        );
+        assert!(
+            hop_chat
+                .attributes
+                .iter()
+                .all(|kv| kv.key.as_str() != "gen_ai.response.time_to_first_chunk"),
+            "TTFB belongs on the root chat span, not the hop"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_hop_failover_emits_one_client_span_per_attempt() {
+        // The fallback loop fires `on_hop_start` / `on_hop_end` once per
+        // upstream attempt. A 2-hop chain where the first fails and the
+        // second succeeds must emit two sibling CLIENT spans, both
+        // parented on the same root chat INTERNAL span — that's the
+        // exact shape the original issue #477 calls out as the most
+        // common multi-account-failover debugging scenario.
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        let first = fresh_target("primary");
+        let second = fresh_target("backup");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        // Hop 1: fails.
+        exporter.on_hop_start(&ctx, &first).await;
+        let err = BitrouterError::Upstream {
+            status: 503,
+            message: "down".into(),
+        };
+        exporter
+            .on_hop_end(&ctx, &first, HopOutcome::Failed(&err))
+            .await;
+        // Hop 2: succeeds.
+        exporter.on_hop_start(&ctx, &second).await;
+        let result = fresh_result(&second);
+        exporter
+            .on_hop_end(&ctx, &second, HopOutcome::Generated(&result))
+            .await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat span");
+        let hop_spans: Vec<&SpanData> = spans
+            .iter()
+            .filter(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Client)
+            .collect();
+        assert_eq!(
+            hop_spans.len(),
+            2,
+            "one CLIENT span per upstream attempt — got {}",
+            hop_spans.len()
+        );
+        for hop in &hop_spans {
+            assert_eq!(
+                hop.parent_span_id,
+                root_chat.span_context.span_id(),
+                "every hop CLIENT span parents on the root chat INTERNAL span"
+            );
+            assert_eq!(
+                hop.span_context.trace_id(),
+                root_chat.span_context.trace_id(),
+                "every hop CLIENT span lives in the same trace as the root"
+            );
+        }
+
+        // The first hop carries the exception event; the second does not.
+        let with_exception: Vec<&SpanData> = hop_spans
+            .iter()
+            .filter(|s| s.events.iter().any(|e| e.name == "exception"))
+            .copied()
+            .collect();
+        assert_eq!(
+            with_exception.len(),
+            1,
+            "only the failed hop carries an `exception` event"
+        );
+    }
+
+    #[tokio::test]
     async fn on_hop_end_records_exception_event_on_failure() {
         // Per OTel exceptions semconv
         // (https://opentelemetry.io/docs/specs/semconv/exceptions/), a
