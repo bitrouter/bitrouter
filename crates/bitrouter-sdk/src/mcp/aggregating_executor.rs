@@ -61,6 +61,7 @@ impl<E: Executor> AggregatingExecutor<E> {
             method: request.method.clone(),
             params: request.params.clone(),
             caller: request.caller.clone(),
+            headers: request.headers.clone(),
         }
     }
 

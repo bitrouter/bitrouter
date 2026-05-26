@@ -46,10 +46,11 @@ impl CallerContext {
         }
     }
 
-    /// A pre-auth placeholder caller. Used when `skip_auth` is off — an
-    /// `AuthHook` is expected to validate credentials and replace it via
-    /// [`crate::language_model::PipelineContext::set_caller`]. If no `AuthHook`
-    /// upgrades it, downstream hooks see an anonymous caller.
+    /// A pre-auth placeholder caller. Used when `skip_auth` is off — a Stage-1
+    /// `PreRequestHook` is expected to validate credentials and replace it via
+    /// [`crate::language_model::PipelineContext::set_caller`] (LLM pipeline) or
+    /// [`crate::mcp::McpContext::set_caller`] (MCP pipeline). If no hook
+    /// upgrades it, downstream stages see an anonymous caller.
     pub fn anonymous() -> Self {
         Self {
             api_key_id: "anonymous".to_string(),

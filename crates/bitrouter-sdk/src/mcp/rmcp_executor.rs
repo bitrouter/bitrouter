@@ -234,6 +234,27 @@ impl RmcpExecutor {
         self.invalidation_tx.subscribe()
     }
 
+    /// Drop the pooled connection for `server_name`, if any. The next request
+    /// for that server will re-dial — running the MCP `initialize` handshake
+    /// against the upstream again and (for HTTP transports) rebuilding the
+    /// transport with whatever headers the new connect call supplies.
+    ///
+    /// The SDK does not interpret *when* to evict — that policy lives in a
+    /// downstream decorator. The canonical use case is an OAuth-refresh
+    /// decorator that calls `evict` after rotating an access token so the
+    /// next request reconnects with the new `Authorization` header rather
+    /// than the one baked into the pooled transport at first-connect time.
+    ///
+    /// In-flight calls that still hold an `Arc` to the dropped service
+    /// continue to completion — eviction affects only *subsequent* lookups.
+    ///
+    /// Returns `true` if an entry was removed, `false` if the pool had no
+    /// entry for `server_name`. Downstream decorators can use the return
+    /// value to skip no-op telemetry / log noise.
+    pub async fn evict(&self, server_name: &str) -> bool {
+        self.pool.lock().await.remove(server_name).is_some()
+    }
+
     async fn connection_for(
         &self,
         server_name: &str,
@@ -623,6 +644,17 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.status(), 502, "unexpected error: {err}");
+    }
+
+    /// `evict` on an empty pool returns `false` and is idempotent. The
+    /// populated-path behaviour (entry removed, next request re-dials) requires
+    /// a real upstream `RunningService` and is covered by integration tests in
+    /// downstream consumers; the unit surface only asserts the public contract.
+    #[tokio::test]
+    async fn evict_on_empty_pool_returns_false_and_is_idempotent() {
+        let exec = RmcpExecutor::new();
+        assert!(!exec.evict("never-connected").await);
+        assert!(!exec.evict("never-connected").await);
     }
 
     #[tokio::test]
