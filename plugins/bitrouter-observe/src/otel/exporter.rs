@@ -375,18 +375,21 @@ impl ObserveHook for OtelExporter {
         match phase {
             Phase::PreRequest => {
                 // Pick a parent for the root `chat` INTERNAL span:
-                //   1. If a SERVER span is currently active (the host's
-                //      tower-http + tracing-opentelemetry bridge attaches one
-                //      for the duration of every inbound request), nest under
-                //      it — that's the canonical "service maps see bitrouter
-                //      as a service" shape.
-                //   2. Otherwise (no ingress layer wired — typical in tests),
+                //   1. If the host's `tower-http` `TraceLayer` +
+                //      `tracing-opentelemetry` bridge wrapped this request in
+                //      a SERVER span, parent on it. The bridge does NOT
+                //      synchronise `opentelemetry::Context::current()` with
+                //      tracing's current span across async awaits — it stores
+                //      the OTel data in the tracing-span extensions instead.
+                //      `tracing::Span::current().context()` does the lookup.
+                //   2. Otherwise (no ingress layer — typical in unit tests),
                 //      fall back to extracting an inbound `traceparent` from
                 //      the request headers via the W3C propagator. Spec:
-                //      https://www.w3.org/TR/trace-context/
-                let current = Context::current();
-                let parent_context = if current.span().span_context().is_valid() {
-                    current
+                //      <https://www.w3.org/TR/trace-context/>
+                use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+                let bridge_cx = tracing::Span::current().context();
+                let parent_context = if bridge_cx.span().span_context().is_valid() {
+                    bridge_cx
                 } else {
                     global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(ctx.headers())))
                 };
