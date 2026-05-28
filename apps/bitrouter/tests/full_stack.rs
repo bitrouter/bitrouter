@@ -512,3 +512,139 @@ async fn e2e_full_stack_outbound_traceparent_propagation() {
 
     fs.teardown().await;
 }
+
+// ===== Test 5 — OTLP wire-shape span hierarchy =====
+
+/// Decode every OTLP/HTTP+protobuf trace export the collector has
+/// received and flatten them into a single span list.
+///
+/// The same wiremock instance also serves the OTLP **metrics** endpoint
+/// (`POST /v1/metrics`), whose proto schema differs from
+/// `ExportTraceServiceRequest`. wiremock 0.6's captured `Request::url`
+/// drops the path back to `/`, so this helper can't filter by URL —
+/// instead it attempts the trace decode on every body and silently
+/// skips ones that fail. A metrics body fails to decode mid-stream
+/// because the inner message schemas diverge.
+///
+/// Spec / wire shape: <https://opentelemetry.io/docs/specs/otlp/>.
+async fn collect_exported_trace_spans(
+    collector: &MockServer,
+) -> Vec<opentelemetry_proto::tonic::trace::v1::Span> {
+    use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+    use prost::Message;
+    let requests = collector.received_requests().await.unwrap_or_default();
+    let mut spans = Vec::new();
+    for req in &requests {
+        let Ok(parsed) = ExportTraceServiceRequest::decode(req.body.as_slice()) else {
+            continue;
+        };
+        for resource_spans in parsed.resource_spans {
+            for scope_spans in resource_spans.scope_spans {
+                spans.extend(scope_spans.spans);
+            }
+        }
+    }
+    spans
+}
+
+/// Look up a string-valued attribute on an OTLP span. Returns `None` for
+/// missing keys and for non-string values.
+fn span_str_attr<'a>(
+    span: &'a opentelemetry_proto::tonic::trace::v1::Span,
+    key: &str,
+) -> Option<&'a str> {
+    use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValue;
+    let kv = span.attributes.iter().find(|kv| kv.key == key)?;
+    let value = kv.value.as_ref()?;
+    match value.value.as_ref()? {
+        AnyValue::StringValue(s) => Some(s.as_str()),
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn e2e_full_stack_otel_span_hierarchy() {
+    let fs = assemble_full_stack().await;
+
+    // Drive a streaming request with an inbound W3C `traceparent` so the
+    // root chat span continues the caller's trace.
+    let inbound_trace_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let inbound_traceparent = format!("00-{inbound_trace_id}-bbbbbbbbbbbbbbbb-01");
+    let resp = fs
+        .server
+        .post("/v1/chat/completions")
+        .add_header("authorization", format!("Bearer {}", fs.brvk_secret))
+        .add_header("accept", "text/event-stream")
+        .add_header("traceparent", inbound_traceparent)
+        .json(&clean_body(true))
+        .await;
+    resp.assert_status_ok();
+    let _ = resp.text();
+
+    wait_for_metering_row(&fs.db, "fullstack-key").await;
+    wait_for_otlp(&fs.otlp_collector).await;
+    // Force the exporter to flush every buffered span before we read.
+    fs.observe.shutdown().await;
+
+    let spans = collect_exported_trace_spans(&fs.otlp_collector).await;
+    assert!(
+        !spans.is_empty(),
+        "collector should have received at least one trace span"
+    );
+
+    use opentelemetry_proto::tonic::trace::v1::span::SpanKind as ProtoKind;
+    let root_chat = spans
+        .iter()
+        .find(|s| s.name == "chat test-model" && s.kind == ProtoKind::Internal as i32)
+        .expect("root chat INTERNAL span present");
+    let hop_chat = spans
+        .iter()
+        .find(|s| s.name == "chat test-model" && s.kind == ProtoKind::Client as i32)
+        .expect("per-hop chat CLIENT span present");
+    let route = spans
+        .iter()
+        .find(|s| s.name == "route")
+        .expect("route INTERNAL span present");
+    let settle = spans
+        .iter()
+        .find(|s| s.name == "settle")
+        .expect("settle INTERNAL span present");
+
+    // Root chat continues the inbound W3C trace.
+    assert_eq!(
+        hex::encode(&root_chat.trace_id),
+        inbound_trace_id,
+        "root chat must continue the inbound trace_id"
+    );
+
+    // route / hop / settle all parent on the root chat span.
+    assert_eq!(route.parent_span_id, root_chat.span_id);
+    assert_eq!(hop_chat.parent_span_id, root_chat.span_id);
+    assert_eq!(settle.parent_span_id, root_chat.span_id);
+    // Same trace.
+    assert_eq!(route.trace_id, root_chat.trace_id);
+    assert_eq!(hop_chat.trace_id, root_chat.trace_id);
+    assert_eq!(settle.trace_id, root_chat.trace_id);
+
+    // Required GenAI attrs on the per-hop CLIENT span (current semconv:
+    // https://opentelemetry.io/docs/specs/semconv/gen-ai/).
+    assert_eq!(
+        span_str_attr(hop_chat, "gen_ai.operation.name"),
+        Some("chat")
+    );
+    assert_eq!(
+        span_str_attr(hop_chat, "gen_ai.provider.name"),
+        Some("mock"),
+        "the hop carries the provider id under the current spec name"
+    );
+    assert_eq!(
+        span_str_attr(hop_chat, "gen_ai.request.model"),
+        Some("test-model")
+    );
+    assert!(
+        span_str_attr(hop_chat, "server.address").is_some(),
+        "hop must carry `server.address` parsed from the target's api_base"
+    );
+
+    fs.teardown().await;
+}
