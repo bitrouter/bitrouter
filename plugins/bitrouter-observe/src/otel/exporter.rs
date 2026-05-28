@@ -610,23 +610,44 @@ impl ObserveHook for OtelExporter {
         }
 
         if let Some(entry) = self.active_spans.get(&ctx.request_id) {
-            let _guard = entry.context.clone().attach();
-            if let StreamPart::ToolCallDelta {
-                name: Some(name), ..
-            } = part
-            {
-                opentelemetry::trace::get_active_span(|span| {
-                    span.add_event(
-                        "tool_call.started",
-                        vec![KeyValue::new("tool.name", name.clone())],
-                    );
-                });
+            match part {
+                StreamPart::ToolCallDelta {
+                    name: Some(name), ..
+                } => {
+                    let _guard = entry.context.clone().attach();
+                    opentelemetry::trace::get_active_span(|span| {
+                        span.add_event(
+                            "tool_call.started",
+                            vec![KeyValue::new("tool.name", name.clone())],
+                        );
+                    });
+                }
+                StreamPart::ResponseCompleted { id, .. } => {
+                    // The OpenAI Responses stream terminates with a
+                    // `response.completed` frame that carries the upstream
+                    // response id. Stamp it onto the root `chat` span as
+                    // `gen_ai.response.id`. The non-streaming path does the
+                    // same via `GenerateResult.response_id`. Spec:
+                    // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
+                    //
+                    // Other streaming protocols (OpenAI Chat, Anthropic,
+                    // Google) carry the id on every chunk but the canonical
+                    // IR does not currently surface one — those paths leave
+                    // `gen_ai.response.id` unset.
+                    entry
+                        .context
+                        .span()
+                        .set_attribute(KeyValue::new("gen_ai.response.id", id.clone()));
+                }
+                _ => {
+                    // Token usage from `StreamPart::Usage` is intentionally
+                    // NOT written to the span here. The GenAI semconv does
+                    // not define a per-delta usage attribute, and
+                    // last-write-wins on a span attribute would be
+                    // meaningless. Final aggregate usage is recorded once on
+                    // the terminal `on_request_end`.
+                }
             }
-            // Token usage from `StreamPart::Usage` is intentionally NOT
-            // written to the span here. The GenAI semconv does not define
-            // a per-delta usage attribute, and last-write-wins on a span
-            // attribute would be meaningless. Final aggregate usage is
-            // recorded once on the terminal `on_request_end`.
         }
     }
 
@@ -849,9 +870,15 @@ fn build_hop_request_attrs(target: &RoutingTarget, prompt: &Prompt) -> Vec<KeyVa
 
 /// Per-hop response-side attributes. Mirrors the request-side recommended
 /// set; `gen_ai.response.id` is read from the canonical IR's
-/// `GenerateResult.response_id`, which the outbound adapters populate from
-/// the provider-native id field (OpenAI `chatcmpl-...`, Anthropic
+/// `GenerateResult.response_id`, which the outbound adapters populate
+/// from the provider-native id field (OpenAI `chatcmpl-...`, Anthropic
 /// `msg_...`, OpenAI Responses `resp_...`, Google `responseId`).
+///
+/// Streaming hops do not pass through here — they close at TTFB via
+/// `HopOutcome::StreamStarted` without an `ExecutionResult`. The
+/// streaming response id (when surfaced — currently only OpenAI
+/// Responses' `StreamPart::ResponseCompleted`) lands on the root chat
+/// span via `on_stream_part`, not on the hop CLIENT span.
 fn set_hop_response_attrs(span: &opentelemetry::trace::SpanRef<'_>, result: &ExecutionResult) {
     span.set_attribute(KeyValue::new(
         "gen_ai.response.model",
@@ -1376,6 +1403,50 @@ mod hop_tests {
             with_exception.len(),
             1,
             "only the failed hop carries an `exception` event"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_response_completed_lands_response_id_on_root_chat() {
+        // OpenAI Responses' terminal `response.completed` frame surfaces
+        // as `StreamPart::ResponseCompleted { id, .. }`. The exporter must
+        // stamp it onto the root `chat` INTERNAL span as
+        // `gen_ai.response.id` so streaming requests aren't missing the
+        // per-spec attribute that operators correlate against.
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+        exporter
+            .on_hop_end(&ctx, &target, HopOutcome::StreamStarted)
+            .await;
+        // Feed the terminal stream frame in.
+        let stream_ctx = ctx.stream_context();
+        exporter
+            .on_stream_part(
+                &stream_ctx,
+                &StreamPart::ResponseCompleted {
+                    id: "resp_streamed_xyz".to_string(),
+                    status: "completed".to_string(),
+                    usage: None,
+                },
+            )
+            .await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        assert_eq!(
+            str_attr(root_chat, "gen_ai.response.id"),
+            Some("resp_streamed_xyz")
         );
     }
 

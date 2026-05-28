@@ -535,8 +535,8 @@ impl OutboundAdapter for OpenAiChatAdapter {
         Ok(GenerateResult {
             content,
             usage,
-            response_id,
             finish_reason,
+            response_id,
         })
     }
 
