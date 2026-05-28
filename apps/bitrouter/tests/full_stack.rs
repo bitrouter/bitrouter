@@ -519,12 +519,14 @@ async fn e2e_full_stack_outbound_traceparent_propagation() {
 /// received and flatten them into a single span list.
 ///
 /// The same wiremock instance also serves the OTLP **metrics** endpoint
-/// (`POST /v1/metrics`), whose proto schema differs from
-/// `ExportTraceServiceRequest`. wiremock 0.6's captured `Request::url`
-/// drops the path back to `/`, so this helper can't filter by URL —
-/// instead it attempts the trace decode on every body and silently
-/// skips ones that fail. A metrics body fails to decode mid-stream
-/// because the inner message schemas diverge.
+/// (`POST /v1/metrics`). wiremock 0.6's captured `Request::url` drops
+/// the path back to `/`, so URL-based filtering isn't available.
+/// `ExportTraceServiceRequest` and `ExportMetricsServiceRequest` share
+/// the same top-level field tags + wire types, so a metrics body can
+/// decode without error as a degenerate `ExportTraceServiceRequest`
+/// whose inner `Span`s carry empty names and zero-length `trace_id`.
+/// Callers should reject those before asserting on real trace data —
+/// see the `trace_id.len() == 16` sanity check in the test below.
 ///
 /// Spec / wire shape: <https://opentelemetry.io/docs/specs/otlp/>.
 async fn collect_exported_trace_spans(
@@ -587,9 +589,12 @@ async fn e2e_full_stack_otel_span_hierarchy() {
     fs.observe.shutdown().await;
 
     let spans = collect_exported_trace_spans(&fs.otlp_collector).await;
+    // Defence against metrics bodies decoding as degenerate
+    // `ExportTraceServiceRequest`s: a real trace span has a 16-byte
+    // `trace_id`. The metric body would parse as zero-trace_id spans.
     assert!(
-        !spans.is_empty(),
-        "collector should have received at least one trace span"
+        spans.iter().any(|s| s.trace_id.len() == 16),
+        "collector must have received at least one real trace span"
     );
 
     use opentelemetry_proto::tonic::trace::v1::span::SpanKind as ProtoKind;
