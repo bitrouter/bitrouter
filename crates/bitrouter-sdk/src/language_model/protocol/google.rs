@@ -432,10 +432,17 @@ impl OutboundAdapter for GoogleAdapter {
             .and_then(|f| f.as_str())
             .and_then(finish_reason);
         let usage = body.get("usageMetadata").and_then(parse_usage);
+        // Google Generative AI: top-level `responseId`.
+        // <https://ai.google.dev/api/generate-content#GenerateContentResponse>
+        let response_id = body
+            .get("responseId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         Ok(GenerateResult {
             content: parts,
             usage,
             finish_reason: finish,
+            response_id,
         })
     }
 

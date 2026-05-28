@@ -174,6 +174,7 @@ impl Pipeline {
                     content: Vec::new(),
                     usage: None,
                     finish_reason: None,
+                    response_id: None,
                 },
                 latency_ms: 0,
                 generation_time_ms: 0,

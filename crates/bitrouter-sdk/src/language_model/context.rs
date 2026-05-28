@@ -258,6 +258,7 @@ impl PipelineContext {
                 content: Vec::new(),
                 usage: None,
                 finish_reason: None,
+                response_id: None,
             },
         );
         PipelineResponse {

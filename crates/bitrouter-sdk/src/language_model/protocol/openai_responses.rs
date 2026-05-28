@@ -492,10 +492,17 @@ impl OutboundAdapter for OpenAiResponsesAdapter {
             .and_then(|s| s.as_str())
             .and_then(finish_from_status);
         let usage = body.get("usage").and_then(parse_usage);
+        // OpenAI Responses: top-level `id` (`resp_...`).
+        // <https://platform.openai.com/docs/api-reference/responses/object>
+        let response_id = body
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         Ok(GenerateResult {
             content,
             usage,
             finish_reason,
+            response_id,
         })
     }
 

@@ -671,6 +671,9 @@ impl ObserveHook for OtelExporter {
                     "gen_ai.response.model",
                     result.model_id.clone(),
                 ));
+                if let Some(id) = &result.result.response_id {
+                    span.set_attribute(KeyValue::new("gen_ai.response.id", id.clone()));
+                }
 
                 if let Some(usage) = &result.result.usage {
                     span.set_attribute(KeyValue::new(
@@ -845,15 +848,18 @@ fn build_hop_request_attrs(target: &RoutingTarget, prompt: &Prompt) -> Vec<KeyVa
 }
 
 /// Per-hop response-side attributes. Mirrors the request-side recommended
-/// set; `gen_ai.response.id` is set when the upstream surfaced one via the
-/// canonical IR (today only OpenAI Responses streaming carries a response id
-/// natively; non-streaming returns it inside provider-native fields the
-/// canonical `GenerateResult` does not yet promote).
+/// set; `gen_ai.response.id` is read from the canonical IR's
+/// `GenerateResult.response_id`, which the outbound adapters populate from
+/// the provider-native id field (OpenAI `chatcmpl-...`, Anthropic
+/// `msg_...`, OpenAI Responses `resp_...`, Google `responseId`).
 fn set_hop_response_attrs(span: &opentelemetry::trace::SpanRef<'_>, result: &ExecutionResult) {
     span.set_attribute(KeyValue::new(
         "gen_ai.response.model",
         result.model_id.clone(),
     ));
+    if let Some(id) = &result.result.response_id {
+        span.set_attribute(KeyValue::new("gen_ai.response.id", id.clone()));
+    }
     if let Some(usage) = &result.result.usage {
         span.set_attribute(KeyValue::new(
             "gen_ai.usage.input_tokens",
@@ -1040,6 +1046,7 @@ mod hop_tests {
                     ..Default::default()
                 }),
                 finish_reason: Some(FinishReason::Stop),
+                response_id: Some("chatcmpl-test123".into()),
             },
             latency_ms: 42,
             generation_time_ms: 40,
@@ -1156,6 +1163,13 @@ mod hop_tests {
         assert_eq!(
             str_attr(hop_chat, "gen_ai.response.model"),
             Some("test-model")
+        );
+        // `gen_ai.response.id` mirrors the canonical IR's
+        // `GenerateResult.response_id`, which the adapters extract from the
+        // provider-native id field.
+        assert_eq!(
+            str_attr(hop_chat, "gen_ai.response.id"),
+            Some("chatcmpl-test123")
         );
         assert_eq!(i64_attr(hop_chat, "gen_ai.usage.input_tokens"), Some(11));
         assert_eq!(i64_attr(hop_chat, "gen_ai.usage.output_tokens"), Some(7));

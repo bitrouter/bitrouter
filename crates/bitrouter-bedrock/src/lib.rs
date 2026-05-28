@@ -192,6 +192,12 @@ impl Executor for BedrockExecutor {
                 content,
                 usage,
                 finish_reason: bedrock_stop_to_finish(&stop_reason),
+                // The Bedrock Converse response body does not surface a
+                // response id; AWS exposes a request id only via the
+                // `x-amzn-RequestId` HTTP header the SDK consumes, not as
+                // a field on `ConverseOutput`.
+                // <https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseOutput.html>
+                response_id: None,
             },
             latency_ms: elapsed,
             generation_time_ms: elapsed,

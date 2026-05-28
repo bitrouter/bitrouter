@@ -472,10 +472,17 @@ impl OutboundAdapter for AnthropicAdapter {
             .and_then(|s| s.as_str())
             .and_then(stop_reason_to_finish);
         let usage = body.get("usage").and_then(parse_usage);
+        // Anthropic Messages: top-level `id` (`msg_...`).
+        // <https://docs.anthropic.com/en/api/messages>
+        let response_id = body
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         Ok(GenerateResult {
             content,
             usage,
             finish_reason,
+            response_id,
         })
     }
 
