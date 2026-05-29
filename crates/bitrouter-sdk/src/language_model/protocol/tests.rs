@@ -1279,6 +1279,43 @@ fn streaming_decoders_emit_response_started_once() {
 }
 
 #[test]
+fn chat_encoder_role_survives_leading_response_started() {
+    // Regression: a leading `ResponseStarted` (now emitted first by the
+    // OpenAI Chat / Google decoders) must NOT consume the one-shot
+    // `role: assistant` marker. The role has to ride the first real
+    // content chunk; otherwise an OpenAI-Chat client never sees it.
+    let adapter = adapter_for(ApiProtocol::Openai);
+    let mut enc = adapter.stream_encoder("chatcmpl-x", "gpt-5");
+
+    // ResponseStarted arrives first — must emit no frames.
+    let started = enc
+        .encode(&StreamPart::ResponseStarted {
+            id: "chatcmpl-upstream".to_string(),
+        })
+        .unwrap();
+    assert!(
+        started.is_empty(),
+        "ResponseStarted must not emit a client frame; got {started:?}"
+    );
+
+    // The first content chunk must still carry `role: assistant`.
+    let frames = enc
+        .encode(&StreamPart::TextDelta {
+            text: "hi".to_string(),
+        })
+        .unwrap();
+    let SseFrame::Event { data, .. } = frames.first().expect("a content frame") else {
+        panic!("expected an SSE event frame");
+    };
+    let chunk: serde_json::Value = serde_json::from_str(data).unwrap();
+    assert_eq!(
+        chunk["choices"][0]["delta"]["role"], "assistant",
+        "role must ride the first content chunk even after a leading ResponseStarted; got {chunk}"
+    );
+    assert_eq!(chunk["choices"][0]["delta"]["content"], "hi");
+}
+
+#[test]
 fn openai_responses_omits_usage_when_none() {
     // v0 #6ae55b2 — when upstream reported no token counts, the wire shape
     // omits the `usage` key entirely. Mirrors the streaming `emit_terminal`.
