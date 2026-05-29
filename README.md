@@ -1,6 +1,6 @@
 # BitRouter
 
-> The local proxy built for AI agent runtimes — one endpoint to reach any LLM provider, with automatic cross-protocol translation and failover.
+> Agent-native LLM router that optimizes your agent with every run. Zero harness changes — every model call reliable, traceable, secure, and cost-effective. 
 
 [![Build status](https://github.com/bitrouter/bitrouter/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bitrouter/bitrouter/actions)
 [![Crates.io](https://img.shields.io/crates/v/bitrouter)](https://crates.io/crates/bitrouter)
