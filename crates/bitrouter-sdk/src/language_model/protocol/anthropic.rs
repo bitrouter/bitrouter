@@ -705,9 +705,20 @@ impl StreamDecoder for AnthropicStreamDecoder {
         let mut parts = Vec::new();
         match event_name {
             "message_start" => {
+                // `message_start` fires exactly once and carries the message
+                // id (`msg_...`); surface it for observability. Spec:
+                // <https://docs.anthropic.com/en/api/messages-streaming>
+                if let Some(id) = json
+                    .get("message")
+                    .and_then(|m| m.get("id"))
+                    .and_then(|i| i.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    parts.push(StreamPart::ResponseStarted { id: id.to_string() });
+                }
                 // Anthropic emits the prompt-cache stats on the start frame,
                 // so capture them now and propagate via the terminal Usage
-                // part (docs.anthropic.com/en/api/messages-streaming).
+                // part.
                 if let Some(usage) = json.get("message").and_then(|m| m.get("usage"))
                     && let Some(parsed) = parse_usage(usage)
                 {
@@ -1087,6 +1098,11 @@ impl StreamEncoder for AnthropicStreamEncoder {
                 }
             }
             StreamPart::Usage { .. } => {}
+            StreamPart::ResponseStarted { .. } => {
+                // Observability-only metadata (upstream response id); the
+                // Anthropic-protocol client gets its id from the
+                // `message_start` event `ensure_started` emits.
+            }
             StreamPart::Finish { reason } => {
                 self.emit_terminal(&mut frames, &finish_to_stop_reason(reason), None);
             }

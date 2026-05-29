@@ -562,6 +562,9 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
 #[derive(Default)]
 struct GoogleStreamDecoder {
     finished: bool,
+    /// Whether the one-shot [`StreamPart::ResponseStarted`] has been emitted.
+    /// Every chunk repeats `responseId`; we surface it only once.
+    response_started_emitted: bool,
 }
 
 impl StreamDecoder for GoogleStreamDecoder {
@@ -575,6 +578,19 @@ impl StreamDecoder for GoogleStreamDecoder {
             Err(_) => return Ok(Vec::new()),
         };
         let mut parts = Vec::new();
+        // Surface the upstream response id once. Every streamGenerateContent
+        // chunk repeats top-level `responseId`; emit it a single time for
+        // observability.
+        // <https://ai.google.dev/api/generate-content#GenerateContentResponse>
+        if !self.response_started_emitted
+            && let Some(id) = chunk
+                .get("responseId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        {
+            self.response_started_emitted = true;
+            parts.push(StreamPart::ResponseStarted { id: id.to_string() });
+        }
         if let Some(candidate) = chunk
             .get("candidates")
             .and_then(|c| c.as_array())
@@ -627,6 +643,9 @@ struct GoogleStreamEncoder;
 impl StreamEncoder for GoogleStreamEncoder {
     fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
         let chunk = match part {
+            // Observability-only metadata (upstream response id) — never
+            // forwarded to the Google-protocol client.
+            StreamPart::ResponseStarted { .. } => return Ok(Vec::new()),
             StreamPart::TextDelta { text } => serde_json::json!({
                 "candidates": [{ "content": { "role": "model", "parts": [{ "text": text }] } }]
             }),

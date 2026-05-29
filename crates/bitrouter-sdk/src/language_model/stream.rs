@@ -28,6 +28,7 @@ impl StreamInterest {
     const TOOL_CALL_DELTA: u8 = 1 << 2;
     const USAGE: u8 = 1 << 3;
     const FINISH: u8 = 1 << 4;
+    const RESPONSE_STARTED: u8 = 1 << 5;
 
     /// Interested in nothing.
     pub const fn none() -> Self {
@@ -41,7 +42,8 @@ impl StreamInterest {
                 | Self::REASONING_DELTA
                 | Self::TOOL_CALL_DELTA
                 | Self::USAGE
-                | Self::FINISH,
+                | Self::FINISH
+                | Self::RESPONSE_STARTED,
         )
     }
 
@@ -70,6 +72,11 @@ impl StreamInterest {
         Self(self.0 | Self::FINISH)
     }
 
+    /// Add interest in `ResponseStarted`.
+    pub const fn with_response_started(self) -> Self {
+        Self(self.0 | Self::RESPONSE_STARTED)
+    }
+
     /// Whether this interest set matches `part`.
     pub fn matches(&self, part: &StreamPart) -> bool {
         let bit = match part {
@@ -77,6 +84,7 @@ impl StreamInterest {
             StreamPart::ReasoningDelta { .. } => Self::REASONING_DELTA,
             StreamPart::ToolCallDelta { .. } => Self::TOOL_CALL_DELTA,
             StreamPart::Usage { .. } => Self::USAGE,
+            StreamPart::ResponseStarted { .. } => Self::RESPONSE_STARTED,
             // `ResponseCompleted` is a terminal part — a hook interested in
             // `Finish` is, by construction, also interested in it.
             StreamPart::Finish { .. } | StreamPart::ResponseCompleted { .. } => Self::FINISH,

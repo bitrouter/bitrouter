@@ -351,6 +351,21 @@ pub enum StreamPart {
         /// The usage counts.
         usage: Usage,
     },
+    /// The provider-assigned response id, surfaced once near the start of
+    /// the stream — OpenAI Chat's top-level `id`, Anthropic's
+    /// `message_start.message.id`, Google's `responseId`. (OpenAI Responses
+    /// carries its id on the terminal [`Self::ResponseCompleted`] instead.)
+    ///
+    /// Not client-facing: outbound encoders drop it (the client gets an id
+    /// the inbound encoder generates). Observability uses it to stamp the
+    /// GenAI semconv `gen_ai.response.id` attribute on the trace so the
+    /// streaming path matches the non-streaming one.
+    ///
+    /// Spec: <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>
+    ResponseStarted {
+        /// The provider's response id.
+        id: String,
+    },
     /// The terminal part: generation finished.
     Finish {
         /// Why generation stopped.

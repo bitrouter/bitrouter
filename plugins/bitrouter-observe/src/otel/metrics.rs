@@ -185,6 +185,7 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
         StreamPart::ReasoningDelta { .. } => "reasoning_delta",
         StreamPart::ToolCallDelta { .. } => "tool_call_delta",
         StreamPart::Usage { .. } => "usage",
+        StreamPart::ResponseStarted { .. } => "response_started",
         StreamPart::Finish { .. } => "finish",
         StreamPart::ResponseCompleted { .. } => "response_completed",
     }

@@ -622,18 +622,15 @@ impl ObserveHook for OtelExporter {
                         );
                     });
                 }
-                StreamPart::ResponseCompleted { id, .. } => {
-                    // The OpenAI Responses stream terminates with a
-                    // `response.completed` frame that carries the upstream
-                    // response id. Stamp it onto the root `chat` span as
-                    // `gen_ai.response.id`. The non-streaming path does the
-                    // same via `GenerateResult.response_id`. Spec:
+                StreamPart::ResponseStarted { id } | StreamPart::ResponseCompleted { id, .. } => {
+                    // The upstream response id, surfaced by the decoder near
+                    // the start of the stream (`ResponseStarted`, emitted by
+                    // OpenAI Chat / Anthropic / Google) or on the terminal
+                    // frame (`ResponseCompleted`, OpenAI Responses). Stamp it
+                    // onto the root `chat` span as `gen_ai.response.id`; the
+                    // non-streaming path does the same via
+                    // `GenerateResult.response_id`. Spec:
                     // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
-                    //
-                    // Other streaming protocols (OpenAI Chat, Anthropic,
-                    // Google) carry the id on every chunk but the canonical
-                    // IR does not currently surface one — those paths leave
-                    // `gen_ai.response.id` unset.
                     entry
                         .context
                         .span()
@@ -1447,6 +1444,46 @@ mod hop_tests {
         assert_eq!(
             str_attr(root_chat, "gen_ai.response.id"),
             Some("resp_streamed_xyz")
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_response_started_lands_response_id_on_root_chat() {
+        // OpenAI Chat / Anthropic / Google streaming surface the upstream id
+        // early as `StreamPart::ResponseStarted { id }`; the exporter stamps
+        // it onto the root `chat` INTERNAL span as `gen_ai.response.id`, the
+        // same attribute the non-streaming path and `ResponseCompleted` set.
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+        exporter
+            .on_hop_end(&ctx, &target, HopOutcome::StreamStarted)
+            .await;
+        let stream_ctx = ctx.stream_context();
+        exporter
+            .on_stream_part(
+                &stream_ctx,
+                &StreamPart::ResponseStarted {
+                    id: "chatcmpl-streamed".to_string(),
+                },
+            )
+            .await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        assert_eq!(
+            str_attr(root_chat, "gen_ai.response.id"),
+            Some("chatcmpl-streamed")
         );
     }
 

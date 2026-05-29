@@ -1359,6 +1359,11 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 }
             }
             StreamPart::Usage { .. } => {}
+            StreamPart::ResponseStarted { .. } => {
+                // Observability-only metadata (upstream response id); the
+                // Responses-protocol client gets its id from the
+                // `response.created` event `ensure_created` emits.
+            }
             StreamPart::Finish { reason } => {
                 // A bare `Finish` (e.g. inbound was OpenAI Chat / Anthropic /
                 // Google) — synthesise the terminal envelope from the reason.
