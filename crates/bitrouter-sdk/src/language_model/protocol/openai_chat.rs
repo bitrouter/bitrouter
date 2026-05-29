@@ -525,11 +525,18 @@ impl OutboundAdapter for OpenAiChatAdapter {
                 }
             });
         let usage = body.get("usage").and_then(parse_usage);
+        // OpenAI Chat Completions: top-level `id` (`chatcmpl-...`).
+        // <https://platform.openai.com/docs/api-reference/chat/object>
+        let response_id = body
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         Ok(GenerateResult {
             content,
             usage,
             finish_reason,
+            response_id,
         })
     }
 

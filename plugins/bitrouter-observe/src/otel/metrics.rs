@@ -116,7 +116,14 @@ impl OtelMetrics {
         attributes.push(KeyValue::new("outcome", outcome_str));
 
         if let Some(result) = &ctx.execution_result {
-            attributes.push(KeyValue::new("gen_ai.system", result.provider_id.clone()));
+            // GenAI semconv: `gen_ai.provider.name` (replaces the older
+            // `gen_ai.system`). The same attribute vocabulary is shared
+            // across traces and metrics, so this metric dimension follows
+            // the trace-side rename.
+            attributes.push(KeyValue::new(
+                "gen_ai.provider.name",
+                result.provider_id.clone(),
+            ));
             attributes.push(KeyValue::new(
                 "gen_ai.response.model",
                 result.model_id.clone(),

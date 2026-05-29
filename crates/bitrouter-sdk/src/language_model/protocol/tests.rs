@@ -79,6 +79,7 @@ fn sample_result() -> GenerateResult {
             ..Default::default()
         }),
         finish_reason: Some(FinishReason::Stop),
+        response_id: None,
     }
 }
 
@@ -250,6 +251,92 @@ fn conversion_matrix_4x4_streaming() {
 }
 
 // ===== per-adapter unit tests =====
+
+/// Each outbound adapter must extract the provider-native response id
+/// from a non-streaming body into `GenerateResult.response_id` so the
+/// observe plugin can stamp it onto the OTel `gen_ai.response.id`
+/// attribute (current GenAI semconv:
+/// <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>).
+#[test]
+fn outbound_adapters_extract_response_id() {
+    // OpenAI Chat Completions: top-level `id` (`chatcmpl-...`).
+    let openai_chat = adapter_for(ApiProtocol::Openai);
+    let body = serde_json::json!({
+        "id": "chatcmpl-abc123",
+        "object": "chat.completion",
+        "model": "gpt-test",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    });
+    assert_eq!(
+        openai_chat
+            .parse_response(body)
+            .unwrap()
+            .response_id
+            .as_deref(),
+        Some("chatcmpl-abc123"),
+        "OpenAI Chat must extract top-level `id`"
+    );
+
+    // Anthropic Messages: top-level `id` (`msg_...`).
+    let anthropic = adapter_for(ApiProtocol::Anthropic);
+    let body = serde_json::json!({
+        "id": "msg_01ABC",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+    });
+    assert_eq!(
+        anthropic
+            .parse_response(body)
+            .unwrap()
+            .response_id
+            .as_deref(),
+        Some("msg_01ABC"),
+        "Anthropic must extract top-level `id`"
+    );
+
+    // Google Generative AI: top-level `responseId`.
+    let google = adapter_for(ApiProtocol::Google);
+    let body = serde_json::json!({
+        "responseId": "google-resp-xyz",
+        "candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+    });
+    assert_eq!(
+        google.parse_response(body).unwrap().response_id.as_deref(),
+        Some("google-resp-xyz"),
+        "Google must extract `responseId`"
+    );
+
+    // OpenAI Responses: top-level `id` (`resp_...`).
+    let responses = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "id": "resp_abc789",
+        "object": "response",
+        "status": "completed",
+        "output": [{"type": "message", "content": [{"text": "hi"}]}],
+    });
+    assert_eq!(
+        responses
+            .parse_response(body)
+            .unwrap()
+            .response_id
+            .as_deref(),
+        Some("resp_abc789"),
+        "OpenAI Responses must extract top-level `id`"
+    );
+
+    // Absent id: graceful None.
+    let openai_chat = adapter_for(ApiProtocol::Openai);
+    let body = serde_json::json!({
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    });
+    assert_eq!(
+        openai_chat.parse_response(body).unwrap().response_id,
+        None,
+        "missing provider id must surface as None, not panic"
+    );
+}
 
 #[test]
 fn openai_chat_request_roundtrip() {
@@ -1117,6 +1204,7 @@ fn openai_responses_omits_usage_when_none() {
         }],
         usage: None,
         finish_reason: Some(FinishReason::Stop),
+        response_id: None,
     };
     let rendered = adapter
         .render_response(&result, &sample_prompt(), "resp_n")
@@ -1482,6 +1570,7 @@ fn regression_454_5_no_null_on_the_wire() {
         }],
         usage: None,
         finish_reason: None,
+        response_id: None,
     };
     // OpenAI Chat: `usage` key is absent when there is no usage.
     let chat = adapter_for(ApiProtocol::Openai)
@@ -1500,6 +1589,7 @@ fn regression_454_5_no_null_on_the_wire() {
         content: vec![],
         usage: None,
         finish_reason: None,
+        response_id: None,
     };
     let chat_empty = adapter_for(ApiProtocol::Openai)
         .render_response(&empty, &sample_prompt(), "c2")
@@ -1974,6 +2064,7 @@ fn regression_454_5_usage_zero_is_numeric_not_null() {
             ..Default::default()
         }),
         finish_reason: Some(FinishReason::Stop),
+        response_id: None,
     };
     let chat = adapter_for(ApiProtocol::Openai)
         .render_response(&result, &sample_prompt(), "c1")

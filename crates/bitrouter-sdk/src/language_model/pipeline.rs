@@ -12,7 +12,7 @@ use crate::error::{BitrouterError, Result};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::executor::{Executor, StreamPartStream};
 use crate::language_model::hooks::{
-    ExecutionHook, FallbackDecision, HookDecision, ObserveHook, Phase, PreRequestHook,
+    ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
     RequestOutcome, RouteHook, StreamHook,
 };
 use crate::language_model::routing::{FallbackPolicy, RoutingPrefs, RoutingTable};
@@ -174,6 +174,7 @@ impl Pipeline {
                     content: Vec::new(),
                     usage: None,
                     finish_reason: None,
+                    response_id: None,
                 },
                 latency_ms: 0,
                 generation_time_ms: 0,
@@ -294,7 +295,19 @@ impl Pipeline {
     ) -> Result<ExecutionResult> {
         let mut last_error: Option<BitrouterError> = None;
         for target in chain {
-            match self.executor.execute(target, ctx.prompt()).await {
+            self.observe_hop_start(ctx, target).await;
+            let outcome = self.executor.execute(target, ctx.prompt(), ctx).await;
+            match &outcome {
+                Ok(result) => {
+                    self.observe_hop_end(ctx, target, HopOutcome::Generated(result))
+                        .await;
+                }
+                Err(e) => {
+                    self.observe_hop_end(ctx, target, HopOutcome::Failed(e))
+                        .await;
+                }
+            }
+            match outcome {
                 Ok(result) => {
                     for hook in &self.execution_hooks {
                         hook.on_success(ctx, &result).await?;
@@ -321,7 +334,22 @@ impl Pipeline {
     ) -> Result<StreamPartStream> {
         let mut last_error: Option<BitrouterError> = None;
         for target in chain {
-            match self.executor.execute_stream(target, ctx.prompt()).await {
+            self.observe_hop_start(ctx, target).await;
+            let outcome = self
+                .executor
+                .execute_stream(target, ctx.prompt(), ctx)
+                .await;
+            match &outcome {
+                Ok(_) => {
+                    self.observe_hop_end(ctx, target, HopOutcome::StreamStarted)
+                        .await;
+                }
+                Err(e) => {
+                    self.observe_hop_end(ctx, target, HopOutcome::Failed(e))
+                        .await;
+                }
+            }
+            match outcome {
                 // Once the stream starts, the SSE response is committed — no
                 // more fallback.
                 Ok(stream) => return Ok(stream),
@@ -394,6 +422,29 @@ impl Pipeline {
             let fut = std::panic::AssertUnwindSafe(hook.after_phase(phase, ctx));
             if fut.catch_unwind().await.is_err() {
                 tracing::warn!(?phase, "ObserveHook::after_phase panicked; swallowed");
+            }
+        }
+    }
+
+    async fn observe_hop_start(&self, ctx: &PipelineContext, target: &RoutingTarget) {
+        for hook in &self.observe_hooks {
+            let fut = std::panic::AssertUnwindSafe(hook.on_hop_start(ctx, target));
+            if fut.catch_unwind().await.is_err() {
+                tracing::warn!("ObserveHook::on_hop_start panicked; swallowed");
+            }
+        }
+    }
+
+    async fn observe_hop_end(
+        &self,
+        ctx: &PipelineContext,
+        target: &RoutingTarget,
+        outcome: HopOutcome<'_>,
+    ) {
+        for hook in &self.observe_hooks {
+            let fut = std::panic::AssertUnwindSafe(hook.on_hop_end(ctx, target, outcome));
+            if fut.catch_unwind().await.is_err() {
+                tracing::warn!("ObserveHook::on_hop_end panicked; swallowed");
             }
         }
     }

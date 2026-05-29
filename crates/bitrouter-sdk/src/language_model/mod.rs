@@ -81,8 +81,8 @@ pub use executor::{
     StreamPartStream,
 };
 pub use hooks::{
-    DenyReason, ExecutionHook, FallbackDecision, HookDecision, ObserveHook, Phase, PreRequestHook,
-    RequestOutcome, RouteHook, StreamHook,
+    DenyReason, ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase,
+    PreRequestHook, RequestOutcome, RouteHook, StreamHook,
 };
 pub use pipeline::{DEFAULT_KEEPALIVE, Pipeline};
 pub use protocol::{

@@ -308,6 +308,16 @@ pub struct GenerateResult {
     pub usage: Option<Usage>,
     /// Finish reason, if the provider reported it.
     pub finish_reason: Option<FinishReason>,
+    /// Provider-assigned response id (e.g. OpenAI `chatcmpl-...`,
+    /// Anthropic `msg_...`, OpenAI Responses `resp_...`, Google
+    /// `responseId`). Carried so observability can stamp it onto the OTel
+    /// `gen_ai.response.id` semconv attribute and operators can correlate
+    /// against the upstream provider's own logs. `None` when the provider
+    /// did not surface one.
+    ///
+    /// Spec: <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
 }
 
 /// One part of a streaming response, in canonical internal form. `StreamHook`
