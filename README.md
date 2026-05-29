@@ -1,7 +1,5 @@
 # BitRouter
 
-> Agent-native LLM router that optimizes your agent with every run. Zero harness changes — every model call reliable, traceable, secure, and cost-effective. 
-
 [![Build status](https://github.com/bitrouter/bitrouter/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bitrouter/bitrouter/actions)
 [![Crates.io](https://img.shields.io/crates/v/bitrouter)](https://crates.io/crates/bitrouter)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -9,9 +7,7 @@
 [![Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/G3zVrZDa5C)
 [![Docs](https://img.shields.io/badge/Docs-bitrouter.ai-green)](https://bitrouter.ai)
 
-## Overview
-
-AI agent runtimes need to route to different LLM providers without reconfiguration. BitRouter is a local Rust proxy that gives your agent a single endpoint at `http://localhost:4356` — configure your providers once, then route freely. Any client protocol (OpenAI, Anthropic, Google) can transparently target any upstream, with ~10ms overhead and no cloud dependency required.
+Agent-native LLM router that optimizes your agent with every run. Zero harness changes — every model call reliable, traceable, secure, and cost-effective.
 
 ## Install
 
