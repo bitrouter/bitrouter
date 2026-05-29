@@ -19,7 +19,7 @@ use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
 use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
 use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
-use bitrouter_guardrails::{Action, GuardrailPreHook, GuardrailRule, GuardrailStreamHook, RuleSet};
+use bitrouter_guardrails::{GuardrailConfig, GuardrailsPlugin};
 use bitrouter_observe::OTEL_ENABLED;
 use bitrouter_observe::otel::{OtelConfig, OtelExporter, OtelObserveHook};
 use bitrouter_sdk::MetricsRenderer;
@@ -193,7 +193,9 @@ pub async fn build_app_with_path(
     let pricing_for_recorder = pricing.clone();
     let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
     let policy_store_for_reload = policy_store.clone();
-    let guardrail_rules = build_guardrail_rules(config)?;
+    let guardrail_rules = build_guardrail_config(config)?
+        .compile()
+        .context("compiling guardrail patterns")?;
 
     // Metrics are now pushed via OTLP, not pulled from /metrics
     // Keep metrics_renderer for compatibility but return empty response
@@ -324,17 +326,14 @@ pub async fn build_app_with_path(
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
-            // Stage 1, in order: auth → policy → guardrail (upstream).
+            // Stage 1, in order: auth → policy. The guardrail plugin appends its
+            // hooks after this closure (see `.plugin(...)` below), preserving the
+            // auth → policy → guardrail order.
             lm.pre_request_hook(AuthHook::new(db_for_hooks.clone()));
             lm.pre_request_hook(PolicyHook::new(
                 policy_store.clone(),
                 Some(metering_store_for_policy),
             ));
-            if !guardrail_rules.is_empty() {
-                lm.pre_request_hook(GuardrailPreHook::new(guardrail_rules.clone()));
-                // StreamHook stage: guardrail downstream redaction / abort.
-                lm.stream_hook(GuardrailStreamHook::new(guardrail_rules));
-            }
             // OpenTelemetry exporter — register the *same* Arc as a hook
             // here. Construction happened above so `Assembled.observe`
             // can hold a query handle on it.
@@ -350,6 +349,14 @@ pub async fn build_app_with_path(
                 pricing_for_recorder,
             ));
         });
+    // Stage-1 guardrail plugin, appended after the closure so its hooks land
+    // after auth + policy in registration order. Skipped when no rules are
+    // configured, so a guardrail-free deployment registers nothing.
+    let app = if guardrail_rules.is_empty() {
+        app
+    } else {
+        app.plugin(GuardrailsPlugin::with_static(guardrail_rules))
+    };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
     // had since v0.
@@ -459,38 +466,14 @@ async fn load_policy_store(config: &Config) -> Result<PolicyStore> {
     }
 }
 
-/// Build the guardrail `RuleSet` from `plugins.bitrouter-guardrails.custom_patterns`.
-/// Each entry is `{ name, pattern, action: "block" | "redact" }`.
-fn build_guardrail_rules(config: &Config) -> Result<RuleSet> {
-    let Some(patterns) = config
-        .plugins
-        .get("bitrouter-guardrails")
-        .and_then(|c| c.get("custom_patterns"))
-        .and_then(|v| v.as_array())
-    else {
-        return Ok(RuleSet::new());
+/// Parse the guardrail data contract from `plugins.bitrouter-guardrails`
+/// (its `custom_patterns` array of `{ name, pattern, action: "block" |
+/// "redact" }`). The plugin owns the shape; this just deserialises it.
+fn build_guardrail_config(config: &Config) -> Result<GuardrailConfig> {
+    let Some(value) = config.plugins.get("bitrouter-guardrails") else {
+        return Ok(GuardrailConfig::default());
     };
-    let mut set = RuleSet::new();
-    for entry in patterns {
-        let name = entry
-            .get("name")
-            .and_then(|v| v.as_str())
-            .context("guardrail pattern missing 'name'")?;
-        let pattern = entry
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .context("guardrail pattern missing 'pattern'")?;
-        let action = match entry.get("action").and_then(|v| v.as_str()) {
-            Some("block") | None => Action::Block,
-            Some("redact") => Action::Redact,
-            Some(other) => anyhow::bail!("unknown guardrail action '{other}'"),
-        };
-        set.push(
-            GuardrailRule::new(name, pattern, action)
-                .with_context(|| format!("compiling guardrail pattern '{name}'"))?,
-        );
-    }
-    Ok(set)
+    serde_json::from_value(value.clone()).context("plugins.bitrouter-guardrails failed to parse")
 }
 
 /// Empty metrics renderer for /metrics endpoint compatibility.

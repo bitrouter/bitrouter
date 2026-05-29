@@ -1,9 +1,21 @@
-//! The two guardrail hooks:
+//! The guardrail hooks:
+//! - [`DepositRulesHook`] — a `language_model::PreRequestHook` that inserts a
+//!   shared [`RuleSet`] into the request's typed extensions, so the guardrail
+//!   hooks downstream see a fixed, process-global rule set;
 //! - [`GuardrailPreHook`] — a `language_model::PreRequestHook` that scans the
 //!   **request** content and denies on a `Block` rule (upstream /);
 //! - [`GuardrailStreamHook`] — a `language_model::StreamHook` that scans the
 //!   **response** stream, redacting `Redact` matches and aborting on `Block`
 //!   (downstream /).
+//!
+//! Both guardrail hooks read the active [`RuleSet`] from the pipeline's typed
+//! extensions rather than capturing one at construction — so a multi-tenant
+//! host can resolve a per-account rule set in an earlier pre-request stage and
+//! [`PipelineContext::insert_extension`] it, and the same hooks enforce it. The
+//! OSS path uses [`DepositRulesHook`] to install one global set. With no rule
+//! set present, both hooks no-op (allow / pass).
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -51,34 +63,56 @@ fn request_text(ctx: &PipelineContext) -> String {
     buf
 }
 
-/// Upstream guardrail: scans request content, denies on a `Block` match.
-pub struct GuardrailPreHook {
-    rules: std::sync::Arc<RuleSet>,
+/// Upstream hook that deposits a shared [`RuleSet`] into the request's typed
+/// extensions, so [`GuardrailPreHook`] / [`GuardrailStreamHook`] (which read
+/// the rule set from the extensions) enforce a fixed, process-global set.
+///
+/// Used by [`crate::GuardrailsPlugin::with_static`]. A multi-tenant host
+/// instead resolves a per-account rule set in its own pre-request stage and
+/// calls [`PipelineContext::insert_extension`] directly — no deposit hook.
+pub struct DepositRulesHook {
+    rules: Arc<RuleSet>,
 }
 
-impl GuardrailPreHook {
-    /// Build an upstream guardrail hook over a rule set.
-    pub fn new(rules: RuleSet) -> Self {
-        Self {
-            rules: std::sync::Arc::new(rules),
-        }
-    }
-
-    /// Build a hook from an already-shared rule set so the two guardrail hooks
-    /// can share one `Arc<RuleSet>` and dodge per-stream-delta clones.
-    pub fn from_arc(rules: std::sync::Arc<RuleSet>) -> Self {
+impl DepositRulesHook {
+    /// Build a deposit hook over a shared rule set.
+    pub fn new(rules: Arc<RuleSet>) -> Self {
         Self { rules }
+    }
+}
+
+#[async_trait]
+impl PreRequestHook for DepositRulesHook {
+    async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        ctx.insert_extension(self.rules.clone());
+        Ok(HookDecision::Allow)
+    }
+}
+
+/// Upstream guardrail: scans request content, denies on a `Block` match. Reads
+/// the active [`RuleSet`] from the request's typed extensions; allows the
+/// request when none is present.
+#[derive(Default)]
+pub struct GuardrailPreHook;
+
+impl GuardrailPreHook {
+    /// Build an upstream guardrail hook.
+    pub fn new() -> Self {
+        Self
     }
 }
 
 #[async_trait]
 impl PreRequestHook for GuardrailPreHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
-        if self.rules.is_empty() {
+        let Some(rules) = ctx.extension::<RuleSet>() else {
+            return Ok(HookDecision::Allow);
+        };
+        if rules.is_empty() {
             return Ok(HookDecision::Allow);
         }
         let text = request_text(ctx);
-        if let Some(rule_name) = self.rules.first_block(&text) {
+        if let Some(rule_name) = rules.first_block(&text) {
             return Ok(HookDecision::Deny(DenyReason::GuardrailViolation(format!(
                 "request blocked by guardrail rule '{rule_name}'"
             ))));
@@ -88,26 +122,19 @@ impl PreRequestHook for GuardrailPreHook {
 }
 
 /// Downstream guardrail: scans the response stream, redacting `Redact` matches
-/// and aborting the stream on a `Block` match.
+/// and aborting the stream on a `Block` match. Reads the active [`RuleSet`]
+/// from the stream context's typed extensions (propagated from the pre-request
+/// stage); passes the stream through untouched when none is present.
 ///
 /// The per-request sliding-window carry is persisted in `StreamContext`
 /// metadata between `on_part` calls — the hook itself is stateless and shared.
-pub struct GuardrailStreamHook {
-    rules: std::sync::Arc<RuleSet>,
-}
+#[derive(Default)]
+pub struct GuardrailStreamHook;
 
 impl GuardrailStreamHook {
-    /// Build a downstream guardrail hook over a rule set.
-    pub fn new(rules: RuleSet) -> Self {
-        Self {
-            rules: std::sync::Arc::new(rules),
-        }
-    }
-
-    /// Build a hook from an already-shared rule set so it can share an
-    /// `Arc<RuleSet>` with [`GuardrailPreHook::from_arc`] and dodge clones.
-    pub fn from_arc(rules: std::sync::Arc<RuleSet>) -> Self {
-        Self { rules }
+    /// Build a downstream guardrail hook.
+    pub fn new() -> Self {
+        Self
     }
 
     fn load_carry(ctx: &StreamContext) -> String {
@@ -134,7 +161,10 @@ impl StreamHook for GuardrailStreamHook {
     }
 
     async fn on_part(&self, ctx: &mut StreamContext, part: StreamPart) -> Result<StreamAction> {
-        if self.rules.is_empty() {
+        let Some(rules) = ctx.extension::<RuleSet>() else {
+            return Ok(StreamAction::Pass);
+        };
+        if rules.is_empty() {
             return Ok(StreamAction::Pass);
         }
         let (text, rebuild): (&str, fn(String) -> StreamPart) = match &part {
@@ -149,9 +179,10 @@ impl StreamHook for GuardrailStreamHook {
         };
 
         let carry = Self::load_carry(ctx);
-        // `Arc::clone` is a refcount bump; the matcher reuses the same
+        // `rules` is a per-delta map lookup returning a cloned `Arc` (refcount
+        // bump, no realloc); the matcher moves it in and reuses the same
         // compiled regex set without re-allocating per delta.
-        let mut matcher = SlidingWindowMatcher::with_carry(self.rules.clone(), &carry);
+        let mut matcher = SlidingWindowMatcher::with_carry(rules, &carry);
         let verdict = matcher.feed(text);
         Self::store_carry(ctx, &matcher.carry());
 

@@ -3,8 +3,9 @@
 //! view borrowed from it). `SettlementContext` lives in
 //! [`crate::language_model::settlement`].
 
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
@@ -14,6 +15,32 @@ use crate::language_model::types::{
     ExecutionResult, PipelineRequest, PipelineResponse, Prompt, RoutingTarget, Usage,
 };
 use crate::plugin::PluginId;
+
+/// A type-keyed map of request-scoped extension values. Each entry is an
+/// `Arc<T>` keyed by `T`'s `TypeId`, so cloning the map is a handful of
+/// refcount bumps — cheap enough to copy from the [`PipelineContext`] into the
+/// per-stream [`StreamContext`]. This is the typed counterpart to the JSON
+/// `metadata` channel: it carries an *already-built* per-request value (e.g. a
+/// compiled guardrail rule set) that a Stage-1 hook resolves and a later
+/// [`StreamHook`](crate::language_model::StreamHook) reads on the hot path
+/// without re-parsing.
+#[derive(Clone, Default)]
+struct Extensions {
+    map: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+}
+
+impl Extensions {
+    fn insert<T: Send + Sync + 'static>(&mut self, value: Arc<T>) {
+        self.map.insert(TypeId::of::<T>(), value);
+    }
+
+    fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.map
+            .get(&TypeId::of::<T>())
+            .cloned()
+            .and_then(|v| v.downcast::<T>().ok())
+    }
+}
 
 /// The whole-request pipeline context. Follows a water-flow model: data flows
 /// downstream, each stage appends, downstream may read everything upstream
@@ -35,6 +62,11 @@ pub struct PipelineContext {
 
     // ===== plugin extension data =====
     metadata: HashMap<PluginId, serde_json::Value>,
+    /// Typed, request-scoped extensions. Unlike `metadata` (JSON, per-stage),
+    /// these carry an already-built `Arc<T>` and are propagated into the
+    /// per-stream [`StreamContext`] so a value resolved in a pre-request hook
+    /// is readable from the stream stage.
+    extensions: Extensions,
 
     // ===== typed event bus =====
     events: EventBus,
@@ -63,6 +95,7 @@ impl PipelineContext {
             route_chain: None,
             execution_result: None,
             metadata: HashMap::new(),
+            extensions: Extensions::default(),
             events: EventBus::new(),
             outbound_trace_headers: Mutex::new(None),
         }
@@ -169,6 +202,22 @@ impl PipelineContext {
         self.metadata.get(plugin_id)
     }
 
+    /// Insert a typed, request-scoped extension, replacing any existing value
+    /// of the same type. The value is shared (`Arc`) and copied into the
+    /// per-stream [`StreamContext`], so a Stage-1 hook can deposit a value that
+    /// the downstream [`StreamHook`](crate::language_model::StreamHook) reads —
+    /// the channel JSON `metadata` can't provide because it neither survives
+    /// into the stream stage nor holds non-serialisable values.
+    pub fn insert_extension<T: Send + Sync + 'static>(&mut self, value: Arc<T>) {
+        self.extensions.insert(value);
+    }
+
+    /// Read a typed, request-scoped extension previously inserted with
+    /// [`insert_extension`](Self::insert_extension).
+    pub fn extension<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.extensions.get()
+    }
+
     /// Emit a typed pipeline event.
     pub fn emit<E: PipelineEvent>(&mut self, event: E) {
         self.events.emit(event);
@@ -206,6 +255,9 @@ impl PipelineContext {
             final_usage: None,
             events: EventBus::new(),
             metadata: HashMap::new(),
+            // Refcount-bump copy: a value a pre-request hook deposited (e.g. the
+            // resolved guardrail rule set) rides along into the stream stage.
+            extensions: self.extensions.clone(),
         }
     }
 
@@ -285,6 +337,7 @@ pub struct StreamContext {
     pub final_usage: Option<Usage>,
     events: EventBus,
     metadata: HashMap<PluginId, serde_json::Value>,
+    extensions: Extensions,
 }
 
 impl StreamContext {
@@ -311,6 +364,12 @@ impl StreamContext {
     /// Read another plugin's metadata blob.
     pub fn get_metadata(&self, plugin_id: &PluginId) -> Option<&serde_json::Value> {
         self.metadata.get(plugin_id)
+    }
+
+    /// Read a typed, request-scoped extension propagated from the
+    /// [`PipelineContext`] (see [`PipelineContext::insert_extension`]).
+    pub fn extension<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.extensions.get()
     }
 }
 

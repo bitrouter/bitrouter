@@ -1,0 +1,93 @@
+//! Serializable guardrail configuration — the data contract the plugin runs
+//! off, independent of where it's loaded from. A host deserialises a
+//! [`GuardrailConfig`] from its own source (a config file, a control-plane
+//! database, …) and [`compile`](GuardrailConfig::compile)s it into the
+//! runtime [`RuleSet`]. The plugin never touches a config *file*; it depends
+//! only on this data.
+
+use serde::{Deserialize, Serialize};
+
+use crate::rules::{Action, GuardrailRule, RuleSet};
+
+/// One guardrail rule in serializable form: a name, a regex `pattern`, and an
+/// [`Action`]. Compiled into a [`GuardrailRule`] by [`GuardrailConfig::compile`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleSpec {
+    /// Human-readable rule name (surfaced in deny reasons / logs).
+    pub name: String,
+    /// The regex pattern to match.
+    pub pattern: String,
+    /// What to do on a match. Defaults to [`Action::Block`] when omitted.
+    #[serde(default)]
+    pub action: Action,
+}
+
+/// The guardrail data contract. In a config file this is the `custom_patterns`
+/// array under `plugins.bitrouter-guardrails`; a control plane builds the same
+/// shape from its own store.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GuardrailConfig {
+    /// The configured rules.
+    #[serde(default, rename = "custom_patterns")]
+    pub rules: Vec<RuleSpec>,
+}
+
+impl GuardrailConfig {
+    /// Compile every [`RuleSpec`] into a [`RuleSet`], surfacing the first regex
+    /// that fails to compile.
+    pub fn compile(&self) -> Result<RuleSet, regex::Error> {
+        let mut set = RuleSet::new();
+        for spec in &self.rules {
+            set.push(GuardrailRule::new(&spec.name, &spec.pattern, spec.action)?);
+        }
+        Ok(set)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialises_custom_patterns_with_default_action() {
+        let json = serde_json::json!({
+            "custom_patterns": [
+                { "name": "ssn", "pattern": r"\d{3}-\d{2}-\d{4}", "action": "redact" },
+                { "name": "secret", "pattern": "sk-[a-z0-9]+" }
+            ]
+        });
+        let cfg: GuardrailConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(cfg.rules.len(), 2);
+        assert_eq!(cfg.rules[0].action, Action::Redact);
+        // Omitted action falls back to Block.
+        assert_eq!(cfg.rules[1].action, Action::Block);
+        // And every pattern compiles into a runtime rule set.
+        assert!(!cfg.compile().unwrap().is_empty());
+    }
+
+    #[test]
+    fn empty_config_compiles_to_empty_rule_set() {
+        let cfg = GuardrailConfig::default();
+        assert!(cfg.compile().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unknown_action_is_a_deserialisation_error() {
+        let json = serde_json::json!({
+            "custom_patterns": [{ "name": "x", "pattern": "y", "action": "nope" }]
+        });
+        assert!(serde_json::from_value::<GuardrailConfig>(json).is_err());
+    }
+
+    #[test]
+    fn invalid_regex_surfaces_at_compile() {
+        let cfg = GuardrailConfig {
+            rules: vec![RuleSpec {
+                name: "bad".to_string(),
+                pattern: "(".to_string(),
+                action: Action::Block,
+            }],
+        };
+        assert!(cfg.compile().is_err());
+    }
+}

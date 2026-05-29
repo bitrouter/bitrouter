@@ -10,7 +10,7 @@ use bitrouter_sdk::language_model::{
 };
 use futures::StreamExt;
 
-use crate::hooks::{GuardrailPreHook, GuardrailStreamHook};
+use crate::hooks::{DepositRulesHook, GuardrailPreHook, GuardrailStreamHook};
 use crate::rules::{Action, GuardrailRule, RuleSet};
 
 fn rules() -> RuleSet {
@@ -37,12 +37,31 @@ fn ctx(text: &str) -> PipelineContext {
     PipelineContext::new(req)
 }
 
+/// A context with the guardrail rule set deposited into its extensions, the way
+/// `DepositRulesHook` (or a host's per-account resolver) does at Stage 1.
+fn ctx_with_rules(text: &str) -> PipelineContext {
+    let mut c = ctx(text);
+    c.insert_extension(Arc::new(rules()));
+    c
+}
+
 // ===== upstream: GuardrailPreHook =====
 
 #[tokio::test]
 async fn pre_hook_allows_clean_request() {
-    let hook = GuardrailPreHook::new(rules());
-    let mut c = ctx("a perfectly normal question");
+    let hook = GuardrailPreHook::new();
+    let mut c = ctx_with_rules("a perfectly normal question");
+    assert!(matches!(
+        hook.check(&mut c).await.unwrap(),
+        bitrouter_sdk::language_model::HookDecision::Allow
+    ));
+}
+
+#[tokio::test]
+async fn pre_hook_allows_when_no_rules_deposited() {
+    // No extension inserted — the hook is a pure consumer and must no-op.
+    let hook = GuardrailPreHook::new();
+    let mut c = ctx("please do the FORBIDDEN thing");
     assert!(matches!(
         hook.check(&mut c).await.unwrap(),
         bitrouter_sdk::language_model::HookDecision::Allow
@@ -51,8 +70,8 @@ async fn pre_hook_allows_clean_request() {
 
 #[tokio::test]
 async fn pre_hook_blocks_forbidden_request() {
-    let hook = GuardrailPreHook::new(rules());
-    let mut c = ctx("please do the FORBIDDEN thing");
+    let hook = GuardrailPreHook::new();
+    let mut c = ctx_with_rules("please do the FORBIDDEN thing");
     match hook.check(&mut c).await.unwrap() {
         bitrouter_sdk::language_model::HookDecision::Deny(reason) => {
             let err: bitrouter_sdk::BitrouterError = reason.into();
@@ -87,11 +106,14 @@ fn routing_table() -> Arc<StaticRoutingTable> {
 
 async fn run_stream(parts: Vec<StreamPart>) -> Vec<bitrouter_sdk::Result<StreamPart>> {
     let mut b = PipelineBuilder::new();
+    // The deposit hook runs at Stage 1 and the rule set rides the extensions
+    // into the StreamContext — end-to-end proof the propagation works.
     b.routing_table(routing_table())
         .executor(Arc::new(MockExecutor::new(vec![MockResponse::Stream(
             parts,
         )])))
-        .stream_hook(GuardrailStreamHook::new(rules()));
+        .pre_request_hook(DepositRulesHook::new(Arc::new(rules())))
+        .stream_hook(GuardrailStreamHook::new());
     let pipeline = Arc::new(b.build().unwrap());
     let req = PipelineRequest::new("m", CallerContext::new("k", "u"), prompt("go", true));
     let stream = pipeline.execute_stream(req).await.unwrap();

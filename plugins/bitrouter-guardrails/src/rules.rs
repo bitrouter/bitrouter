@@ -16,9 +16,12 @@ use regex::{Regex, RegexBuilder};
 const REGEX_SIZE_LIMIT: usize = 1 << 20;
 
 /// What to do when a rule matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
-    /// Block the content — upstream this is a 400 deny, downstream a stream abort.
+    /// Block the content — upstream this is a 400 deny, downstream a stream
+    /// abort. The default when a rule omits its action (block is the safe one).
+    #[default]
     Block,
     /// Redact the matched span — replace it with the redaction placeholder.
     Redact,
