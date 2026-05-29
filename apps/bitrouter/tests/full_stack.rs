@@ -73,7 +73,25 @@ impl Drop for PolicyDir {
 
 /// Build the full assembled stack: every plugin + binary module wired into
 /// the router, a brvk_ key minted, the upstream + OTLP collector stood up.
+/// OTLP **metric** export is on (the legacy `otlp_endpoint` shim), so this
+/// path exercises trace + metric export together — the canonical
+/// "did anyone break assembly?" smoke gate.
 async fn assemble_full_stack() -> FullStack {
+    assemble_full_stack_inner(true).await
+}
+
+/// Like [`assemble_full_stack`] but with OTLP metric export **off**. The
+/// span-shape decode tests use this so the OTLP collector receives only
+/// trace bodies: trace and metric OTLP messages share the same top-level
+/// proto framing, so a metric body would otherwise decode as a degenerate
+/// trace request and muddy the assertions. Metrics-off needs the nested
+/// `otel:` config block — the only form that carries the `metrics.enabled`
+/// knob (the flat `otlp_endpoint` shim always defaults metrics on).
+async fn assemble_full_stack_traces_only() -> FullStack {
+    assemble_full_stack_inner(false).await
+}
+
+async fn assemble_full_stack_inner(metrics_enabled: bool) -> FullStack {
     // ── policy: one `pol_main` policy bound to the key we'll mint ──
     let policy_dir = std::env::temp_dir().join(format!(
         "bitrouter-fullstack-pol-{}",
@@ -120,6 +138,19 @@ async fn assemble_full_stack() -> FullStack {
         .mount(&otlp_collector)
         .await;
 
+    // The observe block: metrics-on uses the flat `otlp_endpoint` shim;
+    // metrics-off needs the nested `otel:` block (the only form carrying
+    // the `metrics.enabled` knob). Indentation matches the 4-space depth
+    // under `bitrouter-observe:`.
+    let observe_block = if metrics_enabled {
+        format!("    otlp_endpoint: \"{otlp}\"", otlp = otlp_collector.uri())
+    } else {
+        format!(
+            "    otel:\n      endpoint: \"{otlp}\"\n      metrics:\n        enabled: false",
+            otlp = otlp_collector.uri()
+        )
+    };
+
     // ── config wiring every plugin + module ──
     let yaml = format!(
         r#"
@@ -147,11 +178,10 @@ plugins:
       - {{ name: ssn,       pattern: '\d{{3}}-\d{{2}}-\d{{4}}', action: redact }}
       - {{ name: forbidden, pattern: '(?i)forbidden',           action: block  }}
   bitrouter-observe:
-    otlp_endpoint: "{otlp}"
+{observe_block}
 "#,
         upstream = upstream.uri(),
         policy_path = policy_dir.display(),
-        otlp = otlp_collector.uri(),
     );
     let cfg: config::Config = config::parse_with(&yaml, |_| None).expect("config parses");
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
@@ -518,15 +548,14 @@ async fn e2e_full_stack_outbound_traceparent_propagation() {
 /// Decode every OTLP/HTTP+protobuf trace export the collector has
 /// received and flatten them into a single span list.
 ///
-/// The same wiremock instance also serves the OTLP **metrics** endpoint
-/// (`POST /v1/metrics`). wiremock 0.6's captured `Request::url` drops
-/// the path back to `/`, so URL-based filtering isn't available.
-/// `ExportTraceServiceRequest` and `ExportMetricsServiceRequest` share
-/// the same top-level field tags + wire types, so a metrics body can
-/// decode without error as a degenerate `ExportTraceServiceRequest`
-/// whose inner `Span`s carry empty names and zero-length `trace_id`.
-/// Callers should reject those before asserting on real trace data —
-/// see the `trace_id.len() == 16` sanity check in the test below.
+/// The caller assembles with metric export OFF
+/// ([`assemble_full_stack_traces_only`]), so the collector receives only
+/// `ExportTraceServiceRequest` bodies — every captured POST is a trace
+/// and decodes cleanly. (Were metrics on, trace and metric OTLP bodies
+/// would share the same wiremock instance and, because their top-level
+/// proto framing is identical, a metric body could decode as a
+/// degenerate trace request; turning metrics off side-steps that
+/// entirely.)
 ///
 /// Spec / wire shape: <https://opentelemetry.io/docs/specs/otlp/>.
 async fn collect_exported_trace_spans(
@@ -537,9 +566,8 @@ async fn collect_exported_trace_spans(
     let requests = collector.received_requests().await.unwrap_or_default();
     let mut spans = Vec::new();
     for req in &requests {
-        let Ok(parsed) = ExportTraceServiceRequest::decode(req.body.as_slice()) else {
-            continue;
-        };
+        let parsed = ExportTraceServiceRequest::decode(req.body.as_slice())
+            .expect("every collector body is a trace export (metric export is off)");
         for resource_spans in parsed.resource_spans {
             for scope_spans in resource_spans.scope_spans {
                 spans.extend(scope_spans.spans);
@@ -566,7 +594,9 @@ fn span_str_attr<'a>(
 
 #[tokio::test]
 async fn e2e_full_stack_otel_span_hierarchy() {
-    let fs = assemble_full_stack().await;
+    // Metric export off so the collector only ever sees trace bodies —
+    // see `collect_exported_trace_spans`.
+    let fs = assemble_full_stack_traces_only().await;
 
     // Drive a streaming request with an inbound W3C `traceparent` so the
     // root chat span continues the caller's trace.
@@ -589,12 +619,9 @@ async fn e2e_full_stack_otel_span_hierarchy() {
     fs.observe.shutdown().await;
 
     let spans = collect_exported_trace_spans(&fs.otlp_collector).await;
-    // Defence against metrics bodies decoding as degenerate
-    // `ExportTraceServiceRequest`s: a real trace span has a 16-byte
-    // `trace_id`. The metric body would parse as zero-trace_id spans.
     assert!(
-        spans.iter().any(|s| s.trace_id.len() == 16),
-        "collector must have received at least one real trace span"
+        !spans.is_empty(),
+        "collector must have received at least one trace span"
     );
 
     use opentelemetry_proto::tonic::trace::v1::span::SpanKind as ProtoKind;

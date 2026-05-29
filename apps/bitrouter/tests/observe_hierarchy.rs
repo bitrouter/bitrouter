@@ -49,10 +49,9 @@ fn install_tracing_subscriber(exporter: &bitrouter_observe::otel::OtelExporter) 
 }
 
 /// Decode OTLP/HTTP+protobuf trace exports from the wiremock collector.
-/// Mirrors `full_stack.rs::collect_exported_trace_spans` — wiremock 0.6
-/// drops the URL path, so we try-decode each body and silently skip
-/// non-trace ones (metrics POSTs share the framing prefix but diverge
-/// in the inner schema).
+/// The config below turns OTLP metric export off, so the collector only
+/// ever receives `ExportTraceServiceRequest` bodies — every captured
+/// POST is a trace and decodes cleanly.
 async fn collect_exported_trace_spans(
     collector: &MockServer,
 ) -> Vec<opentelemetry_proto::tonic::trace::v1::Span> {
@@ -61,9 +60,8 @@ async fn collect_exported_trace_spans(
     let requests = collector.received_requests().await.unwrap_or_default();
     let mut spans = Vec::new();
     for req in &requests {
-        let Ok(parsed) = ExportTraceServiceRequest::decode(req.body.as_slice()) else {
-            continue;
-        };
+        let parsed = ExportTraceServiceRequest::decode(req.body.as_slice())
+            .expect("every collector body is a trace export (metric export is off)");
         for resource_spans in parsed.resource_spans {
             for scope_spans in resource_spans.scope_spans {
                 spans.extend(scope_spans.spans);
@@ -132,7 +130,9 @@ async fn e2e_server_span_parents_chat_via_tracing_opentelemetry_bridge() {
         .mount(&otlp_collector)
         .await;
 
-    // ── minimal config with OTel wired, auth + policy + guardrails off ──
+    // ── minimal config with OTel wired, auth + policy + guardrails off.
+    //    Metric export is off (nested `otel:` block — the only form that
+    //    carries the knob) so the collector receives only trace bodies. ──
     let yaml = format!(
         r#"
 server:
@@ -153,7 +153,10 @@ providers:
           output_micro_usd_per_token: 1.0
 plugins:
   bitrouter-observe:
-    otlp_endpoint: {otlp}
+    otel:
+      endpoint: {otlp}
+      metrics:
+        enabled: false
 "#,
         upstream = upstream.uri(),
         otlp = otlp_collector.uri(),
