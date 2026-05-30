@@ -74,7 +74,7 @@ Built-in providers are defined as TOML files under [`crates/bitrouter-providers/
 
 ### Adding a new built-in provider
 
-If the provider uses an already-supported wire protocol (OpenAI Chat, OpenAI Responses, Anthropic Messages, Google Generative AI):
+If the provider uses an already-supported wire protocol (Chat Completions, Responses, Messages, Generate Content):
 
 1. Add a new TOML file under `crates/bitrouter-providers/providers/`. The filename stem **must** equal the `id` field inside.
 2. Register it in the `EMBEDDED` array in [`crates/bitrouter-providers/src/builtin.rs`](crates/bitrouter-providers/src/builtin.rs) and bump the count assertion in that file's tests.

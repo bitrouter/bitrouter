@@ -425,11 +425,11 @@ impl ProviderConfig {
 pub fn infer_protocol(api_base: &str) -> ApiProtocol {
     let host = api_base.to_ascii_lowercase();
     if host.contains("anthropic.com") {
-        ApiProtocol::Anthropic
+        ApiProtocol::Messages
     } else if host.contains("googleapis.com") || host.contains("generativelanguage") {
-        ApiProtocol::Google
+        ApiProtocol::GenerateContent
     } else {
-        ApiProtocol::Openai
+        ApiProtocol::ChatCompletions
     }
 }
 
@@ -700,7 +700,7 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// Best-effort model discovery. For every provider with
 /// `auto_discover: true` and no declared `models`, `GET {api_base}/models` and
 /// populate the model list from the response (`{ "data": [{ "id": … }] }`,
-/// the OpenAI / Anthropic shape). A provider whose discovery call fails is
+/// the Chat Completions / Messages shape). A provider whose discovery call fails is
 /// left as-is with a WARN — discovery never aborts startup.
 ///
 /// The HTTP client is built with bounded `connect_timeout` + `timeout` so an

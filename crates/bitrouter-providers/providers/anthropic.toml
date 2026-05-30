@@ -15,7 +15,7 @@
 id = "anthropic"
 display_name = "Anthropic"
 api_base = "https://api.anthropic.com/v1"
-api_protocol = "anthropic"
+api_protocol = "messages"
 doc_url = "https://docs.anthropic.com/en/api/messages"
 
 [auth]

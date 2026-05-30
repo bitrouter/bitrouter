@@ -1,4 +1,4 @@
-//! OpenAI Responses adapter.
+//! Responses adapter.
 //!
 //! Official reference: <https://platform.openai.com/docs/api-reference/responses>
 //! Streaming events: <https://platform.openai.com/docs/api-reference/responses-streaming>
@@ -32,16 +32,16 @@ use crate::language_model::types::{
     ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
-/// The OpenAI Responses protocol adapter.
-pub struct OpenAiResponsesAdapter;
+/// The Responses protocol adapter.
+pub struct ResponsesAdapter;
 
-/// HTTP transport for OpenAI Responses: `POST {api_base}/responses` with
+/// HTTP transport for Responses: `POST {api_base}/responses` with
 /// `Authorization: Bearer <api_key>`.
-pub struct OpenAiResponsesTransport;
+pub struct ResponsesTransport;
 
 // ===== wire request types =====
 
-/// OpenAI Responses request body
+/// Responses request body
 /// (<https://platform.openai.com/docs/api-reference/responses/create>).
 ///
 /// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
@@ -254,7 +254,7 @@ fn finish_from_status(status: &str) -> Option<FinishReason> {
     }
 }
 
-impl InboundAdapter for OpenAiResponsesAdapter {
+impl InboundAdapter for ResponsesAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Responses
     }
@@ -362,7 +362,7 @@ impl InboundAdapter for OpenAiResponsesAdapter {
     }
 }
 
-impl OutboundAdapter for OpenAiResponsesAdapter {
+impl OutboundAdapter for ResponsesAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Responses
     }
@@ -492,7 +492,7 @@ impl OutboundAdapter for OpenAiResponsesAdapter {
             .and_then(|s| s.as_str())
             .and_then(finish_from_status);
         let usage = body.get("usage").and_then(parse_usage);
-        // OpenAI Responses: top-level `id` (`resp_...`).
+        // Responses: top-level `id` (`resp_...`).
         // <https://platform.openai.com/docs/api-reference/responses/object>
         let response_id = body
             .get("id")
@@ -561,7 +561,7 @@ fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
 }
 
 #[async_trait]
-impl Transport for OpenAiResponsesTransport {
+impl Transport for ResponsesTransport {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Responses
     }
@@ -735,7 +735,7 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
 
 // ===== streaming =====
 
-/// OpenAI Responses SSE decoder. Explicit state machine over the lifecycle
+/// Responses SSE decoder. Explicit state machine over the lifecycle
 /// envelope. Tracks `item_id → call_id` so `function_call_arguments.delta`
 /// events map back to the canonical tool-call id (#434).
 #[derive(Default)]
@@ -897,7 +897,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
     }
 }
 
-/// OpenAI Responses SSE encoder. Emits the complete lifecycle envelope:
+/// Responses SSE encoder. Emits the complete lifecycle envelope:
 ///
 /// ```text
 /// response.created
@@ -992,7 +992,7 @@ impl ResponsesStreamEncoder {
                 "status": "in_progress",
                 "output": [],
             });
-            // The OpenAI Responses stream opens with `response.created`
+            // The Responses stream opens with `response.created`
             // *then* `response.in_progress`. Codex CLI's state machine
             // waits for `in_progress` before it starts consuming output
             // items — emit both.
@@ -1365,8 +1365,8 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 // `response.created` event `ensure_created` emits.
             }
             StreamPart::Finish { reason } => {
-                // A bare `Finish` (e.g. inbound was OpenAI Chat / Anthropic /
-                // Google) — synthesise the terminal envelope from the reason.
+                // A bare `Finish` (e.g. inbound was Chat Completions / Messages /
+                // Generate Content) — synthesise the terminal envelope from the reason.
                 let status = match reason {
                     FinishReason::Length => "incomplete",
                     FinishReason::Error(_) => "failed",

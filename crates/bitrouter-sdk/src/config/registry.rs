@@ -154,7 +154,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             anthropic.api_protocol,
-            crate::language_model::types::ApiProtocol::Anthropic
+            crate::language_model::types::ApiProtocol::Messages
         );
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }

@@ -1,9 +1,9 @@
 //! axum HTTP server — gated behind the `server` feature.
 //!
 //! Wires all four inbound protocols to the `language_model` pipeline:
-//! - `POST /v1/messages` — Anthropic Messages
-//! - `POST /v1/chat/completions` — OpenAI Chat Completions
-//! - `POST /v1/responses` — OpenAI Responses
+//! - `POST /v1/messages` — Messages
+//! - `POST /v1/chat/completions` — Chat Completions
+//! - `POST /v1/responses` — Responses
 //! - `POST /v1beta/models/{model_action}` — Google `generateContent` /
 //!   `streamGenerateContent`
 //!
@@ -185,10 +185,10 @@ pub fn build_router(state: AppState) -> Router {
 /// tripping `Router::merge`'s duplicate-route panic).
 pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Router {
     let mut router = Router::new()
-        .route("/v1/messages", post(anthropic_messages))
-        .route("/v1/chat/completions", post(openai_chat))
-        .route("/v1/responses", post(openai_responses))
-        .route("/v1beta/models/{model_action}", post(google_generate));
+        .route("/v1/messages", post(messages))
+        .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/responses", post(responses))
+        .route("/v1beta/models/{model_action}", post(generate_content));
     if !options.omit_v1_models {
         router = router.route("/v1/models", get(list_models));
     }
@@ -504,23 +504,23 @@ async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
 
 // ===== inbound protocol handlers =====
 
-async fn anthropic_messages(
+async fn messages(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    handle(state, headers, ApiProtocol::Anthropic, body, None).await
+    handle(state, headers, ApiProtocol::Messages, body, None).await
 }
 
-async fn openai_chat(
+async fn chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    handle(state, headers, ApiProtocol::Openai, body, None).await
+    handle(state, headers, ApiProtocol::ChatCompletions, body, None).await
 }
 
-async fn openai_responses(
+async fn responses(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
@@ -528,9 +528,9 @@ async fn openai_responses(
     handle(state, headers, ApiProtocol::Responses, body, None).await
 }
 
-/// Google encodes the model and the streaming verb in the path segment, e.g.
+/// Generate Content encodes the model and the streaming verb in the path segment, e.g.
 /// `gemini-2.0-flash:generateContent` or `…:streamGenerateContent`.
-async fn google_generate(
+async fn generate_content(
     State(state): State<AppState>,
     Path(model_action): Path<String>,
     headers: HeaderMap,
@@ -545,13 +545,20 @@ async fn google_generate(
             .into_response();
         }
     };
-    // Google carries the model in the URL, not the body — inject it so the
+    // Generate Content carries the model in the URL, not the body — inject it so the
     // adapter sees it, and set the stream flag from the verb.
     if let Some(obj) = body.as_object_mut() {
         obj.insert("model".into(), model.clone().into());
         obj.insert("stream".into(), (action == "streamGenerateContent").into());
     }
-    handle(state, headers, ApiProtocol::Google, body, Some(model)).await
+    handle(
+        state,
+        headers,
+        ApiProtocol::GenerateContent,
+        body,
+        Some(model),
+    )
+    .await
 }
 
 /// Shared handler: parse with the inbound adapter, run the pipeline, render the

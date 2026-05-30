@@ -1,4 +1,4 @@
-//! Anthropic Messages adapter.
+//! Messages adapter.
 //!
 //! Official reference: <https://docs.anthropic.com/en/api/messages>
 //! Streaming: <https://docs.anthropic.com/en/docs/build-with-claude/streaming>
@@ -26,18 +26,18 @@ use crate::language_model::types::{
     ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
-/// The Anthropic Messages inbound + outbound protocol adapter.
-pub struct AnthropicAdapter;
+/// The Messages inbound + outbound protocol adapter.
+pub struct MessagesAdapter;
 
-/// HTTP transport for Anthropic Messages: `POST {api_base}/messages` with
+/// HTTP transport for Messages: `POST {api_base}/messages` with
 /// `x-api-key` + `anthropic-version: 2023-06-01`. The version constant is the
 /// only released revision as of 2026-05; cf.
 /// <https://platform.claude.com/docs/en/api/versioning>.
-pub struct AnthropicTransport;
+pub struct MessagesTransport;
 
 // ===== wire request types =====
 
-/// Anthropic Messages request body (<https://docs.anthropic.com/en/api/messages>).
+/// Messages request body (<https://docs.anthropic.com/en/api/messages>).
 ///
 /// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
 /// OpenAPI schema from the canonical wire shape without redeclaring it.
@@ -47,9 +47,9 @@ pub struct MessagesRequest {
     /// String or an array of `{type:"text", text}` blocks (#227 → #228).
     #[serde(default)]
     system: Option<serde_json::Value>,
-    messages: Vec<AnthropicMessage>,
+    messages: Vec<MessagesMessage>,
     #[serde(default)]
-    tools: Vec<AnthropicTool>,
+    tools: Vec<MessagesTool>,
     #[serde(default)]
     max_tokens: Option<u32>,
     #[serde(default)]
@@ -69,7 +69,7 @@ pub struct MessagesRequest {
 
 /// One element of [`MessagesRequest`]'s `messages` array — a `{ role, content }` turn.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct AnthropicMessage {
+pub struct MessagesMessage {
     role: String,
     /// String or an array of content blocks.
     content: serde_json::Value,
@@ -77,7 +77,7 @@ pub struct AnthropicMessage {
 
 /// One element of [`MessagesRequest`]'s `tools` array — Anthropic's tool definition shape.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct AnthropicTool {
+pub struct MessagesTool {
     name: String,
     #[serde(default)]
     description: Option<String>,
@@ -98,7 +98,7 @@ fn parse_system(value: &serde_json::Value) -> String {
     }
 }
 
-/// Anthropic `tool_result.content` may be a string or an array of blocks (#364).
+/// Messages `tool_result.content` may be a string or an array of blocks (#364).
 fn tool_result_text(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(s) => s.clone(),
@@ -185,7 +185,7 @@ fn parse_role(role: &str) -> Result<Role> {
     match role {
         "user" => Ok(Role::User),
         "assistant" => Ok(Role::Assistant),
-        // Anthropic has no top-level system/tool role; tool results ride inside
+        // Messages has no top-level system/tool role; tool results ride inside
         // a user-role message. An unexpected role is a hard error (#454-4).
         other => Err(BitrouterError::bad_request(format!(
             "unknown anthropic message role '{other}' (expected user/assistant)"
@@ -209,7 +209,7 @@ fn stop_reason_to_finish(s: &str) -> Option<FinishReason> {
 /// upstream error doesn't blanket-convert to 502 (which masks
 /// `invalid_request_error` / `rate_limit_error` / `authentication_error`).
 /// Ref: <https://docs.anthropic.com/en/api/errors>.
-fn anthropic_error_status(err_type: &str) -> u16 {
+fn messages_error_status(err_type: &str) -> u16 {
     match err_type {
         "invalid_request_error" => 400,
         "authentication_error" => 401,
@@ -229,16 +229,16 @@ fn finish_to_stop_reason(r: &FinishReason) -> String {
         FinishReason::ToolCalls => "tool_use".to_string(),
         FinishReason::ContentFilter => "refusal".to_string(),
         FinishReason::Other(s) => s.clone(),
-        // Anthropic has no native "error" finish — pick `end_turn` so the
+        // Messages has no native "error" finish — pick `end_turn` so the
         // wire envelope is well-formed; outbound encoders emit a separate
         // error frame ahead of this when the canonical IR carries an error.
         FinishReason::Error(_) => "end_turn".to_string(),
     }
 }
 
-impl InboundAdapter for AnthropicAdapter {
+impl InboundAdapter for MessagesAdapter {
     fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Anthropic
+        ApiProtocol::Messages
     }
 
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
@@ -284,7 +284,7 @@ impl InboundAdapter for AnthropicAdapter {
             })
             .collect();
 
-        // Anthropic's GA structured-outputs lives under
+        // Messages' GA structured-outputs lives under
         // `output_config.format`. Some clients still emit the deprecated flat
         // `output_format` (vercel/ai#12298) — accept it as a graceful alias.
         // Only the alias that actually matched is stripped from extras, so
@@ -351,7 +351,7 @@ impl InboundAdapter for AnthropicAdapter {
     }
 
     fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
-        Box::new(AnthropicStreamEncoder {
+        Box::new(MessagesStreamEncoder {
             request_id: request_id.to_string(),
             model: model.to_string(),
             started: false,
@@ -362,9 +362,9 @@ impl InboundAdapter for AnthropicAdapter {
     }
 }
 
-impl OutboundAdapter for AnthropicAdapter {
+impl OutboundAdapter for MessagesAdapter {
     fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Anthropic
+        ApiProtocol::Messages
     }
 
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
@@ -395,7 +395,7 @@ impl OutboundAdapter for AnthropicAdapter {
                     .into(),
             );
         }
-        // Anthropic requires max_tokens; default to a sane ceiling if unset.
+        // Messages requires max_tokens; default to a sane ceiling if unset.
         req.insert(
             "max_tokens".into(),
             prompt.params.max_tokens.unwrap_or(4096).into(),
@@ -413,7 +413,7 @@ impl OutboundAdapter for AnthropicAdapter {
         if let Some(rf) = &prompt.response_format {
             req.insert(
                 "output_config".into(),
-                serde_json::json!({ "format": render_anthropic_response_format(rf) }),
+                serde_json::json!({ "format": render_messages_response_format(rf) }),
             );
         }
         // Splat anthropic-specific extras (tool_choice, stop_sequences, …) back
@@ -472,7 +472,7 @@ impl OutboundAdapter for AnthropicAdapter {
             .and_then(|s| s.as_str())
             .and_then(stop_reason_to_finish);
         let usage = body.get("usage").and_then(parse_usage);
-        // Anthropic Messages: top-level `id` (`msg_...`).
+        // Messages: top-level `id` (`msg_...`).
         // <https://docs.anthropic.com/en/api/messages>
         let response_id = body
             .get("id")
@@ -487,7 +487,7 @@ impl OutboundAdapter for AnthropicAdapter {
     }
 
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
-        Box::new(AnthropicStreamDecoder::default())
+        Box::new(MessagesStreamDecoder::default())
     }
 
     fn supports_response_format(&self) -> bool {
@@ -526,15 +526,15 @@ fn json_schema_from(format: &serde_json::Value) -> Option<ResponseFormat> {
 
 /// Render a canonical [`ResponseFormat`] into Anthropic's
 /// `{ type: "json_schema", schema }` body that sits under `output_config.format`.
-fn render_anthropic_response_format(rf: &ResponseFormat) -> serde_json::Value {
+fn render_messages_response_format(rf: &ResponseFormat) -> serde_json::Value {
     let ResponseFormat::JsonSchema { schema, .. } = rf;
     serde_json::json!({ "type": "json_schema", "schema": schema })
 }
 
 #[async_trait]
-impl Transport for AnthropicTransport {
+impl Transport for MessagesTransport {
     fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Anthropic
+        ApiProtocol::Messages
     }
 
     fn endpoint_url(&self, target: &RoutingTarget, _stream: bool) -> String {
@@ -644,7 +644,7 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
     //
     // The canonical [`Usage::cache_read_tokens`] / [`Usage::cache_write_tokens`]
     // are documented as subsets of [`Usage::prompt_tokens`] — matching how
-    // OpenAI Chat / Responses and Google report cached prompt tokens.
+    // Chat Completions / Responses and Generate Content report cached prompt tokens.
     //
     // Without folding the cache buckets back into `prompt_tokens` here,
     // downstream billing layers that derive `no_cache = prompt_tokens -
@@ -671,12 +671,12 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
 
 // ===== streaming =====
 
-/// Anthropic SSE decoder. Explicit state machine over the
+/// Messages SSE decoder. Explicit state machine over the
 /// `message_start` / `content_block_start` / `content_block_delta` /
 /// `content_block_stop` / `message_delta` / `message_stop` / `ping` / `error`
 /// event set.
 #[derive(Default)]
-struct AnthropicStreamDecoder {
+struct MessagesStreamDecoder {
     /// per content-block index → tool id (empty string for non-tool blocks),
     /// so an `input_json_delta` knows which canonical tool call it belongs to.
     block_tool_ids: Vec<String>,
@@ -690,7 +690,7 @@ enum BlockKind {
     ToolUse,
 }
 
-impl StreamDecoder for AnthropicStreamDecoder {
+impl StreamDecoder for MessagesStreamDecoder {
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>> {
         let event_name = event.event.as_deref().unwrap_or_default();
         // ping / unknown events are intentionally ignored — never errors (#422).
@@ -716,7 +716,7 @@ impl StreamDecoder for AnthropicStreamDecoder {
                 {
                     parts.push(StreamPart::ResponseStarted { id: id.to_string() });
                 }
-                // Anthropic emits the prompt-cache stats on the start frame,
+                // Messages emits the prompt-cache stats on the start frame,
                 // so capture them now and propagate via the terminal Usage
                 // part.
                 if let Some(usage) = json.get("message").and_then(|m| m.get("usage"))
@@ -799,7 +799,7 @@ impl StreamDecoder for AnthropicStreamDecoder {
             "message_delta" => {
                 // `message_delta.usage` carries the cumulative final counts
                 // (<https://docs.anthropic.com/en/api/messages-streaming>).
-                // Anthropic emits its wire-level `input_tokens` (the
+                // Messages emits its wire-level `input_tokens` (the
                 // *uncached* portion, per
                 // <https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching>)
                 // alongside the cache buckets; the canonical
@@ -862,7 +862,7 @@ impl StreamDecoder for AnthropicStreamDecoder {
                     .and_then(|m| m.as_str())
                     .unwrap_or("anthropic stream error");
                 return Err(BitrouterError::Upstream {
-                    status: anthropic_error_status(err_type),
+                    status: messages_error_status(err_type),
                     message: msg.to_string(),
                 });
             }
@@ -873,7 +873,7 @@ impl StreamDecoder for AnthropicStreamDecoder {
     }
 }
 
-/// Anthropic SSE encoder. Emits the full event envelope: `message_start`,
+/// Messages SSE encoder. Emits the full event envelope: `message_start`,
 /// per-block `content_block_start` / `_delta` / `_stop`, `message_delta`,
 /// `message_stop`.
 ///
@@ -890,7 +890,7 @@ enum EncoderBlockKind {
     ToolUse,
 }
 
-struct AnthropicStreamEncoder {
+struct MessagesStreamEncoder {
     request_id: String,
     model: String,
     started: bool,
@@ -901,7 +901,7 @@ struct AnthropicStreamEncoder {
     block_index: usize,
 }
 
-impl AnthropicStreamEncoder {
+impl MessagesStreamEncoder {
     fn ev(name: &str, data: serde_json::Value) -> SseFrame {
         SseFrame::Event {
             event: Some(name.to_string()),
@@ -995,7 +995,7 @@ impl AnthropicStreamEncoder {
 /// relationship as `total = cache_read + cache_creation + input_tokens`
 /// (<https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching>
 /// → "Tracking cache performance"). The canonical [`Usage::prompt_tokens`]
-/// is the **inclusive** total (matches OpenAI / Google semantics; see
+/// is the **inclusive** total (matches Chat Completions / Generate Content semantics; see
 /// `parse_usage`), so we subtract the cache buckets back out here to
 /// reconstruct the wire format. Saturating-sub guards against a caller
 /// constructing a `Usage` whose cache totals exceed `prompt_tokens` —
@@ -1021,7 +1021,7 @@ fn render_usage(u: &Usage) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
-impl StreamEncoder for AnthropicStreamEncoder {
+impl StreamEncoder for MessagesStreamEncoder {
     fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
         let mut frames = Vec::new();
         self.ensure_started(&mut frames);
@@ -1100,14 +1100,14 @@ impl StreamEncoder for AnthropicStreamEncoder {
             StreamPart::Usage { .. } => {}
             StreamPart::ResponseStarted { .. } => {
                 // Observability-only metadata (upstream response id); the
-                // Anthropic-protocol client gets its id from the
+                // Messages-protocol client gets its id from the
                 // `message_start` event `ensure_started` emits.
             }
             StreamPart::Finish { reason } => {
                 self.emit_terminal(&mut frames, &finish_to_stop_reason(reason), None);
             }
             StreamPart::ResponseCompleted { status, usage, .. } => {
-                // Inbound was OpenAI Responses; map its status onto Anthropic's
+                // Inbound was Responses; map its status onto Messages'
                 // `stop_reason` and carry the usage if present.
                 let stop_reason = if status == "incomplete" {
                     "max_tokens"
@@ -1121,7 +1121,7 @@ impl StreamEncoder for AnthropicStreamEncoder {
     }
 
     fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
-        // Anthropic surfaces a mid-stream error as a named `error` event.
+        // Messages surfaces a mid-stream error as a named `error` event.
         vec![Self::ev(
             "error",
             serde_json::json!({

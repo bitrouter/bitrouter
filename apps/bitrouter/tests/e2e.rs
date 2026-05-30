@@ -24,8 +24,8 @@ use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Stand up a wiremock upstream speaking OpenAI Chat Completions.
-async fn mock_openai_upstream() -> MockServer {
+/// Stand up a wiremock upstream speaking Chat Completions.
+async fn mock_chat_completions_upstream() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -60,7 +60,7 @@ providers:
     api_base: {upstream}
     api_key: test-key
     api_protocol:
-      - "*": openai
+      - "*": chat_completions
     models:
       - id: test-model
         pricing:
@@ -85,7 +85,7 @@ fn chat_prompt() -> Prompt {
 
 #[tokio::test]
 async fn e2e_assembled_pipeline_routes_to_mock_provider() {
-    let upstream = mock_openai_upstream().await;
+    let upstream = mock_chat_completions_upstream().await;
     let cfg = config_for(&upstream.uri());
 
     // Assemble the FULL app — db + migrations + routing + auth + policy +
@@ -134,7 +134,7 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() {
 async fn e2e_http_server_chat_completions_end_to_end() {
     use axum_test::TestServer;
 
-    let upstream = mock_openai_upstream().await;
+    let upstream = mock_chat_completions_upstream().await;
     let cfg = config_for(&upstream.uri());
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
 
@@ -190,7 +190,7 @@ async fn e2e_http_server_chat_completions_end_to_end() {
 
 #[tokio::test]
 async fn e2e_unknown_model_is_a_clean_404() {
-    let upstream = mock_openai_upstream().await;
+    let upstream = mock_chat_completions_upstream().await;
     let cfg = config_for(&upstream.uri());
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
     let pipeline = assembled.app.language_model().unwrap().clone();
@@ -213,7 +213,7 @@ async fn e2e_metering_drives_policy_spend_cap() {
     // a rolling-window gate, not a per-request budget.)
     use bitrouter::auth::{NewApiKey, db as auth_db, generate};
 
-    let upstream = mock_openai_upstream().await;
+    let upstream = mock_chat_completions_upstream().await;
 
     // Same provider/pricing as `config_for`, but augmented with a policy
     // directory containing a single `pol_cap` policy with a 50µ$ ceiling.
@@ -244,7 +244,7 @@ providers:
     api_base: {upstream}
     api_key: test-key
     api_protocol:
-      - "*": openai
+      - "*": chat_completions
     models:
       - id: test-model
         pricing:
@@ -761,8 +761,8 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
 // inbound protocol's native shape and asserts it lands at the right native
 // field on the wire to the upstream:
 //
-//   OpenAI Chat:      response_format.json_schema.schema
-//   OpenAI Responses: text.format.schema
+//   Chat Completions:      response_format.json_schema.schema
+//   Responses: text.format.schema
 //   Anthropic:        output_config.format.schema
 //   Google:           generationConfig.responseSchema  (paired with
 //                     responseMimeType == "application/json")
@@ -801,7 +801,7 @@ const MODEL_VIA_GOOGLE: &str = "model-via-google";
 async fn upstream_for_all_protocols() -> MockServer {
     let server = MockServer::start().await;
 
-    // OpenAI Chat — POST /chat/completions
+    // Chat Completions — POST /chat/completions
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -818,7 +818,7 @@ async fn upstream_for_all_protocols() -> MockServer {
         .mount(&server)
         .await;
 
-    // OpenAI Responses — POST /responses
+    // Responses — POST /responses
     Mock::given(method("POST"))
         .and(path("/responses"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -836,7 +836,7 @@ async fn upstream_for_all_protocols() -> MockServer {
         .mount(&server)
         .await;
 
-    // Anthropic Messages — POST /messages
+    // Messages — POST /messages
     Mock::given(method("POST"))
         .and(path("/messages"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -851,7 +851,7 @@ async fn upstream_for_all_protocols() -> MockServer {
         .mount(&server)
         .await;
 
-    // Google — POST /models/{model}:generateContent (model id varies per
+    // Generate Content — POST /models/{model}:generateContent (model id varies per
     // test; match on path prefix + suffix).
     Mock::given(method("POST"))
         .and(wiremock::matchers::path_regex(
@@ -889,14 +889,14 @@ providers:
     api_base: {upstream}
     api_key: test-key
     api_protocol:
-      - "*": openai
+      - "*": chat_completions
     models:
       - id: {MODEL_VIA_OPENAI}
   via_anthropic:
     api_base: {upstream}
     api_key: test-key
     api_protocol:
-      - "*": anthropic
+      - "*": messages
     models:
       - id: {MODEL_VIA_ANTHROPIC}
   via_responses:
@@ -910,7 +910,7 @@ providers:
     api_base: {upstream}
     api_key: test-key
     api_protocol:
-      - "*": google
+      - "*": generate_content
     models:
       - id: {MODEL_VIA_GOOGLE}
 "#
@@ -934,7 +934,7 @@ async fn matrix_server() -> (TestServer, MockServer) {
 
 // ----- inbound request builders (one per inbound protocol) -----
 
-fn inbound_openai_chat(model: &str) -> Value {
+fn inbound_chat_completions(model: &str) -> Value {
     json!({
         "model": model,
         "messages": [{ "role": "user", "content": "weather?" }],
@@ -960,7 +960,7 @@ fn inbound_anthropic(model: &str) -> Value {
     })
 }
 
-fn inbound_openai_responses(model: &str) -> Value {
+fn inbound_responses(model: &str) -> Value {
     json!({
         "model": model,
         "input": "weather?",
@@ -976,7 +976,7 @@ fn inbound_openai_responses(model: &str) -> Value {
 }
 
 fn inbound_google() -> Value {
-    // Google carries the model in the URL, not the body.
+    // Generate Content carries the model in the URL, not the body.
     json!({
         "contents": [{ "role": "user", "parts": [{ "text": "weather?" }] }],
         "generationConfig": {
@@ -988,37 +988,37 @@ fn inbound_google() -> Value {
 
 #[derive(Clone, Copy)]
 enum Inbound {
-    OpenAiChat,
-    Anthropic,
-    OpenAiResponses,
-    Google,
+    ChatCompletions,
+    Messages,
+    Responses,
+    GenerateContent,
 }
 
 #[derive(Clone, Copy)]
 enum Outbound {
-    OpenAiChat,
-    Anthropic,
-    OpenAiResponses,
-    Google,
+    ChatCompletions,
+    Messages,
+    Responses,
+    GenerateContent,
 }
 
 impl Outbound {
     fn model(self) -> &'static str {
         match self {
-            Outbound::OpenAiChat => MODEL_VIA_OPENAI,
-            Outbound::Anthropic => MODEL_VIA_ANTHROPIC,
-            Outbound::OpenAiResponses => MODEL_VIA_RESPONSES,
-            Outbound::Google => MODEL_VIA_GOOGLE,
+            Outbound::ChatCompletions => MODEL_VIA_OPENAI,
+            Outbound::Messages => MODEL_VIA_ANTHROPIC,
+            Outbound::Responses => MODEL_VIA_RESPONSES,
+            Outbound::GenerateContent => MODEL_VIA_GOOGLE,
         }
     }
 
     fn path_segment(self) -> &'static str {
         match self {
-            Outbound::OpenAiChat => "/chat/completions",
-            Outbound::Anthropic => "/messages",
-            Outbound::OpenAiResponses => "/responses",
-            // Google's path contains the model id; matched via prefix below.
-            Outbound::Google => "/models/",
+            Outbound::ChatCompletions => "/chat/completions",
+            Outbound::Messages => "/messages",
+            Outbound::Responses => "/responses",
+            // Generate Content's path contains the model id; matched via prefix below.
+            Outbound::GenerateContent => "/models/",
         }
     }
 }
@@ -1026,10 +1026,10 @@ impl Outbound {
 /// POST `body` to the inbound route matching `inbound`.
 async fn post_inbound(server: &TestServer, inbound: Inbound, model: &str, body: &Value) {
     let response = match inbound {
-        Inbound::OpenAiChat => server.post("/v1/chat/completions").json(body).await,
-        Inbound::Anthropic => server.post("/v1/messages").json(body).await,
-        Inbound::OpenAiResponses => server.post("/v1/responses").json(body).await,
-        Inbound::Google => {
+        Inbound::ChatCompletions => server.post("/v1/chat/completions").json(body).await,
+        Inbound::Messages => server.post("/v1/messages").json(body).await,
+        Inbound::Responses => server.post("/v1/responses").json(body).await,
+        Inbound::GenerateContent => {
             server
                 .post(&format!("/v1beta/models/{model}:generateContent"))
                 .json(body)
@@ -1045,7 +1045,7 @@ async fn post_inbound(server: &TestServer, inbound: Inbound, model: &str, body: 
 async fn captured_outbound(upstream: &MockServer, outbound: Outbound) -> Value {
     let received = upstream.received_requests().await.unwrap_or_default();
     let suffix = match outbound {
-        Outbound::Google => ":generateContent",
+        Outbound::GenerateContent => ":generateContent",
         _ => "",
     };
     let matches: Vec<_> = received
@@ -1073,7 +1073,7 @@ async fn captured_outbound(upstream: &MockServer, outbound: Outbound) -> Value {
 fn assert_native_schema(outbound: Outbound, body: &Value) {
     let want = matrix_schema();
     match outbound {
-        Outbound::OpenAiChat => {
+        Outbound::ChatCompletions => {
             assert_eq!(
                 body["response_format"]["type"], "json_schema",
                 "openai chat outbound must set response_format.type=json_schema; body: {body}",
@@ -1083,7 +1083,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 "openai chat outbound must carry the schema under \
                  response_format.json_schema.schema; body: {body}",
             );
-            // OpenAI Chat requires `name`; the renderer must supply a default
+            // Chat Completions requires `name`; the renderer must supply a default
             // when the inbound (Anthropic, Google) didn't carry one. Either
             // the caller-supplied name or the default `"response"` is fine.
             assert!(
@@ -1091,7 +1091,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 "openai chat outbound must always set a name; body: {body}",
             );
         }
-        Outbound::Anthropic => {
+        Outbound::Messages => {
             assert_eq!(
                 body["output_config"]["format"]["type"], "json_schema",
                 "anthropic outbound must set output_config.format.type=json_schema; body: {body}",
@@ -1101,7 +1101,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 "anthropic outbound must carry the schema under \
                  output_config.format.schema; body: {body}",
             );
-            // Anthropic's GA shape doesn't carry name/strict — the renderer
+            // Messages' GA shape doesn't carry name/strict — the renderer
             // must drop them, not forward them as unknown fields.
             assert!(
                 body["output_config"]["format"].get("name").is_none(),
@@ -1118,7 +1118,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                  body: {body}",
             );
         }
-        Outbound::OpenAiResponses => {
+        Outbound::Responses => {
             assert_eq!(
                 body["text"]["format"]["type"], "json_schema",
                 "responses outbound must set text.format.type=json_schema; body: {body}",
@@ -1132,7 +1132,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 "responses outbound must always set a name; body: {body}",
             );
         }
-        Outbound::Google => {
+        Outbound::GenerateContent => {
             assert_eq!(
                 body["generationConfig"]["responseMimeType"], "application/json",
                 "google outbound must set generationConfig.responseMimeType=application/json; \
@@ -1152,10 +1152,10 @@ async fn run_cell(inbound: Inbound, outbound: Outbound) {
     let (server, upstream) = matrix_server().await;
     let model = outbound.model();
     let body = match inbound {
-        Inbound::OpenAiChat => inbound_openai_chat(model),
-        Inbound::Anthropic => inbound_anthropic(model),
-        Inbound::OpenAiResponses => inbound_openai_responses(model),
-        Inbound::Google => inbound_google(),
+        Inbound::ChatCompletions => inbound_chat_completions(model),
+        Inbound::Messages => inbound_anthropic(model),
+        Inbound::Responses => inbound_responses(model),
+        Inbound::GenerateContent => inbound_google(),
     };
     post_inbound(&server, inbound, model, &body).await;
     let upstream_body = captured_outbound(&upstream, outbound).await;
@@ -1165,81 +1165,81 @@ async fn run_cell(inbound: Inbound, outbound: Outbound) {
 // ----- 4×4 matrix -----
 
 #[tokio::test]
-async fn e2e_response_format_openai_chat_in_to_openai_chat_out() {
-    run_cell(Inbound::OpenAiChat, Outbound::OpenAiChat).await;
+async fn e2e_response_format_chat_completions_in_to_chat_completions_out() {
+    run_cell(Inbound::ChatCompletions, Outbound::ChatCompletions).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_openai_chat_in_to_anthropic_out() {
-    run_cell(Inbound::OpenAiChat, Outbound::Anthropic).await;
+async fn e2e_response_format_chat_completions_in_to_messages_out() {
+    run_cell(Inbound::ChatCompletions, Outbound::Messages).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_openai_chat_in_to_responses_out() {
-    run_cell(Inbound::OpenAiChat, Outbound::OpenAiResponses).await;
+async fn e2e_response_format_chat_completions_in_to_responses_out() {
+    run_cell(Inbound::ChatCompletions, Outbound::Responses).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_openai_chat_in_to_google_out() {
-    run_cell(Inbound::OpenAiChat, Outbound::Google).await;
+async fn e2e_response_format_chat_completions_in_to_generate_content_out() {
+    run_cell(Inbound::ChatCompletions, Outbound::GenerateContent).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_anthropic_in_to_openai_chat_out() {
-    run_cell(Inbound::Anthropic, Outbound::OpenAiChat).await;
+async fn e2e_response_format_messages_in_to_chat_completions_out() {
+    run_cell(Inbound::Messages, Outbound::ChatCompletions).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_anthropic_in_to_anthropic_out() {
-    run_cell(Inbound::Anthropic, Outbound::Anthropic).await;
+async fn e2e_response_format_messages_in_to_messages_out() {
+    run_cell(Inbound::Messages, Outbound::Messages).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_anthropic_in_to_responses_out() {
-    run_cell(Inbound::Anthropic, Outbound::OpenAiResponses).await;
+async fn e2e_response_format_messages_in_to_responses_out() {
+    run_cell(Inbound::Messages, Outbound::Responses).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_anthropic_in_to_google_out() {
-    run_cell(Inbound::Anthropic, Outbound::Google).await;
+async fn e2e_response_format_messages_in_to_generate_content_out() {
+    run_cell(Inbound::Messages, Outbound::GenerateContent).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_responses_in_to_openai_chat_out() {
-    run_cell(Inbound::OpenAiResponses, Outbound::OpenAiChat).await;
+async fn e2e_response_format_responses_in_to_chat_completions_out() {
+    run_cell(Inbound::Responses, Outbound::ChatCompletions).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_responses_in_to_anthropic_out() {
-    run_cell(Inbound::OpenAiResponses, Outbound::Anthropic).await;
+async fn e2e_response_format_responses_in_to_messages_out() {
+    run_cell(Inbound::Responses, Outbound::Messages).await;
 }
 
 #[tokio::test]
 async fn e2e_response_format_responses_in_to_responses_out() {
-    run_cell(Inbound::OpenAiResponses, Outbound::OpenAiResponses).await;
+    run_cell(Inbound::Responses, Outbound::Responses).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_responses_in_to_google_out() {
-    run_cell(Inbound::OpenAiResponses, Outbound::Google).await;
+async fn e2e_response_format_responses_in_to_generate_content_out() {
+    run_cell(Inbound::Responses, Outbound::GenerateContent).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_google_in_to_openai_chat_out() {
-    run_cell(Inbound::Google, Outbound::OpenAiChat).await;
+async fn e2e_response_format_generate_content_in_to_chat_completions_out() {
+    run_cell(Inbound::GenerateContent, Outbound::ChatCompletions).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_google_in_to_anthropic_out() {
-    run_cell(Inbound::Google, Outbound::Anthropic).await;
+async fn e2e_response_format_generate_content_in_to_messages_out() {
+    run_cell(Inbound::GenerateContent, Outbound::Messages).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_google_in_to_responses_out() {
-    run_cell(Inbound::Google, Outbound::OpenAiResponses).await;
+async fn e2e_response_format_generate_content_in_to_responses_out() {
+    run_cell(Inbound::GenerateContent, Outbound::Responses).await;
 }
 
 #[tokio::test]
-async fn e2e_response_format_google_in_to_google_out() {
-    run_cell(Inbound::Google, Outbound::Google).await;
+async fn e2e_response_format_generate_content_in_to_generate_content_out() {
+    run_cell(Inbound::GenerateContent, Outbound::GenerateContent).await;
 }

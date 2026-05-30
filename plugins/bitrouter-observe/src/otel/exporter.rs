@@ -625,8 +625,8 @@ impl ObserveHook for OtelExporter {
                 StreamPart::ResponseStarted { id } | StreamPart::ResponseCompleted { id, .. } => {
                     // The upstream response id, surfaced by the decoder near
                     // the start of the stream (`ResponseStarted`, emitted by
-                    // OpenAI Chat / Anthropic / Google) or on the terminal
-                    // frame (`ResponseCompleted`, OpenAI Responses). Stamp it
+                    // Chat Completions / Messages / Generate Content) or on the terminal
+                    // frame (`ResponseCompleted`, Responses). Stamp it
                     // onto the root `chat` span as `gen_ai.response.id`; the
                     // non-streaming path does the same via
                     // `GenerateResult.response_id`. Spec:
@@ -869,7 +869,7 @@ fn build_hop_request_attrs(target: &RoutingTarget, prompt: &Prompt) -> Vec<KeyVa
 /// set; `gen_ai.response.id` is read from the canonical IR's
 /// `GenerateResult.response_id`, which the outbound adapters populate
 /// from the provider-native id field (OpenAI `chatcmpl-...`, Anthropic
-/// `msg_...`, OpenAI Responses `resp_...`, Google `responseId`).
+/// `msg_...`, Responses `resp_...`, Google `responseId`).
 ///
 /// Streaming hops do not pass through here — they close at TTFB via
 /// `HopOutcome::StreamStarted` without an `ExecutionResult`. The
@@ -1031,7 +1031,7 @@ mod hop_tests {
             service_id: "test-model".to_string(),
             api_base: "https://api.example.test:8443/v1".to_string(),
             api_key: "k".to_string(),
-            api_protocol: ApiProtocol::Openai,
+            api_protocol: ApiProtocol::ChatCompletions,
             account_label: Some("primary".to_string()),
             api_key_override: None,
             api_base_override: None,
@@ -1405,7 +1405,7 @@ mod hop_tests {
 
     #[tokio::test]
     async fn stream_response_completed_lands_response_id_on_root_chat() {
-        // OpenAI Responses' terminal `response.completed` frame surfaces
+        // Responses' terminal `response.completed` frame surfaces
         // as `StreamPart::ResponseCompleted { id, .. }`. The exporter must
         // stamp it onto the root `chat` INTERNAL span as
         // `gen_ai.response.id` so streaming requests aren't missing the
@@ -1449,7 +1449,7 @@ mod hop_tests {
 
     #[tokio::test]
     async fn stream_response_started_lands_response_id_on_root_chat() {
-        // OpenAI Chat / Anthropic / Google streaming surface the upstream id
+        // Chat Completions / Messages / Generate Content streaming surface the upstream id
         // early as `StreamPart::ResponseStarted { id }`; the exporter stamps
         // it onto the root `chat` INTERNAL span as `gen_ai.response.id`, the
         // same attribute the non-streaming path and `ResponseCompleted` set.

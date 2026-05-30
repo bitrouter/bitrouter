@@ -27,9 +27,9 @@ doc_url = "https://opencode.ai/docs/zen/"
 # (`opencode/<vendor-prefixed-name>`). Longest match wins.
 [api_protocol]
 "opencode/gpt-*" = "responses"
-"opencode/claude-*" = "anthropic"
-"opencode/gemini-*" = "google"
-"*" = "openai"
+"opencode/claude-*" = "messages"
+"opencode/gemini-*" = "generate_content"
+"*" = "chat_completions"
 
 [auth]
 kind = "bearer"

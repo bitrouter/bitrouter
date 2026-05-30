@@ -223,7 +223,10 @@ mod tests {
         apply_builtin_defaults(&mut config);
         let p = &config.providers["openai"];
         assert_eq!(p.api_base, "https://api.openai.com/v1");
-        assert_eq!(p.api_protocol.resolve("gpt-4o"), Some(&ApiProtocol::Openai));
+        assert_eq!(
+            p.api_protocol.resolve("gpt-4o"),
+            Some(&ApiProtocol::ChatCompletions)
+        );
     }
 
     #[test]
@@ -234,7 +237,10 @@ mod tests {
         let p = &config.providers["openai"];
         // user-set api_base wins; api_protocol still gets the built-in default
         assert_eq!(p.api_base, "https://gateway.internal.example/v1");
-        assert_eq!(p.api_protocol.resolve("gpt-4o"), Some(&ApiProtocol::Openai));
+        assert_eq!(
+            p.api_protocol.resolve("gpt-4o"),
+            Some(&ApiProtocol::ChatCompletions)
+        );
     }
 
     #[test]
@@ -284,7 +290,7 @@ mod tests {
             assert_eq!(p.api_key, "sk-ant-test");
             assert_eq!(
                 p.api_protocol.resolve("claude-opus-4-1"),
-                Some(&ApiProtocol::Anthropic)
+                Some(&ApiProtocol::Messages)
             );
         });
     }

@@ -216,7 +216,7 @@ mod tests {
             service_id: "claude-sonnet-4.6".to_string(),
             api_base: "https://api.githubcopilot.com".to_string(),
             api_key: String::new(),
-            api_protocol: ApiProtocol::Anthropic,
+            api_protocol: ApiProtocol::Messages,
             account_label: None,
             api_key_override: None,
             api_base_override: None,

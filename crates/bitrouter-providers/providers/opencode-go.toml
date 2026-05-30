@@ -20,8 +20,8 @@ doc_url = "https://opencode.ai/docs/go/"
 # advertised by the gateway's `/models` endpoint
 # (`opencode-go/<vendor-prefixed-name>`). Longest match wins.
 [api_protocol]
-"opencode-go/minimax-*" = "anthropic"
-"*" = "openai"
+"opencode-go/minimax-*" = "messages"
+"*" = "chat_completions"
 
 [auth]
 kind = "bearer"

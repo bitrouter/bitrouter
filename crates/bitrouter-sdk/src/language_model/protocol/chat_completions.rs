@@ -1,4 +1,4 @@
-//! OpenAI Chat Completions adapter.
+//! Chat Completions adapter.
 //!
 //! Official reference: <https://platform.openai.com/docs/api-reference/chat>
 //! Streaming format: <https://platform.openai.com/docs/api-reference/chat-streaming>
@@ -23,16 +23,16 @@ use crate::language_model::types::{
     ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
-/// The OpenAI Chat Completions inbound + outbound protocol adapter.
-pub struct OpenAiChatAdapter;
+/// The Chat Completions inbound + outbound protocol adapter.
+pub struct ChatCompletionsAdapter;
 
-/// HTTP transport for OpenAI Chat: `POST {api_base}/chat/completions` with
+/// HTTP transport for Chat Completions: `POST {api_base}/chat/completions` with
 /// `Authorization: Bearer <api_key>`.
-pub struct OpenAiChatTransport;
+pub struct ChatCompletionsTransport;
 
 // ===== wire request types =====
 
-/// OpenAI Chat Completions request body
+/// Chat Completions request body
 /// (<https://platform.openai.com/docs/api-reference/chat/create>).
 ///
 /// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
@@ -171,9 +171,9 @@ fn content_text(value: &serde_json::Value) -> String {
     }
 }
 
-impl InboundAdapter for OpenAiChatAdapter {
+impl InboundAdapter for ChatCompletionsAdapter {
     fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Openai
+        ApiProtocol::ChatCompletions
     }
 
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
@@ -258,7 +258,7 @@ impl InboundAdapter for OpenAiChatAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_tokens.or(req.max_completion_tokens),
                 reasoning_effort: req.reasoning_effort,
-                // Every OpenAI-Chat field we don't have a typed slot for —
+                // Every Chat Completions field we don't have a typed slot for —
                 // tool_choice, stop / stop_sequences, seed, n,
                 // presence/frequency_penalty, logit_bias, … — rides along
                 // in `extra` and is splatted back on render. Note:
@@ -352,9 +352,9 @@ impl InboundAdapter for OpenAiChatAdapter {
     }
 }
 
-impl OutboundAdapter for OpenAiChatAdapter {
+impl OutboundAdapter for ChatCompletionsAdapter {
     fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Openai
+        ApiProtocol::ChatCompletions
     }
 
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
@@ -402,7 +402,7 @@ impl OutboundAdapter for OpenAiChatAdapter {
         if let Some(re) = &prompt.params.reasoning_effort {
             req.insert("reasoning_effort".into(), re.clone().into());
         }
-        // Render the canonical response_format into OpenAI Chat's native shape.
+        // Render the canonical response_format into Chat Completions' native shape.
         // Inserted before the extras splat so it wins over any legacy
         // `response_format` left in extras (typed slot wins, matching how
         // other params are handled).
@@ -449,8 +449,8 @@ impl OutboundAdapter for OpenAiChatAdapter {
         // for the reasoning trace on the Chat envelope. Other OpenAI-compatible
         // upstreams expose the same data under `reasoning` (some OpenRouter
         // passthroughs) or `thinking` (Aliyun). Accept whichever is present.
-        // None of these are documented on OpenAI Chat itself; the canonical
-        // OpenAI Chat object does not carry a reasoning trace.
+        // None of these are documented on Chat Completions itself; the canonical
+        // Chat Completions object does not carry a reasoning trace.
         if let Some(reasoning) = ["reasoning_content", "reasoning", "thinking"]
             .iter()
             .find_map(|key| {
@@ -472,7 +472,7 @@ impl OutboundAdapter for OpenAiChatAdapter {
         {
             content.push(Content::Text { text });
         }
-        // OpenAI Chat's `message.refusal` (when non-empty) is the model's
+        // Chat Completions' `message.refusal` (when non-empty) is the model's
         // declined-response text. Carry it through so the caller sees the
         // refusal rather than an empty assistant message. Spec:
         // <https://platform.openai.com/docs/api-reference/chat/object>.
@@ -525,7 +525,7 @@ impl OutboundAdapter for OpenAiChatAdapter {
                 }
             });
         let usage = body.get("usage").and_then(parse_usage);
-        // OpenAI Chat Completions: top-level `id` (`chatcmpl-...`).
+        // Chat Completions: top-level `id` (`chatcmpl-...`).
         // <https://platform.openai.com/docs/api-reference/chat/object>
         let response_id = body
             .get("id")
@@ -572,7 +572,7 @@ fn parse_chat_response_format(
     })
 }
 
-/// Render a canonical [`ResponseFormat`] into OpenAI Chat's native
+/// Render a canonical [`ResponseFormat`] into Chat Completions' native
 /// `{ type: "json_schema", json_schema: { name, strict, schema } }`. OpenAI
 /// requires `name`; supply a stable default when the caller didn't set one.
 fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
@@ -596,9 +596,9 @@ fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
 }
 
 #[async_trait]
-impl Transport for OpenAiChatTransport {
+impl Transport for ChatCompletionsTransport {
     fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Openai
+        ApiProtocol::ChatCompletions
     }
 
     fn endpoint_url(&self, target: &RoutingTarget, _stream: bool) -> String {
@@ -714,7 +714,7 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .and_then(|d| d.get("reasoning_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    // OpenAI Chat surfaces cached prompt tokens under
+    // Chat Completions surfaces cached prompt tokens under
     // `prompt_tokens_details.cached_tokens` — subset of `prompt_tokens`. Ref:
     // <https://platform.openai.com/docs/api-reference/chat/object> →
     // `usage` object. Some OpenAI-compatible providers (e.g. DeepSeek)
@@ -752,7 +752,7 @@ fn render_usage(usage: &Usage) -> serde_json::Value {
 
 // ===== streaming =====
 
-/// Decodes OpenAI Chat `data:` SSE chunks into canonical stream parts. Explicit
+/// Decodes Chat Completions `data:` SSE chunks into canonical stream parts. Explicit
 /// state machine — unknown chunk shapes are ignored, never panicked on.
 #[derive(Default)]
 struct ChatStreamDecoder {
@@ -784,7 +784,7 @@ impl StreamDecoder for ChatStreamDecoder {
         let mut parts = Vec::new();
         // Surface the upstream response id once, before any deltas. Every
         // chunk repeats the top-level `id` (`chatcmpl-...`); we emit it a
-        // single time for observability. Not in the OpenAI Chat object's
+        // single time for observability. Not in the Chat Completions object's
         // delta — purely the envelope id.
         // <https://platform.openai.com/docs/api-reference/chat/streaming>
         if !self.response_started_emitted
@@ -864,7 +864,7 @@ impl StreamDecoder for ChatStreamDecoder {
     }
 }
 
-/// Encodes canonical stream parts into OpenAI Chat `data:` SSE chunks.
+/// Encodes canonical stream parts into Chat Completions `data:` SSE chunks.
 struct ChatStreamEncoder {
     request_id: String,
     model: String,
@@ -972,7 +972,7 @@ impl StreamEncoder for ChatStreamEncoder {
                 frames.push(self.chunk(serde_json::Value::Object(delta), Some(&reason_str)));
             }
             StreamPart::ResponseCompleted { status, .. } => {
-                // Inbound was OpenAI Responses; Chat has no response-completed
+                // Inbound was Responses; Chat has no response-completed
                 // concept — terminate with a finish chunk derived from status.
                 let reason = if status == "incomplete" {
                     FinishReason::Length
@@ -988,7 +988,7 @@ impl StreamEncoder for ChatStreamEncoder {
     }
 
     fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
-        // OpenAI surfaces a mid-stream error as a chunk carrying an `error`
+        // Chat Completions surfaces a mid-stream error as a chunk carrying an `error`
         // object, followed by the `[DONE]` sentinel.
         vec![
             SseFrame::Event {
@@ -1006,7 +1006,7 @@ impl StreamEncoder for ChatStreamEncoder {
     }
 
     fn finish(&mut self) -> Result<Vec<SseFrame>> {
-        // OpenAI Chat terminates the stream with a literal `[DONE]` sentinel.
+        // Chat Completions terminates the stream with a literal `[DONE]` sentinel.
         Ok(vec![SseFrame::Event {
             event: None,
             data: "[DONE]".to_string(),

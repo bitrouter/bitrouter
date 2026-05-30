@@ -260,7 +260,7 @@ mod tests {
             service_id: "gpt-4o".to_string(),
             api_base: "https://api.bitrouter.ai/v1".to_string(),
             api_key: key.to_string(),
-            api_protocol: ApiProtocol::Openai,
+            api_protocol: ApiProtocol::ChatCompletions,
             account_label: None,
             api_key_override: None,
             api_base_override: None,

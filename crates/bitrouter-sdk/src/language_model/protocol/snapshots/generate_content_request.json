@@ -1,19 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "GenerateContentRequest",
-  "description": "Google Generative AI `generateContent` request body\n(<https://ai.google.dev/api/generate-content>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
+  "description": "Generate Content `generateContent` request body\n(<https://ai.google.dev/api/generate-content>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
   "type": "object",
   "properties": {
     "contents": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/GoogleContent"
+        "$ref": "#/$defs/GenerateContentContent"
       }
     },
     "generationConfig": {
       "anyOf": [
         {
-          "$ref": "#/$defs/GoogleGenerationConfig"
+          "$ref": "#/$defs/GenerateContentGenerationConfig"
         },
         {
           "type": "null"
@@ -26,14 +26,14 @@
       "default": ""
     },
     "stream": {
-      "description": "Injected by `server::google_generate` from the path verb\n(`:streamGenerateContent` → true, `:generateContent` → false).",
+      "description": "Injected by `server::generate_content` from the path verb\n(`:streamGenerateContent` → true, `:generateContent` → false).",
       "type": "boolean",
       "default": false
     },
     "systemInstruction": {
       "anyOf": [
         {
-          "$ref": "#/$defs/GoogleContent"
+          "$ref": "#/$defs/GenerateContentContent"
         },
         {
           "type": "null"
@@ -43,7 +43,7 @@
     "tools": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/GoogleTool"
+        "$ref": "#/$defs/GenerateContentTool"
       }
     }
   },
@@ -51,7 +51,7 @@
     "contents"
   ],
   "$defs": {
-    "GoogleContent": {
+    "GenerateContentContent": {
       "description": "One element of [`GenerateContentRequest`]'s `contents` array — a turn\ncarrying optional role + `parts[]`.",
       "type": "object",
       "properties": {
@@ -69,8 +69,8 @@
         }
       }
     },
-    "GoogleFunctionDecl": {
-      "description": "One function declaration inside a [`GoogleTool`]: name + description +\nJSON-Schema parameters.",
+    "GenerateContentFunctionDecl": {
+      "description": "One function declaration inside a [`GenerateContentTool`]: name + description +\nJSON-Schema parameters.",
       "type": "object",
       "properties": {
         "description": {
@@ -91,7 +91,7 @@
         "name"
       ]
     },
-    "GoogleGenerationConfig": {
+    "GenerateContentGenerationConfig": {
       "description": "`generationConfig` knobs on a [`GenerateContentRequest`].",
       "type": "object",
       "properties": {
@@ -122,14 +122,14 @@
         }
       }
     },
-    "GoogleTool": {
+    "GenerateContentTool": {
       "description": "One element of [`GenerateContentRequest`]'s `tools` array — Google's\n`{ functionDeclarations: [...] }` envelope.",
       "type": "object",
       "properties": {
         "functionDeclarations": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/GoogleFunctionDecl"
+            "$ref": "#/$defs/GenerateContentFunctionDecl"
           }
         }
       }

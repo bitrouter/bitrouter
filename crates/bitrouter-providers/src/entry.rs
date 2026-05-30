@@ -48,13 +48,13 @@ pub struct ProviderEntry {
 ///
 /// `#[serde(untagged)]` so the TOML can write either:
 /// ```toml
-/// api_protocol = "openai"
+/// api_protocol = "chat_completions"
 /// ```
 /// or
 /// ```toml
 /// [api_protocol]
-/// "claude-*" = "anthropic"
-/// "*" = "openai"
+/// "claude-*" = "messages"
+/// "*" = "chat_completions"
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
@@ -167,7 +167,7 @@ mod tests {
             id = "openai"
             display_name = "OpenAI"
             api_base = "https://api.openai.com/v1"
-            api_protocol = "openai"
+            api_protocol = "chat_completions"
             doc_url = "https://platform.openai.com/docs/api-reference"
 
             [auth]
@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(entry.auth.env_var(), Some("OPENAI_API_KEY"));
         assert_eq!(
             entry.api_protocol.resolve("gpt-4o"),
-            Some(ApiProtocol::Openai)
+            Some(ApiProtocol::ChatCompletions)
         );
     }
 
@@ -190,7 +190,7 @@ mod tests {
             id = "anthropic"
             display_name = "Anthropic"
             api_base = "https://api.anthropic.com/v1"
-            api_protocol = "anthropic"
+            api_protocol = "messages"
             doc_url = "https://docs.anthropic.com/en/api/messages"
 
             [auth]
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn parses_per_model_protocol_map() {
-        // opencode-zen-shape: claude-* → anthropic, default → openai.
+        // opencode-zen-shape: claude-* → messages, default → chat_completions.
         let src = r#"
             id = "opencode-zen"
             display_name = "opencode zen"
@@ -228,8 +228,8 @@ mod tests {
             doc_url = "https://example.com"
 
             [api_protocol]
-            "claude-*" = "anthropic"
-            "*" = "openai"
+            "claude-*" = "messages"
+            "*" = "chat_completions"
 
             [auth]
             kind = "bearer"
@@ -238,11 +238,11 @@ mod tests {
         let entry: ProviderEntry = toml::from_str(src).unwrap();
         assert_eq!(
             entry.api_protocol.resolve("claude-opus-4-1"),
-            Some(ApiProtocol::Anthropic)
+            Some(ApiProtocol::Messages)
         );
         assert_eq!(
             entry.api_protocol.resolve("gpt-5-mini"),
-            Some(ApiProtocol::Openai)
+            Some(ApiProtocol::ChatCompletions)
         );
     }
 
@@ -254,7 +254,7 @@ mod tests {
             id = "x"
             display_name = "X"
             apt_base = "https://x.example/v1"
-            api_protocol = "openai"
+            api_protocol = "chat_completions"
             doc_url = "https://x.example"
             [auth]
             kind = "bearer"

@@ -13,9 +13,9 @@
 # `bitrouter.yaml`.
 
 id = "google"
-display_name = "Google Generative AI"
+display_name = "Generate Content"
 api_base = "https://generativelanguage.googleapis.com/v1beta"
-api_protocol = "google"
+api_protocol = "generate_content"
 doc_url = "https://ai.google.dev/api"
 
 [auth]

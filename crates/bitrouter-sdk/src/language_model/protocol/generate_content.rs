@@ -1,4 +1,4 @@
-//! Google Generative AI (`generateContent`) adapter.
+//! Generate Content (`generateContent`) adapter.
 //!
 //! Official reference: <https://ai.google.dev/api/generate-content>
 //! Streaming: <https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent>
@@ -23,25 +23,25 @@ use crate::language_model::types::{
     ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
-/// The Google Generative AI protocol adapter.
-pub struct GoogleAdapter;
+/// The Generate Content protocol adapter.
+pub struct GenerateContentAdapter;
 
-/// HTTP transport for Google Generative AI:
+/// HTTP transport for Generate Content:
 /// `POST {api_base}/models/{model}:generateContent` (or
 /// `:streamGenerateContent?alt=sse` for streaming) with the `x-goog-api-key`
 /// header — documented at
 /// <https://ai.google.dev/gemini-api/docs/api-key>.
-pub struct GoogleTransport;
+pub struct GenerateContentTransport;
 
 /// Sentinel key under which top-level Google extras (`toolConfig`,
 /// `safetySettings`, `cachedContent`, …) ride through `GenerationParams::extra`.
-/// Only `GoogleAdapter::render_request` reads it — every other adapter ignores
+/// Only `GenerateContentAdapter::render_request` reads it — every other adapter ignores
 /// the namespaced key and the JSON wire shape never contains it.
 const GOOGLE_TOP_LEVEL_EXTRA_KEY: &str = "__google_top_level__";
 
 // ===== wire request types =====
 
-/// Google Generative AI `generateContent` request body
+/// Generate Content `generateContent` request body
 /// (<https://ai.google.dev/api/generate-content>).
 ///
 /// `pub` so downstream crates (notably `bitrouter-cloud`) can derive an
@@ -53,14 +53,14 @@ pub struct GenerateContentRequest {
     /// override it; defaults empty.
     #[serde(default)]
     model: String,
-    contents: Vec<GoogleContent>,
+    contents: Vec<GenerateContentContent>,
     #[serde(default)]
-    system_instruction: Option<GoogleContent>,
+    system_instruction: Option<GenerateContentContent>,
     #[serde(default)]
-    tools: Vec<GoogleTool>,
+    tools: Vec<GenerateContentTool>,
     #[serde(default)]
-    generation_config: Option<GoogleGenerationConfig>,
-    /// Injected by `server::google_generate` from the path verb
+    generation_config: Option<GenerateContentGenerationConfig>,
+    /// Injected by `server::generate_content` from the path verb
     /// (`:streamGenerateContent` → true, `:generateContent` → false).
     #[serde(default)]
     stream: bool,
@@ -77,7 +77,7 @@ pub struct GenerateContentRequest {
 /// One element of [`GenerateContentRequest`]'s `contents` array — a turn
 /// carrying optional role + `parts[]`.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct GoogleContent {
+pub struct GenerateContentContent {
     #[serde(default)]
     role: Option<String>,
     #[serde(default)]
@@ -88,15 +88,15 @@ pub struct GoogleContent {
 /// `{ functionDeclarations: [...] }` envelope.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GoogleTool {
+pub struct GenerateContentTool {
     #[serde(default)]
-    function_declarations: Vec<GoogleFunctionDecl>,
+    function_declarations: Vec<GenerateContentFunctionDecl>,
 }
 
-/// One function declaration inside a [`GoogleTool`]: name + description +
+/// One function declaration inside a [`GenerateContentTool`]: name + description +
 /// JSON-Schema parameters.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct GoogleFunctionDecl {
+pub struct GenerateContentFunctionDecl {
     name: String,
     #[serde(default)]
     description: Option<String>,
@@ -107,7 +107,7 @@ pub struct GoogleFunctionDecl {
 /// `generationConfig` knobs on a [`GenerateContentRequest`].
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GoogleGenerationConfig {
+pub struct GenerateContentGenerationConfig {
     #[serde(default)]
     temperature: Option<f64>,
     #[serde(default)]
@@ -140,7 +140,7 @@ fn parse_role(role: Option<&str>) -> Result<Role> {
 fn role_str(role: Role) -> &'static str {
     match role {
         Role::Assistant => "model",
-        // Google has only user/model; tool results ride in a user turn.
+        // Generate Content has only user/model; tool results ride in a user turn.
         Role::User | Role::System | Role::Tool => "user",
     }
 }
@@ -221,9 +221,9 @@ fn finish_reason_str(r: &FinishReason) -> String {
     }
 }
 
-impl InboundAdapter for GoogleAdapter {
+impl InboundAdapter for GenerateContentAdapter {
     fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Google
+        ApiProtocol::GenerateContent
     }
 
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
@@ -285,7 +285,7 @@ impl InboundAdapter for GoogleAdapter {
         // so cross-protocol routing can translate it. When `responseMimeType`
         // is some other value (e.g. `text/x.enum`) we leave both fields in
         // extras as an opaque Google-native pass-through.
-        let response_format = parse_google_response_format(&params.extra);
+        let response_format = parse_generate_content_response_format(&params.extra);
         if response_format.is_some() {
             params.extra.remove("responseMimeType");
             params.extra.remove("responseSchema");
@@ -293,7 +293,7 @@ impl InboundAdapter for GoogleAdapter {
         // Preserve top-level Google fields (`toolConfig`, `safetySettings`,
         // `cachedContent`, …) across the round-trip. They're namespaced so they
         // don't collide with `generationConfig`-level extras above and only the
-        // Google `render_request` lifts them back to the top level.
+        // Generate Content `render_request` lifts them back to the top level.
         if !req.extra.is_empty() {
             params.extra.insert(
                 GOOGLE_TOP_LEVEL_EXTRA_KEY.to_string(),
@@ -340,13 +340,13 @@ impl InboundAdapter for GoogleAdapter {
     }
 
     fn stream_encoder(&self, _request_id: &str, _model: &str) -> Box<dyn StreamEncoder> {
-        Box::new(GoogleStreamEncoder)
+        Box::new(GenerateContentStreamEncoder)
     }
 }
 
-impl OutboundAdapter for GoogleAdapter {
+impl OutboundAdapter for GenerateContentAdapter {
     fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Google
+        ApiProtocol::GenerateContent
     }
 
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
@@ -432,7 +432,7 @@ impl OutboundAdapter for GoogleAdapter {
             .and_then(|f| f.as_str())
             .and_then(finish_reason);
         let usage = body.get("usageMetadata").and_then(parse_usage);
-        // Google Generative AI: top-level `responseId`.
+        // Generate Content: top-level `responseId`.
         // <https://ai.google.dev/api/generate-content#GenerateContentResponse>
         let response_id = body
             .get("responseId")
@@ -447,7 +447,7 @@ impl OutboundAdapter for GoogleAdapter {
     }
 
     fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
-        Box::new(GoogleStreamDecoder::default())
+        Box::new(GenerateContentStreamDecoder::default())
     }
 
     fn supports_response_format(&self) -> bool {
@@ -459,7 +459,7 @@ impl OutboundAdapter for GoogleAdapter {
 /// into the canonical [`ResponseFormat`]. Triggers only when
 /// `responseMimeType == "application/json"` *and* a `responseSchema` is set —
 /// other MIME modes (e.g. `text/x.enum`) have no schema to translate.
-fn parse_google_response_format(
+fn parse_generate_content_response_format(
     extra: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Option<ResponseFormat> {
     if extra.get("responseMimeType").and_then(|v| v.as_str()) != Some("application/json") {
@@ -474,9 +474,9 @@ fn parse_google_response_format(
 }
 
 #[async_trait]
-impl Transport for GoogleTransport {
+impl Transport for GenerateContentTransport {
     fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Google
+        ApiProtocol::GenerateContent
     }
 
     fn endpoint_url(&self, target: &RoutingTarget, stream: bool) -> String {
@@ -557,17 +557,17 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
 
 // ===== streaming =====
 
-/// Google `streamGenerateContent` SSE decoder. Each `data:` line is a full
+/// Generate Content `streamGenerateContent` SSE decoder. Each `data:` line is a full
 /// `GenerateContentResponse` with partial candidates.
 #[derive(Default)]
-struct GoogleStreamDecoder {
+struct GenerateContentStreamDecoder {
     finished: bool,
     /// Whether the one-shot [`StreamPart::ResponseStarted`] has been emitted.
     /// Every chunk repeats `responseId`; we surface it only once.
     response_started_emitted: bool,
 }
 
-impl StreamDecoder for GoogleStreamDecoder {
+impl StreamDecoder for GenerateContentStreamDecoder {
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>> {
         let data = event.data.trim();
         if data.is_empty() {
@@ -636,11 +636,11 @@ impl StreamDecoder for GoogleStreamDecoder {
     }
 }
 
-/// Google `streamGenerateContent` SSE encoder — each canonical part becomes one
+/// Generate Content `streamGenerateContent` SSE encoder — each canonical part becomes one
 /// `GenerateContentResponse` chunk.
-struct GoogleStreamEncoder;
+struct GenerateContentStreamEncoder;
 
-impl StreamEncoder for GoogleStreamEncoder {
+impl StreamEncoder for GenerateContentStreamEncoder {
     fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
         let chunk = match part {
             // Observability-only metadata (upstream response id) — never
@@ -683,7 +683,7 @@ impl StreamEncoder for GoogleStreamEncoder {
                 }]
             }),
             StreamPart::ResponseCompleted { status, usage, .. } => {
-                // Inbound was OpenAI Responses; Google has no response-completed
+                // Inbound was Responses; Generate Content has no response-completed
                 // concept — emit a terminal candidate with a mapped
                 // `finishReason`, plus `usageMetadata` if usage was carried.
                 let finish_reason = if status == "incomplete" {
@@ -715,7 +715,7 @@ impl StreamEncoder for GoogleStreamEncoder {
     }
 
     fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
-        // Google surfaces a mid-stream error as a chunk carrying an `error`
+        // Generate Content surfaces a mid-stream error as a chunk carrying an `error`
         // object (mirrors the non-streaming error envelope).
         vec![SseFrame::Event {
             event: None,

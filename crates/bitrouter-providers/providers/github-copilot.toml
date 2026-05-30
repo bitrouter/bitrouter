@@ -17,10 +17,10 @@
 #    Copilot Bearer (see crates/bitrouter-providers/src/copilot/exchange.rs).
 #
 # Per-model protocol routing (Copilot multiplexes families behind one host):
-# - claude-*               → Anthropic Messages
-# - gpt-*-codex / gpt-5.5  → OpenAI Responses (Chat Completions returns 404
+# - claude-*               → Messages
+# - gpt-*-codex / gpt-5.5  → Responses (Chat Completions returns 404
 #                             on these in Copilot's edition)
-# - everything else        → OpenAI Chat Completions
+# - everything else        → Chat Completions
 #
 # The `oauth` AuthScheme stores routing metadata only — the actual exchange
 # + integration headers live in the `bitrouter-providers::copilot` module
@@ -32,14 +32,14 @@ api_base = "https://api.githubcopilot.com"
 doc_url = "https://docs.github.com/en/copilot/reference/api-reference/copilot-api-endpoints"
 
 [api_protocol]
-"claude-*" = "anthropic"
+"claude-*" = "messages"
 "gpt-5.5" = "responses"
 "gpt-5.5-codex" = "responses"
 "gpt-5.1-codex" = "responses"
 "gpt-5.1-codex-mini" = "responses"
 "gpt-5.3-codex" = "responses"
 "gpt-5.2-codex" = "responses"
-"*" = "openai"
+"*" = "chat_completions"
 
 [auth]
 kind = "oauth"

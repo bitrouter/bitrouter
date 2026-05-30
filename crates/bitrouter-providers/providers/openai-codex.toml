@@ -21,7 +21,7 @@
 # - OpenClaw Codex OAuth runtime:
 #   https://github.com/openclaw/openclaw/blob/main/extensions/openai/openai-codex-oauth.runtime.ts
 #
-# Wire protocol: Codex speaks the OpenAI Responses API exclusively. The
+# Wire protocol: Codex speaks the Responses API exclusively. The
 # `openai` Chat Completions endpoint is not reachable from this base URL,
 # so `api_protocol` is pinned to `responses` (no glob fan-out needed).
 #

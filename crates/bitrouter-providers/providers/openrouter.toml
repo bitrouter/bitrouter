@@ -4,7 +4,7 @@
 # - https://openrouter.ai/docs/api-reference/authentication
 #   ("Pass your API key in the `Authorization: Bearer <KEY>` header.")
 # - https://openrouter.ai/docs/api-reference/overview
-#   (base URL `https://openrouter.ai/api/v1`; OpenAI Chat Completions wire
+#   (base URL `https://openrouter.ai/api/v1`; Chat Completions wire
 #   format; provider routing happens inside OpenRouter)
 #
 # Optional `HTTP-Referer` and `X-Title` headers for OpenRouter's attribution
@@ -14,7 +14,7 @@
 id = "openrouter"
 display_name = "OpenRouter"
 api_base = "https://openrouter.ai/api/v1"
-api_protocol = "openai"
+api_protocol = "chat_completions"
 doc_url = "https://openrouter.ai/docs/api-reference/overview"
 
 [auth]

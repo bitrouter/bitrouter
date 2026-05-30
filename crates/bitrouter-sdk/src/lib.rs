@@ -1,8 +1,8 @@
 //! # bitrouter-sdk
 //!
 //! The BitRouter SDK: build a programmable router for LLM API traffic.
-//! Inbound requests on any of four wire protocols (OpenAI Chat, OpenAI
-//! Responses, Anthropic Messages, Google Generative AI) are normalised into a
+//! Inbound requests on any of four wire protocols (Chat Completions,
+//! Responses, Messages, Generate Content) are normalised into a
 //! canonical pipeline, run through a chain of hooks (auth, policy, settlement,
 //! guardrails, observability), dispatched to the right upstream provider, and
 //! rendered back in the inbound protocol — so a client written for one

@@ -1,7 +1,7 @@
 # BitRouter Cloud — the official hosted gateway. The router speaks every
 # bitrouter-supported LLM protocol on the same base URL; the default mapping
-# below sends every model id over OpenAI Chat Completions. Users who want
-# the same model over Anthropic Messages or OpenAI Responses can override
+# below sends every model id over Chat Completions. Users who want
+# the same model over Messages or Responses can override
 # `api_protocol` in their bitrouter.yaml.
 #
 # Authentication uses RFC 6750 Bearer credentials. Two sources are supported
@@ -27,7 +27,7 @@
 id = "bitrouter"
 display_name = "BitRouter Cloud"
 api_base = "https://api.bitrouter.ai/v1"
-api_protocol = "openai"
+api_protocol = "chat_completions"
 doc_url = "https://docs.bitrouter.ai"
 
 [auth]

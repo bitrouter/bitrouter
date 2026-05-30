@@ -14,7 +14,7 @@
 id = "openai"
 display_name = "OpenAI"
 api_base = "https://api.openai.com/v1"
-api_protocol = "openai"
+api_protocol = "chat_completions"
 doc_url = "https://platform.openai.com/docs/api-reference"
 
 [auth]

@@ -27,14 +27,14 @@ use crate::caller::CallerContext;
 /// The name passed to `Custom` is the registration key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum ApiProtocol {
-    /// OpenAI Chat Completions.
+    /// OpenAI-style Chat Completions (`POST /v1/chat/completions`).
     #[default]
-    Openai,
-    /// Anthropic Messages.
-    Anthropic,
-    /// Google Generative AI.
-    Google,
-    /// OpenAI Responses.
+    ChatCompletions,
+    /// Anthropic-style Messages (`POST /v1/messages`).
+    Messages,
+    /// Google-style Generate Content (`POST …:generateContent`).
+    GenerateContent,
+    /// Responses.
     Responses,
     /// An externally-registered protocol identified by its registration name
     /// (e.g. `"bedrock-claude"`). The SDK does not serve `Custom` protocols
@@ -43,15 +43,15 @@ pub enum ApiProtocol {
 }
 
 impl ApiProtocol {
-    /// Stable string name for this protocol (`"openai"`, `"anthropic"`, …, or
+    /// Stable string name for this protocol (`"chat_completions"`, `"messages"`, …, or
     /// the inner string for [`Custom`](Self::Custom)). Used as the wire-format
     /// representation in YAML config and as the registry key for outbound
     /// dispatch.
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Openai => "openai",
-            Self::Anthropic => "anthropic",
-            Self::Google => "google",
+            Self::ChatCompletions => "chat_completions",
+            Self::Messages => "messages",
+            Self::GenerateContent => "generate_content",
             Self::Responses => "responses",
             Self::Custom(name) => name.as_str(),
         }
@@ -74,9 +74,9 @@ impl<'de> Deserialize<'de> for ApiProtocol {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
         Ok(match s.as_str() {
-            "openai" => Self::Openai,
-            "anthropic" => Self::Anthropic,
-            "google" => Self::Google,
+            "chat_completions" => Self::ChatCompletions,
+            "messages" => Self::Messages,
+            "generate_content" => Self::GenerateContent,
             "responses" => Self::Responses,
             _ => Self::Custom(s),
         })
@@ -167,22 +167,22 @@ pub struct Tool {
 /// `text`, `regex`) can be added without breaking existing call sites.
 ///
 /// Each inbound adapter promotes the provider-native field into this typed
-/// slot at `parse_request` time (e.g. OpenAI Chat's `response_format`,
-/// Anthropic's `output_config.format`, Google's `generationConfig.responseSchema`).
+/// slot at `parse_request` time (e.g. Chat Completions' `response_format`,
+/// Messages' `output_config.format`, Generate Content's `generationConfig.responseSchema`).
 /// Each outbound adapter renders it back into the upstream's native shape on
 /// `render_request`. Cross-protocol routing therefore works automatically:
-/// an OpenAI-Chat client asking for `json_schema` against an Anthropic upstream
+/// a Chat Completions client asking for `json_schema` against a Messages upstream
 /// emits `output_config.format`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseFormat {
     /// Constrain output to a JSON Schema.
     JsonSchema {
-        /// Schema name. Required by OpenAI Chat / Responses; ignored by
-        /// Anthropic and Google.
+        /// Schema name. Required by Chat Completions / Responses; ignored by
+        /// Messages and Generate Content.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        /// Strict-mode flag. OpenAI-only; Anthropic and Google are always strict.
+        /// Strict-mode flag. Chat Completions / Responses only; Messages and Generate Content are always strict.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         strict: Option<bool>,
         /// The JSON Schema.
@@ -249,14 +249,14 @@ pub struct Usage {
     pub reasoning_tokens: u64,
     /// Cache-read input tokens — already-cached prompt content that the
     /// provider served from cache. Subset of `prompt_tokens`. Maps to
-    /// Anthropic's `usage.cache_read_input_tokens`
-    /// (<https://docs.anthropic.com/en/api/messages>) and to OpenAI Chat's
+    /// Messages' `usage.cache_read_input_tokens`
+    /// (<https://docs.anthropic.com/en/api/messages>) and to Chat Completions'
     /// `usage.prompt_tokens_details.cached_tokens`. Default 0 when the
     /// upstream reports no cache stats.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub cache_read_tokens: u64,
     /// Cache-write input tokens — prompt content written to the cache this
-    /// turn. Subset of `prompt_tokens`. Maps to Anthropic's
+    /// turn. Subset of `prompt_tokens`. Maps to Messages'
     /// `usage.cache_creation_input_tokens`.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub cache_write_tokens: u64,
@@ -308,8 +308,8 @@ pub struct GenerateResult {
     pub usage: Option<Usage>,
     /// Finish reason, if the provider reported it.
     pub finish_reason: Option<FinishReason>,
-    /// Provider-assigned response id (e.g. OpenAI `chatcmpl-...`,
-    /// Anthropic `msg_...`, OpenAI Responses `resp_...`, Google
+    /// Provider-assigned response id (e.g. Chat Completions `chatcmpl-...`,
+    /// Messages `msg_...`, Responses `resp_...`, Generate Content
     /// `responseId`). Carried so observability can stamp it onto the OTel
     /// `gen_ai.response.id` semconv attribute and operators can correlate
     /// against the upstream provider's own logs. `None` when the provider
@@ -352,8 +352,8 @@ pub enum StreamPart {
         usage: Usage,
     },
     /// The provider-assigned response id, surfaced once near the start of
-    /// the stream — OpenAI Chat's top-level `id`, Anthropic's
-    /// `message_start.message.id`, Google's `responseId`. (OpenAI Responses
+    /// the stream — Chat Completions' top-level `id`, Anthropic's
+    /// `message_start.message.id`, Generate Content's `responseId`. (Responses
     /// carries its id on the terminal [`Self::ResponseCompleted`] instead.)
     ///
     /// Not client-facing: outbound encoders drop it (the client gets an id
@@ -371,7 +371,7 @@ pub enum StreamPart {
         /// Why generation stopped.
         reason: FinishReason,
     },
-    /// Terminal lifecycle part for OpenAI Responses — preserves the response id
+    /// Terminal lifecycle part for Responses — preserves the response id
     /// and status that a bare [`StreamPart::Finish`] would lose.
     /// Only the Responses decoder emits this; the other protocols' encoders
     /// treat it as a terminal part equivalent to `Finish`.

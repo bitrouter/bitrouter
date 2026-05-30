@@ -66,7 +66,7 @@ Manage keys, usage, billing, policies, and BYOK from the same CLI — see `bitro
 ## Features
 
 - **Multi-provider routing** — unified access to OpenAI, Anthropic, Google, OpenRouter, OpenCode Zen / Go, BitRouter Cloud, GitHub Copilot, ChatGPT Codex, and Amazon Bedrock; configure multiple accounts per provider with failover or round-robin load-balancing ([`sdk`](crates/bitrouter-sdk/) · [`providers`](crates/bitrouter-providers/))
-- **Cross-protocol routing** — any client protocol (OpenAI Chat, OpenAI Responses, Anthropic Messages, Google Gemini) against any upstream; BitRouter translates transparently ([`sdk`](crates/bitrouter-sdk/))
+- **Cross-protocol routing** — any client protocol (Chat Completions, Responses, Messages, Generate Content) against any upstream; BitRouter translates transparently ([`sdk`](crates/bitrouter-sdk/))
 - **Zero-config** — auto-detects providers from environment variables; no config file needed to get started ([`providers`](crates/bitrouter-providers/))
 - **MCP gateway** — proxy for MCP servers; agents discover and call tools across hosts ([`sdk`](crates/bitrouter-sdk/))
 - **ACP integration** — manage coding agent sessions (Claude Code, OpenAI Codex, Gemini CLI) via the CLI ([`sdk`](crates/bitrouter-sdk/))
@@ -84,7 +84,7 @@ Manage keys, usage, billing, policies, and BYOK from the same CLI — see `bitro
 | Google          | ✅     | Generative AI API                                              |
 | Amazon Bedrock  | ✅     | Via AWS SDK (opt-in)                                           |
 | OpenRouter      | ✅     | Chat Completions + Responses API                               |
-| OpenCode Zen    | ✅     | Curated models across OpenAI, Anthropic, Google protocols      |
+| OpenCode Zen    | ✅     | Curated models across Chat Completions, Messages, and Generate Content protocols      |
 | OpenCode Go     | ✅     | Low-cost subscription for open coding models                   |
 | BitRouter Cloud | ✅     | OAuth sign-in (`bitrouter auth login`); cloud-managed routing  |
 | GitHub Copilot  | ✅     | GitHub OAuth device flow (`bitrouter login github-copilot`)    |

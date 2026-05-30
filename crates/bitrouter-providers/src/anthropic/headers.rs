@@ -1,10 +1,10 @@
 //! Header constants for the Anthropic provider's request shaping.
 //!
-//! These mirror the values [`AnthropicTransport::authorise`] would have set
+//! These mirror the values [`MessagesTransport::authorise`] would have set
 //! by default — pulled out here so the OAuth-aware `AuthApplier` can apply
 //! the same constants when no OAuth credential is in play.
 //!
-//! [`AnthropicTransport::authorise`]: bitrouter_sdk::language_model::protocol::anthropic
+//! [`MessagesTransport::authorise`]: bitrouter_sdk::language_model::protocol::messages
 
 /// The pinned `anthropic-version` value. Anthropic's API requires every
 /// request to declare a version (`https://docs.anthropic.com/en/api/versioning`);

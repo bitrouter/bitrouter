@@ -307,7 +307,7 @@ impl AuthApplier for AnthropicOAuthApplier {
             None => {
                 // No store entry — fall through to the routing-target's
                 // configured key (env-var path). Mirrors what
-                // `AnthropicTransport::authorise` would have done.
+                // `MessagesTransport::authorise` would have done.
                 let key = target.effective_api_key();
                 if key.is_empty() {
                     return Err(BitrouterError::Upstream {
@@ -364,7 +364,7 @@ mod tests {
             service_id: "claude-opus-4-7".to_string(),
             api_base: "https://api.anthropic.com/v1".to_string(),
             api_key: String::new(),
-            api_protocol: ApiProtocol::Anthropic,
+            api_protocol: ApiProtocol::Messages,
             account_label: label.map(String::from),
             api_key_override: None,
             api_base_override: None,

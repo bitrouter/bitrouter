@@ -47,7 +47,7 @@ providers:
     api_base: https://api.openai.com/v1
     api_key: ${BR_CFG_KEY}
     api_protocol:
-      - "*": openai
+      - "*": chat_completions
       - "gpt-5*": responses
     rate_limits:
       - "*": { requests_per_minute: 60 }
@@ -68,7 +68,7 @@ providers:
 
     // glob-prefix precedence: `gpt-5*` pattern beats `*`
     assert_eq!(openai.protocol_for("gpt-5"), ApiProtocol::Responses);
-    assert_eq!(openai.protocol_for("gpt-4o"), ApiProtocol::Openai);
+    assert_eq!(openai.protocol_for("gpt-4o"), ApiProtocol::ChatCompletions);
     // per-model override beats the pattern
     assert_eq!(openai.protocol_for("o3"), ApiProtocol::Responses);
 
@@ -93,19 +93,19 @@ providers:
 fn protocol_inference_from_api_base() {
     assert_eq!(
         infer_protocol("https://api.anthropic.com/v1"),
-        ApiProtocol::Anthropic
+        ApiProtocol::Messages
     );
     assert_eq!(
         infer_protocol("https://generativelanguage.googleapis.com/v1beta"),
-        ApiProtocol::Google
+        ApiProtocol::GenerateContent
     );
     assert_eq!(
         infer_protocol("https://api.openai.com/v1"),
-        ApiProtocol::Openai
+        ApiProtocol::ChatCompletions
     );
     assert_eq!(
         infer_protocol("https://my-llm.example.com/v1"),
-        ApiProtocol::Openai
+        ApiProtocol::ChatCompletions
     );
 }
 
@@ -117,7 +117,7 @@ providers:
     api_base: https://api.openai.com/v1
     api_key: parent
     api_protocol:
-      - "*": openai
+      - "*": chat_completions
       - "gpt-5*": responses
     rate_limits:
       - "*": { rpm: 1000 }

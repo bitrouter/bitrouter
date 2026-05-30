@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "MessagesRequest",
-  "description": "Anthropic Messages request body (<https://docs.anthropic.com/en/api/messages>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
+  "description": "Messages request body (<https://docs.anthropic.com/en/api/messages>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
   "type": "object",
   "properties": {
     "max_tokens": {
@@ -16,7 +16,7 @@
     "messages": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/AnthropicMessage"
+        "$ref": "#/$defs/MessagesMessage"
       }
     },
     "model": {
@@ -41,7 +41,7 @@
     "tools": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/AnthropicTool"
+        "$ref": "#/$defs/MessagesTool"
       }
     },
     "top_p": {
@@ -58,7 +58,7 @@
     "messages"
   ],
   "$defs": {
-    "AnthropicMessage": {
+    "MessagesMessage": {
       "description": "One element of [`MessagesRequest`]'s `messages` array — a `{ role, content }` turn.",
       "type": "object",
       "properties": {
@@ -74,7 +74,7 @@
         "content"
       ]
     },
-    "AnthropicTool": {
+    "MessagesTool": {
       "description": "One element of [`MessagesRequest`]'s `tools` array — Anthropic's tool definition shape.",
       "type": "object",
       "properties": {

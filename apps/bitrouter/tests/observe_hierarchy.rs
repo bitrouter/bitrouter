@@ -145,7 +145,7 @@ providers:
     api_base: {upstream}
     api_key: test-key
     api_protocol:
-      - "*": openai
+      - "*": chat_completions
     models:
       - id: test-model
         pricing:

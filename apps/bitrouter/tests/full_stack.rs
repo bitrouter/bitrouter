@@ -164,7 +164,7 @@ providers:
     api_base: {upstream}
     api_key: test-key
     api_protocol:
-      - "*": openai
+      - "*": chat_completions
     models:
       - id: test-model
         pricing:
@@ -230,7 +230,7 @@ plugins:
     }
 }
 
-/// OpenAI-style SSE: role; content with an SSN-shaped span; finish
+/// Chat Completions-style SSE: role; content with an SSN-shaped span; finish
 /// chunk carrying `usage` (so MeteringRecorder has something to price);
 /// then `[DONE]`.
 fn build_sse_stream_with_ssn() -> String {
@@ -266,7 +266,7 @@ fn build_sse_stream_with_ssn() -> String {
     out
 }
 
-/// A clean OpenAI Chat Completions body the auth/policy/guardrails path
+/// A clean Chat Completions body the auth/policy/guardrails path
 /// should let through.
 fn clean_body(stream: bool) -> serde_json::Value {
     serde_json::json!({

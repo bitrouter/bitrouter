@@ -1,7 +1,7 @@
 //! Protocol adapters for the `language_model` protocol.
 //!
-//! Four built-in wire protocols — OpenAI Chat Completions, OpenAI Responses,
-//! Anthropic Messages, Google Generative AI — each convert to/from the
+//! Four built-in wire protocols — Chat Completions, Responses,
+//! Messages, Generate Content — each convert to/from the
 //! canonical internal representation ([`Prompt`] / [`GenerateResult`] /
 //! [`StreamPart`]). Any inbound protocol can be paired with any outbound
 //! protocol (the 4×4 conversion matrix).
@@ -76,10 +76,10 @@ use crate::language_model::types::{
     ApiProtocol, GenerateResult, Prompt, RoutingTarget, StreamPart,
 };
 
-pub mod anthropic;
-pub mod google;
-pub mod openai_chat;
-pub mod openai_responses;
+pub mod chat_completions;
+pub mod generate_content;
+pub mod messages;
+pub mod responses;
 
 #[cfg(test)]
 mod tests;
@@ -206,7 +206,7 @@ pub trait StreamEncoder: Send {
     }
 
     /// Called once at clean stream end; emit any trailing frames (e.g. the
-    /// OpenAI `[DONE]` sentinel — note Responses must **not** emit it, #454-2).
+    /// Chat Completions `[DONE]` sentinel — note Responses must **not** emit it, #454-2).
     fn finish(&mut self) -> Result<Vec<SseFrame>> {
         Ok(Vec::new())
     }
@@ -216,10 +216,10 @@ pub trait StreamEncoder: Send {
 /// have no inbound adapter — the SDK never serves them to clients.
 pub fn inbound_adapter_for(protocol: &ApiProtocol) -> Option<Box<dyn InboundAdapter>> {
     match protocol {
-        ApiProtocol::Openai => Some(Box::new(openai_chat::OpenAiChatAdapter)),
-        ApiProtocol::Anthropic => Some(Box::new(anthropic::AnthropicAdapter)),
-        ApiProtocol::Responses => Some(Box::new(openai_responses::OpenAiResponsesAdapter)),
-        ApiProtocol::Google => Some(Box::new(google::GoogleAdapter)),
+        ApiProtocol::ChatCompletions => Some(Box::new(chat_completions::ChatCompletionsAdapter)),
+        ApiProtocol::Messages => Some(Box::new(messages::MessagesAdapter)),
+        ApiProtocol::Responses => Some(Box::new(responses::ResponsesAdapter)),
+        ApiProtocol::GenerateContent => Some(Box::new(generate_content::GenerateContentAdapter)),
         ApiProtocol::Custom(_) => None,
     }
 }
@@ -256,20 +256,20 @@ impl OutboundDispatch {
     pub fn builtin() -> Self {
         let mut d = Self::empty();
         d.register(
-            Arc::new(openai_chat::OpenAiChatAdapter),
-            Arc::new(openai_chat::OpenAiChatTransport),
+            Arc::new(chat_completions::ChatCompletionsAdapter),
+            Arc::new(chat_completions::ChatCompletionsTransport),
         );
         d.register(
-            Arc::new(anthropic::AnthropicAdapter),
-            Arc::new(anthropic::AnthropicTransport),
+            Arc::new(messages::MessagesAdapter),
+            Arc::new(messages::MessagesTransport),
         );
         d.register(
-            Arc::new(openai_responses::OpenAiResponsesAdapter),
-            Arc::new(openai_responses::OpenAiResponsesTransport),
+            Arc::new(responses::ResponsesAdapter),
+            Arc::new(responses::ResponsesTransport),
         );
         d.register(
-            Arc::new(google::GoogleAdapter),
-            Arc::new(google::GoogleTransport),
+            Arc::new(generate_content::GenerateContentAdapter),
+            Arc::new(generate_content::GenerateContentTransport),
         );
         d
     }

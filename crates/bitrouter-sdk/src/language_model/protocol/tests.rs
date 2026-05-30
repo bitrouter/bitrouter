@@ -17,20 +17,20 @@ impl<T: InboundAdapter + OutboundAdapter> BothAdapter for T {}
 /// the same value.
 fn adapter_for(protocol: ApiProtocol) -> Box<dyn BothAdapter> {
     match protocol {
-        ApiProtocol::Openai => Box::new(openai_chat::OpenAiChatAdapter),
-        ApiProtocol::Anthropic => Box::new(anthropic::AnthropicAdapter),
-        ApiProtocol::Responses => Box::new(openai_responses::OpenAiResponsesAdapter),
-        ApiProtocol::Google => Box::new(google::GoogleAdapter),
+        ApiProtocol::ChatCompletions => Box::new(chat_completions::ChatCompletionsAdapter),
+        ApiProtocol::Messages => Box::new(messages::MessagesAdapter),
+        ApiProtocol::Responses => Box::new(responses::ResponsesAdapter),
+        ApiProtocol::GenerateContent => Box::new(generate_content::GenerateContentAdapter),
         ApiProtocol::Custom(_) => unreachable!("test helper only handles built-in protocols"),
     }
 }
 
 fn all_protocols() -> [ApiProtocol; 4] {
     [
-        ApiProtocol::Anthropic,
-        ApiProtocol::Openai,
+        ApiProtocol::Messages,
+        ApiProtocol::ChatCompletions,
         ApiProtocol::Responses,
-        ApiProtocol::Google,
+        ApiProtocol::GenerateContent,
     ]
 }
 
@@ -259,8 +259,8 @@ fn conversion_matrix_4x4_streaming() {
 /// <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>).
 #[test]
 fn outbound_adapters_extract_response_id() {
-    // OpenAI Chat Completions: top-level `id` (`chatcmpl-...`).
-    let openai_chat = adapter_for(ApiProtocol::Openai);
+    // Chat Completions: top-level `id` (`chatcmpl-...`).
+    let openai_chat = adapter_for(ApiProtocol::ChatCompletions);
     let body = serde_json::json!({
         "id": "chatcmpl-abc123",
         "object": "chat.completion",
@@ -274,11 +274,11 @@ fn outbound_adapters_extract_response_id() {
             .response_id
             .as_deref(),
         Some("chatcmpl-abc123"),
-        "OpenAI Chat must extract top-level `id`"
+        "Chat Completions must extract top-level `id`"
     );
 
-    // Anthropic Messages: top-level `id` (`msg_...`).
-    let anthropic = adapter_for(ApiProtocol::Anthropic);
+    // Messages: top-level `id` (`msg_...`).
+    let anthropic = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "id": "msg_01ABC",
         "type": "message",
@@ -296,8 +296,8 @@ fn outbound_adapters_extract_response_id() {
         "Anthropic must extract top-level `id`"
     );
 
-    // Google Generative AI: top-level `responseId`.
-    let google = adapter_for(ApiProtocol::Google);
+    // Generate Content: top-level `responseId`.
+    let google = adapter_for(ApiProtocol::GenerateContent);
     let body = serde_json::json!({
         "responseId": "google-resp-xyz",
         "candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
@@ -308,7 +308,7 @@ fn outbound_adapters_extract_response_id() {
         "Google must extract `responseId`"
     );
 
-    // OpenAI Responses: top-level `id` (`resp_...`).
+    // Responses: top-level `id` (`resp_...`).
     let responses = adapter_for(ApiProtocol::Responses);
     let body = serde_json::json!({
         "id": "resp_abc789",
@@ -323,11 +323,11 @@ fn outbound_adapters_extract_response_id() {
             .response_id
             .as_deref(),
         Some("resp_abc789"),
-        "OpenAI Responses must extract top-level `id`"
+        "Responses must extract top-level `id`"
     );
 
     // Absent id: graceful None.
-    let openai_chat = adapter_for(ApiProtocol::Openai);
+    let openai_chat = adapter_for(ApiProtocol::ChatCompletions);
     let body = serde_json::json!({
         "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
     });
@@ -339,8 +339,8 @@ fn outbound_adapters_extract_response_id() {
 }
 
 #[test]
-fn openai_chat_request_roundtrip() {
-    let adapter = adapter_for(ApiProtocol::Openai);
+fn chat_completions_request_roundtrip() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let prompt = sample_prompt();
     let json = adapter.render_request(&prompt).unwrap();
     assert_eq!(json["model"], "test-model");
@@ -352,11 +352,11 @@ fn openai_chat_request_roundtrip() {
 }
 
 #[test]
-fn openai_chat_passes_through_uncommon_params() {
+fn chat_completions_passes_through_uncommon_params() {
     // tool_choice, stop, seed, response_format, n, presence/frequency_penalty,
     // logit_bias, logprobs, top_logprobs, user, parallel_tool_calls,
     // stream_options — every field without a typed slot survives parse → render.
-    let adapter = adapter_for(ApiProtocol::Openai);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let body = serde_json::json!({
         "model": "gpt-5",
         "messages": [{"role": "user", "content": "hi"}],
@@ -387,14 +387,14 @@ fn openai_chat_passes_through_uncommon_params() {
     ] {
         assert_eq!(
             rendered[key], body[key],
-            "OpenAI Chat `{key}` must survive parse/render"
+            "Chat Completions `{key}` must survive parse/render"
         );
     }
 }
 
 #[test]
-fn anthropic_passes_through_uncommon_params() {
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+fn messages_passes_through_uncommon_params() {
+    let adapter = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "model": "claude-sonnet-4-6",
         "messages": [{"role": "user", "content": "hi"}],
@@ -422,8 +422,8 @@ fn anthropic_passes_through_uncommon_params() {
 }
 
 #[test]
-fn google_passes_through_uncommon_generation_config() {
-    let adapter = adapter_for(ApiProtocol::Google);
+fn generate_content_passes_through_uncommon_generation_config() {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
@@ -480,8 +480,8 @@ fn sample_prompt_with_schema() -> Prompt {
 }
 
 #[test]
-fn openai_chat_inbound_promotes_json_schema_response_format() {
-    let adapter = adapter_for(ApiProtocol::Openai);
+fn chat_completions_inbound_promotes_json_schema_response_format() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let body = serde_json::json!({
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "weather?"}],
@@ -512,10 +512,10 @@ fn openai_chat_inbound_promotes_json_schema_response_format() {
 }
 
 #[test]
-fn openai_chat_inbound_leaves_json_object_in_extras() {
+fn chat_completions_inbound_leaves_json_object_in_extras() {
     // The legacy `{type: "json_object"}` JSON mode has no schema to translate,
     // so it must keep passing through opaquely.
-    let adapter = adapter_for(ApiProtocol::Openai);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let body = serde_json::json!({
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "hi"}],
@@ -528,8 +528,8 @@ fn openai_chat_inbound_leaves_json_object_in_extras() {
 }
 
 #[test]
-fn openai_chat_outbound_renders_json_schema() {
-    let adapter = adapter_for(ApiProtocol::Openai);
+fn chat_completions_outbound_renders_json_schema() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let rendered = adapter
         .render_request(&sample_prompt_with_schema())
         .unwrap();
@@ -546,10 +546,10 @@ fn openai_chat_outbound_renders_json_schema() {
 }
 
 #[test]
-fn openai_chat_outbound_supplies_default_name() {
-    // OpenAI Chat requires `name`; renderer fills it when absent (e.g. when
+fn chat_completions_outbound_supplies_default_name() {
+    // Chat Completions requires `name`; renderer fills it when absent (e.g. when
     // the inbound was Anthropic/Google which carry no name).
-    let adapter = adapter_for(ApiProtocol::Openai);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let prompt = Prompt {
         response_format: Some(ResponseFormat::JsonSchema {
             name: None,
@@ -572,8 +572,8 @@ fn openai_chat_outbound_supplies_default_name() {
 }
 
 #[test]
-fn anthropic_inbound_promotes_output_config_format() {
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+fn messages_inbound_promotes_output_config_format() {
+    let adapter = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "model": "claude-opus-4-7",
         "max_tokens": 1024,
@@ -596,10 +596,10 @@ fn anthropic_inbound_promotes_output_config_format() {
 }
 
 #[test]
-fn anthropic_inbound_accepts_legacy_output_format_alias() {
+fn messages_inbound_accepts_legacy_output_format_alias() {
     // The deprecated flat `output_format` shape (pre-GA, still emitted by
     // some clients — vercel/ai#12298) must still parse cleanly.
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let adapter = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "model": "claude-opus-4-7",
         "max_tokens": 1024,
@@ -618,11 +618,11 @@ fn anthropic_inbound_accepts_legacy_output_format_alias() {
 }
 
 #[test]
-fn anthropic_inbound_legacy_alias_does_not_disturb_output_config_siblings() {
+fn messages_inbound_legacy_alias_does_not_disturb_output_config_siblings() {
     // If the legacy `output_format` alias is what matched, an unrelated
     // `output_config` blob the client supplied must be left fully intact in
     // extras so its siblings (`unknown_key` here) survive the round trip.
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let adapter = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "model": "claude-opus-4-7",
         "max_tokens": 1024,
@@ -640,8 +640,8 @@ fn anthropic_inbound_legacy_alias_does_not_disturb_output_config_siblings() {
 }
 
 #[test]
-fn anthropic_outbound_renders_output_config_format() {
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+fn messages_outbound_renders_output_config_format() {
+    let adapter = adapter_for(ApiProtocol::Messages);
     let rendered = adapter
         .render_request(&sample_prompt_with_schema())
         .unwrap();
@@ -650,15 +650,15 @@ fn anthropic_outbound_renders_output_config_format() {
         rendered["output_config"]["format"]["schema"]["properties"]["location"]["type"],
         "string"
     );
-    // Anthropic carries no `name` / `strict` — confirm they're dropped, not
+    // Messages carries no `name` / `strict` — confirm they're dropped, not
     // forwarded as unknown fields.
     assert!(rendered["output_config"]["format"].get("name").is_none());
     assert!(rendered["output_config"]["format"].get("strict").is_none());
 }
 
 #[test]
-fn google_inbound_promotes_response_schema() {
-    let adapter = adapter_for(ApiProtocol::Google);
+fn generate_content_inbound_promotes_response_schema() {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
     let body = serde_json::json!({
         "model": "gemini-2.5-pro",
         "contents": [{"role": "user", "parts": [{"text": "weather?"}]}],
@@ -679,10 +679,10 @@ fn google_inbound_promotes_response_schema() {
 }
 
 #[test]
-fn google_inbound_leaves_enum_mime_in_extras() {
+fn generate_content_inbound_leaves_enum_mime_in_extras() {
     // `text/x.enum` has no JSON schema; must stay in extras for opaque
-    // Google-native pass-through.
-    let adapter = adapter_for(ApiProtocol::Google);
+    // Generate Content-native pass-through.
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
     let body = serde_json::json!({
         "model": "gemini-2.5-pro",
         "contents": [{"role": "user", "parts": [{"text": "x"}]}],
@@ -700,8 +700,8 @@ fn google_inbound_leaves_enum_mime_in_extras() {
 }
 
 #[test]
-fn google_outbound_renders_response_schema() {
-    let adapter = adapter_for(ApiProtocol::Google);
+fn generate_content_outbound_renders_response_schema() {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
     let rendered = adapter
         .render_request(&sample_prompt_with_schema())
         .unwrap();
@@ -776,20 +776,20 @@ fn response_format_survives_cross_protocol_routing() {
         ResponseFormat::JsonSchema { schema, .. } => schema.clone(),
     };
 
-    // OpenAI Chat
-    let chat = adapter_for(ApiProtocol::Openai)
+    // Chat Completions
+    let chat = adapter_for(ApiProtocol::ChatCompletions)
         .render_request(&prompt)
         .unwrap();
     assert_eq!(chat["response_format"]["json_schema"]["schema"], schema);
 
-    // Anthropic
-    let ant = adapter_for(ApiProtocol::Anthropic)
+    // Messages
+    let ant = adapter_for(ApiProtocol::Messages)
         .render_request(&prompt)
         .unwrap();
     assert_eq!(ant["output_config"]["format"]["schema"], schema);
 
-    // Google
-    let g = adapter_for(ApiProtocol::Google)
+    // Generate Content
+    let g = adapter_for(ApiProtocol::GenerateContent)
         .render_request(&prompt)
         .unwrap();
     assert_eq!(g["generationConfig"]["responseSchema"], schema);
@@ -798,7 +798,7 @@ fn response_format_survives_cross_protocol_routing() {
         "application/json"
     );
 
-    // OpenAI Responses
+    // Responses
     let r = adapter_for(ApiProtocol::Responses)
         .render_request(&prompt)
         .unwrap();
@@ -817,14 +817,14 @@ fn builtin_adapters_advertise_response_format_support() {
 }
 
 #[test]
-fn anthropic_no_beta_header_is_emitted() {
+fn messages_no_beta_header_is_emitted() {
     // The deprecated `anthropic-beta: structured-outputs-2025-11-13` header
     // is no longer required by the Anthropic GA endpoint and is actively
     // rejected by Vertex AI (vercel/ai#10981). The Anthropic transport must
     // not introduce it as a side effect of structured outputs.
     use crate::language_model::protocol::Transport;
     use crate::language_model::types::RoutingTarget;
-    let transport = crate::language_model::protocol::anthropic::AnthropicTransport;
+    let transport = crate::language_model::protocol::messages::MessagesTransport;
     let client = reqwest::Client::new();
     let req = client
         .post("http://example.invalid/v1/messages")
@@ -835,7 +835,7 @@ fn anthropic_no_beta_header_is_emitted() {
         service_id: "claude-opus-4-7".into(),
         api_base: "http://example.invalid".into(),
         api_key: "k".into(),
-        api_protocol: ApiProtocol::Anthropic,
+        api_protocol: ApiProtocol::Messages,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -848,19 +848,19 @@ fn anthropic_no_beta_header_is_emitted() {
 }
 
 #[test]
-fn anthropic_cache_tokens_round_trip() {
-    // Anthropic prompt caching exposes `cache_read_input_tokens` and
+fn messages_cache_tokens_round_trip() {
+    // Messages prompt caching exposes `cache_read_input_tokens` and
     // `cache_creation_input_tokens` in `usage`. Parser captures them, encoder
     // emits them on the non-streaming response, and on `message_delta` they
     // accompany the streaming finalisation.
     //
     // SDK contract: `cache_read_tokens` / `cache_write_tokens` are **subsets
-    // of** `prompt_tokens` (matches OpenAI / Google). Anthropic's wire format
+    // of** `prompt_tokens` (matches Chat Completions / Generate Content). Messages' wire format
     // is the opposite — `input_tokens` is the uncached portion, reported
     // alongside the cache buckets — so the parser folds the cache totals
     // back into `prompt_tokens` and the renderer unfolds them when writing
     // the wire payload.
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let adapter = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -892,7 +892,7 @@ fn anthropic_cache_tokens_round_trip() {
 }
 
 #[test]
-fn anthropic_cache_tokens_match_subset_contract() {
+fn messages_cache_tokens_match_subset_contract() {
     // Regression: the canonical `Usage` doc-comment states that
     // `cache_read_tokens` and `cache_write_tokens` are **subsets of**
     // `prompt_tokens`. Anthropic's wire payload uses the opposite
@@ -901,7 +901,7 @@ fn anthropic_cache_tokens_match_subset_contract() {
     // downstream billing layers that compute `no_cache = prompt_tokens
     // - cache_read - cache_write` saturate to 0 on cache-heavy
     // requests and silently undercharge the uncached portion.
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let adapter = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -936,14 +936,14 @@ fn anthropic_cache_tokens_match_subset_contract() {
 }
 
 #[test]
-fn anthropic_usage_with_no_cache_fields_keeps_prompt_tokens_unchanged() {
+fn messages_usage_with_no_cache_fields_keeps_prompt_tokens_unchanged() {
     // Belt-and-braces: when an upstream omits the cache fields entirely
     // (the common case for non-Anthropic Anthropic-API-compatible
     // upstreams, or Anthropic requests without prompt caching), the
     // canonical `prompt_tokens` must equal Anthropic's wire-level
     // `input_tokens` — the cache-fold is a no-op when both cache
     // totals are 0.
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let adapter = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -963,14 +963,14 @@ fn anthropic_usage_with_no_cache_fields_keeps_prompt_tokens_unchanged() {
 }
 
 #[test]
-fn anthropic_stream_preserves_cache_inclusive_prompt_tokens() {
+fn messages_stream_preserves_cache_inclusive_prompt_tokens() {
     // The stream decoder receives `message_start` (which carries the
     // full cache breakdown) and `message_delta` (which typically only
     // refreshes `output_tokens`). The terminal Usage frame must reflect
     // the inclusive prompt_tokens contract — the test pins this so a
     // future refactor of the delta path can't quietly drop the
     // cache-fold and undercharge again.
-    let decoder = adapter_for(ApiProtocol::Anthropic);
+    let decoder = adapter_for(ApiProtocol::Messages);
     let mut stream_decoder = decoder.stream_decoder();
 
     let start = SseEvent {
@@ -1023,10 +1023,10 @@ fn anthropic_stream_preserves_cache_inclusive_prompt_tokens() {
 }
 
 #[test]
-fn openai_chat_cache_tokens_round_trip() {
-    // OpenAI Chat surfaces cached prompt tokens via
+fn chat_completions_cache_tokens_round_trip() {
+    // Chat Completions surfaces cached prompt tokens via
     // `prompt_tokens_details.cached_tokens`. Parse → canonical → render.
-    let adapter = adapter_for(ApiProtocol::Openai);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let body = serde_json::json!({
         "id": "c1",
         "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -1049,13 +1049,13 @@ fn openai_chat_cache_tokens_round_trip() {
 }
 
 #[test]
-fn openai_chat_parse_captures_refusal_and_reasoning_aliases() {
+fn chat_completions_parse_captures_refusal_and_reasoning_aliases() {
     // `message.refusal` (when non-empty) is the OpenAI refusal text; carry it
     // as a Content::Text and set FinishReason::ContentFilter regardless of
     // what `finish_reason` says (OpenAI sometimes also says "content_filter"
     // but not always). `message.reasoning` / `message.thinking` are
     // OpenAI-compatible vendor aliases for `reasoning_content`.
-    let adapter = adapter_for(ApiProtocol::Openai);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
 
     // refusal
     let body = serde_json::json!({
@@ -1097,13 +1097,13 @@ fn openai_chat_parse_captures_refusal_and_reasoning_aliases() {
 }
 
 #[test]
-fn anthropic_stream_encoder_closes_block_on_kind_transition() {
+fn messages_stream_encoder_closes_block_on_kind_transition() {
     // v0 #429 regression: when the canonical part stream transitions
     // text → reasoning → text → tool, the Anthropic encoder MUST emit a
     // `content_block_stop` before opening the new block kind. Strict
     // clients (Claude Code) reject a text_delta inside an open `thinking`
     // block. Ref: docs.anthropic.com/en/api/messages-streaming.
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let adapter = adapter_for(ApiProtocol::Messages);
     let mut encoder = adapter.stream_encoder("msg_x", "claude-3-7-sonnet");
     let parts = [
         StreamPart::ReasoningDelta {
@@ -1143,12 +1143,12 @@ fn anthropic_stream_encoder_closes_block_on_kind_transition() {
 }
 
 #[test]
-fn anthropic_stream_error_maps_to_proper_http_status() {
-    // Anthropic mid-stream `error` events carry `error.type` — a 4xx must
+fn messages_stream_error_maps_to_proper_http_status() {
+    // Messages mid-stream `error` events carry `error.type` — a 4xx must
     // be threaded to `Upstream.status` so the fallback policy can decide
     // "don't retry" instead of always treating these as 5xx. Ref:
     // docs.anthropic.com/en/api/errors.
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let adapter = adapter_for(ApiProtocol::Messages);
     let mut decoder = adapter.stream_decoder();
     let err = decoder
         .decode(&SseEvent {
@@ -1169,8 +1169,8 @@ fn anthropic_stream_error_maps_to_proper_http_status() {
 }
 
 #[test]
-fn openai_responses_stream_error_maps_to_proper_http_status() {
-    // OpenAI `response.failed` likewise — `error.type` decides
+fn responses_stream_error_maps_to_proper_http_status() {
+    // Responses `response.failed` likewise — `error.type` decides
     // `Upstream.status` so the fallback policy can tell "client did
     // something wrong" (4xx, don't retry) from "upstream broke" (5xx).
     let adapter = adapter_for(ApiProtocol::Responses);
@@ -1200,8 +1200,8 @@ fn streaming_decoders_emit_response_started_once() {
     // so observability can stamp `gen_ai.response.id` on the trace. OpenAI
     // Responses is unaffected (it carries the id on `ResponseCompleted`).
 
-    // OpenAI Chat: top-level `id` repeats on every chunk → emit once.
-    let adapter = adapter_for(ApiProtocol::Openai);
+    // Chat Completions: top-level `id` repeats on every chunk → emit once.
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let mut dec = adapter.stream_decoder();
     let first = dec
         .decode(&SseEvent {
@@ -1218,7 +1218,7 @@ fn streaming_decoders_emit_response_started_once() {
         first
             .iter()
             .any(|p| matches!(p, StreamPart::ResponseStarted { id } if id == "chatcmpl-stream1")),
-        "OpenAI Chat first chunk emits ResponseStarted; got {first:?}"
+        "Chat Completions first chunk emits ResponseStarted; got {first:?}"
     );
     let second = dec
         .decode(&SseEvent {
@@ -1237,8 +1237,8 @@ fn streaming_decoders_emit_response_started_once() {
         "ResponseStarted is emitted only once per stream; got {second:?}"
     );
 
-    // Anthropic: `message_start` carries `message.id` (fires once).
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    // Messages: `message_start` carries `message.id` (fires once).
+    let adapter = adapter_for(ApiProtocol::Messages);
     let mut dec = adapter.stream_decoder();
     let parts = dec
         .decode(&SseEvent {
@@ -1257,8 +1257,8 @@ fn streaming_decoders_emit_response_started_once() {
         "Anthropic message_start emits ResponseStarted; got {parts:?}"
     );
 
-    // Google: top-level `responseId` repeats on every chunk → emit once.
-    let adapter = adapter_for(ApiProtocol::Google);
+    // Generate Content: top-level `responseId` repeats on every chunk → emit once.
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
     let mut dec = adapter.stream_decoder();
     let parts = dec
         .decode(&SseEvent {
@@ -1281,10 +1281,10 @@ fn streaming_decoders_emit_response_started_once() {
 #[test]
 fn chat_encoder_role_survives_leading_response_started() {
     // Regression: a leading `ResponseStarted` (now emitted first by the
-    // OpenAI Chat / Google decoders) must NOT consume the one-shot
+    // Chat Completions / Generate Content decoders) must NOT consume the one-shot
     // `role: assistant` marker. The role has to ride the first real
-    // content chunk; otherwise an OpenAI-Chat client never sees it.
-    let adapter = adapter_for(ApiProtocol::Openai);
+    // content chunk; otherwise a Chat Completions client never sees it.
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let mut enc = adapter.stream_encoder("chatcmpl-x", "gpt-5");
 
     // ResponseStarted arrives first — must emit no frames.
@@ -1316,7 +1316,7 @@ fn chat_encoder_role_survives_leading_response_started() {
 }
 
 #[test]
-fn openai_responses_omits_usage_when_none() {
+fn responses_omits_usage_when_none() {
     // v0 #6ae55b2 — when upstream reported no token counts, the wire shape
     // omits the `usage` key entirely. Mirrors the streaming `emit_terminal`.
     let adapter = adapter_for(ApiProtocol::Responses);
@@ -1338,11 +1338,11 @@ fn openai_responses_omits_usage_when_none() {
 }
 
 #[test]
-fn openai_chat_streaming_forces_include_usage() {
-    // OpenAI omits the trailing usage chunk unless the caller asks for it.
+fn chat_completions_streaming_forces_include_usage() {
+    // Chat Completions omits the trailing usage chunk unless the caller asks for it.
     // Settlement requires that chunk, so the outbound request injects
     // `stream_options.include_usage = true` whenever stream=true.
-    let adapter = adapter_for(ApiProtocol::Openai);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let body = serde_json::json!({
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "hi"}],
@@ -1377,11 +1377,11 @@ fn openai_chat_streaming_forces_include_usage() {
 }
 
 #[test]
-fn google_passes_through_top_level_extras() {
+fn generate_content_passes_through_top_level_extras() {
     // toolConfig / safetySettings / cachedContent live at the request root,
     // not under generationConfig. They must survive the round-trip.
     // Refs: <https://ai.google.dev/api/generate-content>.
-    let adapter = adapter_for(ApiProtocol::Google);
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
@@ -1404,12 +1404,12 @@ fn google_passes_through_top_level_extras() {
 }
 
 #[test]
-fn google_request_stream_flag_is_propagated() {
+fn generate_content_request_stream_flag_is_propagated() {
     // The server injects `stream: true` from a `:streamGenerateContent` path
     // verb. Before #stream-flag-fix the adapter dropped this field on the
     // floor and forced stream=false, sending streaming clients to the
     // non-streaming branch.
-    let adapter = adapter_for(ApiProtocol::Google);
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
     let body = serde_json::json!({
         "model": "gemini-2.0-flash",
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
@@ -1431,7 +1431,7 @@ fn google_request_stream_flag_is_propagated() {
 }
 
 #[test]
-fn openai_responses_passes_through_uncommon_params() {
+fn responses_passes_through_uncommon_params() {
     let adapter = adapter_for(ApiProtocol::Responses);
     let body = serde_json::json!({
         "model": "gpt-5",
@@ -1465,8 +1465,8 @@ fn openai_responses_passes_through_uncommon_params() {
 }
 
 #[test]
-fn anthropic_response_roundtrip() {
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+fn messages_response_roundtrip() {
+    let adapter = adapter_for(ApiProtocol::Messages);
     let prompt = sample_prompt();
     let json = adapter
         .render_response(&sample_result(), &prompt, "msg_1")
@@ -1482,8 +1482,8 @@ fn anthropic_response_roundtrip() {
 }
 
 #[test]
-fn google_request_roundtrip() {
-    let adapter = adapter_for(ApiProtocol::Google);
+fn generate_content_request_roundtrip() {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
     let prompt = sample_prompt();
     let json = adapter.render_request(&prompt).unwrap();
     assert_eq!(json["systemInstruction"]["parts"][0]["text"], "be brief");
@@ -1522,7 +1522,7 @@ fn regression_276_ansi_escape_in_model_name() {
 /// target type name, the serde line/column, and a body preview.
 #[test]
 fn regression_367_deser_errors_are_descriptive() {
-    let adapter = adapter_for(ApiProtocol::Openai);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     // `messages` should be an array; a string is a type error.
     let bad = serde_json::json!({ "model": "m", "messages": "oops" });
     let err = adapter.parse_request(bad).unwrap_err();
@@ -1538,7 +1538,7 @@ fn regression_367_deser_errors_are_descriptive() {
 /// panic on the request path.
 #[test]
 fn deser_error_preview_handles_multi_byte_utf8() {
-    let adapter = adapter_for(ApiProtocol::Openai);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     // ~120 "é" (2 bytes) gives a body well over 240 bytes whose boundary
     // would fall inside a multi-byte rune if naïvely byte-sliced.
     let pad: String = "é".repeat(200);
@@ -1553,7 +1553,7 @@ fn deser_error_preview_handles_multi_byte_utf8() {
 /// blocks keep their order in the canonical representation.
 #[test]
 fn regression_416_mixed_text_and_tool_call_preserved() {
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let adapter = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "model": "claude",
         "messages": [{
@@ -1577,8 +1577,8 @@ fn regression_416_mixed_text_and_tool_call_preserved() {
 /// #227 → #228 — Anthropic `system` accepts both a string and a content-block
 /// array.
 #[test]
-fn regression_227_anthropic_system_accepts_string_or_array() {
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+fn regression_227_messages_system_accepts_string_or_array() {
+    let adapter = adapter_for(ApiProtocol::Messages);
 
     let as_string = serde_json::json!({
         "model": "claude",
@@ -1604,7 +1604,7 @@ fn regression_227_anthropic_system_accepts_string_or_array() {
 /// blocks round-trip.
 #[test]
 fn regression_364_tool_result_array_and_thinking() {
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+    let adapter = adapter_for(ApiProtocol::Messages);
     let body = serde_json::json!({
         "model": "claude",
         "messages": [
@@ -1672,7 +1672,7 @@ fn regression_454_1_reasoning_survives_all_protocols() {
 /// downgrade to `user`.
 #[test]
 fn regression_454_4_unknown_role_is_an_error() {
-    let adapter = adapter_for(ApiProtocol::Openai);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let body = serde_json::json!({
         "model": "m",
         "messages": [{ "role": "wizard", "content": "abracadabra" }],
@@ -1694,8 +1694,8 @@ fn regression_454_5_no_null_on_the_wire() {
         finish_reason: None,
         response_id: None,
     };
-    // OpenAI Chat: `usage` key is absent when there is no usage.
-    let chat = adapter_for(ApiProtocol::Openai)
+    // Chat Completions: `usage` key is absent when there is no usage.
+    let chat = adapter_for(ApiProtocol::ChatCompletions)
         .render_response(&result, &sample_prompt(), "c1")
         .unwrap();
     assert!(
@@ -1713,7 +1713,7 @@ fn regression_454_5_no_null_on_the_wire() {
         finish_reason: None,
         response_id: None,
     };
-    let chat_empty = adapter_for(ApiProtocol::Openai)
+    let chat_empty = adapter_for(ApiProtocol::ChatCompletions)
         .render_response(&empty, &sample_prompt(), "c2")
         .unwrap();
     assert_eq!(chat_empty["choices"][0]["message"]["content"], "");
@@ -2132,8 +2132,8 @@ fn regression_434_responses_tool_stream_id_mapping() {
 /// #422 — Anthropic inbound `ping` events are ignored, never treated as errors
 /// or content. (The outbound keepalive itself is covered in `stream` tests.)
 #[test]
-fn regression_422_anthropic_ping_events_ignored() {
-    let adapter = adapter_for(ApiProtocol::Anthropic);
+fn regression_422_messages_ping_events_ignored() {
+    let adapter = adapter_for(ApiProtocol::Messages);
     let mut decoder = adapter.stream_decoder();
     let ping = SseEvent {
         event: Some("ping".to_string()),
@@ -2146,7 +2146,7 @@ fn regression_422_anthropic_ping_events_ignored() {
 /// #429 — gpt-5.x style models routed through the Responses protocol round-trip
 /// correctly; the Anthropic outbound stream frames are well-formed events.
 #[test]
-fn regression_429_responses_routing_and_anthropic_frames() {
+fn regression_429_responses_routing_and_messages_frames() {
     // a gpt-5 prompt rendered for the Responses protocol
     let responses = adapter_for(ApiProtocol::Responses);
     let mut prompt = sample_prompt();
@@ -2155,8 +2155,8 @@ fn regression_429_responses_routing_and_anthropic_frames() {
     assert_eq!(req["model"], "gpt-5.1");
     assert!(req["input"].is_array(), "Responses uses an `input` array");
 
-    // Anthropic outbound stream frames are named SSE events
-    let anthropic = adapter_for(ApiProtocol::Anthropic);
+    // Messages outbound stream frames are named SSE events
+    let anthropic = adapter_for(ApiProtocol::Messages);
     let mut enc = anthropic.stream_encoder("m1", "claude");
     let frames = enc
         .encode(&StreamPart::TextDelta {
@@ -2188,7 +2188,7 @@ fn regression_454_5_usage_zero_is_numeric_not_null() {
         finish_reason: Some(FinishReason::Stop),
         response_id: None,
     };
-    let chat = adapter_for(ApiProtocol::Openai)
+    let chat = adapter_for(ApiProtocol::ChatCompletions)
         .render_response(&result, &sample_prompt(), "c1")
         .unwrap();
     assert_eq!(chat["usage"]["prompt_tokens"], 0);
@@ -2241,23 +2241,23 @@ fn assert_schema_snapshot<T: schemars::JsonSchema>(name: &str) {
 }
 
 #[test]
-fn anthropic_messages_request_schema_is_stable() {
-    assert_schema_snapshot::<anthropic::MessagesRequest>("anthropic_messages_request");
+fn messages_request_schema_is_stable() {
+    assert_schema_snapshot::<messages::MessagesRequest>("messages_request");
 }
 
 #[test]
-fn openai_chat_request_schema_is_stable() {
-    assert_schema_snapshot::<openai_chat::ChatRequest>("openai_chat_request");
+fn chat_completions_request_schema_is_stable() {
+    assert_schema_snapshot::<chat_completions::ChatRequest>("chat_completions_request");
 }
 
 #[test]
-fn google_generate_content_request_schema_is_stable() {
-    assert_schema_snapshot::<google::GenerateContentRequest>("google_generate_content_request");
+fn generate_content_request_schema_is_stable() {
+    assert_schema_snapshot::<generate_content::GenerateContentRequest>("generate_content_request");
 }
 
 #[test]
-fn openai_responses_request_schema_is_stable() {
-    assert_schema_snapshot::<openai_responses::ResponsesRequest>("openai_responses_request");
+fn responses_request_schema_is_stable() {
+    assert_schema_snapshot::<responses::ResponsesRequest>("responses_request");
 }
 
 /// `#[schemars(skip)]` on the `extra` `HashMap` must hide it from the published
@@ -2267,38 +2267,40 @@ fn openai_responses_request_schema_is_stable() {
 /// regression is obvious from the failure message.
 #[test]
 fn extra_passthrough_field_is_not_in_schema() {
-    let s = serde_json::to_value(schemars::schema_for!(anthropic::MessagesRequest)).unwrap();
+    let s = serde_json::to_value(schemars::schema_for!(messages::MessagesRequest)).unwrap();
     assert!(
         s.get("properties").and_then(|p| p.get("extra")).is_none(),
-        "Anthropic MessagesRequest schema must not expose `extra` (pass-through field)",
+        "MessagesRequest schema must not expose `extra` (pass-through field)",
     );
-    let s = serde_json::to_value(schemars::schema_for!(openai_chat::ChatRequest)).unwrap();
+    let s = serde_json::to_value(schemars::schema_for!(chat_completions::ChatRequest)).unwrap();
     assert!(
         s.get("properties").and_then(|p| p.get("extra")).is_none(),
-        "OpenAI ChatRequest schema must not expose `extra` (pass-through field)",
+        "Chat CompletionsRequest schema must not expose `extra` (pass-through field)",
     );
-    // Google has two `extra` fields — top-level and on `generationConfig`.
+    // Generate Content has two `extra` fields — top-level and on `generationConfig`.
     // Walk both points to make sure neither leaks.
-    let s = serde_json::to_value(schemars::schema_for!(google::GenerateContentRequest)).unwrap();
+    let s = serde_json::to_value(schemars::schema_for!(
+        generate_content::GenerateContentRequest
+    ))
+    .unwrap();
     assert!(
         s.get("properties").and_then(|p| p.get("extra")).is_none(),
         "Google GenerateContentRequest schema must not expose top-level `extra`",
     );
     let gen_cfg = s
         .get("$defs")
-        .and_then(|d| d.get("GoogleGenerationConfig"))
-        .expect("schema must include GoogleGenerationConfig in $defs");
+        .and_then(|d| d.get("GenerateContentGenerationConfig"))
+        .expect("schema must include GenerateContentGenerationConfig in $defs");
     assert!(
         gen_cfg
             .get("properties")
             .and_then(|p| p.get("extra"))
             .is_none(),
-        "Google GoogleGenerationConfig schema must not expose `extra`",
+        "Google GenerateContentGenerationConfig schema must not expose `extra`",
     );
-    let s =
-        serde_json::to_value(schemars::schema_for!(openai_responses::ResponsesRequest)).unwrap();
+    let s = serde_json::to_value(schemars::schema_for!(responses::ResponsesRequest)).unwrap();
     assert!(
         s.get("properties").and_then(|p| p.get("extra")).is_none(),
-        "OpenAI ResponsesRequest schema must not expose `extra` (pass-through field)",
+        "ResponsesRequest schema must not expose `extra` (pass-through field)",
     );
 }

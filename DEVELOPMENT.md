@@ -24,7 +24,7 @@ The layering is strictly one-directional — **`plugins → sdk`**, **`apps → 
      - `language_model` — the main pipeline: LLM completions with the full hook chain (pre-request → route → execute → settle), an interleaved stream stage, and read-only observation.
      - `mcp` — Model Context Protocol routing (pure routing, no settlement).
      - `acp` — Agent Client Protocol routing (pure routing, no settlement).
-   - **Four wire-protocol adapters** — OpenAI Chat, OpenAI Responses, Anthropic Messages, Google Generative AI — each with an inbound side (parse a client request / encode a client response + SSE) and an outbound side (render a provider request / decode a provider response + SSE). Any inbound protocol can be served by any outbound protocol.
+   - **Four wire-protocol adapters** — Chat Completions, Responses, Messages, Generate Content — each with an inbound side (parse a client request / encode a client response + SSE) and an outbound side (render a provider request / decode a provider response + SSE). Any inbound protocol can be served by any outbound protocol.
    - **Hook traits** — `PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook` — the extension points every plugin and the binary's builtin hooks implement.
    - **Config + routing** — YAML parsing, `${VAR}` substitution, the `ConfigRoutingTable`.
    - The **axum HTTP server** and the `App` builder.
@@ -59,7 +59,7 @@ A streaming LLM request moves through the workspace like this:
    - **Route** — the `RoutingTable` resolves the model name to a fallback chain of `RoutingTarget`s (provider + upstream model id + protocol); `RouteHook`s may rewrite the chain.
    - **Execute** — the executor dials the first target; on failure the `FallbackPolicy` decides whether to try the next. The **outbound adapter** for the target's protocol renders the provider request and decodes the provider response (and its SSE stream).
    - **Settlement** — every `SettlementRecorder` runs (metering, etc.), success or failure.
-4. For streaming, the canonical `StreamPart` stream flows through the `StreamHook` stage and is re-encoded by the inbound adapter into the **client's** protocol — so a client written for OpenAI Responses can transparently use an Anthropic-protocol upstream, and vice versa.
+4. For streaming, the canonical `StreamPart` stream flows through the `StreamHook` stage and is re-encoded by the inbound adapter into the **client's** protocol — so a client written for the Responses protocol can transparently use a Messages upstream, and vice versa.
 5. `ObserveHook`s receive read-only lifecycle events throughout (Prometheus, OTLP).
 
 The `mcp` and `acp` pipelines are simpler: pure routing with no settlement.
@@ -88,10 +88,10 @@ The axum server lives behind the SDK's `server` feature (`crates/bitrouter-sdk/s
 
 | Route                               | Handler                          |
 | ----------------------------------- | -------------------------------- |
-| `POST /v1/chat/completions`         | OpenAI Chat Completions inbound  |
-| `POST /v1/responses`                | OpenAI Responses inbound         |
-| `POST /v1/messages`                 | Anthropic Messages inbound       |
-| `POST /v1beta/models/{model_action}`| Google Generative AI inbound     |
+| `POST /v1/chat/completions`         | Chat Completions inbound         |
+| `POST /v1/responses`                | Responses inbound                |
+| `POST /v1/messages`                 | Messages inbound                 |
+| `POST /v1beta/models/{model_action}`| Generate Content inbound         |
 | `GET  /v1/models`                   | model catalog listing            |
 | `POST /mcp/{server}`                | MCP gateway (JSON-RPC proxy)     |
 | `GET  /metrics`                     | Prometheus exposition            |

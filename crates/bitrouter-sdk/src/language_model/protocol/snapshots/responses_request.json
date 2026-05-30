@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ResponsesRequest",
-  "description": "OpenAI Responses request body\n(<https://platform.openai.com/docs/api-reference/responses/create>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.\n\n`input` stays `serde_json::Value` on purpose — the Responses API accepts\neither a plain string or a heterogeneous item array (Codex multi-turn,\n#454-3), and the deeper walk happens in `parse_input` (private). Mirrors\nhow Anthropic's `system` / `content` are typed.",
+  "description": "Responses request body\n(<https://platform.openai.com/docs/api-reference/responses/create>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.\n\n`input` stays `serde_json::Value` on purpose — the Responses API accepts\neither a plain string or a heterogeneous item array (Codex multi-turn,\n#454-3), and the deeper walk happens in `parse_input` (private). Mirrors\nhow Anthropic's `system` / `content` are typed.",
   "type": "object",
   "properties": {
     "input": true,
