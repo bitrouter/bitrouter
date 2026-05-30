@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.5](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.4...v1.0.0-alpha.5)
+
+
+### ⛰️ Features
+
+- *(guardrails)* [**breaking**] Plugin + per-account rule resolution ([#503](https://github.com/bitrouter/bitrouter/pull/503)) - ([ee06962](https://github.com/bitrouter/bitrouter/commit/ee069621f1b56eaecc45d54b9409b69ce3383d92))
+- *(observe)* [**breaking**] GenAI-semconv trace hierarchy + outbound traceparent ([#495](https://github.com/bitrouter/bitrouter/pull/495)) - ([d05fd5c](https://github.com/bitrouter/bitrouter/commit/d05fd5cbd155f3d798ac70c0b341b00176ff9c55))
+- *(sdk)* [**breaking**] Streaming gen_ai.response.id via StreamPart::ResponseStarted ([#500](https://github.com/bitrouter/bitrouter/pull/500)) - ([4432941](https://github.com/bitrouter/bitrouter/commit/44329412689e41aca16b743f452b689c8e22d998))
+
+### 🚜 Refactor
+
+- *(sdk)* [**breaking**] Rename API protocols to spec names ([#504](https://github.com/bitrouter/bitrouter/pull/504)) - ([820ec67](https://github.com/bitrouter/bitrouter/commit/820ec675f56b7ae4b537829b4297fbee65c5274f))
+
+
 ## [1.0.0-alpha.4](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.3...v1.0.0-alpha.4)
 
 
