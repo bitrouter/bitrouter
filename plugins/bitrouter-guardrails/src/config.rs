@@ -9,19 +9,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::rules::{Action, GuardrailRule, RuleSet};
 
-/// One guardrail rule in serializable form: a name, a regex `pattern`, and an
-/// [`Action`]. Compiled into a [`GuardrailRule`] by [`RuleSpec::compile`].
-///
-/// Derives `PartialEq`/`Eq`/`JsonSchema` so a host can embed it in its own
-/// comparable, OpenAPI-published config / policy types (e.g. bitrouter-cloud's
-/// guardrail policy clause).
+/// One guardrail rule in serializable form: a name, a regex pattern, and a
+/// match action. Compile it into a runtime rule with `RuleSpec::compile`.
+//
+// NOTE: the doc comments on this type and its fields are copied verbatim by
+// `schemars` into the JSON Schema `description`, which a host (e.g.
+// bitrouter-cloud) republishes in its OpenAPI document. Keep them as plain
+// prose — no rustdoc intra-doc links (`[`Foo`]`), which would leak the
+// bracket syntax into the published spec. (`PartialEq`/`Eq`/`JsonSchema` are
+// derived precisely so a host can embed this in its own comparable,
+// OpenAPI-published policy types.)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuleSpec {
     /// Human-readable rule name (surfaced in deny reasons / logs).
     pub name: String,
     /// The regex pattern to match.
     pub pattern: String,
-    /// What to do on a match. Defaults to [`Action::Block`] when omitted.
+    /// What to do on a match. Defaults to `block` when omitted.
     #[serde(default)]
     pub action: Action,
 }
