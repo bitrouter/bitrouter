@@ -22,6 +22,16 @@ tracing.workspace = true
 # Refs:
 # - https://docs.rs/aws-sdk-bedrockruntime/latest/aws_sdk_bedrockruntime/
 # - https://docs.aws.amazon.com/sdk-for-rust/latest/dg/welcome.html
-aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rustls"] }
-aws-sdk-bedrockruntime = { version = "1", default-features = false, features = ["behavior-version-latest", "rustls"] }
+#
+# TLS: we select `default-https-client`, not the deprecated `rustls` feature.
+# The smithy `rustls` feature still resolves to `aws-smithy-http-client`'s
+# `legacy-rustls-ring` stack (hyper 0.14 / rustls 0.21 / rustls-webpki 0.101),
+# which carries the rustls-webpki CRL/name-constraint advisories. The default
+# HTTPS client uses the modern rustls 0.23 stack on `aws-lc-rs` — the same
+# crypto backend `reqwest` (rustls-tls) already pulls in across the workspace,
+# so this adds no new build dependency while dropping the vulnerable legacy
+# stack. `aws-sdk-bedrockruntime` is floored at the first release past the
+# defense-in-depth region-parameter advisory (GHSA-g59m-gf8j-gjf5).
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client"] }
+aws-sdk-bedrockruntime = { version = "1.113", default-features = false, features = ["behavior-version-latest", "default-https-client"] }
 aws-smithy-types = "1"
