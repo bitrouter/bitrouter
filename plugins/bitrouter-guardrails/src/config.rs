@@ -10,8 +10,12 @@ use serde::{Deserialize, Serialize};
 use crate::rules::{Action, GuardrailRule, RuleSet};
 
 /// One guardrail rule in serializable form: a name, a regex `pattern`, and an
-/// [`Action`]. Compiled into a [`GuardrailRule`] by [`GuardrailConfig::compile`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// [`Action`]. Compiled into a [`GuardrailRule`] by [`RuleSpec::compile`].
+///
+/// Derives `PartialEq`/`Eq`/`JsonSchema` so a host can embed it in its own
+/// comparable, OpenAPI-published config / policy types (e.g. bitrouter-cloud's
+/// guardrail policy clause).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuleSpec {
     /// Human-readable rule name (surfaced in deny reasons / logs).
     pub name: String,
@@ -22,10 +26,17 @@ pub struct RuleSpec {
     pub action: Action,
 }
 
+impl RuleSpec {
+    /// Compile this spec's regex into a runtime [`GuardrailRule`].
+    pub fn compile(&self) -> Result<GuardrailRule, regex::Error> {
+        GuardrailRule::new(&self.name, &self.pattern, self.action)
+    }
+}
+
 /// The guardrail data contract. In a config file this is the `custom_patterns`
 /// array under `plugins.bitrouter-guardrails`; a control plane builds the same
 /// shape from its own store.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GuardrailConfig {
     /// The configured rules.
     #[serde(default, rename = "custom_patterns")]
@@ -38,7 +49,7 @@ impl GuardrailConfig {
     pub fn compile(&self) -> Result<RuleSet, regex::Error> {
         let mut set = RuleSet::new();
         for spec in &self.rules {
-            set.push(GuardrailRule::new(&spec.name, &spec.pattern, spec.action)?);
+            set.push(spec.compile()?);
         }
         Ok(set)
     }

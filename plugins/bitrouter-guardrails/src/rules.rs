@@ -16,7 +16,17 @@ use regex::{Regex, RegexBuilder};
 const REGEX_SIZE_LIMIT: usize = 1 << 20;
 
 /// What to do when a rule matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     /// Block the content — upstream this is a 400 deny, downstream a stream

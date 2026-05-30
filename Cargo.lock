@@ -774,6 +774,7 @@ dependencies = [
  "bitrouter-sdk",
  "futures",
  "regex",
+ "schemars",
  "serde",
  "serde_json",
  "tokio",
