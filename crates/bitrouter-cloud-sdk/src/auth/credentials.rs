@@ -269,10 +269,13 @@ impl CredentialsStore {
             scope,
             client_id: creds.client_id,
             authorization_server: creds.authorization_server,
-            // Rotation never rebinds the namespace — the AS echoes the
-            // original binding, but prefer the stored value so a server
-            // that omits it on refresh can't silently drop the binding.
-            namespace_id: token_set.namespace_id.or(creds.namespace_id),
+            // Rotation never rebinds the namespace: the stored binding
+            // wins. Preferring it (over the refresh response) means a
+            // server that omits — or, worse, changes — the field on
+            // refresh can't silently move the credential to a different
+            // namespace. The token-set value is only a fallback for the
+            // (not-expected) case where the stored binding was absent.
+            namespace_id: creds.namespace_id.or(token_set.namespace_id),
             subject: creds.subject,
         };
         let bearer = refreshed.access_token.clone();

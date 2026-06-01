@@ -235,12 +235,16 @@ async fn refreshes_bearer_within_refresh_window_then_calls_management() {
     Mock::given(method("POST"))
         .and(wm_path("/oauth/token"))
         .and(body_string_contains("grant_type=refresh_token"))
+        // The refresh response carries a *different* namespace_id. The
+        // stored binding must win — rotation never rebinds the namespace
+        // — so this value is deliberately ignored on persist.
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "access_token": "refreshed",
             "token_type": "Bearer",
             "expires_in": 3600,
             "refresh_token": "rotated-rt",
             "scope": "keys:read",
+            "namespace_id": "ns-evil",
         })))
         .expect(1)
         .mount(&server)
@@ -277,6 +281,12 @@ async fn refreshes_bearer_within_refresh_window_then_calls_management() {
     assert_eq!(
         reloaded.current().unwrap().refresh_token.as_deref(),
         Some("rotated-rt"),
+    );
+    // The stored namespace survives rotation; the refresh response's
+    // conflicting `ns-evil` is ignored.
+    assert_eq!(
+        reloaded.current().unwrap().namespace_id.as_deref(),
+        Some("ns-1"),
     );
 }
 
