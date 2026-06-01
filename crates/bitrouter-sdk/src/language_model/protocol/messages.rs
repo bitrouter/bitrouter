@@ -23,7 +23,7 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
+    ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart, Usage,
 };
 
 /// The Messages inbound + outbound protocol adapter.
@@ -243,6 +243,43 @@ fn finish_to_stop_reason(r: &FinishReason) -> String {
     }
 }
 
+/// Parse Anthropic's `stop_details` object (present on refusals) into the
+/// canonical [`StopDetails`]. Returns `None` when absent or when it carries
+/// neither a category nor an explanation.
+/// <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
+fn parse_stop_details(value: &serde_json::Value) -> Option<StopDetails> {
+    let category = value
+        .get("category")
+        .and_then(|c| c.as_str())
+        .map(str::to_string);
+    let explanation = value
+        .get("explanation")
+        .and_then(|e| e.as_str())
+        .map(str::to_string);
+    if category.is_none() && explanation.is_none() {
+        return None;
+    }
+    Some(StopDetails {
+        category,
+        explanation,
+    })
+}
+
+/// Render a canonical [`StopDetails`] back into Anthropic's `stop_details`
+/// object. It accompanies a refusal, so `type` is fixed to `"refusal"`.
+/// <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
+fn render_stop_details(details: &StopDetails) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("type".into(), "refusal".into());
+    if let Some(category) = &details.category {
+        obj.insert("category".into(), category.clone().into());
+    }
+    if let Some(explanation) = &details.explanation {
+        obj.insert("explanation".into(), explanation.clone().into());
+    }
+    serde_json::Value::Object(obj)
+}
+
 impl InboundAdapter for MessagesAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Messages
@@ -374,15 +411,26 @@ impl InboundAdapter for MessagesAdapter {
             .filter_map(render_content_block)
             .collect();
         let usage = result.usage.unwrap_or_default();
-        Ok(serde_json::json!({
-            "id": request_id,
-            "type": "message",
-            "role": "assistant",
-            "model": prompt.model,
-            "content": content,
-            "stop_reason": result.finish_reason.as_ref().map(finish_to_stop_reason),
-            "usage": render_usage(&usage),
-        }))
+        let stop_reason = result
+            .finish_reason
+            .as_ref()
+            .map(finish_to_stop_reason)
+            .map_or(serde_json::Value::Null, serde_json::Value::String);
+        let mut body = serde_json::Map::new();
+        body.insert("id".into(), request_id.into());
+        body.insert("type".into(), "message".into());
+        body.insert("role".into(), "assistant".into());
+        body.insert("model".into(), prompt.model.clone().into());
+        body.insert("content".into(), serde_json::Value::Array(content));
+        body.insert("stop_reason".into(), stop_reason);
+        body.insert("usage".into(), render_usage(&usage));
+        // Echo a refusal's structured detail back in Anthropic's shape so a
+        // Messages client sees the same `stop_details` the upstream produced.
+        // <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
+        if let Some(details) = &result.stop_details {
+            body.insert("stop_details".into(), render_stop_details(details));
+        }
+        Ok(serde_json::Value::Object(body))
     }
 
     fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
@@ -526,11 +574,18 @@ impl OutboundAdapter for MessagesAdapter {
             .get("id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // On a refusal, Opus 4.7+ returns a `stop_details` object with the
+        // policy `category` (`cyber` | `bio` | null) and an `explanation`.
+        // Surface it so callers can route refusal classes; it is null for every
+        // non-refusal stop reason.
+        // <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
+        let stop_details = body.get("stop_details").and_then(parse_stop_details);
         Ok(GenerateResult {
             content,
             usage,
             finish_reason,
             response_id,
+            stop_details,
         })
     }
 

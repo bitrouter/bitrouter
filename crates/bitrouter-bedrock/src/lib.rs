@@ -198,6 +198,7 @@ impl Executor for BedrockExecutor {
                 // a field on `ConverseOutput`.
                 // <https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseOutput.html>
                 response_id: None,
+                stop_details: None,
             },
             latency_ms: elapsed,
             generation_time_ms: elapsed,

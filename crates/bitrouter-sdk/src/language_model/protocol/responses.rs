@@ -503,6 +503,7 @@ impl OutboundAdapter for ResponsesAdapter {
             usage,
             finish_reason,
             response_id,
+            stop_details: None,
         })
     }
 

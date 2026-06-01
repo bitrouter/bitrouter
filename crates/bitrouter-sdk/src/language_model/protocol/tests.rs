@@ -80,6 +80,7 @@ fn sample_result() -> GenerateResult {
         }),
         finish_reason: Some(FinishReason::Stop),
         response_id: None,
+        stop_details: None,
     }
 }
 
@@ -889,6 +890,90 @@ fn mid_conversation_system_routes_messages_to_chat_completions() {
 }
 
 #[test]
+fn messages_inbound_parses_refusal_stop_details() {
+    // Opus 4.8 refusals carry a stop_details object {type, category,
+    // explanation}; surface category + explanation on the canonical result.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-8",
+        "content": [],
+        "stop_reason": "refusal",
+        "stop_details": {"type": "refusal", "category": "cyber", "explanation": "declined"},
+        "usage": {"input_tokens": 5, "output_tokens": 0}
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert_eq!(result.finish_reason, Some(FinishReason::ContentFilter));
+    let details = result.stop_details.expect("stop_details present");
+    assert_eq!(details.category.as_deref(), Some("cyber"));
+    assert_eq!(details.explanation.as_deref(), Some("declined"));
+}
+
+#[test]
+fn messages_parse_response_omits_stop_details_when_absent() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-8",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 5, "output_tokens": 1}
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert!(result.stop_details.is_none());
+}
+
+#[test]
+fn messages_outbound_renders_refusal_stop_details() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let result = GenerateResult {
+        content: vec![],
+        usage: None,
+        finish_reason: Some(FinishReason::ContentFilter),
+        response_id: None,
+        stop_details: Some(StopDetails {
+            category: Some("bio".to_string()),
+            explanation: None,
+        }),
+    };
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "msg_1")
+        .unwrap();
+    assert_eq!(rendered["stop_reason"], "refusal");
+    assert_eq!(rendered["stop_details"]["type"], "refusal");
+    assert_eq!(rendered["stop_details"]["category"], "bio");
+    // explanation was None -> omitted, not serialised as null.
+    assert!(rendered["stop_details"].get("explanation").is_none());
+}
+
+#[test]
+fn refusal_stop_details_round_trips_messages() {
+    // Messages -> canonical -> Messages preserves the refusal category and
+    // explanation in Anthropic's wire shape.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-8",
+        "content": [],
+        "stop_reason": "refusal",
+        "stop_details": {"type": "refusal", "category": "cyber", "explanation": "no"},
+        "usage": {"input_tokens": 3, "output_tokens": 0}
+    });
+    let result = adapter.parse_response(body).unwrap();
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "msg_1")
+        .unwrap();
+    assert_eq!(rendered["stop_details"]["category"], "cyber");
+    assert_eq!(rendered["stop_details"]["explanation"], "no");
+}
+
+#[test]
 fn generate_content_inbound_promotes_response_schema() {
     let adapter = adapter_for(ApiProtocol::GenerateContent);
     let body = serde_json::json!({
@@ -1559,6 +1644,7 @@ fn responses_omits_usage_when_none() {
         usage: None,
         finish_reason: Some(FinishReason::Stop),
         response_id: None,
+        stop_details: None,
     };
     let rendered = adapter
         .render_response(&result, &sample_prompt(), "resp_n")
@@ -1925,6 +2011,7 @@ fn regression_454_5_no_null_on_the_wire() {
         usage: None,
         finish_reason: None,
         response_id: None,
+        stop_details: None,
     };
     // Chat Completions: `usage` key is absent when there is no usage.
     let chat = adapter_for(ApiProtocol::ChatCompletions)
@@ -1944,6 +2031,7 @@ fn regression_454_5_no_null_on_the_wire() {
         usage: None,
         finish_reason: None,
         response_id: None,
+        stop_details: None,
     };
     let chat_empty = adapter_for(ApiProtocol::ChatCompletions)
         .render_response(&empty, &sample_prompt(), "c2")
@@ -2419,6 +2507,7 @@ fn regression_454_5_usage_zero_is_numeric_not_null() {
         }),
         finish_reason: Some(FinishReason::Stop),
         response_id: None,
+        stop_details: None,
     };
     let chat = adapter_for(ApiProtocol::ChatCompletions)
         .render_response(&result, &sample_prompt(), "c1")

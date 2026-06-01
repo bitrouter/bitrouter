@@ -311,6 +311,7 @@ impl PipelineContext {
                 usage: None,
                 finish_reason: None,
                 response_id: None,
+                stop_details: None,
             },
         );
         PipelineResponse {

@@ -443,6 +443,7 @@ impl OutboundAdapter for GenerateContentAdapter {
             usage,
             finish_reason: finish,
             response_id,
+            stop_details: None,
         })
     }
 
