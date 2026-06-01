@@ -291,6 +291,19 @@ impl InboundAdapter for MessagesAdapter {
         // unknown siblings inside `output_config` survive opaquely if
         // `output_format` was the source.
         let mut extra = req.extra;
+
+        // Anthropic's GA reasoning `effort` knob lives at `output_config.effort`
+        // (`low` | `medium` | `high` | `xhigh` | `max`; defaults to `high` on
+        // Opus 4.8). Promote it to the canonical `reasoning_effort` so it
+        // round-trips across protocols, mirroring Chat Completions'
+        // `reasoning_effort` and Responses' `reasoning.effort`.
+        // <https://platform.claude.com/docs/en/build-with-claude/effort>
+        let reasoning_effort = extra
+            .get("output_config")
+            .and_then(|oc| oc.get("effort"))
+            .and_then(|e| e.as_str())
+            .map(str::to_string);
+
         let response_format = if let Some(rf) = parse_output_config_format(&extra) {
             if let Some(oc) = extra
                 .get_mut("output_config")
@@ -309,6 +322,21 @@ impl InboundAdapter for MessagesAdapter {
             None
         };
 
+        // The `effort` key was lifted into `reasoning_effort` above; drop it so
+        // the outbound adapter renders it once (from the typed slot) rather than
+        // also splatting it back via `extra`. A no-op when no effort was present.
+        // Unknown `output_config` siblings are preserved; an `output_config`
+        // left empty by the removal is dropped.
+        if let Some(oc) = extra
+            .get_mut("output_config")
+            .and_then(|v| v.as_object_mut())
+        {
+            oc.remove("effort");
+            if oc.is_empty() {
+                extra.remove("output_config");
+            }
+        }
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -318,7 +346,7 @@ impl InboundAdapter for MessagesAdapter {
                 temperature: req.temperature,
                 top_p: req.top_p,
                 max_tokens: req.max_tokens,
-                reasoning_effort: None,
+                reasoning_effort,
                 extra,
             },
             response_format,
@@ -410,10 +438,23 @@ impl OutboundAdapter for MessagesAdapter {
         // (`output_config.format`). `name` and `strict` are intentionally
         // dropped — Anthropic's schema-constrained sampling has no concept of
         // either and they would be rejected as unknown fields.
+        // Anthropic groups structured-outputs (`format`) and the reasoning
+        // `effort` knob under a single `output_config` object. Build it from the
+        // canonical `response_format` + `reasoning_effort` so cross-protocol
+        // routing carries both (e.g. a Chat Completions client's
+        // `reasoning_effort` reaches an Anthropic upstream as `output_config.effort`).
+        // <https://platform.claude.com/docs/en/build-with-claude/effort>
+        let mut output_config = serde_json::Map::new();
         if let Some(rf) = &prompt.response_format {
+            output_config.insert("format".into(), render_messages_response_format(rf));
+        }
+        if let Some(effort) = &prompt.params.reasoning_effort {
+            output_config.insert("effort".into(), effort.clone().into());
+        }
+        if !output_config.is_empty() {
             req.insert(
                 "output_config".into(),
-                serde_json::json!({ "format": render_messages_response_format(rf) }),
+                serde_json::Value::Object(output_config),
             );
         }
         // Splat anthropic-specific extras (tool_choice, stop_sequences, …) back

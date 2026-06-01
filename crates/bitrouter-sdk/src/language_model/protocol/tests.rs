@@ -657,6 +657,140 @@ fn messages_outbound_renders_output_config_format() {
 }
 
 #[test]
+fn messages_inbound_promotes_output_config_effort() {
+    // Anthropic's GA reasoning `effort` knob (`output_config.effort`) is lifted
+    // into the canonical `reasoning_effort` and stripped from the pass-through
+    // extras so the outbound adapter renders it exactly once.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "high"}
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert_eq!(prompt.params.reasoning_effort.as_deref(), Some("high"));
+    assert!(!prompt.params.extra.contains_key("output_config"));
+}
+
+#[test]
+fn messages_inbound_promotes_output_config_format_and_effort() {
+    // `format` + `effort` under one `output_config`: both are promoted to their
+    // canonical slots and the now-empty `output_config` is dropped from extras.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {
+            "effort": "max",
+            "format": {"type": "json_schema", "schema": {"type": "object"}}
+        }
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert_eq!(prompt.params.reasoning_effort.as_deref(), Some("max"));
+    assert!(matches!(
+        prompt.response_format,
+        Some(ResponseFormat::JsonSchema { .. })
+    ));
+    assert!(!prompt.params.extra.contains_key("output_config"));
+}
+
+#[test]
+fn messages_inbound_effort_preserves_unknown_output_config_siblings() {
+    // Lifting `effort` must leave unrelated `output_config` siblings intact.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "low", "unknown_key": "x"}
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert_eq!(prompt.params.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(prompt.params.extra["output_config"]["unknown_key"], "x");
+    assert!(prompt.params.extra["output_config"].get("effort").is_none());
+}
+
+#[test]
+fn messages_outbound_renders_output_config_effort() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let prompt = Prompt {
+        model: "claude-opus-4-8".to_string(),
+        system: None,
+        messages: vec![Message::text(Role::User, "hi")],
+        tools: vec![],
+        params: GenerationParams {
+            reasoning_effort: Some("high".to_string()),
+            ..Default::default()
+        },
+        response_format: None,
+        stream: false,
+    };
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["output_config"]["effort"], "high");
+}
+
+#[test]
+fn messages_outbound_merges_format_and_effort_into_output_config() {
+    // `response_format` + `reasoning_effort` must coexist under one
+    // `output_config` object rather than one clobbering the other.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let prompt = Prompt {
+        model: "claude-opus-4-8".to_string(),
+        system: None,
+        messages: vec![Message::text(Role::User, "hi")],
+        tools: vec![],
+        params: GenerationParams {
+            reasoning_effort: Some("xhigh".to_string()),
+            ..Default::default()
+        },
+        response_format: Some(ResponseFormat::JsonSchema {
+            name: None,
+            strict: None,
+            schema: serde_json::json!({"type": "object"}),
+        }),
+        stream: false,
+    };
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["output_config"]["effort"], "xhigh");
+    assert_eq!(rendered["output_config"]["format"]["type"], "json_schema");
+}
+
+#[test]
+fn effort_routes_chat_completions_to_messages() {
+    // Cross-protocol: a Chat Completions client's `reasoning_effort` reaches an
+    // Anthropic Messages upstream as `output_config.effort`.
+    let cc = adapter_for(ApiProtocol::ChatCompletions);
+    let messages = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "messages": [{"role": "user", "content": "hi"}],
+        "reasoning_effort": "high"
+    });
+    let prompt = cc.parse_request(body).unwrap();
+    let rendered = messages.render_request(&prompt).unwrap();
+    assert_eq!(rendered["output_config"]["effort"], "high");
+}
+
+#[test]
+fn effort_routes_messages_to_responses() {
+    // Cross-protocol: a Messages client's `output_config.effort` reaches a
+    // Responses upstream as `reasoning.effort`.
+    let messages = adapter_for(ApiProtocol::Messages);
+    let responses = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "max"}
+    });
+    let prompt = messages.parse_request(body).unwrap();
+    let rendered = responses.render_request(&prompt).unwrap();
+    assert_eq!(rendered["reasoning"]["effort"], "max");
+}
+
+#[test]
 fn generate_content_inbound_promotes_response_schema() {
     let adapter = adapter_for(ApiProtocol::GenerateContent);
     let body = serde_json::json!({
