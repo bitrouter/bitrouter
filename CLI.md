@@ -213,7 +213,7 @@ Removes every stored credential for the provider (subscription OAuth tokens and 
 
 ### `bitrouter auth login` / `logout` / `whoami`
 
-Cloud sign-in, distinct from the per-provider `bitrouter login` flow above. Signs the CLI into your BitRouter Cloud account via the RFC 8628 OAuth Device Authorization Grant; the resulting bearer authenticates inbound calls to the cloud `/v1/*` surface (inference, key management, BYOK, policy, billing) and is auto-refreshed on use.
+Cloud sign-in, distinct from the per-provider `bitrouter login` flow above. Signs the CLI into your BitRouter Cloud account via the RFC 8628 OAuth Device Authorization Grant. The browser approval page asks you to pick which workspace to grant the CLI access to — the resulting credential is **namespace-baked** (workspace-baked), and all subsequent `bitrouter cloud` calls target that workspace implicitly. To switch workspaces, re-run `bitrouter auth login`. The credential is auto-refreshed on use; rotation preserves the namespace binding.
 
 ```
 bitrouter auth login [--oauth-as <URL>] [--client-id <ID>] [--scope <SCOPE>]
@@ -225,9 +225,9 @@ bitrouter auth whoami
 | --- | --- | --- |
 | `--oauth-as` | `https://api.bitrouter.ai` (env: `BITROUTER_OAUTH_AS`) | Authorization server base URL — override only for a self-hosted deployment |
 | `--client-id` | `bitrouter-cli` (env: `BITROUTER_OAUTH_CLIENT_ID`) | Public OAuth client id |
-| `--scope` | broad developer set (env: `BITROUTER_OAUTH_SCOPE`) | Space-delimited scopes to request. Default includes `inference:invoke`, `usage:read`, `keys:read`/`write`, `billing:read`, `policy:read`/`write`, `byok:read`/`write`, `account:read`. Sensitive scopes (`billing:write`, `clients:read`/`write`, `account:write`) are opt-in. |
+| `--scope` | broad developer set (env: `BITROUTER_OAUTH_SCOPE`) | Space-delimited scopes to request. Default includes `inference:invoke`, `usage:read`, `keys:read`/`write`, `billing:read`, `policy:read`/`write`, `byok:read`/`write`, `namespace:read`. Sensitive scopes (`billing:write`, `clients:read`/`write`, `user:write`) are opt-in. |
 
-Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` on Unix). `whoami` answers from the local file with no network call.
+Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` on Unix). `whoami` answers from the local file with no network call; it also prints the bound namespace.
 
 ---
 
@@ -249,7 +249,9 @@ bitrouter key sign --user <id> --policy strict
 
 ## Cloud account management
 
-`bitrouter cloud …` drives the BitRouter Cloud `/v1/*` management surface (keys, usage, billing, policies, BYOK, OAuth clients) using the credential persisted by [`bitrouter auth login`](#bitrouter-auth-login--logout--whoami). Sign in first, then call any subcommand.
+`bitrouter cloud …` drives the BitRouter Cloud `/v1/*` management surface using the credential persisted by [`bitrouter auth login`](#bitrouter-auth-login--logout--whoami). Sign in first, then call any subcommand.
+
+The credential is **namespace-baked** — keys, usage, policies, and OAuth clients are all scoped to the workspace chosen at login. The `{nsid}` path segment is resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all your workspaces regardless.
 
 Every leaf accepts `--json` to print the raw response body instead of the human-readable summary. On a 403 whose description is `missing required scope: <s>`, the CLI prints a copy-pasteable re-login hint that appends the missing scope to your current set.
 
@@ -259,11 +261,22 @@ Every leaf accepts `--json` to print the raw response body instead of the human-
 bitrouter cloud whoami
 ```
 
-Prints the cloud identity stored on this machine alongside the `/v1/*` base URL the CLI will target. Reads the local credentials file only — no network call.
+Prints the cloud identity and the bound namespace alongside the `/v1/*` base URL the CLI will target. Reads the local credentials file only — no network call.
+
+### `bitrouter cloud namespace`
+
+Inspect the workspaces you own and the one this CLI session is baked to. Workspace creation and deletion are Console-only operations (control-plane scope).
+
+```
+bitrouter cloud namespace list    [--json]
+bitrouter cloud namespace current [--json]
+```
+
+`list` fetches all namespaces you own and marks the active one. `current` is offline — it reads the local credential and prints the bound namespace id without a network call. If the credential predates namespace-scoping, it prints `(no namespace — run \`bitrouter auth login\`)`.
 
 ### `bitrouter cloud keys`
 
-Manage `brk_` API keys on your account.
+Manage `brk_` API keys in the active workspace. All minted keys are workspace-baked to the same namespace as the caller and cannot upscale their scopes beyond the caller's.
 
 ```
 bitrouter cloud keys list [--json]
@@ -285,6 +298,8 @@ bitrouter cloud requests [--limit <N>] [--offset <N>] [--json]
 `usage` defaults to a 30-day rolling window. `requests` clamps the page size to `[1, 100]` and defaults to 25.
 
 ### `bitrouter cloud billing`
+
+User-level — not workspace-scoped; reflects the account-wide wallet regardless of which workspace the CLI is signed in to.
 
 ```
 bitrouter cloud billing balance [--json]
@@ -312,7 +327,7 @@ bitrouter cloud policy effective --principal-type <TYPE> --principal-id <ID> [--
 bitrouter cloud policy for-principal <TYPE> <ID> [--json]
 ```
 
-`--spec` reads the flat inner spec body as JSON from a file path or `-` for stdin. Principal types: `account`, `api_key`, `oauth_token`, `oauth_client`. `disable` parks a policy without deleting it — the engine skips disabled rows at request time.
+`--spec` reads the flat inner spec body as JSON from a file path or `-` for stdin. Principal types: `namespace`, `api_key`, `oauth_token`, `oauth_client`. `disable` parks a policy without deleting it — the engine skips disabled rows at request time.
 
 ### `bitrouter cloud budget` / `bitrouter cloud preset`
 
@@ -336,7 +351,7 @@ Budget `--limit-micro-usd` must be strictly positive (the engine treats `<= 0` a
 
 ### `bitrouter cloud byok`
 
-Manage bring-your-own-key provider keys. The cloud only stores already-sealed ciphertext — seal against the cloud's current X25519 public key (separate fetch) before calling.
+User-level — not workspace-scoped; BYOK provider keys are account-wide. The cloud only stores already-sealed ciphertext — seal against the cloud's current X25519 public key (separate fetch) before calling.
 
 ```
 bitrouter cloud byok list [--json]
