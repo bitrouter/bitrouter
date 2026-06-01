@@ -8,8 +8,8 @@
 //!
 //! The OTLP wire transport is selected at compile time by the crate's feature
 //! flags — `otel-http` (OTLP/HTTP+protobuf) and/or `otel-grpc` (OTLP/gRPC).
-//! See [`transport`] for the selection rules. Both traces and metrics ride the
-//! same chosen transport.
+//! See the `transport` module for the selection rules. Both traces and metrics
+//! ride the same chosen transport.
 
 mod cardinality;
 mod config;

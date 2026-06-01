@@ -2,7 +2,7 @@
 //!
 //! The OTLP wire transport (OTLP/HTTP+protobuf vs OTLP/gRPC) is a *compile-time*
 //! choice driven by the crate's `otel-http` / `otel-grpc` cargo features — see
-//! [`crate::otel::transport`]. This config is transport-agnostic: the same
+//! the `otel::transport` module. This config is transport-agnostic: the same
 //! `endpoint` and `headers` feed whichever transport was compiled in (gRPC
 //! forwards the headers as request metadata).
 //!
