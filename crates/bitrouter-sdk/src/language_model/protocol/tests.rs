@@ -791,6 +791,104 @@ fn effort_routes_messages_to_responses() {
 }
 
 #[test]
+fn messages_inbound_accepts_mid_conversation_system() {
+    // Opus 4.8 mid-conversation system messages: a `role:"system"` entry at a
+    // non-first position parses into a canonical System-role message in place.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "Terse mode: keep replies under 40 words."},
+            {"role": "assistant", "content": "ok"}
+        ]
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert_eq!(prompt.messages.len(), 3);
+    assert_eq!(prompt.messages[1].role, Role::System);
+    assert_eq!(
+        text_of(&prompt.messages[1].content),
+        "Terse mode: keep replies under 40 words."
+    );
+}
+
+#[test]
+fn messages_outbound_renders_mid_conversation_system() {
+    // A canonical System-role message renders as a `role:"system"` entry so the
+    // request is serialized faithfully; the upstream model decides support. The
+    // top-level system instruction still rides the out-of-band `system` field.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let prompt = Prompt {
+        model: "claude-opus-4-8".to_string(),
+        system: Some("top-level system".to_string()),
+        messages: vec![
+            Message::text(Role::User, "hi"),
+            Message::text(Role::System, "switch to terse mode"),
+        ],
+        tools: vec![],
+        params: GenerationParams::default(),
+        response_format: None,
+        stream: false,
+    };
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["system"], "top-level system");
+    assert_eq!(rendered["messages"][1]["role"], "system");
+    assert_eq!(
+        rendered["messages"][1]["content"][0]["text"],
+        "switch to terse mode"
+    );
+}
+
+#[test]
+fn messages_mid_conversation_system_round_trips() {
+    // Messages -> canonical -> Messages preserves both the top-level system and
+    // an interleaved mid-conversation system message, in order.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "system": "you are helpful",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "be terse"},
+            {"role": "user", "content": "go"}
+        ]
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["system"], "you are helpful");
+    let msgs = rendered["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 3);
+    assert_eq!(msgs[1]["role"], "system");
+    assert_eq!(msgs[1]["content"][0]["text"], "be terse");
+}
+
+#[test]
+fn mid_conversation_system_routes_messages_to_chat_completions() {
+    // Cross-protocol: a Messages client's mid-conversation system message reaches
+    // an OpenAI-style upstream as an in-place `role:"system"` message.
+    let messages = adapter_for(ApiProtocol::Messages);
+    let cc = adapter_for(ApiProtocol::ChatCompletions);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "be terse"}
+        ]
+    });
+    let prompt = messages.parse_request(body).unwrap();
+    let rendered = cc.render_request(&prompt).unwrap();
+    let msgs = rendered["messages"].as_array().unwrap();
+    assert!(
+        msgs.iter()
+            .any(|m| m["role"] == "system" && m.to_string().contains("be terse")),
+        "interleaved system survives cross-protocol routing: {msgs:?}"
+    );
+}
+
+#[test]
 fn generate_content_inbound_promotes_response_schema() {
     let adapter = adapter_for(ApiProtocol::GenerateContent);
     let body = serde_json::json!({

@@ -185,10 +185,17 @@ fn parse_role(role: &str) -> Result<Role> {
     match role {
         "user" => Ok(Role::User),
         "assistant" => Ok(Role::Assistant),
-        // Messages has no top-level system/tool role; tool results ride inside
-        // a user-role message. An unexpected role is a hard error (#454-4).
+        // Mid-conversation system messages: Opus 4.8 accepts `role: "system"`
+        // entries at non-first positions in `messages` (GA, no beta header), so
+        // operator instructions can change mid-session without invalidating the
+        // prompt cache. Map them to the canonical System role and let the
+        // upstream model decide whether it supports them.
+        // <https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages>
+        "system" => Ok(Role::System),
+        // Tool results ride inside a user-role message; any other role is a
+        // hard error (#454-4).
         other => Err(BitrouterError::bad_request(format!(
-            "unknown anthropic message role '{other}' (expected user/assistant)"
+            "unknown anthropic message role '{other}' (expected user/assistant/system)"
         ))),
     }
 }
@@ -644,9 +651,13 @@ fn render_message(m: &Message) -> serde_json::Value {
 
     let role = match m.role {
         Role::Assistant => "assistant",
-        // System should have been lifted to the top-level `system` field; if a
-        // System message slips through, fold it into a user turn.
-        Role::User | Role::System => "user",
+        // Mid-conversation system messages render as `role: "system"` entries so
+        // the request is serialized faithfully; the upstream model (Opus 4.8+)
+        // decides whether to honor them. Top-level system still rides the
+        // out-of-band `system` field set in `render_request`.
+        // <https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages>
+        Role::System => "system",
+        Role::User => "user",
         Role::Tool => unreachable!("handled above"),
     };
     let blocks: Vec<serde_json::Value> =
