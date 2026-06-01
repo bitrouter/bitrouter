@@ -4,14 +4,19 @@
 //! conventions (<https://opentelemetry.io/docs/specs/semconv/gen-ai/>):
 //! HTTP SERVER → `chat` INTERNAL → (`route` INTERNAL, per-hop `chat` CLIENT
 //! spans, `settle` INTERNAL). Inbound W3C trace context is honoured;
-//! outbound `traceparent` is injected on every upstream hop. OTLP/HTTP+
-//! protobuf push for both traces and metrics.
+//! outbound `traceparent` is injected on every upstream hop.
+//!
+//! The OTLP wire transport is selected at compile time by the crate's feature
+//! flags — `otel-http` (OTLP/HTTP+protobuf) and/or `otel-grpc` (OTLP/gRPC).
+//! See [`transport`] for the selection rules. Both traces and metrics ride the
+//! same chosen transport.
 
 mod cardinality;
 mod config;
 mod exporter;
 pub mod http_layer;
 mod metrics;
+mod transport;
 
 pub use cardinality::CardinalityLimiter;
 pub use config::{BatchConfig, MetricsConfig, OtelConfig, SamplerKind, TraceConfig};

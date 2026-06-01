@@ -21,7 +21,7 @@ bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", 
 bitrouter-cloud-sdk.workspace = true
 bitrouter-providers = { workspace = true, features = ["pkce"] }
 bitrouter-guardrails.workspace = true
-bitrouter-observe = { workspace = true, features = ["otel"] }
+bitrouter-observe = { workspace = true, features = ["otel-http"] }
 chrono.workspace = true
 sha2.workspace = true
 base64.workspace = true

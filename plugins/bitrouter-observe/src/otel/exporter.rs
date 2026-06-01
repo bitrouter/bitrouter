@@ -39,7 +39,6 @@ use opentelemetry::{
     propagation::{Extractor, Injector},
     trace::{Span, SpanKind, Status, TraceContextExt, Tracer},
 };
-use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{
     BatchConfigBuilder, BatchSpanProcessor, RandomIdGenerator, Sampler, Tracer as SdkTracer,
@@ -149,11 +148,9 @@ impl OtelExporter {
 
         let resource = build_resource(&config);
 
-        let span_exporter: SpanExporter = SpanExporter::builder()
-            .with_http()
-            .with_endpoint(&config.endpoint)
-            .with_headers(config.headers.clone())
-            .build()?;
+        // Transport (OTLP/HTTP vs OTLP/gRPC) is chosen at compile time by the
+        // crate's feature flags — see `crate::otel::transport`.
+        let span_exporter = crate::otel::transport::span_exporter(&config)?;
 
         let batch_config = BatchConfigBuilder::default()
             .with_max_queue_size(config.traces.batch.max_queue_size)

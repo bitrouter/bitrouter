@@ -1,8 +1,10 @@
 //! Configuration for the OpenTelemetry exporter.
 //!
-//! The exporter is OTLP/HTTP+protobuf only. HTTP/JSON and gRPC are left for
-//! a follow-up (the issue lists them; the previous draft shipped a config
-//! variant that hard-errored at runtime, which is worse than absent).
+//! The OTLP wire transport (OTLP/HTTP+protobuf vs OTLP/gRPC) is a *compile-time*
+//! choice driven by the crate's `otel-http` / `otel-grpc` cargo features — see
+//! [`crate::otel::transport`]. This config is transport-agnostic: the same
+//! `endpoint` and `headers` feed whichever transport was compiled in (gRPC
+//! forwards the headers as request metadata).
 //!
 //! All standard `OTEL_*` env vars take precedence over YAML, matching the
 //! upstream OTel SDK spec: <https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/>.

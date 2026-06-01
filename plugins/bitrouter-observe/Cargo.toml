@@ -19,7 +19,13 @@ tracing.workspace = true
 # Pinned to 0.27.x — the API churns minor-to-minor in this stack.
 opentelemetry = { version = "0.27", optional = true }
 opentelemetry_sdk = { version = "0.27", optional = true, features = ["rt-tokio", "trace", "metrics"] }
-opentelemetry-otlp = { version = "0.27", optional = true, features = ["http-proto", "reqwest-client", "reqwest-rustls", "trace", "metrics"] }
+# Transport features (`http-proto`, `grpc-tonic`, the reqwest/tonic TLS
+# variants) are NOT enabled here — they are layered on by the `otel-http` /
+# `otel-grpc` sub-features below. `default-features = false` drops the upstream
+# defaults (`grpc-tonic`, `logs`, `internal-logs`) so a build only ever pulls
+# in the transport stack it actually selected. `trace` + `metrics` are the
+# signal kinds this plugin emits and are transport-independent.
+opentelemetry-otlp = { version = "0.27", optional = true, default-features = false, features = ["trace", "metrics"] }
 opentelemetry-semantic-conventions = { version = "0.27", optional = true }
 # tracing ↔ OpenTelemetry bridge. Pinned to the 0.28.x line, which targets
 # opentelemetry 0.27. https://crates.io/crates/tracing-opentelemetry
@@ -34,11 +40,21 @@ tracing-subscriber = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 http = { workspace = true, optional = true }
 dashmap = { version = "6", optional = true }
+# OTLP/gRPC transport (tonic). Only compiled under `otel-grpc`; the bulk of the
+# gRPC stack arrives through `opentelemetry-otlp/grpc-tonic`. We depend on tonic
+# directly solely for `tonic::metadata::MetadataMap`, used to forward the
+# configured headers as gRPC request metadata.
+tonic = { version = "0.12", optional = true, default-features = false }
 
 [features]
 default = []
-# OpenTelemetry exporter — traces and metrics with multi-tenant attribution.
-otel = [
+
+# Shared, transport-agnostic observability stack: span exporter, metrics,
+# inbound HTTP TraceLayer, and the tracing↔OTel bridge — everything except the
+# OTLP wire transport. It carries no transport on its own, so enabling it
+# WITHOUT `otel-http` or `otel-grpc` is a compile error (see `lib.rs`). Pick a
+# transport feature below; each pulls this in automatically.
+otel-base = [
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",
     "dep:opentelemetry-otlp",
@@ -52,6 +68,26 @@ otel = [
     "dep:dashmap",
 ]
 
+# OTLP/HTTP + protobuf transport over reqwest with rustls. Maps to upstream
+# `opentelemetry-otlp/{http-proto,reqwest-client,reqwest-rustls}`.
+otel-http = [
+    "otel-base",
+    "opentelemetry-otlp/http-proto",
+    "opentelemetry-otlp/reqwest-client",
+    "opentelemetry-otlp/reqwest-rustls",
+]
+
+# OTLP/gRPC transport over tonic with rustls (native trust roots). Maps to
+# upstream `opentelemetry-otlp/{grpc-tonic,tls-roots}`. May be enabled
+# alongside `otel-http` (e.g. under `--all-features`); when both are present,
+# HTTP takes runtime precedence (see `otel::transport`).
+otel-grpc = [
+    "otel-base",
+    "dep:tonic",
+    "opentelemetry-otlp/grpc-tonic",
+    "opentelemetry-otlp/tls-roots",
+]
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 criterion = { version = "0.5", features = ["async_tokio"] }
@@ -59,4 +95,4 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 [[bench]]
 name = "observe_overhead"
 harness = false
-required-features = ["otel"]
+required-features = ["otel-http"]

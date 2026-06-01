@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Histogram, Meter, MeterProvider};
-use opentelemetry_otlp::{MetricExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 
@@ -45,11 +44,9 @@ impl OtelMetrics {
         api_key_limiter: Arc<CardinalityLimiter>,
         user_id_limiter: Arc<CardinalityLimiter>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let exporter = MetricExporter::builder()
-            .with_http()
-            .with_endpoint(&config.endpoint)
-            .with_headers(config.headers.clone())
-            .build()?;
+        // Transport (OTLP/HTTP vs OTLP/gRPC) is chosen at compile time by the
+        // crate's feature flags — see `crate::otel::transport`.
+        let exporter = crate::otel::transport::metric_exporter(config)?;
 
         let reader = PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
             .with_interval(Duration::from_millis(config.metrics.export_interval_ms))
