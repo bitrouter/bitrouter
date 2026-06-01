@@ -759,6 +759,41 @@ fn messages_outbound_merges_format_and_effort_into_output_config() {
 }
 
 #[test]
+fn messages_outbound_preserves_unknown_output_config_sibling_with_effort() {
+    // The inbound adapter leaves unknown output_config siblings in extra after
+    // lifting effort; the outbound render must merge them back rather than drop
+    // them when it rebuilds output_config.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "high", "unknown_key": "x"}
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["output_config"]["effort"], "high");
+    assert_eq!(rendered["output_config"]["unknown_key"], "x");
+}
+
+#[test]
+fn effort_routes_messages_to_chat_completions() {
+    // Cross-protocol (reverse direction): a Messages client's
+    // output_config.effort reaches an OpenAI-style upstream as reasoning_effort.
+    let messages = adapter_for(ApiProtocol::Messages);
+    let cc = adapter_for(ApiProtocol::ChatCompletions);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "high"}
+    });
+    let prompt = messages.parse_request(body).unwrap();
+    let rendered = cc.render_request(&prompt).unwrap();
+    assert_eq!(rendered["reasoning_effort"], "high");
+}
+
+#[test]
 fn effort_routes_chat_completions_to_messages() {
     // Cross-protocol: a Chat Completions client's `reasoning_effort` reaches an
     // Anthropic Messages upstream as `output_config.effort`.

@@ -489,17 +489,23 @@ impl OutboundAdapter for MessagesAdapter {
         if let Some(p) = prompt.params.top_p {
             req.insert("top_p".into(), p.into());
         }
-        // Render the canonical response_format into Anthropic's GA shape
-        // (`output_config.format`). `name` and `strict` are intentionally
-        // dropped — Anthropic's schema-constrained sampling has no concept of
-        // either and they would be rejected as unknown fields.
         // Anthropic groups structured-outputs (`format`) and the reasoning
-        // `effort` knob under a single `output_config` object. Build it from the
-        // canonical `response_format` + `reasoning_effort` so cross-protocol
-        // routing carries both (e.g. a Chat Completions client's
-        // `reasoning_effort` reaches an Anthropic upstream as `output_config.effort`).
+        // `effort` knob under one `output_config` object. Seed it from any
+        // pass-through `output_config` so unknown siblings the inbound adapter
+        // left in `extra` survive, then layer the canonical `response_format`
+        // and `reasoning_effort` on top so cross-protocol routing carries both
+        // (e.g. a Chat Completions client's `reasoning_effort` reaches an
+        // Anthropic upstream as `output_config.effort`). The canonical format's
+        // `name` / `strict` are intentionally dropped — Anthropic's
+        // schema-constrained sampling has no concept of either.
         // <https://platform.claude.com/docs/en/build-with-claude/effort>
-        let mut output_config = serde_json::Map::new();
+        let mut output_config = prompt
+            .params
+            .extra
+            .get("output_config")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
         if let Some(rf) = &prompt.response_format {
             output_config.insert("format".into(), render_messages_response_format(rf));
         }
