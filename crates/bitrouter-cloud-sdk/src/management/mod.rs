@@ -9,20 +9,33 @@
 //! transparently within
 //! [`crate::auth::credentials::REFRESH_WINDOW`] of expiry.
 //!
+//! ## Namespace scoping
+//!
+//! The server bifurcates the management surface (see
+//! `bitrouter_cloud::v1::http::management`): namespace-scoped endpoints
+//! live under `/v1/namespaces/{nsid}/…`, user-level endpoints stay flat.
+//! The CLI's credential is namespace-baked, so the client captures its
+//! `namespace_id` at construction and resolves the `{nsid}` segment
+//! implicitly via [`ManagementClient::namespaced`] — callers never pass
+//! a namespace argument. User-level endpoints (`namespaces`, `billing`,
+//! `byok`) ignore the namespace and key on the subject user server-side.
+//!
 //! ## Endpoint coverage
 //!
 //! Methods are split across per-resource modules and exposed as
-//! additional `impl ManagementClient` blocks. See:
+//! additional `impl ManagementClient` blocks. Namespace-scoped (✱) vs
+//! user-level:
 //!
-//! - [`keys`] — `/v1/keys`
-//! - [`usage`] — `/v1/usage`, `/v1/requests`
+//! - [`namespaces`] — `/v1/namespaces` (list, read-only)
+//! - [`keys`] ✱ — `/v1/namespaces/{nsid}/keys`
+//! - [`usage`] ✱ — `…/usage`, `…/requests`
 //! - [`billing`] — `/v1/billing/*`
-//! - [`policies`] — `/v1/policies*`, including `/v1/policies/effective`
+//! - [`policies`] ✱ — `…/policies*`, including `…/policies/effective`
 //!   and per-principal listing
-//! - [`budgets`] — `/v1/budgets*` (typed sugar)
-//! - [`presets`] — `/v1/presets*` (typed sugar)
+//! - [`budgets`] ✱ — `…/budgets*` (typed sugar)
+//! - [`presets`] ✱ — `…/presets*` (typed sugar)
 //! - [`byok`] — `/v1/byok/keys*`
-//! - [`oauth_clients`] — `/v1/oauth/clients*`
+//! - [`oauth_clients`] ✱ — `…/oauth/clients*`
 //!
 //! ## Errors
 //!
@@ -52,6 +65,7 @@ pub mod budgets;
 pub mod byok;
 pub mod error;
 pub mod keys;
+pub mod namespaces;
 pub mod oauth_clients;
 pub mod policies;
 pub mod presets;
@@ -91,6 +105,13 @@ pub struct ManagementClient {
     /// implicitly invalidates the cache (the next `ManagementClient`
     /// instance reads the new URL from disk).
     metadata: Arc<Mutex<Option<AsMetadata>>>,
+    /// The namespace the stored credential is baked into, captured at
+    /// construction. `Some` for every device-flow token; `None` only
+    /// for a namespace-null credential or a pre-namespace credential
+    /// file. Namespace-scoped methods resolve the `{nsid}` path segment
+    /// from this via [`ManagementClient::namespaced`]. Immutable for the
+    /// client's lifetime — refresh never rebinds the namespace.
+    namespace_id: Option<String>,
 }
 
 impl ManagementClient {
@@ -114,12 +135,14 @@ impl ManagementClient {
             .map_err(Error::Auth)?;
         let creds = store.current().ok_or(Error::NotSignedIn)?;
         let base_url = creds.authorization_server.trim_end_matches('/').to_owned();
+        let namespace_id = creds.namespace_id.clone();
         let http = build_http_client()?;
         Ok(Self {
             base_url,
             http,
             store: Arc::new(Mutex::new(store)),
             metadata: Arc::new(Mutex::new(None)),
+            namespace_id,
         })
     }
 
@@ -133,11 +156,13 @@ impl ManagementClient {
         http: reqwest::Client,
         store: CredentialsStore,
     ) -> Self {
+        let namespace_id = store.current().and_then(|c| c.namespace_id.clone());
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
             http,
             store: Arc::new(Mutex::new(store)),
             metadata: Arc::new(Mutex::new(None)),
+            namespace_id,
         }
     }
 
@@ -145,6 +170,24 @@ impl ManagementClient {
     /// diagnostics — `bitrouter cloud whoami` prints it.
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// The namespace this client's credential is baked into, or `None`
+    /// for a namespace-null / pre-namespace credential. `bitrouter cloud
+    /// whoami` prints it; `namespace list` marks the active one.
+    pub fn namespace_id(&self) -> Option<&str> {
+        self.namespace_id.as_deref()
+    }
+
+    /// Build a namespace-scoped path `/v1/namespaces/{nsid}{suffix}`,
+    /// erroring with [`Error::NoNamespace`] when the credential carries
+    /// no namespace. `suffix` must start with `/` (e.g. `/keys`,
+    /// `/policies/effective`). Centralising the join keeps every
+    /// namespace-scoped method from re-deriving the prefix and guards
+    /// the "no namespace" case in exactly one place.
+    pub(super) fn namespaced(&self, suffix: &str) -> Result<String> {
+        let nsid = self.namespace_id.as_deref().ok_or(Error::NoNamespace)?;
+        Ok(format!("/v1/namespaces/{nsid}{suffix}"))
     }
 
     /// Fetch a current bearer, refreshing if the stored access token

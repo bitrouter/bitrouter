@@ -58,6 +58,17 @@ pub struct Credentials {
     /// The AS base URL the device-flow was run against. Captured for the
     /// same reason as `client_id`.
     pub authorization_server: String,
+    /// Namespace the credential is baked into. Every device-flow token
+    /// the CLI obtains is namespace-baked, so this is normally `Some`.
+    /// Absent for a namespace-null credential (the console web session,
+    /// which the CLI never holds) — and for a credential file written
+    /// before namespace-scoping shipped, where it signals "re-login to
+    /// get a namespace-scoped token". Read once at client construction
+    /// to resolve the implicit `{nsid}` in management calls; preserved
+    /// verbatim across refreshes since rotation never rebinds the
+    /// namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_id: Option<String>,
     /// Subject identifier returned by the AS (typically `sub` from an
     /// OpenID Connect ID token). Optional — populated when the AS
     /// returned an `id_token` claim the flow could decode. Used by
@@ -80,6 +91,7 @@ impl std::fmt::Debug for Credentials {
             .field("scope", &self.scope)
             .field("client_id", &self.client_id)
             .field("authorization_server", &self.authorization_server)
+            .field("namespace_id", &self.namespace_id)
             .field("subject", &self.subject)
             .finish()
     }
@@ -257,6 +269,10 @@ impl CredentialsStore {
             scope,
             client_id: creds.client_id,
             authorization_server: creds.authorization_server,
+            // Rotation never rebinds the namespace — the AS echoes the
+            // original binding, but prefer the stored value so a server
+            // that omits it on refresh can't silently drop the binding.
+            namespace_id: token_set.namespace_id.or(creds.namespace_id),
             subject: creds.subject,
         };
         let bearer = refreshed.access_token.clone();
@@ -324,6 +340,7 @@ mod tests {
             scope: "inference:invoke".into(),
             client_id: "cid".into(),
             authorization_server: "https://as.example.com".into(),
+            namespace_id: Some("ns-1".into()),
             subject: Some("user-42".into()),
         }
     }
@@ -345,6 +362,7 @@ mod tests {
         assert_eq!(got.scope, creds.scope);
         assert_eq!(got.client_id, creds.client_id);
         assert_eq!(got.authorization_server, creds.authorization_server);
+        assert_eq!(got.namespace_id, creds.namespace_id);
         assert_eq!(got.subject, creds.subject);
     }
 

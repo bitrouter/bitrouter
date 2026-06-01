@@ -335,6 +335,7 @@ mod tests {
                 scope: "inference:invoke".into(),
                 client_id: "bitrouter-cli".into(),
                 authorization_server: "https://as.invalid".into(),
+                namespace_id: Some("ns-1".into()),
                 subject: Some("u-1".into()),
             })
             .unwrap();
@@ -363,6 +364,7 @@ mod tests {
                 scope: "inference:invoke".into(),
                 client_id: "bitrouter-cli".into(),
                 authorization_server: uri.clone(),
+                namespace_id: Some("ns-1".into()),
                 subject: Some("u-1".into()),
             })
             .unwrap();
@@ -410,6 +412,7 @@ mod tests {
                 scope: "inference:invoke".into(),
                 client_id: "bitrouter-cli".into(),
                 authorization_server: uri,
+                namespace_id: Some("ns-1".into()),
                 subject: Some("u-1".into()),
             })
             .unwrap();
@@ -450,6 +453,7 @@ mod tests {
                 scope: "inference:invoke".into(),
                 client_id: "bitrouter-cli".into(),
                 authorization_server: uri,
+                namespace_id: None,
                 subject: None,
             })
             .unwrap();
@@ -488,6 +492,7 @@ mod tests {
                 scope: "inference:invoke".into(),
                 client_id: "bitrouter-cli".into(),
                 authorization_server: uri,
+                namespace_id: None,
                 subject: None,
             })
             .unwrap();

@@ -27,8 +27,8 @@ use bitrouter_cloud_sdk::management::types::{
     BudgetWindow as SdkBudgetWindow, ClientType as SdkClientType, PolicyKind as SdkPolicyKind,
 };
 use bitrouter_cloud_sdk::management::{
-    Error as SdkError, ManagementClient, billing, budgets, byok, keys, oauth_clients, policies,
-    presets, usage,
+    Error as SdkError, ManagementClient, billing, budgets, byok, keys, namespaces, oauth_clients,
+    policies, presets, usage,
 };
 
 /// `bitrouter cloud …`. All variants land in [`run`].
@@ -37,7 +37,12 @@ pub enum CloudAction {
     /// Print the cloud identity stored on this machine alongside the
     /// `/v1/*` base URL the CLI will target.
     Whoami,
-    /// Manage `brk_` API keys on your account.
+    /// Inspect the namespaces you own and the one this CLI is bound to.
+    Namespace {
+        #[command(subcommand)]
+        action: NamespaceAction,
+    },
+    /// Manage `brk_` API keys in your namespace.
     Keys {
         #[command(subcommand)]
         action: KeysAction,
@@ -77,6 +82,20 @@ pub enum CloudAction {
         #[command(subcommand)]
         action: OauthClientAction,
     },
+}
+
+// ===== Namespace =====
+
+#[derive(Debug, Subcommand)]
+pub enum NamespaceAction {
+    /// List the namespaces you own. The one this CLI is signed in to is
+    /// marked `(active)`. Switching namespaces is a re-login:
+    /// `bitrouter auth login` and pick a different namespace in the
+    /// browser.
+    List(JsonFlag),
+    /// Print the namespace this CLI's credential is bound to. Offline —
+    /// reads the local credential, no network call.
+    Current(JsonFlag),
 }
 
 // ===== Keys =====
@@ -255,7 +274,7 @@ pub struct PolicyUpdateArgs {
 pub struct PolicyBindArgs {
     /// The policy id.
     pub id: String,
-    /// Principal kind (`account`, `api_key`, `oauth_token`,
+    /// Principal kind (`namespace`, `api_key`, `oauth_token`,
     /// `oauth_client`).
     #[arg(long)]
     pub principal_type: String,
@@ -278,7 +297,7 @@ pub struct PolicyUnbindArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct EffectiveArgs {
-    /// Principal kind (`account`, `api_key`, `oauth_token`,
+    /// Principal kind (`namespace`, `api_key`, `oauth_token`,
     /// `oauth_client`).
     #[arg(long)]
     pub principal_type: String,
@@ -589,6 +608,7 @@ pub async fn run(action: CloudAction) -> Result<()> {
 async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
     match action {
         CloudAction::Whoami => whoami().await,
+        CloudAction::Namespace { action } => run_namespace(action).await,
         CloudAction::Keys { action } => run_keys(action).await,
         CloudAction::Usage(args) => run_usage(args).await,
         CloudAction::Requests(args) => run_requests(args).await,
@@ -611,6 +631,10 @@ async fn whoami() -> std::result::Result<(), SdkError> {
     // base URL `bitrouter cloud …` will target.
     let client = client()?;
     println!("cloud base URL: {}", client.base_url());
+    println!(
+        "namespace:      {}",
+        client.namespace_id().unwrap_or("(none)")
+    );
     let store = CredentialsStore::default_path().map_err(SdkError::Auth)?;
     if let Some(creds) = store.current() {
         println!("scope:          {}", creds.scope);
@@ -622,6 +646,51 @@ async fn whoami() -> std::result::Result<(), SdkError> {
         println!("(not signed in — run `bitrouter auth login`)");
     }
     Ok(())
+}
+
+// ----- Namespace -----
+
+async fn run_namespace(action: NamespaceAction) -> std::result::Result<(), SdkError> {
+    let client = client()?;
+    match action {
+        NamespaceAction::List(flag) => {
+            let resp = client.list_namespaces().await?;
+            let active = client.namespace_id().map(str::to_owned);
+            emit(flag.json, &resp, |r| {
+                format_namespace_list(r, active.as_deref())
+            })
+        }
+        NamespaceAction::Current(flag) => {
+            // Offline — the namespace is baked into the local credential.
+            let nsid = client.namespace_id();
+            if flag.json {
+                let body = serde_json::json!({ "namespace_id": nsid });
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            } else {
+                match nsid {
+                    Some(id) => println!("{id}"),
+                    None => println!("(no namespace — run `bitrouter auth login`)"),
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn format_namespace_list(resp: &namespaces::NamespaceListResponse, active: Option<&str>) -> String {
+    if resp.data.is_empty() {
+        return "no namespaces".to_owned();
+    }
+    let mut out = String::new();
+    for ns in &resp.data {
+        let marker = if Some(ns.id.as_str()) == active {
+            "  (active)"
+        } else {
+            ""
+        };
+        out.push_str(&format!("{:<28}  {}{}\n", ns.id, ns.name, marker));
+    }
+    out
 }
 
 // ----- Keys -----

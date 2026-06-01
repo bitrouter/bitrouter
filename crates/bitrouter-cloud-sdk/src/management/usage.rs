@@ -1,8 +1,10 @@
-//! `/v1/usage` and `/v1/requests` — aggregate spend / token counts and
-//! the request history for the caller's account. Both require
-//! `usage:read`.
+//! `/v1/namespaces/{nsid}/usage` and `…/requests` — aggregate spend /
+//! token counts and the request history for the client's namespace. Both
+//! require `usage:read`.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::usage`.
+//! Mirrors `bitrouter_cloud::v1::http::management::usage`. The `{nsid}`
+//! segment is resolved from the credential — see
+//! [`super::ManagementClient::namespaced`].
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -97,13 +99,17 @@ pub struct RequestEnvelope {
 }
 
 impl ManagementClient {
-    /// `GET /v1/usage` — aggregate spend + token counts over a window.
+    /// `GET /v1/namespaces/{nsid}/usage` — aggregate spend + token
+    /// counts over a window.
     pub async fn usage_aggregate(&self, query: &UsageQuery) -> Result<UsageResponse> {
-        self.get_with_query("/v1/usage", query).await
+        let path = self.namespaced("/usage")?;
+        self.get_with_query(&path, query).await
     }
 
-    /// `GET /v1/requests` — paged list of recent requests.
+    /// `GET /v1/namespaces/{nsid}/requests` — paged list of recent
+    /// requests.
     pub async fn list_requests(&self, query: &RequestsQuery) -> Result<RequestsResponse> {
-        self.get_with_query("/v1/requests", query).await
+        let path = self.namespaced("/requests")?;
+        self.get_with_query(&path, query).await
     }
 }

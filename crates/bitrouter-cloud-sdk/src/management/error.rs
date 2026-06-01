@@ -23,6 +23,17 @@ pub enum Error {
     #[error("not signed in — run `bitrouter auth login` first")]
     NotSignedIn,
 
+    /// The stored credential carries no namespace, but the requested
+    /// operation is namespace-scoped. The CLI's device-flow tokens are
+    /// always namespace-baked, so in practice this means the credential
+    /// file predates namespace-scoping — re-running `bitrouter auth
+    /// login` mints a namespace-bound token.
+    #[error(
+        "credential is not scoped to a namespace — run `bitrouter auth login` to get a \
+         namespace-scoped credential"
+    )]
+    NoNamespace,
+
     /// OAuth token resolution or refresh failed (e.g. refresh token
     /// expired, AS metadata unreachable). The user should re-run
     /// `bitrouter auth login`.

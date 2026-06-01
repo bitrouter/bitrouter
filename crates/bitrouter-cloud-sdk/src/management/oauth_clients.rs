@@ -1,14 +1,18 @@
-//! `/v1/oauth/clients*` — manage the caller's OAuth client
-//! registrations.
+//! `/v1/namespaces/{nsid}/oauth/clients*` — manage the OAuth client
+//! registrations in the client's namespace.
 //!
 //! Mirrors `bitrouter_cloud::v1::http::management::oauth_clients`. The
 //! freshly minted `client_secret` (for confidential clients) is
-//! returned exactly once in the register response and never again.
+//! returned exactly once in the register response and never again. The
+//! `{nsid}` segment is resolved from the credential — see
+//! [`super::ManagementClient::namespaced`].
 //!
-//! Scopes: `clients:read` / `clients:write`. Neither is in the
-//! default scope set ([`crate::auth::settings::DEFAULT_SCOPE`]); a
-//! caller who wants this surface must re-login with `--scope` to
-//! request them.
+//! Scopes: `clients:read` / `clients:write`. `clients:write` is a
+//! control-plane scope the server refuses to mint into a namespace-baked
+//! CLI credential, so registering / mutating clients is console-only in
+//! v1; `clients:read` is not in the default scope set
+//! ([`crate::auth::settings::DEFAULT_SCOPE`]) either, so listing needs a
+//! re-login with `--scope clients:read`.
 
 use serde::{Deserialize, Serialize};
 
@@ -112,36 +116,39 @@ pub struct DeleteOauthClientResponse {
 }
 
 impl ManagementClient {
-    /// `GET /v1/oauth/clients` — list every OAuth client on the
-    /// account.
+    /// `GET /v1/namespaces/{nsid}/oauth/clients` — list every OAuth
+    /// client in the namespace.
     pub async fn list_oauth_clients(&self) -> Result<OauthClientListResponse> {
-        self.get_json("/v1/oauth/clients").await
+        let path = self.namespaced("/oauth/clients")?;
+        self.get_json(&path).await
     }
 
-    /// `POST /v1/oauth/clients` — register a new client. For
-    /// confidential clients, the response's `client_secret` is the
-    /// one-time plaintext.
+    /// `POST /v1/namespaces/{nsid}/oauth/clients` — register a new
+    /// client. For confidential clients, the response's `client_secret`
+    /// is the one-time plaintext.
     pub async fn register_oauth_client(
         &self,
         body: &RegisterOauthClientRequest,
     ) -> Result<RegisterOauthClientResponse> {
-        self.post_json("/v1/oauth/clients", body).await
+        let path = self.namespaced("/oauth/clients")?;
+        self.post_json(&path, body).await
     }
 
-    /// `PUT /v1/oauth/clients/{client_id}` — patch one or more
-    /// fields.
+    /// `PUT /v1/namespaces/{nsid}/oauth/clients/{client_id}` — patch
+    /// one or more fields.
     pub async fn update_oauth_client(
         &self,
         client_id: &str,
         body: &UpdateOauthClientRequest,
     ) -> Result<OauthClientEnvelope> {
-        let path = format!("/v1/oauth/clients/{client_id}");
+        let path = self.namespaced(&format!("/oauth/clients/{client_id}"))?;
         self.put_json(&path, body).await
     }
 
-    /// `DELETE /v1/oauth/clients/{client_id}` — remove a client.
+    /// `DELETE /v1/namespaces/{nsid}/oauth/clients/{client_id}` —
+    /// remove a client.
     pub async fn delete_oauth_client(&self, client_id: &str) -> Result<DeleteOauthClientResponse> {
-        let path = format!("/v1/oauth/clients/{client_id}");
+        let path = self.namespaced(&format!("/oauth/clients/{client_id}"))?;
         self.delete_json(&path).await
     }
 }

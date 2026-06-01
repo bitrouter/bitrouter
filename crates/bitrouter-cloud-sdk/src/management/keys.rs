@@ -1,8 +1,10 @@
-//! `/v1/keys` — list, mint, and revoke `brk_` API keys for the
-//! caller's account.
+//! `/v1/namespaces/{nsid}/keys` — list, mint, and revoke `brk_` API keys
+//! in the client's namespace.
 //!
 //! Mirrors `bitrouter_cloud::v1::http::management::keys`. Scopes:
-//! `keys:read` for list, `keys:write` for mint and revoke.
+//! `keys:read` for list, `keys:write` for mint and revoke. The `{nsid}`
+//! segment is resolved from the credential — see
+//! [`super::ManagementClient::namespaced`].
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -81,25 +83,28 @@ pub struct MintApiKeyResponse {
 pub struct RevokeApiKeyResponse {
     /// Always `true` on success — the server returns 404 (mapped to
     /// [`super::Error::NotFound`]) when the row doesn't exist or
-    /// belongs to a different account.
+    /// belongs to a different namespace.
     pub revoked: bool,
 }
 
 impl ManagementClient {
-    /// `GET /v1/keys` — list API keys on the caller's account.
+    /// `GET /v1/namespaces/{nsid}/keys` — list API keys in the client's
+    /// namespace.
     pub async fn list_keys(&self) -> Result<ApiKeyListResponse> {
-        self.get_json("/v1/keys").await
+        let path = self.namespaced("/keys")?;
+        self.get_json(&path).await
     }
 
-    /// `POST /v1/keys` — mint a new API key. The returned `token` is
-    /// the only copy of the plaintext.
+    /// `POST /v1/namespaces/{nsid}/keys` — mint a new API key. The
+    /// returned `token` is the only copy of the plaintext.
     pub async fn mint_key(&self, body: &MintApiKeyRequest) -> Result<MintApiKeyResponse> {
-        self.post_json("/v1/keys", body).await
+        let path = self.namespaced("/keys")?;
+        self.post_json(&path, body).await
     }
 
-    /// `DELETE /v1/keys/{id}` — revoke a key by id.
+    /// `DELETE /v1/namespaces/{nsid}/keys/{id}` — revoke a key by id.
     pub async fn revoke_key(&self, id: &str) -> Result<RevokeApiKeyResponse> {
-        let path = format!("/v1/keys/{id}");
+        let path = self.namespaced(&format!("/keys/{id}"))?;
         self.delete_json(&path).await
     }
 }

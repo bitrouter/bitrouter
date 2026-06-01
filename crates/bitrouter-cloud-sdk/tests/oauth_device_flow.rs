@@ -133,6 +133,7 @@ impl Respond for DeviceGrantResponder {
                 "refresh_token": "RT-INITIAL",
                 "refresh_token_expires_in": 86400,
                 "scope": "inference:invoke usage:read",
+                "namespace_id": "ns-1",
             }))
         }
     }
@@ -186,6 +187,9 @@ async fn end_to_end_device_flow_with_mock_authorization_server() {
         token_set.scope.as_deref(),
         Some("inference:invoke usage:read")
     );
+    // The namespace the AS baked the token into round-trips through
+    // the device-flow success response into the TokenSet.
+    assert_eq!(token_set.namespace_id.as_deref(), Some("ns-1"));
     // Two token-endpoint hits: one pending, one success.
     assert_eq!(poll_count.load(Ordering::SeqCst), 2);
 
@@ -200,6 +204,8 @@ async fn end_to_end_device_flow_with_mock_authorization_server() {
     let mut store = CredentialsStore::load(&path).unwrap();
     let loaded = store.current().expect("loaded credentials");
     assert_eq!(loaded.access_token, "AT-INITIAL");
+    // The namespace binding survives serialise → disk → reload.
+    assert_eq!(loaded.namespace_id.as_deref(), Some("ns-1"));
 
     // 5. Force a refresh by mutating expires_at to be within the
     //    REFRESH_WINDOW, then asking for current_token.

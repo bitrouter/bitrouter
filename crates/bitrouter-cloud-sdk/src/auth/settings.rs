@@ -26,23 +26,27 @@ pub const DEFAULT_CLIENT_ID: &str = "bitrouter-cli";
 ///
 /// The set follows the `gh auth login` heuristic: grant the broad
 /// "work" scopes a developer expects from a terminal session, hold
-/// back the truly sensitive ones behind an explicit `--scope`. Sensitive
-/// scopes deliberately left out (opt in with `--scope` if you need
-/// them):
+/// back the truly sensitive ones behind an explicit `--scope`. The set
+/// is entirely data-plane — every scope here is mintable into a
+/// namespace-baked credential, which is what the device flow issues.
+/// Control-plane scopes are deliberately left out (and can't be granted
+/// to a namespace-baked CLI token anyway — the server refuses them):
 ///   - `billing:write` — initiates a Stripe checkout flow
-///   - `account:write` — account settings, including deletion
-///   - `clients:read` / `clients:write` — registering OAuth clients
+///   - `user:write` — account settings, including deletion
+///   - `clients:write` — registering OAuth clients (namespace-scoped)
+///   - `namespace:write` — create / delete namespaces (console-only)
 ///
-/// The actual issued scope is still the intersection
-/// `caller_role ∩ client_allowed_scopes ∩ requested`, so a user
-/// without the role for one of these scopes silently drops it at
+/// `namespace:read` is included so `bitrouter cloud namespace list`
+/// works out of the box. The actual issued scope is still the
+/// intersection `caller_role ∩ client_allowed_scopes ∩ requested`, so a
+/// user without the role for one of these scopes silently drops it at
 /// issuance — they only get the broad set their role admits.
 pub const DEFAULT_SCOPE: &str = "inference:invoke usage:read \
                                  keys:read keys:write \
                                  billing:read \
                                  policy:read policy:write \
                                  byok:read byok:write \
-                                 account:read";
+                                 namespace:read";
 
 /// Environment variable for the authorization server base URL.
 pub const AS_ENV: &str = "BITROUTER_OAUTH_AS";

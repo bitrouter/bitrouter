@@ -67,6 +67,12 @@ struct TokenResponse {
     refresh_token_expires_in: Option<u64>,
     #[serde(default)]
     scope: Option<String>,
+    /// Non-standard bitrouter extension: the namespace the issued token
+    /// is baked into. `Some` for every device-flow token; absent for a
+    /// namespace-null credential. Persisted so the management client can
+    /// resolve the implicit namespace for `/v1/namespaces/{nsid}/…` calls.
+    #[serde(default)]
+    namespace_id: Option<String>,
     /// OIDC id_token, used to extract the `sub` claim for `whoami`.
     #[serde(default)]
     id_token: Option<String>,
@@ -94,6 +100,9 @@ pub struct TokenSet {
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
     /// Scope the AS granted (may be narrower than requested).
     pub scope: Option<String>,
+    /// Namespace the issued token is baked into, when the AS reported
+    /// one. `None` for a namespace-null credential.
+    pub namespace_id: Option<String>,
     /// Subject claim extracted from an `id_token`, when one is present.
     pub subject: Option<String>,
 }
@@ -388,6 +397,7 @@ pub fn credentials_from_token_set(token_set: TokenSet, settings: &Settings) -> C
         scope: token_set.scope.unwrap_or_else(|| settings.scope.clone()),
         client_id: settings.client_id.clone(),
         authorization_server: settings.authorization_server.clone(),
+        namespace_id: token_set.namespace_id,
         subject: token_set.subject,
     }
 }
@@ -416,6 +426,7 @@ fn token_set_from_response(access_token: String, parsed: TokenResponse) -> Token
         refresh_token: parsed.refresh_token,
         refresh_token_expires_at,
         scope: parsed.scope,
+        namespace_id: parsed.namespace_id,
         subject,
     }
 }
@@ -522,6 +533,7 @@ mod tests {
             refresh_token: Some("RT".into()),
             refresh_token_expires_at: None,
             scope: None,
+            namespace_id: Some("ns-1".into()),
             subject: None,
         };
         let s = settings();
@@ -530,6 +542,7 @@ mod tests {
         assert_eq!(creds.scope, s.scope);
         assert_eq!(creds.client_id, s.client_id);
         assert_eq!(creds.authorization_server, s.authorization_server);
+        assert_eq!(creds.namespace_id.as_deref(), Some("ns-1"));
     }
 
     #[test]

@@ -1,8 +1,10 @@
-//! `/v1/presets*` — typed CRUD wrappers over the `policies` rows whose
-//! `kind = 'preset'`. A preset is a named bundle of an optional
-//! `guardrail`, `budget`, and / or `rate_limit` clause.
+//! `/v1/namespaces/{nsid}/presets*` — typed CRUD wrappers over the
+//! `policies` rows whose `kind = 'preset'`. A preset is a named bundle
+//! of an optional `guardrail`, `budget`, and / or `rate_limit` clause.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::presets`.
+//! Mirrors `bitrouter_cloud::v1::http::management::presets`. The
+//! `{nsid}` segment is resolved from the credential — see
+//! [`super::ManagementClient::namespaced`].
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -102,35 +104,39 @@ pub struct DeletePresetResponse {
 }
 
 impl ManagementClient {
-    /// `GET /v1/presets` — list every preset on the account.
+    /// `GET /v1/namespaces/{nsid}/presets` — list every preset in the
+    /// namespace.
     pub async fn list_presets(&self) -> Result<PresetListResponse> {
-        self.get_json("/v1/presets").await
-    }
-
-    /// `GET /v1/presets/{id}` — fetch one preset.
-    pub async fn get_preset(&self, id: &str) -> Result<PresetEnvelope> {
-        let path = format!("/v1/presets/{id}");
+        let path = self.namespaced("/presets")?;
         self.get_json(&path).await
     }
 
-    /// `POST /v1/presets` — create a preset.
-    pub async fn create_preset(&self, body: &CreatePresetRequest) -> Result<PresetEnvelope> {
-        self.post_json("/v1/presets", body).await
+    /// `GET /v1/namespaces/{nsid}/presets/{id}` — fetch one preset.
+    pub async fn get_preset(&self, id: &str) -> Result<PresetEnvelope> {
+        let path = self.namespaced(&format!("/presets/{id}"))?;
+        self.get_json(&path).await
     }
 
-    /// `PUT /v1/presets/{id}` — patch a preset's name and/or clauses.
+    /// `POST /v1/namespaces/{nsid}/presets` — create a preset.
+    pub async fn create_preset(&self, body: &CreatePresetRequest) -> Result<PresetEnvelope> {
+        let path = self.namespaced("/presets")?;
+        self.post_json(&path, body).await
+    }
+
+    /// `PUT /v1/namespaces/{nsid}/presets/{id}` — patch a preset's name
+    /// and/or clauses.
     pub async fn update_preset(
         &self,
         id: &str,
         body: &UpdatePresetRequest,
     ) -> Result<PresetEnvelope> {
-        let path = format!("/v1/presets/{id}");
+        let path = self.namespaced(&format!("/presets/{id}"))?;
         self.put_json(&path, body).await
     }
 
-    /// `DELETE /v1/presets/{id}` — remove a preset.
+    /// `DELETE /v1/namespaces/{nsid}/presets/{id}` — remove a preset.
     pub async fn delete_preset(&self, id: &str) -> Result<DeletePresetResponse> {
-        let path = format!("/v1/presets/{id}");
+        let path = self.namespaced(&format!("/presets/{id}"))?;
         self.delete_json(&path).await
     }
 }

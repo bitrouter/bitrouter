@@ -183,6 +183,10 @@ pub async fn whoami() -> Result<()> {
             println!("client id:            {}", creds.client_id);
             println!("scope:                {}", creds.scope);
             println!(
+                "namespace:            {}",
+                creds.namespace_id.as_deref().unwrap_or("(none)")
+            );
+            println!(
                 "subject:              {}",
                 creds.subject.as_deref().unwrap_or("(unknown)")
             );

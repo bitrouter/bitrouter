@@ -1,9 +1,12 @@
-//! `/v1/budgets*` — typed CRUD wrappers over the `policies` rows whose
-//! `kind = 'budget'`. Sugar over [`super::policies`] with a flat wire
-//! shape and no `kind`/`spec` envelope.
+//! `/v1/namespaces/{nsid}/budgets*` — typed CRUD wrappers over the
+//! `policies` rows whose `kind = 'budget'`. Sugar over
+//! [`super::policies`] with a flat wire shape and no `kind`/`spec`
+//! envelope.
 //!
 //! Mirrors `bitrouter_cloud::v1::http::management::budgets`. Same
-//! `policy:read` / `policy:write` scopes as the generic surface.
+//! `policy:read` / `policy:write` scopes as the generic surface. The
+//! `{nsid}` segment is resolved from the credential — see
+//! [`super::ManagementClient::namespaced`].
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -71,37 +74,41 @@ pub struct DeleteBudgetResponse {
 }
 
 impl ManagementClient {
-    /// `GET /v1/budgets` — list every budget on the account.
+    /// `GET /v1/namespaces/{nsid}/budgets` — list every budget in the
+    /// namespace.
     pub async fn list_budgets(&self) -> Result<BudgetListResponse> {
-        self.get_json("/v1/budgets").await
-    }
-
-    /// `GET /v1/budgets/{id}` — fetch one budget. Returns
-    /// [`super::Error::NotFound`] if the id belongs to a non-budget
-    /// policy row.
-    pub async fn get_budget(&self, id: &str) -> Result<BudgetEnvelope> {
-        let path = format!("/v1/budgets/{id}");
+        let path = self.namespaced("/budgets")?;
         self.get_json(&path).await
     }
 
-    /// `POST /v1/budgets` — create a budget.
-    pub async fn create_budget(&self, body: &CreateBudgetRequest) -> Result<BudgetEnvelope> {
-        self.post_json("/v1/budgets", body).await
+    /// `GET /v1/namespaces/{nsid}/budgets/{id}` — fetch one budget.
+    /// Returns [`super::Error::NotFound`] if the id belongs to a
+    /// non-budget policy row.
+    pub async fn get_budget(&self, id: &str) -> Result<BudgetEnvelope> {
+        let path = self.namespaced(&format!("/budgets/{id}"))?;
+        self.get_json(&path).await
     }
 
-    /// `PUT /v1/budgets/{id}` — patch one or more fields of a budget.
+    /// `POST /v1/namespaces/{nsid}/budgets` — create a budget.
+    pub async fn create_budget(&self, body: &CreateBudgetRequest) -> Result<BudgetEnvelope> {
+        let path = self.namespaced("/budgets")?;
+        self.post_json(&path, body).await
+    }
+
+    /// `PUT /v1/namespaces/{nsid}/budgets/{id}` — patch one or more
+    /// fields of a budget.
     pub async fn update_budget(
         &self,
         id: &str,
         body: &UpdateBudgetRequest,
     ) -> Result<BudgetEnvelope> {
-        let path = format!("/v1/budgets/{id}");
+        let path = self.namespaced(&format!("/budgets/{id}"))?;
         self.put_json(&path, body).await
     }
 
-    /// `DELETE /v1/budgets/{id}` — remove a budget.
+    /// `DELETE /v1/namespaces/{nsid}/budgets/{id}` — remove a budget.
     pub async fn delete_budget(&self, id: &str) -> Result<DeleteBudgetResponse> {
-        let path = format!("/v1/budgets/{id}");
+        let path = self.namespaced(&format!("/budgets/{id}"))?;
         self.delete_json(&path).await
     }
 }

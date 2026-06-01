@@ -39,6 +39,7 @@ fn fresh_creds(as_url: &str) -> Credentials {
         scope: "keys:read keys:write policy:read policy:write".into(),
         client_id: "bitrouter-cli".into(),
         authorization_server: as_url.to_owned(),
+        namespace_id: Some("ns-1".into()),
         subject: Some("u-1".into()),
     }
 }
@@ -73,7 +74,7 @@ async fn list_keys_attaches_bearer_and_decodes_body() {
     let server = MockServer::start().await;
     metadata_mock(&server).await;
     Mock::given(method("GET"))
-        .and(wm_path("/v1/keys"))
+        .and(wm_path("/v1/namespaces/ns-1/keys"))
         .and(header("authorization", "Bearer AT"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "data": [{
@@ -106,7 +107,7 @@ async fn mint_key_posts_json_body_and_returns_secret() {
     let server = MockServer::start().await;
     metadata_mock(&server).await;
     Mock::given(method("POST"))
-        .and(wm_path("/v1/keys"))
+        .and(wm_path("/v1/namespaces/ns-1/keys"))
         .and(header("authorization", "Bearer AT"))
         .and(body_string_contains("\"display_name\":\"ci\""))
         .and(body_string_contains("\"scopes\":[\"policy:read\"]"))
@@ -143,7 +144,7 @@ async fn forbidden_with_scope_message_is_parsed() {
     let server = MockServer::start().await;
     metadata_mock(&server).await;
     Mock::given(method("DELETE"))
-        .and(wm_path("/v1/keys/k_x"))
+        .and(wm_path("/v1/namespaces/ns-1/keys/k_x"))
         .respond_with(ResponseTemplate::new(403).set_body_json(json!({
             "error": "forbidden",
             "error_description": "missing required scope: keys:write",
@@ -173,7 +174,7 @@ async fn not_found_maps_to_typed_variant() {
     let server = MockServer::start().await;
     metadata_mock(&server).await;
     Mock::given(method("GET"))
-        .and(wm_path("/v1/policies/ghost"))
+        .and(wm_path("/v1/namespaces/ns-1/policies/ghost"))
         .respond_with(ResponseTemplate::new(404).set_body_json(json!({
             "error": "not_found",
             "error_description": "policy not found",
@@ -211,7 +212,7 @@ async fn metadata_fetched_once_across_multiple_calls() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(wm_path("/v1/keys"))
+        .and(wm_path("/v1/namespaces/ns-1/keys"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
         .mount(&server)
         .await;
@@ -245,7 +246,7 @@ async fn refreshes_bearer_within_refresh_window_then_calls_management() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(wm_path("/v1/keys"))
+        .and(wm_path("/v1/namespaces/ns-1/keys"))
         .and(header("authorization", "Bearer refreshed"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
         .expect(1)
@@ -265,6 +266,7 @@ async fn refreshes_bearer_within_refresh_window_then_calls_management() {
             scope: "keys:read".into(),
             client_id: "bitrouter-cli".into(),
             authorization_server: server.uri(),
+            namespace_id: Some("ns-1".into()),
             subject: None,
         })
         .unwrap();
@@ -276,6 +278,55 @@ async fn refreshes_bearer_within_refresh_window_then_calls_management() {
         reloaded.current().unwrap().refresh_token.as_deref(),
         Some("rotated-rt"),
     );
+}
+
+#[tokio::test]
+async fn list_namespaces_hits_flat_user_level_path() {
+    let server = MockServer::start().await;
+    metadata_mock(&server).await;
+    Mock::given(method("GET"))
+        .and(wm_path("/v1/namespaces"))
+        .and(header("authorization", "Bearer AT"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                { "id": "ns-1", "name": "default", "created_at": "2026-05-25T00:00:00Z" },
+                { "id": "ns-2", "name": "staging", "created_at": "2026-05-26T00:00:00Z" }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let path = tmp_creds_path("list-ns");
+    let mut store = CredentialsStore::load(&path).unwrap();
+    store.save(fresh_creds(&server.uri())).unwrap();
+    let client = build_client(&server, &path);
+
+    assert_eq!(client.namespace_id(), Some("ns-1"));
+    let resp = client.list_namespaces().await.unwrap();
+    assert_eq!(resp.data.len(), 2);
+    assert_eq!(resp.data[0].id, "ns-1");
+    assert_eq!(resp.data[1].name, "staging");
+}
+
+#[tokio::test]
+async fn namespace_scoped_call_without_namespace_errors_before_network() {
+    // A credential file written before namespace-scoping has no
+    // namespace_id. Namespace-scoped methods must fail fast with
+    // NoNamespace rather than firing a malformed request. No mocks are
+    // mounted, so a stray HTTP call would surface as a transport error
+    // and fail this test.
+    let server = MockServer::start().await;
+    metadata_mock(&server).await;
+    let path = tmp_creds_path("no-ns");
+    let mut store = CredentialsStore::load(&path).unwrap();
+    let mut creds = fresh_creds(&server.uri());
+    creds.namespace_id = None;
+    store.save(creds).unwrap();
+    let client = build_client(&server, &path);
+
+    assert_eq!(client.namespace_id(), None);
+    let err = client.list_keys().await.unwrap_err();
+    assert!(matches!(err, Error::NoNamespace), "got {err:?}");
 }
 
 #[tokio::test]

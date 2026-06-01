@@ -1,9 +1,11 @@
-//! `/v1/policies*` — generic CRUD over the typed policy registry plus
-//! binding, enable/disable, per-principal listing, and the effective-
-//! policy preview.
+//! `/v1/namespaces/{nsid}/policies*` — generic CRUD over the typed
+//! policy registry plus binding, enable/disable, per-principal listing,
+//! and the effective-policy preview.
 //!
 //! Mirrors `bitrouter_cloud::v1::http::management::policies`. Scopes:
-//! `policy:read` for reads, `policy:write` for everything else.
+//! `policy:read` for reads, `policy:write` for everything else. The
+//! `{nsid}` segment is resolved from the credential — see
+//! [`super::ManagementClient::namespaced`].
 //!
 //! The shape used for `spec` is the **flat inner body** (e.g. `{
 //! "window": "day", "limit_micro_usd": 1000 }` for a budget), not the
@@ -88,7 +90,7 @@ pub struct DeletePolicyResponse {
 /// Body for `POST /v1/policies/{id}/bind`.
 #[derive(Debug, Clone, Serialize)]
 pub struct BindPolicyRequest {
-    /// One of `account`, `api_key`, `oauth_token`, `oauth_client`.
+    /// One of `namespace`, `api_key`, `oauth_token`, `oauth_client`.
     pub principal_type: String,
     /// Id of the principal — interpretation depends on
     /// `principal_type`.
@@ -127,7 +129,7 @@ pub struct BindingEnvelope {
     pub id: String,
     /// Owning policy id.
     pub policy_id: String,
-    /// One of `account`, `api_key`, `oauth_token`, `oauth_client`.
+    /// One of `namespace`, `api_key`, `oauth_token`, `oauth_client`.
     pub principal_type: String,
     /// Id of the principal this binding targets.
     pub principal_id: String,
@@ -142,10 +144,10 @@ pub struct BindingListResponse {
 
 /// Query string for `GET /v1/policies/effective`. Both fields are
 /// required: there's no "for me" shortcut because the engine
-/// computes account-vs-credential composition differently.
+/// computes namespace-vs-credential composition differently.
 #[derive(Debug, Clone, Serialize)]
 pub struct EffectivePolicyQuery {
-    /// One of `account`, `api_key`, `oauth_token`, `oauth_client`.
+    /// One of `namespace`, `api_key`, `oauth_token`, `oauth_client`.
     pub principal_type: String,
     /// Id of the principal the preview is computed for.
     pub principal_id: String,
@@ -170,92 +172,102 @@ pub struct EffectivePolicy {
 }
 
 impl ManagementClient {
-    /// `GET /v1/policies` — list policies on the caller's account,
-    /// optionally narrowed by kind.
+    /// `GET /v1/namespaces/{nsid}/policies` — list policies in the
+    /// client's namespace, optionally narrowed by kind.
     pub async fn list_policies(&self, query: &ListPoliciesQuery) -> Result<PolicyListResponse> {
-        self.get_with_query("/v1/policies", query).await
+        let path = self.namespaced("/policies")?;
+        self.get_with_query(&path, query).await
     }
 
-    /// `GET /v1/policies/{id}` — fetch a single policy.
+    /// `GET /v1/namespaces/{nsid}/policies/{id}` — fetch a single
+    /// policy.
     pub async fn get_policy(&self, id: &str) -> Result<PolicyEnvelope> {
-        let path = format!("/v1/policies/{id}");
+        let path = self.namespaced(&format!("/policies/{id}"))?;
         self.get_json(&path).await
     }
 
-    /// `POST /v1/policies` — create a new policy.
+    /// `POST /v1/namespaces/{nsid}/policies` — create a new policy.
     pub async fn create_policy(&self, body: &CreatePolicyRequest) -> Result<PolicyEnvelope> {
-        self.post_json("/v1/policies", body).await
+        let path = self.namespaced("/policies")?;
+        self.post_json(&path, body).await
     }
 
-    /// `PUT /v1/policies/{id}` — patch name and/or spec.
+    /// `PUT /v1/namespaces/{nsid}/policies/{id}` — patch name and/or
+    /// spec.
     pub async fn update_policy(
         &self,
         id: &str,
         body: &UpdatePolicyRequest,
     ) -> Result<PolicyEnvelope> {
-        let path = format!("/v1/policies/{id}");
+        let path = self.namespaced(&format!("/policies/{id}"))?;
         self.put_json(&path, body).await
     }
 
-    /// `DELETE /v1/policies/{id}` — remove a policy. Cascades to its
-    /// bindings server-side.
+    /// `DELETE /v1/namespaces/{nsid}/policies/{id}` — remove a policy.
+    /// Cascades to its bindings server-side.
     pub async fn delete_policy(&self, id: &str) -> Result<DeletePolicyResponse> {
-        let path = format!("/v1/policies/{id}");
+        let path = self.namespaced(&format!("/policies/{id}"))?;
         self.delete_json(&path).await
     }
 
-    /// `POST /v1/policies/{id}/bind` — attach a policy to a principal.
+    /// `POST /v1/namespaces/{nsid}/policies/{id}/bind` — attach a
+    /// policy to a principal.
     pub async fn bind_policy(
         &self,
         id: &str,
         body: &BindPolicyRequest,
     ) -> Result<BindPolicyResponse> {
-        let path = format!("/v1/policies/{id}/bind");
+        let path = self.namespaced(&format!("/policies/{id}/bind"))?;
         self.post_json(&path, body).await
     }
 
-    /// `DELETE /v1/policies/{id}/bind/{binding_id}` — detach one
-    /// binding.
+    /// `DELETE /v1/namespaces/{nsid}/policies/{id}/bind/{binding_id}` —
+    /// detach one binding.
     pub async fn unbind_policy(&self, id: &str, binding_id: &str) -> Result<UnbindPolicyResponse> {
-        let path = format!("/v1/policies/{id}/bind/{binding_id}");
+        let path = self.namespaced(&format!("/policies/{id}/bind/{binding_id}"))?;
         self.delete_json(&path).await
     }
 
-    /// `GET /v1/policies/{id}/bindings` — list bindings for one
-    /// policy.
+    /// `GET /v1/namespaces/{nsid}/policies/{id}/bindings` — list
+    /// bindings for one policy.
     pub async fn list_policy_bindings(&self, id: &str) -> Result<BindingListResponse> {
-        let path = format!("/v1/policies/{id}/bindings");
+        let path = self.namespaced(&format!("/policies/{id}/bindings"))?;
         self.get_json(&path).await
     }
 
-    /// `POST /v1/policies/{id}/disable` — park a policy. The row
-    /// stays in the table; the engine skips it at request time.
+    /// `POST /v1/namespaces/{nsid}/policies/{id}/disable` — park a
+    /// policy. The row stays in the table; the engine skips it at
+    /// request time.
     pub async fn disable_policy(&self, id: &str) -> Result<ToggleResponse> {
-        let path = format!("/v1/policies/{id}/disable");
+        let path = self.namespaced(&format!("/policies/{id}/disable"))?;
         self.post_empty(&path).await
     }
 
-    /// `POST /v1/policies/{id}/enable` — un-park a previously
-    /// disabled policy.
+    /// `POST /v1/namespaces/{nsid}/policies/{id}/enable` — un-park a
+    /// previously disabled policy.
     pub async fn enable_policy(&self, id: &str) -> Result<ToggleResponse> {
-        let path = format!("/v1/policies/{id}/enable");
+        let path = self.namespaced(&format!("/policies/{id}/enable"))?;
         self.post_empty(&path).await
     }
 
-    /// `GET /v1/principals/{type}/{id}/policies` — every policy bound
-    /// to a given principal.
+    /// `GET /v1/namespaces/{nsid}/principals/{type}/{id}/policies` —
+    /// every policy bound to a given principal.
     pub async fn list_principal_policies(
         &self,
         principal_type: &str,
         principal_id: &str,
     ) -> Result<PolicyListResponse> {
-        let path = format!("/v1/principals/{principal_type}/{principal_id}/policies");
+        let path = self.namespaced(&format!(
+            "/principals/{principal_type}/{principal_id}/policies"
+        ))?;
         self.get_json(&path).await
     }
 
-    /// `GET /v1/policies/effective` — preview the effective policy for
-    /// a principal without making a real inference call.
+    /// `GET /v1/namespaces/{nsid}/policies/effective` — preview the
+    /// effective policy for a principal without making a real inference
+    /// call.
     pub async fn effective_policy(&self, query: &EffectivePolicyQuery) -> Result<EffectivePolicy> {
-        self.get_with_query("/v1/policies/effective", query).await
+        let path = self.namespaced("/policies/effective")?;
+        self.get_with_query(&path, query).await
     }
 }
