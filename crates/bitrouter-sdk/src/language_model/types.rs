@@ -299,6 +299,26 @@ pub enum FinishReason {
     Error(String),
 }
 
+/// Structured detail about why generation stopped. Today this is populated only
+/// for refusals — Anthropic returns a `stop_details` object alongside
+/// `stop_reason: "refusal"` (surfaced canonically as
+/// [`FinishReason::ContentFilter`]) carrying the policy `category` and a
+/// human-readable `explanation`. Both are optional: a refusal may map to no
+/// named category, and the explanation can be absent or non-stable.
+///
+/// <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StopDetails {
+    /// Policy category that triggered the stop (e.g. `"cyber"`, `"bio"`).
+    /// `None` when the stop maps to no named category.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// Human-readable description of the stop. Not guaranteed stable — surface
+    /// it, don't branch on it. `None` when unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+}
+
 /// A complete non-streaming generation result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GenerateResult {
@@ -318,6 +338,11 @@ pub struct GenerateResult {
     /// Spec: <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_id: Option<String>,
+    /// Structured stop detail (e.g. a refusal category) when the provider
+    /// supplies one. Maps to Anthropic's `stop_details`. `None` for providers
+    /// or responses that carry no detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_details: Option<StopDetails>,
 }
 
 /// One part of a streaming response, in canonical internal form. `StreamHook`

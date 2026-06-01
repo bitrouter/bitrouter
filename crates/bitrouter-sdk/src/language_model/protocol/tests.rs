@@ -80,6 +80,7 @@ fn sample_result() -> GenerateResult {
         }),
         finish_reason: Some(FinishReason::Stop),
         response_id: None,
+        stop_details: None,
     }
 }
 
@@ -654,6 +655,357 @@ fn messages_outbound_renders_output_config_format() {
     // forwarded as unknown fields.
     assert!(rendered["output_config"]["format"].get("name").is_none());
     assert!(rendered["output_config"]["format"].get("strict").is_none());
+}
+
+#[test]
+fn messages_inbound_promotes_output_config_effort() {
+    // Anthropic's GA reasoning `effort` knob (`output_config.effort`) is lifted
+    // into the canonical `reasoning_effort` and stripped from the pass-through
+    // extras so the outbound adapter renders it exactly once.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "high"}
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert_eq!(prompt.params.reasoning_effort.as_deref(), Some("high"));
+    assert!(!prompt.params.extra.contains_key("output_config"));
+}
+
+#[test]
+fn messages_inbound_promotes_output_config_format_and_effort() {
+    // `format` + `effort` under one `output_config`: both are promoted to their
+    // canonical slots and the now-empty `output_config` is dropped from extras.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {
+            "effort": "max",
+            "format": {"type": "json_schema", "schema": {"type": "object"}}
+        }
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert_eq!(prompt.params.reasoning_effort.as_deref(), Some("max"));
+    assert!(matches!(
+        prompt.response_format,
+        Some(ResponseFormat::JsonSchema { .. })
+    ));
+    assert!(!prompt.params.extra.contains_key("output_config"));
+}
+
+#[test]
+fn messages_inbound_effort_preserves_unknown_output_config_siblings() {
+    // Lifting `effort` must leave unrelated `output_config` siblings intact.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "low", "unknown_key": "x"}
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert_eq!(prompt.params.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(prompt.params.extra["output_config"]["unknown_key"], "x");
+    assert!(prompt.params.extra["output_config"].get("effort").is_none());
+}
+
+#[test]
+fn messages_outbound_renders_output_config_effort() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let prompt = Prompt {
+        model: "claude-opus-4-8".to_string(),
+        system: None,
+        messages: vec![Message::text(Role::User, "hi")],
+        tools: vec![],
+        params: GenerationParams {
+            reasoning_effort: Some("high".to_string()),
+            ..Default::default()
+        },
+        response_format: None,
+        stream: false,
+    };
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["output_config"]["effort"], "high");
+}
+
+#[test]
+fn messages_outbound_merges_format_and_effort_into_output_config() {
+    // `response_format` + `reasoning_effort` must coexist under one
+    // `output_config` object rather than one clobbering the other.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let prompt = Prompt {
+        model: "claude-opus-4-8".to_string(),
+        system: None,
+        messages: vec![Message::text(Role::User, "hi")],
+        tools: vec![],
+        params: GenerationParams {
+            reasoning_effort: Some("xhigh".to_string()),
+            ..Default::default()
+        },
+        response_format: Some(ResponseFormat::JsonSchema {
+            name: None,
+            strict: None,
+            schema: serde_json::json!({"type": "object"}),
+        }),
+        stream: false,
+    };
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["output_config"]["effort"], "xhigh");
+    assert_eq!(rendered["output_config"]["format"]["type"], "json_schema");
+}
+
+#[test]
+fn messages_outbound_preserves_unknown_output_config_sibling_with_effort() {
+    // The inbound adapter leaves unknown output_config siblings in extra after
+    // lifting effort; the outbound render must merge them back rather than drop
+    // them when it rebuilds output_config.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "high", "unknown_key": "x"}
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["output_config"]["effort"], "high");
+    assert_eq!(rendered["output_config"]["unknown_key"], "x");
+}
+
+#[test]
+fn effort_routes_messages_to_chat_completions() {
+    // Cross-protocol (reverse direction): a Messages client's
+    // output_config.effort reaches an OpenAI-style upstream as reasoning_effort.
+    let messages = adapter_for(ApiProtocol::Messages);
+    let cc = adapter_for(ApiProtocol::ChatCompletions);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "high"}
+    });
+    let prompt = messages.parse_request(body).unwrap();
+    let rendered = cc.render_request(&prompt).unwrap();
+    assert_eq!(rendered["reasoning_effort"], "high");
+}
+
+#[test]
+fn effort_routes_chat_completions_to_messages() {
+    // Cross-protocol: a Chat Completions client's `reasoning_effort` reaches an
+    // Anthropic Messages upstream as `output_config.effort`.
+    let cc = adapter_for(ApiProtocol::ChatCompletions);
+    let messages = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "messages": [{"role": "user", "content": "hi"}],
+        "reasoning_effort": "high"
+    });
+    let prompt = cc.parse_request(body).unwrap();
+    let rendered = messages.render_request(&prompt).unwrap();
+    assert_eq!(rendered["output_config"]["effort"], "high");
+}
+
+#[test]
+fn effort_routes_messages_to_responses() {
+    // Cross-protocol: a Messages client's `output_config.effort` reaches a
+    // Responses upstream as `reasoning.effort`.
+    let messages = adapter_for(ApiProtocol::Messages);
+    let responses = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_config": {"effort": "max"}
+    });
+    let prompt = messages.parse_request(body).unwrap();
+    let rendered = responses.render_request(&prompt).unwrap();
+    assert_eq!(rendered["reasoning"]["effort"], "max");
+}
+
+#[test]
+fn messages_inbound_accepts_mid_conversation_system() {
+    // Opus 4.8 mid-conversation system messages: a `role:"system"` entry at a
+    // non-first position parses into a canonical System-role message in place.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "Terse mode: keep replies under 40 words."},
+            {"role": "assistant", "content": "ok"}
+        ]
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    assert_eq!(prompt.messages.len(), 3);
+    assert_eq!(prompt.messages[1].role, Role::System);
+    assert_eq!(
+        text_of(&prompt.messages[1].content),
+        "Terse mode: keep replies under 40 words."
+    );
+}
+
+#[test]
+fn messages_outbound_renders_mid_conversation_system() {
+    // A canonical System-role message renders as a `role:"system"` entry so the
+    // request is serialized faithfully; the upstream model decides support. The
+    // top-level system instruction still rides the out-of-band `system` field.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let prompt = Prompt {
+        model: "claude-opus-4-8".to_string(),
+        system: Some("top-level system".to_string()),
+        messages: vec![
+            Message::text(Role::User, "hi"),
+            Message::text(Role::System, "switch to terse mode"),
+        ],
+        tools: vec![],
+        params: GenerationParams::default(),
+        response_format: None,
+        stream: false,
+    };
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["system"], "top-level system");
+    assert_eq!(rendered["messages"][1]["role"], "system");
+    assert_eq!(
+        rendered["messages"][1]["content"][0]["text"],
+        "switch to terse mode"
+    );
+}
+
+#[test]
+fn messages_mid_conversation_system_round_trips() {
+    // Messages -> canonical -> Messages preserves both the top-level system and
+    // an interleaved mid-conversation system message, in order.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "system": "you are helpful",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "be terse"},
+            {"role": "user", "content": "go"}
+        ]
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["system"], "you are helpful");
+    let msgs = rendered["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 3);
+    assert_eq!(msgs[1]["role"], "system");
+    assert_eq!(msgs[1]["content"][0]["text"], "be terse");
+}
+
+#[test]
+fn mid_conversation_system_routes_messages_to_chat_completions() {
+    // Cross-protocol: a Messages client's mid-conversation system message reaches
+    // an OpenAI-style upstream as an in-place `role:"system"` message.
+    let messages = adapter_for(ApiProtocol::Messages);
+    let cc = adapter_for(ApiProtocol::ChatCompletions);
+    let body = serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "be terse"}
+        ]
+    });
+    let prompt = messages.parse_request(body).unwrap();
+    let rendered = cc.render_request(&prompt).unwrap();
+    let msgs = rendered["messages"].as_array().unwrap();
+    assert!(
+        msgs.iter()
+            .any(|m| m["role"] == "system" && m.to_string().contains("be terse")),
+        "interleaved system survives cross-protocol routing: {msgs:?}"
+    );
+}
+
+#[test]
+fn messages_inbound_parses_refusal_stop_details() {
+    // Opus 4.8 refusals carry a stop_details object {type, category,
+    // explanation}; surface category + explanation on the canonical result.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-8",
+        "content": [],
+        "stop_reason": "refusal",
+        "stop_details": {"type": "refusal", "category": "cyber", "explanation": "declined"},
+        "usage": {"input_tokens": 5, "output_tokens": 0}
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert_eq!(result.finish_reason, Some(FinishReason::ContentFilter));
+    let details = result.stop_details.expect("stop_details present");
+    assert_eq!(details.category.as_deref(), Some("cyber"));
+    assert_eq!(details.explanation.as_deref(), Some("declined"));
+}
+
+#[test]
+fn messages_parse_response_omits_stop_details_when_absent() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-8",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 5, "output_tokens": 1}
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert!(result.stop_details.is_none());
+}
+
+#[test]
+fn messages_outbound_renders_refusal_stop_details() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let result = GenerateResult {
+        content: vec![],
+        usage: None,
+        finish_reason: Some(FinishReason::ContentFilter),
+        response_id: None,
+        stop_details: Some(StopDetails {
+            category: Some("bio".to_string()),
+            explanation: None,
+        }),
+    };
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "msg_1")
+        .unwrap();
+    assert_eq!(rendered["stop_reason"], "refusal");
+    assert_eq!(rendered["stop_details"]["type"], "refusal");
+    assert_eq!(rendered["stop_details"]["category"], "bio");
+    // explanation was None -> omitted, not serialised as null.
+    assert!(rendered["stop_details"].get("explanation").is_none());
+}
+
+#[test]
+fn refusal_stop_details_round_trips_messages() {
+    // Messages -> canonical -> Messages preserves the refusal category and
+    // explanation in Anthropic's wire shape.
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-8",
+        "content": [],
+        "stop_reason": "refusal",
+        "stop_details": {"type": "refusal", "category": "cyber", "explanation": "no"},
+        "usage": {"input_tokens": 3, "output_tokens": 0}
+    });
+    let result = adapter.parse_response(body).unwrap();
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "msg_1")
+        .unwrap();
+    assert_eq!(rendered["stop_details"]["category"], "cyber");
+    assert_eq!(rendered["stop_details"]["explanation"], "no");
 }
 
 #[test]
@@ -1327,6 +1679,7 @@ fn responses_omits_usage_when_none() {
         usage: None,
         finish_reason: Some(FinishReason::Stop),
         response_id: None,
+        stop_details: None,
     };
     let rendered = adapter
         .render_response(&result, &sample_prompt(), "resp_n")
@@ -1693,6 +2046,7 @@ fn regression_454_5_no_null_on_the_wire() {
         usage: None,
         finish_reason: None,
         response_id: None,
+        stop_details: None,
     };
     // Chat Completions: `usage` key is absent when there is no usage.
     let chat = adapter_for(ApiProtocol::ChatCompletions)
@@ -1712,6 +2066,7 @@ fn regression_454_5_no_null_on_the_wire() {
         usage: None,
         finish_reason: None,
         response_id: None,
+        stop_details: None,
     };
     let chat_empty = adapter_for(ApiProtocol::ChatCompletions)
         .render_response(&empty, &sample_prompt(), "c2")
@@ -2187,6 +2542,7 @@ fn regression_454_5_usage_zero_is_numeric_not_null() {
         }),
         finish_reason: Some(FinishReason::Stop),
         response_id: None,
+        stop_details: None,
     };
     let chat = adapter_for(ApiProtocol::ChatCompletions)
         .render_response(&result, &sample_prompt(), "c1")

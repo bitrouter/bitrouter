@@ -86,6 +86,7 @@ impl MockExecutor {
             }),
             finish_reason: Some(FinishReason::Stop),
             response_id: None,
+            stop_details: None,
         };
         Self::new(vec![MockResponse::Generate(result)])
     }

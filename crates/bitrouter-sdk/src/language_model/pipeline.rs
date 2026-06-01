@@ -175,6 +175,7 @@ impl Pipeline {
                     usage: None,
                     finish_reason: None,
                     response_id: None,
+                    stop_details: None,
                 },
                 latency_ms: 0,
                 generation_time_ms: 0,

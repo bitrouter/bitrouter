@@ -537,6 +537,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             usage,
             finish_reason,
             response_id,
+            stop_details: None,
         })
     }
 

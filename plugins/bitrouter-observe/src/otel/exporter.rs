@@ -1068,6 +1068,7 @@ mod hop_tests {
                 }),
                 finish_reason: Some(FinishReason::Stop),
                 response_id: Some("chatcmpl-test123".into()),
+                stop_details: None,
             },
             latency_ms: 42,
             generation_time_ms: 40,

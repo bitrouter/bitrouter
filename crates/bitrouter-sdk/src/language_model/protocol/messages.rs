@@ -23,7 +23,7 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
+    ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart, Usage,
 };
 
 /// The Messages inbound + outbound protocol adapter.
@@ -185,10 +185,17 @@ fn parse_role(role: &str) -> Result<Role> {
     match role {
         "user" => Ok(Role::User),
         "assistant" => Ok(Role::Assistant),
-        // Messages has no top-level system/tool role; tool results ride inside
-        // a user-role message. An unexpected role is a hard error (#454-4).
+        // Mid-conversation system messages: Opus 4.8 accepts `role: "system"`
+        // entries at non-first positions in `messages` (GA, no beta header), so
+        // operator instructions can change mid-session without invalidating the
+        // prompt cache. Map them to the canonical System role and let the
+        // upstream model decide whether it supports them.
+        // <https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages>
+        "system" => Ok(Role::System),
+        // Tool results ride inside a user-role message; any other role is a
+        // hard error (#454-4).
         other => Err(BitrouterError::bad_request(format!(
-            "unknown anthropic message role '{other}' (expected user/assistant)"
+            "unknown anthropic message role '{other}' (expected user/assistant/system)"
         ))),
     }
 }
@@ -234,6 +241,43 @@ fn finish_to_stop_reason(r: &FinishReason) -> String {
         // error frame ahead of this when the canonical IR carries an error.
         FinishReason::Error(_) => "end_turn".to_string(),
     }
+}
+
+/// Parse Anthropic's `stop_details` object (present on refusals) into the
+/// canonical [`StopDetails`]. Returns `None` when absent or when it carries
+/// neither a category nor an explanation.
+/// <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
+fn parse_stop_details(value: &serde_json::Value) -> Option<StopDetails> {
+    let category = value
+        .get("category")
+        .and_then(|c| c.as_str())
+        .map(str::to_string);
+    let explanation = value
+        .get("explanation")
+        .and_then(|e| e.as_str())
+        .map(str::to_string);
+    if category.is_none() && explanation.is_none() {
+        return None;
+    }
+    Some(StopDetails {
+        category,
+        explanation,
+    })
+}
+
+/// Render a canonical [`StopDetails`] back into Anthropic's `stop_details`
+/// object. It accompanies a refusal, so `type` is fixed to `"refusal"`.
+/// <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
+fn render_stop_details(details: &StopDetails) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("type".into(), "refusal".into());
+    if let Some(category) = &details.category {
+        obj.insert("category".into(), category.clone().into());
+    }
+    if let Some(explanation) = &details.explanation {
+        obj.insert("explanation".into(), explanation.clone().into());
+    }
+    serde_json::Value::Object(obj)
 }
 
 impl InboundAdapter for MessagesAdapter {
@@ -291,6 +335,19 @@ impl InboundAdapter for MessagesAdapter {
         // unknown siblings inside `output_config` survive opaquely if
         // `output_format` was the source.
         let mut extra = req.extra;
+
+        // Anthropic's GA reasoning `effort` knob lives at `output_config.effort`
+        // (`low` | `medium` | `high` | `xhigh` | `max`; defaults to `high` on
+        // Opus 4.8). Promote it to the canonical `reasoning_effort` so it
+        // round-trips across protocols, mirroring Chat Completions'
+        // `reasoning_effort` and Responses' `reasoning.effort`.
+        // <https://platform.claude.com/docs/en/build-with-claude/effort>
+        let reasoning_effort = extra
+            .get("output_config")
+            .and_then(|oc| oc.get("effort"))
+            .and_then(|e| e.as_str())
+            .map(str::to_string);
+
         let response_format = if let Some(rf) = parse_output_config_format(&extra) {
             if let Some(oc) = extra
                 .get_mut("output_config")
@@ -309,6 +366,21 @@ impl InboundAdapter for MessagesAdapter {
             None
         };
 
+        // The `effort` key was lifted into `reasoning_effort` above; drop it so
+        // the outbound adapter renders it once (from the typed slot) rather than
+        // also splatting it back via `extra`. A no-op when no effort was present.
+        // Unknown `output_config` siblings are preserved; an `output_config`
+        // left empty by the removal is dropped.
+        if let Some(oc) = extra
+            .get_mut("output_config")
+            .and_then(|v| v.as_object_mut())
+        {
+            oc.remove("effort");
+            if oc.is_empty() {
+                extra.remove("output_config");
+            }
+        }
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -318,7 +390,7 @@ impl InboundAdapter for MessagesAdapter {
                 temperature: req.temperature,
                 top_p: req.top_p,
                 max_tokens: req.max_tokens,
-                reasoning_effort: None,
+                reasoning_effort,
                 extra,
             },
             response_format,
@@ -339,15 +411,26 @@ impl InboundAdapter for MessagesAdapter {
             .filter_map(render_content_block)
             .collect();
         let usage = result.usage.unwrap_or_default();
-        Ok(serde_json::json!({
-            "id": request_id,
-            "type": "message",
-            "role": "assistant",
-            "model": prompt.model,
-            "content": content,
-            "stop_reason": result.finish_reason.as_ref().map(finish_to_stop_reason),
-            "usage": render_usage(&usage),
-        }))
+        let stop_reason = result
+            .finish_reason
+            .as_ref()
+            .map(finish_to_stop_reason)
+            .map_or(serde_json::Value::Null, serde_json::Value::String);
+        let mut body = serde_json::Map::new();
+        body.insert("id".into(), request_id.into());
+        body.insert("type".into(), "message".into());
+        body.insert("role".into(), "assistant".into());
+        body.insert("model".into(), prompt.model.clone().into());
+        body.insert("content".into(), serde_json::Value::Array(content));
+        body.insert("stop_reason".into(), stop_reason);
+        body.insert("usage".into(), render_usage(&usage));
+        // Echo a refusal's structured detail back in Anthropic's shape so a
+        // Messages client sees the same `stop_details` the upstream produced.
+        // <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
+        if let Some(details) = &result.stop_details {
+            body.insert("stop_details".into(), render_stop_details(details));
+        }
+        Ok(serde_json::Value::Object(body))
     }
 
     fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
@@ -406,14 +489,33 @@ impl OutboundAdapter for MessagesAdapter {
         if let Some(p) = prompt.params.top_p {
             req.insert("top_p".into(), p.into());
         }
-        // Render the canonical response_format into Anthropic's GA shape
-        // (`output_config.format`). `name` and `strict` are intentionally
-        // dropped — Anthropic's schema-constrained sampling has no concept of
-        // either and they would be rejected as unknown fields.
+        // Anthropic groups structured-outputs (`format`) and the reasoning
+        // `effort` knob under one `output_config` object. Seed it from any
+        // pass-through `output_config` so unknown siblings the inbound adapter
+        // left in `extra` survive, then layer the canonical `response_format`
+        // and `reasoning_effort` on top so cross-protocol routing carries both
+        // (e.g. a Chat Completions client's `reasoning_effort` reaches an
+        // Anthropic upstream as `output_config.effort`). The canonical format's
+        // `name` / `strict` are intentionally dropped — Anthropic's
+        // schema-constrained sampling has no concept of either.
+        // <https://platform.claude.com/docs/en/build-with-claude/effort>
+        let mut output_config = prompt
+            .params
+            .extra
+            .get("output_config")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
         if let Some(rf) = &prompt.response_format {
+            output_config.insert("format".into(), render_messages_response_format(rf));
+        }
+        if let Some(effort) = &prompt.params.reasoning_effort {
+            output_config.insert("effort".into(), effort.clone().into());
+        }
+        if !output_config.is_empty() {
             req.insert(
                 "output_config".into(),
-                serde_json::json!({ "format": render_messages_response_format(rf) }),
+                serde_json::Value::Object(output_config),
             );
         }
         // Splat anthropic-specific extras (tool_choice, stop_sequences, …) back
@@ -478,11 +580,18 @@ impl OutboundAdapter for MessagesAdapter {
             .get("id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // On a refusal, Opus 4.7+ returns a `stop_details` object with the
+        // policy `category` (`cyber` | `bio` | null) and an `explanation`.
+        // Surface it so callers can route refusal classes; it is null for every
+        // non-refusal stop reason.
+        // <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
+        let stop_details = body.get("stop_details").and_then(parse_stop_details);
         Ok(GenerateResult {
             content,
             usage,
             finish_reason,
             response_id,
+            stop_details,
         })
     }
 
@@ -603,9 +712,13 @@ fn render_message(m: &Message) -> serde_json::Value {
 
     let role = match m.role {
         Role::Assistant => "assistant",
-        // System should have been lifted to the top-level `system` field; if a
-        // System message slips through, fold it into a user turn.
-        Role::User | Role::System => "user",
+        // Mid-conversation system messages render as `role: "system"` entries so
+        // the request is serialized faithfully; the upstream model (Opus 4.8+)
+        // decides whether to honor them. Top-level system still rides the
+        // out-of-band `system` field set in `render_request`.
+        // <https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages>
+        Role::System => "system",
+        Role::User => "user",
         Role::Tool => unreachable!("handled above"),
     };
     let blocks: Vec<serde_json::Value> =
