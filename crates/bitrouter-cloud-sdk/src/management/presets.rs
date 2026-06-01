@@ -3,8 +3,7 @@
 //! of an optional `guardrail`, `budget`, and / or `rate_limit` clause.
 //!
 //! Mirrors `bitrouter_cloud::v1::http::management::presets`. The
-//! `{nsid}` segment is resolved from the credential — see
-//! [`super::ManagementClient::namespaced`].
+//! `{nsid}` segment is resolved from the credential's baked namespace.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

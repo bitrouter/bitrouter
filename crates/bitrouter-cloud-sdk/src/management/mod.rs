@@ -16,9 +16,9 @@
 //! live under `/v1/namespaces/{nsid}/…`, user-level endpoints stay flat.
 //! The CLI's credential is namespace-baked, so the client captures its
 //! `namespace_id` at construction and resolves the `{nsid}` segment
-//! implicitly via [`ManagementClient::namespaced`] — callers never pass
-//! a namespace argument. User-level endpoints (`namespaces`, `billing`,
-//! `byok`) ignore the namespace and key on the subject user server-side.
+//! implicitly — callers never pass a namespace argument. User-level
+//! endpoints (`namespaces`, `billing`, `byok`) ignore the namespace and
+//! key on the subject user server-side.
 //!
 //! ## Endpoint coverage
 //!

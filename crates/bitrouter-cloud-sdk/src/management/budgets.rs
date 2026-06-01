@@ -5,8 +5,7 @@
 //!
 //! Mirrors `bitrouter_cloud::v1::http::management::budgets`. Same
 //! `policy:read` / `policy:write` scopes as the generic surface. The
-//! `{nsid}` segment is resolved from the credential — see
-//! [`super::ManagementClient::namespaced`].
+//! `{nsid}` segment is resolved from the credential's baked namespace.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

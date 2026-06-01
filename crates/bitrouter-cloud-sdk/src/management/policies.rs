@@ -4,8 +4,7 @@
 //!
 //! Mirrors `bitrouter_cloud::v1::http::management::policies`. Scopes:
 //! `policy:read` for reads, `policy:write` for everything else. The
-//! `{nsid}` segment is resolved from the credential — see
-//! [`super::ManagementClient::namespaced`].
+//! `{nsid}` segment is resolved from the credential's baked namespace.
 //!
 //! The shape used for `spec` is the **flat inner body** (e.g. `{
 //! "window": "day", "limit_micro_usd": 1000 }` for a budget), not the

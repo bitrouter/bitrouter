@@ -3,8 +3,7 @@
 //! require `usage:read`.
 //!
 //! Mirrors `bitrouter_cloud::v1::http::management::usage`. The `{nsid}`
-//! segment is resolved from the credential — see
-//! [`super::ManagementClient::namespaced`].
+//! segment is resolved from the credential's baked namespace.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -3,8 +3,7 @@
 //!
 //! Mirrors `bitrouter_cloud::v1::http::management::keys`. Scopes:
 //! `keys:read` for list, `keys:write` for mint and revoke. The `{nsid}`
-//! segment is resolved from the credential — see
-//! [`super::ManagementClient::namespaced`].
+//! segment is resolved from the credential's baked namespace.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

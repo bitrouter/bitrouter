@@ -4,8 +4,7 @@
 //! Mirrors `bitrouter_cloud::v1::http::management::oauth_clients`. The
 //! freshly minted `client_secret` (for confidential clients) is
 //! returned exactly once in the register response and never again. The
-//! `{nsid}` segment is resolved from the credential — see
-//! [`super::ManagementClient::namespaced`].
+//! `{nsid}` segment is resolved from the credential's baked namespace.
 //!
 //! Scopes: `clients:read` / `clients:write`. `clients:write` is a
 //! control-plane scope the server refuses to mint into a namespace-baked
