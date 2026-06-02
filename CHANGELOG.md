@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.6](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.5...v1.0.0-alpha.6)
+
+
+### ⛰️ Features
+
+- *(cloud-sdk)* Namespace-scoped management client + CLI ([#508](https://github.com/bitrouter/bitrouter/pull/508)) - ([f4ff599](https://github.com/bitrouter/bitrouter/commit/f4ff599cd2927d56c163b5281162b92b62fdfdcb))
+- *(messages)* Integrate Opus 4.8 Messages API parameters ([#509](https://github.com/bitrouter/bitrouter/pull/509)) - ([c768b50](https://github.com/bitrouter/bitrouter/commit/c768b508f6374e861566ab1ba94e546a0ed1a30d))
+- *(observe)* [**breaking**] Split otel feature into transport sub-features ([#506](https://github.com/bitrouter/bitrouter/pull/506)) - ([dcb3830](https://github.com/bitrouter/bitrouter/commit/dcb3830a1612b8284a092798ec0247543b4c622b))
+- *(skills)* Skills gateway client — bitrouter-skills crate + CLI ([#511](https://github.com/bitrouter/bitrouter/pull/511)) - ([5de0786](https://github.com/bitrouter/bitrouter/commit/5de0786a811a0eedaf77ba981fd64f418350cee7))
+
+
 ## [1.0.0-alpha.5](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.4...v1.0.0-alpha.5)
 
 
