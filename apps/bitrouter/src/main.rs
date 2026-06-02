@@ -233,6 +233,12 @@ enum Command {
         #[command(subcommand)]
         action: bitrouter::cloud::cli::CloudAction,
     },
+    /// Install and manage Claude Code skills from GitHub, a git URL, or a
+    /// BitRouter registry.
+    Skills {
+        #[command(subcommand)]
+        action: bitrouter::skills::cli::SkillsAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -535,6 +541,7 @@ async fn run() -> Result<()> {
         }
         Command::Auth { action } => auth_cmd(action).await,
         Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
+        Command::Skills { action } => bitrouter::skills::cli::run(action).await,
     }
 }
 

@@ -370,4 +370,60 @@ bitrouter cloud oauth-client update <CLIENT_ID> [--name <NAME>] [--grant <GRANT>
 bitrouter cloud oauth-client delete <CLIENT_ID> [--json]
 ```
 
+## Skills
+
+`bitrouter skills …` installs and manages Claude Code skills — directories containing a `SKILL.md` with YAML frontmatter (`name`, `description`). Skills install into the agent skills directory: `~/.claude/skills/<name>/` with `--global`, or `./.claude/skills/<name>/` (project-local) by default.
+
+Sources are auto-detected:
+
+- `owner/repo` — GitHub shorthand (optionally `owner/repo#<branch|tag|sha>`)
+- `https://github.com/owner/repo[.git]` — full GitHub URL
+- `https://github.com/owner/repo/tree/<ref>/<subdir>` — a skill in a subdirectory
+- any other `https://…`, `git://…`, or `git@…` git URL
+- `./path`, `../path`, `/abs/path`, `~/path` — a local directory (copied, not cloned)
+- a bare `name` — resolved against the registry's public hub (`--registry <URL>`, default `https://api.bitrouter.ai`)
+
+Git sources are shallow-cloned via the system `git` binary (must be on `PATH`). Plain-HTTP sources are refused (skills are executable content); symlinks in a source tree are skipped, and skill names are validated to prevent path traversal.
+
+### `bitrouter skills add <source>`
+
+```
+bitrouter skills add <SOURCE> [--skill <NAME>] [-g|--global] [-y|--yes] [--registry <URL>]
+```
+
+Clones/copies the source, discovers its `SKILL.md`, and installs it. `--skill <NAME>` selects one skill by frontmatter name when the source exposes several. Installing over an existing skill requires `-y/--yes`.
+
+### `bitrouter skills list` / `remove`
+
+```
+bitrouter skills list   [-g|--global]
+bitrouter skills remove <NAME> [-g|--global]
+```
+
+`list` prints installed skills (name + path); `remove` deletes one by name.
+
+### `bitrouter skills find <query>`
+
+```
+bitrouter skills find <QUERY> [--registry <URL>]
+```
+
+Searches the registry hub, matching `query` against name, description, and tags.
+
+### `bitrouter skills init <name>`
+
+```
+bitrouter skills init <NAME> [-o|--output <PATH>]
+```
+
+Scaffolds a starter `SKILL.md` (default `./SKILL.md`). Refuses to overwrite an existing file.
+
+### `bitrouter skills update`
+
+```
+bitrouter skills update [<NAME>] [-g|--global] [--registry <URL>]
+```
+
+Re-installs installed skills from the registry to their latest version (all installed skills, or just `<NAME>`). Skills absent from the registry are skipped; a per-skill failure is reported without aborting the rest.
+
 Grant types: `authorization_code`, `refresh_token`, `urn:ietf:params:oauth:grant-type:device_code`. For confidential clients, the freshly minted `client_secret` is returned exactly once in the `register` response.

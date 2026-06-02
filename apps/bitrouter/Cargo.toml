@@ -20,6 +20,7 @@ path = "src/main.rs"
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
 bitrouter-cloud-sdk.workspace = true
 bitrouter-providers = { workspace = true, features = ["pkce"] }
+bitrouter-skills.workspace = true
 bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true, features = ["otel-http"] }
 chrono.workspace = true

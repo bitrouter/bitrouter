@@ -628,6 +628,202 @@ pub async fn logout_provider(provider_id: &str) -> Result<()> {
     Ok(())
 }
 
+// ===== skills (client installer) =====
+
+/// Default BitRouter registry queried when `bitrouter skills add <name>` is
+/// given a bare skill name rather than a git source.
+const DEFAULT_SKILLS_REGISTRY: &str = "https://api.bitrouter.ai";
+
+/// Build the HTTP client used to talk to a skills registry. Mirrors the
+/// 30-second-timeout, user-agent-tagged client the cloud SDK uses.
+fn skills_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(concat!("bitrouter-skills/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("building skills HTTP client")
+}
+
+/// Resolve the install target for the `--global` flag.
+fn skills_target(global: bool) -> Result<bitrouter_skills::install::InstallTarget> {
+    use bitrouter_skills::install::InstallTarget;
+    if global {
+        Ok(InstallTarget::Global)
+    } else {
+        let cwd = std::env::current_dir().context("resolving the current directory")?;
+        Ok(InstallTarget::Project { project_root: cwd })
+    }
+}
+
+/// Whether `source` is a bare registry skill name (no path/scheme), as opposed
+/// to a git source.
+fn is_bare_skill_name(source: &str) -> bool {
+    !source.contains('/') && !source.contains("://") && !source.starts_with("git@")
+}
+
+/// Resolve a registry name to its git source string via the marketplace.
+async fn resolve_registry_source(name: &str, registry: Option<&str>) -> Result<String> {
+    use bitrouter_skills::marketplace;
+    let base = registry.unwrap_or(DEFAULT_SKILLS_REGISTRY);
+    let client = skills_http_client()?;
+    let market = marketplace::fetch_marketplace(&client, base).await?;
+    let entry = market
+        .find(name)
+        .ok_or_else(|| anyhow::anyhow!("skill {name:?} not found in registry {base}"))?;
+    Ok(entry.source.clone())
+}
+
+/// `bitrouter skills add` — install a skill from a git source or registry name.
+pub async fn skills_add(
+    source: &str,
+    select: Option<&str>,
+    global: bool,
+    overwrite: bool,
+    registry: Option<&str>,
+) -> Result<()> {
+    use bitrouter_skills::{install, source as skill_source};
+
+    if source.trim().is_empty() {
+        anyhow::bail!(
+            "a skill source is required (owner/repo, a git URL, a local path, or a registry name)"
+        );
+    }
+
+    let target = skills_target(global)?;
+    let source_str = if is_bare_skill_name(source) {
+        resolve_registry_source(source, registry).await?
+    } else {
+        source.to_string()
+    };
+    let parsed = skill_source::parse_source(&source_str)?;
+    let outcome = install::install(&parsed, &target, overwrite, select, None).await?;
+    let verb = if outcome.was_updated {
+        "updated"
+    } else {
+        "installed"
+    };
+    println!("{verb} {} → {}", outcome.name, outcome.dest.display());
+    Ok(())
+}
+
+/// `bitrouter skills list` — show installed skills.
+pub fn skills_list(global: bool) -> Result<()> {
+    use bitrouter_skills::install;
+    let target = skills_target(global)?;
+    let installed = install::list_installed(&target)?;
+    if installed.is_empty() {
+        println!("no skills installed");
+        return Ok(());
+    }
+    for (name, path) in installed {
+        println!("{name}\t{}", path.display());
+    }
+    Ok(())
+}
+
+/// `bitrouter skills remove` — uninstall a skill by name.
+pub fn skills_remove(name: &str, global: bool) -> Result<()> {
+    use bitrouter_skills::install;
+    let target = skills_target(global)?;
+    let dir = install::remove(name, &target)?;
+    println!("removed {name} ({})", dir.display());
+    Ok(())
+}
+
+/// `bitrouter skills find` — search a registry.
+pub async fn skills_find(query: &str, registry: Option<&str>) -> Result<()> {
+    use bitrouter_skills::marketplace;
+    let base = registry.unwrap_or(DEFAULT_SKILLS_REGISTRY);
+    let client = skills_http_client()?;
+    let market = marketplace::fetch_marketplace(&client, base).await?;
+    let hits = market.search(query);
+    if hits.is_empty() {
+        println!("no skills matching {query:?} in {base}");
+        return Ok(());
+    }
+    for entry in hits {
+        let version = entry.version.as_deref().unwrap_or("-");
+        println!("{}\t{version}\t{}", entry.name, entry.description);
+    }
+    Ok(())
+}
+
+/// `bitrouter skills init` — scaffold a SKILL.md.
+pub fn skills_init(name: &str, output: &std::path::Path) -> Result<()> {
+    bitrouter_skills::install::validate_skill_name(name)?;
+    if output.exists() {
+        anyhow::bail!("{} already exists; refusing to overwrite", output.display());
+    }
+    let body = format!(
+        "---\nname: {name}\ndescription: TODO — one line on what this skill does and when to use it.\n---\n\n# {name}\n\nTODO: instructions for the agent.\n\n## When to use\n\n## Steps\n"
+    );
+    std::fs::write(output, body).with_context(|| format!("writing {}", output.display()))?;
+    println!("wrote {}", output.display());
+    Ok(())
+}
+
+/// `bitrouter skills update` — re-install installed skills from the registry.
+pub async fn skills_update(name: Option<&str>, global: bool, registry: Option<&str>) -> Result<()> {
+    use bitrouter_skills::{install, marketplace, source as skill_source};
+
+    let target = skills_target(global)?;
+    let base = registry.unwrap_or(DEFAULT_SKILLS_REGISTRY);
+
+    // `update` only re-installs skills that are actually installed; an explicit
+    // name must already be present (it does not double as an installer).
+    let installed: Vec<String> = install::list_installed(&target)?
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    let names: Vec<String> = match name {
+        Some(n) => {
+            if !installed.iter().any(|i| i == n) {
+                anyhow::bail!("skill {n:?} is not installed; use `bitrouter skills add` first");
+            }
+            vec![n.to_string()]
+        }
+        None => installed,
+    };
+    if names.is_empty() {
+        println!("no skills installed to update");
+        return Ok(());
+    }
+
+    let client = skills_http_client()?;
+    let market = marketplace::fetch_marketplace(&client, base).await?;
+
+    // Update each skill independently: one failure must not abort the rest.
+    // Re-install into the same directory (`install_as`) so a skill stays put
+    // even if its upstream frontmatter name has drifted.
+    let mut failures = 0u32;
+    for skill_name in names {
+        match market.find(&skill_name) {
+            Some(entry) => {
+                let result = match skill_source::parse_source(&entry.source) {
+                    Ok(parsed) => {
+                        install::install(&parsed, &target, true, None, Some(&skill_name)).await
+                    }
+                    Err(e) => Err(e),
+                };
+                match result {
+                    Ok(outcome) => {
+                        println!("updated {} → {}", outcome.name, outcome.dest.display())
+                    }
+                    Err(e) => {
+                        failures += 1;
+                        eprintln!("failed to update {skill_name}: {e}");
+                    }
+                }
+            }
+            None => println!("skipped {skill_name} (not in registry {base})"),
+        }
+    }
+    if failures > 0 {
+        anyhow::bail!("{failures} skill(s) failed to update");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
