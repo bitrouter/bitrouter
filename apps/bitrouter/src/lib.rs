@@ -23,6 +23,7 @@ pub mod metering;
 pub mod paths;
 pub mod policy;
 pub mod reload;
+pub mod skills;
 pub mod style;
 pub mod tools;
 

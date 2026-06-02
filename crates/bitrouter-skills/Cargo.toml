@@ -1,0 +1,20 @@
+[package]
+name = "bitrouter-skills"
+description = "BitRouter skills: SKILL.md parsing, source resolution, marketplace types, and install logic."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["process"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

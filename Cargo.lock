@@ -731,6 +731,7 @@ dependencies = [
  "bitrouter-observe",
  "bitrouter-providers",
  "bitrouter-sdk",
+ "bitrouter-skills",
  "chrono",
  "clap",
  "futures",
@@ -877,6 +878,18 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "bitrouter-skills"
+version = "1.0.0-alpha.5"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

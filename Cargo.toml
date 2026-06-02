@@ -19,6 +19,7 @@ bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.5", defa
 bitrouter-bedrock = { path = "crates/bitrouter-bedrock", version = "1.0.0-alpha.5" }
 bitrouter-cloud-sdk = { path = "crates/bitrouter-cloud-sdk", version = "1.0.0-alpha.5" }
 bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.5" }
+bitrouter-skills = { path = "crates/bitrouter-skills", version = "1.0.0-alpha.5" }
 bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.5" }
 bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.5", default-features = false }
 
