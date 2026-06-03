@@ -253,7 +253,7 @@ enum AuthAction {
         client_id: Option<String>,
         /// Permissions to request, as a space-delimited list. Defaults to a
         /// broad "developer" set (inference, key management, billing-read,
-        /// policy, BYOK, account-read); pass a narrower or wider list to
+        /// policy, BYOK, namespace-read); pass a narrower or wider list to
         /// override (env: BITROUTER_OAUTH_SCOPE).
         #[arg(long, value_name = "SCOPE")]
         scope: Option<String>,
