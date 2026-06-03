@@ -15,6 +15,124 @@ use std::path::{Path, PathBuf};
 
 use crate::{Error, Result};
 
+/// Claude Code's `marketplace.json` source union — the wire shape served by a
+/// bitrouter registry hub and consumed natively by Claude Code. Distinct from
+/// the local-resolution [`SkillSource`]: this one is serde-serializable and
+/// carries the CC discriminator (`source: "github" | "url" | "git-subdir"`),
+/// while `SkillSource` additionally models local paths (which can never be
+/// published to a registry).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "source", rename_all = "kebab-case")]
+pub enum Source {
+    /// A GitHub repository referenced by `owner/repo`.
+    Github {
+        /// `owner/repo`.
+        repo: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        r#ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha: Option<String>,
+    },
+    /// Any git-cloneable URL.
+    Url {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        r#ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha: Option<String>,
+    },
+    /// A sub-directory within a git repository.
+    GitSubdir {
+        url: String,
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        r#ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha: Option<String>,
+    },
+}
+
+/// Convert a resolved [`SkillSource`] into the Claude Code wire [`Source`]. Used
+/// by the bitrouter-cloud skills hub to store/serve registry entries; local
+/// sources are rejected as they cannot be published.
+impl TryFrom<&SkillSource> for Source {
+    type Error = Error;
+
+    fn try_from(value: &SkillSource) -> Result<Self> {
+        match value {
+            SkillSource::Github {
+                owner,
+                repo,
+                git_ref,
+            } => Ok(Source::Github {
+                repo: format!("{owner}/{repo}"),
+                r#ref: git_ref.clone(),
+                sha: None,
+            }),
+            SkillSource::Url { url, git_ref } => Ok(Source::Url {
+                url: url.clone(),
+                r#ref: git_ref.clone(),
+                sha: None,
+            }),
+            SkillSource::GitSubdir { url, path, git_ref } => Ok(Source::GitSubdir {
+                url: url.clone(),
+                path: path.clone(),
+                r#ref: git_ref.clone(),
+                sha: None,
+            }),
+            SkillSource::Local { .. } => Err(Error::InvalidSource(
+                "local sources cannot be published to a registry".into(),
+            )),
+        }
+    }
+}
+
+impl TryFrom<&Source> for SkillSource {
+    type Error = Error;
+
+    fn try_from(value: &Source) -> Result<Self> {
+        match value {
+            Source::Github { repo, r#ref, sha } => {
+                let (owner, name) = repo.split_once('/').ok_or_else(|| {
+                    Error::InvalidSource(format!("github repo {repo:?} must be 'owner/repo'"))
+                })?;
+                let name = name.trim_end_matches(".git");
+                if owner.is_empty() || name.is_empty() || name.contains('/') {
+                    return Err(Error::InvalidSource(format!(
+                        "github repo {repo:?} must be 'owner/repo'"
+                    )));
+                }
+                Ok(SkillSource::Github {
+                    owner: owner.to_string(),
+                    repo: name.to_string(),
+                    git_ref: r#ref.clone().or_else(|| sha.clone()),
+                })
+            }
+            Source::Url { url, r#ref, sha } => Ok(SkillSource::Url {
+                url: url.clone(),
+                git_ref: r#ref.clone().or_else(|| sha.clone()),
+            }),
+            Source::GitSubdir {
+                url,
+                path,
+                r#ref,
+                sha,
+            } => Ok(SkillSource::GitSubdir {
+                url: url.clone(),
+                path: path.clone(),
+                git_ref: r#ref.clone().or_else(|| sha.clone()),
+            }),
+        }
+    }
+}
+
+/// Normalize a flat source string into the Claude Code wire [`Source`]. Used by
+/// the bitrouter-cloud skills hub to store/serve registry entries before storing
+/// or serving them. A local path errors, which is correct for a registry.
+pub fn parse_source_to_wire(input: &str) -> Result<Source> {
+    Source::try_from(&parse_source(input)?)
+}
+
 /// A resolved, fetchable skill source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkillSource {
@@ -506,5 +624,175 @@ mod tests {
         assert_eq!(s.subdir(), Some("a/b"));
         let s2 = parse_source("o/r").unwrap();
         assert_eq!(s2.subdir(), None);
+    }
+
+    #[test]
+    fn wire_github_serializes_with_cc_discriminator() {
+        let s = Source::Github {
+            repo: "o/r".into(),
+            r#ref: Some("v1".into()),
+            sha: None,
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"source": "github", "repo": "o/r", "ref": "v1"})
+        );
+        // No `sha` key when None.
+        assert!(v.get("sha").is_none());
+    }
+
+    #[test]
+    fn wire_git_subdir_serializes_as_kebab() {
+        let s = Source::GitSubdir {
+            url: "https://x/y.git".into(),
+            path: "sub".into(),
+            r#ref: None,
+            sha: Some("deadbeef".into()),
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["source"], "git-subdir");
+        assert_eq!(v["path"], "sub");
+        assert_eq!(v["sha"], "deadbeef");
+        assert!(v.get("ref").is_none());
+    }
+
+    #[test]
+    fn wire_round_trips_each_variant() {
+        let variants = [
+            Source::Github {
+                repo: "o/r".into(),
+                r#ref: Some("v1".into()),
+                sha: None,
+            },
+            Source::Url {
+                url: "https://gitlab.com/o/r".into(),
+                r#ref: None,
+                sha: None,
+            },
+            Source::GitSubdir {
+                url: "https://github.com/o/r.git".into(),
+                path: "skills/foo".into(),
+                r#ref: Some("main".into()),
+                sha: None,
+            },
+        ];
+        for s in variants {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: Source = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn parse_source_to_wire_shorthand_is_github() {
+        let s = parse_source_to_wire("owner/repo").unwrap();
+        assert_eq!(
+            s,
+            Source::Github {
+                repo: "owner/repo".into(),
+                r#ref: None,
+                sha: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_source_to_wire_local_errors() {
+        assert!(matches!(
+            parse_source_to_wire("./local"),
+            Err(Error::InvalidSource(_))
+        ));
+    }
+
+    #[test]
+    fn wire_github_to_skill_source_splits_owner_repo() {
+        let wire = Source::Github {
+            repo: "o/r".into(),
+            r#ref: Some("v1".into()),
+            sha: None,
+        };
+        let s = SkillSource::try_from(&wire).unwrap();
+        assert_eq!(
+            s,
+            SkillSource::Github {
+                owner: "o".into(),
+                repo: "r".into(),
+                git_ref: Some("v1".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn wire_github_to_skill_source_strips_git_suffix() {
+        let wire = Source::Github {
+            repo: "o/r.git".into(),
+            r#ref: None,
+            sha: None,
+        };
+        let s = SkillSource::try_from(&wire).unwrap();
+        assert_eq!(
+            s,
+            SkillSource::Github {
+                owner: "o".into(),
+                repo: "r".into(),
+                git_ref: None,
+            }
+        );
+    }
+
+    #[test]
+    fn wire_github_to_skill_source_falls_back_to_sha() {
+        let wire = Source::Github {
+            repo: "o/r".into(),
+            r#ref: None,
+            sha: Some("abc123".into()),
+        };
+        let s = SkillSource::try_from(&wire).unwrap();
+        assert!(
+            matches!(s, SkillSource::Github { git_ref, .. } if git_ref.as_deref() == Some("abc123"))
+        );
+    }
+
+    #[test]
+    fn wire_github_without_slash_errors() {
+        let wire = Source::Github {
+            repo: "noslash".into(),
+            r#ref: None,
+            sha: None,
+        };
+        assert!(matches!(
+            SkillSource::try_from(&wire),
+            Err(Error::InvalidSource(_))
+        ));
+    }
+
+    #[test]
+    fn local_skill_source_to_wire_errors() {
+        let local = SkillSource::Local {
+            path: PathBuf::from("/tmp/x"),
+        };
+        assert!(matches!(
+            Source::try_from(&local),
+            Err(Error::InvalidSource(_))
+        ));
+    }
+
+    #[test]
+    fn skill_source_github_to_wire_joins_owner_repo() {
+        let s = SkillSource::Github {
+            owner: "o".into(),
+            repo: "r".into(),
+            git_ref: Some("v1".into()),
+        };
+        let wire = Source::try_from(&s).unwrap();
+        assert_eq!(
+            wire,
+            Source::Github {
+                repo: "o/r".into(),
+                r#ref: Some("v1".into()),
+                sha: None,
+            }
+        );
     }
 }

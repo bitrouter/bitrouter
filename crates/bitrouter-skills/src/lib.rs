@@ -2,9 +2,8 @@
 //!
 //! Shared, framework-agnostic building blocks for BitRouter's skills gateway:
 //!
-//! - [`source`] — parse a skill source string (`owner/repo`, a git URL, a
-//!   subdirectory, or a registry name) into a [`source::SkillSource`] and fetch
-//!   it onto disk.
+//! - [`source`] — parse a skill source string (`owner/repo`, a git URL, or a
+//!   subdirectory) into a [`source::SkillSource`] and fetch it onto disk.
 //! - [`frontmatter`] — parse the YAML frontmatter of a `SKILL.md` and discover
 //!   skills under a directory tree.
 //! - [`marketplace`] — the `marketplace.json` wire types shared by the server

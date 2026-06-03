@@ -661,16 +661,23 @@ fn is_bare_skill_name(source: &str) -> bool {
     !source.contains('/') && !source.contains("://") && !source.starts_with("git@")
 }
 
-/// Resolve a registry name to its git source string via the marketplace.
-async fn resolve_registry_source(name: &str, registry: Option<&str>) -> Result<String> {
+/// Resolve a registry name to its [`bitrouter_skills::source::SkillSource`] via
+/// the namespace's marketplace hub.
+async fn resolve_registry_source(
+    name: &str,
+    registry: Option<&str>,
+    namespace: &str,
+) -> Result<bitrouter_skills::source::SkillSource> {
     use bitrouter_skills::marketplace;
+    use bitrouter_skills::source::SkillSource;
     let base = registry.unwrap_or(DEFAULT_SKILLS_REGISTRY);
     let client = skills_http_client()?;
-    let market = marketplace::fetch_marketplace(&client, base).await?;
+    let market = marketplace::fetch_marketplace(&client, base, namespace).await?;
     let entry = market
         .find(name)
         .ok_or_else(|| anyhow::anyhow!("skill {name:?} not found in registry {base}"))?;
-    Ok(entry.source.clone())
+    SkillSource::try_from(&entry.source)
+        .with_context(|| format!("resolving registry source for {name:?}"))
 }
 
 /// `bitrouter skills add` — install a skill from a git source or registry name.
@@ -680,6 +687,7 @@ pub async fn skills_add(
     global: bool,
     overwrite: bool,
     registry: Option<&str>,
+    namespace: Option<&str>,
 ) -> Result<()> {
     use bitrouter_skills::{install, source as skill_source};
 
@@ -690,12 +698,13 @@ pub async fn skills_add(
     }
 
     let target = skills_target(global)?;
-    let source_str = if is_bare_skill_name(source) {
-        resolve_registry_source(source, registry).await?
+    let parsed = if is_bare_skill_name(source) {
+        let nsid = namespace
+            .ok_or_else(|| anyhow::anyhow!("--namespace <nsid> is required to query a registry"))?;
+        resolve_registry_source(source, registry, nsid).await?
     } else {
-        source.to_string()
+        skill_source::parse_source(source)?
     };
-    let parsed = skill_source::parse_source(&source_str)?;
     let outcome = install::install(&parsed, &target, overwrite, select, None).await?;
     let verb = if outcome.was_updated {
         "updated"
@@ -731,11 +740,17 @@ pub fn skills_remove(name: &str, global: bool) -> Result<()> {
 }
 
 /// `bitrouter skills find` — search a registry.
-pub async fn skills_find(query: &str, registry: Option<&str>) -> Result<()> {
+pub async fn skills_find(
+    query: &str,
+    registry: Option<&str>,
+    namespace: Option<&str>,
+) -> Result<()> {
     use bitrouter_skills::marketplace;
     let base = registry.unwrap_or(DEFAULT_SKILLS_REGISTRY);
+    let nsid = namespace
+        .ok_or_else(|| anyhow::anyhow!("--namespace <nsid> is required to query a registry"))?;
     let client = skills_http_client()?;
-    let market = marketplace::fetch_marketplace(&client, base).await?;
+    let market = marketplace::fetch_marketplace(&client, base, nsid).await?;
     let hits = market.search(query);
     if hits.is_empty() {
         println!("no skills matching {query:?} in {base}");
@@ -743,7 +758,8 @@ pub async fn skills_find(query: &str, registry: Option<&str>) -> Result<()> {
     }
     for entry in hits {
         let version = entry.version.as_deref().unwrap_or("-");
-        println!("{}\t{version}\t{}", entry.name, entry.description);
+        let description = entry.description.as_deref().unwrap_or("");
+        println!("{}\t{version}\t{description}", entry.name);
     }
     Ok(())
 }
@@ -763,8 +779,15 @@ pub fn skills_init(name: &str, output: &std::path::Path) -> Result<()> {
 }
 
 /// `bitrouter skills update` — re-install installed skills from the registry.
-pub async fn skills_update(name: Option<&str>, global: bool, registry: Option<&str>) -> Result<()> {
-    use bitrouter_skills::{install, marketplace, source as skill_source};
+pub async fn skills_update(
+    name: Option<&str>,
+    global: bool,
+    registry: Option<&str>,
+    namespace: Option<&str>,
+) -> Result<()> {
+    use bitrouter_skills::install;
+    use bitrouter_skills::marketplace;
+    use bitrouter_skills::source::SkillSource;
 
     let target = skills_target(global)?;
     let base = registry.unwrap_or(DEFAULT_SKILLS_REGISTRY);
@@ -789,8 +812,10 @@ pub async fn skills_update(name: Option<&str>, global: bool, registry: Option<&s
         return Ok(());
     }
 
+    let nsid = namespace
+        .ok_or_else(|| anyhow::anyhow!("--namespace <nsid> is required to query a registry"))?;
     let client = skills_http_client()?;
-    let market = marketplace::fetch_marketplace(&client, base).await?;
+    let market = marketplace::fetch_marketplace(&client, base, nsid).await?;
 
     // Update each skill independently: one failure must not abort the rest.
     // Re-install into the same directory (`install_as`) so a skill stays put
@@ -799,7 +824,7 @@ pub async fn skills_update(name: Option<&str>, global: bool, registry: Option<&s
     for skill_name in names {
         match market.find(&skill_name) {
             Some(entry) => {
-                let result = match skill_source::parse_source(&entry.source) {
+                let result = match SkillSource::try_from(&entry.source) {
                     Ok(parsed) => {
                         install::install(&parsed, &target, true, None, Some(&skill_name)).await
                     }

@@ -46,6 +46,9 @@ pub struct AddArgs {
     /// Registry base URL used when `source` is a bare skill name.
     #[arg(long, value_name = "URL")]
     pub registry: Option<String>,
+    /// Namespace id whose registry hub to query (required for registry operations).
+    #[arg(long, short = 'n', value_name = "NSID")]
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -71,6 +74,9 @@ pub struct FindArgs {
     /// Registry base URL to search.
     #[arg(long, value_name = "URL")]
     pub registry: Option<String>,
+    /// Namespace id whose registry hub to query (required for registry operations).
+    #[arg(long, short = 'n', value_name = "NSID")]
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -93,6 +99,9 @@ pub struct UpdateArgs {
     /// Registry base URL to update from.
     #[arg(long, value_name = "URL")]
     pub registry: Option<String>,
+    /// Namespace id whose registry hub to query (required for registry operations).
+    #[arg(long, short = 'n', value_name = "NSID")]
+    pub namespace: Option<String>,
 }
 
 /// Entry point dispatched by `apps/bitrouter/src/main.rs`.
@@ -105,18 +114,29 @@ pub async fn run(action: SkillsAction) -> Result<()> {
                 args.global,
                 args.yes,
                 args.registry.as_deref(),
+                args.namespace.as_deref(),
             )
             .await
         }
         SkillsAction::List(args) => commands::skills_list(args.global),
         SkillsAction::Remove(args) => commands::skills_remove(&args.name, args.global),
         SkillsAction::Find(args) => {
-            commands::skills_find(&args.query, args.registry.as_deref()).await
+            commands::skills_find(
+                &args.query,
+                args.registry.as_deref(),
+                args.namespace.as_deref(),
+            )
+            .await
         }
         SkillsAction::Init(args) => commands::skills_init(&args.name, &args.output),
         SkillsAction::Update(args) => {
-            commands::skills_update(args.name.as_deref(), args.global, args.registry.as_deref())
-                .await
+            commands::skills_update(
+                args.name.as_deref(),
+                args.global,
+                args.registry.as_deref(),
+                args.namespace.as_deref(),
+            )
+            .await
         }
     }
 }

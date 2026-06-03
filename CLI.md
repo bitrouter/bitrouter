@@ -381,17 +381,17 @@ Sources are auto-detected:
 - `https://github.com/owner/repo/tree/<ref>/<subdir>` — a skill in a subdirectory
 - any other `https://…`, `git://…`, or `git@…` git URL
 - `./path`, `../path`, `/abs/path`, `~/path` — a local directory (copied, not cloned)
-- a bare `name` — resolved against the registry's public hub (`--registry <URL>`, default `https://api.bitrouter.ai`)
+- a bare `name` — resolved against a namespace's registry hub (`-n/--namespace <NSID>` required; `--registry <URL>`, default `https://api.bitrouter.ai`). The hub is per-namespace: `<registry>/v1/namespaces/<NSID>/skills/hub`.
 
 Git sources are shallow-cloned via the system `git` binary (must be on `PATH`). Plain-HTTP sources are refused (skills are executable content); symlinks in a source tree are skipped, and skill names are validated to prevent path traversal.
 
 ### `bitrouter skills add <source>`
 
 ```
-bitrouter skills add <SOURCE> [--skill <NAME>] [-g|--global] [-y|--yes] [--registry <URL>]
+bitrouter skills add <SOURCE> [--skill <NAME>] [-g|--global] [-y|--yes] [--registry <URL>] [-n|--namespace <NSID>]
 ```
 
-Clones/copies the source, discovers its `SKILL.md`, and installs it. `--skill <NAME>` selects one skill by frontmatter name when the source exposes several. Installing over an existing skill requires `-y/--yes`.
+Clones/copies the source, discovers its `SKILL.md`, and installs it. `--skill <NAME>` selects one skill by frontmatter name when the source exposes several. Installing over an existing skill requires `-y/--yes`. Resolving a bare `name` requires `-n/--namespace <NSID>` (the registry hub is per-namespace).
 
 ### `bitrouter skills list` / `remove`
 
@@ -405,10 +405,10 @@ bitrouter skills remove <NAME> [-g|--global]
 ### `bitrouter skills find <query>`
 
 ```
-bitrouter skills find <QUERY> [--registry <URL>]
+bitrouter skills find <QUERY> [--registry <URL>] [-n|--namespace <NSID>]
 ```
 
-Searches the registry hub, matching `query` against name, description, and tags.
+Searches a namespace's registry hub (`-n/--namespace <NSID>` required), matching `query` against name, description, keywords, and tags.
 
 ### `bitrouter skills init <name>`
 
@@ -421,9 +421,9 @@ Scaffolds a starter `SKILL.md` (default `./SKILL.md`). Refuses to overwrite an e
 ### `bitrouter skills update`
 
 ```
-bitrouter skills update [<NAME>] [-g|--global] [--registry <URL>]
+bitrouter skills update [<NAME>] [-g|--global] [--registry <URL>] [-n|--namespace <NSID>]
 ```
 
-Re-installs installed skills from the registry to their latest version (all installed skills, or just `<NAME>`). Skills absent from the registry are skipped; a per-skill failure is reported without aborting the rest.
+Re-installs installed skills from a namespace's registry hub to their latest version (`-n/--namespace <NSID>` required; all installed skills, or just `<NAME>`). Skills absent from the registry are skipped; a per-skill failure is reported without aborting the rest.
 
 Grant types: `authorization_code`, `refresh_token`, `urn:ietf:params:oauth:grant-type:device_code`. For confidential clients, the freshly minted `client_secret` is returned exactly once in the `register` response.
