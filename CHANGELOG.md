@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.7](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.6...v1.0.0-alpha.7)
+
+
+### ⛰️ Features
+
+- *(skills)* [**breaking**] Converge marketplace.json on Claude Code native schema ([#512](https://github.com/bitrouter/bitrouter/pull/512)) - ([0f83a39](https://github.com/bitrouter/bitrouter/commit/0f83a399fa21c414a4c55c6c0e4e93001aac6d43))
+
+
 ## [1.0.0-alpha.6](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.5...v1.0.0-alpha.6)
 
 
