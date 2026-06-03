@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(skills)* [**breaking**] Converge marketplace.json on Claude Code native schema ([#512](https://github.com/bitrouter/bitrouter/pull/512)) - ([0f83a39](https://github.com/bitrouter/bitrouter/commit/0f83a399fa21c414a4c55c6c0e4e93001aac6d43))
 
+### 🐛 Bug Fixes
+
+- *(cli)* Correct auth login --scope help to namespace-read ([#513](https://github.com/bitrouter/bitrouter/pull/513)) - ([b420fc1](https://github.com/bitrouter/bitrouter/commit/b420fc1d347a73e97558d5c4133d2c318bbc17e4))
+
 
 ## [1.0.0-alpha.6](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.5...v1.0.0-alpha.6)
 
