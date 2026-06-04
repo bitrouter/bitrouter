@@ -441,6 +441,28 @@ pub struct ExecutionResult {
     pub generation_time_ms: u64,
 }
 
+/// How an upstream's credential is presented on the wire.
+///
+/// Consulted by transports that support more than one credential scheme.
+/// Today that is only the Messages transport, which sends the key as either
+/// `x-api-key` (Anthropic's native scheme) or `Authorization: Bearer`. The
+/// Chat Completions transport (always `Authorization: Bearer`) and Generate
+/// Content transport (always `x-goog-api-key`) have a single fixed scheme and
+/// ignore this.
+///
+/// Exactly one scheme is ever sent — never both: the Anthropic API rejects a
+/// request that carries `x-api-key` and `Authorization` together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum AuthScheme {
+    /// `x-api-key: <key>` — Anthropic's native scheme; the default.
+    #[default]
+    #[serde(rename = "x-api-key")]
+    XApiKey,
+    /// `Authorization: Bearer <key>`.
+    #[serde(rename = "bearer")]
+    Bearer,
+}
+
 /// One hop in a fallback chain: a concrete provider + model + connection info.
 ///
 /// The `Debug` impl redacts `api_key` and `api_key_override` (v0 audit S9):
@@ -470,6 +492,11 @@ pub struct RoutingTarget {
     pub api_key_override: Option<String>,
     /// Per-request api-base override, paired with `api_key_override`.
     pub api_base_override: Option<String>,
+    /// How the credential is presented to this target. Consulted by
+    /// transports that support more than one scheme — today only the Messages
+    /// transport (`x-api-key` vs `Authorization: Bearer`); others ignore it.
+    /// Defaults to [`AuthScheme::XApiKey`].
+    pub auth_scheme: AuthScheme,
 }
 
 impl std::fmt::Debug for RoutingTarget {
@@ -486,6 +513,7 @@ impl std::fmt::Debug for RoutingTarget {
                 &self.api_key_override.as_deref().map(redacted),
             )
             .field("api_base_override", &self.api_base_override)
+            .field("auth_scheme", &self.auth_scheme)
             .finish()
     }
 }

@@ -25,6 +25,7 @@ fn target(provider: &str) -> RoutingTarget {
         account_label: None,
         api_key_override: None,
         api_base_override: None,
+        auth_scheme: Default::default(),
     }
 }
 
@@ -853,6 +854,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         account_label: None,
         api_key_override: None,
         api_base_override: None,
+        auth_scheme: Default::default(),
     };
     let prompt = Prompt {
         model: "m".into(),

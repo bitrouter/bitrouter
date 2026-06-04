@@ -293,6 +293,7 @@ mod tests {
             account_label: label.map(String::from),
             api_key_override: None,
             api_base_override: None,
+            auth_scheme: Default::default(),
         }
     }
 
