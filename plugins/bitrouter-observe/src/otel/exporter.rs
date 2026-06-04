@@ -1032,6 +1032,7 @@ mod hop_tests {
             account_label: Some("primary".to_string()),
             api_key_override: None,
             api_base_override: None,
+            auth_scheme: Default::default(),
         }
     }
 

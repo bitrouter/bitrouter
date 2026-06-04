@@ -22,8 +22,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart, Usage,
+    ApiProtocol, AuthScheme, Content, FinishReason, GenerateResult, GenerationParams, Message,
+    Prompt, ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart, Usage,
 };
 
 /// The Messages inbound + outbound protocol adapter.
@@ -657,11 +657,28 @@ impl Transport for MessagesTransport {
         target: &RoutingTarget,
     ) -> Result<reqwest::Request> {
         let key = target.effective_api_key();
-        let key_header = reqwest::header::HeaderValue::from_str(key).map_err(|e| {
-            BitrouterError::internal(format!("invalid api key for x-api-key header: {e}"))
-        })?;
-        request.headers_mut().insert("x-api-key", key_header);
-        request.headers_mut().insert(
+        let headers = request.headers_mut();
+        // Exactly one credential header — never both. The Anthropic API
+        // rejects a request carrying `x-api-key` and `Authorization` together,
+        // so the scheme is chosen per target (`RoutingTarget::auth_scheme`).
+        match target.auth_scheme {
+            AuthScheme::XApiKey => {
+                let value = reqwest::header::HeaderValue::from_str(key).map_err(|e| {
+                    BitrouterError::internal(format!("invalid api key for x-api-key header: {e}"))
+                })?;
+                headers.insert("x-api-key", value);
+            }
+            AuthScheme::Bearer => {
+                let value = reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
+                    .map_err(|e| {
+                        BitrouterError::internal(format!(
+                            "invalid api key for authorization header: {e}"
+                        ))
+                    })?;
+                headers.insert(reqwest::header::AUTHORIZATION, value);
+            }
+        }
+        headers.insert(
             "anthropic-version",
             reqwest::header::HeaderValue::from_static("2023-06-01"),
         );

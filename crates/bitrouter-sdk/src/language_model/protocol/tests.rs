@@ -1191,12 +1191,67 @@ fn messages_no_beta_header_is_emitted() {
         account_label: None,
         api_key_override: None,
         api_base_override: None,
+        auth_scheme: Default::default(),
     };
     let req = futures::executor::block_on(transport.authorise(req, &target)).unwrap();
     assert!(
         req.headers().get("anthropic-beta").is_none(),
         "anthropic-beta header must not be set by the transport (deprecated and Vertex-incompatible)"
     );
+}
+
+#[test]
+fn messages_auth_scheme_selects_one_credential_header() {
+    // The Messages transport honours `RoutingTarget::auth_scheme`: `x-api-key`
+    // by default, `Authorization: Bearer` when asked — and never both, since
+    // the Anthropic API rejects a request carrying both credential headers.
+    use crate::language_model::protocol::Transport;
+    use crate::language_model::types::{AuthScheme, RoutingTarget};
+    let transport = crate::language_model::protocol::messages::MessagesTransport;
+    let client = reqwest::Client::new();
+    let base = RoutingTarget {
+        provider_name: "gw".into(),
+        service_id: "claude".into(),
+        api_base: "http://example.invalid".into(),
+        api_key: "secret".into(),
+        api_protocol: ApiProtocol::Messages,
+        account_label: None,
+        api_key_override: None,
+        api_base_override: None,
+        auth_scheme: AuthScheme::XApiKey,
+    };
+
+    // Default (x-api-key) scheme → `x-api-key` only.
+    let req = client
+        .post("http://example.invalid/v1/messages")
+        .build()
+        .unwrap();
+    let req = futures::executor::block_on(transport.authorise(req, &base)).unwrap();
+    assert_eq!(
+        req.headers().get("x-api-key").unwrap().to_str().unwrap(),
+        "secret"
+    );
+    assert!(req.headers().get(reqwest::header::AUTHORIZATION).is_none());
+
+    // Bearer scheme → `Authorization: Bearer` only.
+    let bearer = RoutingTarget {
+        auth_scheme: AuthScheme::Bearer,
+        ..base.clone()
+    };
+    let req = client
+        .post("http://example.invalid/v1/messages")
+        .build()
+        .unwrap();
+    let req = futures::executor::block_on(transport.authorise(req, &bearer)).unwrap();
+    assert_eq!(
+        req.headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "Bearer secret"
+    );
+    assert!(req.headers().get("x-api-key").is_none());
 }
 
 #[test]

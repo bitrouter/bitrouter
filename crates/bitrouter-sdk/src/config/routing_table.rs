@@ -111,6 +111,7 @@ fn build_targets(
             account_label: None,
             api_key_override: None,
             api_base_override: None,
+            auth_scheme: Default::default(),
         }];
     }
 
@@ -142,6 +143,7 @@ fn build_targets(
                 account_label: Some(label),
                 api_key_override: None,
                 api_base_override: None,
+                auth_scheme: Default::default(),
             }
         })
         .collect()
