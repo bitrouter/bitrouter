@@ -295,6 +295,9 @@ enum AuthMethod {
     /// Browser-based PKCE Authorization Code flow — Anthropic Claude
     /// Pro/Max, OpenAI Codex / ChatGPT.
     PkceSubscription,
+    /// Adopt an existing session from the provider's own vendor CLI (Claude
+    /// Code, Codex) by reading its on-disk / Keychain OAuth token — no browser.
+    ImportFromCli,
     /// RFC 8628 Device Authorization Grant — GitHub Copilot's flow.
     DeviceCode,
     /// User pastes a static API key (sk-…, sk-ant-…).
@@ -305,9 +308,21 @@ impl AuthMethod {
     fn label(self) -> &'static str {
         match self {
             AuthMethod::PkceSubscription => "Subscription (browser sign-in)",
+            AuthMethod::ImportFromCli => "Import an existing session from the vendor CLI",
             AuthMethod::DeviceCode => "Device-code OAuth (show a code in browser)",
             AuthMethod::ApiKey => "API key (paste a static credential)",
         }
+    }
+}
+
+/// The vendor CLI bitrouter can adopt an existing OAuth session from, for
+/// providers that ship one — `Claude Code` for `anthropic`, `Codex` for
+/// `openai-codex`. `None` for every other provider.
+fn import_cli_for(provider_id: &str) -> Option<&'static str> {
+    match provider_id {
+        bitrouter_providers::anthropic::PROVIDER_ID => Some("Claude Code"),
+        bitrouter_providers::codex::PROVIDER_ID => Some("Codex"),
+        _ => None,
     }
 }
 
@@ -319,6 +334,10 @@ fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMeth
     let has_pkce = bitrouter_providers::oauth::registry::has_pkce_flow(&entry.id);
     if has_pkce {
         methods.push(AuthMethod::PkceSubscription);
+    }
+    // Providers with a sibling vendor CLI can adopt its existing session.
+    if import_cli_for(&entry.id).is_some() {
+        methods.push(AuthMethod::ImportFromCli);
     }
     match &entry.auth {
         AuthScheme::Bearer { .. } | AuthScheme::Header { .. } => {
@@ -418,6 +437,7 @@ pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
 
     let credential = match chosen {
         AuthMethod::PkceSubscription => run_pkce_subscription(provider_id).await?,
+        AuthMethod::ImportFromCli => run_cli_import(provider_id)?,
         AuthMethod::DeviceCode => run_device_code(provider_id, entry).await?,
         AuthMethod::ApiKey => run_api_key_paste(&entry.display_name)?,
     };
@@ -541,6 +561,30 @@ async fn run_device_code(
         }
     };
     Ok(bitrouter_providers::oauth::credential_store::Credential::from_oauth_token(token))
+}
+
+/// Adopt an existing OAuth session from the provider's sibling vendor CLI
+/// (Claude Code for `anthropic`, Codex for `openai-codex`) by reading its
+/// on-disk / Keychain credential. Errors when no such session is found.
+fn run_cli_import(
+    provider_id: &str,
+) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
+    let imported = match provider_id {
+        bitrouter_providers::anthropic::PROVIDER_ID => {
+            bitrouter_providers::import::claude_code::import()
+        }
+        bitrouter_providers::codex::PROVIDER_ID => bitrouter_providers::import::codex::import(),
+        other => anyhow::bail!("no vendor-CLI import is available for provider '{other}'"),
+    }
+    .with_context(|| format!("importing a CLI credential for {provider_id}"))?;
+    let imported = imported.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no existing CLI session found for {provider_id} — sign in to the \
+             vendor CLI first, or choose the browser sign-in instead"
+        )
+    })?;
+    eprintln!("  Imported existing session from {}", imported.source);
+    Ok(bitrouter_providers::oauth::credential_store::Credential::from_oauth_token(imported.token))
 }
 
 /// Read a static API key from stdin. Input is **not** masked — the user

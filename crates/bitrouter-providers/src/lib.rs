@@ -76,6 +76,8 @@ pub mod catalog;
 pub mod codex;
 pub mod copilot;
 mod entry;
+#[cfg(feature = "pkce")]
+pub mod import;
 pub mod oauth;
 
 pub use apply::{apply_builtin_defaults, zero_config, zero_config_env_var_providers};
