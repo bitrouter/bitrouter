@@ -123,6 +123,13 @@ fn openai_codex() -> PkceProvider {
     let mut extra = BTreeMap::new();
     extra.insert("id_token_add_organizations".into(), "true".into());
     extra.insert("codex_cli_simplified_flow".into(), "true".into());
+    // Tag the authorize step with the same `originator` we send on inference
+    // requests so login and traffic are attributed consistently. (Reference:
+    // OpenClaw `extensions/openai/openai-chatgpt-oauth-flow.runtime.ts`.)
+    extra.insert(
+        "originator".into(),
+        crate::codex::headers::ORIGINATOR.to_string(),
+    );
     PkceProvider {
         provider_id: "openai-codex",
         display_name: "OpenAI Codex (ChatGPT Plus/Pro)",
@@ -189,6 +196,10 @@ mod tests {
                 .map(String::as_str),
             Some("true")
         );
+        assert_eq!(
+            p.auth.extra_authorize.get("originator").map(String::as_str),
+            Some("bitrouter")
+        );
     }
 
     #[test]
@@ -197,6 +208,21 @@ mod tests {
         assert_eq!(
             p.manual_redirect_uri,
             Some("https://console.anthropic.com/oauth/code/callback")
+        );
+    }
+
+    #[test]
+    fn anthropic_requests_claude_code_scopes_and_code_extra() {
+        let p = find("anthropic").unwrap();
+        assert_eq!(
+            p.auth.token_endpoint,
+            "https://platform.claude.com/v1/oauth/token"
+        );
+        assert!(p.auth.scope.contains("user:inference"));
+        assert!(p.auth.scope.contains("user:sessions:claude_code"));
+        assert_eq!(
+            p.auth.extra_authorize.get("code").map(String::as_str),
+            Some("true")
         );
     }
 

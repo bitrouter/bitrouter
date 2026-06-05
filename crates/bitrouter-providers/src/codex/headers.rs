@@ -22,3 +22,8 @@ pub const ORIGINATOR: &str = "bitrouter";
 /// `OpenAI-Beta` value to opt into the experimental Responses API surface
 /// that Codex's backend speaks.
 pub const OPENAI_BETA: &str = "responses=experimental";
+
+/// `user-agent` bitrouter sends on Codex requests. The backend is lenient
+/// about the value (the OpenClaw reference sends its own name), so we send
+/// our own attribution rather than impersonating a specific CLI version.
+pub const USER_AGENT: &str = concat!("bitrouter/", env!("CARGO_PKG_VERSION"));
