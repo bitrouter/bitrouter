@@ -8,7 +8,7 @@
 //!
 //! | Stored credential | Outbound headers |
 //! |---|---|
-//! | `Credential::Oauth` (Claude Pro/Max)  | `Authorization: Bearer sk-ant-oat…`, `anthropic-beta: oauth-2025-04-20,claude-code-20250219`, `anthropic-version: 2023-06-01`. **No `x-api-key`** — the upstream rejects OAuth requests that also carry `x-api-key`. |
+//! | `Credential::Oauth` (Claude Pro/Max)  | `Authorization: Bearer sk-ant-oat…`, `anthropic-beta: claude-code-20250219,oauth-2025-04-20`, `anthropic-version: 2023-06-01`, `user-agent: claude-cli/…`, `x-app: cli`. **No `x-api-key`** — the upstream rejects OAuth requests that also carry `x-api-key`. The request body is shaped by [`AnthropicOAuthApplier::prepare_body`] so Claude Code's identity is the first `system` block. |
 //! | `Credential::ApiKey`                  | `x-api-key: <value>`, `anthropic-version: 2023-06-01`. |
 //! | _no credential in store_              | Fall back to the routing target's `api_key` field (the env-var path). Existing `${ANTHROPIC_API_KEY}` setups behave exactly as before. |
 //!
@@ -18,15 +18,14 @@
 //! back to the store, and caches it in memory to avoid hammering the
 //! refresh endpoint under load.
 //!
-//! ## Body shape — known gap
+//! ## Body shape
 //!
-//! The Anthropic OAuth endpoint expects requests bodies shaped like
-//! Claude Code's: the first system block has to be Claude Code's identity
-//! string. This module does NOT enforce that — `AuthApplier::apply`
-//! receives an already-serialised body and rewriting JSON there is the
-//! wrong layer. A follow-up will land a body shim in the protocol-adapter
-//! path. Until then, OAuth credentials will authenticate successfully but
-//! the upstream may still reject requests on body grounds.
+//! The Claude Pro/Max subscription endpoint admits requests under the Claude
+//! Code agent profile: the first `system` block has to be Claude Code's
+//! identity string. [`AnthropicOAuthApplier::prepare_body`] enforces that at
+//! render time (when the body is still a `serde_json::Value`), prepending the
+//! identity block and preserving the caller's own system prompt after it.
+//! API-key requests pass the body through unchanged.
 //!
 //! Authoritative reference for the OAuth client + headers: Claude Code's
 //! published OAuth client (client_id `9d1c250a-…`), as reused by
@@ -298,6 +297,18 @@ impl AuthApplier for AnthropicOAuthApplier {
                 })?;
                 let beta_name = HeaderName::from_static("anthropic-beta");
                 headers_mut.insert(beta_name, beta_header);
+                // The subscription endpoint expects first-party-CLI-shaped
+                // requests; mirror Claude Code's user-agent + x-app so the
+                // OAuth credential is admitted. (Reference: OpenClaw
+                // `src/llm/providers/anthropic.ts`.)
+                headers_mut.insert(
+                    reqwest::header::USER_AGENT,
+                    HeaderValue::from_static(headers::CLAUDE_CODE_USER_AGENT),
+                );
+                headers_mut.insert(
+                    HeaderName::from_static("x-app"),
+                    HeaderValue::from_static(headers::CLAUDE_CODE_X_APP),
+                );
                 Ok(request)
             }
             Some(ResolvedCredential::ApiKey(value)) => {
@@ -322,6 +333,26 @@ impl AuthApplier for AnthropicOAuthApplier {
             }
         }
     }
+
+    async fn prepare_body(
+        &self,
+        body: &mut serde_json::Value,
+        target: &RoutingTarget,
+    ) -> Result<()> {
+        // Only the OAuth (Claude Pro/Max) path needs the Claude Code identity
+        // block. API-key and env-var requests pass the caller's body through
+        // unchanged. `resolve_credential` is cached, so this does not add a
+        // second disk read or refresh on top of `apply`.
+        let label = self.label_for(target);
+        if !matches!(
+            self.resolve_credential(label).await?,
+            Some(ResolvedCredential::Oauth(_))
+        ) {
+            return Ok(());
+        }
+        inject_claude_code_identity(body);
+        Ok(())
+    }
 }
 
 fn apply_api_key_header(request: &mut reqwest::Request, key: &str) -> Result<()> {
@@ -333,6 +364,57 @@ fn apply_api_key_header(request: &mut reqwest::Request, key: &str) -> Result<()>
     // Bearer the protocol layer might have added.
     request.headers_mut().remove(reqwest::header::AUTHORIZATION);
     Ok(())
+}
+
+/// Ensure the first Anthropic `system` block is Claude Code's identity string,
+/// preserving the caller's own system prompt after it. Idempotent — a body
+/// whose first block is already the identity is left unchanged.
+///
+/// Required by the Claude Pro/Max subscription endpoint, which admits requests
+/// under the Claude Code agent profile (reference: OpenClaw
+/// `src/llm/providers/anthropic.ts`). The caller's system prompt is never
+/// dropped; it follows the identity block.
+fn inject_claude_code_identity(body: &mut serde_json::Value) {
+    use serde_json::Value;
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    let identity_block = serde_json::json!({
+        "type": "text",
+        "text": headers::CLAUDE_CODE_SYSTEM_PROMPT,
+    });
+    let new_system = match obj.remove("system") {
+        // No system yet → the identity alone, as a plain string.
+        None => Value::String(headers::CLAUDE_CODE_SYSTEM_PROMPT.to_string()),
+        // Already correct → leave it.
+        Some(Value::String(s)) if s == headers::CLAUDE_CODE_SYSTEM_PROMPT => Value::String(s),
+        // A plain-string system prompt → [identity, caller's prompt].
+        Some(Value::String(s)) => Value::Array(vec![
+            identity_block,
+            serde_json::json!({ "type": "text", "text": s }),
+        ]),
+        // A content-block array → prepend the identity unless already present.
+        Some(Value::Array(mut blocks)) => {
+            if !first_block_is_identity(&blocks) {
+                blocks.insert(0, identity_block);
+            }
+            Value::Array(blocks)
+        }
+        // Any other shape (not valid for Messages) → wrap defensively so the
+        // identity still leads.
+        Some(other) => Value::Array(vec![identity_block, other]),
+    };
+    obj.insert("system".to_string(), new_system);
+}
+
+/// Whether the first element of an Anthropic `system` content-block array is
+/// already Claude Code's identity string.
+fn first_block_is_identity(blocks: &[serde_json::Value]) -> bool {
+    blocks
+        .first()
+        .and_then(|b| b.get("text"))
+        .and_then(|t| t.as_str())
+        == Some(headers::CLAUDE_CODE_SYSTEM_PROMPT)
 }
 
 #[cfg(test)]
@@ -490,6 +572,15 @@ mod tests {
             .unwrap();
         assert!(beta.contains("oauth-2025-04-20"));
         assert!(beta.contains("claude-code-20250219"));
+        assert_eq!(
+            h.get(reqwest::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok()),
+            Some(headers::CLAUDE_CODE_USER_AGENT)
+        );
+        assert_eq!(
+            h.get("x-app").and_then(|v| v.to_str().ok()),
+            Some(headers::CLAUDE_CODE_X_APP)
+        );
     }
 
     #[tokio::test]
@@ -583,5 +674,72 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("for-work")
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_prepare_body_injects_claude_code_identity() {
+        let path = tmp_store_path();
+        {
+            let mut store = CredentialStore::load(&path).unwrap();
+            store
+                .set(
+                    PROVIDER_ID,
+                    DEFAULT_LABEL,
+                    Credential::from_oauth_token(OAuthToken {
+                        access_token: "sk-ant-oat-x".into(),
+                        expires_at: 0,
+                        refresh_token: Some("r".into()),
+                    }),
+                )
+                .unwrap();
+        }
+        let applier = AnthropicOAuthApplier::new(&path).unwrap();
+        // No system field → identity becomes the system string.
+        let mut body = serde_json::json!({ "model": "claude", "messages": [] });
+        applier
+            .prepare_body(&mut body, &anthropic_target(None))
+            .await
+            .unwrap();
+        assert_eq!(
+            body["system"],
+            serde_json::json!(headers::CLAUDE_CODE_SYSTEM_PROMPT)
+        );
+        // String system → array: identity first, caller's prompt preserved.
+        let mut body2 = serde_json::json!({ "system": "be terse", "messages": [] });
+        applier
+            .prepare_body(&mut body2, &anthropic_target(None))
+            .await
+            .unwrap();
+        let arr = body2["system"].as_array().unwrap();
+        assert_eq!(arr[0]["text"], headers::CLAUDE_CODE_SYSTEM_PROMPT);
+        assert_eq!(arr[1]["text"], "be terse");
+        // Idempotent — a second pass doesn't double-prepend.
+        applier
+            .prepare_body(&mut body2, &anthropic_target(None))
+            .await
+            .unwrap();
+        assert_eq!(body2["system"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn api_key_prepare_body_leaves_system_untouched() {
+        let path = tmp_store_path();
+        {
+            let mut store = CredentialStore::load(&path).unwrap();
+            store
+                .set(
+                    PROVIDER_ID,
+                    DEFAULT_LABEL,
+                    Credential::api_key("sk-ant-api03-x"),
+                )
+                .unwrap();
+        }
+        let applier = AnthropicOAuthApplier::new(&path).unwrap();
+        let mut body = serde_json::json!({ "system": "user prompt", "messages": [] });
+        applier
+            .prepare_body(&mut body, &anthropic_target(None))
+            .await
+            .unwrap();
+        assert_eq!(body["system"], serde_json::json!("user prompt"));
     }
 }

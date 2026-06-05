@@ -74,6 +74,11 @@ pub fn all() -> Vec<PkceProvider> {
 /// OAuth accepts any `http://localhost:*` redirect URI by design (the
 /// public-client model for native CLIs).
 fn anthropic() -> PkceProvider {
+    let mut extra = BTreeMap::new();
+    // Claude Code sends `code=true` on the authorize request; mirror it so the
+    // consent flow returns an authorization code for both the loopback and the
+    // manual-paste paths. (Reference: OpenClaw `src/llm/utils/oauth/anthropic.ts`.)
+    extra.insert("code".into(), "true".into());
     PkceProvider {
         provider_id: "anthropic",
         display_name: "Anthropic Claude Pro/Max",
@@ -85,9 +90,18 @@ fn anthropic() -> PkceProvider {
         auth: AuthCodeParams {
             client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e".into(),
             authorize_endpoint: "https://claude.ai/oauth/authorize".into(),
-            token_endpoint: "https://console.anthropic.com/v1/oauth/token".into(),
-            scope: "org:create_api_key user:profile user:inference".into(),
-            extra_authorize: BTreeMap::new(),
+            // Claude Code's OAuth token endpoint. `platform.claude.com` is the
+            // current canonical host (the older `console.anthropic.com` alias
+            // still resolves). Used for the initial code exchange and refresh.
+            token_endpoint: "https://platform.claude.com/v1/oauth/token".into(),
+            // Scopes Claude Code requests. `user:inference` authorises the
+            // subscription inference calls; `user:sessions:claude_code` gates
+            // the Claude Code agent profile the OAuth path runs under.
+            // (Reference: OpenClaw `src/llm/utils/oauth/anthropic.ts`.)
+            scope: "org:create_api_key user:profile user:inference \
+                    user:sessions:claude_code user:mcp_servers user:file_upload"
+                .into(),
+            extra_authorize: extra,
         },
     }
 }
