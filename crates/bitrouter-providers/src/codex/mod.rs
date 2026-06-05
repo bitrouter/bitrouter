@@ -282,12 +282,16 @@ impl AuthApplier for OpenAiCodexAuthApplier {
 ///
 /// The backend requires `store: false` (it does not persist Codex responses)
 /// and `include: ["reasoning.encrypted_content"]` so reasoning models return
-/// their encrypted reasoning for multi-turn continuity. The system prompt
-/// already rides in `instructions` (set by the Responses adapter), so it is
-/// left as-is. Mirrors OpenClaw `src/llm/providers/openai-chatgpt-responses.ts`.
+/// their encrypted reasoning for multi-turn continuity. The caller's system
+/// prompt rides in `instructions` (set by the Responses adapter); when the
+/// caller sent none, default it to the Codex CLI's own fallback so the backend
+/// always sees instructions. Mirrors OpenClaw
+/// `src/llm/providers/openai-chatgpt-responses.ts`.
 fn shape_codex_responses_body(body: &mut serde_json::Value) {
     use serde_json::Value;
     const REASONING_INCLUDE: &str = "reasoning.encrypted_content";
+    // OpenClaw: `instructions = systemPrompt || "You are a helpful assistant."`.
+    const DEFAULT_INSTRUCTIONS: &str = "You are a helpful assistant.";
     let Some(obj) = body.as_object_mut() else {
         return;
     };
@@ -304,6 +308,18 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
                 Value::Array(vec![Value::String(REASONING_INCLUDE.to_string())]),
             );
         }
+    }
+    // Ensure `instructions` is present even when the caller sent no system
+    // prompt — the Codex backend expects it.
+    let has_instructions = obj
+        .get("instructions")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty());
+    if !has_instructions {
+        obj.insert(
+            "instructions".to_string(),
+            Value::String(DEFAULT_INSTRUCTIONS.to_string()),
+        );
     }
 }
 
@@ -512,5 +528,17 @@ mod tests {
             body2["include"],
             serde_json::json!(["foo", "reasoning.encrypted_content"])
         );
+        // No system prompt → instructions defaulted to the Codex fallback.
+        assert_eq!(
+            body["instructions"],
+            serde_json::json!("You are a helpful assistant.")
+        );
+        // A caller-supplied instructions is preserved untouched.
+        let mut body3 = serde_json::json!({ "instructions": "be a pirate", "input": [] });
+        applier
+            .prepare_body(&mut body3, &codex_target(None))
+            .await
+            .unwrap();
+        assert_eq!(body3["instructions"], serde_json::json!("be a pirate"));
     }
 }

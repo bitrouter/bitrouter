@@ -50,8 +50,11 @@ struct Tokens {
 pub fn import() -> Result<Option<Imported>, ImportError> {
     let home = codex_home().ok_or(ImportError::NoHome)?;
     // Keychain first (macOS). A malformed or absent item falls through to the
-    // file, which is the authoritative error surface.
-    let account = keychain_account(&home);
+    // file, which is the authoritative error surface. The Keychain account is
+    // derived from the realpath'd home (matching OpenClaw's `realpathSync`), so
+    // a symlinked $CODEX_HOME still resolves to the same item.
+    let resolved = std::fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
+    let account = keychain_account(&resolved);
     if let Some(blob) = keychain::read_generic_password(KEYCHAIN_SERVICE, Some(&account))
         && let Ok(Some(token)) = parse_blob(&blob, "keychain")
     {
