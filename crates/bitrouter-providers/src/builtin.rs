@@ -29,6 +29,7 @@ const EMBEDDED: &[(&str, &str)] = &[
     ("anthropic", include_str!("../providers/anthropic.toml")),
     ("google", include_str!("../providers/google.toml")),
     ("openrouter", include_str!("../providers/openrouter.toml")),
+    ("ambient", include_str!("../providers/ambient.toml")),
     (
         "github-copilot",
         include_str!("../providers/github-copilot.toml"),
@@ -88,7 +89,7 @@ mod tests {
         let entries = load_embedded().expect("embedded TOML files must parse");
         // Bump this when adding a new provider — keeps the test honest about
         // catalog growth.
-        assert_eq!(entries.len(), 9);
+        assert_eq!(entries.len(), 10);
     }
 
     #[test]
@@ -122,6 +123,7 @@ mod tests {
         assert!(find("anthropic").is_some());
         assert!(find("google").is_some());
         assert!(find("openrouter").is_some());
+        assert!(find("ambient").is_some());
         assert!(find("github-copilot").is_some());
         assert!(find("opencode-zen").is_some());
         assert!(find("opencode-go").is_some());

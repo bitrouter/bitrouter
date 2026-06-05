@@ -1,0 +1,17 @@
+# Ambient — OpenAI-compatible inference API. Bearer auth on `Authorization`.
+#
+# Official auth + endpoint docs:
+# - https://docs.ambient.xyz/ (developer docs)
+# - https://api.ambient.xyz/docs (OpenAPI reference)
+# - base URL `https://api.ambient.xyz/v1`; Chat Completions wire format
+#   (`POST /v1/chat/completions`); model list at `GET /v1/models`
+
+id = "ambient"
+display_name = "Ambient"
+api_base = "https://api.ambient.xyz/v1"
+api_protocol = "chat_completions"
+doc_url = "https://docs.ambient.xyz/"
+
+[auth]
+kind = "bearer"
+env = "AMBIENT_API_KEY"
