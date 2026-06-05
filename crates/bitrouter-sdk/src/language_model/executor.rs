@@ -298,6 +298,21 @@ impl HttpExecutor {
         }
     }
 
+    /// Run the per-provider [`AuthApplier::prepare_body`] hook on the freshly
+    /// rendered request body when an applier is registered for the target's
+    /// provider. No-op otherwise. Shared by `execute` and `execute_stream` so
+    /// subscription-OAuth body shaping happens identically on both paths.
+    async fn shape_request_body(
+        &self,
+        body: &mut serde_json::Value,
+        target: &RoutingTarget,
+    ) -> Result<()> {
+        if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
+            applier.prepare_body(body, target).await?;
+        }
+        Ok(())
+    }
+
     fn no_dispatch_error(target: &RoutingTarget) -> BitrouterError {
         BitrouterError::internal(format!(
             "no outbound dispatch registered for protocol '{}' (target provider '{}'); \
@@ -362,7 +377,8 @@ impl Executor for HttpExecutor {
         let mut upstream_prompt = prompt.clone();
         upstream_prompt.model = target.service_id.clone();
         upstream_prompt.stream = false;
-        let body = adapter.render_request(&upstream_prompt)?;
+        let mut body = adapter.render_request(&upstream_prompt)?;
+        self.shape_request_body(&mut body, target).await?;
         let url = transport.endpoint_url(target, false);
 
         let started = Instant::now();
@@ -432,7 +448,8 @@ impl Executor for HttpExecutor {
         let mut upstream_prompt = prompt.clone();
         upstream_prompt.model = target.service_id.clone();
         upstream_prompt.stream = true;
-        let body = adapter.render_request(&upstream_prompt)?;
+        let mut body = adapter.render_request(&upstream_prompt)?;
+        self.shape_request_body(&mut body, target).await?;
         let url = transport.endpoint_url(target, true);
 
         let request = self
