@@ -340,9 +340,11 @@ impl AuthApplier for AnthropicOAuthApplier {
         target: &RoutingTarget,
     ) -> Result<()> {
         // Only the OAuth (Claude Pro/Max) path needs the Claude Code identity
-        // block. API-key and env-var requests pass the caller's body through
-        // unchanged. `resolve_credential` is cached, so this does not add a
-        // second disk read or refresh on top of `apply`.
+        // block; API-key and env-var requests pass the caller's body through
+        // unchanged. For an OAuth credential the resolution is cached and
+        // shared with `apply`; the non-OAuth paths re-read the store (cheap)
+        // instead of caching, so a credential added between requests is picked
+        // up without a restart.
         let label = self.label_for(target);
         if !matches!(
             self.resolve_credential(label).await?,
@@ -384,8 +386,9 @@ fn inject_claude_code_identity(body: &mut serde_json::Value) {
         "text": headers::CLAUDE_CODE_SYSTEM_PROMPT,
     });
     let new_system = match obj.remove("system") {
-        // No system yet → the identity alone, as a plain string.
-        None => Value::String(headers::CLAUDE_CODE_SYSTEM_PROMPT.to_string()),
+        // No system yet → the identity as a single content block, matching
+        // Claude Code's own wire shape (it always sends `system` as an array).
+        None => Value::Array(vec![identity_block]),
         // Already correct → leave it.
         Some(Value::String(s)) if s == headers::CLAUDE_CODE_SYSTEM_PROMPT => Value::String(s),
         // A plain-string system prompt → [identity, caller's prompt].
@@ -694,16 +697,15 @@ mod tests {
                 .unwrap();
         }
         let applier = AnthropicOAuthApplier::new(&path).unwrap();
-        // No system field → identity becomes the system string.
+        // No system field → identity as a single-element content-block array.
         let mut body = serde_json::json!({ "model": "claude", "messages": [] });
         applier
             .prepare_body(&mut body, &anthropic_target(None))
             .await
             .unwrap();
-        assert_eq!(
-            body["system"],
-            serde_json::json!(headers::CLAUDE_CODE_SYSTEM_PROMPT)
-        );
+        let only = body["system"].as_array().unwrap();
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0]["text"], headers::CLAUDE_CODE_SYSTEM_PROMPT);
         // String system → array: identity first, caller's prompt preserved.
         let mut body2 = serde_json::json!({ "system": "be terse", "messages": [] });
         applier
