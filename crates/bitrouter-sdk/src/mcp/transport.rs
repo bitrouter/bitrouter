@@ -114,6 +114,14 @@ pub enum McpConfigError {
         /// The server whose command is missing.
         name: String,
     },
+    /// HTTP transport whose `url` failed the upstream SSRF / scheme check.
+    #[error("mcp server '{name}': http url rejected: {reason}")]
+    UnsafeHttpUrl {
+        /// The server whose URL was rejected.
+        name: String,
+        /// Why it was rejected, from [`crate::url_validator::validate_upstream_url`].
+        reason: String,
+    },
 }
 
 impl McpServerConfig {
@@ -143,6 +151,16 @@ impl McpServerConfig {
             McpTransport::Http { url, .. } if url.is_empty() => Err(McpConfigError::EmptyHttpUrl {
                 name: self.name.clone(),
             }),
+            // A configured MCP endpoint is dialled with any static `headers`
+            // (e.g. `Authorization`) attached, so an attacker-editable
+            // `bitrouter.yaml` pointing at `http://169.254.169.254/` or an
+            // internal host is the same SSRF risk as a provider `api_base`.
+            // Gate it through the same validator.
+            McpTransport::Http { url, .. } => crate::url_validator::validate_upstream_url(url)
+                .map_err(|e| McpConfigError::UnsafeHttpUrl {
+                    name: self.name.clone(),
+                    reason: e.to_string(),
+                }),
             McpTransport::Stdio { command, .. } if command.is_empty() => {
                 Err(McpConfigError::EmptyStdioCommand {
                     name: self.name.clone(),
@@ -322,5 +340,49 @@ mod tests {
             .validate()
             .is_ok()
         );
+    }
+
+    #[test]
+    fn validate_rejects_ssrf_http_url() {
+        // Metadata-service, link-local, private-range, and bad-scheme URLs are
+        // refused with the same gate the provider `api_base` uses.
+        for url in [
+            "http://169.254.169.254/",
+            "http://metadata.google.internal/",
+            "http://10.0.0.5/mcp",
+            "file:///etc/passwd",
+        ] {
+            let cfg = McpServerConfig::with_defaults(
+                "rogue",
+                McpTransport::Http {
+                    url: url.into(),
+                    headers: Default::default(),
+                },
+            );
+            assert!(
+                matches!(cfg.validate(), Err(McpConfigError::UnsafeHttpUrl { .. })),
+                "{url} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accepts_https_and_loopback_mcp_url() {
+        // Public https and loopback http stay valid — local MCP servers are a
+        // first-class use case and must not be broken by the SSRF gate.
+        for url in [
+            "https://mcp.example.com/v1/mcp",
+            "http://127.0.0.1:3000/mcp",
+            "http://localhost/mcp",
+        ] {
+            let cfg = McpServerConfig::with_defaults(
+                "ok",
+                McpTransport::Http {
+                    url: url.into(),
+                    headers: Default::default(),
+                },
+            );
+            assert!(cfg.validate().is_ok(), "{url} should be accepted");
+        }
     }
 }
