@@ -250,6 +250,49 @@ fn account_strategy_defaults_to_failover() {
 }
 
 #[test]
+fn parses_virtual_model_strategy_priority_and_cascade() {
+    // Both spellings the audited config documented must still parse — the
+    // field is now a typed enum but the YAML surface is unchanged.
+    let yaml = r#"
+providers:
+  a:
+    api_base: https://a.example/v1
+    api_key: k
+    models: [{ id: m }]
+models:
+  fast:
+    strategy: priority
+    endpoints:
+      - { provider: a, service_id: m }
+  cheap:
+    strategy: cascade
+    endpoints:
+      - { provider: a, service_id: m }
+"#;
+    let cfg = parse(yaml).unwrap();
+    assert_eq!(cfg.models["fast"].strategy, VirtualModelStrategy::Priority);
+    assert_eq!(cfg.models["cheap"].strategy, VirtualModelStrategy::Cascade);
+}
+
+#[test]
+fn virtual_model_strategy_defaults_to_priority() {
+    // A virtual model with no explicit `strategy:` keeps declared order.
+    let yaml = r#"
+providers:
+  a:
+    api_base: https://a.example/v1
+    api_key: k
+    models: [{ id: m }]
+models:
+  v:
+    endpoints:
+      - { provider: a, service_id: m }
+"#;
+    let cfg = parse(yaml).unwrap();
+    assert_eq!(cfg.models["v"].strategy, VirtualModelStrategy::Priority);
+}
+
+#[test]
 fn primary_api_key_prefers_top_level_then_first_account() {
     // Top-level key wins when set.
     let mut p = ProviderConfig {

@@ -182,6 +182,78 @@ fn provider_matches_tags(provider: &crate::config::ProviderConfig, require: &[St
     require.iter().all(|t| provider.tags.contains(t))
 }
 
+/// Build the fallback chain for an explicit virtual model (Strategy 2),
+/// honouring its [`VirtualModelStrategy`].
+///
+/// Each endpoint that names an *active* provider contributes one-or-more
+/// (account-expanded) targets. The endpoint's `strategy` then decides the
+/// chain order:
+///
+/// - [`Priority`](crate::config::VirtualModelStrategy::Priority): keep the
+///   endpoints in declared YAML order; `prefs` do not reorder or filter them.
+///   The operator's declared priority is authoritative — the chain only
+///   *advances* past an endpoint when it fails with a retryable error.
+/// - [`Cascade`](crate::config::VirtualModelStrategy::Cascade): treat the
+///   endpoints as an unordered candidate set — apply `prefs.only` /
+///   `prefs.ignore` per-endpoint, then sort by `prefs.sort` exactly as
+///   Strategy-3 auto-cascade orders providers. Ordering is keyed on the
+///   endpoint's provider id so account-expanded targets stay grouped.
+fn resolve_virtual_model(
+    clean: &str,
+    virtual_model: &crate::config::VirtualModel,
+    config: &Config,
+    prefs: &RoutingPrefs,
+) -> Result<Vec<RoutingTarget>> {
+    use crate::config::VirtualModelStrategy;
+
+    // Per-endpoint targets, paired with the provider id so `cascade` can sort
+    // on it while keeping each provider's account-expanded targets together.
+    let mut endpoints: Vec<(String, Vec<RoutingTarget>)> = Vec::new();
+    for endpoint in &virtual_model.endpoints {
+        let Some(provider) = config.providers.get(&endpoint.provider) else {
+            continue;
+        };
+        if !provider.active {
+            continue;
+        }
+        if virtual_model.strategy == VirtualModelStrategy::Cascade {
+            // `priority` is an explicit, authoritative order, so only the
+            // cascade strategy consults the `only` / `ignore` filters.
+            if !prefs.only.is_empty() && !prefs.only.contains(&endpoint.provider) {
+                continue;
+            }
+            if prefs.ignore.contains(&endpoint.provider) {
+                continue;
+            }
+        }
+        endpoints.push((
+            endpoint.provider.clone(),
+            build_targets(&endpoint.provider, provider, &endpoint.service_id),
+        ));
+    }
+
+    // `cascade` re-orders the candidate endpoints by the request's SortOrder
+    // (`Latency` / `Cost` have no metrics source yet, so they currently fall
+    // back to the alphabetical-by-provider order — same as Strategy-3). A
+    // stable sort keeps the declared order as the tiebreaker for endpoints
+    // that share a provider id.
+    if virtual_model.strategy == VirtualModelStrategy::Cascade {
+        match prefs.sort {
+            SortOrder::Alphabetical | SortOrder::Latency | SortOrder::Cost => {
+                endpoints.sort_by(|a, b| a.0.cmp(&b.0));
+            }
+        }
+    }
+
+    let chain: Vec<RoutingTarget> = endpoints.into_iter().flat_map(|(_, t)| t).collect();
+    if chain.is_empty() {
+        return Err(BitrouterError::NotFound(format!(
+            "virtual model '{clean}' has no active endpoints"
+        )));
+    }
+    Ok(chain)
+}
+
 /// The shared Stage-0 + Strategy-1/2/3 resolution. Synchronous — both
 /// `ConfigRoutingTable` and `RegistryRoutingTable` call it under a read lock.
 pub fn resolve_route_chain(
@@ -206,24 +278,7 @@ pub fn resolve_route_chain(
 
     // ---- Strategy 2: explicit virtual model ----
     if let Some(virtual_model) = config.models.get(&clean) {
-        let mut chain = Vec::new();
-        for endpoint in &virtual_model.endpoints {
-            if let Some(provider) = config.providers.get(&endpoint.provider)
-                && provider.active
-            {
-                chain.extend(build_targets(
-                    &endpoint.provider,
-                    provider,
-                    &endpoint.service_id,
-                ));
-            }
-        }
-        if chain.is_empty() {
-            return Err(BitrouterError::NotFound(format!(
-                "virtual model '{clean}' has no active endpoints"
-            )));
-        }
-        return Ok(chain);
+        return resolve_virtual_model(&clean, virtual_model, config, &prefs);
     }
 
     // ---- Strategy 3: auto-cascade across every provider declaring it ----
@@ -453,6 +508,110 @@ providers:
         assert_eq!(chain.len(), 1, "virtual model's explicit endpoints win");
         assert_eq!(chain[0].provider_name, "openai");
         assert_eq!(chain[0].service_id, "gpt-5");
+    }
+
+    // A virtual model whose endpoints are declared in *non-alphabetical*
+    // provider order, so `priority` (declared order) and `cascade`
+    // (alphabetical re-sort) produce observably different chains.
+    const VIRTUAL_OUT_OF_ORDER: &str = r#"
+providers:
+  alpha:
+    api_base: https://alpha.example/v1
+    api_key: k-alpha
+    models: [{ id: backend-a }]
+  zeta:
+    api_base: https://zeta.example/v1
+    api_key: k-zeta
+    models: [{ id: backend-z }]
+models:
+  combo:
+    strategy: STRATEGY
+    endpoints:
+      - { provider: zeta, service_id: backend-z }
+      - { provider: alpha, service_id: backend-a }
+"#;
+
+    #[tokio::test]
+    async fn strategy_2_priority_keeps_declared_endpoint_order() {
+        // `priority` is authoritative: the chain is exactly the declared
+        // order (zeta, then alpha), regardless of provider-name ordering.
+        let t = table(&VIRTUAL_OUT_OF_ORDER.replace("STRATEGY", "priority"));
+        let chain = t
+            .route_chain("combo", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(order, vec!["zeta", "alpha"], "declared order preserved");
+    }
+
+    #[tokio::test]
+    async fn strategy_2_cascade_reorders_endpoints_by_sort() {
+        // `cascade` treats the endpoints as a candidate set and applies the
+        // cascade ordering (alphabetical-by-provider today) — flipping the
+        // declared (zeta, alpha) into (alpha, zeta). Same config, different
+        // strategy, provably different chain.
+        let t = table(&VIRTUAL_OUT_OF_ORDER.replace("STRATEGY", "cascade"));
+        let chain = t
+            .route_chain("combo", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(order, vec!["alpha", "zeta"], "cascade re-sorts the chain");
+    }
+
+    #[tokio::test]
+    async fn strategy_2_priority_ignores_routing_prefs_filters() {
+        // The declared priority order is authoritative: an `ignore` pref must
+        // NOT prune a `priority` virtual model's endpoints (contrast the
+        // cascade test below).
+        let t = table(&VIRTUAL_OUT_OF_ORDER.replace("STRATEGY", "priority"));
+        let prefs = RoutingPrefs {
+            ignore: vec!["zeta".to_string()],
+            ..Default::default()
+        };
+        let chain = t
+            .route_chain("combo", &prefs, &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["zeta", "alpha"],
+            "priority is authoritative — ignore pref has no effect"
+        );
+    }
+
+    #[tokio::test]
+    async fn strategy_2_cascade_honors_ignore_pref() {
+        // Under `cascade` the endpoints are an unordered candidate set, so an
+        // `ignore` pref drops the matching endpoint from the chain.
+        let t = table(&VIRTUAL_OUT_OF_ORDER.replace("STRATEGY", "cascade"));
+        let prefs = RoutingPrefs {
+            ignore: vec!["zeta".to_string()],
+            ..Default::default()
+        };
+        let chain = t
+            .route_chain("combo", &prefs, &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(order, vec!["alpha"], "cascade drops the ignored endpoint");
+    }
+
+    #[tokio::test]
+    async fn strategy_2_defaults_to_priority_order() {
+        // No explicit `strategy:` ⇒ Priority ⇒ declared order. Guards the
+        // backward-compat default for pre-existing configs.
+        let yaml = VIRTUAL_OUT_OF_ORDER
+            .replace("    strategy: STRATEGY\n", "")
+            .to_string();
+        let t = table(&yaml);
+        let chain = t
+            .route_chain("combo", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(order, vec!["zeta", "alpha"], "default strategy = priority");
     }
 
     #[tokio::test]

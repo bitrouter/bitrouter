@@ -452,19 +452,50 @@ pub struct ProviderModel {
 /// An explicit virtual-model definition (Strategy 2).
 #[derive(Debug, Clone, Deserialize)]
 pub struct VirtualModel {
-    /// Endpoint-selection strategy (`priority` / `cascade` / …). Free-form for
-    /// now — Phase 4 routes a virtual model as a chain over its endpoints.
-    #[serde(default = "default_strategy")]
-    pub strategy: String,
-    /// The ordered endpoints this virtual model maps to.
+    /// How this virtual model's [`endpoints`](Self::endpoints) are ordered
+    /// into the fallback chain. See [`VirtualModelStrategy`]. Defaults to
+    /// [`Priority`](VirtualModelStrategy::Priority).
+    #[serde(default)]
+    pub strategy: VirtualModelStrategy,
+    /// The endpoints this virtual model maps to. Their meaning depends on
+    /// [`strategy`](Self::strategy): under `priority` they are an *ordered*
+    /// preference list; under `cascade` the order is a starting point that
+    /// the cascade ordering then re-sorts.
     pub endpoints: Vec<VirtualEndpoint>,
     /// Optional pricing for the virtual model.
     #[serde(default)]
     pub pricing: Option<PricingConfig>,
 }
 
-fn default_strategy() -> String {
-    "priority".to_string()
+/// How a [`VirtualModel`]'s endpoints are ordered into its fallback chain
+/// (Strategy 2). Mirrors the typed-enum + serde pattern of
+/// [`AccountStrategy`].
+///
+/// Both strategies build a chain that `execute_with_fallback` walks: a
+/// retryable failure (5xx / 408 / 429 / timeout / credit-exhaustion) always
+/// advances to the next endpoint — that failover-on-error behaviour is a
+/// property of *any* chain and is shared by both. They differ only in the
+/// **order** the endpoints take in that chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VirtualModelStrategy {
+    /// Endpoints are tried in **declared YAML order** — the first is the
+    /// preferred endpoint, the rest are failover targets reached only when a
+    /// preceding one fails with a retryable error. Routing preferences
+    /// (`sort` / `only` / `ignore`) do **not** reorder or filter the chain:
+    /// the operator's declared priority is authoritative. This is the
+    /// default and matches the historical (pre-typed-`strategy`) behaviour.
+    #[default]
+    Priority,
+    /// Endpoints are treated as an unordered candidate set and **re-ordered by
+    /// the request's [`SortOrder`]** (the same cascade ordering Strategy-3
+    /// auto-cascade applies to providers), and filtered by `only` / `ignore`.
+    /// Use this when the endpoints are interchangeable and you want
+    /// cost/latency-aware (or, today, alphabetical) selection rather than a
+    /// fixed priority order. `Latency` / `Cost` have no metrics source yet, so
+    /// they currently fall back to alphabetical-by-provider — the same honest
+    /// limitation Strategy-3 documents.
+    Cascade,
 }
 
 /// One endpoint of a virtual model.
