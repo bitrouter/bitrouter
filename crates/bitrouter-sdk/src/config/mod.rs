@@ -654,6 +654,23 @@ where
                 BitrouterError::bad_request(format!("provider '{id}' api_base rejected: {e}"))
             })?;
         }
+        // A per-account `api_base` override reaches the executor exactly like
+        // the provider-level one (`build_targets` copies it onto the routing
+        // target), so it needs the same SSRF gate — otherwise an `accounts`
+        // entry is an unchecked back door to the host's internal network. An
+        // empty override inherits the (already-validated) provider `api_base`.
+        for account in &provider.accounts {
+            if !account.api_base.is_empty() {
+                crate::url_validator::validate_upstream_url(&account.api_base).map_err(|e| {
+                    let who = if account.label.is_empty() {
+                        format!("provider '{id}' account")
+                    } else {
+                        format!("provider '{id}' account '{}'", account.label)
+                    };
+                    BitrouterError::bad_request(format!("{who} api_base rejected: {e}"))
+                })?;
+            }
+        }
     }
     Ok(config)
 }

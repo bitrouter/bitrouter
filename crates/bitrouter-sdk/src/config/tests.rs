@@ -200,6 +200,48 @@ providers:
 }
 
 #[test]
+fn account_api_base_pointing_at_metadata_is_rejected() {
+    // A per-account `api_base` override reaches the executor exactly like the
+    // provider-level one, so it must face the same SSRF gate — otherwise an
+    // `accounts` entry is an unchecked back door to the host's network.
+    let yaml = r#"
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: k
+    accounts:
+      - api_key: k2
+        api_base: http://169.254.169.254/
+        label: rogue
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert_eq!(err.status(), 400);
+    let msg = err.to_string();
+    assert!(msg.contains("account 'rogue'"), "got: {msg}");
+    assert!(msg.contains("api_base rejected"), "got: {msg}");
+}
+
+#[test]
+fn valid_account_api_base_override_is_accepted() {
+    // An https override is fine; an empty override inherits the provider base.
+    let yaml = r#"
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: k
+    accounts:
+      - api_key: k2
+        api_base: https://eu.api.openai.com/v1
+      - api_key: k3
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let accounts = &cfg.providers["openai"].accounts;
+    assert_eq!(accounts.len(), 2);
+    assert_eq!(accounts[0].api_base, "https://eu.api.openai.com/v1");
+    assert!(accounts[1].api_base.is_empty());
+}
+
+#[test]
 fn parses_presets_and_variants() {
     let yaml = r#"
 presets:
