@@ -30,7 +30,7 @@ pub const OAUTH_BETA_VALUES: &[&str] = &["claude-code-20250219", "oauth-2025-04-
 /// profile; the first `system` block has to be this exact identity string or
 /// the upstream rejects the request. The caller's own system prompt is
 /// preserved — appended after this block by
-/// [`crate::anthropic::AnthropicOAuthApplier::prepare_body`]. Mirrors the
+/// [`crate::anthropic::AnthropicOAuthApplier`]'s body shaper. Mirrors the
 /// request shape of Claude Code itself (see the OpenClaw reference,
 /// `src/llm/providers/anthropic.ts`, at <https://github.com/openclaw/openclaw>).
 pub const CLAUDE_CODE_SYSTEM_PROMPT: &str =
