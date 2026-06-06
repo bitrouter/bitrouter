@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.9](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.8...v1.0.0-alpha.9)
+
+
+### ⛰️ Features
+
+- *(providers)* Claude & Codex OAuth subscriptions ([#519](https://github.com/bitrouter/bitrouter/pull/519)) - ([6983051](https://github.com/bitrouter/bitrouter/commit/6983051e5dc93b4b9bfb9ddcf1e26a2f1c29f8d7))
+
+
 ## [1.0.0-alpha.8](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.7...v1.0.0-alpha.8)
 
 
