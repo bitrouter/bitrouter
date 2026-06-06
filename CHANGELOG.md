@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.8](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.7...v1.0.0-alpha.8)
+
+
+### ⛰️ Features
+
+- *(sdk)* [**breaking**] Per-target Messages auth scheme (x-api-key | Bearer) ([#516](https://github.com/bitrouter/bitrouter/pull/516)) - ([da10012](https://github.com/bitrouter/bitrouter/commit/da10012e4db97db650ccd69c8ac243ef2172e511))
+
+
 ## [1.0.0-alpha.7](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.6...v1.0.0-alpha.7)
 
 
