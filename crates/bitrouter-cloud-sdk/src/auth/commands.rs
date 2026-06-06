@@ -208,24 +208,3 @@ pub async fn whoami() -> Result<()> {
         }
     }
 }
-
-/// Return the current access token, transparently refreshing if it's
-/// within ~60s of expiry. Exposed as the §5 helper for any future call
-/// site that needs to attach `Authorization: Bearer …` to an outgoing
-/// request when no explicit per-call key was passed.
-pub async fn current_bearer() -> Result<Option<String>> {
-    let mut store = CredentialsStore::default_path()?;
-    if store.current().is_none() {
-        return Ok(None);
-    }
-    let client = http_client()?;
-    let as_url = store
-        .current()
-        .map(|c| c.authorization_server.clone())
-        .expect("checked above");
-    let metadata = metadata::fetch(&client, &as_url)
-        .await
-        .with_context(|| format!("fetching AS metadata for {as_url}"))?;
-    let token = store.current_token(&client, &metadata).await?;
-    Ok(Some(token))
-}
