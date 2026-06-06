@@ -92,22 +92,6 @@ impl ConfigMcpRoutingTable {
     pub fn is_empty(&self) -> bool {
         self.servers.is_empty()
     }
-
-    /// The configured server ids (in arbitrary order).
-    pub fn server_ids(&self) -> impl Iterator<Item = &str> {
-        self.servers.keys().map(String::as_str)
-    }
-
-    /// Direct transport lookup, used by CLI verbs that want to introspect
-    /// configuration without going through a [`super::Pipeline`].
-    pub fn lookup(&self, server: &str) -> Option<&McpTransport> {
-        self.servers.get(server)
-    }
-
-    /// The aggregate members snapshot, in registration order.
-    pub fn aggregate_members(&self) -> &[AggregateMember] {
-        &self.aggregate_members
-    }
 }
 
 #[async_trait]
@@ -290,15 +274,5 @@ mod tests {
             McpServerAggregateConfig::default_for("bad"),
         );
         assert!(ConfigMcpRoutingTable::from_configs([bad]).is_err());
-    }
-
-    #[test]
-    fn lookup_returns_transport_for_introspection() {
-        let table = ConfigMcpRoutingTable::from_configs([server("ctx7", "https://x")]).unwrap();
-        assert!(matches!(
-            table.lookup("ctx7"),
-            Some(McpTransport::Http { .. })
-        ));
-        assert!(table.lookup("missing").is_none());
     }
 }
