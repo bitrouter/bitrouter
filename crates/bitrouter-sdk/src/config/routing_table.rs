@@ -65,7 +65,8 @@ impl ConfigRoutingTable {
         })
     }
 
-    /// Snapshot the current config (used by `RegistryRoutingTable`).
+    /// Snapshot the current `Config` — used by the daemon reload integration
+    /// test to assert the table adopted a hot-reloaded config.
     pub fn snapshot_config(&self) -> Config {
         self.config.read().expect("config lock poisoned").clone()
     }
@@ -258,8 +259,8 @@ fn resolve_virtual_model(
     Ok(chain)
 }
 
-/// The shared Stage-0 + Strategy-1/2/3 resolution. Synchronous — both
-/// `ConfigRoutingTable` and `RegistryRoutingTable` call it under a read lock.
+/// The shared Stage-0 + Strategy-1/2/3 resolution. Synchronous —
+/// `ConfigRoutingTable` calls it under a read lock.
 pub fn resolve_route_chain(
     config: &Config,
     model: &str,

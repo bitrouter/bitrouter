@@ -56,7 +56,7 @@ pub struct ModelInfo {
 /// Resolves a model name into a fallback chain. v1 has no single-target
 /// `route()` — everything is `route_chain()`; a "single target" is just a
 /// length-1 chain. Implementations: `ConfigRoutingTable` (yaml) and
-/// `RegistryRoutingTable` (external registry), plus `StaticRoutingTable` here.
+/// `StaticRoutingTable` here.
 #[async_trait]
 pub trait RoutingTable: Send + Sync {
     /// Resolve `model` into an ordered fallback chain.
@@ -147,7 +147,7 @@ impl FallbackPolicy for DefaultFallbackPolicy {
 
 /// A trivial in-memory routing table: `model -> ordered targets`. Used by the
 /// Phase-1 pipeline tests and the minimal server path. Phase 4 replaces it with
-/// `ConfigRoutingTable` / `RegistryRoutingTable`.
+/// `ConfigRoutingTable`.
 pub struct StaticRoutingTable {
     routes: RwLock<HashMap<String, Vec<RoutingTarget>>>,
 }

@@ -71,22 +71,6 @@ providers:
     assert_eq!(openai.protocol_for("gpt-4o"), ApiProtocol::ChatCompletions);
     // per-model override beats the pattern
     assert_eq!(openai.protocol_for("o3"), ApiProtocol::Responses);
-
-    // rate limits: `gpt-5*` and `*` are independent buckets
-    assert_eq!(
-        openai.rate_limit_for("gpt-5").unwrap().requests_per_minute,
-        Some(10)
-    );
-    assert_eq!(
-        openai.rate_limit_for("gpt-4o").unwrap().requests_per_minute,
-        Some(60)
-    );
-    let bucket_gpt5 = openai.rate_limit_bucket("openai", "gpt-5").unwrap();
-    let bucket_4o = openai.rate_limit_bucket("openai", "gpt-4o").unwrap();
-    assert_ne!(
-        bucket_gpt5, bucket_4o,
-        "per-pattern keyed buckets are distinct"
-    );
 }
 
 #[test]

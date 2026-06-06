@@ -28,7 +28,6 @@ use crate::language_model::types::ApiProtocol;
 
 pub mod pattern;
 pub mod presets;
-pub mod registry;
 pub mod routing_table;
 
 #[cfg(test)]
@@ -36,7 +35,6 @@ mod tests;
 
 pub use pattern::{Pattern, PatternMap};
 pub use presets::{PresetResolution, PromptOverrides, resolve_presets};
-pub use registry::RegistryRoutingTable;
 pub use routing_table::ConfigRoutingTable;
 
 /// The top-level configuration.
@@ -392,32 +390,6 @@ impl ProviderConfig {
             return p.clone();
         }
         infer_protocol(&self.api_base)
-    }
-
-    /// Resolve the effective rate limit for `model_id` and the bucket key
-    /// (provider id + matched pattern) it should be counted under.
-    pub fn rate_limit_for(&self, model_id: &str) -> Option<RateLimit> {
-        if let Some(m) = self.models.iter().find(|m| m.id == model_id)
-            && let Some(rl) = m.rate_limits
-        {
-            return Some(rl);
-        }
-        self.rate_limits.resolve(model_id).copied()
-    }
-
-    /// The rate-limit bucket key for `model_id` — `provider:pattern`, so two
-    /// patterns under one provider get independent windows.
-    pub fn rate_limit_bucket(&self, provider_id: &str, model_id: &str) -> Option<String> {
-        if self
-            .models
-            .iter()
-            .any(|m| m.id == model_id && m.rate_limits.is_some())
-        {
-            return Some(format!("{provider_id}:model:{model_id}"));
-        }
-        self.rate_limits
-            .matched_pattern(model_id)
-            .map(|p| format!("{provider_id}:pattern:{p:?}"))
     }
 }
 
