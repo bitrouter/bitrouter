@@ -36,6 +36,26 @@ pub trait AuthApplier: Send + Sync {
         request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request>;
+
+    /// Optionally rewrite the structured request body before it is
+    /// serialized and sent. Runs at render time — after the protocol
+    /// adapter produces the JSON body and before the HTTP request is built,
+    /// so it sees the body as a mutable [`serde_json::Value`]. This is the
+    /// right layer for body edits; [`apply`](Self::apply) only sees an
+    /// already-built request whose body is opaque bytes.
+    ///
+    /// The default is a no-op. OAuth *subscription* providers override it to
+    /// match the body shape the vendor's own first-party client sends — for
+    /// example Claude Pro/Max requires Claude Code's identity as the first
+    /// `system` block, and the ChatGPT/Codex backend requires `store: false`
+    /// on the Responses body. Static-credential providers never need it.
+    async fn prepare_body(
+        &self,
+        _body: &mut serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Registry of per-provider [`AuthApplier`]s, keyed by `provider_name`.

@@ -17,13 +17,14 @@
 //! 4. Set `OpenAI-Beta: responses=experimental` and `originator: bitrouter`
 //!    so the upstream admits the request through the Codex pipeline.
 //!
-//! ## Body shape — known gap
+//! ## Body shape
 //!
-//! Same caveat as the Anthropic OAuth applier: subscription endpoints
-//! expect first-party-CLI-shaped bodies (specific `instructions` /
-//! `store` fields). This module only places credentials + integration
-//! headers; body shaping is a follow-up. Until then, requests will
-//! authenticate but the upstream may reject them on body grounds.
+//! The ChatGPT/Codex backend requires `store: false` and
+//! `include: ["reasoning.encrypted_content"]` on the Responses body.
+//! [`OpenAiCodexAuthApplier::prepare_body`] sets both at render time. The
+//! system prompt already rides in the Responses `instructions` field (set by
+//! the Responses adapter), so it is left as-is. Mirrors OpenClaw
+//! `src/llm/providers/openai-chatgpt-responses.ts`.
 
 pub mod headers;
 pub mod jwt;
@@ -257,7 +258,68 @@ impl AuthApplier for OpenAiCodexAuthApplier {
             HeaderName::from_static("originator"),
             HeaderValue::from_static(headers::ORIGINATOR),
         );
+        headers_mut.insert(
+            reqwest::header::USER_AGENT,
+            HeaderValue::from_static(headers::USER_AGENT),
+        );
         Ok(request)
+    }
+
+    async fn prepare_body(
+        &self,
+        body: &mut serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> Result<()> {
+        // The openai-codex provider always targets the ChatGPT/Codex backend
+        // (Responses-only, OAuth-only), so the body always needs the Codex
+        // shape — no credential branch required.
+        shape_codex_responses_body(body);
+        Ok(())
+    }
+}
+
+/// Shape a Responses request body for the ChatGPT/Codex backend.
+///
+/// The backend requires `store: false` (it does not persist Codex responses)
+/// and `include: ["reasoning.encrypted_content"]` so reasoning models return
+/// their encrypted reasoning for multi-turn continuity. The caller's system
+/// prompt rides in `instructions` (set by the Responses adapter); when the
+/// caller sent none, default it to the Codex CLI's own fallback so the backend
+/// always sees instructions. Mirrors OpenClaw
+/// `src/llm/providers/openai-chatgpt-responses.ts`.
+fn shape_codex_responses_body(body: &mut serde_json::Value) {
+    use serde_json::Value;
+    const REASONING_INCLUDE: &str = "reasoning.encrypted_content";
+    // OpenClaw: `instructions = systemPrompt || "You are a helpful assistant."`.
+    const DEFAULT_INSTRUCTIONS: &str = "You are a helpful assistant.";
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    obj.insert("store".to_string(), Value::Bool(false));
+    match obj.get_mut("include") {
+        Some(Value::Array(items)) => {
+            if !items.iter().any(|v| v.as_str() == Some(REASONING_INCLUDE)) {
+                items.push(Value::String(REASONING_INCLUDE.to_string()));
+            }
+        }
+        _ => {
+            obj.insert(
+                "include".to_string(),
+                Value::Array(vec![Value::String(REASONING_INCLUDE.to_string())]),
+            );
+        }
+    }
+    // Ensure `instructions` is present even when the caller sent no system
+    // prompt — the Codex backend expects it.
+    let has_instructions = obj
+        .get("instructions")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty());
+    if !has_instructions {
+        obj.insert(
+            "instructions".to_string(),
+            Value::String(DEFAULT_INSTRUCTIONS.to_string()),
+        );
     }
 }
 
@@ -354,6 +416,11 @@ mod tests {
             h.get("originator").and_then(|v| v.to_str().ok()),
             Some(headers::ORIGINATOR)
         );
+        assert_eq!(
+            h.get(reqwest::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok()),
+            Some(headers::USER_AGENT)
+        );
     }
 
     #[tokio::test]
@@ -426,5 +493,53 @@ mod tests {
                 .get(reqwest::header::AUTHORIZATION)
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_body_forces_store_false_and_reasoning_include() {
+        let path = tmp_store_path();
+        let applier = OpenAiCodexAuthApplier::new(&path).unwrap();
+        // include absent → created with the reasoning item; store forced false.
+        let mut body = serde_json::json!({ "model": "gpt-5-codex", "input": [] });
+        applier
+            .prepare_body(&mut body, &codex_target(None))
+            .await
+            .unwrap();
+        assert_eq!(body["store"], serde_json::json!(false));
+        assert_eq!(
+            body["include"],
+            serde_json::json!(["reasoning.encrypted_content"])
+        );
+        // include already present → reasoning item appended without duplication.
+        let mut body2 = serde_json::json!({ "include": ["foo"] });
+        applier
+            .prepare_body(&mut body2, &codex_target(None))
+            .await
+            .unwrap();
+        assert_eq!(
+            body2["include"],
+            serde_json::json!(["foo", "reasoning.encrypted_content"])
+        );
+        // Idempotent — a second pass doesn't re-append.
+        applier
+            .prepare_body(&mut body2, &codex_target(None))
+            .await
+            .unwrap();
+        assert_eq!(
+            body2["include"],
+            serde_json::json!(["foo", "reasoning.encrypted_content"])
+        );
+        // No system prompt → instructions defaulted to the Codex fallback.
+        assert_eq!(
+            body["instructions"],
+            serde_json::json!("You are a helpful assistant.")
+        );
+        // A caller-supplied instructions is preserved untouched.
+        let mut body3 = serde_json::json!({ "instructions": "be a pirate", "input": [] });
+        applier
+            .prepare_body(&mut body3, &codex_target(None))
+            .await
+            .unwrap();
+        assert_eq!(body3["instructions"], serde_json::json!("be a pirate"));
     }
 }

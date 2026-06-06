@@ -201,6 +201,8 @@ bitrouter login github-copilot       # GitHub device-code flow
 
 Runs the provider's OAuth flow (PKCE in a browser or device-code, depending on provider) and stores the token in `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The slot is keyed by `(provider_id, label)` — pass `--label <name>` (defaults to `default`) to keep multiple accounts of the same provider side by side. Other providers fall back to a pasted API key.
 
+For `anthropic` and `openai-codex`, the login menu also offers **"Import an existing session from the vendor CLI"** — bitrouter reads the credential the matching first-party CLI already stored (Claude Code from the macOS Keychain or `~/.claude/.credentials.json`; Codex from the macOS Keychain or `$CODEX_HOME/auth.json`) and adopts it, with no fresh browser sign-in. The imported token refreshes automatically like any other.
+
 For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter auth login`](#bitrouter-auth-login--logout--whoami) below.
 
 ### `bitrouter logout <provider>`
