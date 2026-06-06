@@ -2,15 +2,15 @@
 //!
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `route` / `init` / `key sign` / `models` / `tools` /
-//! `policy create` / `providers (list|use)` / `wallet` / `login` / `logout` /
-//! `whoami` / `agents`. Daemon control runs over a local IPC endpoint
-//! (a Unix domain socket, or a Windows named pipe) — `start` spawns
-//! `serve` detached; the client subcommands send one [`DaemonCommand`] each.
+//! `policy create` / `providers list` / `login` / `logout` / `agents` /
+//! `agent-proxy` / `auth` / `cloud` / `skills`. Daemon control runs over a
+//! local IPC endpoint (a Unix domain socket, or a Windows named pipe) —
+//! `start` spawns `serve` detached; the client subcommands send one
+//! [`DaemonCommand`] each.
 //!
-//! v1.0 ships the routing / settlement subsystems wired here. Subsystems that
-//! belong to *other* services (OWS wallet, cloud login, ACP runtime) print an
-//! honest "not implemented in v1.0" message rather than faking output — see
-//! 007's notes on cross-system scope.
+//! OWS wallet integration is out of scope for v1.0 (it lives in the `ows`
+//! workspace); a commented-out `Wallet` variant in `Command` reserves the
+//! name for a future integration without shipping a non-functional command.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -158,8 +158,11 @@ enum Command {
         #[command(subcommand)]
         action: ProviderAction,
     },
-    /// OWS wallet integration — not implemented in v1.0.
-    Wallet,
+    // Reserved for a future OWS wallet integration (delivered by the `ows`
+    // workspace, not bitrouter). Intentionally commented out so v1.0 ships no
+    // non-functional `wallet` command; uncomment this variant AND restore its
+    // match arm in `run` when wiring OWS in.
+    // Wallet,
     /// Log in to an upstream provider — interactive credential setup.
     ///
     /// Per-provider available methods are auto-derived from the catalog:
@@ -169,14 +172,13 @@ enum Command {
     /// code flow; everything else accepts a pasted API key. The
     /// resulting credential is stored under
     /// `$XDG_DATA_HOME/bitrouter/oauth-tokens.json` keyed by
-    /// `(provider_id, label)`. For cloud sign-in (no argument), see
-    /// `bitrouter auth login` instead — kept separate so the per-
-    /// provider and cloud flows don't share a flag surface.
+    /// `(provider_id, label)`. For cloud sign-in, see `bitrouter auth login`
+    /// — kept separate so the per-provider and cloud flows don't share a
+    /// flag surface.
     Login {
         /// Provider id to log in to (e.g. `anthropic`, `openai-codex`,
-        /// `github-copilot`). Omit and the CLI redirects you to
-        /// `bitrouter auth login` for the cloud flow.
-        provider: Option<String>,
+        /// `github-copilot`).
+        provider: String,
         /// Account label this credential is stored under. Defaults to
         /// `default`. Use a non-default label to keep multiple accounts
         /// of the same provider side by side — reference them from
@@ -186,16 +188,11 @@ enum Command {
     },
     /// Log out of an upstream provider — clears every stored credential
     /// for the provider (subscription OAuth and pasted API keys alike).
-    /// For cloud sign-out (no argument), see `bitrouter auth logout`.
+    /// For cloud sign-out, see `bitrouter auth logout`.
     Logout {
         /// Provider id whose stored credentials should be removed.
-        /// Omit and the CLI redirects you to `bitrouter auth logout`.
-        provider: Option<String>,
+        provider: String,
     },
-    /// Legacy shim. Cloud identity now lives under
-    /// `bitrouter auth whoami` (local) and `bitrouter cloud whoami`
-    /// (local + base URL); this prints a pointer to those.
-    Whoami,
     /// ACP agent lifecycle — list the catalog, check configured agents,
     /// print install stubs. `bitrouter agent-proxy <id>` is the separate
     /// stdio bridge an editor spawns.
@@ -404,13 +401,6 @@ enum ProviderAction {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Select an active provider. v1 has no "current provider" concept (003
-    /// §5.2 dropped the v0 DEFAULT_PROVIDER fallback) — this command is a
-    /// no-op kept for surface compatibility with v0's `providers use`.
-    Use {
-        /// Provider id (accepted but not persisted).
-        id: String,
-    },
 }
 
 #[tokio::main]
@@ -494,46 +484,10 @@ async fn run() -> Result<()> {
         Command::Observe { action } => observe(action).await,
         Command::Policy { action } => policy(action).await,
         Command::Providers { action } => providers(action).await,
-        Command::Wallet => {
-            print_unimplemented(
-                "wallet",
-                "OWS wallet integration is delivered by the `ows` workspace, not\n\
-                 by bitrouter. v1.0 ships the routing / settlement layer only.",
-            );
-            Ok(())
+        Command::Login { provider, label } => {
+            bitrouter::commands::login_provider(&provider, &label).await
         }
-        Command::Login { provider, label } => match provider.as_deref() {
-            Some(name) => bitrouter::commands::login_provider(name, &label).await,
-            None => {
-                print_unimplemented(
-                    "login",
-                    "`bitrouter login` is the per-provider OAuth surface.\n\
-                     For cloud sign-in, run `bitrouter auth login`.\n\
-                     For a local virtual key, run `bitrouter key sign --user <id>`.",
-                );
-                Ok(())
-            }
-        },
-        Command::Logout { provider } => match provider.as_deref() {
-            Some(name) => bitrouter::commands::logout_provider(name).await,
-            None => {
-                print_unimplemented(
-                    "logout",
-                    "`bitrouter logout` is the per-provider OAuth surface.\n\
-                     For cloud sign-out, run `bitrouter auth logout`.",
-                );
-                Ok(())
-            }
-        },
-        Command::Whoami => {
-            print_unimplemented(
-                "whoami",
-                "`bitrouter whoami` (top-level) is a legacy shim. Use:\n\
-                 - `bitrouter auth whoami`  — local cloud identity (offline read).\n\
-                 - `bitrouter cloud whoami` — same identity plus the configured /v1/* base URL.",
-            );
-            Ok(())
-        }
+        Command::Logout { provider } => bitrouter::commands::logout_provider(&provider).await,
         Command::Agents { action } => agents_cmd(action).await,
         Command::AgentProxy { agent, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -1380,13 +1334,6 @@ async fn providers(action: ProviderAction) -> Result<()> {
             }
             Ok(())
         }
-        ProviderAction::Use { id } => {
-            println!("v1 has no \"current provider\" — `providers use {id}` is a no-op.");
-            println!(
-                "  request a specific provider per-call via the model name or routing\n  prefs; bind a default by editing `bitrouter.yaml`."
-            );
-            Ok(())
-        }
     }
 }
 
@@ -1662,14 +1609,6 @@ fn pid_path_for(socket: &Path) -> PathBuf {
     let mut p = socket.to_path_buf();
     p.set_extension("pid");
     p
-}
-
-fn print_unimplemented(name: &str, detail: &str) {
-    eprintln!("`bitrouter {name}` is not implemented in v1.0.");
-    eprintln!();
-    for line in detail.lines() {
-        eprintln!("  {line}");
-    }
 }
 
 /// Liveness check: on Unix `kill -0 <pid>` returns success iff the pid is
