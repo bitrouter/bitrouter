@@ -369,22 +369,38 @@ impl CredentialStore {
         })?;
         let bytes = serde_json::to_vec_pretty(&self.creds)?;
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, &bytes).map_err(|source| CredentialStoreError::Io {
-            path: tmp.clone(),
-            source,
-        })?;
-        // chmod 0600 BEFORE the rename, so the file is never visible to
-        // co-tenants with world-readable permissions even for an instant.
+        // Create the temp file owner-only (0600) from the instant it exists, so
+        // the tokens never sit on a world-/group-readable file even for the
+        // width of the write — the exact co-tenant read window a `fs::write`
+        // followed by a later `chmod` leaves open. A stale temp from a crashed
+        // run is cleared first so `create_new` always makes a fresh 0600 file
+        // (and refuses to follow a symlink a co-tenant may have planted).
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            if let Err(source) = fs::set_permissions(&tmp, perms) {
-                return Err(CredentialStoreError::Io {
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let _ = fs::remove_file(&tmp);
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)
+                .map_err(|source| CredentialStoreError::Io {
                     path: tmp.clone(),
                     source,
-                });
-            }
+                })?;
+            file.write_all(&bytes)
+                .map_err(|source| CredentialStoreError::Io {
+                    path: tmp.clone(),
+                    source,
+                })?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(&tmp, &bytes).map_err(|source| CredentialStoreError::Io {
+                path: tmp.clone(),
+                source,
+            })?;
         }
         fs::rename(&tmp, &self.path).map_err(|source| CredentialStoreError::Io {
             path: self.path.clone(),
