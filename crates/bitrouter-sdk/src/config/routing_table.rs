@@ -195,9 +195,9 @@ fn provider_matches_tags(provider: &crate::config::ProviderConfig, require: &[St
 ///   *advances* past an endpoint when it fails with a retryable error.
 /// - [`Cascade`](crate::config::VirtualModelStrategy::Cascade): treat the
 ///   endpoints as an unordered candidate set — apply `prefs.only` /
-///   `prefs.ignore` per-endpoint, then sort by `prefs.sort` exactly as
-///   Strategy-3 auto-cascade orders providers. Ordering is keyed on the
-///   endpoint's provider id so account-expanded targets stay grouped.
+///   `prefs.ignore` / `prefs.require_tags` per-endpoint, then sort by
+///   `prefs.sort` exactly as Strategy-3 auto-cascade does. Ordering is keyed
+///   on the endpoint's provider id so account-expanded targets stay grouped.
 fn resolve_virtual_model(
     clean: &str,
     virtual_model: &crate::config::VirtualModel,
@@ -218,11 +218,15 @@ fn resolve_virtual_model(
         }
         if virtual_model.strategy == VirtualModelStrategy::Cascade {
             // `priority` is an explicit, authoritative order, so only the
-            // cascade strategy consults the `only` / `ignore` filters.
+            // cascade strategy consults the `only` / `ignore` / `require_tags`
+            // filters — the same filter set Strategy-3 auto-cascade applies.
             if !prefs.only.is_empty() && !prefs.only.contains(&endpoint.provider) {
                 continue;
             }
             if prefs.ignore.contains(&endpoint.provider) {
+                continue;
+            }
+            if !provider_matches_tags(provider, &prefs.require_tags) {
                 continue;
             }
         }
@@ -596,6 +600,69 @@ models:
             .unwrap();
         let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
         assert_eq!(order, vec!["alpha"], "cascade drops the ignored endpoint");
+    }
+
+    // `combo` over a tagged `alpha` (paid) and an untagged `zeta`, so a
+    // `require_tags=[paid]` pref can prove cascade filters on tags while
+    // priority does not.
+    const VIRTUAL_TAGGED: &str = r#"
+providers:
+  alpha:
+    api_base: https://alpha.example/v1
+    api_key: k-alpha
+    tags: [paid]
+    models: [{ id: backend-a }]
+  zeta:
+    api_base: https://zeta.example/v1
+    api_key: k-zeta
+    models: [{ id: backend-z }]
+models:
+  combo:
+    strategy: STRATEGY
+    endpoints:
+      - { provider: zeta, service_id: backend-z }
+      - { provider: alpha, service_id: backend-a }
+"#;
+
+    #[tokio::test]
+    async fn strategy_2_cascade_honors_require_tags() {
+        // Cascade's filter set matches Strategy-3, which includes
+        // `require_tags`: the untagged `zeta` endpoint is dropped.
+        let t = table(&VIRTUAL_TAGGED.replace("STRATEGY", "cascade"));
+        let prefs = RoutingPrefs {
+            require_tags: vec!["paid".to_string()],
+            ..Default::default()
+        };
+        let chain = t
+            .route_chain("combo", &prefs, &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["alpha"],
+            "cascade drops the endpoint whose provider lacks the required tag"
+        );
+    }
+
+    #[tokio::test]
+    async fn strategy_2_priority_ignores_require_tags() {
+        // `priority` is authoritative — `require_tags` must not prune it.
+        let t = table(&VIRTUAL_TAGGED.replace("STRATEGY", "priority"));
+        let prefs = RoutingPrefs {
+            require_tags: vec!["paid".to_string()],
+            ..Default::default()
+        };
+        let chain = t
+            .route_chain("combo", &prefs, &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["zeta", "alpha"],
+            "priority is authoritative — require_tags has no effect"
+        );
     }
 
     #[tokio::test]

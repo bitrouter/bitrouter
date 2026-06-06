@@ -477,7 +477,7 @@ pub struct VirtualModel {
 /// property of *any* chain and is shared by both. They differ only in the
 /// **order** the endpoints take in that chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum VirtualModelStrategy {
     /// Endpoints are tried in **declared YAML order** — the first is the
     /// preferred endpoint, the rest are failover targets reached only when a
@@ -489,7 +489,8 @@ pub enum VirtualModelStrategy {
     Priority,
     /// Endpoints are treated as an unordered candidate set and **re-ordered by
     /// the request's [`SortOrder`]** (the same cascade ordering Strategy-3
-    /// auto-cascade applies to providers), and filtered by `only` / `ignore`.
+    /// auto-cascade applies to providers), and filtered by `only` / `ignore` /
+    /// `require_tags`.
     /// Use this when the endpoints are interchangeable and you want
     /// cost/latency-aware (or, today, alphabetical) selection rather than a
     /// fixed priority order. `Latency` / `Cost` have no metrics source yet, so
