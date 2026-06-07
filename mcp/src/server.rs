@@ -148,6 +148,36 @@ async fn require_bearer(
     }
 }
 
+/// Build the `/mcp-control` axum router for `backend`, optionally gated by the
+/// pre-auth bearer middleware.
+fn build_http_router(backend: Arc<dyn Backend>, require_auth: bool) -> axum::Router {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
+    let service = StreamableHttpService::new(
+        move || Ok(BitrouterMcp::new(backend.clone())),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
+    );
+    let mut router = axum::Router::new().nest_service("/mcp-control", service);
+    if require_auth {
+        router = router.layer(axum::middleware::from_fn(require_bearer));
+    }
+    router
+}
+
+/// Serve streamable HTTP on an already-bound listener until the task is dropped.
+/// Exposed for integration tests of real multi-tenant forwarding.
+#[doc(hidden)]
+pub async fn serve_http_on(
+    backend: Arc<dyn Backend>,
+    listener: tokio::net::TcpListener,
+    require_auth: bool,
+) -> anyhow::Result<()> {
+    axum::serve(listener, build_http_router(backend, require_auth)).await?;
+    Ok(())
+}
+
 /// Serve over stdio until the client disconnects.
 pub async fn serve_stdio(backend: Arc<dyn Backend>) -> anyhow::Result<()> {
     use rmcp::{ServiceExt, transport::stdio};
