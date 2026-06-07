@@ -180,16 +180,28 @@ impl CredentialsStore {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating credentials dir {}", parent.display()))?;
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, &bytes).with_context(|| format!("writing {}", tmp.display()))?;
-        // chmod 0600 BEFORE the rename so the file is never world-readable
-        // even for an instant. Cross-tenant token theft prevention is the
-        // whole point.
+        // Create the temp file owner-only (0600) from the instant it exists so
+        // the bearer never lands on a world-/group-readable file, even for the
+        // width of the write — a `fs::write` then a later `chmod` leaves that
+        // co-tenant read window open. Clearing any stale temp lets `create_new`
+        // make a fresh 0600 file and refuse a symlink a co-tenant may plant.
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            fs::set_permissions(&tmp, perms)
-                .with_context(|| format!("chmod 0600 {}", tmp.display()))?;
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let _ = fs::remove_file(&tmp);
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)
+                .with_context(|| format!("creating {}", tmp.display()))?;
+            file.write_all(&bytes)
+                .with_context(|| format!("writing {}", tmp.display()))?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(&tmp, &bytes).with_context(|| format!("writing {}", tmp.display()))?;
         }
         fs::rename(&tmp, &self.path)
             .with_context(|| format!("renaming {} -> {}", tmp.display(), self.path.display()))?;

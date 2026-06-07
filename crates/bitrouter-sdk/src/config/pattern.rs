@@ -84,16 +84,6 @@ impl<T> PatternMap<T> {
             .map(|(_, v)| v)
     }
 
-    /// The most-specific matching pattern for `name` (used as the rate-limit
-    /// bucket key — limits are keyed per `(provider, matched pattern)`).
-    pub fn matched_pattern(&self, name: &str) -> Option<&Pattern> {
-        self.entries
-            .iter()
-            .filter(|(p, _)| p.matches(name))
-            .max_by_key(|(p, _)| p.specificity())
-            .map(|(p, _)| p)
-    }
-
     /// Whether the map has no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
@@ -147,18 +137,5 @@ mod tests {
         assert_eq!(map.resolve("gpt-5-mini"), Some(&"gpt5"));
         assert_eq!(map.resolve("gpt-4o"), Some(&"gpt"));
         assert_eq!(map.resolve("claude-x"), Some(&"default"));
-    }
-
-    #[test]
-    fn matched_pattern_is_the_bucket_key() {
-        let mut map: PatternMap<u32> = PatternMap::new();
-        map.push(Pattern::Wildcard, 60);
-        map.push(Pattern::parse("gpt-5*"), 10);
-        // distinct buckets: `gpt-5*` models key on the prefix pattern, others on `*`
-        assert_eq!(
-            map.matched_pattern("gpt-5-mini"),
-            Some(&Pattern::Prefix("gpt-5".into()))
-        );
-        assert_eq!(map.matched_pattern("claude"), Some(&Pattern::Wildcard));
     }
 }

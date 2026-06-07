@@ -28,7 +28,6 @@ use crate::language_model::types::ApiProtocol;
 
 pub mod pattern;
 pub mod presets;
-pub mod registry;
 pub mod routing_table;
 
 #[cfg(test)]
@@ -36,7 +35,6 @@ mod tests;
 
 pub use pattern::{Pattern, PatternMap};
 pub use presets::{PresetResolution, PromptOverrides, resolve_presets};
-pub use registry::RegistryRoutingTable;
 pub use routing_table::ConfigRoutingTable;
 
 /// The top-level configuration.
@@ -393,32 +391,6 @@ impl ProviderConfig {
         }
         infer_protocol(&self.api_base)
     }
-
-    /// Resolve the effective rate limit for `model_id` and the bucket key
-    /// (provider id + matched pattern) it should be counted under.
-    pub fn rate_limit_for(&self, model_id: &str) -> Option<RateLimit> {
-        if let Some(m) = self.models.iter().find(|m| m.id == model_id)
-            && let Some(rl) = m.rate_limits
-        {
-            return Some(rl);
-        }
-        self.rate_limits.resolve(model_id).copied()
-    }
-
-    /// The rate-limit bucket key for `model_id` — `provider:pattern`, so two
-    /// patterns under one provider get independent windows.
-    pub fn rate_limit_bucket(&self, provider_id: &str, model_id: &str) -> Option<String> {
-        if self
-            .models
-            .iter()
-            .any(|m| m.id == model_id && m.rate_limits.is_some())
-        {
-            return Some(format!("{provider_id}:model:{model_id}"));
-        }
-        self.rate_limits
-            .matched_pattern(model_id)
-            .map(|p| format!("{provider_id}:pattern:{p:?}"))
-    }
 }
 
 /// Infer a wire protocol from a provider's api-base host.
@@ -653,6 +625,23 @@ where
             crate::url_validator::validate_upstream_url(&provider.api_base).map_err(|e| {
                 BitrouterError::bad_request(format!("provider '{id}' api_base rejected: {e}"))
             })?;
+        }
+        // A per-account `api_base` override reaches the executor exactly like
+        // the provider-level one (`build_targets` copies it onto the routing
+        // target), so it needs the same SSRF gate — otherwise an `accounts`
+        // entry is an unchecked back door to the host's internal network. An
+        // empty override inherits the (already-validated) provider `api_base`.
+        for account in &provider.accounts {
+            if !account.api_base.is_empty() {
+                crate::url_validator::validate_upstream_url(&account.api_base).map_err(|e| {
+                    let who = if account.label.is_empty() {
+                        format!("provider '{id}' account")
+                    } else {
+                        format!("provider '{id}' account '{}'", account.label)
+                    };
+                    BitrouterError::bad_request(format!("{who} api_base rejected: {e}"))
+                })?;
+            }
         }
     }
     Ok(config)
