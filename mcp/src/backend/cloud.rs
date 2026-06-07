@@ -5,8 +5,8 @@
 use async_trait::async_trait;
 
 use super::{
-    Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, ModelsEnvelope,
-    StatusInfo, Usage,
+    Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
+    ModelsEnvelope, StatusInfo, Usage,
 };
 
 pub struct CloudBackend {
@@ -24,8 +24,9 @@ impl CloudBackend {
         }
     }
 
-    fn bearer(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        rb.bearer_auth(&self.token)
+    fn bearer(&self, caller: &CallerAuth, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let token = caller.bearer.as_deref().unwrap_or(&self.token);
+        rb.bearer_auth(token)
     }
 }
 
@@ -38,10 +39,10 @@ struct Balance {
 
 #[async_trait]
 impl Backend for CloudBackend {
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, BackendError> {
+    async fn list_models(&self, caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError> {
         let url = format!("{}/v1/models", self.base_url);
         let resp = self
-            .bearer(self.http.get(&url))
+            .bearer(caller, self.http.get(&url))
             .send()
             .await
             .map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -67,7 +68,11 @@ impl Backend for CloudBackend {
             .collect())
     }
 
-    async fn complete(&self, req: CompleteRequest) -> Result<CompleteResponse, BackendError> {
+    async fn complete(
+        &self,
+        caller: &CallerAuth,
+        req: CompleteRequest,
+    ) -> Result<CompleteResponse, BackendError> {
         let url = format!("{}/v1/chat/completions", self.base_url);
         let mut body = serde_json::json!({ "model": req.model, "messages": req.messages });
         if let Some(m) = req.max_tokens {
@@ -80,7 +85,7 @@ impl Backend for CloudBackend {
             body["system"] = s.into();
         }
         let resp = self
-            .bearer(self.http.post(&url).json(&body))
+            .bearer(caller, self.http.post(&url).json(&body))
             .send()
             .await
             .map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -124,10 +129,10 @@ impl Backend for CloudBackend {
         })
     }
 
-    async fn status(&self) -> Result<StatusInfo, BackendError> {
+    async fn status(&self, caller: &CallerAuth) -> Result<StatusInfo, BackendError> {
         let url = format!("{}/v1/billing/balance", self.base_url);
         let resp = self
-            .bearer(self.http.get(&url))
+            .bearer(caller, self.http.get(&url))
             .send()
             .await
             .map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -171,7 +176,11 @@ mod tests {
             .await;
 
         let backend = CloudBackend::new(server.uri(), "brk_test");
-        match backend.status().await.expect("status") {
+        match backend
+            .status(&CallerAuth::default())
+            .await
+            .expect("status")
+        {
             StatusInfo::Cloud {
                 available_micro_usd,
                 balance_micro_usd,
@@ -194,7 +203,7 @@ mod tests {
             .mount(&server)
             .await;
         let backend = CloudBackend::new(server.uri(), "brk_bad");
-        match backend.list_models().await {
+        match backend.list_models(&CallerAuth::default()).await {
             Err(BackendError::Upstream { status, .. }) => assert_eq!(status, 401),
             other => panic!("expected Upstream 401, got {other:?}"),
         }
@@ -214,7 +223,10 @@ mod tests {
             .await;
 
         let backend = CloudBackend::new(server.uri(), "brk_test");
-        let models = backend.list_models().await.expect("models");
+        let models = backend
+            .list_models(&CallerAuth::default())
+            .await
+            .expect("models");
         assert_eq!(
             models,
             vec![ModelInfo {
@@ -223,5 +235,23 @@ mod tests {
                 active: true,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn caller_bearer_overrides_configured_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer caller-tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "object": "list", "data": []
+            })))
+            .mount(&server)
+            .await;
+        let backend = CloudBackend::new(server.uri(), "configured-tok");
+        let caller = CallerAuth {
+            bearer: Some("caller-tok".into()),
+        };
+        backend.list_models(&caller).await.expect("list_models");
     }
 }

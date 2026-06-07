@@ -5,8 +5,8 @@
 use async_trait::async_trait;
 
 use super::{
-    Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, ModelsEnvelope,
-    ProviderStatus, StatusInfo, Usage,
+    Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
+    ModelsEnvelope, ProviderStatus, StatusInfo, Usage,
 };
 
 /// Routes tool calls to the local daemon's `/v1/*` HTTP API.
@@ -27,7 +27,7 @@ impl LocalBackend {
 
 #[async_trait]
 impl Backend for LocalBackend {
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, BackendError> {
+    async fn list_models(&self, _caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError> {
         let url = format!("{}/v1/models", self.base_url);
         let resp = self
             .http
@@ -57,7 +57,11 @@ impl Backend for LocalBackend {
             .collect())
     }
 
-    async fn complete(&self, req: CompleteRequest) -> Result<CompleteResponse, BackendError> {
+    async fn complete(
+        &self,
+        _caller: &CallerAuth,
+        req: CompleteRequest,
+    ) -> Result<CompleteResponse, BackendError> {
         let url = format!("{}/v1/chat/completions", self.base_url);
         let mut body = serde_json::json!({
             "model": req.model,
@@ -119,7 +123,7 @@ impl Backend for LocalBackend {
         })
     }
 
-    async fn status(&self) -> Result<StatusInfo, BackendError> {
+    async fn status(&self, _caller: &CallerAuth) -> Result<StatusInfo, BackendError> {
         let url = format!("{}/v1/models", self.base_url);
         let resp = self
             .http
@@ -199,13 +203,16 @@ mod tests {
 
         let backend = LocalBackend::new(server.uri());
         let out = backend
-            .complete(CompleteRequest {
-                model: "openai/gpt-4o".into(),
-                messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
-                max_tokens: Some(64),
-                temperature: None,
-                system: None,
-            })
+            .complete(
+                &CallerAuth::default(),
+                CompleteRequest {
+                    model: "openai/gpt-4o".into(),
+                    messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+                    max_tokens: Some(64),
+                    temperature: None,
+                    system: None,
+                },
+            )
             .await
             .expect("complete");
 
@@ -230,7 +237,7 @@ mod tests {
             .mount(&server)
             .await;
         let backend = LocalBackend::new(server.uri());
-        match backend.status().await {
+        match backend.status(&CallerAuth::default()).await {
             Err(BackendError::Upstream { status, .. }) => assert_eq!(status, 500),
             other => panic!("expected Upstream 500, got {other:?}"),
         }
@@ -253,7 +260,11 @@ mod tests {
             .await;
 
         let backend = LocalBackend::new(server.uri());
-        match backend.status().await.expect("status") {
+        match backend
+            .status(&CallerAuth::default())
+            .await
+            .expect("status")
+        {
             StatusInfo::Local {
                 running,
                 models,
@@ -297,7 +308,10 @@ mod tests {
             .await;
 
         let backend = LocalBackend::new(server.uri());
-        let models = backend.list_models().await.expect("list_models");
+        let models = backend
+            .list_models(&CallerAuth::default())
+            .await
+            .expect("list_models");
 
         assert_eq!(
             models,

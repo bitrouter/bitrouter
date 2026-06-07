@@ -8,7 +8,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 
-use crate::backend::{Backend, CompleteRequest};
+use crate::backend::{Backend, CallerAuth, CompleteRequest};
 
 #[derive(Clone)]
 pub struct BitrouterMcp {
@@ -48,7 +48,7 @@ impl BitrouterMcp {
             temperature: args.temperature,
             system: args.system,
         };
-        match self.backend.complete(req).await {
+        match self.backend.complete(&CallerAuth::default(), req).await {
             Ok(r) => match serde_json::to_string(&r) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -61,7 +61,7 @@ impl BitrouterMcp {
 
     #[tool(description = "List models routable through BitRouter.")]
     async fn list_models(&self) -> Result<CallToolResult, McpError> {
-        match self.backend.list_models().await {
+        match self.backend.list_models(&CallerAuth::default()).await {
             Ok(m) => match serde_json::to_string(&m) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -76,7 +76,7 @@ impl BitrouterMcp {
         description = "Report BitRouter status (local: liveness/models/providers; cloud: credit balance)."
     )]
     async fn status(&self) -> Result<CallToolResult, McpError> {
-        match self.backend.status().await {
+        match self.backend.status(&CallerAuth::default()).await {
             Ok(s) => match serde_json::to_string(&s) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -159,12 +159,18 @@ pub fn build_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{BackendError, CompleteResponse, ModelInfo, StatusInfo, Usage};
+    use crate::backend::{
+        BackendError, CallerAuth, CompleteResponse, ModelInfo, StatusInfo, Usage,
+    };
 
     struct StubBackend;
     #[async_trait::async_trait]
     impl Backend for StubBackend {
-        async fn complete(&self, _: CompleteRequest) -> Result<CompleteResponse, BackendError> {
+        async fn complete(
+            &self,
+            _: &CallerAuth,
+            _: CompleteRequest,
+        ) -> Result<CompleteResponse, BackendError> {
             Ok(CompleteResponse {
                 content: "ok".into(),
                 model: "m".into(),
@@ -175,10 +181,10 @@ mod tests {
                 finish_reason: "stop".into(),
             })
         }
-        async fn list_models(&self) -> Result<Vec<ModelInfo>, BackendError> {
+        async fn list_models(&self, _: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError> {
             Ok(vec![])
         }
-        async fn status(&self) -> Result<StatusInfo, BackendError> {
+        async fn status(&self, _: &CallerAuth) -> Result<StatusInfo, BackendError> {
             Ok(StatusInfo::Cloud {
                 available_micro_usd: 1,
                 balance_micro_usd: 1,
