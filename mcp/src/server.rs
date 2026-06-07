@@ -6,9 +6,23 @@ use std::sync::Arc;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
-use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
-use crate::backend::{Backend, CompleteRequest};
+use crate::backend::{Backend, CallerAuth, CompleteRequest};
+
+/// Extract the caller's bearer from MCP request extensions. The streamable-HTTP
+/// transport injects `http::request::Parts`; returns an empty `CallerAuth` over
+/// stdio (no parts) or when no/!Bearer `Authorization` is present.
+fn caller_from_extensions(ext: &rmcp::model::Extensions) -> CallerAuth {
+    let bearer = ext
+        .get::<http::request::Parts>()
+        .and_then(|p| p.headers.get(http::header::AUTHORIZATION))
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(str::to_owned);
+    CallerAuth { bearer }
+}
 
 #[derive(Clone)]
 pub struct BitrouterMcp {
@@ -40,7 +54,9 @@ impl BitrouterMcp {
     async fn complete(
         &self,
         Parameters(args): Parameters<CompleteArgs>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let caller = caller_from_extensions(&ctx.extensions);
         let req = CompleteRequest {
             model: args.model,
             messages: args.messages,
@@ -48,7 +64,7 @@ impl BitrouterMcp {
             temperature: args.temperature,
             system: args.system,
         };
-        match self.backend.complete(req).await {
+        match self.backend.complete(&caller, req).await {
             Ok(r) => match serde_json::to_string(&r) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -60,8 +76,12 @@ impl BitrouterMcp {
     }
 
     #[tool(description = "List models routable through BitRouter.")]
-    async fn list_models(&self) -> Result<CallToolResult, McpError> {
-        match self.backend.list_models().await {
+    async fn list_models(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let caller = caller_from_extensions(&ctx.extensions);
+        match self.backend.list_models(&caller).await {
             Ok(m) => match serde_json::to_string(&m) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -75,8 +95,9 @@ impl BitrouterMcp {
     #[tool(
         description = "Report BitRouter status (local: liveness/models/providers; cloud: credit balance)."
     )]
-    async fn status(&self) -> Result<CallToolResult, McpError> {
-        match self.backend.status().await {
+    async fn status(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
+        let caller = caller_from_extensions(&ctx.extensions);
+        match self.backend.status(&caller).await {
             Ok(s) => match serde_json::to_string(&s) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -102,6 +123,70 @@ impl ServerHandler for BitrouterMcp {
 use crate::backend::cloud::CloudBackend;
 use crate::backend::local::LocalBackend;
 
+/// Whether an `Authorization` header value is a Bearer token.
+fn has_bearer(value: Option<&str>) -> bool {
+    value.is_some_and(|v| v.starts_with("Bearer "))
+}
+
+/// Reject requests without a `Bearer` Authorization header (presence only;
+/// the cloud validates the token's validity).
+async fn require_bearer(
+    headers: axum::http::HeaderMap,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let present = has_bearer(
+        headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok()),
+    );
+    if present {
+        next.run(request).await
+    } else {
+        axum::http::StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
+/// Build the `/mcp-control` axum router for `backend`, optionally gated by the
+/// pre-auth bearer middleware.
+fn build_http_router(
+    backend: Arc<dyn Backend>,
+    require_auth: bool,
+    config: rmcp::transport::streamable_http_server::StreamableHttpServerConfig,
+) -> axum::Router {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpService, session::local::LocalSessionManager,
+    };
+    let service = StreamableHttpService::new(
+        move || Ok(BitrouterMcp::new(backend.clone())),
+        LocalSessionManager::default().into(),
+        config,
+    );
+    let mut router = axum::Router::new().nest_service("/mcp-control", service);
+    if require_auth {
+        router = router.layer(axum::middleware::from_fn(require_bearer));
+    }
+    router
+}
+
+/// Serve streamable HTTP on an already-bound listener until the task is dropped.
+/// Exposed for integration tests of real multi-tenant forwarding.
+#[doc(hidden)]
+pub async fn serve_http_on(
+    backend: Arc<dyn Backend>,
+    listener: tokio::net::TcpListener,
+    require_auth: bool,
+) -> anyhow::Result<()> {
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
+    axum::serve(
+        listener,
+        build_http_router(backend, require_auth, StreamableHttpServerConfig::default()),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Serve over stdio until the client disconnects.
 pub async fn serve_stdio(backend: Arc<dyn Backend>) -> anyhow::Result<()> {
     use rmcp::{ServiceExt, transport::stdio};
@@ -111,19 +196,18 @@ pub async fn serve_stdio(backend: Arc<dyn Backend>) -> anyhow::Result<()> {
 }
 
 /// Serve streamable HTTP at `/mcp-control` on `bind` until Ctrl-C.
-pub async fn serve_http(backend: Arc<dyn Backend>, bind: &str) -> anyhow::Result<()> {
-    use rmcp::transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    };
+///
+/// When `require_auth` is `true`, requests without a `Bearer` Authorization
+/// header are rejected with `401 Unauthorized` before reaching the MCP handler.
+pub async fn serve_http(
+    backend: Arc<dyn Backend>,
+    bind: &str,
+    require_auth: bool,
+) -> anyhow::Result<()> {
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
     let ct = tokio_util::sync::CancellationToken::new();
     let mut config = StreamableHttpServerConfig::default();
     config.cancellation_token = ct.child_token();
-    let service = StreamableHttpService::new(
-        move || Ok(BitrouterMcp::new(backend.clone())),
-        LocalSessionManager::default().into(),
-        config,
-    );
-    let router = axum::Router::new().nest_service("/mcp-control", service);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let shutdown = {
         let ct = ct.clone();
@@ -132,26 +216,38 @@ pub async fn serve_http(backend: Arc<dyn Backend>, bind: &str) -> anyhow::Result
             ct.cancel();
         }
     };
-    axum::serve(listener, router)
+    axum::serve(listener, build_http_router(backend, require_auth, config))
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
 }
 
-/// Build the backend for a given kind from connection params.
+/// Build the backend. The cloud auth mode depends on transport:
+/// stdio→cloud uses the configured token (Static); http→cloud is multi-tenant
+/// (PerCaller — each request must carry its own bearer).
 pub fn build_backend(
     kind: crate::BackendKind,
+    transport: crate::Transport,
     local_url: &str,
     cloud_url: &str,
     cloud_token: Option<&str>,
 ) -> anyhow::Result<Arc<dyn Backend>> {
+    use crate::backend::cloud::CloudAuth;
     match kind {
         crate::BackendKind::Local => Ok(Arc::new(LocalBackend::new(local_url))),
         crate::BackendKind::Cloud => {
-            let token = cloud_token.ok_or_else(|| {
-                anyhow::anyhow!("cloud backend needs a bearer token (--token or BITROUTER_TOKEN)")
-            })?;
-            Ok(Arc::new(CloudBackend::new(cloud_url, token)))
+            let auth = match transport {
+                crate::Transport::Http => CloudAuth::PerCaller,
+                crate::Transport::Stdio => {
+                    let token = cloud_token.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "stdio cloud backend needs a token (--token or BITROUTER_TOKEN)"
+                        )
+                    })?;
+                    CloudAuth::Static(token.to_owned())
+                }
+            };
+            Ok(Arc::new(CloudBackend::new(cloud_url, auth)))
         }
     }
 }
@@ -159,12 +255,25 @@ pub fn build_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{BackendError, CompleteResponse, ModelInfo, StatusInfo, Usage};
+    use crate::backend::{
+        BackendError, CallerAuth, CompleteResponse, ModelInfo, StatusInfo, Usage,
+    };
+
+    #[test]
+    fn require_bearer_predicate() {
+        assert!(has_bearer(Some("Bearer abc")));
+        assert!(!has_bearer(Some("Basic abc")));
+        assert!(!has_bearer(None));
+    }
 
     struct StubBackend;
     #[async_trait::async_trait]
     impl Backend for StubBackend {
-        async fn complete(&self, _: CompleteRequest) -> Result<CompleteResponse, BackendError> {
+        async fn complete(
+            &self,
+            _: &CallerAuth,
+            _: CompleteRequest,
+        ) -> Result<CompleteResponse, BackendError> {
             Ok(CompleteResponse {
                 content: "ok".into(),
                 model: "m".into(),
@@ -175,10 +284,10 @@ mod tests {
                 finish_reason: "stop".into(),
             })
         }
-        async fn list_models(&self) -> Result<Vec<ModelInfo>, BackendError> {
+        async fn list_models(&self, _: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError> {
             Ok(vec![])
         }
-        async fn status(&self) -> Result<StatusInfo, BackendError> {
+        async fn status(&self, _: &CallerAuth) -> Result<StatusInfo, BackendError> {
             Ok(StatusInfo::Cloud {
                 available_micro_usd: 1,
                 balance_micro_usd: 1,
@@ -191,5 +300,31 @@ mod tests {
     fn handler_constructs_with_three_tools() {
         let h = BitrouterMcp::new(Arc::new(StubBackend));
         assert_eq!(h.tool_router.list_all().len(), 3);
+    }
+
+    #[test]
+    fn caller_from_extensions_reads_bearer() {
+        use rmcp::model::Extensions;
+        let mut ext = Extensions::new();
+        let req = http::Request::builder()
+            .header(http::header::AUTHORIZATION, "Bearer xyz")
+            .body(())
+            .expect("req");
+        let (parts, _) = req.into_parts();
+        ext.insert(parts);
+        assert_eq!(caller_from_extensions(&ext).bearer.as_deref(), Some("xyz"));
+
+        let empty = Extensions::new();
+        assert_eq!(caller_from_extensions(&empty).bearer, None);
+
+        // non-Bearer scheme → None
+        let mut ext2 = Extensions::new();
+        let req2 = http::Request::builder()
+            .header(http::header::AUTHORIZATION, "Basic abc")
+            .body(())
+            .expect("req2");
+        let (parts2, _) = req2.into_parts();
+        ext2.insert(parts2);
+        assert_eq!(caller_from_extensions(&ext2).bearer, None);
     }
 }

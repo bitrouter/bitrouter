@@ -811,6 +811,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum 0.8.9",
+ "http 1.4.0",
  "reqwest 0.12.28",
  "rmcp",
  "schemars",

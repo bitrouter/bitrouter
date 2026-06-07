@@ -83,6 +83,13 @@ pub(super) struct ModelEntry {
     pub(super) providers: Vec<String>,
 }
 
+/// The caller's bearer to forward upstream, if the inbound request carried one.
+/// Empty for stdio (the cloud backend's configured credential applies instead).
+#[derive(Debug, Default, Clone)]
+pub struct CallerAuth {
+    pub bearer: Option<String>,
+}
+
 /// Errors surfaced to the MCP client as tool failures.
 #[derive(Debug, thiserror::Error)]
 pub enum BackendError {
@@ -94,12 +101,18 @@ pub enum BackendError {
     Transport(String),
     #[error("malformed upstream response: {0}")]
     Decode(String),
+    #[error("no bearer token: set Authorization on the MCP client")]
+    MissingCredential,
 }
 
 /// Where tool calls route. Object-safe so tools hold `Arc<dyn Backend>`.
 #[async_trait]
 pub trait Backend: Send + Sync {
-    async fn complete(&self, req: CompleteRequest) -> Result<CompleteResponse, BackendError>;
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, BackendError>;
-    async fn status(&self) -> Result<StatusInfo, BackendError>;
+    async fn complete(
+        &self,
+        caller: &CallerAuth,
+        req: CompleteRequest,
+    ) -> Result<CompleteResponse, BackendError>;
+    async fn list_models(&self, caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError>;
+    async fn status(&self, caller: &CallerAuth) -> Result<StatusInfo, BackendError>;
 }

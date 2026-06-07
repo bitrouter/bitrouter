@@ -5,27 +5,45 @@
 use async_trait::async_trait;
 
 use super::{
-    Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, ModelsEnvelope,
-    StatusInfo, Usage,
+    Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
+    ModelsEnvelope, StatusInfo, Usage,
 };
+
+/// How a [`CloudBackend`] authenticates upstream.
+pub enum CloudAuth {
+    /// One configured token used for every call (stdio → cloud, single-tenant).
+    Static(String),
+    /// Every call must carry the caller's own bearer; no fallback (http multi-tenant).
+    PerCaller,
+}
 
 pub struct CloudBackend {
     base_url: String,
-    token: String,
+    auth: CloudAuth,
     http: reqwest::Client,
 }
 
 impl CloudBackend {
-    pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Self {
+    pub fn new(base_url: impl Into<String>, auth: CloudAuth) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
-            token: token.into(),
+            auth,
             http: reqwest::Client::new(),
         }
     }
 
-    fn bearer(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        rb.bearer_auth(&self.token)
+    /// Resolve the bearer to send: the caller's wins; else the `Static` token;
+    /// `PerCaller` with no caller bearer is a (middleware-prevented) error.
+    fn resolve_bearer<'a>(&'a self, caller: &'a CallerAuth) -> Result<&'a str, BackendError> {
+        match (&self.auth, caller.bearer.as_deref()) {
+            (_, Some(b)) => Ok(b),
+            (CloudAuth::Static(t), None) => Ok(t),
+            (CloudAuth::PerCaller, None) => Err(BackendError::MissingCredential),
+        }
+    }
+
+    fn authed(&self, bearer: &str, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        rb.bearer_auth(bearer)
     }
 }
 
@@ -38,10 +56,11 @@ struct Balance {
 
 #[async_trait]
 impl Backend for CloudBackend {
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, BackendError> {
+    async fn list_models(&self, caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError> {
+        let bearer = self.resolve_bearer(caller)?;
         let url = format!("{}/v1/models", self.base_url);
         let resp = self
-            .bearer(self.http.get(&url))
+            .authed(bearer, self.http.get(&url))
             .send()
             .await
             .map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -67,7 +86,11 @@ impl Backend for CloudBackend {
             .collect())
     }
 
-    async fn complete(&self, req: CompleteRequest) -> Result<CompleteResponse, BackendError> {
+    async fn complete(
+        &self,
+        caller: &CallerAuth,
+        req: CompleteRequest,
+    ) -> Result<CompleteResponse, BackendError> {
         let url = format!("{}/v1/chat/completions", self.base_url);
         let mut body = serde_json::json!({ "model": req.model, "messages": req.messages });
         if let Some(m) = req.max_tokens {
@@ -79,8 +102,9 @@ impl Backend for CloudBackend {
         if let Some(s) = req.system {
             body["system"] = s.into();
         }
+        let bearer = self.resolve_bearer(caller)?;
         let resp = self
-            .bearer(self.http.post(&url).json(&body))
+            .authed(bearer, self.http.post(&url).json(&body))
             .send()
             .await
             .map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -124,10 +148,11 @@ impl Backend for CloudBackend {
         })
     }
 
-    async fn status(&self) -> Result<StatusInfo, BackendError> {
+    async fn status(&self, caller: &CallerAuth) -> Result<StatusInfo, BackendError> {
+        let bearer = self.resolve_bearer(caller)?;
         let url = format!("{}/v1/billing/balance", self.base_url);
         let resp = self
-            .bearer(self.http.get(&url))
+            .authed(bearer, self.http.get(&url))
             .send()
             .await
             .map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -170,8 +195,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let backend = CloudBackend::new(server.uri(), "brk_test");
-        match backend.status().await.expect("status") {
+        let backend = CloudBackend::new(server.uri(), CloudAuth::Static("brk_test".into()));
+        match backend
+            .status(&CallerAuth::default())
+            .await
+            .expect("status")
+        {
             StatusInfo::Cloud {
                 available_micro_usd,
                 balance_micro_usd,
@@ -193,8 +222,8 @@ mod tests {
             .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
             .mount(&server)
             .await;
-        let backend = CloudBackend::new(server.uri(), "brk_bad");
-        match backend.list_models().await {
+        let backend = CloudBackend::new(server.uri(), CloudAuth::Static("brk_bad".into()));
+        match backend.list_models(&CallerAuth::default()).await {
             Err(BackendError::Upstream { status, .. }) => assert_eq!(status, 401),
             other => panic!("expected Upstream 401, got {other:?}"),
         }
@@ -213,8 +242,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let backend = CloudBackend::new(server.uri(), "brk_test");
-        let models = backend.list_models().await.expect("models");
+        let backend = CloudBackend::new(server.uri(), CloudAuth::Static("brk_test".into()));
+        let models = backend
+            .list_models(&CallerAuth::default())
+            .await
+            .expect("models");
         assert_eq!(
             models,
             vec![ModelInfo {
@@ -223,5 +255,33 @@ mod tests {
                 active: true,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn per_caller_without_bearer_errors() {
+        let backend = CloudBackend::new("https://api.bitrouter.ai", CloudAuth::PerCaller);
+        let err = backend
+            .list_models(&CallerAuth::default())
+            .await
+            .expect_err("should error");
+        assert!(matches!(err, BackendError::MissingCredential));
+    }
+
+    #[tokio::test]
+    async fn caller_bearer_overrides_configured_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer caller-tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "object": "list", "data": []
+            })))
+            .mount(&server)
+            .await;
+        let backend = CloudBackend::new(server.uri(), CloudAuth::Static("configured-tok".into()));
+        let caller = CallerAuth {
+            bearer: Some("caller-tok".into()),
+        };
+        backend.list_models(&caller).await.expect("list_models");
     }
 }

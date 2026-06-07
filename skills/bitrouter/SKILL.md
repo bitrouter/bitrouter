@@ -137,9 +137,9 @@ BitRouter exposes its own tools (`complete`, `list_models`, `status`) over MCP. 
 # stdio (default): talks to the local daemon at 127.0.0.1:4356
 bitrouter mcp serve
 
-# streamable HTTP: cloud backend, mounts at /mcp-control on 127.0.0.1:4357
-bitrouter mcp serve --transport http --token brk_...
-# or: export BITROUTER_TOKEN=brk_...; bitrouter mcp serve --transport http
+# streamable HTTP: cloud backend, multi-tenant — clients supply their own Bearer header
+# no --token on the server side; each MCP client sets "Authorization: Bearer brk_..." in its remote config
+bitrouter mcp serve --transport http
 
 # print the Claude/Cursor mcpServers config block
 bitrouter mcp install --client claude
@@ -148,7 +148,7 @@ bitrouter mcp install --client claude
 bitrouter mcp install --client claude --config ~/Library/Application\ Support/Claude/claude_desktop_config.json
 ```
 
-Transport↔backend defaults: `stdio` → local daemon at `127.0.0.1:4356`; `http` → cloud at `api.bitrouter.ai` (requires a token). HTTP server binds at `127.0.0.1:4357` and mounts at `/mcp-control`.
+Transport↔backend defaults: `stdio` → local daemon at `127.0.0.1:4356`; `http` → cloud at `api.bitrouter.ai` (multi-tenant: each client sends its own `Authorization: Bearer` header; no server-side `--token` needed). HTTP server binds at `127.0.0.1:4357` and mounts at `/mcp-control`. For stdio→cloud, pass `--token brk_...` or `BITROUTER_TOKEN` (single-tenant).
 
 See `references/mcp-server.md` for all flags, tool JSON shapes, and deferred roadmap items.
 
