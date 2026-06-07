@@ -150,14 +150,18 @@ async fn require_bearer(
 
 /// Build the `/mcp-control` axum router for `backend`, optionally gated by the
 /// pre-auth bearer middleware.
-fn build_http_router(backend: Arc<dyn Backend>, require_auth: bool) -> axum::Router {
+fn build_http_router(
+    backend: Arc<dyn Backend>,
+    require_auth: bool,
+    config: rmcp::transport::streamable_http_server::StreamableHttpServerConfig,
+) -> axum::Router {
     use rmcp::transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        StreamableHttpService, session::local::LocalSessionManager,
     };
     let service = StreamableHttpService::new(
         move || Ok(BitrouterMcp::new(backend.clone())),
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig::default(),
+        config,
     );
     let mut router = axum::Router::new().nest_service("/mcp-control", service);
     if require_auth {
@@ -174,7 +178,12 @@ pub async fn serve_http_on(
     listener: tokio::net::TcpListener,
     require_auth: bool,
 ) -> anyhow::Result<()> {
-    axum::serve(listener, build_http_router(backend, require_auth)).await?;
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
+    axum::serve(
+        listener,
+        build_http_router(backend, require_auth, StreamableHttpServerConfig::default()),
+    )
+    .await?;
     Ok(())
 }
 
@@ -195,21 +204,10 @@ pub async fn serve_http(
     bind: &str,
     require_auth: bool,
 ) -> anyhow::Result<()> {
-    use rmcp::transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    };
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
     let ct = tokio_util::sync::CancellationToken::new();
     let mut config = StreamableHttpServerConfig::default();
     config.cancellation_token = ct.child_token();
-    let service = StreamableHttpService::new(
-        move || Ok(BitrouterMcp::new(backend.clone())),
-        LocalSessionManager::default().into(),
-        config,
-    );
-    let mut router = axum::Router::new().nest_service("/mcp-control", service);
-    if require_auth {
-        router = router.layer(axum::middleware::from_fn(require_bearer));
-    }
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let shutdown = {
         let ct = ct.clone();
@@ -218,7 +216,7 @@ pub async fn serve_http(
             ct.cancel();
         }
     };
-    axum::serve(listener, router)
+    axum::serve(listener, build_http_router(backend, require_auth, config))
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())

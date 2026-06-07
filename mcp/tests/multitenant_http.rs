@@ -88,3 +88,34 @@ async fn two_callers_forward_distinct_bearers() {
     drop(cloud);
     server.abort();
 }
+
+#[tokio::test]
+async fn missing_bearer_is_rejected_401() {
+    // PerCaller cloud backend (the cloud URL is never reached — the edge
+    // middleware rejects before any tool runs).
+    let backend: Arc<dyn Backend> = Arc::new(CloudBackend::new(
+        "https://api.bitrouter.ai",
+        CloudAuth::PerCaller,
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let _ = bitrouter_mcp::server::serve_http_on(backend, listener, true).await;
+    });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // POST with NO Authorization header → 401 from the edge middleware.
+    let resp = reqwest::Client::new()
+        .post(format!("http://{addr}/mcp-control"))
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#)
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(resp.status().as_u16(), 401);
+
+    server.abort();
+}

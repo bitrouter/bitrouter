@@ -612,6 +612,11 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 Some(other) => return Err(anyhow::anyhow!("unknown backend '{other}'")),
             };
             let cloud_token = token.or_else(|| std::env::var("BITROUTER_TOKEN").ok());
+            if matches!(transport, bitrouter_mcp::Transport::Http) && cloud_token.is_some() {
+                eprintln!(
+                    "note: --token/BITROUTER_TOKEN is ignored for --transport http (multi-tenant; each client sends its own Authorization)"
+                );
+            }
             bitrouter_mcp::serve(bitrouter_mcp::ServeOptions {
                 transport,
                 backend,
