@@ -110,22 +110,45 @@ pub trait Backend: Send + Sync {
 - **`LocalBackend`** ignores `caller` entirely (the BYOK daemon is single-tenant
   and must never receive a third party's cloud bearer). Signatures change; bodies
   do not.
-- **`CloudBackend.token` stays a required `String`** set at construction
-  (`CloudBackend::new(base_url, token)` — unchanged signature). Per the design
-  decision, a cloud backend always has a token. Each request authenticates with
-  the per-caller bearer when present, else the construction token:
+- **`CloudBackend` holds an explicit credential *mode*** rather than a single
+  token field, so the single-tenant and multi-tenant cases are distinct,
+  type-safe construction choices (no accidentally-tokenless backend, no
+  redundant token):
+
   ```rust
-  let bearer = caller.bearer.as_deref().unwrap_or(&self.token);
+  /// How a CloudBackend authenticates upstream.
+  pub enum CloudAuth {
+      /// One configured token used for every call. (stdio → cloud, single-tenant)
+      Static(String),
+      /// Every call must carry the caller's own bearer; no fallback. (http multi-tenant)
+      PerCaller,
+  }
+  // CloudBackend { base_url: String, http: reqwest::Client, auth: CloudAuth }
+  // CloudBackend::new(base_url, auth: CloudAuth)
   ```
-  No new error variant: there is always a credential to send (caller's or the
-  construction fallback). Invalid tokens are the cloud's `401` →
+
+  Per call, the caller's bearer always wins; the `Static` token is the stdio
+  fallback; `PerCaller` with no bearer is an (edge-middleware-prevented) error:
+
+  ```rust
+  let bearer = match (&self.auth, caller.bearer.as_deref()) {
+      (_, Some(b))                 => b,                                  // caller bearer wins
+      (CloudAuth::Static(t), None) => t,                                 // stdio fallback
+      (CloudAuth::PerCaller, None) => return Err(BackendError::MissingCredential),
+  };
+  ```
+
+  `MissingCredential` is a new `BackendError` variant used **only** as a
+  defense-in-depth guard for `PerCaller` with no bearer — unreachable in practice
+  because the §4.5 edge middleware rejects bearer-less HTTP→cloud requests at the
+  door. Invalid (present-but-wrong) tokens remain the cloud's `401` →
   `BackendError::Upstream { 401 }` (already handled).
 
-> For a pure multi-tenant HTTP host, the construction token is required but
-> effectively a backstop — the §4.5 edge middleware guarantees every HTTP
-> request that reaches a tool already carries a caller bearer, which overrides
-> it. The operator still supplies `--token`/`BITROUTER_TOKEN` (any valid bearer)
-> to build the backend.
+> Both `CloudAuth` variants are genuinely used (Static for stdio→cloud, PerCaller
+> for http→cloud) — no dead code. A pure multi-tenant HTTP host passes **no**
+> `--token`: the backend is built `PerCaller`. The earlier "always require a
+> construction token" tension is gone — the tokenless state (`PerCaller`) is a
+> deliberate, named mode, not an accidental `None`.
 
 ### 4.3 Tool handlers
 
@@ -151,11 +174,17 @@ extraction logic (one place, unit-tested).
 
 ### 4.4 CLI / serve wiring
 
-- `CloudBackend::new(base_url, token)` — **unchanged** (token required).
-- `build_backend` cloud arm — unchanged: the configured `--token`/
-  `BITROUTER_TOKEN` becomes the construction token.
-- No new CLI flags. `--token` keeps its meaning (now also the stdio→cloud
-  credential and the HTTP backstop).
+`build_backend` selects the `CloudAuth` mode from the transport:
+
+- **stdio → cloud** → `CloudAuth::Static(token)`. `--token`/`BITROUTER_TOKEN` is
+  **required** here (no per-request header exists); error clearly if absent.
+- **http → cloud** → `CloudAuth::PerCaller`. **No `--token` needed** (and it is
+  ignored if passed); the §4.5 edge middleware enforces a per-caller bearer.
+
+No new CLI flags. `--token`/`BITROUTER_TOKEN` now means specifically "the
+stdio→cloud credential." This requires `build_backend` to know the transport
+(it currently takes only the backend kind) — extend its signature to take
+`Transport` so it can pick the mode.
 
 ### 4.5 Pre-auth edge middleware (HTTP + cloud backend only)
 
@@ -184,9 +213,9 @@ combo stays open, with the caller bearer ignored as in §4.2.
 | Transport → backend | Credential used per call |
 |---|---|
 | stdio → local | none (caller ignored) — unchanged |
-| stdio → cloud | construction `--token`/`BITROUTER_TOKEN` (no HTTP parts) — unchanged |
+| stdio → cloud | `CloudAuth::Static(token)` from `--token`/`BITROUTER_TOKEN` (required; no HTTP parts) |
 | http → local | caller bearer ignored; no edge middleware; local unauthenticated |
-| **http → cloud** | edge middleware requires a `Bearer`; the tool forwards that **caller bearer** to `api.bitrouter.ai` (overriding the construction token) |
+| **http → cloud** | `CloudAuth::PerCaller`; edge middleware requires a `Bearer`; the tool forwards that **caller bearer** to `api.bitrouter.ai`. No `--token`. |
 
 ## 6. Security
 
@@ -207,10 +236,12 @@ combo stays open, with the caller bearer ignored as in §4.2.
   `http::request::Parts` with `Authorization: Bearer xyz` →
   `CallerAuth { bearer: Some("xyz") }`; no parts (stdio) → `CallerAuth::default()`;
   malformed/non-Bearer header → `bearer: None`.
-- **CloudBackend precedence tests** — `caller.bearer` overrides the construction
-  token (wiremock asserts the forwarded `Authorization` equals the caller bearer,
-  not the construction token); with `CallerAuth::default()`, the construction
-  token is sent.
+- **CloudBackend precedence tests** —
+  (a) `CloudAuth::Static("fallback")` + `caller.bearer = Some("caller")` →
+  wiremock asserts the forwarded `Authorization` is `Bearer caller` (caller
+  wins); (b) `Static("fallback")` + `CallerAuth::default()` → forwards `Bearer
+  fallback`; (c) `CloudAuth::PerCaller` + `CallerAuth::default()` →
+  `BackendError::MissingCredential` (no request sent).
 - **Edge-middleware tests** — HTTP→cloud request with no `Authorization` → `401`;
   with `Authorization: Bearer x` → passes through (reaches a tool). Confirm the
   middleware is NOT applied for `--backend local`.
@@ -227,7 +258,8 @@ combo stays open, with the caller bearer ignored as in §4.2.
 `skills/bitrouter/references/mcp-server.md`: the remote HTTP server is now
 **multi-tenant** — each MCP client supplies its own `Authorization: Bearer
 <brk_…>` header (HTTP→cloud requires it; 401 otherwise), forwarded per request;
-`--token` is the stdio→cloud credential and HTTP construction backstop. Note
+`--token`/`BITROUTER_TOKEN` is the **stdio→cloud** credential only (a
+multi-tenant HTTP host needs no token; the backend is built `PerCaller`). Note
 native browser OAuth (Item B) remains deferred and why (cloud-side DCR).
 
 ## 9. Resolved during design / remaining notes
@@ -238,8 +270,9 @@ native browser OAuth (Item B) remains deferred and why (cloud-side DCR).
 3. **(resolved)** No existing bitrouter mechanism fits; `CallerContext` is a
    resolved-identity type without a raw bearer and lives in `bitrouter-sdk`
    (§4.1). New minimal `CallerAuth` justified.
-4. **(decision)** Construction token stays **required** even for multi-tenant
-   HTTP (operator passes any valid bearer as the backstop; the edge middleware
-   makes per-call use of it moot on HTTP→cloud).
+4. **(decision)** Credential model is an explicit `CloudAuth` mode (Option C):
+   `Static(token)` for stdio→cloud (token required), `PerCaller` for http→cloud
+   (no token). This keeps the "no accidentally-tokenless backend" invariant while
+   removing the redundant multi-tenant token (§4.2, §4.4).
 5. **(YAGNI)** `CallerAuth` carries only `bearer`. If Item B later needs resolved
    claims/principal, extend then — not now.
