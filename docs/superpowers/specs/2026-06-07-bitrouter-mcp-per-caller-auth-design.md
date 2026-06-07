@@ -1,6 +1,6 @@
 # BitRouter MCP — Per-Caller Bearer Forwarding (v1.x, Item A)
 
-- **Status:** Draft for review
+- **Status:** Draft for review (rev 2 — incorporates review feedback)
 - **Date:** 2026-06-07
 - **Builds on:** `2026-06-07-bitrouter-mcp-server-design.md` (v1, shipped in PR #530)
 - **Issue:** follow-up to #526
@@ -30,18 +30,18 @@ work and is not required once token-in-header multi-tenancy (A) works.
 ### Goals
 - The HTTP transport forwards each caller's `Authorization` bearer to the cloud,
   per request (true multi-tenant).
+- HTTP requests with no/!Bearer `Authorization` are rejected **at the edge**
+  (401) before reaching a tool, when serving the cloud backend.
 - stdio behaviour is **unchanged** (no HTTP request → no per-caller bearer →
-  existing configured-token / no-auth paths still apply).
+  the configured construction token applies).
 - The local daemon **never** receives a caller bearer.
-- A missing bearer (HTTP, no configured fallback) yields a **clear tool error**,
-  not an opaque upstream failure.
 
 ### Non-Goals
 - Native in-client browser OAuth / PRM / DCR (Item B — needs cloud changes).
-- Local token validation/introspection in the MCP server (the cloud validates;
-  we forward and surface its verdict).
-- TLS termination / hosting concerns (operator's responsibility; we keep the
-  default bind at `127.0.0.1` and forward to cloud over HTTPS).
+- Local token *validation*/introspection (the cloud validates; we forward and
+  surface its verdict). The edge middleware only checks **presence**, not validity.
+- TLS termination / hosting concerns (operator's responsibility; default bind
+  stays `127.0.0.1`, forwarding to cloud over HTTPS).
 
 ## 3. The mechanism (verified against rmcp 1.7.0)
 
@@ -61,59 +61,77 @@ let bearer = ctx
     .map(str::to_owned);
 ```
 
-The `RequestContext` form is chosen over the `Extension<Parts>` extractor
+The `RequestContext` form is chosen over the bare `Extension<Parts>` extractor
 because `ctx.extensions.get::<Parts>()` returns `Option` — `None` over stdio,
 where no HTTP parts exist — so the **same tool definition works on both
 transports**.
 
+**A `#[tool]` method may take both `Parameters<T>` and `RequestContext`.**
+Verified: both implement rmcp's `FromContextPart` extractor
+(`handler/server/tool.rs:181`, `handler/server/common.rs:114`), so the macro
+extracts each independently — the same axum-style multi-extractor model. (This
+was the one open implementation risk; it is resolved.)
+
 ## 4. Design
 
-### 4.1 Separate "what to call" from "who's calling"
+### 4.1 A minimal forwarded-credential type (and why not reuse `CallerContext`)
 
-A small per-call credential carrier, defined in `mcp/src/backend/mod.rs`:
+A small per-call carrier in `mcp/src/backend/mod.rs`:
 
 ```rust
-/// Per-call caller identity. Empty for stdio / unauthenticated local use.
+/// The caller's bearer to forward upstream, if the inbound request carried one.
+/// Empty for stdio (the backend's construction token applies instead).
 #[derive(Debug, Default, Clone)]
-pub struct Caller {
-    /// The caller's bearer token, if the inbound request carried one.
+pub struct CallerAuth {
     pub bearer: Option<String>,
 }
 ```
 
-The `Backend` trait threads it through every method:
+**Why a new type rather than `bitrouter-sdk::CallerContext`:** `CallerContext`
+is a *resolved-identity* type (`api_key_id`, `user_id`, `local`) — the **output**
+of authentication, deliberately storing "opaque identity," with **no raw
+credential**. We need the opposite: the raw bearer to **relay** to the cloud,
+which validates it. `CallerContext` also lives in `bitrouter-sdk`, which the
+thin mcp crate intentionally does not depend on (it would pull the whole SDK in
+for one struct that doesn't even carry a token). The distinct name `CallerAuth`
+avoids implying equivalence with the SDK's `CallerContext`.
+
+### 4.2 `Backend` trait threads the caller credential
 
 ```rust
 #[async_trait]
 pub trait Backend: Send + Sync {
-    async fn complete(&self, caller: &Caller, req: CompleteRequest) -> Result<CompleteResponse, BackendError>;
-    async fn list_models(&self, caller: &Caller) -> Result<Vec<ModelInfo>, BackendError>;
-    async fn status(&self, caller: &Caller) -> Result<StatusInfo, BackendError>;
+    async fn complete(&self, caller: &CallerAuth, req: CompleteRequest) -> Result<CompleteResponse, BackendError>;
+    async fn list_models(&self, caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError>;
+    async fn status(&self, caller: &CallerAuth) -> Result<StatusInfo, BackendError>;
 }
 ```
-
-### 4.2 Backend behaviour
 
 - **`LocalBackend`** ignores `caller` entirely (the BYOK daemon is single-tenant
   and must never receive a third party's cloud bearer). Signatures change; bodies
   do not.
-- **`CloudBackend.token`** becomes `Option<String>` — a **fallback** for the
-  single-tenant stdio→cloud case. Each request authenticates with:
+- **`CloudBackend.token` stays a required `String`** set at construction
+  (`CloudBackend::new(base_url, token)` — unchanged signature). Per the design
+  decision, a cloud backend always has a token. Each request authenticates with
+  the per-caller bearer when present, else the construction token:
   ```rust
-  let bearer = caller.bearer.as_deref().or(self.token.as_deref());
+  let bearer = caller.bearer.as_deref().unwrap_or(&self.token);
   ```
-  - `Some(b)` → send `Authorization: Bearer b`.
-  - `None` → return `BackendError::MissingCredential` (new variant) with a clear
-    message: *"no bearer token — set Authorization on the MCP client or pass
-    --token"*. (Today `CloudBackend::new` requires a token; this relaxes it so a
-    hosted multi-tenant server can run with no default token and rely on
-    per-caller bearers.)
+  No new error variant: there is always a credential to send (caller's or the
+  construction fallback). Invalid tokens are the cloud's `401` →
+  `BackendError::Upstream { 401 }` (already handled).
+
+> For a pure multi-tenant HTTP host, the construction token is required but
+> effectively a backstop — the §4.5 edge middleware guarantees every HTTP
+> request that reaches a tool already carries a caller bearer, which overrides
+> it. The operator still supplies `--token`/`BITROUTER_TOKEN` (any valid bearer)
+> to build the backend.
 
 ### 4.3 Tool handlers
 
 Each of the three `#[tool]` methods in `mcp/src/server.rs` gains a
-`ctx: RequestContext<RoleServer>` parameter, extracts the bearer per §3, builds
-a `Caller`, and passes it to the backend:
+`ctx: RequestContext<RoleServer>` parameter alongside its existing params,
+extracts the bearer per §3 into a `CallerAuth`, and passes it to the backend:
 
 ```rust
 #[tool(description = "…")]
@@ -122,38 +140,53 @@ async fn complete(
     Parameters(args): Parameters<CompleteArgs>,
     ctx: RequestContext<RoleServer>,
 ) -> Result<CallToolResult, McpError> {
-    let caller = caller_from(&ctx);          // helper: extracts bearer (§3)
+    let caller = caller_from(&ctx);          // private helper, §3 extraction
     match self.backend.complete(&caller, args.into()).await { … }
 }
 ```
 
 `list_models` and `status` likewise gain `ctx` and pass `&caller`. A single
-private `caller_from(ctx: &RequestContext<RoleServer>) -> Caller` helper holds
-the extraction logic (one place, unit-tested).
-
-> Verify at implementation: the rmcp `#[tool]` macro accepts a method taking
-> both `Parameters<T>` and `RequestContext<RoleServer>`. rmcp's extractor model
-> supports multiple params; confirm by compile. If the combination is rejected,
-> fall back to the `Extension<http::request::Parts>` extractor guarded for the
-> stdio (no-parts) case.
+private `caller_from(ctx: &RequestContext<RoleServer>) -> CallerAuth` holds the
+extraction logic (one place, unit-tested).
 
 ### 4.4 CLI / serve wiring
 
-- `CloudBackend::new(base_url, token: Option<String>)` — token now optional.
-- `build_backend` (in `server.rs`) for the cloud kind: pass the configured
-  `--token`/`BITROUTER_TOKEN` as the **fallback** token (may be `None`). The
-  per-caller bearer (when present) overrides it inside the backend.
-- No new CLI flags. `--token` keeps its meaning (now: the *fallback* used when a
-  request carries no `Authorization`). For a pure multi-tenant host, omit it.
+- `CloudBackend::new(base_url, token)` — **unchanged** (token required).
+- `build_backend` cloud arm — unchanged: the configured `--token`/
+  `BITROUTER_TOKEN` becomes the construction token.
+- No new CLI flags. `--token` keeps its meaning (now also the stdio→cloud
+  credential and the HTTP backstop).
+
+### 4.5 Pre-auth edge middleware (HTTP + cloud backend only)
+
+`serve_http` installs a small axum middleware on the `/mcp-control` route **when
+the backend is `Cloud`**, rejecting requests whose `Authorization` is missing or
+not a `Bearer` token with `401 Unauthorized` before rmcp sees them. Modelled on
+rmcp's `simple_auth_streamhttp.rs` (`middleware::from_fn`). It checks
+**presence only** — token *validity* is the cloud's job.
+
+```rust
+// pseudo
+async fn require_bearer(headers: HeaderMap, req: Request, next: Next) -> Result<Response, StatusCode> {
+    match headers.get(AUTHORIZATION).and_then(|h| h.to_str().ok()) {
+        Some(v) if v.starts_with("Bearer ") => Ok(next.run(req).await),
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+```
+
+Not installed for `--backend local` over HTTP (the local daemon is
+unauthenticated, so requiring a bearer there would be wrong) — that unusual
+combo stays open, with the caller bearer ignored as in §4.2.
 
 ## 5. Behaviour matrix
 
 | Transport → backend | Credential used per call |
 |---|---|
 | stdio → local | none (caller ignored) — unchanged |
-| stdio → cloud | configured `--token`/`BITROUTER_TOKEN` (fallback; no HTTP parts) — unchanged |
-| http → local | caller bearer ignored (local never gets it); local stays unauthenticated/master_key |
-| **http → cloud** | **caller's `Authorization` bearer**; else fallback token; else `MissingCredential` error |
+| stdio → cloud | construction `--token`/`BITROUTER_TOKEN` (no HTTP parts) — unchanged |
+| http → local | caller bearer ignored; no edge middleware; local unauthenticated |
+| **http → cloud** | edge middleware requires a `Bearer`; the tool forwards that **caller bearer** to `api.bitrouter.ai` (overriding the construction token) |
 
 ## 6. Security
 
@@ -161,45 +194,52 @@ the extraction logic (one place, unit-tested).
   header).
 - The **local backend never** attaches a caller bearer — a caller's cloud
   credential cannot leak to the BYOK daemon.
+- **Edge middleware** rejects unauthenticated HTTP→cloud requests at the door
+  (401), shrinking what reaches rmcp.
 - Forwarding to `api.bitrouter.ai` stays over **HTTPS**; the cloud is the sole
-  validator (bad token → `401` → `Upstream { 401 }`).
+  validator of token *validity* (bad token → `401` → `Upstream { 401 }`).
 - HTTP bind default stays `127.0.0.1:4357`. Real multi-tenant hosting (operator
-  binds `0.0.0.0` behind TLS) is out of scope here but unblocked by this change.
-- `MissingCredential` returns a tool error, never panics.
+  binds `0.0.0.0` behind TLS) is out of scope here but unblocked.
 
 ## 7. Testing
 
-- **`caller_from` unit test** — given a `RequestContext` whose extensions carry
-  an `http::request::Parts` with `Authorization: Bearer xyz`, returns
-  `Caller { bearer: Some("xyz") }`; with no parts (stdio) returns
-  `Caller::default()`; with a malformed header returns `bearer: None`.
-- **CloudBackend precedence tests** — `caller.bearer` overrides the fallback
-  token (wiremock asserts the forwarded `Authorization` header equals the caller
-  bearer, not the fallback); with neither, `complete/list_models/status` return
-  `BackendError::MissingCredential`.
-- **Multi-tenant HTTP integration test** — stand up the streamable-HTTP server
-  pointed at a wiremock "cloud"; issue two `tools/call list_models` requests
-  with **different** `Authorization` bearers; assert the wiremock saw each bearer
-  forwarded verbatim on its respective call. This is the proof of multi-tenancy.
+- **`caller_from` unit test** — a `RequestContext` whose extensions carry an
+  `http::request::Parts` with `Authorization: Bearer xyz` →
+  `CallerAuth { bearer: Some("xyz") }`; no parts (stdio) → `CallerAuth::default()`;
+  malformed/non-Bearer header → `bearer: None`.
+- **CloudBackend precedence tests** — `caller.bearer` overrides the construction
+  token (wiremock asserts the forwarded `Authorization` equals the caller bearer,
+  not the construction token); with `CallerAuth::default()`, the construction
+  token is sent.
+- **Edge-middleware tests** — HTTP→cloud request with no `Authorization` → `401`;
+  with `Authorization: Bearer x` → passes through (reaches a tool). Confirm the
+  middleware is NOT applied for `--backend local`.
+- **Multi-tenant HTTP integration test** — streamable-HTTP server pointed at a
+  wiremock "cloud"; two `tools/call list_models` requests with **different**
+  `Authorization` bearers; assert wiremock saw each bearer forwarded verbatim on
+  its respective call. The proof of multi-tenancy.
 - **Regression** — existing v1 backend tests update to the new signatures
-  (`complete(&Caller::default(), req)` etc.); all must stay green. No `#[allow]`,
+  (`complete(&CallerAuth::default(), req)` etc.); all stay green. No `#[allow]`,
   no `.unwrap`/`.expect`/`panic!` in non-test code (CLAUDE.md).
 
 ## 8. Skill update (CLAUDE.md requirement)
 
-`skills/bitrouter/references/mcp-server.md`: document that the remote HTTP
-server is now **multi-tenant** — each MCP client supplies its own
-`Authorization: Bearer <brk_…>` header in its remote-server config, forwarded
-per request; `--token` is the optional single-tenant fallback. Note native
-browser OAuth (Item B) remains deferred and why (cloud-side DCR).
+`skills/bitrouter/references/mcp-server.md`: the remote HTTP server is now
+**multi-tenant** — each MCP client supplies its own `Authorization: Bearer
+<brk_…>` header (HTTP→cloud requires it; 401 otherwise), forwarded per request;
+`--token` is the stdio→cloud credential and HTTP construction backstop. Note
+native browser OAuth (Item B) remains deferred and why (cloud-side DCR).
 
-## 9. Open questions (carry into the plan)
+## 9. Resolved during design / remaining notes
 
-1. Confirm the rmcp `#[tool]` macro accepts `Parameters<T>` + `RequestContext<…>`
-   together (§4.3) — else use the `Extension<Parts>` fallback.
-2. Whether to also add a lightweight axum middleware that rejects HTTP requests
-   with *no* `Authorization` header up front (defense-in-depth). Leaning **no**
-   for this increment — the per-tool `MissingCredential` error is sufficient and
-   keeps stdio/HTTP symmetric; revisit if pre-auth rejection is wanted for hosting.
-3. `Caller` is intentionally minimal (just `bearer`). If Item B later needs a
-   resolved principal/claims, extend `Caller` then — not now (YAGNI).
+1. **(resolved)** rmcp `#[tool]` accepts `Parameters<T>` + `RequestContext`
+   together — both are `FromContextPart` extractors (§3).
+2. **(resolved)** Pre-auth middleware: **included** (§4.5), HTTP+cloud only.
+3. **(resolved)** No existing bitrouter mechanism fits; `CallerContext` is a
+   resolved-identity type without a raw bearer and lives in `bitrouter-sdk`
+   (§4.1). New minimal `CallerAuth` justified.
+4. **(decision)** Construction token stays **required** even for multi-tenant
+   HTTP (operator passes any valid bearer as the backstop; the edge middleware
+   makes per-call use of it moot on HTTP→cloud).
+5. **(YAGNI)** `CallerAuth` carries only `bearer`. If Item B later needs resolved
+   claims/principal, extend then — not now.
