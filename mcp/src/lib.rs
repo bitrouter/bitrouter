@@ -26,3 +26,31 @@ pub enum BackendKind {
     /// BitRouter Cloud at `api.bitrouter.ai`.
     Cloud,
 }
+
+/// Parameters for `serve`.
+pub struct ServeOptions {
+    pub transport: Transport,
+    pub backend: BackendKind,
+    /// Local daemon root. Default `http://127.0.0.1:4356`.
+    pub local_url: String,
+    /// Cloud root. Default `https://api.bitrouter.ai`.
+    pub cloud_url: String,
+    /// Bearer for the cloud backend (from `--token` / `BITROUTER_TOKEN`).
+    pub cloud_token: Option<String>,
+    /// HTTP bind address (only for `Transport::Http`). Default `127.0.0.1:4357`.
+    pub bind: String,
+}
+
+/// Run the MCP server to completion.
+pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
+    let backend = server::build_backend(
+        opts.backend,
+        &opts.local_url,
+        &opts.cloud_url,
+        opts.cloud_token.as_deref(),
+    )?;
+    match opts.transport {
+        Transport::Stdio => server::serve_stdio(backend).await,
+        Transport::Http => server::serve_http(backend, &opts.bind).await,
+    }
+}

@@ -6,8 +6,17 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# The sole file under examples/ is wired as a [[bin]] below (so the smoke test
+# gets CARGO_BIN_EXE_*); disable example auto-discovery to avoid a dual target.
+autoexamples = false
 
 [lib]
+
+# Test-only stdio entrypoint, spawned by `tests/stdio_smoke.rs`. Declared as a
+# bin (not just an example) so cargo exposes `CARGO_BIN_EXE_mcp-stdio-local`.
+[[bin]]
+name = "mcp-stdio-local"
+path = "examples/mcp-stdio-local.rs"
 
 [dependencies]
 rmcp = { workspace = true, features = [
@@ -26,6 +35,7 @@ reqwest.workspace = true
 axum.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 wiremock = "0.6"

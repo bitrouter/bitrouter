@@ -807,6 +807,7 @@ dependencies = [
 name = "bitrouter-mcp"
 version = "1.0.0-alpha.9"
 dependencies = [
+ "anyhow",
  "async-trait",
  "axum 0.8.9",
  "reqwest 0.12.28",

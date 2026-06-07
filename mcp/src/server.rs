@@ -90,6 +90,63 @@ impl ServerHandler for BitrouterMcp {
     }
 }
 
+use crate::backend::cloud::CloudBackend;
+use crate::backend::local::LocalBackend;
+
+/// Serve over stdio until the client disconnects.
+pub async fn serve_stdio(backend: Arc<dyn Backend>) -> anyhow::Result<()> {
+    use rmcp::{ServiceExt, transport::stdio};
+    let service = BitrouterMcp::new(backend).serve(stdio()).await?;
+    service.waiting().await?;
+    Ok(())
+}
+
+/// Serve streamable HTTP at `/mcp-control` on `bind` until Ctrl-C.
+pub async fn serve_http(backend: Arc<dyn Backend>, bind: &str) -> anyhow::Result<()> {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
+    let ct = tokio_util::sync::CancellationToken::new();
+    let mut config = StreamableHttpServerConfig::default();
+    config.cancellation_token = ct.child_token();
+    let service = StreamableHttpService::new(
+        move || Ok(BitrouterMcp::new(backend.clone())),
+        LocalSessionManager::default().into(),
+        config,
+    );
+    let router = axum::Router::new().nest_service("/mcp-control", service);
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    let shutdown = {
+        let ct = ct.clone();
+        async move {
+            let _ = tokio::signal::ctrl_c().await;
+            ct.cancel();
+        }
+    };
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown)
+        .await?;
+    Ok(())
+}
+
+/// Build the backend for a given kind from connection params.
+pub fn build_backend(
+    kind: crate::BackendKind,
+    local_url: &str,
+    cloud_url: &str,
+    cloud_token: Option<&str>,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    match kind {
+        crate::BackendKind::Local => Ok(Arc::new(LocalBackend::new(local_url))),
+        crate::BackendKind::Cloud => {
+            let token = cloud_token.ok_or_else(|| {
+                anyhow::anyhow!("cloud backend needs a bearer token (--token or BITROUTER_TOKEN)")
+            })?;
+            Ok(Arc::new(CloudBackend::new(cloud_url, token)))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
