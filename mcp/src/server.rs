@@ -151,7 +151,10 @@ pub fn build_backend(
             let token = cloud_token.ok_or_else(|| {
                 anyhow::anyhow!("cloud backend needs a bearer token (--token or BITROUTER_TOKEN)")
             })?;
-            Ok(Arc::new(CloudBackend::new(cloud_url, token)))
+            Ok(Arc::new(CloudBackend::new(
+                cloud_url,
+                crate::backend::cloud::CloudAuth::Static(token.to_owned()),
+            )))
         }
     }
 }
