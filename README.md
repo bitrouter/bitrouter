@@ -111,7 +111,7 @@ Guardrails run at the proxy layer — before requests leave your network and bef
 
 ### Efficiency
 
-BitRouter is written in Rust and adds ~10ms of overhead — well under the latency of any upstream model. No Python workers, no GIL, no warm-up time. Per-request cost tracking makes model spend visible immediately, without waiting for a provider invoice. ACP integration means you can manage coding agent sessions (Claude Code, Codex, Gemini CLI) from the same CLI, without extra tooling.
+Agents burn tokens fast — and a misconfigured loop or unexpectedly expensive model call won't surface until the provider invoice arrives. BitRouter tracks cost per request at the proxy layer, making spend visible in real time. Route by policy: fall back to a cheaper provider when the primary exceeds a cost threshold, or pin specific call types to the model with the best price-to-quality ratio for that task. Scoped virtual keys let you cap what each agent or user can spend before it touches your upstream account.
 
 ## Supported Providers
 
