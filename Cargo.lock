@@ -728,6 +728,7 @@ dependencies = [
  "base64",
  "bitrouter-cloud-sdk",
  "bitrouter-guardrails",
+ "bitrouter-mcp",
  "bitrouter-observe",
  "bitrouter-providers",
  "bitrouter-sdk",
