@@ -9,6 +9,38 @@ pub mod backend;
 pub mod install;
 pub mod server;
 
+use std::path::PathBuf;
+
+/// Parameters for `install`.
+pub struct InstallOptions {
+    pub client: install::Client,
+    /// When set, write+merge into this config path; otherwise print to stdout.
+    pub config_path: Option<PathBuf>,
+}
+
+/// Render (and optionally merge+write) the MCP client config block.
+pub fn install(opts: InstallOptions) -> anyhow::Result<()> {
+    let block = install::render_block(opts.client);
+    match opts.config_path {
+        None => {
+            println!("{}", serde_json::to_string_pretty(&block)?);
+            Ok(())
+        }
+        Some(path) => {
+            let mut doc: serde_json::Value = if path.exists() {
+                serde_json::from_str(&std::fs::read_to_string(&path)?)
+                    .map_err(|e| anyhow::anyhow!("{} is not valid JSON: {e}", path.display()))?
+            } else {
+                serde_json::json!({})
+            };
+            install::merge_into(&mut doc, &block);
+            std::fs::write(&path, serde_json::to_string_pretty(&doc)?)?;
+            println!("wrote bitrouter MCP server into {}", path.display());
+            Ok(())
+        }
+    }
+}
+
 /// Which wire transport the server speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
