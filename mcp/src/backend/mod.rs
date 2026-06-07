@@ -69,6 +69,20 @@ pub struct ProviderStatus {
     pub active: bool,
 }
 
+/// Envelope returned by `/v1/models` on both backends.
+#[derive(serde::Deserialize)]
+pub(super) struct ModelsEnvelope {
+    pub(super) data: Vec<ModelEntry>,
+}
+
+/// One entry in the models list envelope.
+#[derive(serde::Deserialize)]
+pub(super) struct ModelEntry {
+    pub(super) id: String,
+    #[serde(default)]
+    pub(super) providers: Vec<String>,
+}
+
 /// Errors surfaced to the MCP client as tool failures.
 #[derive(Debug, thiserror::Error)]
 pub enum BackendError {

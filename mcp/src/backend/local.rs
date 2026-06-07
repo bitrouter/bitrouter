@@ -5,8 +5,8 @@
 use async_trait::async_trait;
 
 use super::{
-    Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, ProviderStatus,
-    StatusInfo, Usage,
+    Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, ModelsEnvelope,
+    ProviderStatus, StatusInfo, Usage,
 };
 
 /// Routes tool calls to the local daemon's `/v1/*` HTTP API.
@@ -25,18 +25,6 @@ impl LocalBackend {
     }
 }
 
-#[derive(serde::Deserialize)]
-struct ModelsEnvelope {
-    data: Vec<ModelEntry>,
-}
-
-#[derive(serde::Deserialize)]
-struct ModelEntry {
-    id: String,
-    #[serde(default)]
-    providers: Vec<String>,
-}
-
 #[async_trait]
 impl Backend for LocalBackend {
     async fn list_models(&self) -> Result<Vec<ModelInfo>, BackendError> {
@@ -47,6 +35,13 @@ impl Backend for LocalBackend {
             .send()
             .await
             .map_err(|e| BackendError::DaemonUnreachable(self.base_url.clone()).if_not(e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(BackendError::Upstream {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
         let env: ModelsEnvelope = resp
             .json()
             .await
@@ -132,6 +127,13 @@ impl Backend for LocalBackend {
             .send()
             .await
             .map_err(|e| BackendError::DaemonUnreachable(self.base_url.clone()).if_not(e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(BackendError::Upstream {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
         let env: ModelsEnvelope = resp
             .json()
             .await
@@ -217,6 +219,21 @@ mod tests {
             }
         );
         assert_eq!(out.model, "openai/gpt-4o");
+    }
+
+    #[tokio::test]
+    async fn status_maps_non_2xx_to_upstream_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .mount(&server)
+            .await;
+        let backend = LocalBackend::new(server.uri());
+        match backend.status().await {
+            Err(BackendError::Upstream { status, .. }) => assert_eq!(status, 500),
+            other => panic!("expected Upstream 500, got {other:?}"),
+        }
     }
 
     #[tokio::test]

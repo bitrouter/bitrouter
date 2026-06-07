@@ -49,9 +49,12 @@ impl BitrouterMcp {
             system: args.system,
         };
         match self.backend.complete(req).await {
-            Ok(r) => Ok(CallToolResult::success(vec![Content::text(
-                serde_json::to_string(&r).unwrap_or_default(),
-            )])),
+            Ok(r) => match serde_json::to_string(&r) {
+                Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "serialization error: {e}"
+                ))])),
+            },
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
         }
     }
@@ -59,9 +62,12 @@ impl BitrouterMcp {
     #[tool(description = "List models routable through BitRouter.")]
     async fn list_models(&self) -> Result<CallToolResult, McpError> {
         match self.backend.list_models().await {
-            Ok(m) => Ok(CallToolResult::success(vec![Content::text(
-                serde_json::to_string(&m).unwrap_or_default(),
-            )])),
+            Ok(m) => match serde_json::to_string(&m) {
+                Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "serialization error: {e}"
+                ))])),
+            },
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
         }
     }
@@ -71,9 +77,12 @@ impl BitrouterMcp {
     )]
     async fn status(&self) -> Result<CallToolResult, McpError> {
         match self.backend.status().await {
-            Ok(s) => Ok(CallToolResult::success(vec![Content::text(
-                serde_json::to_string(&s).unwrap_or_default(),
-            )])),
+            Ok(s) => match serde_json::to_string(&s) {
+                Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "serialization error: {e}"
+                ))])),
+            },
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
         }
     }

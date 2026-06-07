@@ -5,7 +5,8 @@
 use async_trait::async_trait;
 
 use super::{
-    Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, StatusInfo, Usage,
+    Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, ModelsEnvelope,
+    StatusInfo, Usage,
 };
 
 pub struct CloudBackend {
@@ -29,16 +30,6 @@ impl CloudBackend {
 }
 
 #[derive(serde::Deserialize)]
-struct ModelsEnvelope {
-    data: Vec<ModelEntry>,
-}
-#[derive(serde::Deserialize)]
-struct ModelEntry {
-    id: String,
-    #[serde(default)]
-    providers: Vec<String>,
-}
-#[derive(serde::Deserialize)]
 struct Balance {
     balance_micro_usd: i64,
     pending_micro_usd: i64,
@@ -54,6 +45,13 @@ impl Backend for CloudBackend {
             .send()
             .await
             .map_err(|e| BackendError::Transport(e.to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(BackendError::Upstream {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
         let env: ModelsEnvelope = resp
             .json()
             .await
@@ -133,6 +131,13 @@ impl Backend for CloudBackend {
             .send()
             .await
             .map_err(|e| BackendError::Transport(e.to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(BackendError::Upstream {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
         let b: Balance = resp
             .json()
             .await
@@ -177,6 +182,21 @@ mod tests {
                 assert_eq!(pending_micro_usd, 769_000);
             }
             other => panic!("expected Cloud, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_models_maps_non_2xx_to_upstream_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .mount(&server)
+            .await;
+        let backend = CloudBackend::new(server.uri(), "brk_bad");
+        match backend.list_models().await {
+            Err(BackendError::Upstream { status, .. }) => assert_eq!(status, 401),
+            other => panic!("expected Upstream 401, got {other:?}"),
         }
     }
 
