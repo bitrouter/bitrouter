@@ -45,7 +45,7 @@ pub enum CloudAction {
     /// the built-in `bitrouter` provider uses for inference, so
     /// `providers login bitrouter` is an alias for this command.
     Login {
-        /// Authorization server URL. Defaults to https://api.bitrouter.ai;
+        /// Authorization server URL. Defaults to <https://api.bitrouter.ai>;
         /// override only for a self-hosted deployment (env: BITROUTER_OAUTH_AS).
         #[arg(long = "oauth-as", value_name = "URL")]
         authorization_server: Option<String>,
