@@ -159,23 +159,32 @@ pub async fn serve_http(backend: Arc<dyn Backend>, bind: &str) -> anyhow::Result
     Ok(())
 }
 
-/// Build the backend for a given kind from connection params.
+/// Build the backend. The cloud auth mode depends on transport:
+/// stdio→cloud uses the configured token (Static); http→cloud is multi-tenant
+/// (PerCaller — each request must carry its own bearer).
 pub fn build_backend(
     kind: crate::BackendKind,
+    transport: crate::Transport,
     local_url: &str,
     cloud_url: &str,
     cloud_token: Option<&str>,
 ) -> anyhow::Result<Arc<dyn Backend>> {
+    use crate::backend::cloud::CloudAuth;
     match kind {
         crate::BackendKind::Local => Ok(Arc::new(LocalBackend::new(local_url))),
         crate::BackendKind::Cloud => {
-            let token = cloud_token.ok_or_else(|| {
-                anyhow::anyhow!("cloud backend needs a bearer token (--token or BITROUTER_TOKEN)")
-            })?;
-            Ok(Arc::new(CloudBackend::new(
-                cloud_url,
-                crate::backend::cloud::CloudAuth::Static(token.to_owned()),
-            )))
+            let auth = match transport {
+                crate::Transport::Http => CloudAuth::PerCaller,
+                crate::Transport::Stdio => {
+                    let token = cloud_token.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "stdio cloud backend needs a token (--token or BITROUTER_TOKEN)"
+                        )
+                    })?;
+                    CloudAuth::Static(token.to_owned())
+                }
+            };
+            Ok(Arc::new(CloudBackend::new(cloud_url, auth)))
         }
     }
 }

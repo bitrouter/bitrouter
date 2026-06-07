@@ -77,6 +77,7 @@ pub struct ServeOptions {
 pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
     let backend = server::build_backend(
         opts.backend,
+        opts.transport,
         &opts.local_url,
         &opts.cloud_url,
         opts.cloud_token.as_deref(),
