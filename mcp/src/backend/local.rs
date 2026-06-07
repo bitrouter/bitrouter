@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 
-use super::{Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, StatusInfo};
+use super::{Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, StatusInfo, Usage};
 
 /// Routes tool calls to the local daemon's `/v1/*` HTTP API.
 pub struct LocalBackend {
@@ -59,8 +59,60 @@ impl Backend for LocalBackend {
             .collect())
     }
 
-    async fn complete(&self, _req: CompleteRequest) -> Result<CompleteResponse, BackendError> {
-        unimplemented!("Task 4")
+    async fn complete(&self, req: CompleteRequest) -> Result<CompleteResponse, BackendError> {
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let mut body = serde_json::json!({
+            "model": req.model,
+            "messages": req.messages,
+        });
+        if let Some(m) = req.max_tokens {
+            body["max_tokens"] = m.into();
+        }
+        if let Some(t) = req.temperature {
+            body["temperature"] = t.into();
+        }
+        if let Some(s) = req.system {
+            body["system"] = s.into();
+        }
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| BackendError::DaemonUnreachable(self.base_url.clone()).if_not(e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(BackendError::Upstream {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
+        let v: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| BackendError::Decode(e.to_string()))?;
+        let choice = v
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .ok_or_else(|| BackendError::Decode("no choices in response".into()))?;
+        Ok(CompleteResponse {
+            content: choice
+                .pointer("/message/content")
+                .and_then(|c| c.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+            finish_reason: choice
+                .get("finish_reason")
+                .and_then(|f| f.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+            usage: Usage {
+                input_tokens: v.pointer("/usage/prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
+                output_tokens: v.pointer("/usage/completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
+            },
+            model: req.model,
+        })
     }
 
     async fn status(&self) -> Result<StatusInfo, BackendError> {
@@ -88,6 +140,38 @@ mod tests {
     use super::*;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn complete_posts_openai_body_and_extracts_content() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(body_partial_json(serde_json::json!({ "model": "openai/gpt-4o" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [ { "message": { "content": "hi there" }, "finish_reason": "stop" } ],
+                "usage": { "prompt_tokens": 12, "completion_tokens": 5 }
+            })))
+            .mount(&server)
+            .await;
+
+        let backend = LocalBackend::new(server.uri());
+        let out = backend
+            .complete(CompleteRequest {
+                model: "openai/gpt-4o".into(),
+                messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+                max_tokens: Some(64),
+                temperature: None,
+                system: None,
+            })
+            .await
+            .expect("complete");
+
+        assert_eq!(out.content, "hi there");
+        assert_eq!(out.finish_reason, "stop");
+        assert_eq!(out.usage, Usage { input_tokens: 12, output_tokens: 5 });
+        assert_eq!(out.model, "openai/gpt-4o");
+    }
 
     #[tokio::test]
     async fn list_models_maps_data_to_modelinfo() {
