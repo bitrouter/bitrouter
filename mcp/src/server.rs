@@ -6,9 +6,23 @@ use std::sync::Arc;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
-use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::backend::{Backend, CallerAuth, CompleteRequest};
+
+/// Extract the caller's bearer from MCP request extensions. The streamable-HTTP
+/// transport injects `http::request::Parts`; returns an empty `CallerAuth` over
+/// stdio (no parts) or when no/!Bearer `Authorization` is present.
+fn caller_from_extensions(ext: &rmcp::model::Extensions) -> CallerAuth {
+    let bearer = ext
+        .get::<http::request::Parts>()
+        .and_then(|p| p.headers.get(http::header::AUTHORIZATION))
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(str::to_owned);
+    CallerAuth { bearer }
+}
 
 #[derive(Clone)]
 pub struct BitrouterMcp {
@@ -40,7 +54,9 @@ impl BitrouterMcp {
     async fn complete(
         &self,
         Parameters(args): Parameters<CompleteArgs>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let caller = caller_from_extensions(&ctx.extensions);
         let req = CompleteRequest {
             model: args.model,
             messages: args.messages,
@@ -48,7 +64,7 @@ impl BitrouterMcp {
             temperature: args.temperature,
             system: args.system,
         };
-        match self.backend.complete(&CallerAuth::default(), req).await {
+        match self.backend.complete(&caller, req).await {
             Ok(r) => match serde_json::to_string(&r) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -60,8 +76,12 @@ impl BitrouterMcp {
     }
 
     #[tool(description = "List models routable through BitRouter.")]
-    async fn list_models(&self) -> Result<CallToolResult, McpError> {
-        match self.backend.list_models(&CallerAuth::default()).await {
+    async fn list_models(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let caller = caller_from_extensions(&ctx.extensions);
+        match self.backend.list_models(&caller).await {
             Ok(m) => match serde_json::to_string(&m) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -75,8 +95,9 @@ impl BitrouterMcp {
     #[tool(
         description = "Report BitRouter status (local: liveness/models/providers; cloud: credit balance)."
     )]
-    async fn status(&self) -> Result<CallToolResult, McpError> {
-        match self.backend.status(&CallerAuth::default()).await {
+    async fn status(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
+        let caller = caller_from_extensions(&ctx.extensions);
+        match self.backend.status(&caller).await {
             Ok(s) => match serde_json::to_string(&s) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -200,5 +221,31 @@ mod tests {
     fn handler_constructs_with_three_tools() {
         let h = BitrouterMcp::new(Arc::new(StubBackend));
         assert_eq!(h.tool_router.list_all().len(), 3);
+    }
+
+    #[test]
+    fn caller_from_extensions_reads_bearer() {
+        use rmcp::model::Extensions;
+        let mut ext = Extensions::new();
+        let req = http::Request::builder()
+            .header(http::header::AUTHORIZATION, "Bearer xyz")
+            .body(())
+            .expect("req");
+        let (parts, _) = req.into_parts();
+        ext.insert(parts);
+        assert_eq!(caller_from_extensions(&ext).bearer.as_deref(), Some("xyz"));
+
+        let empty = Extensions::new();
+        assert_eq!(caller_from_extensions(&empty).bearer, None);
+
+        // non-Bearer scheme → None
+        let mut ext2 = Extensions::new();
+        let req2 = http::Request::builder()
+            .header(http::header::AUTHORIZATION, "Basic abc")
+            .body(())
+            .expect("req2");
+        let (parts2, _) = req2.into_parts();
+        ext2.insert(parts2);
+        assert_eq!(caller_from_extensions(&ext2).bearer, None);
     }
 }
