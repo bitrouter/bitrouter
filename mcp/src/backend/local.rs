@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 
-use super::{Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, StatusInfo, Usage};
+use super::{Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, ProviderStatus, StatusInfo, Usage};
 
 /// Routes tool calls to the local daemon's `/v1/*` HTTP API.
 pub struct LocalBackend {
@@ -116,7 +116,33 @@ impl Backend for LocalBackend {
     }
 
     async fn status(&self) -> Result<StatusInfo, BackendError> {
-        unimplemented!("Task 5")
+        let url = format!("{}/v1/models", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| BackendError::DaemonUnreachable(self.base_url.clone()).if_not(e))?;
+        let env: ModelsEnvelope = resp
+            .json()
+            .await
+            .map_err(|e| BackendError::Decode(e.to_string()))?;
+
+        let mut seen = std::collections::BTreeSet::new();
+        let mut providers = Vec::new();
+        for m in &env.data {
+            for p in &m.providers {
+                if seen.insert(p.clone()) {
+                    providers.push(ProviderStatus { id: p.clone(), active: true });
+                }
+            }
+        }
+        Ok(StatusInfo::Local {
+            running: true,
+            listen: self.base_url.clone(),
+            models: env.data.len(),
+            providers,
+        })
     }
 }
 
@@ -171,6 +197,37 @@ mod tests {
         assert_eq!(out.finish_reason, "stop");
         assert_eq!(out.usage, Usage { input_tokens: 12, output_tokens: 5 });
         assert_eq!(out.model, "openai/gpt-4o");
+    }
+
+    #[tokio::test]
+    async fn status_summarizes_models_and_distinct_providers() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "object": "list",
+                "data": [
+                    { "id": "openai/gpt-4o", "providers": ["openai"] },
+                    { "id": "openai/gpt-4o-mini", "providers": ["openai"] },
+                    { "id": "claude/sonnet", "providers": ["anthropic"] }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let backend = LocalBackend::new(server.uri());
+        match backend.status().await.expect("status") {
+            StatusInfo::Local { running, models, mut providers, .. } => {
+                assert!(running);
+                assert_eq!(models, 3);
+                providers.sort_by(|a, b| a.id.cmp(&b.id));
+                assert_eq!(providers, vec![
+                    ProviderStatus { id: "anthropic".into(), active: true },
+                    ProviderStatus { id: "openai".into(), active: true },
+                ]);
+            }
+            other => panic!("expected Local, got {other:?}"),
+        }
     }
 
     #[tokio::test]
