@@ -1,4 +1,4 @@
-//! On-disk OAuth credentials for the `bitrouter auth` user-account flow.
+//! On-disk OAuth credentials for the `bitrouter cloud` user-account flow.
 //!
 //! Single JSON file at `<data-dir>/account-credentials.json`. The file
 //! is owner-only (mode `0o600` on Unix) — these tokens grant access to
@@ -34,7 +34,7 @@ pub struct Credentials {
     /// `Authorization: Bearer <access_token>` (RFC 6750 §2.1).
     pub access_token: String,
     /// RFC 6749 §1.5 refresh token. Optional — the AS may decline to
-    /// issue one, or `bitrouter auth login` may have been run with a
+    /// issue one, or `bitrouter cloud login` may have been run with a
     /// scope the AS refuses to refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
@@ -180,16 +180,28 @@ impl CredentialsStore {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating credentials dir {}", parent.display()))?;
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, &bytes).with_context(|| format!("writing {}", tmp.display()))?;
-        // chmod 0600 BEFORE the rename so the file is never world-readable
-        // even for an instant. Cross-tenant token theft prevention is the
-        // whole point.
+        // Create the temp file owner-only (0600) from the instant it exists so
+        // the bearer never lands on a world-/group-readable file, even for the
+        // width of the write — a `fs::write` then a later `chmod` leaves that
+        // co-tenant read window open. Clearing any stale temp lets `create_new`
+        // make a fresh 0600 file and refuse a symlink a co-tenant may plant.
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            fs::set_permissions(&tmp, perms)
-                .with_context(|| format!("chmod 0600 {}", tmp.display()))?;
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let _ = fs::remove_file(&tmp);
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)
+                .with_context(|| format!("creating {}", tmp.display()))?;
+            file.write_all(&bytes)
+                .with_context(|| format!("writing {}", tmp.display()))?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(&tmp, &bytes).with_context(|| format!("writing {}", tmp.display()))?;
         }
         fs::rename(&tmp, &self.path)
             .with_context(|| format!("renaming {} -> {}", tmp.display(), self.path.display()))?;
@@ -229,17 +241,17 @@ impl CredentialsStore {
         let creds = self
             .current
             .as_ref()
-            .context("no stored credentials — run `bitrouter auth login` first")?
+            .context("no stored credentials — run `bitrouter cloud login` first")?
             .clone();
         if !creds.access_token_near_expiry(REFRESH_WINDOW) {
             return Ok(creds.access_token);
         }
         let refresh_token = creds.refresh_token.as_deref().context(
-            "access token expired and no refresh token is stored — run `bitrouter auth login`",
+            "access token expired and no refresh token is stored — run `bitrouter cloud login`",
         )?;
         if !creds.refresh_token_usable() {
             anyhow::bail!(
-                "refresh token has itself expired — run `bitrouter auth login` to re-authenticate"
+                "refresh token has itself expired — run `bitrouter cloud login` to re-authenticate"
             );
         }
         let token_set = flow::refresh(

@@ -397,7 +397,7 @@ pub async fn build_app_with_path(
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
 /// provider whose credential flow needs more than the per-protocol
 /// `Transport::authorise` default — today: `bitrouter` (the official
-/// hosted gateway; OAuth from `bitrouter auth login` with a
+/// hosted gateway; OAuth from `bitrouter cloud login` with a
 /// `BITROUTER_API_KEY` fallback), GitHub Copilot (device-code OAuth +
 /// token exchange), Anthropic (dual API-key / Pro/Max subscription
 /// OAuth), OpenAI Codex (ChatGPT-subscription OAuth).

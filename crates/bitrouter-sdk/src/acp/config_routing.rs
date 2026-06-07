@@ -38,11 +38,6 @@ impl ConfigAcpRoutingTable {
         self.agents.is_empty()
     }
 
-    /// The configured agent ids (in arbitrary order).
-    pub fn agent_ids(&self) -> impl Iterator<Item = &str> {
-        self.agents.keys().map(String::as_str)
-    }
-
     /// Direct transport lookup, used by CLI verbs and the `agent-proxy`
     /// bridge that want to introspect configuration without going through
     /// a [`super::Pipeline`].

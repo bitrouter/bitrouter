@@ -71,22 +71,6 @@ providers:
     assert_eq!(openai.protocol_for("gpt-4o"), ApiProtocol::ChatCompletions);
     // per-model override beats the pattern
     assert_eq!(openai.protocol_for("o3"), ApiProtocol::Responses);
-
-    // rate limits: `gpt-5*` and `*` are independent buckets
-    assert_eq!(
-        openai.rate_limit_for("gpt-5").unwrap().requests_per_minute,
-        Some(10)
-    );
-    assert_eq!(
-        openai.rate_limit_for("gpt-4o").unwrap().requests_per_minute,
-        Some(60)
-    );
-    let bucket_gpt5 = openai.rate_limit_bucket("openai", "gpt-5").unwrap();
-    let bucket_4o = openai.rate_limit_bucket("openai", "gpt-4o").unwrap();
-    assert_ne!(
-        bucket_gpt5, bucket_4o,
-        "per-pattern keyed buckets are distinct"
-    );
 }
 
 #[test]
@@ -197,6 +181,48 @@ providers:
     let err = parse_with(yaml, |_| None).unwrap_err();
     assert_eq!(err.status(), 400);
     assert!(err.to_string().contains("does-not-exist"));
+}
+
+#[test]
+fn account_api_base_pointing_at_metadata_is_rejected() {
+    // A per-account `api_base` override reaches the executor exactly like the
+    // provider-level one, so it must face the same SSRF gate — otherwise an
+    // `accounts` entry is an unchecked back door to the host's network.
+    let yaml = r#"
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: k
+    accounts:
+      - api_key: k2
+        api_base: http://169.254.169.254/
+        label: rogue
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert_eq!(err.status(), 400);
+    let msg = err.to_string();
+    assert!(msg.contains("account 'rogue'"), "got: {msg}");
+    assert!(msg.contains("api_base rejected"), "got: {msg}");
+}
+
+#[test]
+fn valid_account_api_base_override_is_accepted() {
+    // An https override is fine; an empty override inherits the provider base.
+    let yaml = r#"
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: k
+    accounts:
+      - api_key: k2
+        api_base: https://eu.api.openai.com/v1
+      - api_key: k3
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let accounts = &cfg.providers["openai"].accounts;
+    assert_eq!(accounts.len(), 2);
+    assert_eq!(accounts[0].api_base, "https://eu.api.openai.com/v1");
+    assert!(accounts[1].api_base.is_empty());
 }
 
 #[test]

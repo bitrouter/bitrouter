@@ -3,7 +3,7 @@
 //! is read, so the precedence rule lives in exactly one location.
 //!
 //! Defaults are set to the project's hosted authorization server so a
-//! plain `bitrouter auth login` works out of the box. The
+//! plain `bitrouter cloud login` works out of the box. The
 //! implementation is a generic RFC 8628 client — anyone running their
 //! own authorization server overrides the defaults via flags or env
 //! vars.
@@ -11,7 +11,7 @@
 use anyhow::Result;
 
 /// Default authorization server URL. Points at the project's hosted
-/// service so `bitrouter auth login` works with no flags. Override
+/// service so `bitrouter cloud login` works with no flags. Override
 /// with `--oauth-as` or [`AS_ENV`] to target a different deployment.
 pub const DEFAULT_AS: &str = "https://api.bitrouter.ai";
 
@@ -129,16 +129,28 @@ pub fn require_secure_url(url: &str) -> Result<()> {
     if url.starts_with("https://") {
         return Ok(());
     }
-    let lower = url.to_ascii_lowercase();
-    if lower.starts_with("http://localhost")
-        || lower.starts_with("http://127.0.0.1")
-        || lower.starts_with("http://[::1]")
+    // The RFC 8252 §8.3 exception allows plain HTTP *only* on a loopback host.
+    // Parse the URL and compare the host EXACTLY: a prefix check such as
+    // `starts_with("http://localhost")` would also accept
+    // `http://localhost.evil.com/token` or `http://127.0.0.1.evil.com/`,
+    // POSTing the client credential in cleartext to an attacker-resolvable
+    // host. `is_loopback()` covers all of 127.0.0.0/8 and `::1`.
+    if let Ok(parsed) = url::Url::parse(url)
+        && parsed.scheme() == "http"
     {
-        return Ok(());
+        let is_loopback = match parsed.host() {
+            Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        };
+        if is_loopback {
+            return Ok(());
+        }
     }
     anyhow::bail!(
         "refusing to use insecure URL '{url}' — OAuth endpoints must be https:// \
-         (loopback addresses are allowed for local testing per RFC 8252 §8.3)"
+         (only loopback addresses are allowed for local testing per RFC 8252 §8.3)"
     )
 }
 
@@ -237,5 +249,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.authorization_server, "http://127.0.0.1:8080");
+    }
+
+    #[test]
+    fn rejects_loopback_lookalike_hosts() {
+        // The old prefix check accepted these; exact host matching must reject
+        // them so a credential is never sent cleartext to an attacker host.
+        for url in [
+            "http://localhost.evil.com/token",
+            "http://127.0.0.1.evil.com/token",
+            "http://localhost@evil.com/token",
+            "http://evil.com/?redir=http://localhost",
+        ] {
+            assert!(
+                require_secure_url(url).is_err(),
+                "{url} must be rejected as insecure"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_exact_loopback_and_https() {
+        for url in [
+            "http://localhost/token",
+            "http://localhost:9000/token",
+            "http://127.0.0.1:8080/token",
+            "http://127.0.0.5/token",
+            "http://[::1]/token",
+            "https://api.bitrouter.ai/token",
+        ] {
+            require_secure_url(url).unwrap_or_else(|e| panic!("{url} should be allowed: {e}"));
+        }
     }
 }
