@@ -11,6 +11,20 @@ See `README.md` and `DEVELOPMENT.md` for full project introduction and architect
 3. **NEVER** use `.unwrap`, `.expect` or `panic!` to make the Rust program panic.
 4. **NEVER** over-design types, functions and methods that is never used in the feature or fix you are working on. We don't allow dead code.
 
+## Agent Skill
+
+The `/bitrouter` Agent Skill lives in `skills/bitrouter/` and is the source of
+truth for how agents drive BitRouter. It documents facts that drift easily —
+the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
+`GOOGLE_API_KEY`; `OPENCODE_ZEN_API_KEY` shared by Zen and Go), the
+`provider/model` slash form, and which CLI subcommands exist.
+
+1. **ALWAYS** update `skills/bitrouter/` in the same change when you alter a CLI
+   flag, listen port, env var, default config, or harness wiring step. The skill
+   must not describe a CLI that no longer matches `apps/bitrouter`.
+2. Keep `skills/bitrouter/SKILL.md` under ~200 lines; deep detail goes in
+   `skills/bitrouter/references/`.
+
 ## Contributing
 
 1. **ALWAYS** use the **conventional** git commit message format. Keep the title under 60 characters. The message body and footer can be any length.

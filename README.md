@@ -132,12 +132,25 @@ bitrouter cloud keys / usage / billing / …     # manage keys, usage, billing, 
 
 See [`CLI.md`](CLI.md) for flags, config resolution, and examples.
 
+## Agent Skill
+
+BitRouter ships an [Agent Skill](https://agentskills.io) — `/bitrouter` — so AI
+coding agents can install, configure, migrate to, and troubleshoot BitRouter on
+their own. It lives in this repo at [`skills/bitrouter/`](skills/), kept in sync
+with the code.
+
+```bash
+bitrouter skills add bitrouter        # via BitRouter's own installer
+npx skills add bitrouter/bitrouter    # via the generic skills CLI
+```
+
 ## Documentation
 
 - [`CLI.md`](CLI.md) — full CLI reference with flags and examples
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
+- [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)
 
 ## Roadmap
 
