@@ -111,7 +111,7 @@ Guardrails run at the proxy layer — before requests leave your network and bef
 
 ### Efficiency
 
-BitRouter is written in Rust and adds ~10ms of overhead — well under the latency of any upstream model. No Python workers, no GIL, no warm-up time. Per-request cost tracking makes model spend visible immediately, without waiting for a provider invoice. ACP integration means you can manage coding agent sessions (Claude Code, Codex, Gemini CLI) from the same CLI, without extra tooling.
+Agents burn tokens fast — and a misconfigured loop or unexpectedly expensive model call won't surface until the provider invoice arrives. BitRouter tracks cost per request at the proxy layer, making spend visible in real time. Route by policy: fall back to a cheaper provider when the primary exceeds a cost threshold, or pin specific call types to the model with the best price-to-quality ratio for that task. Scoped virtual keys let you cap what each agent or user can spend before it touches your upstream account.
 
 ## Supported Providers
 
@@ -134,14 +134,14 @@ Want to see another provider? [Open an issue](https://github.com/bitrouter/bitro
 
 Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356` and you're done. The following harnesses are tested and supported:
 
-| Harness        | Status |
-| -------------- | ------ |
-| Claude Code    | ✅     |
-| OpenAI Codex   | ✅     |
-| OpenCode       | ✅     |
-| Hermes Agent   | ✅     |
-| Openclaw       | ✅     |
-| Pi-Agent       | ✅     |
+| Harness        | Status | Notes                                                                                       |
+| -------------- | ------ | ------------------------------------------------------------------------------------------- |
+| Claude Code    | ✅     | [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway)                           |
+| OpenAI Codex   | ✅     | [Custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) |
+| OpenCode       | ✅     | Via [models.dev](https://github.com/anomalyco/models.dev)                                  |
+| Hermes Agent   | ✅     | Native plugin — [hermes-bitrouter-plugin](https://github.com/bitrouter/hermes-bitrouter-plugin) |
+| Openclaw       | ✅     | Native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw)      |
+| Pi-Agent       | ✅     | [Model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) |
 
 **Building an agent runtime?** We partner with teams on native integrations — email [contact@bitrouter.ai](mailto:contact@bitrouter.ai) or [book a meeting with the founder](https://cal.com/kelsenliu/founder-meeting).
 
