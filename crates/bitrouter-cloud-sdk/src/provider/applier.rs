@@ -3,7 +3,7 @@
 //!
 //! Two credential sources are tried in order:
 //!
-//! 1. **OAuth access token** persisted by `bitrouter auth login`
+//! 1. **OAuth access token** persisted by `bitrouter cloud login`
 //!    ([`crate::auth::credentials::CredentialsStore`]). When the stored
 //!    access token is within
 //!    [`crate::auth::credentials::REFRESH_WINDOW`] of expiry the store's
@@ -32,7 +32,7 @@
 //! The RFC 8414 authorization-server metadata document is fetched on the
 //! first call that exercises the OAuth branch and cached for the process
 //! lifetime. The cache key is the AS URL recorded in the credentials
-//! file, so a `bitrouter auth login` against a fresh AS will trigger a
+//! file, so a `bitrouter cloud login` against a fresh AS will trigger a
 //! re-fetch on the first inference call.
 //!
 //! References:
@@ -68,7 +68,7 @@ pub const PROVIDER_ID: &str = "bitrouter";
 /// the CLI prints back to the user; the longer multi-step prompt at zero
 /// config time is rendered separately by `apps/bitrouter`.
 pub fn onboarding_hint() -> &'static str {
-    "no BitRouter Cloud credential — run `bitrouter auth login` or set BITROUTER_API_KEY=brk_…"
+    "no BitRouter Cloud credential — run `bitrouter cloud login` or set BITROUTER_API_KEY=brk_…"
 }
 
 /// `AuthApplier` for `provider_name == "bitrouter"`.
@@ -315,7 +315,7 @@ mod tests {
         match err {
             BitrouterError::Upstream { status, message } => {
                 assert_eq!(status, 401);
-                assert!(message.contains("bitrouter auth login"), "msg={message}");
+                assert!(message.contains("bitrouter cloud login"), "msg={message}");
                 assert!(message.contains("BITROUTER_API_KEY"), "msg={message}");
             }
             other => panic!("expected Upstream 401, got {other:?}"),

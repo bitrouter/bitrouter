@@ -3,7 +3,7 @@
 //! is read, so the precedence rule lives in exactly one location.
 //!
 //! Defaults are set to the project's hosted authorization server so a
-//! plain `bitrouter auth login` works out of the box. The
+//! plain `bitrouter cloud login` works out of the box. The
 //! implementation is a generic RFC 8628 client — anyone running their
 //! own authorization server overrides the defaults via flags or env
 //! vars.
@@ -11,7 +11,7 @@
 use anyhow::Result;
 
 /// Default authorization server URL. Points at the project's hosted
-/// service so `bitrouter auth login` works with no flags. Override
+/// service so `bitrouter cloud login` works with no flags. Override
 /// with `--oauth-as` or [`AS_ENV`] to target a different deployment.
 pub const DEFAULT_AS: &str = "https://api.bitrouter.ai";
 

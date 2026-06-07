@@ -1,5 +1,5 @@
 //! Device Authorization Grant client — RFC 8628 — plus the small
-//! ancillary HTTP exchanges the `bitrouter auth` flow needs:
+//! ancillary HTTP exchanges the `bitrouter cloud` sign-in flow needs:
 //! - refresh-token exchange (RFC 6749 §6),
 //! - best-effort token revocation (RFC 7009).
 //!
@@ -433,7 +433,7 @@ fn token_set_from_response(access_token: String, parsed: TokenResponse) -> Token
 
 /// Pull the `sub` claim out of a serialized JWT-shaped id_token without
 /// verifying its signature. We do NOT trust this for authorization —
-/// it's only surfaced by `bitrouter auth whoami` as a hint of "which
+/// it's only surfaced by `bitrouter cloud whoami` as a hint of "which
 /// account did I sign in as", and the AS already signed the
 /// access_token that grants the actual access. RFC 9068 + RFC 7519
 /// describe the structure; per OpenID Connect Core §3.1.3.7 the

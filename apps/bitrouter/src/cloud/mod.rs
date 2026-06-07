@@ -6,7 +6,7 @@
 //!
 //! - [`enable_in_zero_config`] — auto-add the `bitrouter` provider to the in-memory
 //!   zero-config `providers:` map when the user has signed in via
-//!   `bitrouter auth login` (an `account-credentials.json` file is present
+//!   `bitrouter cloud login` (an `account-credentials.json` file is present
 //!   at the default path). The env-var path (`$BITROUTER_API_KEY`) is
 //!   already covered by [`bitrouter_providers::zero_config`].
 //! - [`build_auth_applier`] — construct the
@@ -34,7 +34,7 @@ use bitrouter_sdk::config::{Config, ProviderConfig};
 use bitrouter_sdk::language_model::{AuthApplier, auth::AuthAppliers};
 
 /// Insert the `bitrouter` provider into `config.providers` when the user
-/// has run `bitrouter auth login` (i.e. the credentials file exists at the
+/// has run `bitrouter cloud login` (i.e. the credentials file exists at the
 /// default path) and the entry is not already present.
 ///
 /// No-op when the credentials file is absent — `bitrouter_providers::zero_config`

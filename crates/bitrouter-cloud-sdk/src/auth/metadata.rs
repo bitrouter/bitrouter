@@ -19,7 +19,7 @@ use super::settings::require_secure_url;
 /// `device_authorization_endpoint` (RFC 8628 §4) is the only endpoint
 /// the device flow strictly requires alongside `token_endpoint` (RFC
 /// 6749 §3.2). `revocation_endpoint` (RFC 7009 §3) is best-effort — when
-/// the AS doesn't advertise one, `bitrouter auth logout` skips the
+/// the AS doesn't advertise one, `bitrouter cloud logout` skips the
 /// network call and just deletes the local file.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct AsMetadata {
