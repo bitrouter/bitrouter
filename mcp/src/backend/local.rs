@@ -107,9 +107,20 @@ mod tests {
         let backend = LocalBackend::new(server.uri());
         let models = backend.list_models().await.expect("list_models");
 
-        assert_eq!(models, vec![
-            ModelInfo { id: "openai/gpt-4o".into(), provider: "openai".into(), active: true },
-            ModelInfo { id: "claude/sonnet".into(), provider: "anthropic".into(), active: true },
-        ]);
+        assert_eq!(
+            models,
+            vec![
+                ModelInfo {
+                    id: "openai/gpt-4o".into(),
+                    provider: "openai".into(),
+                    active: true
+                },
+                ModelInfo {
+                    id: "claude/sonnet".into(),
+                    provider: "anthropic".into(),
+                    active: true
+                },
+            ]
+        );
     }
 }
