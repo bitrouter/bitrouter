@@ -2,11 +2,12 @@
 //!
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `route` / `init` / `key sign` / `models` / `tools` /
-//! `policy create` / `providers list` / `login` / `logout` / `agents` /
-//! `agent-proxy` / `auth` / `cloud` / `skills`. Daemon control runs over a
-//! local IPC endpoint (a Unix domain socket, or a Windows named pipe) —
-//! `start` spawns `serve` detached; the client subcommands send one
-//! [`DaemonCommand`] each.
+//! `policy create` / `providers (list|login|logout)` / `agents` /
+//! `agent-proxy` / `cloud` / `skills`. Cloud-account sign-in lives under
+//! `cloud (login|logout|whoami)`; per-provider credentials under
+//! `providers (login|logout)`. Daemon control runs over a local IPC endpoint
+//! (a Unix domain socket, or a Windows named pipe) — `start` spawns `serve`
+//! detached; the client subcommands send one [`DaemonCommand`] each.
 //!
 //! OWS wallet integration is out of scope for v1.0 (it lives in the `ows`
 //! workspace); a commented-out `Wallet` variant in `Command` reserves the
@@ -163,36 +164,6 @@ enum Command {
     // non-functional `wallet` command; uncomment this variant AND restore its
     // match arm in `run` when wiring OWS in.
     // Wallet,
-    /// Log in to an upstream provider — interactive credential setup.
-    ///
-    /// Per-provider available methods are auto-derived from the catalog:
-    /// `anthropic` prompts for **subscription** (Claude Pro/Max browser
-    /// PKCE) **or** **API key** paste; `openai-codex` runs the ChatGPT
-    /// subscription PKCE flow; `github-copilot` runs the GitHub device
-    /// code flow; everything else accepts a pasted API key. The
-    /// resulting credential is stored under
-    /// `$XDG_DATA_HOME/bitrouter/oauth-tokens.json` keyed by
-    /// `(provider_id, label)`. For cloud sign-in, see `bitrouter auth login`
-    /// — kept separate so the per-provider and cloud flows don't share a
-    /// flag surface.
-    Login {
-        /// Provider id to log in to (e.g. `anthropic`, `openai-codex`,
-        /// `github-copilot`).
-        provider: String,
-        /// Account label this credential is stored under. Defaults to
-        /// `default`. Use a non-default label to keep multiple accounts
-        /// of the same provider side by side — reference them from
-        /// `accounts:` entries in `bitrouter.yaml`.
-        #[arg(short, long, default_value = "default")]
-        label: String,
-    },
-    /// Log out of an upstream provider — clears every stored credential
-    /// for the provider (subscription OAuth and pasted API keys alike).
-    /// For cloud sign-out, see `bitrouter auth logout`.
-    Logout {
-        /// Provider id whose stored credentials should be removed.
-        provider: String,
-    },
     /// ACP agent lifecycle — list the catalog, check configured agents,
     /// print install stubs. `bitrouter agent-proxy <id>` is the separate
     /// stdio bridge an editor spawns.
@@ -214,18 +185,8 @@ enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Sign in to bitrouter from this terminal.
-    ///
-    /// After `bitrouter auth login`, this CLI uses your account credentials
-    /// automatically for inference, key management, billing, BYOK, and the
-    /// rest of the management surface.
-    Auth {
-        #[command(subcommand)]
-        action: AuthAction,
-    },
-    /// Manage your BitRouter Cloud account — API keys, usage, billing,
-    /// policies, BYOK, OAuth clients. Requires `bitrouter auth login`
-    /// first.
+    /// Manage your BitRouter Cloud account — sign in/out, API keys, usage,
+    /// billing, policies, BYOK, OAuth clients. Start with `cloud login`.
     Cloud {
         #[command(subcommand)]
         action: bitrouter::cloud::cli::CloudAction,
@@ -236,46 +197,6 @@ enum Command {
         #[command(subcommand)]
         action: bitrouter::skills::cli::SkillsAction,
     },
-}
-
-#[derive(Subcommand)]
-enum AuthAction {
-    /// Sign in to bitrouter.
-    ///
-    /// Prints a verification URL — open it in your browser, approve, and
-    /// this CLI receives an access token it stores locally and refreshes
-    /// automatically.
-    Login {
-        /// Authorization server URL. Defaults to https://api.bitrouter.ai;
-        /// override only for a self-hosted deployment (env: BITROUTER_OAUTH_AS).
-        #[arg(long = "oauth-as", value_name = "URL")]
-        authorization_server: Option<String>,
-        /// OAuth client id. Defaults to `bitrouter-cli`; override only for a
-        /// self-hosted deployment (env: BITROUTER_OAUTH_CLIENT_ID).
-        #[arg(long = "client-id", value_name = "ID")]
-        client_id: Option<String>,
-        /// Permissions to request, as a space-delimited list. Defaults to a
-        /// broad "developer" set (inference, key management, billing-read,
-        /// policy, BYOK, namespace-read); pass a narrower or wider list to
-        /// override (env: BITROUTER_OAUTH_SCOPE).
-        #[arg(long, value_name = "SCOPE")]
-        scope: Option<String>,
-    },
-    /// Sign out: revoke the stored token at the server (best-effort) and
-    /// delete the local credentials file.
-    Logout {
-        /// Override the authorization server URL recorded in the
-        /// credentials file for the revocation call.
-        #[arg(long = "oauth-as", value_name = "URL")]
-        authorization_server: Option<String>,
-        /// Override the recorded OAuth client id for the revocation call.
-        #[arg(long = "client-id", value_name = "ID")]
-        client_id: Option<String>,
-    },
-    /// Show who is signed in on this machine.
-    ///
-    /// Reads the locally stored credentials — no network call.
-    Whoami,
 }
 
 #[derive(Subcommand)]
@@ -401,6 +322,28 @@ enum ProviderAction {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Log in to an upstream provider — interactive credential setup.
+    ///
+    /// Per-provider methods are auto-derived from the catalog: `anthropic`
+    /// prompts for subscription (browser PKCE) or API-key paste;
+    /// `openai-codex` runs the ChatGPT PKCE flow; `github-copilot` the GitHub
+    /// device flow; everything else accepts a pasted API key. Logging in to
+    /// the built-in `bitrouter` provider runs the same cloud sign-in as
+    /// `bitrouter cloud login`.
+    Login {
+        /// Provider id (e.g. `anthropic`, `openai-codex`, `bitrouter`).
+        provider: String,
+        /// Account label this credential is stored under (default `default`).
+        /// Ignored for the `bitrouter` provider (it uses the cloud credential).
+        #[arg(short, long, default_value = "default")]
+        label: String,
+    },
+    /// Log out of an upstream provider — clears every stored credential for
+    /// it. For the built-in `bitrouter` provider this is `cloud logout`.
+    Logout {
+        /// Provider id whose stored credentials should be removed.
+        provider: String,
+    },
 }
 
 #[tokio::main]
@@ -484,51 +427,13 @@ async fn run() -> Result<()> {
         Command::Observe { action } => observe(action).await,
         Command::Policy { action } => policy(action).await,
         Command::Providers { action } => providers(action).await,
-        Command::Login { provider, label } => {
-            bitrouter::commands::login_provider(&provider, &label).await
-        }
-        Command::Logout { provider } => bitrouter::commands::logout_provider(&provider).await,
         Command::Agents { action } => agents_cmd(action).await,
         Command::AgentProxy { agent, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             agent_proxy_cmd(&agent, &source).await
         }
-        Command::Auth { action } => auth_cmd(action).await,
         Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action).await,
-    }
-}
-
-// ===== `bitrouter auth …` (OAuth 2.0 device flow against a user-supplied AS) =====
-
-async fn auth_cmd(action: AuthAction) -> Result<()> {
-    use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login, logout, whoami};
-    match action {
-        AuthAction::Login {
-            authorization_server,
-            client_id,
-            scope,
-        } => {
-            login(LoginInputs {
-                authorization_server,
-                client_id,
-                scope,
-            })
-            .await?;
-            Ok(())
-        }
-        AuthAction::Logout {
-            authorization_server,
-            client_id,
-        } => {
-            logout(LoginInputs {
-                authorization_server,
-                client_id,
-                scope: None,
-            })
-            .await
-        }
-        AuthAction::Whoami => whoami().await,
     }
 }
 
@@ -943,7 +848,7 @@ fn announce_zero_config(
 /// Multi-line guidance shown when zero-config detects no credential of any
 /// kind. The recommendation chain is intentional:
 ///
-///   1. `bitrouter auth login` — one OAuth account, every supported model.
+///   1. `bitrouter cloud login` — one OAuth account, every supported model.
 ///   2. `BITROUTER_API_KEY` — long-lived `brk_…` key, same coverage.
 ///   3. Any upstream provider the user already pays for, locally.
 ///
@@ -960,7 +865,7 @@ fn print_onboarding_hint() {
     eprintln!();
     eprintln!("  1. Sign in to BitRouter Cloud — one account covers every model:");
     eprintln!();
-    eprintln!("       bitrouter auth login");
+    eprintln!("       bitrouter cloud login");
     eprintln!("       bitrouter cloud --help        # manage keys, usage, policies, billing");
     eprintln!();
     eprintln!("  2. Or paste a BitRouter API key:");
@@ -1333,6 +1238,32 @@ async fn providers(action: ProviderAction) -> Result<()> {
                 );
             }
             Ok(())
+        }
+        ProviderAction::Login { provider, label } => {
+            // The built-in `bitrouter` provider authenticates with the cloud
+            // OAuth credential, so logging into it IS the cloud sign-in
+            // (`cloud login`); other providers use the per-provider store.
+            if provider == "bitrouter" {
+                bitrouter::cloud::cli::run(bitrouter::cloud::cli::CloudAction::Login {
+                    authorization_server: None,
+                    client_id: None,
+                    scope: None,
+                })
+                .await
+            } else {
+                bitrouter::commands::login_provider(&provider, &label).await
+            }
+        }
+        ProviderAction::Logout { provider } => {
+            if provider == "bitrouter" {
+                bitrouter::cloud::cli::run(bitrouter::cloud::cli::CloudAction::Logout {
+                    authorization_server: None,
+                    client_id: None,
+                })
+                .await
+            } else {
+                bitrouter::commands::logout_provider(&provider).await
+            }
         }
     }
 }

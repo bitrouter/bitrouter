@@ -1,4 +1,4 @@
-//! `bitrouter auth <login|logout|whoami>` entry points.
+//! `bitrouter cloud login` / `logout` device-flow entry points.
 //!
 //! The CLI in `apps/bitrouter/src/main.rs` parses the subcommand + flags
 //! into [`LoginInputs`] and hands off to the functions here.
@@ -11,7 +11,7 @@ use super::flow;
 use super::metadata::{self, AsMetadata};
 use super::settings::{Settings, resolve_from_env};
 
-/// User-supplied flag values for `bitrouter auth login` / `logout`.
+/// User-supplied flag values for `bitrouter cloud login` / `logout`.
 /// The CLI passes them straight through.
 #[derive(Debug, Default, Clone)]
 pub struct LoginInputs {
@@ -35,7 +35,7 @@ pub fn http_client() -> Result<reqwest::Client> {
 }
 
 /// Run the device-authorization grant against the configured AS and
-/// persist the resulting tokens. Used by `bitrouter auth login`.
+/// persist the resulting tokens. Used by `bitrouter cloud login`.
 pub async fn login(inputs: LoginInputs) -> Result<Credentials> {
     let settings = resolve_from_env(
         inputs.authorization_server.as_deref(),
@@ -88,7 +88,7 @@ pub async fn login(inputs: LoginInputs) -> Result<Credentials> {
 }
 
 /// Revoke the stored tokens (best-effort) and clear the local file.
-/// Used by `bitrouter auth logout`.
+/// Used by `bitrouter cloud logout`.
 pub async fn logout(inputs: LoginInputs) -> Result<()> {
     let mut store = CredentialsStore::default_path().context("opening credentials store")?;
     let prior = match store.current().cloned() {
@@ -203,7 +203,7 @@ pub async fn whoami() -> Result<()> {
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| "<unresolved>".into());
             println!("not signed in (no credentials at {default})");
-            println!("  run `bitrouter auth login` to sign in");
+            println!("  run `bitrouter cloud login` to sign in");
             Ok(())
         }
     }

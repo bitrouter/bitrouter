@@ -14,7 +14,7 @@
 //! All errors flow through one place ([`run`]); 403 responses whose
 //! description matches the server's `missing required scope: <s>` shape
 //! get a tailored re-login hint pointing the user at
-//! `bitrouter auth login --scope "<existing scopes> <missing>"`.
+//! `bitrouter cloud login --scope "<existing scopes> <missing>"`.
 
 use std::path::PathBuf;
 
@@ -22,6 +22,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::{Subcommand, ValueEnum};
 
+use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login, logout};
 use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, default_credentials_path};
 use bitrouter_cloud_sdk::management::types::{
     BudgetWindow as SdkBudgetWindow, ClientType as SdkClientType, PolicyKind as SdkPolicyKind,
@@ -37,6 +38,38 @@ pub enum CloudAction {
     /// Print the cloud identity stored on this machine alongside the
     /// `/v1/*` base URL the CLI will target.
     Whoami,
+    /// Sign in to BitRouter Cloud from this terminal.
+    ///
+    /// Prints a verification URL — open it, approve, and this CLI stores an
+    /// access token it refreshes automatically. This is the same credential
+    /// the built-in `bitrouter` provider uses for inference, so
+    /// `providers login bitrouter` is an alias for this command.
+    Login {
+        /// Authorization server URL. Defaults to https://api.bitrouter.ai;
+        /// override only for a self-hosted deployment (env: BITROUTER_OAUTH_AS).
+        #[arg(long = "oauth-as", value_name = "URL")]
+        authorization_server: Option<String>,
+        /// OAuth client id. Defaults to `bitrouter-cli`; override only for a
+        /// self-hosted deployment (env: BITROUTER_OAUTH_CLIENT_ID).
+        #[arg(long = "client-id", value_name = "ID")]
+        client_id: Option<String>,
+        /// Permissions to request, as a space-delimited list. Defaults to a
+        /// broad "developer" set; pass a narrower or wider list to override
+        /// (env: BITROUTER_OAUTH_SCOPE).
+        #[arg(long, value_name = "SCOPE")]
+        scope: Option<String>,
+    },
+    /// Sign out: revoke the stored token at the server (best-effort) and
+    /// delete the local credentials file.
+    Logout {
+        /// Override the authorization server URL recorded in the
+        /// credentials file for the revocation call.
+        #[arg(long = "oauth-as", value_name = "URL")]
+        authorization_server: Option<String>,
+        /// Override the recorded OAuth client id for the revocation call.
+        #[arg(long = "client-id", value_name = "ID")]
+        client_id: Option<String>,
+    },
     /// Inspect the namespaces you own and the one this CLI is bound to.
     Namespace {
         #[command(subcommand)]
@@ -90,7 +123,7 @@ pub enum CloudAction {
 pub enum NamespaceAction {
     /// List the namespaces you own. The one this CLI is signed in to is
     /// marked `(active)`. Switching namespaces is a re-login:
-    /// `bitrouter auth login` and pick a different namespace in the
+    /// `bitrouter cloud login` and pick a different namespace in the
     /// browser.
     List(JsonFlag),
     /// Print the namespace this CLI's credential is bound to. Offline —
@@ -608,6 +641,28 @@ pub async fn run(action: CloudAction) -> Result<()> {
 async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
     match action {
         CloudAction::Whoami => whoami().await,
+        CloudAction::Login {
+            authorization_server,
+            client_id,
+            scope,
+        } => login(LoginInputs {
+            authorization_server,
+            client_id,
+            scope,
+        })
+        .await
+        .map(|_| ())
+        .map_err(SdkError::Auth),
+        CloudAction::Logout {
+            authorization_server,
+            client_id,
+        } => logout(LoginInputs {
+            authorization_server,
+            client_id,
+            scope: None,
+        })
+        .await
+        .map_err(SdkError::Auth),
         CloudAction::Namespace { action } => run_namespace(action).await,
         CloudAction::Keys { action } => run_keys(action).await,
         CloudAction::Usage(args) => run_usage(args).await,
@@ -627,7 +682,7 @@ fn client() -> std::result::Result<ManagementClient, SdkError> {
 
 async fn whoami() -> std::result::Result<(), SdkError> {
     // Doesn't hit the network — reads the local credentials file so
-    // it works offline. Mirrors `bitrouter auth whoami` but adds the
+    // it works offline. Mirrors `bitrouter cloud whoami` but adds the
     // base URL `bitrouter cloud …` will target.
     let client = client()?;
     println!("cloud base URL: {}", client.base_url());
@@ -643,7 +698,7 @@ async fn whoami() -> std::result::Result<(), SdkError> {
         }
         println!("credentials:    {}", store.path().display());
     } else {
-        println!("(not signed in — run `bitrouter auth login`)");
+        println!("(not signed in — run `bitrouter cloud login`)");
     }
     Ok(())
 }
@@ -669,7 +724,7 @@ async fn run_namespace(action: NamespaceAction) -> std::result::Result<(), SdkEr
             } else {
                 match nsid {
                     Some(id) => println!("{id}"),
-                    None => println!("(no namespace — run `bitrouter auth login`)"),
+                    None => println!("(no namespace — run `bitrouter cloud login`)"),
                 }
             }
             Ok(())
@@ -1375,7 +1430,7 @@ fn opt_json_input(
 
 /// `--scope` accepts both repeated flags and a single space-delimited
 /// list per flag — mirroring how the same value is handled by
-/// `bitrouter auth login --scope`. Empty tokens are dropped.
+/// `bitrouter cloud login --scope`. Empty tokens are dropped.
 fn split_scope_args(scopes: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for raw in scopes {
@@ -1393,7 +1448,7 @@ fn print_error_hint(err: &SdkError) {
         SdkError::NotSignedIn => {
             eprintln!();
             eprintln!("  Sign in first:");
-            eprintln!("    bitrouter auth login");
+            eprintln!("    bitrouter cloud login");
         }
         SdkError::Forbidden {
             missing_scope: Some(scope),
@@ -1402,10 +1457,10 @@ fn print_error_hint(err: &SdkError) {
             eprintln!();
             eprintln!("  This command requires the scope: {scope}");
             if let Some(extended) = suggested_scope(scope) {
-                eprintln!("  Re-run `bitrouter auth login --scope \"{extended}\"` to add it.");
+                eprintln!("  Re-run `bitrouter cloud login --scope \"{extended}\"` to add it.");
             } else {
                 eprintln!(
-                    "  Re-run `bitrouter auth login --scope \"<your current scope> {scope}\"`."
+                    "  Re-run `bitrouter cloud login --scope \"<your current scope> {scope}\"`."
                 );
             }
         }

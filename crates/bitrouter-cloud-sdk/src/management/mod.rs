@@ -4,7 +4,7 @@
 //! `presets`, `byok`, `oauth_clients` — is the same one the web console
 //! consumes. It accepts either a `brk_` API key or a `bra_` OAuth
 //! access token. This client always presents the latter: it reads the
-//! credential persisted by `bitrouter auth login`
+//! credential persisted by `bitrouter cloud login`
 //! ([`crate::auth::credentials::CredentialsStore`]) and refreshes it
 //! transparently within
 //! [`crate::auth::credentials::REFRESH_WINDOW`] of expiry.
