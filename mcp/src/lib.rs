@@ -84,6 +84,9 @@ pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
     )?;
     match opts.transport {
         Transport::Stdio => server::serve_stdio(backend).await,
-        Transport::Http => server::serve_http(backend, &opts.bind).await,
+        Transport::Http => {
+            let require_auth = matches!(opts.backend, BackendKind::Cloud);
+            server::serve_http(backend, &opts.bind, require_auth).await
+        }
     }
 }

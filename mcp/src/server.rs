@@ -123,6 +123,31 @@ impl ServerHandler for BitrouterMcp {
 use crate::backend::cloud::CloudBackend;
 use crate::backend::local::LocalBackend;
 
+/// Whether an `Authorization` header value is a Bearer token.
+fn has_bearer(value: Option<&str>) -> bool {
+    value.is_some_and(|v| v.starts_with("Bearer "))
+}
+
+/// Reject requests without a `Bearer` Authorization header (presence only;
+/// the cloud validates the token's validity).
+async fn require_bearer(
+    headers: axum::http::HeaderMap,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let present = has_bearer(
+        headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok()),
+    );
+    if present {
+        next.run(request).await
+    } else {
+        axum::http::StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
 /// Serve over stdio until the client disconnects.
 pub async fn serve_stdio(backend: Arc<dyn Backend>) -> anyhow::Result<()> {
     use rmcp::{ServiceExt, transport::stdio};
@@ -132,7 +157,14 @@ pub async fn serve_stdio(backend: Arc<dyn Backend>) -> anyhow::Result<()> {
 }
 
 /// Serve streamable HTTP at `/mcp-control` on `bind` until Ctrl-C.
-pub async fn serve_http(backend: Arc<dyn Backend>, bind: &str) -> anyhow::Result<()> {
+///
+/// When `require_auth` is `true`, requests without a `Bearer` Authorization
+/// header are rejected with `401 Unauthorized` before reaching the MCP handler.
+pub async fn serve_http(
+    backend: Arc<dyn Backend>,
+    bind: &str,
+    require_auth: bool,
+) -> anyhow::Result<()> {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
@@ -144,7 +176,10 @@ pub async fn serve_http(backend: Arc<dyn Backend>, bind: &str) -> anyhow::Result
         LocalSessionManager::default().into(),
         config,
     );
-    let router = axum::Router::new().nest_service("/mcp-control", service);
+    let mut router = axum::Router::new().nest_service("/mcp-control", service);
+    if require_auth {
+        router = router.layer(axum::middleware::from_fn(require_bearer));
+    }
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let shutdown = {
         let ct = ct.clone();
@@ -195,6 +230,13 @@ mod tests {
     use crate::backend::{
         BackendError, CallerAuth, CompleteResponse, ModelInfo, StatusInfo, Usage,
     };
+
+    #[test]
+    fn require_bearer_predicate() {
+        assert!(has_bearer(Some("Bearer abc")));
+        assert!(!has_bearer(Some("Basic abc")));
+        assert!(!has_bearer(None));
+    }
 
     struct StubBackend;
     #[async_trait::async_trait]
