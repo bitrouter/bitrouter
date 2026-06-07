@@ -99,6 +99,7 @@ pub use stream::{
     UsageAccumulator,
 };
 pub use types::{
-    ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, GenerationParams, Message,
-    PipelineRequest, PipelineResponse, Prompt, Role, RoutingTarget, StreamPart, Tool, Usage,
+    ApiProtocol, Capability, Content, ExecutionResult, FinishReason, GenerateResult,
+    GenerationParams, Message, PipelineRequest, PipelineResponse, Prompt, Role, RoutingTarget,
+    StreamPart, Tool, Usage,
 };

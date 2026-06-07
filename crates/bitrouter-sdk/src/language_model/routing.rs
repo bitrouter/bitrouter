@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::hooks::FallbackDecision;
-use crate::language_model::types::RoutingTarget;
+use crate::language_model::types::{Capability, RoutingTarget};
 
 /// How a cascade chain should be ordered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -42,6 +42,12 @@ pub struct RoutingPrefs {
     pub only: Vec<String>,
     /// Drop these providers from the chain.
     pub ignore: Vec<String>,
+    /// The capabilities a request needs; a capability-aware [`RoutingTable`]
+    /// should treat only providers advertising all of these as eligible. The
+    /// pipeline populates it from
+    /// [`Prompt::required_capabilities`](crate::language_model::Prompt::required_capabilities).
+    /// Empty (the default) imposes no capability constraint.
+    pub require_capabilities: Vec<Capability>,
 }
 
 /// Summary of a routable model, for `GET /v1/models`.

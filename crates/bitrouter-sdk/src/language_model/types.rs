@@ -190,6 +190,34 @@ pub enum ResponseFormat {
     },
 }
 
+/// An optional inference feature a request may require and a provider may
+/// advertise. Capabilities are API-agnostic: the same capability maps to a
+/// different wire parameter in each protocol (structured outputs is Chat
+/// Completions' `response_format`, Messages' `output_config.format`, Generate
+/// Content's `responseSchema`, Responses' `text.format`). The serde
+/// representation (e.g. `structured_outputs`) is the stable token used to match
+/// a request's needs against a provider's advertised capabilities.
+///
+/// A capability-aware [`RoutingTable`](crate::language_model::routing::RoutingTable)
+/// can read the set a request requires ([`Prompt::required_capabilities`]) and
+/// restrict the chain to providers advertising all of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    /// JSON-Schema-constrained output — [`ResponseFormat::JsonSchema`].
+    StructuredOutputs,
+}
+
+impl Capability {
+    /// The stable token string (e.g. `"structured_outputs"`), equal to this
+    /// enum's serde representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::StructuredOutputs => "structured_outputs",
+        }
+    }
+}
+
 /// Sampling / generation parameters, carried verbatim where possible.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GenerationParams {
@@ -235,6 +263,20 @@ pub struct Prompt {
     pub response_format: Option<ResponseFormat>,
     /// Whether the caller requested a streaming response.
     pub stream: bool,
+}
+
+impl Prompt {
+    /// The [`Capability`]s this request requires, derived from which optional
+    /// features it actually uses. A capability-aware routing table can use this
+    /// to restrict the fallback chain to providers that advertise all of these,
+    /// instead of silently degrading the request.
+    pub fn required_capabilities(&self) -> Vec<Capability> {
+        let mut caps = Vec::new();
+        if self.response_format.is_some() {
+            caps.push(Capability::StructuredOutputs);
+        }
+        caps
+    }
 }
 
 /// Token usage counts. Counts use `0` (not `null`) for "known to be zero";
@@ -574,4 +616,45 @@ pub struct PipelineResponse {
     pub request_id: String,
     /// The generation result.
     pub result: GenerateResult,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bare_prompt() -> Prompt {
+        Prompt {
+            model: "m".into(),
+            system: None,
+            messages: vec![],
+            tools: vec![],
+            params: GenerationParams::default(),
+            response_format: None,
+            stream: false,
+        }
+    }
+
+    #[test]
+    fn plain_request_requires_no_capabilities() {
+        assert!(bare_prompt().required_capabilities().is_empty());
+    }
+
+    #[test]
+    fn response_format_requires_structured_outputs() {
+        let mut p = bare_prompt();
+        p.response_format = Some(ResponseFormat::JsonSchema {
+            name: None,
+            strict: None,
+            schema: serde_json::json!({ "type": "object" }),
+        });
+        assert_eq!(
+            p.required_capabilities(),
+            vec![Capability::StructuredOutputs]
+        );
+    }
+
+    #[test]
+    fn capability_token_matches_registry_vocabulary() {
+        assert_eq!(Capability::StructuredOutputs.as_str(), "structured_outputs");
+    }
 }

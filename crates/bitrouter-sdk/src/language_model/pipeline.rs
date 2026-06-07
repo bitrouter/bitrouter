@@ -271,7 +271,13 @@ impl Pipeline {
         let overrides = self.routing_table.preset_overrides(ctx.model()).await?;
         ctx.apply_preset_overrides(&overrides);
 
-        let prefs = RoutingPrefs::default();
+        // Restrict the chain to providers that advertise every capability this
+        // request actually uses (e.g. structured outputs). Empty for plain
+        // requests, so those route unchanged.
+        let prefs = RoutingPrefs {
+            require_capabilities: ctx.prompt().required_capabilities(),
+            ..RoutingPrefs::default()
+        };
         let mut chain = self
             .routing_table
             .route_chain(ctx.model(), &prefs, ctx.caller())
