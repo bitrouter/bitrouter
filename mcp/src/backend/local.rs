@@ -4,7 +4,10 @@
 
 use async_trait::async_trait;
 
-use super::{Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, ProviderStatus, StatusInfo, Usage};
+use super::{
+    Backend, BackendError, CompleteRequest, CompleteResponse, ModelInfo, ProviderStatus,
+    StatusInfo, Usage,
+};
 
 /// Routes tool calls to the local daemon's `/v1/*` HTTP API.
 pub struct LocalBackend {
@@ -108,8 +111,14 @@ impl Backend for LocalBackend {
                 .unwrap_or_default()
                 .to_owned(),
             usage: Usage {
-                input_tokens: v.pointer("/usage/prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
-                output_tokens: v.pointer("/usage/completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
+                input_tokens: v
+                    .pointer("/usage/prompt_tokens")
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0),
+                output_tokens: v
+                    .pointer("/usage/completion_tokens")
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0),
             },
             model: req.model,
         })
@@ -133,7 +142,10 @@ impl Backend for LocalBackend {
         for m in &env.data {
             for p in &m.providers {
                 if seen.insert(p.clone()) {
-                    providers.push(ProviderStatus { id: p.clone(), active: true });
+                    providers.push(ProviderStatus {
+                        id: p.clone(),
+                        active: true,
+                    });
                 }
             }
         }
@@ -173,7 +185,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
-            .and(body_partial_json(serde_json::json!({ "model": "openai/gpt-4o" })))
+            .and(body_partial_json(
+                serde_json::json!({ "model": "openai/gpt-4o" }),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "choices": [ { "message": { "content": "hi there" }, "finish_reason": "stop" } ],
                 "usage": { "prompt_tokens": 12, "completion_tokens": 5 }
@@ -195,7 +209,13 @@ mod tests {
 
         assert_eq!(out.content, "hi there");
         assert_eq!(out.finish_reason, "stop");
-        assert_eq!(out.usage, Usage { input_tokens: 12, output_tokens: 5 });
+        assert_eq!(
+            out.usage,
+            Usage {
+                input_tokens: 12,
+                output_tokens: 5
+            }
+        );
         assert_eq!(out.model, "openai/gpt-4o");
     }
 
@@ -217,14 +237,28 @@ mod tests {
 
         let backend = LocalBackend::new(server.uri());
         match backend.status().await.expect("status") {
-            StatusInfo::Local { running, models, mut providers, .. } => {
+            StatusInfo::Local {
+                running,
+                models,
+                mut providers,
+                ..
+            } => {
                 assert!(running);
                 assert_eq!(models, 3);
                 providers.sort_by(|a, b| a.id.cmp(&b.id));
-                assert_eq!(providers, vec![
-                    ProviderStatus { id: "anthropic".into(), active: true },
-                    ProviderStatus { id: "openai".into(), active: true },
-                ]);
+                assert_eq!(
+                    providers,
+                    vec![
+                        ProviderStatus {
+                            id: "anthropic".into(),
+                            active: true
+                        },
+                        ProviderStatus {
+                            id: "openai".into(),
+                            active: true
+                        },
+                    ]
+                );
             }
             other => panic!("expected Local, got {other:?}"),
         }
