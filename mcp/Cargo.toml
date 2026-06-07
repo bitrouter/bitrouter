@@ -17,6 +17,7 @@ rmcp = { workspace = true, features = [
     "transport-streamable-http-server",
 ] }
 async-trait.workspace = true
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
