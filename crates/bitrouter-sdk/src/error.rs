@@ -59,6 +59,21 @@ pub enum BitrouterError {
         message: String,
     },
 
+    /// 401 / 403 — upstream MCP server demanded authorization. Distinct from
+    /// [`Upstream`](Self::Upstream) (a generic 502) because the cloud needs the
+    /// real status, the `WWW-Authenticate` challenge, and the parsed required
+    /// scope to drive OAuth token refresh (401) and step-up (403).
+    #[error("upstream auth required ({status})")]
+    UpstreamAuth {
+        /// The upstream HTTP status — `401` or `403`.
+        status: u16,
+        /// The verbatim `WWW-Authenticate` header, when present.
+        www_authenticate: Option<String>,
+        /// The scope the upstream says is required (403 `insufficient_scope`
+        /// only); `None` when not named.
+        required_scope: Option<String>,
+    },
+
     /// 504 — upstream timed out.
     #[error("upstream timeout")]
     UpstreamTimeout,
@@ -79,6 +94,7 @@ impl BitrouterError {
             Self::NotFound(_) => 404,
             Self::RateLimited { .. } => 429,
             Self::Upstream { .. } => 502,
+            Self::UpstreamAuth { status, .. } => *status,
             Self::UpstreamTimeout => 504,
             Self::Internal(_) => 500,
         }
@@ -94,6 +110,8 @@ impl BitrouterError {
             Self::NotFound(_) => "not_found_error",
             Self::RateLimited { .. } => "rate_limit_error",
             Self::Upstream { .. } | Self::UpstreamTimeout => "upstream_error",
+            Self::UpstreamAuth { status: 403, .. } => "permission_error",
+            Self::UpstreamAuth { .. } => "authentication_error",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -108,5 +126,31 @@ impl BitrouterError {
     /// Convenience constructor for [`BitrouterError::Internal`].
     pub fn internal(message: impl fmt::Display) -> Self {
         Self::Internal(message.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upstream_auth_status_and_type() {
+        let unauth = BitrouterError::UpstreamAuth {
+            status: 401,
+            www_authenticate: Some("Bearer resource_metadata=\"https://x/.well-known\"".into()),
+            required_scope: None,
+        };
+        assert_eq!(unauth.status(), 401);
+        assert_eq!(unauth.error_type(), "authentication_error");
+
+        let insufficient = BitrouterError::UpstreamAuth {
+            status: 403,
+            www_authenticate: Some(
+                "Bearer error=\"insufficient_scope\", scope=\"read:files\"".into(),
+            ),
+            required_scope: Some("read:files".into()),
+        };
+        assert_eq!(insufficient.status(), 403);
+        assert_eq!(insufficient.error_type(), "permission_error");
     }
 }
