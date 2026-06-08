@@ -367,9 +367,13 @@ fn classify_transport_auth_error(
     dte: &rmcp::transport::DynamicTransportError,
 ) -> Option<BitrouterError> {
     use rmcp::transport::streamable_http_client::StreamableHttpError;
+    // regression: rmcp uses reqwest 0.13; downcast must name that type
+    // (rmcp_reqwest = reqwest 0.13). Our own client is reqwest 0.12 — a
+    // distinct, separately-compiled crate with a different TypeId, so naming
+    // bare `reqwest::Error` here would make this downcast silently never match.
     let err = dte
         .error
-        .downcast_ref::<StreamableHttpError<reqwest::Error>>()?;
+        .downcast_ref::<StreamableHttpError<rmcp_reqwest::Error>>()?;
     match err {
         StreamableHttpError::AuthRequired(e) => Some(BitrouterError::UpstreamAuth {
             status: 401,
@@ -732,7 +736,7 @@ mod tests {
             InsufficientScopeError, StreamableHttpError,
         };
 
-        let inner: StreamableHttpError<reqwest::Error> =
+        let inner: StreamableHttpError<rmcp_reqwest::Error> =
             StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
                 "Bearer error=\"insufficient_scope\", scope=\"read:files\"".to_string(),
                 Some("read:files".to_string()),
@@ -762,7 +766,7 @@ mod tests {
         use rmcp::transport::DynamicTransportError;
         use rmcp::transport::streamable_http_client::{AuthRequiredError, StreamableHttpError};
 
-        let inner: StreamableHttpError<reqwest::Error> =
+        let inner: StreamableHttpError<rmcp_reqwest::Error> =
             StreamableHttpError::AuthRequired(AuthRequiredError::new("Bearer".to_string()));
         let dte = DynamicTransportError::from_parts(
             "test",
@@ -780,7 +784,8 @@ mod tests {
     fn non_auth_transport_error_is_not_classified() {
         use rmcp::transport::DynamicTransportError;
         use rmcp::transport::streamable_http_client::StreamableHttpError;
-        let inner: StreamableHttpError<reqwest::Error> = StreamableHttpError::UnexpectedEndOfStream;
+        let inner: StreamableHttpError<rmcp_reqwest::Error> =
+            StreamableHttpError::UnexpectedEndOfStream;
         let dte = DynamicTransportError::from_parts(
             "test",
             std::any::TypeId::of::<()>(),
@@ -797,7 +802,7 @@ mod tests {
             InsufficientScopeError, StreamableHttpError,
         };
 
-        let inner: StreamableHttpError<reqwest::Error> =
+        let inner: StreamableHttpError<rmcp_reqwest::Error> =
             StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
                 "Bearer error=\"insufficient_scope\", scope=\"x\"".into(),
                 Some("x".into()),
@@ -826,7 +831,7 @@ mod tests {
             InsufficientScopeError, StreamableHttpError,
         };
 
-        let inner: StreamableHttpError<reqwest::Error> =
+        let inner: StreamableHttpError<rmcp_reqwest::Error> =
             StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
                 "Bearer error=\"insufficient_scope\", scope=\"a\"".into(),
                 Some("a".into()),
