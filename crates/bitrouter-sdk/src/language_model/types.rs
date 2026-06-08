@@ -727,4 +727,18 @@ mod tests {
         assert_eq!(Capability::WebSearch.as_str(), "web_search");
         assert_eq!(Capability::Logprobs.as_str(), "logprobs");
     }
+
+    #[test]
+    fn extra_only_features_are_not_auto_detected() {
+        // web_search / logprobs ride `params.extra` and are advertise-only (not
+        // gated) — a request carrying them must still require no capabilities.
+        let mut p = bare_prompt();
+        p.params
+            .extra
+            .insert("logprobs".into(), serde_json::json!(true));
+        p.params
+            .extra
+            .insert("web_search_options".into(), serde_json::json!({}));
+        assert!(p.required_capabilities().is_empty());
+    }
 }
