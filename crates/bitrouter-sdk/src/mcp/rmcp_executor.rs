@@ -385,6 +385,22 @@ fn classify_transport_auth_error(
     }
 }
 
+/// Map a `ServiceError` from a live MCP call to a `BitrouterError`, preferring
+/// a typed `UpstreamAuth` when the transport error is an auth challenge, else
+/// the generic 502.
+fn map_service_error(
+    server: &str,
+    method: &str,
+    err: rmcp::service::ServiceError,
+) -> BitrouterError {
+    if let rmcp::service::ServiceError::TransportSend(dte) = &err
+        && let Some(auth) = classify_transport_auth_error(dte)
+    {
+        return auth;
+    }
+    upstream(server, format!("{method}: {err}"))
+}
+
 /// Map a connect/initialize failure to a `BitrouterError`, preferring a typed
 /// `UpstreamAuth` when the underlying transport error is an auth challenge,
 /// else the generic 502.
@@ -554,7 +570,7 @@ async fn dispatch(
             let tools = peer
                 .list_all_tools()
                 .await
-                .map_err(|e| upstream(server, format!("tools/list: {e}")))?;
+                .map_err(|e| map_service_error(server, method, e))?;
             Ok(serde_json::json!({ "tools": tools }))
         }
         "tools/call" => {
@@ -563,7 +579,7 @@ async fn dispatch(
             let result = peer
                 .call_tool(params)
                 .await
-                .map_err(|e| upstream(server, format!("tools/call: {e}")))?;
+                .map_err(|e| map_service_error(server, method, e))?;
             serde_json::to_value(&result).map_err(|e| {
                 BitrouterError::internal(format!("mcp '{server}' tools/call serialise: {e}"))
             })
@@ -572,7 +588,7 @@ async fn dispatch(
             let resources = peer
                 .list_all_resources()
                 .await
-                .map_err(|e| upstream(server, format!("resources/list: {e}")))?;
+                .map_err(|e| map_service_error(server, method, e))?;
             Ok(serde_json::json!({ "resources": resources }))
         }
         "resources/read" => {
@@ -581,7 +597,7 @@ async fn dispatch(
             let result = peer
                 .read_resource(params)
                 .await
-                .map_err(|e| upstream(server, format!("resources/read: {e}")))?;
+                .map_err(|e| map_service_error(server, method, e))?;
             serde_json::to_value(&result).map_err(|e| {
                 BitrouterError::internal(format!("mcp '{server}' resources/read serialise: {e}"))
             })
@@ -590,14 +606,14 @@ async fn dispatch(
             let templates = peer
                 .list_all_resource_templates()
                 .await
-                .map_err(|e| upstream(server, format!("resources/templates/list: {e}")))?;
+                .map_err(|e| map_service_error(server, method, e))?;
             Ok(serde_json::json!({ "resourceTemplates": templates }))
         }
         "prompts/list" => {
             let prompts = peer
                 .list_all_prompts()
                 .await
-                .map_err(|e| upstream(server, format!("prompts/list: {e}")))?;
+                .map_err(|e| map_service_error(server, method, e))?;
             Ok(serde_json::json!({ "prompts": prompts }))
         }
         "prompts/get" => {
@@ -606,7 +622,7 @@ async fn dispatch(
             let result = peer
                 .get_prompt(params)
                 .await
-                .map_err(|e| upstream(server, format!("prompts/get: {e}")))?;
+                .map_err(|e| map_service_error(server, method, e))?;
             serde_json::to_value(&result).map_err(|e| {
                 BitrouterError::internal(format!("mcp '{server}' prompts/get serialise: {e}"))
             })
@@ -771,6 +787,35 @@ mod tests {
             Box::new(inner),
         );
         assert!(classify_transport_auth_error(&dte).is_none());
+    }
+
+    #[test]
+    fn service_transport_send_auth_maps_to_upstream_auth() {
+        use rmcp::service::ServiceError;
+        use rmcp::transport::DynamicTransportError;
+        use rmcp::transport::streamable_http_client::{
+            InsufficientScopeError, StreamableHttpError,
+        };
+
+        let inner: StreamableHttpError<reqwest::Error> =
+            StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
+                "Bearer error=\"insufficient_scope\", scope=\"x\"".into(),
+                Some("x".into()),
+            ));
+        let svc_err = ServiceError::TransportSend(DynamicTransportError::from_parts(
+            "test",
+            std::any::TypeId::of::<()>(),
+            Box::new(inner),
+        ));
+        let mapped = map_service_error("srv", "tools/call", svc_err);
+        assert!(matches!(
+            mapped,
+            BitrouterError::UpstreamAuth {
+                status: 403,
+                required_scope: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]
