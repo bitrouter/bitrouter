@@ -206,6 +206,14 @@ pub enum ResponseFormat {
 pub enum Capability {
     /// JSON-Schema-constrained output — [`ResponseFormat::JsonSchema`].
     StructuredOutputs,
+    /// Tool / function calling — the request supplies a non-empty tool list.
+    Tools,
+    /// Extended reasoning / thinking — the request sets a reasoning-effort hint.
+    Reasoning,
+    /// Provider-side web search / browsing.
+    WebSearch,
+    /// Token log-probabilities in the response.
+    Logprobs,
 }
 
 impl Capability {
@@ -214,6 +222,10 @@ impl Capability {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::StructuredOutputs => "structured_outputs",
+            Self::Tools => "tools",
+            Self::Reasoning => "reasoning",
+            Self::WebSearch => "web_search",
+            Self::Logprobs => "logprobs",
         }
     }
 }
@@ -270,10 +282,23 @@ impl Prompt {
     /// features it actually uses. A capability-aware routing table can use this
     /// to restrict the fallback chain to providers that advertise all of these,
     /// instead of silently degrading the request.
+    ///
+    /// Only capabilities detectable from the canonical [`Prompt`] are returned:
+    /// `structured_outputs` (a `response_format`), `tools` (a non-empty tool
+    /// list), and `reasoning` (a reasoning-effort hint). Other capabilities a
+    /// provider may advertise — `web_search`, `logprobs`, and input/output
+    /// modalities — are not yet expressible in the canonical request, so they
+    /// are surfaced in the catalog but never gate routing here.
     pub fn required_capabilities(&self) -> Vec<Capability> {
         let mut caps = Vec::new();
         if self.response_format.is_some() {
             caps.push(Capability::StructuredOutputs);
+        }
+        if !self.tools.is_empty() {
+            caps.push(Capability::Tools);
+        }
+        if self.params.reasoning_effort.is_some() {
+            caps.push(Capability::Reasoning);
         }
         caps
     }
@@ -654,7 +679,52 @@ mod tests {
     }
 
     #[test]
+    fn tools_require_tools_capability() {
+        let mut p = bare_prompt();
+        p.tools = vec![Tool {
+            name: "get_weather".into(),
+            description: None,
+            parameters: serde_json::json!({ "type": "object" }),
+        }];
+        assert_eq!(p.required_capabilities(), vec![Capability::Tools]);
+    }
+
+    #[test]
+    fn reasoning_effort_requires_reasoning_capability() {
+        let mut p = bare_prompt();
+        p.params.reasoning_effort = Some("high".to_string());
+        assert_eq!(p.required_capabilities(), vec![Capability::Reasoning]);
+    }
+
+    #[test]
+    fn multiple_features_require_all_their_capabilities() {
+        let mut p = bare_prompt();
+        p.response_format = Some(ResponseFormat::JsonSchema {
+            name: None,
+            strict: None,
+            schema: serde_json::json!({ "type": "object" }),
+        });
+        p.tools = vec![Tool {
+            name: "t".into(),
+            description: None,
+            parameters: serde_json::json!({}),
+        }];
+        p.params.reasoning_effort = Some("low".to_string());
+        let caps = p.required_capabilities();
+        assert!(caps.contains(&Capability::StructuredOutputs));
+        assert!(caps.contains(&Capability::Tools));
+        assert!(caps.contains(&Capability::Reasoning));
+        assert_eq!(caps.len(), 3);
+    }
+
+    #[test]
     fn capability_token_matches_registry_vocabulary() {
+        // These tokens must stay byte-identical to the registry Zod enum and
+        // the cloud's imported `Capability` — they are the cross-repo contract.
         assert_eq!(Capability::StructuredOutputs.as_str(), "structured_outputs");
+        assert_eq!(Capability::Tools.as_str(), "tools");
+        assert_eq!(Capability::Reasoning.as_str(), "reasoning");
+        assert_eq!(Capability::WebSearch.as_str(), "web_search");
+        assert_eq!(Capability::Logprobs.as_str(), "logprobs");
     }
 }
