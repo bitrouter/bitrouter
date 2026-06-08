@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
@@ -68,6 +68,11 @@ pub struct ResponsesRequest {
     max_output_tokens: Option<u32>,
     #[serde(default)]
     reasoning: Option<ResponsesReasoningConfig>,
+    /// Output `text` config — `format` is the structured-output constraint
+    /// (`json_schema` is promoted to the canonical slot; `text` / `json_object`
+    /// pass through). Sibling keys (e.g. `verbosity`) survive via `extra`.
+    #[serde(default)]
+    text: Option<ResponsesText>,
     #[serde(default)]
     stream: bool,
     /// Every other field — `tool_choice`, `parallel_tool_calls`,
@@ -79,6 +84,39 @@ pub struct ResponsesRequest {
     #[serde(flatten)]
     #[schemars(skip)]
     extra: HashMap<String, serde_json::Value>,
+}
+
+/// Responses `text` config. `format` constrains output shape; sibling keys
+/// (e.g. `verbosity`) pass through via `extra`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ResponsesText {
+    #[serde(default)]
+    format: Option<ResponsesTextFormat>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+/// Responses `text.format`
+/// (<https://platform.openai.com/docs/api-reference/responses/create>) — a
+/// closed union over OpenAI's three output modes.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponsesTextFormat {
+    /// Free-form text — the default.
+    Text,
+    /// Legacy JSON mode.
+    JsonObject,
+    /// JSON constrained to a schema.
+    JsonSchema {
+        /// Schema name (OpenAI requires it).
+        name: String,
+        /// Strict-mode flag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strict: Option<bool>,
+        /// The JSON Schema.
+        schema: serde_json::Value,
+    },
 }
 
 /// One element of [`ResponsesRequest`]'s `tools` array — the Responses-flavoured
@@ -284,19 +322,48 @@ impl InboundAdapter for ResponsesAdapter {
             })
             .collect();
 
-        // Promote `text.format: { type: "json_schema", ... }` out of extras
-        // into the canonical slot. Other contents of `text` (e.g. `verbosity`)
-        // stay in extras and pass through opaquely.
+        // `text` is a typed field. Promote `text.format: json_schema` into the
+        // canonical slot; other formats and sibling keys (e.g. `verbosity`)
+        // re-attach to `extra["text"]` to pass through on render.
         let mut extra = req.extra;
-        let response_format = parse_responses_response_format(&extra);
-        if response_format.is_some()
-            && let Some(text) = extra.get_mut("text").and_then(|t| t.as_object_mut())
-        {
-            text.remove("format");
-            if text.is_empty() {
-                extra.remove("text");
-            }
-        }
+        let response_format = match req.text {
+            Some(ResponsesText {
+                format,
+                extra: text_extra,
+            }) => match format {
+                Some(ResponsesTextFormat::JsonSchema {
+                    name,
+                    strict,
+                    schema,
+                }) => {
+                    if !text_extra.is_empty() {
+                        extra.insert(
+                            "text".to_string(),
+                            serde_json::Value::Object(text_extra.into_iter().collect()),
+                        );
+                    }
+                    Some(ResponseFormat::JsonSchema {
+                        name: Some(name),
+                        strict,
+                        schema,
+                    })
+                }
+                other => {
+                    let mut text_map: serde_json::Map<String, serde_json::Value> =
+                        text_extra.into_iter().collect();
+                    if let Some(f) = other
+                        && let Ok(v) = serde_json::to_value(&f)
+                    {
+                        text_map.insert("format".to_string(), v);
+                    }
+                    if !text_map.is_empty() {
+                        extra.insert("text".to_string(), serde_json::Value::Object(text_map));
+                    }
+                    None
+                }
+            },
+            None => None,
+        };
 
         Ok(Prompt {
             model: req.model,
@@ -514,27 +581,6 @@ impl OutboundAdapter for ResponsesAdapter {
     fn supports_response_format(&self) -> bool {
         true
     }
-}
-
-/// Detect a `text.format: { type: "json_schema", ... }` blob in the inbound
-/// extras and lift it into the canonical [`ResponseFormat`]. Returns `None`
-/// for any other shape.
-fn parse_responses_response_format(
-    extra: &HashMap<String, serde_json::Value>,
-) -> Option<ResponseFormat> {
-    let format = extra.get("text")?.get("format")?;
-    if format.get("type")?.as_str()? != "json_schema" {
-        return None;
-    }
-    let schema = format.get("schema")?.clone();
-    Some(ResponseFormat::JsonSchema {
-        name: format
-            .get("name")
-            .and_then(|n| n.as_str())
-            .map(|s| s.to_string()),
-        strict: format.get("strict").and_then(|s| s.as_bool()),
-        schema,
-    })
 }
 
 /// Render a canonical [`ResponseFormat`] into Responses' native

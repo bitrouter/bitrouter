@@ -114,12 +114,21 @@ pub struct GenerateContentGenerationConfig {
     top_p: Option<f64>,
     #[serde(default)]
     max_output_tokens: Option<u32>,
-    /// `stopSequences`, `seed`, `topK`, `responseMimeType`, `responseSchema`,
-    /// `responseLogprobs`, `presencePenalty`, `frequencyPenalty`, … — every
-    /// generation-config knob without a typed slot rides via `extra` and is
-    /// splatted back into `generationConfig` on render. v0 passed these
-    /// through. Skipped from the published schema for the same reason as
-    /// the top-level `extra` on [`GenerateContentRequest`].
+    /// Response MIME type. `application/json` paired with `response_schema` is
+    /// the structured-output contract; other values (e.g. `text/x.enum`) pass
+    /// through opaquely.
+    /// <https://ai.google.dev/gemini-api/docs/structured-output>
+    #[serde(default)]
+    response_mime_type: Option<String>,
+    /// JSON Schema constraining the response (with
+    /// `response_mime_type: "application/json"`).
+    #[serde(default)]
+    response_schema: Option<serde_json::Value>,
+    /// `stopSequences`, `seed`, `topK`, `responseLogprobs`, `presencePenalty`,
+    /// `frequencyPenalty`, … — every generation-config knob without a typed
+    /// slot rides via `extra` and is splatted back into `generationConfig` on
+    /// render. v0 passed these through. Skipped from the published schema for
+    /// the same reason as the top-level `extra` on [`GenerateContentRequest`].
     #[serde(flatten)]
     #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
@@ -270,26 +279,54 @@ impl InboundAdapter for GenerateContentAdapter {
             })
             .collect();
 
-        let mut params = req
-            .generation_config
-            .map(|g| GenerationParams {
-                temperature: g.temperature,
-                top_p: g.top_p,
-                max_tokens: g.max_output_tokens,
-                reasoning_effort: None,
-                extra: g.extra,
-            })
-            .unwrap_or_default();
-        // Promote `generationConfig.responseSchema` (paired with
-        // `responseMimeType: "application/json"`) into the canonical slot
-        // so cross-protocol routing can translate it. When `responseMimeType`
-        // is some other value (e.g. `text/x.enum`) we leave both fields in
-        // extras as an opaque Google-native pass-through.
-        let response_format = parse_generate_content_response_format(&params.extra);
-        if response_format.is_some() {
-            params.extra.remove("responseMimeType");
-            params.extra.remove("responseSchema");
-        }
+        // `responseMimeType` / `responseSchema` are typed fields now. Promote
+        // `responseSchema` (paired with `responseMimeType: "application/json"`)
+        // into the canonical slot so cross-protocol routing can translate it;
+        // any other MIME mode (e.g. `text/x.enum`) re-attaches to extras as an
+        // opaque Google-native pass-through.
+        let (mut params, response_format) = match req.generation_config {
+            Some(g) => {
+                let GenerateContentGenerationConfig {
+                    temperature,
+                    top_p,
+                    max_output_tokens,
+                    response_mime_type,
+                    response_schema,
+                    mut extra,
+                } = g;
+                let response_format = match (
+                    response_mime_type.as_deref() == Some("application/json"),
+                    response_schema,
+                ) {
+                    (true, Some(schema)) => Some(ResponseFormat::JsonSchema {
+                        name: None,
+                        strict: None,
+                        schema,
+                    }),
+                    // Not a JSON-schema constraint — re-attach for opaque passthrough.
+                    (_, schema) => {
+                        if let Some(mime) = response_mime_type {
+                            extra.insert("responseMimeType".to_string(), mime.into());
+                        }
+                        if let Some(schema) = schema {
+                            extra.insert("responseSchema".to_string(), schema);
+                        }
+                        None
+                    }
+                };
+                (
+                    GenerationParams {
+                        temperature,
+                        top_p,
+                        max_tokens: max_output_tokens,
+                        reasoning_effort: None,
+                        extra,
+                    },
+                    response_format,
+                )
+            }
+            None => (GenerationParams::default(), None),
+        };
         // Preserve top-level Google fields (`toolConfig`, `safetySettings`,
         // `cachedContent`, …) across the round-trip. They're namespaced so they
         // don't collide with `generationConfig`-level extras above and only the
@@ -454,24 +491,6 @@ impl OutboundAdapter for GenerateContentAdapter {
     fn supports_response_format(&self) -> bool {
         true
     }
-}
-
-/// Lift Google's structured-output fields out of `generationConfig` extras
-/// into the canonical [`ResponseFormat`]. Triggers only when
-/// `responseMimeType == "application/json"` *and* a `responseSchema` is set —
-/// other MIME modes (e.g. `text/x.enum`) have no schema to translate.
-fn parse_generate_content_response_format(
-    extra: &std::collections::HashMap<String, serde_json::Value>,
-) -> Option<ResponseFormat> {
-    if extra.get("responseMimeType").and_then(|v| v.as_str()) != Some("application/json") {
-        return None;
-    }
-    let schema = extra.get("responseSchema")?.clone();
-    Some(ResponseFormat::JsonSchema {
-        name: None,
-        strict: None,
-        schema,
-    })
 }
 
 #[async_trait]

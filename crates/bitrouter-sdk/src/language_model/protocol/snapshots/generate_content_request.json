@@ -104,6 +104,18 @@
           "default": null,
           "minimum": 0
         },
+        "responseMimeType": {
+          "description": "Response MIME type. `application/json` paired with `response_schema` is\nthe structured-output contract; other values (e.g. `text/x.enum`) pass\nthrough opaquely.\n<https://ai.google.dev/gemini-api/docs/structured-output>",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "responseSchema": {
+          "description": "JSON Schema constraining the response (with\n`response_mime_type: \"application/json\"`).",
+          "default": null
+        },
         "temperature": {
           "type": [
             "number",

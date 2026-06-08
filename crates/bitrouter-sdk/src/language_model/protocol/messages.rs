@@ -56,15 +56,48 @@ pub struct MessagesRequest {
     temperature: Option<f64>,
     #[serde(default)]
     top_p: Option<f64>,
+    /// Structured-output + reasoning config — `format` (`json_schema`) is
+    /// promoted to the canonical `response_format` and `effort` to the canonical
+    /// reasoning effort. Sibling keys pass through via `extra`.
+    /// <https://platform.claude.com/docs/en/build-with-claude/structured-outputs>
+    #[serde(default)]
+    output_config: Option<MessagesOutputConfig>,
     #[serde(default)]
     stream: bool,
     /// Every other field — `tool_choice`, `stop_sequences`, `top_k`, `metadata`,
-    /// `thinking`, … — rides along via `extra` and is splatted back on render.
-    /// Skipped from the published schema so the documented contract is the set
-    /// of typed fields; pass-through behavior is preserved at runtime.
+    /// `thinking`, the deprecated flat `output_format` alias, … — rides along
+    /// via `extra` and is splatted back on render. Skipped from the published
+    /// schema so the documented contract is the set of typed fields;
+    /// pass-through behavior is preserved at runtime.
     #[serde(flatten)]
     #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Messages `output_config` — structured output + reasoning effort.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MessagesOutputConfig {
+    #[serde(default)]
+    format: Option<MessagesOutputFormat>,
+    /// Reasoning effort (`low` | `medium` | `high` | `xhigh` | `max`).
+    #[serde(default)]
+    effort: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Messages `output_config.format`
+/// (<https://platform.claude.com/docs/en/build-with-claude/structured-outputs>).
+/// Anthropic's GA structured-output format carries no name / strict.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessagesOutputFormat {
+    /// JSON constrained to a schema.
+    JsonSchema {
+        /// The JSON Schema.
+        schema: serde_json::Value,
+    },
 }
 
 /// One element of [`MessagesRequest`]'s `messages` array — a `{ role, content }` turn.
@@ -328,57 +361,45 @@ impl InboundAdapter for MessagesAdapter {
             })
             .collect();
 
-        // Messages' GA structured-outputs lives under
-        // `output_config.format`. Some clients still emit the deprecated flat
-        // `output_format` (vercel/ai#12298) — accept it as a graceful alias.
-        // Only the alias that actually matched is stripped from extras, so
-        // unknown siblings inside `output_config` survive opaquely if
-        // `output_format` was the source.
+        // Messages' GA structured outputs are typed under `output_config`
+        // (`format` = json_schema → canonical; `effort` → canonical reasoning
+        // effort so it round-trips across protocols, mirroring Chat Completions'
+        // `reasoning_effort` and Responses' `reasoning.effort`). Unknown
+        // `output_config` siblings and the deprecated flat `output_format` alias
+        // (vercel/ai#12298) still ride through `extra`.
         let mut extra = req.extra;
-
-        // Anthropic's GA reasoning `effort` knob lives at `output_config.effort`
-        // (`low` | `medium` | `high` | `xhigh` | `max`; defaults to `high` on
-        // Opus 4.8). Promote it to the canonical `reasoning_effort` so it
-        // round-trips across protocols, mirroring Chat Completions'
-        // `reasoning_effort` and Responses' `reasoning.effort`.
-        // <https://platform.claude.com/docs/en/build-with-claude/effort>
-        let reasoning_effort = extra
-            .get("output_config")
-            .and_then(|oc| oc.get("effort"))
-            .and_then(|e| e.as_str())
-            .map(str::to_string);
-
-        let response_format = if let Some(rf) = parse_output_config_format(&extra) {
-            if let Some(oc) = extra
-                .get_mut("output_config")
-                .and_then(|v| v.as_object_mut())
-            {
-                oc.remove("format");
-                if oc.is_empty() {
-                    extra.remove("output_config");
-                }
+        let mut reasoning_effort = None;
+        let mut response_format = None;
+        if let Some(oc) = req.output_config {
+            let MessagesOutputConfig {
+                format,
+                effort,
+                extra: oc_extra,
+            } = oc;
+            reasoning_effort = effort;
+            if let Some(MessagesOutputFormat::JsonSchema { schema }) = format {
+                // Anthropic's GA format carries no name / strict.
+                response_format = Some(ResponseFormat::JsonSchema {
+                    name: None,
+                    strict: None,
+                    schema,
+                });
             }
-            Some(rf)
-        } else if let Some(rf) = parse_legacy_output_format(&extra) {
-            extra.remove("output_format");
-            Some(rf)
-        } else {
-            None
-        };
-
-        // The `effort` key was lifted into `reasoning_effort` above; drop it so
-        // the outbound adapter renders it once (from the typed slot) rather than
-        // also splatting it back via `extra`. A no-op when no effort was present.
-        // Unknown `output_config` siblings are preserved; an `output_config`
-        // left empty by the removal is dropped.
-        if let Some(oc) = extra
-            .get_mut("output_config")
-            .and_then(|v| v.as_object_mut())
+            // Preserve unknown `output_config` siblings for render passthrough.
+            if !oc_extra.is_empty() {
+                extra.insert(
+                    "output_config".to_string(),
+                    serde_json::Value::Object(oc_extra.into_iter().collect()),
+                );
+            }
+        }
+        // Deprecated flat `output_format` alias — only when `output_config` did
+        // not already supply a structured-output format.
+        if response_format.is_none()
+            && let Some(rf) = parse_legacy_output_format(&extra)
         {
-            oc.remove("effort");
-            if oc.is_empty() {
-                extra.remove("output_config");
-            }
+            extra.remove("output_format");
+            response_format = Some(rf);
         }
 
         Ok(Prompt {
@@ -602,15 +623,6 @@ impl OutboundAdapter for MessagesAdapter {
     fn supports_response_format(&self) -> bool {
         true
     }
-}
-
-/// Lift Anthropic's GA `output_config.format: { type: "json_schema", schema }`
-/// into the canonical [`ResponseFormat`]. Anthropic's wire format carries no
-/// `name` / `strict` so both are `None`.
-fn parse_output_config_format(
-    extra: &std::collections::HashMap<String, serde_json::Value>,
-) -> Option<ResponseFormat> {
-    json_schema_from(extra.get("output_config")?.get("format")?)
 }
 
 /// Lift Anthropic's deprecated flat `output_format: { type: "json_schema", schema }`

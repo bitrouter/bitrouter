@@ -22,6 +22,17 @@
     "model": {
       "type": "string"
     },
+    "output_config": {
+      "description": "Structured-output + reasoning config — `format` (`json_schema`) is\npromoted to the canonical `response_format` and `effort` to the canonical\nreasoning effort. Sibling keys pass through via `extra`.\n<https://platform.claude.com/docs/en/build-with-claude/structured-outputs>",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MessagesOutputConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "stream": {
       "type": "boolean",
       "default": false
@@ -72,6 +83,52 @@
       "required": [
         "role",
         "content"
+      ]
+    },
+    "MessagesOutputConfig": {
+      "description": "Messages `output_config` — structured output + reasoning effort.",
+      "type": "object",
+      "properties": {
+        "effort": {
+          "description": "Reasoning effort (`low` | `medium` | `high` | `xhigh` | `max`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessagesOutputFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "MessagesOutputFormat": {
+      "description": "Messages `output_config.format`\n(<https://platform.claude.com/docs/en/build-with-claude/structured-outputs>).\nAnthropic's GA structured-output format carries no name / strict.",
+      "oneOf": [
+        {
+          "description": "JSON constrained to a schema.",
+          "type": "object",
+          "properties": {
+            "schema": {
+              "description": "The JSON Schema."
+            },
+            "type": {
+              "type": "string",
+              "const": "json_schema"
+            }
+          },
+          "required": [
+            "type",
+            "schema"
+          ]
+        }
       ]
     },
     "MessagesTool": {

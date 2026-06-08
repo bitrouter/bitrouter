@@ -47,6 +47,17 @@
       "format": "double",
       "default": null
     },
+    "text": {
+      "description": "Output `text` config — `format` is the structured-output constraint\n(`json_schema` is promoted to the canonical slot; `text` / `json_object`\npass through). Sibling keys (e.g. `verbosity`) survive via `extra`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResponsesText"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "tools": {
       "type": "array",
       "items": {
@@ -78,6 +89,83 @@
           "default": null
         }
       }
+    },
+    "ResponsesText": {
+      "description": "Responses `text` config. `format` constrains output shape; sibling keys\n(e.g. `verbosity`) pass through via `extra`.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponsesTextFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "ResponsesTextFormat": {
+      "description": "Responses `text.format`\n(<https://platform.openai.com/docs/api-reference/responses/create>) — a\nclosed union over OpenAI's three output modes.",
+      "oneOf": [
+        {
+          "description": "Free-form text — the default.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Legacy JSON mode.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "json_object"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "JSON constrained to a schema.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "Schema name (OpenAI requires it).",
+              "type": "string"
+            },
+            "schema": {
+              "description": "The JSON Schema."
+            },
+            "strict": {
+              "description": "Strict-mode flag.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "json_schema"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "schema"
+          ]
+        }
+      ]
     },
     "ResponsesTool": {
       "description": "One element of [`ResponsesRequest`]'s `tools` array — the Responses-flavoured\nflat tool definition (`{ type: \"function\", name, description, parameters }`).",
