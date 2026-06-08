@@ -864,6 +864,7 @@ dependencies = [
  "pin-project-lite",
  "regex",
  "reqwest 0.12.28",
+ "reqwest 0.13.3",
  "rmcp",
  "schemars",
  "serde",

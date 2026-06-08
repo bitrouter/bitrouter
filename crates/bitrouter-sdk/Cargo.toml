@@ -45,6 +45,11 @@ serde-saphyr = { workspace = true, optional = true }
 # <https://github.com/modelcontextprotocol/rust-sdk>
 rmcp = { workspace = true, optional = true }
 
+# Used ONLY to name rmcp 1.7's transport error type
+# (StreamableHttpError<reqwest::Error>) in the MCP auth-error downcast —
+# rmcp pins reqwest 0.13 while our own client stays on 0.12.
+rmcp-reqwest = { package = "reqwest", version = "0.13", default-features = false, optional = true }
+
 [features]
 default = []
 # axum HTTP server + SSE handlers + admin endpoints
@@ -55,7 +60,7 @@ config_file = ["dep:serde-saphyr", "tokio/fs"]
 # pure-routing pipeline. Without this feature the SDK still exposes
 # `mcp::Pipeline`, hook traits, and the `McpTransport` enum, so a consumer
 # can plug in a custom Executor without pulling rmcp.
-mcp = ["dep:rmcp", "tokio/process"]
+mcp = ["dep:rmcp", "dep:rmcp-reqwest", "tokio/process"]
 # Bundled `AcpStdioExecutor` + `ConfigAcpRoutingTable` for the `acp`
 # pure-routing pipeline. The executor implements newline-delimited JSON-RPC
 # over the subprocess stdio per the ACP spec; without this feature the SDK
