@@ -772,6 +772,10 @@ fn render_content_block(c: &Content) -> Option<serde_json::Value> {
                 DataContent::Base64 { data } => serde_json::json!({
                     "type": "base64", "media_type": media_type, "data": data
                 }),
+                // Anthropic's `url` source carries no media_type, so an
+                // `image/png` + Url loses its subtype on a round-trip — the kind
+                // (image vs document) is recovered from the block type on parse,
+                // so modality detection still survives.
                 DataContent::Url { url } => serde_json::json!({ "type": "url", "url": url }),
             };
             let block_type = if media_type.starts_with("image/") {

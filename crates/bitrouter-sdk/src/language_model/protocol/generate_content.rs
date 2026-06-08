@@ -734,9 +734,12 @@ impl StreamDecoder for GenerateContentStreamDecoder {
                             arguments,
                         }),
                         Content::ToolResult { .. } => {}
-                        // Response-side file output (e.g. generated images) is not
-                        // yet surfaced as a stream part; request files never reach
-                        // the decoder.
+                        // Response-side file output (e.g. Gemini-generated images)
+                        // is the not-yet-implemented multimodal *output* surface:
+                        // no StreamPart here, and the non-streaming cross-protocol
+                        // render also drops it where the target protocol has no
+                        // native output-file shape (chat / responses). Request-side
+                        // files never reach this decoder.
                         Content::File { .. } => {}
                     }
                 }
