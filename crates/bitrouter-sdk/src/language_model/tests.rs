@@ -100,7 +100,7 @@ impl RouteHook for EmitRouteHook {
 struct CountingRecorder(Arc<AtomicUsize>);
 #[async_trait]
 impl SettlementRecorder for CountingRecorder {
-    async fn record(&self, _ctx: &SettlementContext) -> Result<()> {
+    async fn record(&self, _ctx: &mut SettlementContext) -> Result<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -111,7 +111,7 @@ impl SettlementRecorder for CountingRecorder {
 struct UsageCapturingRecorder(Arc<std::sync::Mutex<Vec<(u64, u64)>>>);
 #[async_trait]
 impl SettlementRecorder for UsageCapturingRecorder {
-    async fn record(&self, ctx: &SettlementContext) -> Result<()> {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
         self.0
             .lock()
             .unwrap()
@@ -263,7 +263,7 @@ async fn settlement_recorders_run_in_registration_order() {
     }
     #[async_trait]
     impl SettlementRecorder for LabelledRecorder {
-        async fn record(&self, _ctx: &SettlementContext) -> Result<()> {
+        async fn record(&self, _ctx: &mut SettlementContext) -> Result<()> {
             self.log.lock().unwrap().push(self.label);
             Ok(())
         }
@@ -760,7 +760,7 @@ async fn route_hook_event_is_visible_downstream() {
     struct EventAssertRecorder;
     #[async_trait]
     impl SettlementRecorder for EventAssertRecorder {
-        async fn record(&self, ctx: &SettlementContext) -> Result<()> {
+        async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
             assert!(
                 ctx.has_event::<TestRouteEvent>(),
                 "route-stage event reached settlement"
@@ -778,6 +778,58 @@ async fn route_hook_event_is_visible_downstream() {
         },
     );
     pipeline.execute(request()).await.expect("ok");
+}
+
+#[tokio::test]
+async fn settlement_recorder_can_emit_event_for_later_recorders() {
+    // Option A (#529): `record(&mut ctx)` lets a recorder emit events that a
+    // later-registered recorder — and, via `absorb_settlement`, downstream
+    // observe hooks — can read.
+    #[derive(Serialize)]
+    struct SettleEmit {
+        tag: u32,
+    }
+    impl PipelineEvent for SettleEmit {
+        fn event_name(&self) -> &'static str {
+            "test.settle_emit"
+        }
+    }
+
+    struct EmitRecorder;
+    #[async_trait]
+    impl SettlementRecorder for EmitRecorder {
+        async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+            ctx.emit(SettleEmit { tag: 42 });
+            Ok(())
+        }
+    }
+
+    let seen = Arc::new(AtomicUsize::new(0));
+    struct AssertRecorder(Arc<AtomicUsize>);
+    #[async_trait]
+    impl SettlementRecorder for AssertRecorder {
+        async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+            if let Some(e) = ctx.get_event::<SettleEmit>() {
+                self.0.store(e.tag as usize, Ordering::SeqCst);
+            }
+            Ok(())
+        }
+    }
+
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::always_text("x")),
+        |b| {
+            b.settlement_recorder(EmitRecorder)
+                .settlement_recorder(AssertRecorder(seen.clone()));
+        },
+    );
+    pipeline.execute(request()).await.expect("ok");
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        42,
+        "a later settlement recorder sees the event emitted by an earlier one"
+    );
 }
 
 #[tokio::test]

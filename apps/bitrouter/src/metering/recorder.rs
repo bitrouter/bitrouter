@@ -63,7 +63,7 @@ impl MeteringRecorder {
 
 #[async_trait]
 impl SettlementRecorder for MeteringRecorder {
-    async fn record(&self, ctx: &SettlementContext) -> Result<()> {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
         let (estimated_charge_micro_usd, missing_pricing) = self.estimate_charge(ctx);
         if missing_pricing {
             // Demoted from `warn` to `debug` — the per-request "finished"

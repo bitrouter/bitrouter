@@ -51,7 +51,7 @@ async fn recorder_writes_estimated_charge_from_pricing() -> Result<()> {
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     // 10 prompt × 2 + 5 completion × 10 = 70 µ$
-    recorder.record(&ctx("k1", 10, 5)).await?;
+    recorder.record(&mut ctx("k1", 10, 5)).await?;
     let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(spend, 70);
     Ok(())
@@ -63,7 +63,7 @@ async fn recorder_writes_zero_when_pricing_missing() -> Result<()> {
     let store = MeteringStore::new(pool.clone());
     let empty = Arc::new(PricingTable::new());
     let recorder = MeteringRecorder::new(store.clone(), empty);
-    recorder.record(&ctx("k1", 10, 5)).await?;
+    recorder.record(&mut ctx("k1", 10, 5)).await?;
     let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(spend, 0);
     // The row was still written — count is 1.
@@ -77,9 +77,9 @@ async fn spend_aggregates_across_requests() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
-    recorder.record(&ctx("k1", 10, 5)).await?; // 70
-    recorder.record(&ctx("k1", 100, 0)).await?; // 200
-    recorder.record(&ctx("k1", 0, 50)).await?; // 500
+    recorder.record(&mut ctx("k1", 10, 5)).await?; // 70
+    recorder.record(&mut ctx("k1", 100, 0)).await?; // 200
+    recorder.record(&mut ctx("k1", 0, 50)).await?; // 500
     let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(spend, 70 + 200 + 500);
     Ok(())
@@ -90,8 +90,8 @@ async fn spend_isolates_by_api_key() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
-    recorder.record(&ctx("k1", 10, 5)).await?;
-    recorder.record(&ctx("k2", 100, 0)).await?;
+    recorder.record(&mut ctx("k1", 10, 5)).await?;
+    recorder.record(&mut ctx("k2", 100, 0)).await?;
     assert_eq!(store.get_spend("k1", TimeWindow::ThisMonth).await?, 70);
     assert_eq!(store.get_spend("k2", TimeWindow::ThisMonth).await?, 200);
     Ok(())
@@ -163,7 +163,7 @@ async fn failed_request_still_records_with_error() -> Result<()> {
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut c = ctx("k1", 5, 0);
     c.error = Some(bitrouter_sdk::BitrouterError::internal("boom"));
-    recorder.record(&c).await?;
+    recorder.record(&mut c).await?;
     let count = store.get_request_count("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(count, 1, "failed requests still get a metering row");
     Ok(())

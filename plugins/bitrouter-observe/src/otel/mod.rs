@@ -16,8 +16,12 @@ mod config;
 mod exporter;
 pub mod http_layer;
 mod metrics;
+mod span_attributes;
 mod transport;
 
 pub use cardinality::CardinalityLimiter;
-pub use config::{BatchConfig, MetricsConfig, OtelConfig, SamplerKind, TraceConfig};
+pub use config::{
+    BatchConfig, ContentCaptureMode, MetricsConfig, OtelConfig, SamplerKind, TraceConfig,
+};
 pub use exporter::{OtelExporter, OtelObserveHook, OtelStatus};
+pub use span_attributes::SpanAttributes;

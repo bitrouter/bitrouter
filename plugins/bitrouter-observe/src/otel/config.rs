@@ -44,6 +44,11 @@ pub struct OtelConfig {
 
     /// Metrics configuration.
     pub metrics: MetricsConfig,
+
+    /// Whether to capture prompt / response message content onto spans.
+    /// Default [`ContentCaptureMode::Off`] — no message bodies leave the
+    /// process. Override with `BITROUTER_OBSERVE_CONTENT_CAPTURE=full`.
+    pub content_capture: ContentCaptureMode,
 }
 
 /// Subset of OTel-spec sampler kinds the SDK actually supports. The default
@@ -62,6 +67,24 @@ pub enum SamplerKind {
     ParentBasedAlwaysOff,
     #[serde(rename = "parentbased_traceidratio")]
     ParentBasedTraceIdRatio,
+}
+
+/// Whether the exporter copies prompt / response message content onto spans.
+///
+/// `Off` (default) keeps all message bodies out of telemetry — only metadata
+/// (tokens, model, latency, finish reason, cloud-forwarded attributes) is
+/// exported. `Full` serializes the prompt messages onto `gen_ai.input.messages`
+/// and the response content onto `gen_ai.output.messages`. Redaction is a
+/// caller policy, not done here; downstream pipelines decide whether to forward
+/// the content (e.g. a collector that strips it from a third-party export).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentCaptureMode {
+    /// Never copy message content onto spans (privacy-preserving default).
+    #[default]
+    Off,
+    /// Serialize prompt + response message content onto the span.
+    Full,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -110,6 +133,7 @@ impl Default for OtelConfig {
             sampler_arg: None,
             traces: TraceConfig::default(),
             metrics: MetricsConfig::default(),
+            content_capture: ContentCaptureMode::Off,
         }
     }
 }
@@ -182,6 +206,11 @@ impl OtelConfig {
         {
             self.sampler_arg = Some(ratio);
         }
+        if let Some(s) = lookup("BITROUTER_OBSERVE_CONTENT_CAPTURE")
+            && let Some(mode) = parse_content_capture(&s)
+        {
+            self.content_capture = mode;
+        }
         self
     }
 }
@@ -194,6 +223,14 @@ fn parse_sampler(s: &str) -> Option<SamplerKind> {
         "parentbased_always_on" => Some(SamplerKind::ParentBasedAlwaysOn),
         "parentbased_always_off" => Some(SamplerKind::ParentBasedAlwaysOff),
         "parentbased_traceidratio" => Some(SamplerKind::ParentBasedTraceIdRatio),
+        _ => None,
+    }
+}
+
+fn parse_content_capture(s: &str) -> Option<ContentCaptureMode> {
+    match s.to_ascii_lowercase().as_str() {
+        "off" => Some(ContentCaptureMode::Off),
+        "full" => Some(ContentCaptureMode::Full),
         _ => None,
     }
 }
@@ -256,5 +293,20 @@ mod tests {
             Some("secret")
         );
         assert_eq!(cfg.headers.get("x-team").map(String::as_str), Some("infra"));
+    }
+
+    #[test]
+    fn content_capture_defaults_off_and_env_overrides_to_full() {
+        assert_eq!(
+            OtelConfig::default().content_capture,
+            ContentCaptureMode::Off
+        );
+        let cfg = OtelConfig::default()
+            .with_env_from(env(&[("BITROUTER_OBSERVE_CONTENT_CAPTURE", "full")]));
+        assert_eq!(cfg.content_capture, ContentCaptureMode::Full);
+        // Unknown value leaves the default untouched.
+        let cfg = OtelConfig::default()
+            .with_env_from(env(&[("BITROUTER_OBSERVE_CONTENT_CAPTURE", "bogus")]));
+        assert_eq!(cfg.content_capture, ContentCaptureMode::Off);
     }
 }

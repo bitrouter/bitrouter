@@ -2,10 +2,10 @@
 //! [`SettlementRecorder`] list.
 //!
 //! The SDK is opinionated only about *pipeline data correctness*: a recorder
-//! receives the final, immutable token / latency / model / error data
-//! the pipeline observed. What a recorder does with that data
-//! (metering, charging, signed receipts, blockchain anchoring, …) is
-//! deployment-specific and lives outside the SDK.
+//! receives the final token / latency / model / error data the pipeline
+//! observed, and may emit events forward for later stages / observe hooks.
+//! What a recorder does with that data (metering, charging, signed receipts,
+//! blockchain anchoring, …) is deployment-specific and lives outside the SDK.
 
 use async_trait::async_trait;
 
@@ -94,5 +94,12 @@ impl SettlementContext {
 #[async_trait]
 pub trait SettlementRecorder: Send + Sync {
     /// Record the request outcome.
-    async fn record(&self, ctx: &SettlementContext) -> Result<()>;
+    ///
+    /// `ctx` is `&mut` so a recorder may also [`SettlementContext::emit`]
+    /// events forward (e.g. cloud-computed span attributes) for later stages
+    /// and observe hooks: [`PipelineContext::absorb_settlement`] folds the
+    /// settlement bus back into the request bus before `on_request_end`.
+    ///
+    /// [`PipelineContext::absorb_settlement`]: crate::language_model::PipelineContext::absorb_settlement
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()>;
 }

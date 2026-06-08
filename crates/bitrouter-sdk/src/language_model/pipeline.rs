@@ -414,7 +414,7 @@ impl Pipeline {
         log_request_finished(&settle);
 
         for recorder in &self.settlement_recorders {
-            if let Err(e) = recorder.record(&settle).await {
+            if let Err(e) = recorder.record(&mut settle).await {
                 tracing::error!(error = %e, "SettlementRecorder failed");
             }
         }

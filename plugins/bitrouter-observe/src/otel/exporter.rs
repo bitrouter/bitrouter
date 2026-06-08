@@ -55,7 +55,8 @@ use bitrouter_sdk::language_model::{
 };
 
 use crate::otel::cardinality::CardinalityLimiter;
-use crate::otel::config::{OtelConfig, SamplerKind};
+use crate::otel::config::{ContentCaptureMode, OtelConfig, SamplerKind};
+use crate::otel::span_attributes::SpanAttributes;
 
 /// HTTP header extractor for W3C trace context propagation
 /// (<https://www.w3.org/TR/trace-context/>). Used on inbound headers.
@@ -718,6 +719,51 @@ impl ObserveHook for OtelExporter {
                 }
             }
 
+            // Cloud-forwarded attributes (cost / namespace / routing / …). A
+            // `SettlementRecorder` may emit `SpanAttributes`;
+            // `PipelineContext::absorb_settlement` folds the settlement bus
+            // back into `ctx` before this hook runs, so they're visible here.
+            // Generic by design — the emitter names the keys, we just stamp.
+            if let Some(extra) = ctx.get_event::<SpanAttributes>() {
+                for (key, value) in &extra.0 {
+                    match value {
+                        serde_json::Value::String(s) => {
+                            span.set_attribute(KeyValue::new(key.clone(), s.clone()));
+                        }
+                        serde_json::Value::Bool(b) => {
+                            span.set_attribute(KeyValue::new(key.clone(), *b));
+                        }
+                        serde_json::Value::Number(n) => {
+                            if let Some(i) = n.as_i64() {
+                                span.set_attribute(KeyValue::new(key.clone(), i));
+                            } else if let Some(f) = n.as_f64() {
+                                span.set_attribute(KeyValue::new(key.clone(), f));
+                            }
+                        }
+                        // null / array / object: not a scalar OTel value — skip.
+                        _ => {}
+                    }
+                }
+            }
+
+            // Optional prompt / response content capture (off by default).
+            if self.config.content_capture == ContentCaptureMode::Full {
+                if let Ok(json) = serde_json::to_string(&ctx.prompt().messages) {
+                    span.set_attribute(KeyValue::new(
+                        "gen_ai.input.messages",
+                        truncate_utf8(json, CONTENT_ATTR_MAX_BYTES),
+                    ));
+                }
+                if let Some(result) = &ctx.execution_result
+                    && let Ok(json) = serde_json::to_string(&result.result.content)
+                {
+                    span.set_attribute(KeyValue::new(
+                        "gen_ai.output.messages",
+                        truncate_utf8(json, CONTENT_ATTR_MAX_BYTES),
+                    ));
+                }
+            }
+
             match outcome {
                 RequestOutcome::Completed => {
                     span.set_status(Status::Ok);
@@ -754,6 +800,27 @@ impl ObserveHook for OtelExporter {
             metrics.record_request(ctx, outcome);
         }
     }
+}
+
+/// Maximum byte length for a single captured content attribute
+/// (`gen_ai.input.messages` / `gen_ai.output.messages`). A conservative cap so
+/// a pathological prompt or response can't produce an oversized span the
+/// collector or backend would reject. Only consulted under
+/// [`ContentCaptureMode::Full`].
+const CONTENT_ATTR_MAX_BYTES: usize = 128 * 1024;
+
+/// Truncate a `String` to at most `max` bytes, backing off to the nearest
+/// UTF-8 char boundary so the result is always valid UTF-8.
+fn truncate_utf8(mut s: String, max: usize) -> String {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+    s
 }
 
 fn build_resource(config: &OtelConfig) -> Resource {
@@ -994,6 +1061,10 @@ mod hop_tests {
     /// endpoint) by constructing the struct directly — possible here
     /// because the test lives in the same module and sees private fields.
     fn make_test_exporter() -> (OtelExporter, Arc<Mutex<Vec<SpanData>>>) {
+        make_test_exporter_with(OtelConfig::default())
+    }
+
+    fn make_test_exporter_with(config: OtelConfig) -> (OtelExporter, Arc<Mutex<Vec<SpanData>>>) {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let processor = CapturingProcessor {
             captured: captured.clone(),
@@ -1012,7 +1083,7 @@ mod hop_tests {
             tracer,
             provider,
             metrics: None,
-            config: OtelConfig::default(),
+            config,
             api_key_limiter: Arc::new(CardinalityLimiter::new(100)),
             user_id_limiter: Arc::new(CardinalityLimiter::new(100)),
             active_spans: Arc::new(DashMap::new()),
@@ -1093,6 +1164,26 @@ mod hop_tests {
             .find(|kv| kv.key.as_str() == key)
             .and_then(|kv| match kv.value {
                 Value::I64(v) => Some(v),
+                _ => None,
+            })
+    }
+
+    fn f64_attr(span: &SpanData, key: &str) -> Option<f64> {
+        span.attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == key)
+            .and_then(|kv| match kv.value {
+                Value::F64(v) => Some(v),
+                _ => None,
+            })
+    }
+
+    fn bool_attr(span: &SpanData, key: &str) -> Option<bool> {
+        span.attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == key)
+            .and_then(|kv| match kv.value {
+                Value::Bool(v) => Some(v),
                 _ => None,
             })
     }
@@ -1196,6 +1287,95 @@ mod hop_tests {
         );
         assert_eq!(i64_attr(hop_chat, "gen_ai.usage.input_tokens"), Some(11));
         assert_eq!(i64_attr(hop_chat, "gen_ai.usage.output_tokens"), Some(7));
+    }
+
+    #[tokio::test]
+    async fn on_request_end_stamps_forwarded_span_attributes() {
+        // A SettlementRecorder forwards cloud-computed attributes via a
+        // `SpanAttributes` event (#529); `absorb_settlement` makes them visible
+        // on the PipelineContext, and `on_request_end` stamps each entry — by
+        // JSON type — onto the root `chat` span.
+        let (exporter, captured) = make_test_exporter();
+        let mut ctx = PipelineContext::new(fresh_request());
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+
+        let mut attrs = serde_json::Map::new();
+        attrs.insert("$ai_total_cost_usd".into(), serde_json::json!(0.00123456));
+        attrs.insert("namespace".into(), serde_json::json!("acme"));
+        attrs.insert("fallback".into(), serde_json::json!(true));
+        attrs.insert("bitrouter.retry_count".into(), serde_json::json!(2));
+        // Null / nested values are skipped (not representable as a scalar attr).
+        attrs.insert("skipped_null".into(), serde_json::Value::Null);
+        ctx.emit(SpanAttributes(attrs));
+
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+
+        assert_eq!(str_attr(root_chat, "namespace"), Some("acme"));
+        assert_eq!(f64_attr(root_chat, "$ai_total_cost_usd"), Some(0.00123456));
+        assert_eq!(bool_attr(root_chat, "fallback"), Some(true));
+        assert_eq!(i64_attr(root_chat, "bitrouter.retry_count"), Some(2));
+        assert!(
+            root_chat
+                .attributes
+                .iter()
+                .all(|kv| kv.key.as_str() != "skipped_null"),
+            "null values are not stamped onto the span"
+        );
+    }
+
+    #[tokio::test]
+    async fn content_capture_off_omits_messages_full_records_them() {
+        let target = fresh_target("openai");
+
+        // Off (default): no message bodies on the span.
+        let (exporter, captured) = make_test_exporter();
+        let mut ctx = PipelineContext::new(fresh_request());
+        ctx.execution_result = Some(fresh_result(&target));
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+        let spans = captured.lock().unwrap().clone();
+        let root = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        assert_eq!(str_attr(root, "gen_ai.input.messages"), None);
+        assert_eq!(str_attr(root, "gen_ai.output.messages"), None);
+
+        // Full: prompt + response content serialized onto the span.
+        let cfg = OtelConfig {
+            content_capture: ContentCaptureMode::Full,
+            ..OtelConfig::default()
+        };
+        let (exporter, captured) = make_test_exporter_with(cfg);
+        let mut ctx = PipelineContext::new(fresh_request());
+        ctx.execution_result = Some(fresh_result(&target));
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+        let spans = captured.lock().unwrap().clone();
+        let root = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        let input = str_attr(root, "gen_ai.input.messages").expect("input messages captured");
+        assert!(input.contains("hi"), "prompt text serialized: {input}");
+        let output = str_attr(root, "gen_ai.output.messages").expect("output messages captured");
+        assert!(output.contains("ok"), "response text serialized: {output}");
     }
 
     #[tokio::test]
