@@ -327,7 +327,7 @@ async fn connect(
             client
                 .serve(transport)
                 .await
-                .map_err(|e| upstream(server_name, format!("HTTP connect: {e}")))
+                .map_err(|e| map_initialize_error(server_name, e))
         }
         McpTransport::Stdio { command, args, env } => {
             // stdio child-process transport per the MCP spec
@@ -342,7 +342,7 @@ async fn connect(
             client
                 .serve(transport)
                 .await
-                .map_err(|e| upstream(server_name, format!("stdio connect: {e}")))
+                .map_err(|e| map_initialize_error(server_name, e))
         }
     }
 }
@@ -363,7 +363,6 @@ fn bad_params(server: &str, method: &str, msg: impl std::fmt::Display) -> Bitrou
 /// [`BitrouterError::UpstreamAuth`] for `401`/`403` so the cloud can drive
 /// token refresh / OAuth step-up; `None` for any other transport error
 /// (the caller then falls back to the generic 502 `upstream(...)`).
-#[allow(dead_code)] // wired up in the next task
 fn classify_transport_auth_error(
     dte: &rmcp::transport::DynamicTransportError,
 ) -> Option<BitrouterError> {
@@ -384,6 +383,18 @@ fn classify_transport_auth_error(
         }),
         _ => None,
     }
+}
+
+/// Map a connect/initialize failure to a `BitrouterError`, preferring a typed
+/// `UpstreamAuth` when the underlying transport error is an auth challenge,
+/// else the generic 502.
+fn map_initialize_error(server: &str, err: rmcp::service::ClientInitializeError) -> BitrouterError {
+    if let rmcp::service::ClientInitializeError::TransportError { error, .. } = &err
+        && let Some(auth) = classify_transport_auth_error(error)
+    {
+        return auth;
+    }
+    upstream(server, format!("connect: {err}"))
 }
 
 #[async_trait]
@@ -760,5 +771,33 @@ mod tests {
             Box::new(inner),
         );
         assert!(classify_transport_auth_error(&dte).is_none());
+    }
+
+    #[test]
+    fn initialize_transport_auth_maps_to_upstream_auth() {
+        use rmcp::service::ClientInitializeError;
+        use rmcp::transport::DynamicTransportError;
+        use rmcp::transport::streamable_http_client::{
+            InsufficientScopeError, StreamableHttpError,
+        };
+
+        let inner: StreamableHttpError<reqwest::Error> =
+            StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
+                "Bearer error=\"insufficient_scope\", scope=\"a\"".into(),
+                Some("a".into()),
+            ));
+        let init_err = ClientInitializeError::TransportError {
+            error: DynamicTransportError::from_parts(
+                "test",
+                std::any::TypeId::of::<()>(),
+                Box::new(inner),
+            ),
+            context: "send initialize request".into(),
+        };
+        let mapped = map_initialize_error("srv", init_err);
+        assert!(matches!(
+            mapped,
+            BitrouterError::UpstreamAuth { status: 403, .. }
+        ));
     }
 }
