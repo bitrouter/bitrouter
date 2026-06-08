@@ -358,6 +358,34 @@ fn bad_params(server: &str, method: &str, msg: impl std::fmt::Display) -> Bitrou
     BitrouterError::bad_request(format!("mcp '{server}' {method}: {msg}"))
 }
 
+/// Inspect a transport error for an upstream auth challenge (rmcp 1.7
+/// classifies these as typed variants). Returns a status-bearing
+/// [`BitrouterError::UpstreamAuth`] for `401`/`403` so the cloud can drive
+/// token refresh / OAuth step-up; `None` for any other transport error
+/// (the caller then falls back to the generic 502 `upstream(...)`).
+#[allow(dead_code)] // wired up in the next task
+fn classify_transport_auth_error(
+    dte: &rmcp::transport::DynamicTransportError,
+) -> Option<BitrouterError> {
+    use rmcp::transport::streamable_http_client::StreamableHttpError;
+    let err = dte
+        .error
+        .downcast_ref::<StreamableHttpError<reqwest::Error>>()?;
+    match err {
+        StreamableHttpError::AuthRequired(e) => Some(BitrouterError::UpstreamAuth {
+            status: 401,
+            www_authenticate: Some(e.www_authenticate_header.clone()),
+            required_scope: None,
+        }),
+        StreamableHttpError::InsufficientScope(e) => Some(BitrouterError::UpstreamAuth {
+            status: 403,
+            www_authenticate: Some(e.www_authenticate_header.clone()),
+            required_scope: e.required_scope.clone(),
+        }),
+        _ => None,
+    }
+}
+
 #[async_trait]
 impl Executor for RmcpExecutor {
     async fn execute(&self, target: &McpTarget, request: &McpRequest) -> Result<McpResponse> {
@@ -668,5 +696,69 @@ mod tests {
         // Internal — RmcpExecutor without an AggregatingExecutor wrapper is
         // a programming bug, not a transport failure.
         assert_eq!(err.status(), 500, "unexpected error: {err}");
+    }
+
+    #[test]
+    fn classifies_insufficient_scope_transport_error() {
+        use rmcp::transport::DynamicTransportError;
+        use rmcp::transport::streamable_http_client::{
+            InsufficientScopeError, StreamableHttpError,
+        };
+
+        let inner: StreamableHttpError<reqwest::Error> =
+            StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
+                "Bearer error=\"insufficient_scope\", scope=\"read:files\"".to_string(),
+                Some("read:files".to_string()),
+            ));
+        let dte = DynamicTransportError::from_parts(
+            "test",
+            std::any::TypeId::of::<()>(),
+            Box::new(inner),
+        );
+
+        let classified = classify_transport_auth_error(&dte).expect("should classify");
+        match classified {
+            BitrouterError::UpstreamAuth {
+                status,
+                required_scope,
+                ..
+            } => {
+                assert_eq!(status, 403);
+                assert_eq!(required_scope.as_deref(), Some("read:files"));
+            }
+            other => panic!("expected UpstreamAuth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classifies_auth_required_transport_error() {
+        use rmcp::transport::DynamicTransportError;
+        use rmcp::transport::streamable_http_client::{AuthRequiredError, StreamableHttpError};
+
+        let inner: StreamableHttpError<reqwest::Error> =
+            StreamableHttpError::AuthRequired(AuthRequiredError::new("Bearer".to_string()));
+        let dte = DynamicTransportError::from_parts(
+            "test",
+            std::any::TypeId::of::<()>(),
+            Box::new(inner),
+        );
+        let classified = classify_transport_auth_error(&dte).expect("should classify");
+        assert!(matches!(
+            classified,
+            BitrouterError::UpstreamAuth { status: 401, .. }
+        ));
+    }
+
+    #[test]
+    fn non_auth_transport_error_is_not_classified() {
+        use rmcp::transport::DynamicTransportError;
+        use rmcp::transport::streamable_http_client::StreamableHttpError;
+        let inner: StreamableHttpError<reqwest::Error> = StreamableHttpError::UnexpectedEndOfStream;
+        let dte = DynamicTransportError::from_parts(
+            "test",
+            std::any::TypeId::of::<()>(),
+            Box::new(inner),
+        );
+        assert!(classify_transport_auth_error(&dte).is_none());
     }
 }
