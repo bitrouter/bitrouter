@@ -38,6 +38,18 @@
       ],
       "default": null
     },
+    "response_format": {
+      "description": "Output-format constraint. The `json_schema` variant is the\nstructured-output contract; `json_object` is the legacy JSON mode and\n`text` is the default. Promoted to the canonical `response_format` slot\nat parse time (`json_object` / `text` pass through opaquely).\n<https://platform.openai.com/docs/guides/structured-outputs>",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChatResponseFormat"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "stream": {
       "type": "boolean",
       "default": false
@@ -84,6 +96,30 @@
         }
       }
     },
+    "ChatJsonSchema": {
+      "description": "The `json_schema` payload of [`ChatResponseFormat::JsonSchema`].",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Schema name (OpenAI requires it).",
+          "type": "string"
+        },
+        "schema": {
+          "description": "The JSON Schema."
+        },
+        "strict": {
+          "description": "Strict-mode flag.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "schema"
+      ]
+    },
     "ChatMessage": {
       "description": "One element of [`ChatRequest`]'s `messages` array — a chat turn carrying\nrole + optional content + optional tool calls / tool-call reply id.",
       "type": "object",
@@ -119,6 +155,55 @@
       },
       "required": [
         "role"
+      ]
+    },
+    "ChatResponseFormat": {
+      "description": "Chat Completions `response_format`\n(<https://platform.openai.com/docs/guides/structured-outputs>) — a closed\nunion over OpenAI's three output modes.",
+      "oneOf": [
+        {
+          "description": "Free-form text — the default.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Legacy JSON mode: valid JSON with no schema.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "json_object"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "JSON constrained to a schema.",
+          "type": "object",
+          "properties": {
+            "json_schema": {
+              "description": "The schema spec.",
+              "$ref": "#/$defs/ChatJsonSchema"
+            },
+            "type": {
+              "type": "string",
+              "const": "json_schema"
+            }
+          },
+          "required": [
+            "type",
+            "json_schema"
+          ]
+        }
       ]
     },
     "ChatTool": {

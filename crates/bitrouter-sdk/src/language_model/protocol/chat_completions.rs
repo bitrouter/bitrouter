@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
@@ -53,18 +53,53 @@ pub struct ChatRequest {
     max_completion_tokens: Option<u32>,
     #[serde(default)]
     reasoning_effort: Option<String>,
+    /// Output-format constraint. The `json_schema` variant is the
+    /// structured-output contract; `json_object` is the legacy JSON mode and
+    /// `text` is the default. Promoted to the canonical `response_format` slot
+    /// at parse time (`json_object` / `text` pass through opaquely).
+    /// <https://platform.openai.com/docs/guides/structured-outputs>
+    #[serde(default)]
+    response_format: Option<ChatResponseFormat>,
     #[serde(default)]
     stream: bool,
     /// Every other field — `tool_choice`, `stop` / `stop_sequences`, `seed`,
-    /// `response_format`, `n`, `presence_penalty`, `frequency_penalty`,
-    /// `logit_bias`, `logprobs`, `top_logprobs`, `user`, `stream_options`,
-    /// `parallel_tool_calls`, … — survives parse/render via `extra`. v0
-    /// passed these through; v1 must too. Skipped from the published schema
-    /// so the documented contract is the set of typed fields; pass-through
-    /// behavior is preserved at runtime.
+    /// `n`, `presence_penalty`, `frequency_penalty`, `logit_bias`, `logprobs`,
+    /// `top_logprobs`, `user`, `stream_options`, `parallel_tool_calls`, … —
+    /// survives parse/render via `extra`. v0 passed these through; v1 must too.
+    /// Skipped from the published schema so the documented contract is the set
+    /// of typed fields; pass-through behavior is preserved at runtime.
     #[serde(flatten)]
     #[schemars(skip)]
     extra: HashMap<String, serde_json::Value>,
+}
+
+/// Chat Completions `response_format`
+/// (<https://platform.openai.com/docs/guides/structured-outputs>) — a closed
+/// union over OpenAI's three output modes.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatResponseFormat {
+    /// Free-form text — the default.
+    Text,
+    /// Legacy JSON mode: valid JSON with no schema.
+    JsonObject,
+    /// JSON constrained to a schema.
+    JsonSchema {
+        /// The schema spec.
+        json_schema: ChatJsonSchema,
+    },
+}
+
+/// The `json_schema` payload of [`ChatResponseFormat::JsonSchema`].
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct ChatJsonSchema {
+    /// Schema name (OpenAI requires it).
+    name: String,
+    /// Strict-mode flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    strict: Option<bool>,
+    /// The JSON Schema.
+    schema: serde_json::Value,
 }
 
 /// One element of [`ChatRequest`]'s `messages` array — a chat turn carrying
@@ -238,15 +273,27 @@ impl InboundAdapter for ChatCompletionsAdapter {
             })
             .collect();
 
-        // Promote `response_format: { type: "json_schema", ... }` out of the
-        // extras splat into the canonical slot so cross-protocol routing can
-        // translate it. The legacy `{ type: "json_object" }` JSON mode is left
-        // in extras (it has no schema to translate and passes through opaquely).
+        // `response_format` is a typed field. Promote `json_schema` into the
+        // canonical slot so cross-protocol routing can translate it; `json_object`
+        // / `text` carry no schema, so re-attach them to `extra` to pass through
+        // opaquely on render (v0 parity).
         let mut extra = req.extra;
-        let response_format = parse_chat_response_format(&extra);
-        if response_format.is_some() {
-            extra.remove("response_format");
-        }
+        let response_format = match req.response_format {
+            Some(ChatResponseFormat::JsonSchema { json_schema }) => {
+                Some(ResponseFormat::JsonSchema {
+                    name: Some(json_schema.name),
+                    strict: json_schema.strict,
+                    schema: json_schema.schema,
+                })
+            }
+            Some(other) => {
+                if let Ok(value) = serde_json::to_value(&other) {
+                    extra.insert("response_format".to_string(), value);
+                }
+                None
+            }
+            None => None,
+        };
 
         Ok(Prompt {
             model: req.model,
@@ -258,13 +305,9 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_tokens.or(req.max_completion_tokens),
                 reasoning_effort: req.reasoning_effort,
-                // Every Chat Completions field we don't have a typed slot for —
-                // tool_choice, stop / stop_sequences, seed, n,
-                // presence/frequency_penalty, logit_bias, … — rides along
-                // in `extra` and is splatted back on render. Note:
-                // `response_format` with `type:"json_schema"` is promoted into
-                // `Prompt::response_format` above; other shapes (e.g.
-                // `type:"json_object"`) stay in extras.
+                // Every Chat Completions field without a typed slot — tool_choice,
+                // stop / stop_sequences, seed, n, presence/frequency_penalty,
+                // logit_bias, … — rides in `extra` and is splatted back on render.
                 extra,
             },
             response_format,
@@ -548,29 +591,6 @@ impl OutboundAdapter for ChatCompletionsAdapter {
     fn supports_response_format(&self) -> bool {
         true
     }
-}
-
-/// Detect a `response_format: { type: "json_schema", json_schema: {...} }`
-/// blob in the inbound extras and lift it into the canonical [`ResponseFormat`].
-/// Returns `None` for any other shape (notably `{ type: "json_object" }`,
-/// which is the older JSON-mode and has no schema to translate).
-fn parse_chat_response_format(
-    extra: &HashMap<String, serde_json::Value>,
-) -> Option<ResponseFormat> {
-    let rf = extra.get("response_format")?;
-    if rf.get("type")?.as_str()? != "json_schema" {
-        return None;
-    }
-    let js = rf.get("json_schema")?;
-    let schema = js.get("schema")?.clone();
-    Some(ResponseFormat::JsonSchema {
-        name: js
-            .get("name")
-            .and_then(|n| n.as_str())
-            .map(|s| s.to_string()),
-        strict: js.get("strict").and_then(|s| s.as_bool()),
-        schema,
-    })
 }
 
 /// Render a canonical [`ResponseFormat`] into Chat Completions' native
