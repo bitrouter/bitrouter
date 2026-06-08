@@ -1093,6 +1093,24 @@ fn responses_inbound_promotes_text_format() {
 }
 
 #[test]
+fn responses_inbound_leaves_json_object_in_extras() {
+    // `text.format: {type: "json_object"}` (and `{type: "text"}`) carries no
+    // schema to translate, so it is not promoted to the canonical slot — it
+    // passes through opaquely and round-trips unchanged. Mirrors the Chat
+    // Completions json_object case.
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "input": "weather?",
+        "text": {"format": {"type": "json_object"}}
+    });
+    let prompt = adapter.parse_request(body.clone()).unwrap();
+    assert!(prompt.response_format.is_none());
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["text"], body["text"]);
+}
+
+#[test]
 fn responses_outbound_renders_text_format() {
     let adapter = adapter_for(ApiProtocol::Responses);
     let rendered = adapter
