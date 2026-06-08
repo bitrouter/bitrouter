@@ -113,6 +113,23 @@ pub enum Content {
         /// The reasoning text.
         text: String,
     },
+    /// A media / file part — image, audio, video, or document. Modelled à la the
+    /// Vercel AI SDK `LanguageModelV3File`: a single media-typed part rather than
+    /// a per-modality variant, identified by its IANA `media_type`.
+    /// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-file.ts>
+    File {
+        /// IANA media type, e.g. `image/png`, `audio/mpeg`, `application/pdf`.
+        media_type: String,
+        /// The payload — inline base64 bytes or a URL the upstream fetches.
+        data: DataContent,
+        /// Original filename, when the provider supplies or requires it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        /// Provider-specific per-part fields preserved verbatim (e.g. an image
+        /// `detail` hint). Mirrors the AI SDK's per-part `providerMetadata`.
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        extra: HashMap<String, serde_json::Value>,
+    },
     /// A tool/function call requested by the model.
     ToolCall {
         /// Provider-assigned call id.
@@ -129,6 +146,65 @@ pub enum Content {
         /// Result body. May itself be structured (v0 #364).
         content: String,
     },
+}
+
+/// The payload of a [`Content::File`] part. The Vercel AI SDK models this as
+/// `Uint8Array | string | URL`; a faithful-passthrough router never decodes the
+/// bytes, so we keep only the two wire forms every provider accepts: an inline
+/// base64 blob or a URL.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DataContent {
+    /// Base64-encoded inline bytes (no `data:` URI prefix).
+    Base64 {
+        /// The base64 payload.
+        data: String,
+    },
+    /// A URL the upstream fetches directly.
+    Url {
+        /// The resource URL.
+        url: String,
+    },
+}
+
+impl DataContent {
+    /// Render as a single URL string: inline base64 bytes become a `data:` URI;
+    /// a URL passes through unchanged. For wire forms that carry media in one
+    /// URL field (e.g. OpenAI `image_url.url`).
+    pub fn to_url(&self, media_type: &str) -> String {
+        match self {
+            DataContent::Base64 { data } => format!("data:{media_type};base64,{data}"),
+            DataContent::Url { url } => url.clone(),
+        }
+    }
+
+    /// Parse a URL-or-`data:`-URI into an optional embedded media type and the
+    /// payload. `data:<mt>;base64,<payload>` yields `(Some(mt), Base64)`; any
+    /// other string becomes `(None, Url)`.
+    pub fn from_url(value: &str) -> (Option<String>, DataContent) {
+        if let Some(rest) = value.strip_prefix("data:")
+            && let Some((meta, payload)) = rest.split_once(',')
+            && meta.contains(";base64")
+        {
+            let media_type = meta
+                .split(';')
+                .next()
+                .filter(|m| !m.is_empty())
+                .map(str::to_string);
+            return (
+                media_type,
+                DataContent::Base64 {
+                    data: payload.to_string(),
+                },
+            );
+        }
+        (
+            None,
+            DataContent::Url {
+                url: value.to_string(),
+            },
+        )
+    }
 }
 
 /// A single message in the conversation.
@@ -214,6 +290,20 @@ pub enum Capability {
     WebSearch,
     /// Token log-probabilities in the response.
     Logprobs,
+    /// Image input (vision) — a message carries an `image/*` file part.
+    ImageInput,
+    /// Audio input — a message carries an `audio/*` file part.
+    AudioInput,
+    /// Video input — a message carries a `video/*` file part.
+    VideoInput,
+    /// Document / file input — a message carries a non-image/audio/video file
+    /// part (e.g. `application/pdf`).
+    FileInput,
+    /// Image output (generation) — the request asks for an `image` output
+    /// modality.
+    ImageOutput,
+    /// Audio output (speech) — the request asks for an `audio` output modality.
+    AudioOutput,
 }
 
 impl Capability {
@@ -226,8 +316,48 @@ impl Capability {
             Self::Reasoning => "reasoning",
             Self::WebSearch => "web_search",
             Self::Logprobs => "logprobs",
+            Self::ImageInput => "image_input",
+            Self::AudioInput => "audio_input",
+            Self::VideoInput => "video_input",
+            Self::FileInput => "file_input",
+            Self::ImageOutput => "image_output",
+            Self::AudioOutput => "audio_output",
         }
     }
+
+    /// The input-modality capability implied by a file part's IANA media type;
+    /// everything that is not image/audio/video is treated as a document.
+    fn from_input_media_type(media_type: &str) -> Capability {
+        match media_type.split('/').next() {
+            Some("image") => Capability::ImageInput,
+            Some("audio") => Capability::AudioInput,
+            Some("video") => Capability::VideoInput,
+            _ => Capability::FileInput,
+        }
+    }
+
+    /// The output-modality capability implied by a requested response modality;
+    /// `Text` implies no extra capability.
+    fn from_output_modality(modality: Modality) -> Option<Capability> {
+        match modality {
+            Modality::Image => Some(Capability::ImageOutput),
+            Modality::Audio => Some(Capability::AudioOutput),
+            Modality::Text => None,
+        }
+    }
+}
+
+/// A content modality. Used for the requested output modalities
+/// ([`GenerationParams::response_modalities`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Modality {
+    /// Text.
+    Text,
+    /// Image.
+    Image,
+    /// Audio.
+    Audio,
 }
 
 /// Sampling / generation parameters, carried verbatim where possible.
@@ -245,6 +375,11 @@ pub struct GenerationParams {
     /// Reasoning effort hint (`low` / `medium` / `high`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Requested output modalities (OpenAI `modalities` / Gemini
+    /// `responseModalities`). Empty means text-only (the default). Drives
+    /// `image_output` / `audio_output` capability detection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub response_modalities: Vec<Modality>,
     /// Any provider-specific extras passed through untouched.
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -283,12 +418,13 @@ impl Prompt {
     /// to restrict the fallback chain to providers that advertise all of these,
     /// instead of silently degrading the request.
     ///
-    /// Only capabilities detectable from the canonical [`Prompt`] are returned:
-    /// `structured_outputs` (a `response_format`), `tools` (a non-empty tool
-    /// list), and `reasoning` (a reasoning-effort hint). Other capabilities a
-    /// provider may advertise — `web_search`, `logprobs`, and input/output
-    /// modalities — are not yet expressible in the canonical request, so they
-    /// are surfaced in the catalog but never gate routing here.
+    /// Detected from the canonical [`Prompt`]: `structured_outputs` (a
+    /// `response_format`), `tools` (a non-empty tool list), `reasoning` (a
+    /// reasoning-effort hint), the input modalities of any [`Content::File`]
+    /// parts (`image_input` / `audio_input` / `video_input` / `file_input`), and
+    /// the requested output modalities (`image_output` / `audio_output`).
+    /// `web_search` and `logprobs` ride [`GenerationParams::extra`] and are not
+    /// expressible here, so they stay catalog-only and never gate routing.
     pub fn required_capabilities(&self) -> Vec<Capability> {
         let mut caps = Vec::new();
         if self.response_format.is_some() {
@@ -299,6 +435,24 @@ impl Prompt {
         }
         if self.params.reasoning_effort.is_some() {
             caps.push(Capability::Reasoning);
+        }
+        // Input modalities: each file part contributes the capability implied by
+        // its media type, deduplicated (one `image_input` for several images).
+        for content in self.messages.iter().flat_map(|m| &m.content) {
+            if let Content::File { media_type, .. } = content {
+                let cap = Capability::from_input_media_type(media_type);
+                if !caps.contains(&cap) {
+                    caps.push(cap);
+                }
+            }
+        }
+        // Output modalities: from the requested response modalities.
+        for modality in &self.params.response_modalities {
+            if let Some(cap) = Capability::from_output_modality(*modality)
+                && !caps.contains(&cap)
+            {
+                caps.push(cap);
+            }
         }
         caps
     }
@@ -717,6 +871,102 @@ mod tests {
         assert_eq!(caps.len(), 3);
     }
 
+    fn user_file_prompt(media_type: &str) -> Prompt {
+        let mut p = bare_prompt();
+        p.messages = vec![Message {
+            role: Role::User,
+            content: vec![Content::File {
+                media_type: media_type.to_string(),
+                data: DataContent::Base64 {
+                    data: "AAAA".to_string(),
+                },
+                filename: None,
+                extra: Default::default(),
+            }],
+        }];
+        p
+    }
+
+    #[test]
+    fn image_file_requires_image_input() {
+        assert_eq!(
+            user_file_prompt("image/png").required_capabilities(),
+            vec![Capability::ImageInput]
+        );
+    }
+
+    #[test]
+    fn audio_file_requires_audio_input() {
+        assert_eq!(
+            user_file_prompt("audio/mpeg").required_capabilities(),
+            vec![Capability::AudioInput]
+        );
+    }
+
+    #[test]
+    fn video_file_requires_video_input() {
+        assert_eq!(
+            user_file_prompt("video/mp4").required_capabilities(),
+            vec![Capability::VideoInput]
+        );
+    }
+
+    #[test]
+    fn document_file_requires_file_input() {
+        assert_eq!(
+            user_file_prompt("application/pdf").required_capabilities(),
+            vec![Capability::FileInput]
+        );
+    }
+
+    #[test]
+    fn repeated_image_parts_dedupe_to_one_image_input() {
+        let img = || Content::File {
+            media_type: "image/png".to_string(),
+            data: DataContent::Url {
+                url: "https://example.invalid/a.png".to_string(),
+            },
+            filename: None,
+            extra: Default::default(),
+        };
+        let mut p = bare_prompt();
+        p.messages = vec![Message {
+            role: Role::User,
+            content: vec![img(), img()],
+        }];
+        assert_eq!(p.required_capabilities(), vec![Capability::ImageInput]);
+    }
+
+    #[test]
+    fn response_modalities_require_output_capabilities() {
+        let mut p = bare_prompt();
+        p.params.response_modalities = vec![Modality::Text, Modality::Image, Modality::Audio];
+        // Text implies no capability; image / audio each map to an output cap.
+        assert_eq!(
+            p.required_capabilities(),
+            vec![Capability::ImageOutput, Capability::AudioOutput]
+        );
+    }
+
+    #[test]
+    fn file_content_serde_round_trips() {
+        let original = Content::File {
+            media_type: "image/png".to_string(),
+            data: DataContent::Url {
+                url: "https://example.invalid/y.png".to_string(),
+            },
+            filename: Some("y.png".to_string()),
+            extra: Default::default(),
+        };
+        let value = serde_json::to_value(&original).unwrap();
+        assert_eq!(value["type"], "file");
+        assert_eq!(value["media_type"], "image/png");
+        assert_eq!(value["data"]["kind"], "url");
+        assert_eq!(value["data"]["url"], "https://example.invalid/y.png");
+        let back: Content = serde_json::from_value(value).unwrap();
+        assert_eq!(back, original);
+    }
+
     #[test]
     fn capability_token_matches_registry_vocabulary() {
         // These tokens must stay byte-identical to the registry Zod enum and
@@ -726,6 +976,12 @@ mod tests {
         assert_eq!(Capability::Reasoning.as_str(), "reasoning");
         assert_eq!(Capability::WebSearch.as_str(), "web_search");
         assert_eq!(Capability::Logprobs.as_str(), "logprobs");
+        assert_eq!(Capability::ImageInput.as_str(), "image_input");
+        assert_eq!(Capability::AudioInput.as_str(), "audio_input");
+        assert_eq!(Capability::VideoInput.as_str(), "video_input");
+        assert_eq!(Capability::FileInput.as_str(), "file_input");
+        assert_eq!(Capability::ImageOutput.as_str(), "image_output");
+        assert_eq!(Capability::AudioOutput.as_str(), "audio_output");
     }
 
     #[test]

@@ -375,6 +375,7 @@ impl InboundAdapter for ResponsesAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_output_tokens,
                 reasoning_effort: req.reasoning.and_then(|r| r.effort),
+                response_modalities: Vec::new(),
                 // Splat every Responses-API field without a typed slot —
                 // tool_choice, parallel_tool_calls, max_tool_calls, metadata,
                 // include[], previous_response_id, store, stream_options, … —
@@ -663,6 +664,30 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
                     "name": name,
                     "arguments": arguments,
                 }));
+            }
+            // image/* -> `input_image`, other media -> `input_file`; the payload
+            // is a URL or `data:` URI via the shared helper.
+            // <https://platform.openai.com/docs/api-reference/responses/create>
+            Content::File {
+                media_type,
+                data,
+                filename,
+                ..
+            } => {
+                let part = if media_type.starts_with("image/") {
+                    serde_json::json!({
+                        "type": "input_image", "image_url": data.to_url(media_type)
+                    })
+                } else {
+                    let mut file = serde_json::json!({
+                        "type": "input_file", "file_data": data.to_url(media_type)
+                    });
+                    if let Some(name) = filename {
+                        file["filename"] = serde_json::Value::String(name.clone());
+                    }
+                    file
+                };
+                text_parts.push(part);
             }
             Content::ToolResult { call_id, content } => {
                 items.push(serde_json::json!({

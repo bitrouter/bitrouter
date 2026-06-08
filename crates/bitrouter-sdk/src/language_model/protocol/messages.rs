@@ -22,8 +22,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, AuthScheme, Content, FinishReason, GenerateResult, GenerationParams, Message,
-    Prompt, ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart, Usage,
+    ApiProtocol, AuthScheme, Content, DataContent, FinishReason, GenerateResult, GenerationParams,
+    Message, Prompt, ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart, Usage,
 };
 
 /// The Messages inbound + outbound protocol adapter.
@@ -412,6 +412,7 @@ impl InboundAdapter for MessagesAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_tokens,
                 reasoning_effort,
+                response_modalities: Vec::new(),
                 extra,
             },
             response_format,
@@ -717,6 +718,25 @@ fn render_content_block(c: &Content) -> Option<serde_json::Value> {
         }
         // tool results are request-side only; not part of an assistant reply
         Content::ToolResult { .. } => None,
+        // image/* -> an `image` block, everything else -> a `document` block.
+        // Source is `{type:base64,media_type,data}` or `{type:url,url}`.
+        // <https://docs.anthropic.com/en/docs/build-with-claude/vision>
+        Content::File {
+            media_type, data, ..
+        } => {
+            let source = match data {
+                DataContent::Base64 { data } => serde_json::json!({
+                    "type": "base64", "media_type": media_type, "data": data
+                }),
+                DataContent::Url { url } => serde_json::json!({ "type": "url", "url": url }),
+            };
+            let block_type = if media_type.starts_with("image/") {
+                "image"
+            } else {
+                "document"
+            };
+            Some(serde_json::json!({ "type": block_type, "source": source }))
+        }
     }
 }
 

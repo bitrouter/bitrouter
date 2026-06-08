@@ -19,8 +19,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
+    ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
+    Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
 /// The Chat Completions inbound + outbound protocol adapter.
@@ -305,6 +305,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_tokens.or(req.max_completion_tokens),
                 reasoning_effort: req.reasoning_effort,
+                response_modalities: Vec::new(),
                 // Every Chat Completions field without a typed slot — tool_choice,
                 // stop / stop_sequences, seed, n, presence/frequency_penalty,
                 // logit_bias, … — rides in `extra` and is splatted back on render.
@@ -644,6 +645,44 @@ impl Transport for ChatCompletionsTransport {
     }
 }
 
+/// Render one canonical content part into an OpenAI content-array element
+/// (text + media). Reasoning / tool calls ride sibling fields, not the content
+/// array, so they yield `None` here.
+fn render_input_part(c: &Content) -> Option<serde_json::Value> {
+    match c {
+        Content::Text { text } => Some(serde_json::json!({ "type": "text", "text": text })),
+        Content::File {
+            media_type,
+            data,
+            filename,
+            ..
+        } => Some(if media_type.starts_with("image/") {
+            // <https://platform.openai.com/docs/guides/vision>
+            serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": data.to_url(media_type) }
+            })
+        } else if let Some(format) = media_type.strip_prefix("audio/") {
+            // <https://platform.openai.com/docs/guides/audio>
+            let audio = match data {
+                DataContent::Base64 { data } => {
+                    serde_json::json!({ "data": data, "format": format })
+                }
+                DataContent::Url { url } => serde_json::json!({ "url": url, "format": format }),
+            };
+            serde_json::json!({ "type": "input_audio", "input_audio": audio })
+        } else {
+            // Documents (PDF, …) — OpenAI `file` part.
+            let mut file = serde_json::json!({ "file_data": data.to_url(media_type) });
+            if let Some(name) = filename {
+                file["filename"] = serde_json::Value::String(name.clone());
+            }
+            serde_json::json!({ "type": "file", "file": file })
+        }),
+        _ => None,
+    }
+}
+
 fn render_message(m: &Message) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     obj.insert("role".into(), role_str(m.role).into());
@@ -659,15 +698,23 @@ fn render_message(m: &Message) -> serde_json::Value {
         return serde_json::Value::Object(obj);
     }
 
-    let text: String = m
-        .content
-        .iter()
-        .filter_map(|c| match c {
-            Content::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    obj.insert("content".into(), text.into());
+    // `content` is a plain string for text-only messages (back-compat) or an
+    // ordered parts array when the message carries media.
+    if m.content.iter().any(|c| matches!(c, Content::File { .. })) {
+        let parts: Vec<serde_json::Value> =
+            m.content.iter().filter_map(render_input_part).collect();
+        obj.insert("content".into(), parts.into());
+    } else {
+        let text: String = m
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        obj.insert("content".into(), text.into());
+    }
 
     let reasoning: String = m
         .content

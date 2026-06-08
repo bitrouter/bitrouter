@@ -19,8 +19,8 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
+    ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
+    Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
 };
 
 /// The Generate Content protocol adapter.
@@ -320,6 +320,7 @@ impl InboundAdapter for GenerateContentAdapter {
                         top_p,
                         max_tokens: max_output_tokens,
                         reasoning_effort: None,
+                        response_modalities: Vec::new(),
                         extra,
                     },
                     response_format,
@@ -541,6 +542,18 @@ fn render_part(c: &Content) -> Option<serde_json::Value> {
                 "functionResponse": { "name": call_id, "response": response }
             }))
         }
+        // Inline bytes -> `inlineData`; a URL -> `fileData`. Gemini keys media by
+        // `mimeType`. <https://ai.google.dev/gemini-api/docs/image-understanding>
+        Content::File {
+            media_type, data, ..
+        } => Some(match data {
+            DataContent::Base64 { data } => serde_json::json!({
+                "inlineData": { "mimeType": media_type, "data": data }
+            }),
+            DataContent::Url { url } => serde_json::json!({
+                "fileData": { "mimeType": media_type, "fileUri": url }
+            }),
+        }),
     }
 }
 
@@ -637,6 +650,10 @@ impl StreamDecoder for GenerateContentStreamDecoder {
                             arguments,
                         }),
                         Content::ToolResult { .. } => {}
+                        // Response-side file output (e.g. generated images) is not
+                        // yet surfaced as a stream part; request files never reach
+                        // the decoder.
+                        Content::File { .. } => {}
                     }
                 }
             }
