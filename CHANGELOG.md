@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.10](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.9...v1.0.0-alpha.10)
+
+
+### ⛰️ Features
+
+- *(capabilities)* Capability-aware routing primitives + typed structured-output fields (B4) ([#528](https://github.com/bitrouter/bitrouter/pull/528)) - ([e4fee7c](https://github.com/bitrouter/bitrouter/commit/e4fee7c85b9a7e134152cce3cf412d958183e419))
+- *(observe)* [**breaking**] Forward cloud span attrs + content capture ([#535](https://github.com/bitrouter/bitrouter/pull/535)) - ([2c7edd3](https://github.com/bitrouter/bitrouter/commit/2c7edd3a54014d59c5048424ae828f9011b68a3e))
+- *(sdk)* Surface MCP upstream 401/403 auth challenges (UpstreamAuth) ([#534](https://github.com/bitrouter/bitrouter/pull/534)) - ([f81a322](https://github.com/bitrouter/bitrouter/commit/f81a3221fa1918bf750612cb2c615bc4d59e67b4))
+- *(sdk)* Implement VirtualModel priority/cascade strategy ([#521](https://github.com/bitrouter/bitrouter/pull/521)) - ([6b06d94](https://github.com/bitrouter/bitrouter/commit/6b06d94ac1d0a1f47cd463fd6d76b41b4c44732f))
+
+### 🐛 Bug Fixes
+
+- [**breaking**] Pre-1.0 security audit fixes + dead-code cleanup ([#523](https://github.com/bitrouter/bitrouter/pull/523)) - ([44ec022](https://github.com/bitrouter/bitrouter/commit/44ec02299a8df495ba4dbbb19408a39da9e3e55d))
+
+### 🚜 Refactor
+
+- *(cli)* [**breaking**] Subcommand cleanup (placeholders + auth) ([#524](https://github.com/bitrouter/bitrouter/pull/524)) - ([c2f5fef](https://github.com/bitrouter/bitrouter/commit/c2f5fefbcf91315b117a4739c2e3a912088a3331))
+
+
 ## [1.0.0-alpha.9](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.8...v1.0.0-alpha.9)
 
 
