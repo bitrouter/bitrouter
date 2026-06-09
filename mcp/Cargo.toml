@@ -1,0 +1,46 @@
+[package]
+name = "bitrouter-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+# The sole file under examples/ is wired as a [[bin]] below (so the smoke test
+# gets CARGO_BIN_EXE_*); disable example auto-discovery to avoid a dual target.
+autoexamples = false
+
+[lib]
+
+# Test-only stdio entrypoint, spawned by `tests/stdio_smoke.rs`. Declared as a
+# bin (not just an example) so cargo exposes `CARGO_BIN_EXE_mcp-stdio-local`.
+[[bin]]
+name = "mcp-stdio-local"
+path = "examples/mcp-stdio-local.rs"
+
+[dependencies]
+rmcp = { workspace = true, features = [
+    "server",
+    "macros",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
+async-trait.workspace = true
+http = { workspace = true }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
+tokio-util.workspace = true
+reqwest.workspace = true
+axum.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+# Reused for the typed `/v1/billing/balance` wire shape (no cycle: cloud-sdk
+# does not depend on this crate or on apps/bitrouter).
+bitrouter-cloud-sdk.workspace = true
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }

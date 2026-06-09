@@ -129,7 +129,30 @@ Resolve a model name without making a request: `bitrouter route openai/gpt-4o`.
 
 > For Cloud, swap `http://localhost:4356/v1` → `https://api.bitrouter.ai/v1` and `api_key="unused"` → `api_key="brk_..."`. Everything else stays identical.
 
-## 5. References
+## 5. Origin MCP server
+
+BitRouter exposes its own tools (`complete`, `list_models`, `status`) over MCP. This is the **origin** server — it wraps BitRouter's routing core — and is **distinct** from the MCP gateway at `/mcp` (which proxies upstream MCP servers declared in `bitrouter.yaml`).
+
+```bash
+# stdio (default): talks to the local daemon at 127.0.0.1:4356
+bitrouter mcp serve
+
+# streamable HTTP: cloud backend, multi-tenant — clients supply their own Bearer header
+# no --token on the server side; each MCP client sets "Authorization: Bearer brk_..." in its remote config
+bitrouter mcp serve --transport http
+
+# print the Claude/Cursor mcpServers config block
+bitrouter mcp install --client claude
+
+# merge non-destructively into an existing config file
+bitrouter mcp install --client claude --config ~/Library/Application\ Support/Claude/claude_desktop_config.json
+```
+
+Transport↔backend defaults: `stdio` → local daemon at `127.0.0.1:4356`; `http` → cloud at `api.bitrouter.ai` (multi-tenant: each client sends its own `Authorization: Bearer` header; no server-side `--token` needed). HTTP server binds at `127.0.0.1:4357` and mounts at `/mcp-control`. For stdio→cloud, pass `--token brk_...` or `BITROUTER_TOKEN` (single-tenant).
+
+See `references/mcp-server.md` for all flags, tool JSON shapes, and deferred roadmap items.
+
+## 6. References
 
 Read these on demand — don't load them all upfront.
 
@@ -147,8 +170,9 @@ Read these on demand — don't load them all upfront.
 | `references/harness-codex.md` | Wiring Codex CLI |
 | `references/harness-hermes-agent.md` | Wiring Hermes Agent |
 | `references/harness-openclaw.md` | Wiring OpenClaw |
+| `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
 
-## 6. Gotchas
+## 7. Gotchas
 
 - **Always ask Local-or-Cloud first.** The default of "just install locally" is wrong for users who want managed billing — they should never install the daemon at all.
 - **Cloud sign-in is `bitrouter auth login`, not `bitrouter login`.** The top-level `bitrouter login <provider>` surface is still per-provider OAuth (today: `github-copilot`); the cloud bridge landed as a separate `bitrouter auth …` subcommand tree to avoid colliding with it. Bare `bitrouter login` / `bitrouter logout` / `bitrouter whoami` now print a redirect pointing at `bitrouter auth login` / `bitrouter auth logout` / `bitrouter auth whoami` and `bitrouter cloud whoami`.

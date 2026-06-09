@@ -172,6 +172,26 @@ bitrouter skills add bitrouter        # via BitRouter's own installer
 npx skills add bitrouter/bitrouter    # via the generic skills CLI
 ```
 
+## MCP (experimental)
+
+> ⚠️ **Experimental — not stable. Interfaces and flags may change without
+> notice; use at your own risk.**
+
+Distinct from *proxying* upstream MCP servers (the gateway behind
+`bitrouter tools`), BitRouter can also run as an **origin** MCP server that
+exposes its *own* tools — `complete`, `list_models`, `status` — to any
+MCP-capable client (Claude Code, Cursor, …).
+
+```bash
+bitrouter mcp serve                    # stdio → local daemon (127.0.0.1:4356)
+bitrouter mcp serve --transport http   # streamable HTTP → BitRouter Cloud
+bitrouter mcp install --client claude  # write/print the client config block
+```
+
+See [`mcp/README.md`](mcp/) and
+[`skills/bitrouter/references/mcp-server.md`](skills/bitrouter/references/mcp-server.md)
+for transports, backends, and auth.
+
 ## Documentation
 
 - [`CLI.md`](CLI.md) — full CLI reference with flags and examples
@@ -179,6 +199,7 @@ npx skills add bitrouter/bitrouter    # via the generic skills CLI
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
 - [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)
+- [`mcp/`](mcp/) — the experimental origin MCP server (`bitrouter mcp serve`)
 
 ## Roadmap
 
