@@ -233,6 +233,10 @@ pub struct UsageAccumulator {
     seen: bool,
     /// Total `char` count of `TextDelta` + `ReasoningDelta` text observed.
     delta_chars: u64,
+    /// `char` count of the request prompt's text, seeded at stream start. Lets a
+    /// client disconnect *before* the upstream usage frame still estimate the
+    /// prompt tokens the provider bills regardless of disconnect.
+    prompt_chars: u64,
 }
 
 impl UsageAccumulator {
@@ -240,9 +244,14 @@ impl UsageAccumulator {
     /// Conservative-ish: too small bills extra, too large bills less.
     const CHARS_PER_TOKEN_ESTIMATE: u64 = 4;
 
-    /// A fresh, empty accumulator.
-    pub fn new() -> Self {
-        Self::default()
+    /// A fresh accumulator seeded with the request prompt's `char` count, so a
+    /// disconnect before the upstream usage frame can still estimate prompt
+    /// tokens. Pass `0` when no prompt-token estimate is wanted.
+    pub fn with_prompt_chars(prompt_chars: u64) -> Self {
+        Self {
+            prompt_chars,
+            ..Default::default()
+        }
     }
 
     /// Observe a part; updates the running usage from a `Usage` part or from a
@@ -274,6 +283,13 @@ impl UsageAccumulator {
     /// observed.
     pub fn estimated_output_tokens(&self) -> u64 {
         self.delta_chars.div_ceil(Self::CHARS_PER_TOKEN_ESTIMATE)
+    }
+
+    /// Estimated prompt-token count from the seeded prompt char count, for the
+    /// disconnect-billing fallback. Returns `0` when the accumulator was not
+    /// seeded with a prompt char count.
+    pub fn estimated_prompt_tokens(&self) -> u64 {
+        self.prompt_chars.div_ceil(Self::CHARS_PER_TOKEN_ESTIMATE)
     }
 }
 
@@ -363,15 +379,17 @@ impl StreamProcessor {
     ///   wins — covers both clean termination and disconnect *after* the
     ///   usage chunk.
     /// - If the stream ended via [`StreamOutcome::ClientDisconnected`] before
-    ///   any `Usage` was seen but delta text *was* observed, synthesise a
-    ///   usage with `completion_tokens` estimated from the text length so
-    ///   the request still bills. Without this, a client could drain a long
-    ///   generation, hang up just before the trailing usage frame, and pay
-    ///   $0. Prompt tokens stay at `0` in the estimate (the prompt isn't
-    ///   plumbed through `StreamContext` — known gap, mirrors the v0 fix).
-    /// - Otherwise (clean error with no usage, or disconnect with no
-    ///   deltas), leave `final_usage` empty; settlement records the request
-    ///   as un-billable.
+    ///   any `Usage` was seen, synthesise a usage from the disconnect
+    ///   estimate: `prompt_tokens` from the request prompt's char count
+    ///   (seeded into the accumulator at stream start) and `completion_tokens`
+    ///   from the observed delta text. The provider bills input tokens the
+    ///   moment it accepts the request, so prompt tokens are charged even when
+    ///   no output streamed before the hang-up; output is added when deltas
+    ///   were seen. Without this, a client could drain a long generation, hang
+    ///   up just before the trailing usage frame, and pay $0.
+    /// - Otherwise (clean error with no usage, or disconnect with neither a
+    ///   seeded prompt nor deltas), leave `final_usage` empty; settlement
+    ///   records the request as un-billable.
     pub async fn finish(&mut self, outcome: StreamOutcome) -> &StreamContext {
         if self.ended {
             return &self.ctx;
@@ -385,15 +403,18 @@ impl StreamProcessor {
         if let Some(usage) = self.ctx.accumulated_usage.finalized() {
             self.ctx.final_usage = Some(usage);
         } else if matches!(outcome, StreamOutcome::ClientDisconnected) {
-            let estimated = self.ctx.accumulated_usage.estimated_output_tokens();
-            if estimated > 0 {
+            let prompt_tokens = self.ctx.accumulated_usage.estimated_prompt_tokens();
+            let completion_tokens = self.ctx.accumulated_usage.estimated_output_tokens();
+            if prompt_tokens > 0 || completion_tokens > 0 {
                 tracing::warn!(
                     request_id = %self.ctx.request_id,
-                    estimated_output_tokens = estimated,
-                    "client disconnected mid-stream before upstream usage frame; billing estimated output"
+                    estimated_prompt_tokens = prompt_tokens,
+                    estimated_output_tokens = completion_tokens,
+                    "client disconnected mid-stream before upstream usage frame; billing estimated usage"
                 );
                 self.ctx.final_usage = Some(Usage {
-                    completion_tokens: estimated,
+                    prompt_tokens,
+                    completion_tokens,
                     ..Default::default()
                 });
             }
