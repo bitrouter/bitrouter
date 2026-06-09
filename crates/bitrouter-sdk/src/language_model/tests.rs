@@ -614,8 +614,10 @@ async fn disconnect_before_usage_bills_estimated_output() {
     let entries = captured.lock().unwrap().clone();
     assert_eq!(entries.len(), 1, "exactly one settlement recorded");
     let (prompt, completion) = entries[0];
-    // Prompt-tokens not plumbed through StreamContext yet — known gap.
-    assert_eq!(prompt, 0, "prompt-token estimate is the documented gap");
+    // Prompt tokens are now seeded into the `StreamContext` and billed on
+    // disconnect even though the upstream usage frame never arrived: the
+    // request prompt is `"hi"` (2 chars), so ceil(2/4) = 1 token.
+    assert_eq!(prompt, 1, "prompt-token estimate billed on disconnect");
     assert!(
         completion >= 1,
         "completion-token estimate must be non-zero ({completion}); ~31 chars / 4 ≈ 8 tokens"

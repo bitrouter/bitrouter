@@ -12,7 +12,7 @@ use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
 use crate::language_model::types::{
-    ExecutionResult, PipelineRequest, PipelineResponse, Prompt, RoutingTarget, Usage,
+    Content, ExecutionResult, PipelineRequest, PipelineResponse, Prompt, RoutingTarget, Usage,
 };
 use crate::plugin::PluginId;
 
@@ -243,6 +243,28 @@ impl PipelineContext {
         &self.events
     }
 
+    /// Rough `char` count of the request prompt's text — system instruction
+    /// plus every message's text / reasoning content. Used to seed the
+    /// [`UsageAccumulator`] so a client disconnect *before* the upstream usage
+    /// frame can still estimate prompt tokens. Non-text parts (tool calls,
+    /// tool results) are skipped; they carry no user-visible prose and the
+    /// estimate only needs to beat `0` until the authoritative frame arrives.
+    fn prompt_text_chars(&self) -> u64 {
+        let prompt = self.prompt();
+        let mut chars = prompt
+            .system
+            .as_ref()
+            .map_or(0u64, |s| s.chars().count() as u64);
+        for message in &prompt.messages {
+            for content in &message.content {
+                if let Content::Text { text } | Content::Reasoning { text } = content {
+                    chars = chars.saturating_add(text.chars().count() as u64);
+                }
+            }
+        }
+        chars
+    }
+
     /// Borrow a `StreamContext` for the StreamHook stage.
     pub fn stream_context(&self) -> StreamContext {
         let target = self.route_chain.as_ref().and_then(|c| c.first()).cloned();
@@ -250,7 +272,7 @@ impl PipelineContext {
             request_id: self.request_id.clone(),
             caller: self.caller.clone(),
             target,
-            accumulated_usage: UsageAccumulator::new(),
+            accumulated_usage: UsageAccumulator::with_prompt_chars(self.prompt_text_chars()),
             parts_emitted: 0,
             final_usage: None,
             events: EventBus::new(),
@@ -378,6 +400,8 @@ impl StreamContext {
 mod tests {
     use super::*;
     use crate::config::PromptOverrides;
+    use crate::language_model::stream::{StreamOutcome, StreamProcessor};
+    use crate::language_model::types::StreamPart;
     use crate::language_model::{Message, PipelineRequest, Role};
 
     fn ctx_from_prompt(prompt: Prompt) -> PipelineContext {
@@ -458,5 +482,141 @@ mod tests {
         ctx.apply_preset_overrides(&PromptOverrides::default());
         assert!(ctx.prompt().system.is_none());
         assert!(ctx.prompt().params.extra.is_empty());
+    }
+
+    fn prompt_with_text(system: Option<&str>, user_text: &str) -> Prompt {
+        Prompt {
+            model: "gpt-5".into(),
+            system: system.map(str::to_string),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![Content::Text {
+                    text: user_text.to_string(),
+                }],
+            }],
+            tools: vec![],
+            params: Default::default(),
+            response_format: None,
+            stream: true,
+        }
+    }
+
+    // Mirrors the private `UsageAccumulator::CHARS_PER_TOKEN_ESTIMATE`.
+    const CHARS_PER_TOKEN: u64 = 4;
+
+    #[test]
+    fn stream_context_seeds_prompt_token_estimate() {
+        let system = "You are a careful assistant.";
+        let user = "Summarize the meeting notes in three concise bullet points.";
+        let ctx = ctx_from_prompt(prompt_with_text(Some(system), user));
+
+        let chars = (system.chars().count() + user.chars().count()) as u64;
+        let sc = ctx.stream_context();
+        assert_eq!(
+            sc.accumulated_usage.estimated_prompt_tokens(),
+            chars.div_ceil(CHARS_PER_TOKEN),
+        );
+        // No deltas observed yet → no output estimate.
+        assert_eq!(sc.accumulated_usage.estimated_output_tokens(), 0);
+    }
+
+    #[test]
+    fn prompt_token_estimate_ignores_non_text_content() {
+        // Only the system instruction is prose; the message's tool-call JSON
+        // args must not inflate the prompt-token estimate.
+        let system = "sys";
+        let prompt = Prompt {
+            model: "gpt-5".into(),
+            system: Some(system.into()),
+            messages: vec![Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolCall {
+                    id: "call_1".into(),
+                    name: "get_weather".into(),
+                    arguments: "{\"city\":\"a deliberately long value to be ignored\"}".into(),
+                }],
+            }],
+            tools: vec![],
+            params: Default::default(),
+            response_format: None,
+            stream: true,
+        };
+        let ctx = ctx_from_prompt(prompt);
+        let sc = ctx.stream_context();
+        assert_eq!(
+            sc.accumulated_usage.estimated_prompt_tokens(),
+            (system.chars().count() as u64).div_ceil(CHARS_PER_TOKEN),
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_bills_prompt_tokens_without_output() {
+        let user = "Generate a long essay about distributed systems.";
+        let ctx = ctx_from_prompt(prompt_with_text(None, user));
+        let expected_prompt = (user.chars().count() as u64).div_ceil(CHARS_PER_TOKEN);
+
+        // Client hangs up before any delta or usage frame arrives.
+        let mut proc = StreamProcessor::new(vec![], vec![], ctx.stream_context());
+        proc.finish(StreamOutcome::ClientDisconnected).await;
+
+        let usage = proc
+            .context()
+            .final_usage
+            .expect("disconnect with a non-empty prompt must still bill input tokens");
+        assert_eq!(usage.prompt_tokens, expected_prompt);
+        assert_eq!(usage.completion_tokens, 0);
+    }
+
+    #[tokio::test]
+    async fn disconnect_bills_prompt_and_estimated_output() {
+        let user = "hi";
+        let ctx = ctx_from_prompt(prompt_with_text(None, user));
+        let mut proc = StreamProcessor::new(vec![], vec![], ctx.stream_context());
+
+        // Drain some output, then disconnect before the trailing usage frame.
+        let delta = "The answer is forty-two, and here is some more text.";
+        proc.process_part(StreamPart::TextDelta { text: delta.into() })
+            .await
+            .expect("text delta passes through with no hooks");
+        proc.finish(StreamOutcome::ClientDisconnected).await;
+
+        let usage = proc.context().final_usage.expect("billed on disconnect");
+        assert_eq!(
+            usage.prompt_tokens,
+            (user.chars().count() as u64).div_ceil(CHARS_PER_TOKEN),
+        );
+        assert_eq!(
+            usage.completion_tokens,
+            (delta.chars().count() as u64).div_ceil(CHARS_PER_TOKEN),
+        );
+    }
+
+    #[tokio::test]
+    async fn authoritative_usage_overrides_disconnect_estimate() {
+        // A real upstream usage frame must win over the disconnect estimate,
+        // even when the stream then ends as a client disconnect.
+        let ctx = ctx_from_prompt(prompt_with_text(Some("system"), "user question"));
+        let mut proc = StreamProcessor::new(vec![], vec![], ctx.stream_context());
+
+        proc.process_part(StreamPart::Usage {
+            usage: Usage {
+                prompt_tokens: 11,
+                completion_tokens: 22,
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+        proc.finish(StreamOutcome::ClientDisconnected).await;
+
+        let usage = proc
+            .context()
+            .final_usage
+            .expect("authoritative usage billed");
+        assert_eq!(
+            usage.prompt_tokens, 11,
+            "real prompt tokens, not the estimate"
+        );
+        assert_eq!(usage.completion_tokens, 22);
     }
 }
