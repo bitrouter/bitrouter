@@ -3,6 +3,7 @@
 //! explicitly; auto-reading the stored OAuth credential is v1.x.
 
 use async_trait::async_trait;
+use bitrouter_cloud_sdk::management::billing::BalanceResponse;
 
 use super::{
     Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
@@ -47,13 +48,6 @@ impl CloudBackend {
     }
 }
 
-#[derive(serde::Deserialize)]
-struct Balance {
-    balance_micro_usd: i64,
-    pending_micro_usd: i64,
-    available_micro_usd: i64,
-}
-
 #[async_trait]
 impl Backend for CloudBackend {
     async fn list_models(&self, caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError> {
@@ -81,7 +75,6 @@ impl Backend for CloudBackend {
             .map(|m| ModelInfo {
                 provider: m.providers.first().cloned().unwrap_or_default(),
                 id: m.id,
-                active: true,
             })
             .collect())
     }
@@ -100,7 +93,11 @@ impl Backend for CloudBackend {
             body["temperature"] = t.into();
         }
         if let Some(s) = req.system {
-            body["system"] = s.into();
+            // OpenAI's contract carries the system prompt as a leading
+            // system-role message, not a top-level field (see `LocalBackend`).
+            if let Some(arr) = body["messages"].as_array_mut() {
+                arr.insert(0, serde_json::json!({ "role": "system", "content": s }));
+            }
         }
         let bearer = self.resolve_bearer(caller)?;
         let resp = self
@@ -163,14 +160,14 @@ impl Backend for CloudBackend {
                 body: resp.text().await.unwrap_or_default(),
             });
         }
-        let b: Balance = resp
+        let b: BalanceResponse = resp
             .json()
             .await
             .map_err(|e| BackendError::Decode(e.to_string()))?;
         Ok(StatusInfo::Cloud {
             available_micro_usd: b.available_micro_usd,
             balance_micro_usd: b.balance_micro_usd,
-            pending_micro_usd: b.pending_micro_usd,
+            pending_micro_usd: b.pending_debits_micro_usd,
         })
     }
 }
@@ -189,8 +186,9 @@ mod tests {
             .and(header("authorization", "Bearer brk_test"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "balance_micro_usd": 5_000_000,
-                "pending_micro_usd": 769_000,
-                "available_micro_usd": 4_231_000
+                "pending_debits_micro_usd": 769_000,
+                "available_micro_usd": 4_231_000,
+                "currency": "USD"
             })))
             .mount(&server)
             .await;
@@ -252,7 +250,6 @@ mod tests {
             vec![ModelInfo {
                 id: "openai/gpt-4o".into(),
                 provider: "openai".into(),
-                active: true,
             }]
         );
     }

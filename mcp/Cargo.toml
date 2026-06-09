@@ -37,6 +37,9 @@ axum.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
+# Reused for the typed `/v1/billing/balance` wire shape (no cycle: cloud-sdk
+# does not depend on this crate or on apps/bitrouter).
+bitrouter-cloud-sdk.workspace = true
 
 [dev-dependencies]
 wiremock = "0.6"

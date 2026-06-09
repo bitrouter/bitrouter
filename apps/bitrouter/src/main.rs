@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
@@ -209,11 +209,11 @@ enum McpAction {
     /// Serve the MCP server (stdio by default).
     Serve {
         /// `stdio` (local daemon) or `http` (cloud).
-        #[arg(long, default_value = "stdio")]
-        transport: String,
+        #[arg(long, value_enum, default_value_t = McpTransport::Stdio)]
+        transport: McpTransport,
         /// `local` or `cloud`. Defaults: stdio→local, http→cloud.
-        #[arg(long)]
-        backend: Option<String>,
+        #[arg(long, value_enum)]
+        backend: Option<McpBackend>,
         /// Local daemon root.
         #[arg(long, default_value = "http://127.0.0.1:4356")]
         local_url: String,
@@ -230,12 +230,64 @@ enum McpAction {
     /// Write/print the client config block.
     Install {
         /// `claude` or `cursor`.
-        #[arg(long, default_value = "claude")]
-        client: String,
+        #[arg(long, value_enum, default_value_t = McpClient::Claude)]
+        client: McpClient,
         /// Config file to merge into; omit to print to stdout.
         #[arg(long)]
         config: Option<PathBuf>,
     },
+}
+
+/// Wire transport for `bitrouter mcp serve`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum McpTransport {
+    /// Newline-delimited JSON-RPC over stdio (local clients launch this).
+    Stdio,
+    /// Streamable HTTP, mounted at `/mcp-control`.
+    Http,
+}
+
+/// Backend the MCP tools route to.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum McpBackend {
+    /// The local BYOK daemon at `127.0.0.1:4356`.
+    Local,
+    /// BitRouter Cloud at `api.bitrouter.ai`.
+    Cloud,
+}
+
+/// MCP client targeted by `bitrouter mcp install`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum McpClient {
+    Claude,
+    Cursor,
+}
+
+impl From<McpTransport> for bitrouter_mcp::Transport {
+    fn from(t: McpTransport) -> Self {
+        match t {
+            McpTransport::Stdio => bitrouter_mcp::Transport::Stdio,
+            McpTransport::Http => bitrouter_mcp::Transport::Http,
+        }
+    }
+}
+
+impl From<McpBackend> for bitrouter_mcp::BackendKind {
+    fn from(b: McpBackend) -> Self {
+        match b {
+            McpBackend::Local => bitrouter_mcp::BackendKind::Local,
+            McpBackend::Cloud => bitrouter_mcp::BackendKind::Cloud,
+        }
+    }
+}
+
+impl From<McpClient> for bitrouter_mcp::install::Client {
+    fn from(c: McpClient) -> Self {
+        match c {
+            McpClient::Claude => bitrouter_mcp::install::Client::Claude,
+            McpClient::Cursor => bitrouter_mcp::install::Client::Cursor,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -489,20 +541,11 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
             token,
             bind,
         } => {
-            let transport = match transport.as_str() {
-                "stdio" => bitrouter_mcp::Transport::Stdio,
-                "http" => bitrouter_mcp::Transport::Http,
-                other => return Err(anyhow::anyhow!("unknown transport '{other}'")),
-            };
-            let backend = match backend.as_deref() {
-                Some("local") => bitrouter_mcp::BackendKind::Local,
-                Some("cloud") => bitrouter_mcp::BackendKind::Cloud,
-                None => match transport {
-                    bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
-                    bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
-                },
-                Some(other) => return Err(anyhow::anyhow!("unknown backend '{other}'")),
-            };
+            let transport = bitrouter_mcp::Transport::from(transport);
+            let backend = backend.map(Into::into).unwrap_or(match transport {
+                bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
+                bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
+            });
             let cloud_token = token.or_else(|| std::env::var("BITROUTER_TOKEN").ok());
             if matches!(transport, bitrouter_mcp::Transport::Http) && cloud_token.is_some() {
                 eprintln!(
@@ -520,13 +563,8 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
             .await
         }
         McpAction::Install { client, config } => {
-            let client = match client.as_str() {
-                "claude" => bitrouter_mcp::install::Client::Claude,
-                "cursor" => bitrouter_mcp::install::Client::Cursor,
-                other => return Err(anyhow::anyhow!("unknown client '{other}'")),
-            };
             bitrouter_mcp::install(bitrouter_mcp::InstallOptions {
-                client,
+                client: client.into(),
                 config_path: config,
             })
         }

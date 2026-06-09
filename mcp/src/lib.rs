@@ -86,6 +86,11 @@ pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
         Transport::Stdio => server::serve_stdio(backend).await,
         Transport::Http => {
             let require_auth = matches!(opts.backend, BackendKind::Cloud);
+            // Without the auth middleware (local backend), a non-loopback bind
+            // would expose the BYOK daemon's provider keys to the network.
+            if !require_auth {
+                server::ensure_loopback_bind(&opts.bind)?;
+            }
             server::serve_http(backend, &opts.bind, require_auth).await
         }
     }

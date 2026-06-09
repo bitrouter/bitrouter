@@ -52,7 +52,6 @@ impl Backend for LocalBackend {
             .map(|m| ModelInfo {
                 provider: m.providers.first().cloned().unwrap_or_default(),
                 id: m.id,
-                active: true,
             })
             .collect())
     }
@@ -74,7 +73,13 @@ impl Backend for LocalBackend {
             body["temperature"] = t.into();
         }
         if let Some(s) = req.system {
-            body["system"] = s.into();
+            // OpenAI's contract carries the system prompt as a leading
+            // system-role message, not a top-level field (the daemon's
+            // `ChatRequest` has no `system` slot; a top-level one would be
+            // splatted onto the outbound provider request unchanged).
+            if let Some(arr) = body["messages"].as_array_mut() {
+                arr.insert(0, serde_json::json!({ "role": "system", "content": s }));
+            }
         }
         let resp = self
             .http
@@ -148,15 +153,11 @@ impl Backend for LocalBackend {
         for m in &env.data {
             for p in &m.providers {
                 if seen.insert(p.clone()) {
-                    providers.push(ProviderStatus {
-                        id: p.clone(),
-                        active: true,
-                    });
+                    providers.push(ProviderStatus { id: p.clone() });
                 }
             }
         }
         Ok(StatusInfo::Local {
-            running: true,
             listen: self.base_url.clone(),
             models: env.data.len(),
             providers,
@@ -186,14 +187,23 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
-    async fn complete_posts_openai_body_and_extracts_content() {
+    async fn complete_posts_full_openai_body_and_extracts_content() {
         use wiremock::matchers::body_partial_json;
         let server = MockServer::start().await;
+        // Pin the *entire* outbound body: model, sampling params, and — crucially
+        // — that `system` is prepended as a leading system-role message rather
+        // than sent as a top-level field the daemon would ignore.
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
-            .and(body_partial_json(
-                serde_json::json!({ "model": "openai/gpt-4o" }),
-            ))
+            .and(body_partial_json(serde_json::json!({
+                "model": "openai/gpt-4o",
+                "max_tokens": 64,
+                "temperature": 0.5,
+                "messages": [
+                    { "role": "system", "content": "be terse" },
+                    { "role": "user", "content": "hi" }
+                ]
+            })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "choices": [ { "message": { "content": "hi there" }, "finish_reason": "stop" } ],
                 "usage": { "prompt_tokens": 12, "completion_tokens": 5 }
@@ -209,8 +219,8 @@ mod tests {
                     model: "openai/gpt-4o".into(),
                     messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
                     max_tokens: Some(64),
-                    temperature: None,
-                    system: None,
+                    temperature: Some(0.5),
+                    system: Some("be terse".into()),
                 },
             )
             .await
@@ -266,12 +276,10 @@ mod tests {
             .expect("status")
         {
             StatusInfo::Local {
-                running,
                 models,
                 mut providers,
                 ..
             } => {
-                assert!(running);
                 assert_eq!(models, 3);
                 providers.sort_by(|a, b| a.id.cmp(&b.id));
                 assert_eq!(
@@ -279,11 +287,9 @@ mod tests {
                     vec![
                         ProviderStatus {
                             id: "anthropic".into(),
-                            active: true
                         },
                         ProviderStatus {
                             id: "openai".into(),
-                            active: true
                         },
                     ]
                 );
@@ -319,12 +325,10 @@ mod tests {
                 ModelInfo {
                     id: "openai/gpt-4o".into(),
                     provider: "openai".into(),
-                    active: true
                 },
                 ModelInfo {
                     id: "claude/sonnet".into(),
                     provider: "anthropic".into(),
-                    active: true
                 },
             ]
         );

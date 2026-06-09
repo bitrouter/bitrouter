@@ -812,6 +812,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum 0.8.9",
+ "bitrouter-cloud-sdk",
  "http 1.4.0",
  "reqwest 0.12.28",
  "rmcp",

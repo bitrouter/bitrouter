@@ -19,9 +19,16 @@ fn caller_from_extensions(ext: &rmcp::model::Extensions) -> CallerAuth {
         .get::<http::request::Parts>()
         .and_then(|p| p.headers.get(http::header::AUTHORIZATION))
         .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
+        .and_then(parse_bearer)
         .map(str::to_owned);
     CallerAuth { bearer }
+}
+
+/// Token from a `Bearer <token>` Authorization value. The scheme is matched
+/// case-insensitively per RFC 7235 (`bearer`/`BEARER` are equally valid).
+fn parse_bearer(value: &str) -> Option<&str> {
+    let (scheme, token) = value.split_once(' ')?;
+    scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
 }
 
 #[derive(Clone)]
@@ -37,7 +44,7 @@ pub struct CompleteArgs {
     /// Chat messages, OpenAI shape: `[{"role":"user","content":"…"}]`.
     pub messages: Vec<serde_json::Value>,
     pub max_tokens: Option<u32>,
-    pub temperature: Option<f32>,
+    pub temperature: Option<f64>,
     pub system: Option<String>,
 }
 
@@ -123,9 +130,33 @@ impl ServerHandler for BitrouterMcp {
 use crate::backend::cloud::CloudBackend;
 use crate::backend::local::LocalBackend;
 
-/// Whether an `Authorization` header value is a Bearer token.
+/// Whether an `Authorization` header value carries a Bearer token (scheme
+/// matched case-insensitively per RFC 7235).
 fn has_bearer(value: Option<&str>) -> bool {
-    value.is_some_and(|v| v.starts_with("Bearer "))
+    value.and_then(parse_bearer).is_some()
+}
+
+/// Refuse a non-loopback HTTP bind when the server runs without auth (the
+/// local backend). Binding the unauthenticated local backend to a public
+/// address would expose the BYOK daemon — running on the user's own provider
+/// keys — to the whole network.
+pub(crate) fn ensure_loopback_bind(bind: &str) -> anyhow::Result<()> {
+    use std::net::ToSocketAddrs;
+    let addrs: Vec<_> = bind
+        .to_socket_addrs()
+        .map_err(|e| anyhow::anyhow!("invalid --bind '{bind}': {e}"))?
+        .collect();
+    match addrs.iter().find(|a| !a.ip().is_loopback()) {
+        None if addrs.is_empty() => {
+            anyhow::bail!("invalid --bind '{bind}': resolved to no socket addresses")
+        }
+        None => Ok(()),
+        Some(addr) => anyhow::bail!(
+            "refusing to bind the unauthenticated local backend to non-loopback address \
+             {addr}: this would expose your provider keys to the network. Bind a loopback \
+             address (e.g. 127.0.0.1) or use --backend cloud (which requires Authorization)."
+        ),
+    }
 }
 
 /// Reject requests without a `Bearer` Authorization header (presence only;
@@ -262,8 +293,29 @@ mod tests {
     #[test]
     fn require_bearer_predicate() {
         assert!(has_bearer(Some("Bearer abc")));
+        // RFC 7235 schemes are case-insensitive.
+        assert!(has_bearer(Some("bearer abc")));
+        assert!(has_bearer(Some("BEARER abc")));
         assert!(!has_bearer(Some("Basic abc")));
+        assert!(!has_bearer(Some("Bearer")));
         assert!(!has_bearer(None));
+    }
+
+    #[test]
+    fn parse_bearer_is_case_insensitive_and_trims() {
+        assert_eq!(parse_bearer("Bearer xyz"), Some("xyz"));
+        assert_eq!(parse_bearer("bearer  xyz"), Some("xyz"));
+        assert_eq!(parse_bearer("Basic xyz"), None);
+        assert_eq!(parse_bearer("Bearer"), None);
+    }
+
+    #[test]
+    fn ensure_loopback_bind_allows_loopback_rejects_public() {
+        assert!(ensure_loopback_bind("127.0.0.1:4357").is_ok());
+        assert!(ensure_loopback_bind("[::1]:4357").is_ok());
+        assert!(ensure_loopback_bind("0.0.0.0:4357").is_err());
+        assert!(ensure_loopback_bind("192.168.1.10:4357").is_err());
+        assert!(ensure_loopback_bind("not-a-bind").is_err());
     }
 
     struct StubBackend;

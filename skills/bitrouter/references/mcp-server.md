@@ -109,8 +109,8 @@ List all models routable through the connected backend.
 
 ```json
 [
-  { "id": "openai/gpt-4o", "provider": "openai", "active": true },
-  { "id": "anthropic/claude-3-5-sonnet", "provider": "anthropic", "active": true }
+  { "id": "openai/gpt-4o", "provider": "openai" },
+  { "id": "anthropic/claude-3-5-sonnet", "provider": "anthropic" }
 ]
 ```
 
@@ -122,14 +122,15 @@ Report BitRouter's health and credit state. The shape differs by backend.
 
 **Local backend response:**
 
+A successful response means the daemon is reachable; an error is returned otherwise.
+
 ```json
 {
-  "running": true,
   "listen": "127.0.0.1:4356",
   "models": 14,
   "providers": [
-    { "id": "openai", "active": true },
-    { "id": "anthropic", "active": false }
+    { "id": "openai" },
+    { "id": "anthropic" }
   ]
 }
 ```
@@ -202,7 +203,7 @@ Different clients can use different `brk_*` keys (or their own `bitrouter auth l
 
 ### http → local
 
-When the local backend is forced (`--backend local`), no auth middleware is applied — the local daemon's own `skip_auth` setting governs access.
+When the local backend is forced (`--backend local`), no auth middleware is applied — the local daemon's own `skip_auth` setting governs access. Because this exposes the BYOK daemon (running on your own provider keys) with no MCP-layer auth, `serve` **refuses a non-loopback `--bind`** in this mode: bind a loopback address (e.g. `127.0.0.1:4357`), or use `--backend cloud`, which requires `Authorization`.
 
 ---
 

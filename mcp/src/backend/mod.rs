@@ -17,7 +17,7 @@ pub struct CompleteRequest {
     #[serde(default)]
     pub max_tokens: Option<u32>,
     #[serde(default)]
-    pub temperature: Option<f32>,
+    pub temperature: Option<f64>,
     #[serde(default)]
     pub system: Option<String>,
 }
@@ -43,7 +43,6 @@ pub struct CompleteResponse {
 pub struct ModelInfo {
     pub id: String,
     pub provider: String,
-    pub active: bool,
 }
 
 /// Backend-specific status payload.
@@ -51,7 +50,6 @@ pub struct ModelInfo {
 #[serde(untagged)]
 pub enum StatusInfo {
     Local {
-        running: bool,
         listen: String,
         models: usize,
         providers: Vec<ProviderStatus>,
@@ -66,7 +64,6 @@ pub enum StatusInfo {
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct ProviderStatus {
     pub id: String,
-    pub active: bool,
 }
 
 /// Envelope returned by `/v1/models` on both backends.
