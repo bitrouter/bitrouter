@@ -807,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-mcp"
-version = "1.0.0-alpha.9"
+version = "1.0.0-alpha.11"
 dependencies = [
  "anyhow",
  "async-trait",

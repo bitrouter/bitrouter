@@ -1,5 +1,6 @@
 [package]
 name = "bitrouter-mcp"
+description = "BitRouter origin MCP server: exposes complete/list_models/status over stdio and streamable HTTP."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
