@@ -231,7 +231,7 @@
       ]
     },
     "ChatToolFunction": {
-      "description": "The `function` payload of a [`ChatTool`]: name + description + JSON-Schema\nparameters.",
+      "description": "The `function` payload of a [`ChatTool`]: name + description + JSON-Schema\nparameters + optional `strict` flag.\n<https://platform.openai.com/docs/guides/function-calling#strict-mode>",
       "type": "object",
       "properties": {
         "description": {
@@ -245,6 +245,14 @@
           "type": "string"
         },
         "parameters": {
+          "default": null
+        },
+        "strict": {
+          "description": "OpenAI strict-mode flag (V3 `strict`). Captured so it is not lost across\nthe canonical boundary.",
+          "type": [
+            "boolean",
+            "null"
+          ],
           "default": null
         }
       },

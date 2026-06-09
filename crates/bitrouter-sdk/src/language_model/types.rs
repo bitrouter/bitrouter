@@ -418,15 +418,77 @@ impl Message {
     }
 }
 
-/// A tool/function the model may call.
+/// A tool the model may call — a faithful port of the Vercel AI SDK
+/// `LanguageModelV3FunctionTool | LanguageModelV3ProviderTool` union.
+/// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-function-tool.ts>
+/// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-provider-tool.ts>
+///
+/// Like [`ToolChoice`] and [`ResponseFormat`], each inbound adapter promotes a
+/// provider-native tool entry into this typed slot at parse time, and each
+/// outbound adapter renders it back into the upstream's native shape. The two
+/// variants behave very differently across protocols:
+///
+/// - [`Self::Function`] is portable: every protocol has a function/tool slot,
+///   so a function tool round-trips across all four wires. Only the optional
+///   `strict` flag is protocol-specific (Chat Completions / Responses honor it;
+///   Anthropic and Gemini have no equivalent and drop it — documented at those
+///   render sites).
+/// - [`Self::ProviderDefined`] is **not** portable. V3 namespaces these tools by
+///   provider precisely because their `args` schema is provider-specific and has
+///   no cross-provider equivalent (an OpenAI `web_search_preview` is not an
+///   Anthropic `web_search_20250305`). On a **same-protocol** round-trip the
+///   native shape is reproduced exactly (`id` + `args` preserved). On a
+///   **cross-protocol** route the tool is preserved **verbatim** in its source
+///   provider's native shape and splatted into the target request so the
+///   upstream — not bitrouter — decides what to do with it; bitrouter never
+///   silently drops it and never invents a lossy "equivalent" (the same
+///   faithful-passthrough rule as [`ToolChoice::Other`]). See
+///   [`provider_defined_native`](crate::language_model::protocol) for the shared
+///   reconstruction.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Tool {
-    /// Tool name.
-    pub name: String,
-    /// Human description.
-    pub description: Option<String>,
-    /// JSON Schema for the tool's parameters.
-    pub parameters: serde_json::Value,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Tool {
+    /// A client-side function tool: `{name, description?, parameters, strict?}`.
+    /// `parameters` is V3's `inputSchema` (a JSON Schema). `strict` is V3's
+    /// top-level strict-mode flag — captured from the wire where present so it
+    /// is not lost across the canonical boundary.
+    Function {
+        /// Tool name. Unique within the request.
+        name: String,
+        /// Human description.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// JSON Schema for the tool's parameters (V3 `inputSchema`).
+        parameters: serde_json::Value,
+        /// V3 strict-mode flag. Chat Completions / Responses honor it; Anthropic
+        /// and Gemini have no equivalent and drop it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strict: Option<bool>,
+    },
+    /// A provider-defined (server-side) tool: `{id, name, args}`, mirroring V3's
+    /// `LanguageModelV3ProviderTool`. `id` is provider-namespaced as
+    /// `<provider-id>.<tool-name>` (e.g. `openai.web_search_preview`,
+    /// `anthropic.web_search_20250305`, `google.google_search`). `args` is the
+    /// provider-specific configuration object for the tool, preserved verbatim.
+    ProviderDefined {
+        /// Provider-namespaced id, `<provider-id>.<tool-name>`.
+        id: String,
+        /// Tool name. Unique within the request.
+        name: String,
+        /// Provider-specific configuration arguments, preserved verbatim.
+        args: serde_json::Value,
+    },
+}
+
+impl Tool {
+    /// The tool's name — present on both variants. Used where a feature needs to
+    /// reference a tool by name without caring whether it is a client function
+    /// tool or a provider-defined one (e.g. policy tool-access checks).
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Function { name, .. } | Self::ProviderDefined { name, .. } => name,
+        }
+    }
 }
 
 /// How the model must treat the available [`Tool`]s on this request — a faithful
@@ -1086,10 +1148,11 @@ mod tests {
     #[test]
     fn tools_require_tools_capability() {
         let mut p = bare_prompt();
-        p.tools = vec![Tool {
+        p.tools = vec![Tool::Function {
             name: "get_weather".into(),
             description: None,
             parameters: serde_json::json!({ "type": "object" }),
+            strict: None,
         }];
         assert_eq!(p.required_capabilities(), vec![Capability::Tools]);
     }
@@ -1109,10 +1172,11 @@ mod tests {
             strict: None,
             schema: serde_json::json!({ "type": "object" }),
         });
-        p.tools = vec![Tool {
+        p.tools = vec![Tool::Function {
             name: "t".into(),
             description: None,
             parameters: serde_json::json!({}),
+            strict: None,
         }];
         p.params.reasoning_effort = Some("low".to_string());
         let caps = p.required_capabilities();

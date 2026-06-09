@@ -43,10 +43,11 @@ fn ctx_with_tools(tools: &[&str], policy_id: Option<&str>) -> PipelineContext {
         messages: vec![Message::text(Role::User, "hi")],
         tools: tools
             .iter()
-            .map(|name| Tool {
+            .map(|name| Tool::Function {
                 name: name.to_string(),
                 description: None,
                 parameters: serde_json::json!({}),
+                strict: None,
             })
             .collect(),
         params: GenerationParams::default(),

@@ -168,7 +168,7 @@
       ]
     },
     "ResponsesTool": {
-      "description": "One element of [`ResponsesRequest`]'s `tools` array — the Responses-flavoured\nflat tool definition (`{ type: \"function\", name, description, parameters }`).",
+      "description": "One element of [`ResponsesRequest`]'s `tools` array.\n\nResponses uses one flat array for both kinds of tool:\n- a **function** tool — `{type:\"function\", name, description?, parameters, strict?}`;\n- a **provider-defined** server tool — `{type:\"web_search_preview\"|…, …config}`\n  (`code_interpreter`, `file_search`, `image_generation`, `computer_use_preview`).\n\n`kind` (`type`) discriminates the two; for a server tool the configuration\nkeys ride in `extra` so they are preserved verbatim into the canonical\n`Tool::ProviderDefined.args`.\n<https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>",
       "type": "object",
       "properties": {
         "description": {
@@ -186,6 +186,14 @@
           "default": null
         },
         "parameters": {
+          "default": null
+        },
+        "strict": {
+          "description": "OpenAI strict-mode flag (V3 `strict`) on a function tool. Captured so it\nis not lost across the canonical boundary.",
+          "type": [
+            "boolean",
+            "null"
+          ],
           "default": null
         },
         "type": {

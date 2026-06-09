@@ -14,13 +14,13 @@ use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
-    describe_deser_error,
+    InboundAdapter, OutboundAdapter, PROVIDER_ID_GOOGLE, SseEvent, StreamDecoder, StreamEncoder,
+    Transport, describe_deser_error, provider_defined_native,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Modality, Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice,
+    Modality, Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, Tool, ToolChoice,
     ToolResultOutput, Usage,
 };
 
@@ -85,13 +85,30 @@ pub struct GenerateContentContent {
     parts: Vec<serde_json::Value>,
 }
 
-/// One element of [`GenerateContentRequest`]'s `tools` array — Google's
-/// `{ functionDeclarations: [...] }` envelope.
+/// One element of [`GenerateContentRequest`]'s `tools` array.
+///
+/// A single Google tool object may carry client function declarations
+/// (`functionDeclarations`) **and/or** one or more provider-defined ("built-in")
+/// tool keys on the same object — `googleSearch`, `codeExecution`,
+/// `googleSearchRetrieval`, `urlContext`. Function declarations parse to
+/// [`Tool::Function`]; every other key is a provider-defined tool namespaced
+/// `google.<key>`, its value preserved verbatim as `args`. The non-function keys
+/// ride in `extra`.
+/// <https://ai.google.dev/gemini-api/docs/function-calling>
+/// <https://ai.google.dev/gemini-api/docs/google-search>
+/// <https://ai.google.dev/gemini-api/docs/code-execution>
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateContentTool {
     #[serde(default)]
     function_declarations: Vec<GenerateContentFunctionDecl>,
+    /// Provider-defined (built-in) tool keys on this object — `googleSearch`,
+    /// `codeExecution`, `googleSearchRetrieval`, `urlContext`, … — each preserved
+    /// verbatim. Skipped from the published schema; the documented contract is
+    /// the typed `functionDeclarations` shape.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// One function declaration inside a [`GenerateContentTool`]: name + description +
@@ -251,6 +268,75 @@ fn render_gemini_tool_choice(choice: &ToolChoice) -> serde_json::Value {
         ToolChoice::Other { value } => return value.clone(),
     };
     serde_json::json!({ "functionCallingConfig": fcc })
+}
+
+/// Expand one Google `tools[]` object into canonical [`Tool`]s: each
+/// `functionDeclarations` entry → a [`Tool::Function`]; each other (built-in)
+/// key → a [`Tool::ProviderDefined`] namespaced `google.<key>`, value preserved
+/// verbatim as `args`.
+fn parse_generate_content_tool(t: GenerateContentTool) -> Vec<Tool> {
+    let mut out: Vec<Tool> = t
+        .function_declarations
+        .into_iter()
+        .map(|f| Tool::Function {
+            name: f.name,
+            description: f.description,
+            parameters: f.parameters,
+            // Google function declarations carry no `strict` slot.
+            strict: None,
+        })
+        .collect();
+    for (key, value) in t.extra {
+        out.push(Tool::ProviderDefined {
+            id: format!("{PROVIDER_ID_GOOGLE}.{key}"),
+            name: key,
+            args: value,
+        });
+    }
+    out
+}
+
+/// Render the canonical tool list into Google's `tools` value.
+///
+/// Google packs all client function tools into a single object's
+/// `functionDeclarations` array, while each provider-defined built-in tool is a
+/// distinct single-key object (`{googleSearch:{}}`, `{codeExecution:{}}`, …).
+/// Google's own function declarations have **no** `strict` slot, so
+/// [`Tool::Function::strict`] is intentionally dropped here (documented; mirrors
+/// the structured-output `strict` drop). A [`Tool::ProviderDefined`] renders to
+/// its source-native shape via [`provider_defined_native`]: a `google.*` id is a
+/// lossless same-protocol round-trip; a foreign-provider id is preserved verbatim
+/// (faithful passthrough) as its own tool-array element so the upstream decides.
+/// <https://ai.google.dev/gemini-api/docs/function-calling>
+/// <https://ai.google.dev/gemini-api/docs/google-search>
+fn render_generate_content_tools(tools: &[Tool]) -> serde_json::Value {
+    let mut function_declarations = Vec::new();
+    let mut entries = Vec::new();
+    for tool in tools {
+        match tool {
+            Tool::Function {
+                name,
+                description,
+                parameters,
+                strict: _,
+            } => function_declarations.push(serde_json::json!({
+                "name": name,
+                "description": description,
+                "parameters": parameters,
+            })),
+            Tool::ProviderDefined { id, name, args } => {
+                entries.push(provider_defined_native(id, name, args));
+            }
+        }
+    }
+    // The function-declarations object goes first when present, preserving the
+    // prior single-object render for the common (function-only) case.
+    let mut out = Vec::with_capacity(entries.len() + 1);
+    if !function_declarations.is_empty() {
+        out.push(serde_json::json!({ "functionDeclarations": function_declarations }));
+    }
+    out.extend(entries);
+    serde_json::Value::Array(out)
 }
 
 /// Parse one Google `parts[]` array into ordered canonical content. Order is
@@ -425,15 +511,17 @@ impl InboundAdapter for GenerateContentAdapter {
             }
         }
 
+        // A Google tool object may carry `functionDeclarations` (client function
+        // tools) and/or provider-defined built-in keys (`googleSearch`,
+        // `codeExecution`, `googleSearchRetrieval`, `urlContext`, …) on the same
+        // object. Expand each object into its function tools plus one
+        // `Tool::ProviderDefined` per built-in key, namespaced `google.<key>`,
+        // value preserved verbatim as `args`.
+        // <https://ai.google.dev/gemini-api/docs/function-calling>
         let tools = req
             .tools
             .into_iter()
-            .flat_map(|t| t.function_declarations)
-            .map(|f| crate::language_model::types::Tool {
-                name: f.name,
-                description: f.description,
-                parameters: f.parameters,
-            })
+            .flat_map(parse_generate_content_tool)
             .collect();
 
         // `responseMimeType` / `responseSchema` are typed fields now. Promote
@@ -569,16 +657,7 @@ impl OutboundAdapter for GenerateContentAdapter {
             );
         }
         if !prompt.tools.is_empty() {
-            req.insert(
-                "tools".into(),
-                serde_json::json!([{
-                    "functionDeclarations": prompt.tools.iter().map(|t| serde_json::json!({
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    })).collect::<Vec<_>>()
-                }]),
-            );
+            req.insert("tools".into(), render_generate_content_tools(&prompt.tools));
         }
         let mut gen_config = serde_json::Map::new();
         if let Some(t) = prompt.params.temperature {

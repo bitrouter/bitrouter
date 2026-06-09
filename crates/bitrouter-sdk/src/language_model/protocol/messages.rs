@@ -10,6 +10,8 @@
 //! - #416: mixed text + tool_use blocks keep their order and never 502.
 //! - #422: inbound `ping` events are ignored, not treated as errors.
 
+use std::collections::HashMap;
+
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -17,14 +19,14 @@ use async_trait::async_trait;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
-    describe_deser_error,
+    InboundAdapter, OutboundAdapter, PROVIDER_ID_ANTHROPIC, SseEvent, StreamDecoder, StreamEncoder,
+    Transport, describe_deser_error, provider_defined_native,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, AuthScheme, Content, DataContent, FinishReason, GenerateResult, GenerationParams,
-    Message, Prompt, ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart, ToolChoice,
-    ToolResultContentPart, ToolResultOutput, Usage,
+    Message, Prompt, ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart, Tool,
+    ToolChoice, ToolResultContentPart, ToolResultOutput, Usage,
 };
 
 /// The Messages inbound + outbound protocol adapter.
@@ -109,14 +111,87 @@ pub struct MessagesMessage {
     content: serde_json::Value,
 }
 
-/// One element of [`MessagesRequest`]'s `tools` array — Anthropic's tool definition shape.
+/// One element of [`MessagesRequest`]'s `tools` array.
+///
+/// Anthropic uses one array for both kinds of tool:
+/// - a **client (function) tool** — `{name, description?, input_schema}` (no `type`);
+/// - a **provider-defined (server) tool** — `{type:"web_search_20250305"|…, name, …config}`
+///   (web search, code execution, computer use, bash, text editor), where `type`
+///   is the dated tool version and `name` is the stable tool name.
+///
+/// A versioned `type` discriminates a server tool; its config keys ride in
+/// `extra` so they are preserved verbatim into `Tool::ProviderDefined.args`.
+/// <https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview>
+/// <https://docs.claude.com/en/docs/agents-and-tools/tool-use/web-search-tool>
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MessagesTool {
-    name: String,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
     input_schema: serde_json::Value,
+    /// Server-tool configuration keys (e.g. `max_uses`, `allowed_domains`,
+    /// `display_width_px`) for a provider-defined tool. Preserved verbatim.
+    /// Skipped from the published schema — the documented contract is the typed
+    /// client-tool shape.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+/// Parse one Anthropic `tools` entry into a canonical [`Tool`]. A versioned
+/// `type` marks a provider-defined server tool (namespaced `anthropic.<type>`,
+/// config keys preserved verbatim as `args`); a typeless entry is a client
+/// function tool (`{name, description?, input_schema}`). An entry with neither a
+/// `type` nor a `name` is dropped — there is nothing to forward.
+fn parse_messages_tool(t: MessagesTool) -> Option<Tool> {
+    if let Some(kind) = t.kind {
+        // Server tool: `{type:"web_search_20250305", name:"web_search", …config}`.
+        return Some(Tool::ProviderDefined {
+            id: format!("{PROVIDER_ID_ANTHROPIC}.{kind}"),
+            name: t.name.unwrap_or_else(|| kind.clone()),
+            args: serde_json::Value::Object(t.extra.into_iter().collect()),
+        });
+    }
+    Some(Tool::Function {
+        name: t.name?,
+        description: t.description,
+        parameters: t.input_schema,
+        // Anthropic client tools carry no `strict` slot.
+        strict: None,
+    })
+}
+
+/// Render one canonical [`Tool`] into an Anthropic `tools` entry.
+///
+/// A [`Tool::Function`] becomes `{name, description?, input_schema}`. Anthropic
+/// has **no** `strict` slot, so [`Tool::Function::strict`] is intentionally
+/// dropped here (documented; the same drop applies to structured-output
+/// `strict`). A [`Tool::ProviderDefined`] renders to its source-native shape via
+/// [`provider_defined_native`]: an `anthropic.*` id reproduces the exact server
+/// tool (`{type:<version>, name, …args}`) for a lossless same-protocol
+/// round-trip; a foreign-provider id is preserved verbatim (faithful
+/// passthrough) so the upstream decides.
+/// <https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview>
+fn render_messages_tool(tool: &Tool) -> serde_json::Value {
+    match tool {
+        Tool::Function {
+            name,
+            description,
+            parameters,
+            strict: _,
+        } => {
+            serde_json::json!({
+                "name": name,
+                "description": description,
+                "input_schema": parameters,
+            })
+        }
+        Tool::ProviderDefined { id, name, args } => provider_defined_native(id, name, args),
+    }
 }
 
 /// Collapse Anthropic's `system` (string or content-block array) into plain text.
@@ -506,14 +581,17 @@ impl InboundAdapter for MessagesAdapter {
             }
         }
 
+        // Anthropic mixes client (function) tools and provider-defined (server)
+        // tools in one array. A versioned `type` (`web_search_20250305`,
+        // `code_execution_20250522`, `computer_20250124`, `bash_20250124`,
+        // `text_editor_20250124`, …) marks a server tool — namespaced
+        // `anthropic.<type>`, with its config keys preserved verbatim as `args`.
+        // A typeless entry is a client tool (`{name, description?, input_schema}`).
+        // <https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview>
         let tools = req
             .tools
             .into_iter()
-            .map(|t| crate::language_model::types::Tool {
-                name: t.name,
-                description: t.description,
-                parameters: t.input_schema,
-            })
+            .filter_map(parse_messages_tool)
             .collect();
 
         // Messages' GA structured outputs are typed under `output_config`
@@ -650,13 +728,7 @@ impl OutboundAdapter for MessagesAdapter {
                 prompt
                     .tools
                     .iter()
-                    .map(|t| {
-                        serde_json::json!({
-                            "name": t.name,
-                            "description": t.description,
-                            "input_schema": t.parameters,
-                        })
-                    })
+                    .map(render_messages_tool)
                     .collect::<Vec<_>>()
                     .into(),
             );

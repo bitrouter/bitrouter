@@ -40,10 +40,11 @@ fn sample_prompt() -> Prompt {
         model: "test-model".to_string(),
         system: Some("be brief".to_string()),
         messages: vec![Message::text(Role::User, "what is 2+2?")],
-        tools: vec![Tool {
+        tools: vec![Tool::Function {
             name: "calculator".to_string(),
             description: Some("does math".to_string()),
             parameters: serde_json::json!({ "type": "object" }),
+            strict: None,
         }],
         params: GenerationParams {
             temperature: Some(0.5),
@@ -4147,10 +4148,11 @@ fn prompt_with_tool_choice(choice: ToolChoice) -> Prompt {
         model: "m".to_string(),
         system: None,
         messages: vec![Message::text(Role::User, "hi")],
-        tools: vec![Tool {
+        tools: vec![Tool::Function {
             name: "search".to_string(),
             description: None,
             parameters: serde_json::json!({"type": "object"}),
+            strict: None,
         }],
         params: GenerationParams {
             tool_choice: Some(choice),
@@ -4535,4 +4537,462 @@ fn generation_params_omits_absent_tool_choice() {
         value.get("tool_choice").is_none(),
         "absent tool_choice must be omitted: {value}"
     );
+}
+
+// ===== Part C: typed tools (V3 function `strict` + provider-defined tools) =====
+
+/// A prompt carrying exactly the given tool list (and nothing else interesting).
+fn prompt_with_tools(tools: Vec<Tool>) -> Prompt {
+    Prompt {
+        model: "m".to_string(),
+        system: None,
+        messages: vec![Message::text(Role::User, "hi")],
+        tools,
+        params: GenerationParams::default(),
+        response_format: None,
+        stream: false,
+    }
+}
+
+/// Render a tool list through `protocol` and parse it back through the same
+/// protocol — the same-protocol fidelity contract. Returns the recovered tools.
+fn round_trip_tools(protocol: &ApiProtocol, tools: Vec<Tool>) -> Vec<Tool> {
+    let adapter = adapter_for(protocol.clone());
+    let prompt = prompt_with_tools(tools);
+    let rendered = adapter.render_request(&prompt).unwrap();
+    adapter.parse_request(rendered).unwrap().tools
+}
+
+/// The raw `tools` JSON a protocol renders for a tool list (for native-shape
+/// assertions).
+fn rendered_tools_json(protocol: &ApiProtocol, tools: Vec<Tool>) -> serde_json::Value {
+    adapter_for(protocol.clone())
+        .render_request(&prompt_with_tools(tools))
+        .unwrap()["tools"]
+        .clone()
+}
+
+// --- function-tool `strict` ---
+
+/// A function tool's `strict` flag survives a same-protocol round-trip on the
+/// two protocols whose wire has a `strict` slot (Chat Completions, Responses).
+#[test]
+fn function_tool_strict_round_trips_on_openai_protocols() {
+    for protocol in &[ApiProtocol::ChatCompletions, ApiProtocol::Responses] {
+        let tools = round_trip_tools(
+            protocol,
+            vec![Tool::Function {
+                name: "get_weather".to_string(),
+                description: Some("look up weather".to_string()),
+                parameters: serde_json::json!({ "type": "object" }),
+                strict: Some(true),
+            }],
+        );
+        assert_eq!(
+            tools,
+            vec![Tool::Function {
+                name: "get_weather".to_string(),
+                description: Some("look up weather".to_string()),
+                parameters: serde_json::json!({ "type": "object" }),
+                strict: Some(true),
+            }],
+            "{protocol:?} must preserve function-tool strict"
+        );
+    }
+}
+
+/// Chat Completions renders `strict` under `function`; Responses renders it flat.
+#[test]
+fn function_tool_strict_renders_in_native_position() {
+    let tool = Tool::Function {
+        name: "f".to_string(),
+        description: None,
+        parameters: serde_json::json!({ "type": "object" }),
+        strict: Some(true),
+    };
+    let chat = rendered_tools_json(&ApiProtocol::ChatCompletions, vec![tool.clone()]);
+    assert_eq!(chat[0]["type"], "function");
+    assert_eq!(chat[0]["function"]["strict"], true);
+
+    let responses = rendered_tools_json(&ApiProtocol::Responses, vec![tool]);
+    assert_eq!(responses[0]["type"], "function");
+    assert_eq!(responses[0]["strict"], true);
+}
+
+/// `strict` is omitted (not emitted as `false`/`null`) when unset.
+#[test]
+fn function_tool_strict_omitted_when_absent() {
+    let tool = Tool::Function {
+        name: "f".to_string(),
+        description: None,
+        parameters: serde_json::json!({ "type": "object" }),
+        strict: None,
+    };
+    let chat = rendered_tools_json(&ApiProtocol::ChatCompletions, vec![tool.clone()]);
+    assert!(
+        chat[0]["function"].get("strict").is_none(),
+        "absent strict must be omitted: {chat}"
+    );
+    let responses = rendered_tools_json(&ApiProtocol::Responses, vec![tool]);
+    assert!(
+        responses[0].get("strict").is_none(),
+        "absent strict must be omitted: {responses}"
+    );
+}
+
+/// Anthropic and Gemini have no `strict` slot — the flag is documented as
+/// dropped. A function tool still round-trips otherwise; `strict` comes back
+/// `None`.
+#[test]
+fn function_tool_strict_dropped_on_anthropic_and_gemini() {
+    for protocol in &[ApiProtocol::Messages, ApiProtocol::GenerateContent] {
+        let tools = round_trip_tools(
+            protocol,
+            vec![Tool::Function {
+                name: "get_weather".to_string(),
+                description: Some("desc".to_string()),
+                parameters: serde_json::json!({ "type": "object" }),
+                strict: Some(true),
+            }],
+        );
+        assert_eq!(
+            tools,
+            vec![Tool::Function {
+                name: "get_weather".to_string(),
+                description: Some("desc".to_string()),
+                parameters: serde_json::json!({ "type": "object" }),
+                strict: None,
+            }],
+            "{protocol:?} has no strict slot; it must drop to None but keep the tool"
+        );
+        // And it is never emitted on the wire.
+        let rendered = rendered_tools_json(
+            protocol,
+            vec![Tool::Function {
+                name: "f".to_string(),
+                description: None,
+                parameters: serde_json::json!({}),
+                strict: Some(true),
+            }],
+        );
+        assert!(
+            !rendered.to_string().contains("strict"),
+            "{protocol:?} must not emit strict: {rendered}"
+        );
+    }
+}
+
+// --- provider-defined tools: same-protocol round-trips ---
+
+/// Every Responses server tool round-trips losslessly (id `openai.<type>` +
+/// verbatim args), covering the full documented set.
+#[test]
+fn responses_provider_defined_tools_round_trip() {
+    let cases = vec![
+        Tool::ProviderDefined {
+            id: "openai.web_search_preview".to_string(),
+            name: "web_search_preview".to_string(),
+            args: serde_json::json!({ "search_context_size": "high" }),
+        },
+        Tool::ProviderDefined {
+            id: "openai.code_interpreter".to_string(),
+            name: "code_interpreter".to_string(),
+            args: serde_json::json!({ "container": { "type": "auto" } }),
+        },
+        Tool::ProviderDefined {
+            id: "openai.file_search".to_string(),
+            name: "file_search".to_string(),
+            args: serde_json::json!({ "vector_store_ids": ["vs_1"], "max_num_results": 5 }),
+        },
+        Tool::ProviderDefined {
+            id: "openai.image_generation".to_string(),
+            name: "image_generation".to_string(),
+            args: serde_json::json!({ "quality": "high" }),
+        },
+        Tool::ProviderDefined {
+            id: "openai.computer_use_preview".to_string(),
+            name: "computer_use_preview".to_string(),
+            args: serde_json::json!({ "display_width": 1024, "display_height": 768, "environment": "browser" }),
+        },
+    ];
+    for tool in cases {
+        let round_tripped = round_trip_tools(&ApiProtocol::Responses, vec![tool.clone()]);
+        assert_eq!(round_tripped, vec![tool.clone()], "round-trip for {tool:?}");
+    }
+}
+
+/// Responses renders a server tool flat as `{type:<tool>, …args}`.
+#[test]
+fn responses_provider_defined_renders_flat_native_shape() {
+    let rendered = rendered_tools_json(
+        &ApiProtocol::Responses,
+        vec![Tool::ProviderDefined {
+            id: "openai.web_search_preview".to_string(),
+            name: "web_search_preview".to_string(),
+            args: serde_json::json!({ "search_context_size": "low" }),
+        }],
+    );
+    assert_eq!(rendered[0]["type"], "web_search_preview");
+    assert_eq!(rendered[0]["search_context_size"], "low");
+    // No function-only keys leak onto a server tool.
+    assert!(rendered[0].get("parameters").is_none());
+}
+
+/// Every Anthropic server tool round-trips losslessly (an `anthropic.<version>`
+/// id with a stable `name` and verbatim args), covering web search, code
+/// execution, and computer use.
+#[test]
+fn messages_provider_defined_tools_round_trip() {
+    let cases = vec![
+        Tool::ProviderDefined {
+            id: "anthropic.web_search_20250305".to_string(),
+            name: "web_search".to_string(),
+            args: serde_json::json!({ "max_uses": 5 }),
+        },
+        Tool::ProviderDefined {
+            id: "anthropic.code_execution_20250522".to_string(),
+            name: "code_execution".to_string(),
+            args: serde_json::json!({}),
+        },
+        Tool::ProviderDefined {
+            id: "anthropic.computer_20250124".to_string(),
+            name: "computer".to_string(),
+            args: serde_json::json!({ "display_width_px": 1024, "display_height_px": 768 }),
+        },
+    ];
+    for tool in cases {
+        let round_tripped = round_trip_tools(&ApiProtocol::Messages, vec![tool.clone()]);
+        assert_eq!(round_tripped, vec![tool.clone()], "round-trip for {tool:?}");
+    }
+}
+
+/// Anthropic renders a server tool as `{type:<version>, name, …args}`.
+#[test]
+fn messages_provider_defined_renders_versioned_native_shape() {
+    let rendered = rendered_tools_json(
+        &ApiProtocol::Messages,
+        vec![Tool::ProviderDefined {
+            id: "anthropic.web_search_20250305".to_string(),
+            name: "web_search".to_string(),
+            args: serde_json::json!({ "max_uses": 3 }),
+        }],
+    );
+    assert_eq!(rendered[0]["type"], "web_search_20250305");
+    assert_eq!(rendered[0]["name"], "web_search");
+    assert_eq!(rendered[0]["max_uses"], 3);
+}
+
+/// Every Gemini built-in tool round-trips losslessly (id `google.<key>` +
+/// verbatim args), covering search, code execution, and URL context.
+#[test]
+fn generate_content_provider_defined_tools_round_trip() {
+    let cases = vec![
+        Tool::ProviderDefined {
+            id: "google.googleSearch".to_string(),
+            name: "googleSearch".to_string(),
+            args: serde_json::json!({}),
+        },
+        Tool::ProviderDefined {
+            id: "google.codeExecution".to_string(),
+            name: "codeExecution".to_string(),
+            args: serde_json::json!({}),
+        },
+        Tool::ProviderDefined {
+            id: "google.googleSearchRetrieval".to_string(),
+            name: "googleSearchRetrieval".to_string(),
+            args: serde_json::json!({ "dynamicRetrievalConfig": { "mode": "MODE_DYNAMIC" } }),
+        },
+        Tool::ProviderDefined {
+            id: "google.urlContext".to_string(),
+            name: "urlContext".to_string(),
+            args: serde_json::json!({}),
+        },
+    ];
+    for tool in cases {
+        let round_tripped = round_trip_tools(&ApiProtocol::GenerateContent, vec![tool.clone()]);
+        assert_eq!(round_tripped, vec![tool.clone()], "round-trip for {tool:?}");
+    }
+}
+
+/// Gemini renders a built-in tool as a single-key `{<toolKey>: args}` object.
+#[test]
+fn generate_content_provider_defined_renders_single_key_object() {
+    let rendered = rendered_tools_json(
+        &ApiProtocol::GenerateContent,
+        vec![Tool::ProviderDefined {
+            id: "google.googleSearch".to_string(),
+            name: "googleSearch".to_string(),
+            args: serde_json::json!({}),
+        }],
+    );
+    // The built-in tool is its own tool-array element with the camelCase key.
+    let entry = rendered
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e.get("googleSearch").is_some())
+        .expect("googleSearch entry present");
+    assert_eq!(entry["googleSearch"], serde_json::json!({}));
+}
+
+/// A single Gemini tool object carrying both `functionDeclarations` and a
+/// built-in `googleSearch` key expands into both a function tool and a
+/// provider-defined tool, and rebuilds the same wire on render.
+#[test]
+fn generate_content_mixed_function_and_builtin_tools_round_trip() {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
+    let body = serde_json::json!({
+        "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
+        "tools": [{
+            "functionDeclarations": [{
+                "name": "get_weather",
+                "description": "w",
+                "parameters": { "type": "object" }
+            }],
+            "googleSearch": {}
+        }]
+    });
+    let parsed = adapter.parse_request(body).unwrap();
+    assert_eq!(parsed.tools.len(), 2, "one function + one builtin");
+    assert!(matches!(parsed.tools[0], Tool::Function { .. }));
+    assert!(matches!(parsed.tools[1], Tool::ProviderDefined { .. }));
+
+    // Re-render and re-parse: both tools survive (the function-declarations
+    // object plus the googleSearch element).
+    let rendered = adapter.render_request(&parsed).unwrap();
+    let reparsed = adapter.parse_request(rendered).unwrap();
+    assert_eq!(reparsed.tools, parsed.tools);
+}
+
+/// A Responses array mixing a function tool and a server tool keeps both, in
+/// order, with the function/provider split intact.
+#[test]
+fn responses_mixed_function_and_server_tools_round_trip() {
+    let tools = vec![
+        Tool::Function {
+            name: "get_weather".to_string(),
+            description: None,
+            parameters: serde_json::json!({ "type": "object" }),
+            strict: Some(true),
+        },
+        Tool::ProviderDefined {
+            id: "openai.web_search_preview".to_string(),
+            name: "web_search_preview".to_string(),
+            args: serde_json::json!({ "search_context_size": "high" }),
+        },
+    ];
+    let round_tripped = round_trip_tools(&ApiProtocol::Responses, tools.clone());
+    assert_eq!(round_tripped, tools);
+}
+
+// --- provider-defined tools: cross-protocol faithful passthrough ---
+
+/// Documented cross-protocol behavior: a provider-defined tool routed to a
+/// *different* provider's wire is **preserved verbatim** in its source-native
+/// shape (so the upstream decides), never silently dropped and never lossily
+/// "translated". Concretely, an Anthropic `web_search_20250305` rendered onto a
+/// Responses (OpenAI) request still arrives as `{type:"web_search_20250305",
+/// name:"web_search", …}` — and a Responses parser, treating any non-`function`
+/// type as a server tool, recovers it with its original `anthropic.*` id intact.
+#[test]
+fn provider_defined_tool_cross_protocol_is_preserved_verbatim() {
+    let anthropic_tool = Tool::ProviderDefined {
+        id: "anthropic.web_search_20250305".to_string(),
+        name: "web_search".to_string(),
+        args: serde_json::json!({ "max_uses": 5 }),
+    };
+
+    // Render the Anthropic-native tool onto a Responses (OpenAI) request.
+    let rendered = rendered_tools_json(&ApiProtocol::Responses, vec![anthropic_tool.clone()]);
+    // Verbatim source-native shape: the versioned Anthropic `type` + `name` +
+    // args are all present, unchanged — not mapped to `web_search_preview`.
+    assert_eq!(rendered[0]["type"], "web_search_20250305");
+    assert_eq!(rendered[0]["name"], "web_search");
+    assert_eq!(rendered[0]["max_uses"], 5);
+
+    // The Responses inbound parser recovers it as a provider-defined tool. The
+    // `type` it sees is the Anthropic version, namespaced `openai.*` because the
+    // wire it arrived on is OpenAI's — bitrouter cannot know the tool's true
+    // origin from the wire alone, but it is faithfully forwarded, never dropped.
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let reparsed = adapter
+        .parse_request(
+            adapter
+                .render_request(&prompt_with_tools(vec![anthropic_tool]))
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(reparsed.tools.len(), 1, "tool is forwarded, not dropped");
+    match &reparsed.tools[0] {
+        Tool::ProviderDefined { id, name, args } => {
+            assert_eq!(id, "openai.web_search_20250305");
+            assert_eq!(name, "web_search");
+            assert_eq!(args["max_uses"], 5);
+        }
+        other => panic!("expected a provider-defined tool, got {other:?}"),
+    }
+}
+
+/// The same faithful-passthrough holds onto Anthropic's wire: an OpenAI
+/// `web_search_preview` routed to a Messages request is preserved verbatim in
+/// its **source-native (OpenAI)** shape — `{type:"web_search_preview", …args}`,
+/// flat and with no `name` key, exactly as OpenAI serializes it — rather than
+/// being dropped or lossily reshaped into Anthropic's `{type, name, …}` form.
+/// bitrouter never invents a `name` the source did not carry; the upstream
+/// decides what to do with the unfamiliar tool.
+#[test]
+fn provider_defined_tool_cross_protocol_onto_anthropic_is_preserved() {
+    let openai_tool = Tool::ProviderDefined {
+        id: "openai.web_search_preview".to_string(),
+        name: "web_search_preview".to_string(),
+        args: serde_json::json!({ "search_context_size": "high" }),
+    };
+    let rendered = rendered_tools_json(&ApiProtocol::Messages, vec![openai_tool]);
+    assert_eq!(rendered[0]["type"], "web_search_preview");
+    assert_eq!(rendered[0]["search_context_size"], "high");
+    // Source-native (OpenAI) shape is flat: no Anthropic-style `name` is invented.
+    assert!(
+        rendered[0].get("name").is_none(),
+        "must not fabricate an Anthropic `name` key: {rendered}"
+    );
+}
+
+/// And onto Chat Completions (function-only on the wire): a provider-defined
+/// tool is still preserved verbatim into the `tools` array rather than dropped.
+#[test]
+fn provider_defined_tool_preserved_into_chat_completions() {
+    let tool = Tool::ProviderDefined {
+        id: "openai.web_search_preview".to_string(),
+        name: "web_search_preview".to_string(),
+        args: serde_json::json!({ "search_context_size": "low" }),
+    };
+    let rendered = rendered_tools_json(&ApiProtocol::ChatCompletions, vec![tool]);
+    assert_eq!(rendered[0]["type"], "web_search_preview");
+    assert_eq!(rendered[0]["search_context_size"], "low");
+}
+
+/// The canonical `Tool` enum uses an internal `type` tag (`function` /
+/// `provider_defined`) — a compact, self-describing IR serialization.
+#[test]
+fn tool_serde_uses_type_tag() {
+    let function = serde_json::to_value(Tool::Function {
+        name: "f".to_string(),
+        description: None,
+        parameters: serde_json::json!({}),
+        strict: None,
+    })
+    .unwrap();
+    assert_eq!(function["type"], "function");
+    // Absent optionals are omitted (no JSON null).
+    assert!(function.get("description").is_none());
+    assert!(function.get("strict").is_none());
+
+    let provider = serde_json::to_value(Tool::ProviderDefined {
+        id: "openai.web_search_preview".to_string(),
+        name: "web_search_preview".to_string(),
+        args: serde_json::json!({}),
+    })
+    .unwrap();
+    assert_eq!(provider["type"], "provider_defined");
+    assert_eq!(provider["id"], "openai.web_search_preview");
 }

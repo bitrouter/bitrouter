@@ -23,14 +23,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
-    describe_deser_error,
+    InboundAdapter, OutboundAdapter, PROVIDER_ID_OPENAI, SseEvent, StreamDecoder, StreamEncoder,
+    Transport, describe_deser_error, provider_defined_native,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice, ToolResultContentPart,
-    ToolResultOutput, Usage,
+    Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, Tool, ToolChoice,
+    ToolResultContentPart, ToolResultOutput, Usage,
 };
 
 /// The Responses protocol adapter.
@@ -120,8 +120,17 @@ pub enum ResponsesTextFormat {
     },
 }
 
-/// One element of [`ResponsesRequest`]'s `tools` array — the Responses-flavoured
-/// flat tool definition (`{ type: "function", name, description, parameters }`).
+/// One element of [`ResponsesRequest`]'s `tools` array.
+///
+/// Responses uses one flat array for both kinds of tool:
+/// - a **function** tool — `{type:"function", name, description?, parameters, strict?}`;
+/// - a **provider-defined** server tool — `{type:"web_search_preview"|…, …config}`
+///   (`code_interpreter`, `file_search`, `image_generation`, `computer_use_preview`).
+///
+/// `kind` (`type`) discriminates the two; for a server tool the configuration
+/// keys ride in `extra` so they are preserved verbatim into the canonical
+/// `Tool::ProviderDefined.args`.
+/// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct ResponsesTool {
     #[serde(default, rename = "type")]
@@ -132,6 +141,17 @@ pub struct ResponsesTool {
     description: Option<String>,
     #[serde(default)]
     parameters: serde_json::Value,
+    /// OpenAI strict-mode flag (V3 `strict`) on a function tool. Captured so it
+    /// is not lost across the canonical boundary.
+    #[serde(default)]
+    strict: Option<bool>,
+    /// Server-tool configuration keys (e.g. `search_context_size`,
+    /// `container`, `vector_store_ids`) for a provider-defined tool. Preserved
+    /// verbatim. Skipped from the published schema — the documented contract is
+    /// the typed function-tool shape.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 /// `reasoning` knob on [`ResponsesRequest`] — only `effort` is read; other
@@ -353,19 +373,19 @@ impl InboundAdapter for ResponsesAdapter {
         let messages = parse_input(&req.input)?;
         let system = req.instructions.filter(|s| !s.is_empty());
 
+        // Responses packs function tools and provider-defined ("server") tools
+        // into one flat array, discriminated by `type`. `type:"function"` (or a
+        // typeless entry that still carries a `name`, tolerated for lenient
+        // clients) becomes a `Tool::Function`; every other `type`
+        // (`web_search_preview`, `code_interpreter`, `file_search`,
+        // `image_generation`, `computer_use_preview`, …) is a provider-defined
+        // tool whose config keys ride in `extra` and are preserved verbatim under
+        // an `openai.<type>` id.
+        // <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>
         let tools = req
             .tools
             .into_iter()
-            .filter(|t| t.kind.as_deref() == Some("function") || t.name.is_some())
-            .map(|t| crate::language_model::types::Tool {
-                name: t.name.unwrap_or_default(),
-                description: t.description,
-                parameters: if t.parameters.is_null() {
-                    serde_json::json!({})
-                } else {
-                    t.parameters
-                },
-            })
+            .filter_map(parse_responses_tool)
             .collect();
 
         // `text` is a typed field. Promote `text.format: json_schema` into the
@@ -504,14 +524,7 @@ impl OutboundAdapter for ResponsesAdapter {
                 prompt
                     .tools
                     .iter()
-                    .map(|t| {
-                        serde_json::json!({
-                            "type": "function",
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters,
-                        })
-                    })
+                    .map(render_responses_tool)
                     .collect::<Vec<_>>()
                     .into(),
             );
@@ -715,6 +728,74 @@ impl OutboundAdapter for ResponsesAdapter {
 
     fn supports_response_format(&self) -> bool {
         true
+    }
+}
+
+/// Parse one Responses `tools` entry into a canonical [`Tool`]. A
+/// `type:"function"` entry (or a typeless one that still has a `name`) is a
+/// [`Tool::Function`]; anything else is a provider-defined server tool keyed by
+/// its `type`, namespaced `openai.<type>`, with its config keys preserved
+/// verbatim as `args`. An entry that is neither (no `type`, no `name`) is
+/// dropped — there is nothing to forward.
+fn parse_responses_tool(t: ResponsesTool) -> Option<Tool> {
+    let is_function = t.kind.as_deref() == Some("function");
+    if is_function || (t.kind.is_none() && t.name.is_some()) {
+        return Some(Tool::Function {
+            name: t.name.unwrap_or_default(),
+            description: t.description,
+            parameters: if t.parameters.is_null() {
+                serde_json::json!({})
+            } else {
+                t.parameters
+            },
+            strict: t.strict,
+        });
+    }
+    // Provider-defined server tool. `type` is the tool kind (and the tool name);
+    // config keys live in `extra`. A few server tools (`file_search`) accept a
+    // distinct `name`; default to the kind when absent.
+    let kind = t.kind?;
+    Some(Tool::ProviderDefined {
+        id: format!("{PROVIDER_ID_OPENAI}.{kind}"),
+        name: t.name.unwrap_or_else(|| kind.clone()),
+        args: serde_json::Value::Object(t.extra.into_iter().collect()),
+    })
+}
+
+/// Render one canonical [`Tool`] into a Responses `tools` entry.
+///
+/// A [`Tool::Function`] becomes the flat `{type:"function", name, description?,
+/// parameters, strict?}` shape; `strict` is emitted when set (previously always
+/// dropped). A [`Tool::ProviderDefined`] is rendered to its source-native shape
+/// via [`provider_defined_native`]: for an `openai.*` id this is the exact
+/// Responses server-tool object (`{type:<tool>, …args}`), a lossless
+/// same-protocol round-trip; a foreign-provider id is preserved verbatim
+/// (faithful passthrough) so the upstream decides.
+/// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>
+fn render_responses_tool(tool: &Tool) -> serde_json::Value {
+    match tool {
+        Tool::Function {
+            name,
+            description,
+            parameters,
+            strict,
+        } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".into(), "function".into());
+            obj.insert("name".into(), name.clone().into());
+            obj.insert(
+                "description".into(),
+                description
+                    .clone()
+                    .map_or(serde_json::Value::Null, serde_json::Value::String),
+            );
+            obj.insert("parameters".into(), parameters.clone());
+            if let Some(strict) = strict {
+                obj.insert("strict".into(), (*strict).into());
+            }
+            serde_json::Value::Object(obj)
+        }
+        Tool::ProviderDefined { id, name, args } => provider_defined_native(id, name, args),
     }
 }
 

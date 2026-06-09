@@ -84,6 +84,88 @@ pub mod responses;
 #[cfg(test)]
 mod tests;
 
+/// Provider-id prefix for OpenAI tools (Responses wire): `openai.<tool>`.
+pub(crate) const PROVIDER_ID_OPENAI: &str = "openai";
+/// Provider-id prefix for Anthropic tools (Messages wire): `anthropic.<tool>`.
+pub(crate) const PROVIDER_ID_ANTHROPIC: &str = "anthropic";
+/// Provider-id prefix for Google tools (Generate Content wire): `google.<tool>`.
+pub(crate) const PROVIDER_ID_GOOGLE: &str = "google";
+
+/// Split a provider-namespaced tool id (`<provider-id>.<tool-name>`, e.g.
+/// `openai.web_search_preview`) into `(provider_id, tool_name)`. If the id has
+/// no `.` separator the whole string is treated as the tool name with an empty
+/// provider id, so a malformed id never panics — the caller renders it verbatim.
+pub(crate) fn split_provider_id(id: &str) -> (&str, &str) {
+    match id.split_once('.') {
+        Some((provider, tool)) => (provider, tool),
+        None => ("", id),
+    }
+}
+
+/// Reconstruct a provider-defined tool's **source-native** wire object from its
+/// canonical `(id, name, args)`, as the originating provider serializes it.
+///
+/// This is the single source of truth for both directions of provider-defined
+/// tools:
+///
+/// - **Same-protocol render** (the tool's `id` prefix matches the target wire):
+///   the output is exactly the native shape the provider expects, so a
+///   provider-defined tool round-trips losslessly.
+/// - **Cross-protocol render** (foreign `id` prefix): bitrouter does not have a
+///   faithful 1:1 equivalent on a different provider's wire (V3 namespaces these
+///   tools by provider for exactly this reason), so the *faithful* behavior is to
+///   preserve the tool **verbatim** in its source-native shape and let the
+///   upstream decide — the same rule as
+///   [`ToolChoice::Other`](crate::language_model::types::ToolChoice::Other). The
+///   caller splats this object into the target request's tool list unchanged.
+///
+/// Native shapes (one comment-linked doc per provider lives at each adapter's
+/// tool render site):
+/// - OpenAI / Responses — a flat object `{type:<tool>, …args}`.
+/// - Anthropic / Messages — `{type:<tool>, name, …args}` (versioned `type` + a
+///   stable `name`).
+/// - Google / Generate Content — a single-key object `{<toolKey>: args}` (the
+///   `args` already carry the camelCase tool key's value).
+///
+/// `args` must be a JSON object; a non-object `args` (only reachable from a
+/// hand-built canonical value) is treated as empty so this never panics.
+pub(crate) fn provider_defined_native(
+    id: &str,
+    name: &str,
+    args: &serde_json::Value,
+) -> serde_json::Value {
+    let (provider, tool) = split_provider_id(id);
+    let arg_fields = args.as_object().cloned().unwrap_or_default();
+    match provider {
+        PROVIDER_ID_ANTHROPIC => {
+            // Anthropic server tools: `{type:"web_search_20250305", name:"web_search", …args}`.
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".into(), tool.into());
+            obj.insert("name".into(), name.into());
+            obj.extend(arg_fields);
+            serde_json::Value::Object(obj)
+        }
+        PROVIDER_ID_GOOGLE => {
+            // Google tools live as a single camelCase key on the tool object:
+            // `{googleSearch:{}}`, `{codeExecution:{}}`, `{urlContext:{}}`, …
+            // The key is the tool name; its value is the (possibly empty) args.
+            let value = args.as_object().map_or_else(
+                || serde_json::json!({}),
+                |m| serde_json::Value::Object(m.clone()),
+            );
+            serde_json::json!({ tool: value })
+        }
+        // OpenAI / Responses (and any other provider id) — a flat `{type, …args}`
+        // object, which is also the most faithful generic verbatim form.
+        _ => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".into(), tool.into());
+            obj.extend(arg_fields);
+            serde_json::Value::Object(obj)
+        }
+    }
+}
+
 /// A parsed Server-Sent-Events event from an upstream stream.
 #[derive(Debug, Clone, Default)]
 pub struct SseEvent {

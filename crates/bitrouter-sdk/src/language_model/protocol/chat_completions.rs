@@ -20,7 +20,7 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Modality, Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice,
+    Modality, Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, Tool, ToolChoice,
     ToolResultContentPart, ToolResultOutput, Usage,
 };
 
@@ -152,7 +152,8 @@ pub struct ChatTool {
 }
 
 /// The `function` payload of a [`ChatTool`]: name + description + JSON-Schema
-/// parameters.
+/// parameters + optional `strict` flag.
+/// <https://platform.openai.com/docs/guides/function-calling#strict-mode>
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct ChatToolFunction {
     name: String,
@@ -160,6 +161,10 @@ pub struct ChatToolFunction {
     description: Option<String>,
     #[serde(default)]
     parameters: serde_json::Value,
+    /// OpenAI strict-mode flag (V3 `strict`). Captured so it is not lost across
+    /// the canonical boundary.
+    #[serde(default)]
+    strict: Option<bool>,
 }
 
 // ===== role mapping (total — v0 #454-4) =====
@@ -392,13 +397,19 @@ impl InboundAdapter for ChatCompletionsAdapter {
             messages.push(Message { role, content });
         }
 
+        // Chat Completions is function-only on the wire — there is no
+        // provider-defined ("server") tool envelope, so every entry parses to a
+        // `Tool::Function`. The `strict` flag is captured into the canonical slot
+        // (previously dropped here).
+        // <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tools>
         let tools = req
             .tools
             .into_iter()
-            .map(|t| crate::language_model::types::Tool {
+            .map(|t| crate::language_model::types::Tool::Function {
                 name: t.function.name,
                 description: t.function.description,
                 parameters: t.function.parameters,
+                strict: t.function.strict,
             })
             .collect();
 
@@ -584,16 +595,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
                 prompt
                     .tools
                     .iter()
-                    .map(|t| {
-                        serde_json::json!({
-                            "type": "function",
-                            "function": {
-                                "name": t.name,
-                                "description": t.description,
-                                "parameters": t.parameters,
-                            }
-                        })
-                    })
+                    .map(render_chat_tool)
                     .collect::<Vec<_>>()
                     .into(),
             );
@@ -771,6 +773,48 @@ impl OutboundAdapter for ChatCompletionsAdapter {
 
     fn supports_response_format(&self) -> bool {
         true
+    }
+}
+
+/// Render one canonical [`Tool`] into a Chat Completions `tools` entry.
+///
+/// A [`Tool::Function`] becomes `{type:"function", function:{name, description,
+/// parameters, strict?}}`; the `strict` flag is emitted when set (previously it
+/// was always dropped).
+/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tools>
+///
+/// Chat Completions has **no** provider-defined ("server") tool envelope on the
+/// wire, so a [`Tool::ProviderDefined`] only reaches here on a cross-protocol
+/// route (a client targeting another provider's server tool, routed to an
+/// OpenAI-compatible upstream). Per the faithful-passthrough rule it is
+/// preserved verbatim in its source-native shape so the upstream decides; the
+/// object is splatted directly into the `tools` array rather than dropped or
+/// lossily mapped.
+fn render_chat_tool(tool: &Tool) -> serde_json::Value {
+    match tool {
+        Tool::Function {
+            name,
+            description,
+            parameters,
+            strict,
+        } => {
+            let mut function = serde_json::Map::new();
+            function.insert("name".into(), name.clone().into());
+            // `description` rides through as JSON null when absent for parity with
+            // the prior render; callers tolerate it.
+            function.insert(
+                "description".into(),
+                description
+                    .clone()
+                    .map_or(serde_json::Value::Null, serde_json::Value::String),
+            );
+            function.insert("parameters".into(), parameters.clone());
+            if let Some(strict) = strict {
+                function.insert("strict".into(), (*strict).into());
+            }
+            serde_json::json!({ "type": "function", "function": function })
+        }
+        Tool::ProviderDefined { id, name, args } => super::provider_defined_native(id, name, args),
     }
 }
 

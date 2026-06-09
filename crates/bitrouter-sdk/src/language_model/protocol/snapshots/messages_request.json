@@ -132,7 +132,7 @@
       ]
     },
     "MessagesTool": {
-      "description": "One element of [`MessagesRequest`]'s `tools` array — Anthropic's tool definition shape.",
+      "description": "One element of [`MessagesRequest`]'s `tools` array.\n\nAnthropic uses one array for both kinds of tool:\n- a **client (function) tool** — `{name, description?, input_schema}` (no `type`);\n- a **provider-defined (server) tool** — `{type:\"web_search_20250305\"|…, name, …config}`\n  (web search, code execution, computer use, bash, text editor), where `type`\n  is the dated tool version and `name` is the stable tool name.\n\nA versioned `type` discriminates a server tool; its config keys ride in\n`extra` so they are preserved verbatim into `Tool::ProviderDefined.args`.\n<https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview>\n<https://docs.claude.com/en/docs/agents-and-tools/tool-use/web-search-tool>",
       "type": "object",
       "properties": {
         "description": {
@@ -146,12 +146,20 @@
           "default": null
         },
         "name": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
-      },
-      "required": [
-        "name"
-      ]
+      }
     }
   }
 }

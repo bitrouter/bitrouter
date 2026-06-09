@@ -135,7 +135,7 @@
       }
     },
     "GenerateContentTool": {
-      "description": "One element of [`GenerateContentRequest`]'s `tools` array — Google's\n`{ functionDeclarations: [...] }` envelope.",
+      "description": "One element of [`GenerateContentRequest`]'s `tools` array.\n\nA single Google tool object may carry client function declarations\n(`functionDeclarations`) **and/or** one or more provider-defined (\"built-in\")\ntool keys on the same object — `googleSearch`, `codeExecution`,\n`googleSearchRetrieval`, `urlContext`. Function declarations parse to\n[`Tool::Function`]; every other key is a provider-defined tool namespaced\n`google.<key>`, its value preserved verbatim as `args`. The non-function keys\nride in `extra`.\n<https://ai.google.dev/gemini-api/docs/function-calling>\n<https://ai.google.dev/gemini-api/docs/google-search>\n<https://ai.google.dev/gemini-api/docs/code-execution>",
       "type": "object",
       "properties": {
         "functionDeclarations": {
