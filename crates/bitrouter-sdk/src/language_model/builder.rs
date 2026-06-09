@@ -142,6 +142,7 @@ impl PipelineBuilder {
             executor,
             keepalive_interval: self.keepalive_interval,
             pending_settlements: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
+            detached_executions: tokio_util::task::TaskTracker::new(),
         })
     }
 }

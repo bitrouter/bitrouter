@@ -95,12 +95,13 @@ impl App {
             .await
             .map_err(|e| BitrouterError::internal(format!("serve: {e}")))?;
         // After the HTTP server drains, also wait for every detached client-
-        // disconnect settlement task (StreamSettlementGuard::drop). Without
-        // this, SIGTERM during heavy streaming traffic could drop the
-        // detached tasks mid-await and lose receipts.
+        // disconnect settlement task (StreamSettlementGuard::drop) and every
+        // detached non-streaming execution (Pipeline::execute_detached).
+        // Without this, SIGTERM during heavy traffic could drop those tasks
+        // mid-await and lose receipts.
         let drained = drain_pipeline.drain_pending_settlements().await;
         if drained > 0 {
-            tracing::info!(drained, "drained pending streaming settlements on shutdown");
+            tracing::info!(drained, "drained pending settlements on shutdown");
         }
         Ok(())
     }
@@ -610,7 +611,11 @@ async fn handle(
             &prompt.model,
         )
     } else {
-        match state.language_model.execute(req).await {
+        // `execute_detached`, not `execute`: a non-streaming request must run to
+        // completion and settle even if the client disconnects (axum drops this
+        // handler future on disconnect). The upstream bills us for the accepted
+        // request regardless, so the customer must be billed too.
+        match state.language_model.clone().execute_detached(req).await {
             Ok(resp) => match adapter.render_response(&resp.result, &prompt, &resp.request_id) {
                 Ok(json) => Json(json).into_response(),
                 Err(e) => e.into_response(),

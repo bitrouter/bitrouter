@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
+use tracing::Instrument;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::PipelineContext;
@@ -44,6 +45,13 @@ pub struct Pipeline {
     /// settlement). [`Pipeline::drain_pending_settlements`] awaits them all
     /// on graceful shutdown so the process doesn't exit mid-settlement.
     pub(crate) pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+    /// Detached **non-streaming** executions ([`Pipeline::execute_detached`]).
+    /// A `TaskTracker` (not the `JoinSet` above) because *every* non-streaming
+    /// request runs here, so completed tasks must be reaped automatically
+    /// rather than retained until shutdown. `drain_pending_settlements` closes
+    /// and awaits it on graceful shutdown so a SIGTERM can't cut a request that
+    /// the upstream is still billing us for.
+    pub(crate) detached_executions: tokio_util::task::TaskTracker,
 }
 
 impl Pipeline {
@@ -83,7 +91,56 @@ impl Pipeline {
         while taken.join_next().await.is_some() {
             drained += 1;
         }
+
+        // Also wait for every in-flight detached non-streaming execution
+        // (`execute_detached`). `close()` only stops the tracker from blocking
+        // `wait()` on tasks spawned *after* this point — already-spawned tasks
+        // are still awaited. axum drains in-flight handlers before this runs,
+        // so every detached execution has already been spawned.
+        drained += self.detached_executions.len();
+        self.detached_executions.close();
+        self.detached_executions.wait().await;
+
         drained
+    }
+
+    /// Execute a non-streaming request that **always runs to completion**, even
+    /// if the caller (an HTTP request handler) is dropped because the client
+    /// disconnected.
+    ///
+    /// axum/hyper drops the request-handler future the instant the client
+    /// disconnects, which would otherwise cancel the in-flight upstream call
+    /// mid-prefill and skip Stage-4 settlement — the client pays nothing while
+    /// the upstream still bills us for the request it accepted. This mirrors
+    /// OpenRouter's documented behaviour: for non-streaming requests the model
+    /// "will continue processing and you will be billed for the complete
+    /// response" (<https://openrouter.ai/docs/api/reference/streaming>).
+    ///
+    /// The work is spawned onto a shutdown-tracked task, so dropping the
+    /// returned future no longer cancels it. The connected caller still awaits
+    /// the task's `JoinHandle` and gets the real response. Streaming requests
+    /// keep their own cancel-on-disconnect path ([`Pipeline::execute_stream`]).
+    pub async fn execute_detached(
+        self: Arc<Self>,
+        req: PipelineRequest,
+    ) -> Result<PipelineResponse> {
+        let pipeline = Arc::clone(&self);
+        // `tokio::spawn` does not propagate the current tracing span, so attach
+        // it explicitly — otherwise the whole request's logs would detach from
+        // the handler's request span / trace context.
+        let span = tracing::Span::current();
+        let handle = self
+            .detached_executions
+            .spawn(async move { pipeline.execute(req).await }.instrument(span));
+        match handle.await {
+            Ok(result) => result,
+            // The task panicked or was aborted (it is never aborted by us). The
+            // settlement inside `execute` already ran or the panic precluded it;
+            // surface a clean internal error to the still-connected caller.
+            Err(join_err) => Err(BitrouterError::internal(format!(
+                "non-streaming execution task failed to complete: {join_err}"
+            ))),
+        }
     }
 
     /// Execute a non-streaming request: the four stages, in order.

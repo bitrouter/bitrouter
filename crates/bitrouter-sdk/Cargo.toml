@@ -17,7 +17,9 @@ futures.workspace = true
 futures-core.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 tokio-stream.workspace = true
-tokio-util.workspace = true
+# `rt` feature: `tokio_util::task::TaskTracker`, used to run non-streaming
+# requests to completion after a client disconnect (see `Pipeline::execute_detached`).
+tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 http.workspace = true
 bytes.workspace = true
