@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "1.0.0-alpha.10"
+version = "1.0.0-alpha.11"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-bedrock"
-version = "1.0.0-alpha.10"
+version = "1.0.0-alpha.11"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-cloud-sdk"
-version = "1.0.0-alpha.10"
+version = "1.0.0-alpha.11"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-guardrails"
-version = "1.0.0-alpha.10"
+version = "1.0.0-alpha.11"
 dependencies = [
  "async-trait",
  "bitrouter-sdk",
@@ -806,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-observe"
-version = "1.0.0-alpha.10"
+version = "1.0.0-alpha.11"
 dependencies = [
  "async-trait",
  "axum 0.8.9",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-providers"
-version = "1.0.0-alpha.10"
+version = "1.0.0-alpha.11"
 dependencies = [
  "async-trait",
  "base64",
@@ -849,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-sdk"
-version = "1.0.0-alpha.10"
+version = "1.0.0-alpha.11"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -884,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-skills"
-version = "1.0.0-alpha.10"
+version = "1.0.0-alpha.11"
 dependencies = [
  "reqwest 0.12.28",
  "serde",

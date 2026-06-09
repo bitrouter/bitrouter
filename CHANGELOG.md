@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.11](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.10...v1.0.0-alpha.11)
+
+
+### ⛰️ Features
+
+- *(capabilities)* Extend Capability vocabulary (tools, reasoning, web_search, logprobs) ([#536](https://github.com/bitrouter/bitrouter/pull/536)) - ([e369f2e](https://github.com/bitrouter/bitrouter/commit/e369f2e184832c877f42bbb7b0673b9f38f3ef06))
+
+### 🐛 Bug Fixes
+
+- *(pipeline)* Run non-streaming requests to completion ([#538](https://github.com/bitrouter/bitrouter/pull/538)) - ([5528e3e](https://github.com/bitrouter/bitrouter/commit/5528e3e33fff495ee17ab41d1dc35962f5a6f2e8))
+- *(stream)* Bill prompt tokens on client disconnect ([#537](https://github.com/bitrouter/bitrouter/pull/537)) - ([f0dc0f0](https://github.com/bitrouter/bitrouter/commit/f0dc0f0cddd55e79ff8304287ab5593f2fb8ccbd))
+
+
 ## [1.0.0-alpha.10](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.9...v1.0.0-alpha.10)
 
 
