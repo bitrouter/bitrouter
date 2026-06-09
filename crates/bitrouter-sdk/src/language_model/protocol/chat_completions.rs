@@ -20,8 +20,8 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Modality, Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, ToolResultContentPart,
-    ToolResultOutput, Usage,
+    Modality, Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice,
+    ToolResultContentPart, ToolResultOutput, Usage,
 };
 
 /// The Chat Completions inbound + outbound protocol adapter.
@@ -383,6 +383,9 @@ impl InboundAdapter for ChatCompletionsAdapter {
                         id: tc.id,
                         name: tc.function.name,
                         arguments: tc.function.arguments,
+                        // Chat Completions `tool_calls` are always client tools —
+                        // there is no server-tool slot on this wire.
+                        provider_executed: false,
                     });
                 }
             }
@@ -429,6 +432,12 @@ impl InboundAdapter for ChatCompletionsAdapter {
             .and_then(|v| serde_json::from_value::<Vec<Modality>>(v).ok())
             .unwrap_or_default();
 
+        // `tool_choice` is a typed field. Promote it into the canonical slot so
+        // cross-protocol routing renders it natively for the target provider, and
+        // remove it from `extra` so it is not also splatted back verbatim (which
+        // would forward an OpenAI-shaped choice into a non-OpenAI upstream).
+        let tool_choice = extra.remove("tool_choice").map(parse_chat_tool_choice);
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -440,7 +449,8 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 max_tokens: req.max_tokens.or(req.max_completion_tokens),
                 reasoning_effort: req.reasoning_effort,
                 response_modalities,
-                // Every Chat Completions field without a typed slot — tool_choice,
+                tool_choice,
+                // Every remaining Chat Completions field without a typed slot —
                 // stop / stop_sequences, seed, n, presence/frequency_penalty,
                 // logit_bias, … — rides in `extra` and is splatted back on render.
                 extra,
@@ -499,6 +509,9 @@ impl InboundAdapter for ChatCompletionsAdapter {
             message.insert("reasoning_content".into(), reasoning.into());
         }
 
+        // Chat Completions has no provider-executed server-tool slot, so a
+        // `provider_executed` call degrades to a plain `tool_calls` entry here
+        // (the flag is dropped) — `..` ignores it deliberately.
         let tool_calls: Vec<_> = result
             .content
             .iter()
@@ -507,6 +520,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
                     id,
                     name,
                     arguments,
+                    ..
                 } => Some(serde_json::json!({
                     "id": id,
                     "type": "function",
@@ -610,9 +624,15 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         {
             req.insert("modalities".into(), value);
         }
+        // Render the canonical tool_choice into Chat Completions' native shape,
+        // before the extras splat so the typed slot wins over any stale
+        // `tool_choice` left in extras.
+        if let Some(tc) = &prompt.params.tool_choice {
+            req.insert("tool_choice".into(), render_chat_tool_choice(tc));
+        }
         // Splat the extras back into the outbound request — this is how
-        // `tool_choice`, `stop`, `seed`, etc. survive the round trip. Typed
-        // fields above win over any same-named extra.
+        // `stop`, `seed`, etc. survive the round trip. Typed fields above win
+        // over any same-named extra.
         for (k, v) in &prompt.params.extra {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -708,6 +728,9 @@ impl OutboundAdapter for ChatCompletionsAdapter {
                         .and_then(|a| a.as_str())
                         .unwrap_or_default()
                         .to_string(),
+                    // The Chat Completions response wire has no server-tool item;
+                    // every `tool_calls` entry is a client tool call.
+                    provider_executed: false,
                 });
             }
         }
@@ -772,6 +795,55 @@ fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
     }
     js.insert("schema".into(), schema.clone());
     serde_json::json!({ "type": "json_schema", "json_schema": serde_json::Value::Object(js) })
+}
+
+/// Parse a Chat Completions `tool_choice` value into the canonical [`ToolChoice`].
+/// The wire is either a string (`"auto"|"none"|"required"`) or an object
+/// `{type:"function",function:{name}}`. Anything else (e.g. the legacy
+/// `{type:"none"}` object form, or a provider extension) is preserved verbatim
+/// via [`ToolChoice::Other`] so it round-trips losslessly.
+/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tool_choice>
+fn parse_chat_tool_choice(value: serde_json::Value) -> ToolChoice {
+    match &value {
+        serde_json::Value::String(s) => match s.as_str() {
+            "auto" => ToolChoice::Auto,
+            "none" => ToolChoice::None,
+            "required" => ToolChoice::Required,
+            _ => ToolChoice::Other { value },
+        },
+        serde_json::Value::Object(obj)
+            if obj.get("type").and_then(|t| t.as_str()) == Some("function") =>
+        {
+            match obj
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+            {
+                Some(name) => ToolChoice::Tool {
+                    name: name.to_string(),
+                },
+                None => ToolChoice::Other { value },
+            }
+        }
+        _ => ToolChoice::Other { value },
+    }
+}
+
+/// Render a canonical [`ToolChoice`] into Chat Completions' native shape:
+/// `"auto"|"none"|"required"` for the simple variants, `{type:"function",
+/// function:{name}}` for a specific tool, and the preserved raw value for
+/// [`ToolChoice::Other`].
+/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tool_choice>
+fn render_chat_tool_choice(choice: &ToolChoice) -> serde_json::Value {
+    match choice {
+        ToolChoice::Auto => "auto".into(),
+        ToolChoice::None => "none".into(),
+        ToolChoice::Required => "required".into(),
+        ToolChoice::Tool { name } => {
+            serde_json::json!({ "type": "function", "function": { "name": name } })
+        }
+        ToolChoice::Other { value } => value.clone(),
+    }
 }
 
 #[async_trait]
@@ -932,6 +1004,9 @@ fn render_message(m: &Message) -> serde_json::Value {
         obj.insert("reasoning_content".into(), reasoning.into());
     }
 
+    // Chat Completions has no provider-executed server-tool slot, so a
+    // `provider_executed` call degrades to a plain `tool_calls` entry here (the
+    // flag is dropped) — `..` ignores it deliberately.
     let tool_calls: Vec<_> = m
         .content
         .iter()
@@ -940,6 +1015,7 @@ fn render_message(m: &Message) -> serde_json::Value {
                 id,
                 name,
                 arguments,
+                ..
             } => Some(serde_json::json!({
                 "id": id,
                 "type": "function",

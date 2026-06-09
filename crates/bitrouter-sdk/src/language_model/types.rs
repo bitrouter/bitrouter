@@ -130,7 +130,9 @@ pub enum Content {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         extra: HashMap<String, serde_json::Value>,
     },
-    /// A tool/function call requested by the model.
+    /// A tool/function call requested by the model. Models the Vercel AI SDK
+    /// `LanguageModelV3ToolCall` content part.
+    /// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-tool-call.ts>
     ToolCall {
         /// Provider-assigned call id.
         id: String,
@@ -138,6 +140,32 @@ pub enum Content {
         name: String,
         /// JSON-encoded arguments.
         arguments: String,
+        /// Whether the tool ran **server-side at the provider** rather than
+        /// being handed back to the client to execute — the V3
+        /// `providerExecuted` flag. `false` (the default) is an ordinary client
+        /// tool call (Chat Completions `tool_calls`, Anthropic `tool_use`,
+        /// Gemini `functionCall`); `true` marks a provider-executed server tool
+        /// (OpenAI Responses `web_search_call` / `code_interpreter_call` /
+        /// `file_search_call`, Anthropic `server_tool_use`). The distinction is
+        /// load-bearing: a provider-executed call must **not** be re-sent to the
+        /// upstream as a client `function_call` on a follow-up turn (the
+        /// provider already ran it), so render paths branch on this flag.
+        /// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-tool-call.ts>
+        ///
+        /// The sibling V3 `dynamic` flag (provider-executed MCP tools defined at
+        /// runtime) is intentionally **not** modeled. It arises only from
+        /// Anthropic `mcp_tool_use` and OpenAI Responses `mcp_call`, both of
+        /// which carry a load-bearing server identifier (`server_name` /
+        /// `server_label`) that this flat `ToolCall` has no slot for. Setting
+        /// `dynamic` without also preserving that identifier would re-render an
+        /// MCP block missing its server — worse than omitting it — and the
+        /// Anthropic MCP connector is still beta-gated, not GA. So a faithful
+        /// `dynamic` round-trip is deferred until the `ToolCall` shape grows a
+        /// server-identifier slot, mirroring how the `execution-denied`
+        /// tool-result variant is deferred above.
+        /// <https://platform.claude.com/docs/en/agents-and-tools/mcp-connector>
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        provider_executed: bool,
     },
     /// A tool/function result supplied back to the model. Models the Vercel AI
     /// SDK `LanguageModelV3ToolResultPart`: the result is a typed
@@ -401,6 +429,48 @@ pub struct Tool {
     pub parameters: serde_json::Value,
 }
 
+/// How the model must treat the available [`Tool`]s on this request — a faithful
+/// port of the Vercel AI SDK `LanguageModelV3ToolChoice` tagged union.
+/// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-tool-choice.ts>
+///
+/// Each protocol expresses tool choice with a different wire shape (Chat
+/// Completions `"auto"|"none"|"required"` or `{type:"function",…}`; Anthropic
+/// `{type:"auto"|"any"|"tool"|"none"}`; Responses `"auto"|"none"|"required"` or
+/// `{type:"function",name}`; Gemini `functionCallingConfig.mode`). Each inbound
+/// adapter promotes its native field into this typed slot at parse time and
+/// **removes it from the raw `extra`** so it is not double-written; each outbound
+/// adapter renders it back into the upstream's native shape. Promoting it makes
+/// cross-protocol routing correct: without it a raw provider-shaped `tool_choice`
+/// (e.g. an OpenAI `{type:"function",…}`) would be splatted verbatim into a
+/// different provider's request and be silently ignored or rejected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolChoice {
+    /// The model decides whether to call a tool (V3 `auto`). The default when
+    /// tools are present.
+    Auto,
+    /// The model must not call any tool (V3 `none`).
+    None,
+    /// The model must call one of the available tools, but which one is its
+    /// choice (V3 `required`).
+    Required,
+    /// The model must call this specific tool by name (V3 `tool`).
+    Tool {
+        /// The tool name the model is forced to call.
+        name: String,
+    },
+    /// A provider-specific tool-choice shape that does not map onto any of the
+    /// four V3 variants (e.g. Gemini's `mode: "ANY"` paired with
+    /// `allowedFunctionNames`, or an OpenAI `allowed_tools` constraint),
+    /// preserved verbatim so an exotic choice is never lost on a same-protocol
+    /// round-trip. Carries the raw provider-native JSON; an adapter that cannot
+    /// express it on its own wire degrades it (documented at each render site).
+    Other {
+        /// The provider-native `tool_choice` value, untouched.
+        value: serde_json::Value,
+    },
+}
+
 /// Constraint on the shape of the model's response.
 ///
 /// Today the only variant is [`Self::JsonSchema`]; future variants (`json_object`,
@@ -544,6 +614,13 @@ pub struct GenerationParams {
     /// `image_output` / `audio_output` capability detection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub response_modalities: Vec<Modality>,
+    /// How the model must treat the available tools (V3 `toolChoice`). Each
+    /// inbound adapter promotes its native `tool_choice` field into this typed
+    /// slot and removes it from `extra`; each outbound adapter renders it back
+    /// into the upstream's native shape, so it routes correctly across
+    /// protocols instead of leaking a raw provider-shaped value through `extra`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
     /// Any provider-specific extras passed through untouched.
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub extra: HashMap<String, serde_json::Value>,

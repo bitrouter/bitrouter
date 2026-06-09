@@ -29,7 +29,7 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, ToolResultContentPart,
+    Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice, ToolResultContentPart,
     ToolResultOutput, Usage,
 };
 
@@ -249,6 +249,11 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                     .and_then(|a| a.as_str())
                                     .unwrap_or_default()
                                     .to_string(),
+                                // A `function_call` input item is always a client
+                                // tool call; provider-executed server-tool calls
+                                // (`web_search_call`, …) are never re-sent as
+                                // input items.
+                                provider_executed: false,
                             }],
                         });
                     }
@@ -406,6 +411,11 @@ impl InboundAdapter for ResponsesAdapter {
             None => None,
         };
 
+        // Promote `tool_choice` into the typed slot and drop it from `extra` so
+        // it is not also splatted back verbatim into a (possibly non-OpenAI)
+        // upstream.
+        let tool_choice = extra.remove("tool_choice").map(parse_responses_tool_choice);
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -417,10 +427,11 @@ impl InboundAdapter for ResponsesAdapter {
                 max_tokens: req.max_output_tokens,
                 reasoning_effort: req.reasoning.and_then(|r| r.effort),
                 response_modalities: Vec::new(),
-                // Splat every Responses-API field without a typed slot —
-                // tool_choice, parallel_tool_calls, max_tool_calls, metadata,
-                // include[], previous_response_id, store, stream_options, … —
-                // into `extra` so render_request can put them back.
+                tool_choice,
+                // Splat every remaining Responses-API field without a typed slot
+                // — parallel_tool_calls, max_tool_calls, metadata, include[],
+                // previous_response_id, store, stream_options, … — into `extra`
+                // so render_request can put them back.
                 extra,
             },
             response_format,
@@ -530,9 +541,13 @@ impl OutboundAdapter for ResponsesAdapter {
             text.insert("format".into(), render_responses_response_format(rf));
             req.insert("text".into(), serde_json::Value::Object(text));
         }
-        // Splat Responses-API extras (tool_choice, parallel_tool_calls,
-        // metadata, include, …) back onto the outbound request. Typed fields
-        // win.
+        // Render the canonical tool_choice into the Responses native shape,
+        // before the extras splat so the typed slot wins.
+        if let Some(tc) = &prompt.params.tool_choice {
+            req.insert("tool_choice".into(), render_responses_tool_choice(tc));
+        }
+        // Splat remaining Responses-API extras (parallel_tool_calls, metadata,
+        // include, …) back onto the outbound request. Typed fields win.
         for (k, v) in &prompt.params.extra {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -591,6 +606,53 @@ impl OutboundAdapter for ResponsesAdapter {
                             .and_then(|a| a.as_str())
                             .unwrap_or_default()
                             .to_string(),
+                        // A `function_call` output item is a client tool call.
+                        provider_executed: false,
+                    });
+                }
+                // OpenAI Responses built-in (server-side) tools surface as their
+                // own output-item types rather than `function_call`. The SDK
+                // exposes each as a provider-executed tool call keyed by item
+                // `id`, with a synthetic tool name and the call's distinguishing
+                // input, matching the AI SDK reference mapping. These must be
+                // marked `provider_executed` so they are not re-sent as client
+                // `function_call` items on a later turn.
+                // <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/openai-responses-language-model.ts>
+                Some(server_tool @ ("web_search_call" | "file_search_call")) => {
+                    content.push(Content::ToolCall {
+                        id: item
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: server_tool.trim_end_matches("_call").to_string(),
+                        // The Responses API does not echo these tools' query
+                        // arguments on the output item, so the SDK reference
+                        // emits an empty input object.
+                        arguments: "{}".to_string(),
+                        provider_executed: true,
+                    });
+                }
+                Some("code_interpreter_call") => {
+                    // `code_interpreter_call` does carry its `code` and
+                    // `container_id`; preserve them as the call input (matching
+                    // the AI SDK `{ code, containerId }` shape).
+                    let mut input = serde_json::Map::new();
+                    if let Some(code) = item.get("code").and_then(|c| c.as_str()) {
+                        input.insert("code".into(), code.into());
+                    }
+                    if let Some(container) = item.get("container_id").and_then(|c| c.as_str()) {
+                        input.insert("containerId".into(), container.into());
+                    }
+                    content.push(Content::ToolCall {
+                        id: item
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: "code_interpreter".to_string(),
+                        arguments: serde_json::Value::Object(input).to_string(),
+                        provider_executed: true,
                     });
                 }
                 _ => {}
@@ -649,6 +711,49 @@ fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
     serde_json::Value::Object(obj)
 }
 
+/// Parse a Responses `tool_choice` value into the canonical [`ToolChoice`]. The
+/// wire is a string (`"auto"|"none"|"required"`) or an object — `{type:
+/// "function", name}` forces a specific function (note: the name is flat, unlike
+/// Chat Completions' nested `function.name`). Built-in-tool choices
+/// (`{type:"web_search"|…}`), `allowed_tools`, and any other shape are preserved
+/// verbatim via [`ToolChoice::Other`].
+/// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tool_choice>
+fn parse_responses_tool_choice(value: serde_json::Value) -> ToolChoice {
+    match &value {
+        serde_json::Value::String(s) => match s.as_str() {
+            "auto" => ToolChoice::Auto,
+            "none" => ToolChoice::None,
+            "required" => ToolChoice::Required,
+            _ => ToolChoice::Other { value },
+        },
+        serde_json::Value::Object(obj)
+            if obj.get("type").and_then(|t| t.as_str()) == Some("function") =>
+        {
+            match obj.get("name").and_then(|n| n.as_str()) {
+                Some(name) => ToolChoice::Tool {
+                    name: name.to_string(),
+                },
+                None => ToolChoice::Other { value },
+            }
+        }
+        _ => ToolChoice::Other { value },
+    }
+}
+
+/// Render a canonical [`ToolChoice`] into the Responses native shape:
+/// `"auto"|"none"|"required"` strings, `{type:"function",name}` for a specific
+/// tool (flat `name`), and the preserved raw value for [`ToolChoice::Other`].
+/// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tool_choice>
+fn render_responses_tool_choice(choice: &ToolChoice) -> serde_json::Value {
+    match choice {
+        ToolChoice::Auto => "auto".into(),
+        ToolChoice::None => "none".into(),
+        ToolChoice::Required => "required".into(),
+        ToolChoice::Tool { name } => serde_json::json!({ "type": "function", "name": name }),
+        ToolChoice::Other { value } => value.clone(),
+    }
+}
+
 #[async_trait]
 impl Transport for ResponsesTransport {
     fn protocol(&self) -> ApiProtocol {
@@ -698,13 +803,22 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
                 id,
                 name,
                 arguments,
+                provider_executed,
             } => {
-                items.push(serde_json::json!({
-                    "type": "function_call",
-                    "call_id": id,
-                    "name": name,
-                    "arguments": arguments,
-                }));
+                // A provider-executed server-tool call is NOT re-sent as a client
+                // `function_call` input item — the provider already ran it, and
+                // the Responses input wire has no slot to replay a server-tool
+                // call (the AI SDK reference drops it / emits an item_reference).
+                // Only client tool calls round-trip as `function_call`.
+                // <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+                if !provider_executed {
+                    items.push(serde_json::json!({
+                        "type": "function_call",
+                        "call_id": id,
+                        "name": name,
+                        "arguments": arguments,
+                    }));
+                }
             }
             // image/* -> `input_image`, other media -> `input_file`; the payload
             // is a URL or `data:` URI via the shared helper.
@@ -925,14 +1039,39 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
             id,
             name,
             arguments,
+            provider_executed,
         } = c
         {
-            items.push(serde_json::json!({
-                "type": "function_call",
-                "call_id": id,
-                "name": name,
-                "arguments": arguments,
-            }));
+            if *provider_executed {
+                // Reproduce the provider-executed server-tool output item on the
+                // same wire. The Responses API names these items `<tool>_call`
+                // (e.g. `web_search_call`) and keys them by item `id` rather than
+                // `call_id`. `code_interpreter_call` carries its `code` /
+                // `container_id` back out; the others have no echoed input.
+                // <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/openai-responses-language-model.ts>
+                let mut item = serde_json::Map::new();
+                item.insert("type".into(), format!("{name}_call").into());
+                item.insert("id".into(), id.clone().into());
+                if name == "code_interpreter"
+                    && let Ok(serde_json::Value::Object(input)) =
+                        serde_json::from_str::<serde_json::Value>(arguments)
+                {
+                    if let Some(code) = input.get("code") {
+                        item.insert("code".into(), code.clone());
+                    }
+                    if let Some(container) = input.get("containerId") {
+                        item.insert("container_id".into(), container.clone());
+                    }
+                }
+                items.push(serde_json::Value::Object(item));
+            } else {
+                items.push(serde_json::json!({
+                    "type": "function_call",
+                    "call_id": id,
+                    "name": name,
+                    "arguments": arguments,
+                }));
+            }
         }
     }
     // Best-effort: a generated file becomes an image message item. The Responses

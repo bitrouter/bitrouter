@@ -23,7 +23,7 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, AuthScheme, Content, DataContent, FinishReason, GenerateResult, GenerationParams,
-    Message, Prompt, ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart,
+    Message, Prompt, ResponseFormat, Role, RoutingTarget, StopDetails, StreamPart, ToolChoice,
     ToolResultContentPart, ToolResultOutput, Usage,
 };
 
@@ -292,7 +292,13 @@ fn parse_content(value: &serde_json::Value) -> Result<Vec<Content>> {
                             .unwrap_or_default()
                             .to_string(),
                     }),
-                    "tool_use" => out.push(Content::ToolCall {
+                    // A client `tool_use` block, or a provider-executed
+                    // `server_tool_use` block (web search, code execution, …).
+                    // They share the same `{id, name, input}` shape and differ
+                    // only by the block `type`; the latter sets
+                    // `provider_executed` so it is not re-sent as a client call.
+                    // <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
+                    "tool_use" | "server_tool_use" => out.push(Content::ToolCall {
                         id: block
                             .get("id")
                             .and_then(|i| i.as_str())
@@ -307,6 +313,7 @@ fn parse_content(value: &serde_json::Value) -> Result<Vec<Content>> {
                             .get("input")
                             .map(|i| i.to_string())
                             .unwrap_or_else(|| "{}".to_string()),
+                        provider_executed: block_type == "server_tool_use",
                     }),
                     // Anthropic `tool_result` block `{tool_use_id, content, is_error}`:
                     // `content` is a string or a block array (text / image); the
@@ -550,6 +557,11 @@ impl InboundAdapter for MessagesAdapter {
             response_format = Some(rf);
         }
 
+        // Promote `tool_choice` into the typed slot and drop it from `extra` so it
+        // is not also splatted back verbatim — otherwise an Anthropic-shaped
+        // choice would leak into a non-Anthropic upstream.
+        let tool_choice = extra.remove("tool_choice").map(parse_messages_tool_choice);
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -561,6 +573,7 @@ impl InboundAdapter for MessagesAdapter {
                 max_tokens: req.max_tokens,
                 reasoning_effort,
                 response_modalities: Vec::new(),
+                tool_choice,
                 extra,
             },
             response_format,
@@ -688,8 +701,13 @@ impl OutboundAdapter for MessagesAdapter {
                 serde_json::Value::Object(output_config),
             );
         }
-        // Splat anthropic-specific extras (tool_choice, stop_sequences, …) back
-        // into the outbound request. Typed fields win over same-named extras.
+        // Render the canonical tool_choice into Anthropic's native shape, before
+        // the extras splat so the typed slot wins over any stale `tool_choice`.
+        if let Some(tc) = &prompt.params.tool_choice {
+            req.insert("tool_choice".into(), render_messages_tool_choice(tc));
+        }
+        // Splat anthropic-specific extras (stop_sequences, top_k, …) back into
+        // the outbound request. Typed fields win over same-named extras.
         for (k, v) in &prompt.params.extra {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -720,7 +738,15 @@ impl OutboundAdapter for MessagesAdapter {
                         .unwrap_or_default()
                         .to_string(),
                 }),
-                Some("tool_use") => content.push(Content::ToolCall {
+                // A client `tool_use` block, or a provider-executed
+                // `server_tool_use` block. Anthropic runs server tools (e.g.
+                // `web_search`) itself and emits a `server_tool_use` block with
+                // an `srvtoolu_…` id followed by a `*_tool_result` block; mark
+                // it `provider_executed` so a follow-up turn does not re-issue it
+                // as a client call. The paired result block is consumed
+                // separately and is not a tool *call*.
+                // <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
+                Some(kind @ ("tool_use" | "server_tool_use")) => content.push(Content::ToolCall {
                     id: block
                         .get("id")
                         .and_then(|i| i.as_str())
@@ -735,6 +761,7 @@ impl OutboundAdapter for MessagesAdapter {
                         .get("input")
                         .map(|i| i.to_string())
                         .unwrap_or_else(|| "{}".to_string()),
+                    provider_executed: kind == "server_tool_use",
                 }),
                 _ => {}
             }
@@ -801,6 +828,41 @@ fn render_messages_response_format(rf: &ResponseFormat) -> serde_json::Value {
     serde_json::json!({ "type": "json_schema", "schema": schema })
 }
 
+/// Parse Anthropic's `tool_choice` object into the canonical [`ToolChoice`].
+/// Anthropic uses `{type:"auto"|"any"|"tool"|"none", name?}`: `any` is "must
+/// call some tool" (canonical `Required`), `tool` names a specific tool. An
+/// unrecognised shape is preserved verbatim via [`ToolChoice::Other`].
+/// <https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use#controlling-claudes-output>
+fn parse_messages_tool_choice(value: serde_json::Value) -> ToolChoice {
+    match value.get("type").and_then(|t| t.as_str()) {
+        Some("auto") => ToolChoice::Auto,
+        Some("none") => ToolChoice::None,
+        Some("any") => ToolChoice::Required,
+        Some("tool") => match value.get("name").and_then(|n| n.as_str()) {
+            Some(name) => ToolChoice::Tool {
+                name: name.to_string(),
+            },
+            None => ToolChoice::Other { value },
+        },
+        _ => ToolChoice::Other { value },
+    }
+}
+
+/// Render a canonical [`ToolChoice`] into Anthropic's native `tool_choice`
+/// object. `Required` maps to `{type:"any"}`; `Tool` to `{type:"tool",name}`.
+/// Anthropic natively supports `{type:"none"}`, so `None` round-trips faithfully
+/// (rather than the AI SDK's drop-the-tools workaround).
+/// <https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use#controlling-claudes-output>
+fn render_messages_tool_choice(choice: &ToolChoice) -> serde_json::Value {
+    match choice {
+        ToolChoice::Auto => serde_json::json!({ "type": "auto" }),
+        ToolChoice::None => serde_json::json!({ "type": "none" }),
+        ToolChoice::Required => serde_json::json!({ "type": "any" }),
+        ToolChoice::Tool { name } => serde_json::json!({ "type": "tool", "name": name }),
+        ToolChoice::Other { value } => value.clone(),
+    }
+}
+
 #[async_trait]
 impl Transport for MessagesTransport {
     fn protocol(&self) -> ApiProtocol {
@@ -857,11 +919,23 @@ fn render_content_block(c: &Content) -> Option<serde_json::Value> {
             id,
             name,
             arguments,
+            provider_executed,
         } => {
             let input: serde_json::Value =
                 serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
+            // Reproduce the server-tool block shape on the same wire: a
+            // provider-executed call (e.g. web search) renders as
+            // `server_tool_use`, a client call as `tool_use`. Both carry the
+            // identical `{id, name, input}` payload — only the block type
+            // differs.
+            // <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
+            let block_type = if *provider_executed {
+                "server_tool_use"
+            } else {
+                "tool_use"
+            };
             Some(serde_json::json!({
-                "type": "tool_use", "id": id, "name": name, "input": input,
+                "type": block_type, "id": id, "name": name, "input": input,
             }))
         }
         // tool results are request-side only; not part of an assistant reply

@@ -294,10 +294,14 @@ fn canonical_content_to_bedrock(blocks: &[Content]) -> Result<Vec<ContentBlock>>
     for c in blocks {
         match c {
             Content::Text { text } => out.push(ContentBlock::Text(text.clone())),
+            // The Bedrock Converse content model has no provider-executed
+            // server-tool block, so a `provider_executed` call degrades to a
+            // plain `toolUse` block (the flag is dropped) — `..` ignores it.
             Content::ToolCall {
                 id,
                 name,
                 arguments,
+                ..
             } => {
                 let args_doc = json_to_document(arguments)?;
                 let tool_use = ToolUseBlock::builder()
@@ -442,6 +446,9 @@ fn bedrock_content_to_canonical(blocks: &[ContentBlock]) -> Vec<Content> {
                     id: tu.tool_use_id().to_string(),
                     name: tu.name().to_string(),
                     arguments,
+                    // Bedrock `toolUse` blocks are client tool calls; the
+                    // Converse content model has no provider-executed marker.
+                    provider_executed: false,
                 });
             }
             ContentBlock::ToolResult(tr) => {

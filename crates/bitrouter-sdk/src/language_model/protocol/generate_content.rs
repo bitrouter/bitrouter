@@ -20,7 +20,8 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Modality, Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, ToolResultOutput, Usage,
+    Modality, Prompt, ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice,
+    ToolResultOutput, Usage,
 };
 
 /// The Generate Content protocol adapter.
@@ -192,6 +193,63 @@ fn take_gemini_modalities(
         .unwrap_or_default()
 }
 
+/// Parse Google's top-level `toolConfig` value into the canonical
+/// [`ToolChoice`]. Gemini expresses tool choice as
+/// `toolConfig.functionCallingConfig.mode` (`AUTO|NONE|ANY`) with an optional
+/// `allowedFunctionNames`. `AUTO`→`Auto`, `NONE`→`None`, bare `ANY`→`Required`.
+/// `ANY` restricted to a single allowed name is rendered as `Tool` (a forced
+/// specific call); any richer constraint — `ANY` with multiple allowed names,
+/// the `VALIDATED` mode, or a `toolConfig` carrying sibling keys — has no V3
+/// equivalent and is preserved verbatim via [`ToolChoice::Other`] so it
+/// round-trips losslessly on the same wire.
+/// <https://ai.google.dev/api/caching#FunctionCallingConfig>
+fn parse_gemini_tool_choice(tool_config: &serde_json::Value) -> Option<ToolChoice> {
+    let obj = tool_config.as_object()?;
+    let fcc = obj.get("functionCallingConfig")?.as_object()?;
+    let mode = fcc.get("mode").and_then(|m| m.as_str())?;
+    let allowed: Vec<&str> = fcc
+        .get("allowedFunctionNames")
+        .and_then(|a| a.as_array())
+        .map(|arr| arr.iter().filter_map(|n| n.as_str()).collect())
+        .unwrap_or_default();
+    // A `toolConfig` with extra sibling keys, or a `functionCallingConfig` with
+    // keys beyond mode/allowedFunctionNames, cannot be reconstructed from a bare
+    // typed variant — preserve the whole thing verbatim.
+    let only_known_siblings = obj.len() == 1
+        && fcc
+            .keys()
+            .all(|k| k == "mode" || k == "allowedFunctionNames");
+    match mode {
+        "AUTO" if only_known_siblings && allowed.is_empty() => Some(ToolChoice::Auto),
+        "NONE" if only_known_siblings && allowed.is_empty() => Some(ToolChoice::None),
+        "ANY" if only_known_siblings && allowed.is_empty() => Some(ToolChoice::Required),
+        "ANY" if only_known_siblings && allowed.len() == 1 => Some(ToolChoice::Tool {
+            name: allowed[0].to_string(),
+        }),
+        _ => Some(ToolChoice::Other {
+            value: tool_config.clone(),
+        }),
+    }
+}
+
+/// Render a canonical [`ToolChoice`] into Google's top-level `toolConfig` value.
+/// `Required`→`mode:"ANY"`, `Tool`→`mode:"ANY"` with a single-entry
+/// `allowedFunctionNames`. [`ToolChoice::Other`] is emitted verbatim (it already
+/// holds a Google-native `toolConfig`).
+/// <https://ai.google.dev/api/caching#FunctionCallingConfig>
+fn render_gemini_tool_choice(choice: &ToolChoice) -> serde_json::Value {
+    let fcc = match choice {
+        ToolChoice::Auto => serde_json::json!({ "mode": "AUTO" }),
+        ToolChoice::None => serde_json::json!({ "mode": "NONE" }),
+        ToolChoice::Required => serde_json::json!({ "mode": "ANY" }),
+        ToolChoice::Tool { name } => {
+            serde_json::json!({ "mode": "ANY", "allowedFunctionNames": [name] })
+        }
+        ToolChoice::Other { value } => return value.clone(),
+    };
+    serde_json::json!({ "functionCallingConfig": fcc })
+}
+
 /// Parse one Google `parts[]` array into ordered canonical content. Order is
 /// preserved (#416); `thought: true` parts become `Reasoning` (#454-1).
 fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
@@ -213,6 +271,12 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
                     .get("args")
                     .map(|a| a.to_string())
                     .unwrap_or_else(|| "{}".to_string()),
+                // Gemini `functionCall` parts are client tool calls. Google's
+                // own server-side tools (Search grounding, code execution)
+                // surface as separate `groundingMetadata` / `executableCode`
+                // fields, never as a `functionCall`, so there is no
+                // provider-executed call to parse here.
+                provider_executed: false,
             });
         } else if let Some(fr) = part.get("functionResponse") {
             // Gemini `functionResponse {id?, name, response}`: `name` is the tool
@@ -412,6 +476,7 @@ impl InboundAdapter for GenerateContentAdapter {
                         max_tokens: max_output_tokens,
                         reasoning_effort: None,
                         response_modalities,
+                        tool_choice: None,
                         extra,
                     },
                     response_format,
@@ -419,14 +484,23 @@ impl InboundAdapter for GenerateContentAdapter {
             }
             None => (GenerationParams::default(), None),
         };
-        // Preserve top-level Google fields (`toolConfig`, `safetySettings`,
+        // `toolConfig` is a top-level Google field that carries tool choice. Lift
+        // its `functionCallingConfig` into the typed slot and remove `toolConfig`
+        // from the top-level extras so it is not also re-rendered verbatim (which
+        // would forward a Gemini-shaped choice into a non-Gemini upstream, and
+        // double-write it on a same-protocol round-trip).
+        let mut top_level = req.extra;
+        if let Some(tc) = top_level.remove("toolConfig") {
+            params.tool_choice = parse_gemini_tool_choice(&tc);
+        }
+        // Preserve the remaining top-level Google fields (`safetySettings`,
         // `cachedContent`, …) across the round-trip. They're namespaced so they
         // don't collide with `generationConfig`-level extras above and only the
         // Generate Content `render_request` lifts them back to the top level.
-        if !req.extra.is_empty() {
+        if !top_level.is_empty() {
             params.extra.insert(
                 GOOGLE_TOP_LEVEL_EXTRA_KEY.to_string(),
-                serde_json::Value::Object(req.extra.into_iter().collect()),
+                serde_json::Value::Object(top_level.into_iter().collect()),
             );
         }
 
@@ -540,8 +614,14 @@ impl OutboundAdapter for GenerateContentAdapter {
         if !gen_config.is_empty() {
             req.insert("generationConfig".into(), gen_config.into());
         }
-        // Lift namespaced top-level extras (toolConfig / safetySettings /
-        // cachedContent / …) back to the request root.
+        // Render the canonical tool_choice into Google's top-level `toolConfig`,
+        // before the top-level-extras lift so the typed slot wins over any stale
+        // `toolConfig` that might linger in the sentinel.
+        if let Some(tc) = &prompt.params.tool_choice {
+            req.insert("toolConfig".into(), render_gemini_tool_choice(tc));
+        }
+        // Lift namespaced top-level extras (safetySettings / cachedContent / …)
+        // back to the request root.
         if let Some(serde_json::Value::Object(top)) =
             prompt.params.extra.get(GOOGLE_TOP_LEVEL_EXTRA_KEY)
         {
@@ -772,10 +852,15 @@ impl StreamDecoder for GenerateContentStreamDecoder {
                         Content::Reasoning { text } => {
                             parts.push(StreamPart::ReasoningDelta { text })
                         }
+                        // The streaming `ToolCallDelta` has no provider-executed
+                        // flag (Gemini streams only client `functionCall` parts),
+                        // so the server-tool marker is not carried here — `..`
+                        // ignores it deliberately.
                         Content::ToolCall {
                             id,
                             name,
                             arguments,
+                            ..
                         } => parts.push(StreamPart::ToolCallDelta {
                             id,
                             name: Some(name),
