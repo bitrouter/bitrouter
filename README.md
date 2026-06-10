@@ -38,6 +38,16 @@ Without BitRouter, your coding agent routes every call — file reads, summaries
 
 <!-- Screenshots coming — will be added here -->
 
+### Benchmark
+
+| Metric | Without BitRouter | With BitRouter |
+| --- | --- | --- |
+| **Cost per task** | baseline | — |
+| **Task success rate** | baseline | — |
+| **Avg. latency** | baseline | — |
+
+<!-- Benchmark data coming — replace with real numbers -->
+
 ## Install
 
 ```bash
@@ -91,6 +101,31 @@ bitrouter start         # `bitrouter` provider auto-enables once signed in
 ```
 
 Manage keys, usage, billing, policies, and BYOK from the same CLI — see `bitrouter cloud --help` or [`CLI.md`](CLI.md#cloud-account-management).
+
+### CLI
+
+```bash
+bitrouter start / stop / restart               # daemon lifecycle
+bitrouter route <model>                        # trace how a model name resolves
+bitrouter agents list / check / install        # ACP agent management
+bitrouter key sign --user <id>                 # mint a scoped brvk_ API key
+bitrouter auth login / logout / whoami         # BitRouter Cloud sign-in
+bitrouter cloud keys / usage / billing         # manage cloud account
+```
+
+See [`CLI.md`](CLI.md) for flags, config resolution, and examples.
+
+### Agent Skill
+
+BitRouter ships an [Agent Skill](https://agentskills.io) — `/bitrouter` — so AI
+coding agents can install, configure, migrate to, and troubleshoot BitRouter on
+their own. It lives in this repo at [`skills/bitrouter/`](skills/), kept in sync
+with the code.
+
+```bash
+bitrouter skills add bitrouter        # via BitRouter's own installer
+npx skills add bitrouter/bitrouter    # via the generic skills CLI
+```
 
 ## Comparison
 
@@ -160,56 +195,9 @@ Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out 
 | Openclaw       | ✅     | Native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw)      |
 | Pi-Agent       | ✅     | [Model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) |
 
-**Building an agent runtime?** We partner with teams on native integrations — email [contact@bitrouter.ai](mailto:contact@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu).
-
 **Building an open-source agent?** Reach out at [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu) — we offer **up to 50% off** for you and your community.
 
 The full provider and harness catalog lives at [github.com/bitrouter/provider-registry](https://github.com/bitrouter/provider-registry).
-
-## CLI
-
-```bash
-bitrouter start / stop / restart               # daemon lifecycle
-bitrouter route <model>                        # trace how a model name resolves
-bitrouter agents list / check / install        # ACP agent management
-bitrouter key sign --user <id>                 # mint a scoped brvk_ API key
-bitrouter auth login / logout / whoami         # BitRouter Cloud sign-in
-bitrouter cloud keys / usage / billing         # manage cloud account
-```
-
-See [`CLI.md`](CLI.md) for flags, config resolution, and examples.
-
-## Agent Skill
-
-BitRouter ships an [Agent Skill](https://agentskills.io) — `/bitrouter` — so AI
-coding agents can install, configure, migrate to, and troubleshoot BitRouter on
-their own. It lives in this repo at [`skills/bitrouter/`](skills/), kept in sync
-with the code.
-
-```bash
-bitrouter skills add bitrouter        # via BitRouter's own installer
-npx skills add bitrouter/bitrouter    # via the generic skills CLI
-```
-
-## MCP (experimental)
-
-> ⚠️ **Experimental — not stable. Interfaces and flags may change without
-> notice; use at your own risk.**
-
-Distinct from *proxying* upstream MCP servers (the gateway behind
-`bitrouter tools`), BitRouter can also run as an **origin** MCP server that
-exposes its *own* tools — `complete`, `list_models`, `status` — to any
-MCP-capable client (Claude Code, Cursor, …).
-
-```bash
-bitrouter mcp serve                    # stdio → local daemon (127.0.0.1:4356)
-bitrouter mcp serve --transport http   # streamable HTTP → BitRouter Cloud
-bitrouter mcp install --client claude  # write/print the client config block
-```
-
-See [`mcp/README.md`](mcp/) and
-[`skills/bitrouter/references/mcp-server.md`](skills/bitrouter/references/mcp-server.md)
-for transports, backends, and auth.
 
 ## Documentation
 
@@ -218,7 +206,6 @@ for transports, backends, and auth.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
 - [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)
-- [`mcp/`](mcp/) — the experimental origin MCP server (`bitrouter mcp serve`)
 
 ## Roadmap
 
