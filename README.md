@@ -14,17 +14,6 @@ An open-source LLM router that sends routine calls to open models and pays front
 > **Not every agent run needs Claude Opus 4.8 — or even Claude 5.**
 > \~80% of agent workloads run just fine on cheaper open-source models without sacrificing performance. Use BitRouter alongside Claude Code (or any coding agent) to reserve your subscription budget for the calls that actually need it. **Enjoy 25% off all open-source model calls on BitRouter Cloud today.**
 
-## What it does
-
-BitRouter is a local proxy that sits between your agent and every upstream LLM provider. Point your agent at `http://localhost:4356` instead of a provider URL — your agent code stays unchanged while BitRouter handles routing, failover, cross-protocol translation, guardrails, and cost tracking.
-
-```diff
-- OPENAI_BASE_URL=https://api.openai.com/v1   # hardwired to one provider, no fallback
-+ OPENAI_BASE_URL=http://localhost:4356        # all providers, automatic failover
-```
-
-That one env-var change is the only harness modification required. BitRouter auto-detects every API key in your environment and makes those providers immediately routable — no config file needed to get started.
-
 ## Before & After
 
 Without BitRouter, your coding agent routes every call — file reads, summaries, tool calls, scaffolding — through the same frontier model. With BitRouter, routine work goes to open models automatically; frontier models get invoked only when they're justified.
@@ -71,6 +60,13 @@ cargo install bitrouter
 </details>
 
 ## Quick Start
+
+BitRouter is a local proxy between your agent and every LLM provider. One env-var swap — no harness changes required:
+
+```diff
+- OPENAI_BASE_URL=https://api.openai.com/v1   # hardwired to one provider, no fallback
++ OPENAI_BASE_URL=http://localhost:4356        # all providers, automatic failover
+```
 
 ### Local (BYOK)
 
@@ -151,19 +147,19 @@ BitRouter is purpose-built for autonomous agents — every feature is designed f
 
 ### Reliability
 
-When an agent runs unattended, a provider outage or rate-limit doesn't get a human retry — it just fails. BitRouter routes each call through a configurable fallback chain: if the primary provider fails, the next takes over automatically. Configure multiple accounts per provider for round-robin load-balancing, or let cross-protocol routing send OpenAI-format requests to an Anthropic or Google upstream when it's the better option.
+Agents can't retry a provider outage the way a human can. BitRouter reroutes across providers mid-run, transparently — so a rate-limit at file 140 never makes you re-pay for 139 files of work. Configure fallback chains, round-robin across multiple accounts, or let cross-protocol routing send OpenAI-format requests to an Anthropic or Google upstream automatically.
 
 ### Observability
 
-Every model call is recorded with provider, model, latency, and cost — queryable from the CLI without reaching for a dashboard. Export to Prometheus or any OTLP-compatible backend for fleet-level visibility. Use `bitrouter route <model>` to trace exactly how a model name resolves before it reaches the upstream.
+Billed per run. Now visible per run. Every agent, every model, every hop — with cost and latency attributed to the call. Query spend from the CLI without reaching for a dashboard, export to Prometheus or any OTLP backend, or trace exactly how a model name resolves before it hits the upstream with `bitrouter route <model>`.
 
 ### Security
 
-Guardrails run at the proxy layer — before requests leave your network and before responses reach your agent. Inspect and redact sensitive content, block policy-violating output, or abort streams mid-flight when a rule triggers. Virtual keys (`brvk_`) let you issue scoped credentials per agent or user so no agent ever holds an upstream API key directly. MCP tool calls route through the same layer, keeping tool access under one control point.
+One policy at the router — before requests leave your network and before responses reach your agent. Injection and output filtering, private by default. Virtual keys (`brvk_`) scope credentials per agent or user so no agent ever holds an upstream key directly; per-agent spend caps and loop guards keep runaway costs contained.
 
 ### Efficiency
 
-Agents burn tokens fast — and a misconfigured loop or unexpectedly expensive model call won't surface until the provider invoice arrives. BitRouter tracks cost per request at the proxy layer, making spend visible in real time. Route by policy: fall back to a cheaper provider when the primary exceeds a cost threshold, or pin specific call types to the model with the best price-to-quality ratio for that task. Scoped virtual keys let you cap what each agent or user can spend before it touches your upstream account.
+Pay open-source prices for the calls that don't need frontier. Route by policy: fall back to a cheaper provider when the primary exceeds a cost threshold, or pin call types to the model with the best price-to-quality ratio for that task. Scoped virtual keys let you cap what each agent or user can spend before it touches your upstream account.
 
 ## Supported Providers
 
@@ -180,7 +176,7 @@ Agents burn tokens fast — and a misconfigured loop or unexpectedly expensive m
 | GitHub Copilot  | ✅     | GitHub OAuth device flow (`bitrouter login github-copilot`)    |
 | ChatGPT Codex   | ✅     | ChatGPT subscription PKCE (`bitrouter login openai-codex`)     |
 
-Want to see another provider? [Open an issue](https://github.com/bitrouter/bitrouter/issues) or submit a PR. If you're a provider interested in first-party integration, reach out on [Discord](https://discord.gg/G3zVrZDa5C).
+**Want to add a provider?** Open an issue or submit a PR. **Interested in a first-party integration?** Email [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu).
 
 ## Supported Harnesses
 
