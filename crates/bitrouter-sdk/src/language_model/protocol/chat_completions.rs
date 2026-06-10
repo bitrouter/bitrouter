@@ -1564,6 +1564,14 @@ impl StreamEncoder for ChatStreamEncoder {
                 // (image generation is a separate API), so a generated file is
                 // surfaced only on the non-streaming path. Documented limitation.
             }
+            StreamPart::TextStart { .. }
+            | StreamPart::TextEnd { .. }
+            | StreamPart::ReasoningStart { .. }
+            | StreamPart::ReasoningEnd { .. } => {
+                // Coarse wire: Chat Completions frames no content blocks (deltas
+                // are a flat run on one `choices[0].delta`), so block-lifecycle
+                // markers have no native frame and re-encode to nothing.
+            }
             StreamPart::Source { source } => {
                 // Re-attach a streamed citation as a `delta.annotations[]`
                 // `url_citation` chunk — the location the decoder reads. Only a

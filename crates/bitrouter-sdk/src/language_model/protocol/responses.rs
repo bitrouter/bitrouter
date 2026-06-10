@@ -1667,6 +1667,23 @@ impl ResponsesStreamDecoder {
     }
 }
 
+/// Derive the block id for a [`StreamPart::TextStart`] / [`StreamPart::TextEnd`]
+/// (and reasoning counterpart) from an `output_item.added` / `output_item.done`
+/// event: prefer the upstream `item.id`, falling back to the event's
+/// `output_index` when an upstream omits it. The id is used only to correlate a
+/// start with its matching end; outbound encoders generate their own item ids,
+/// so an exact value is not required for fidelity.
+fn block_marker_id(item: &serde_json::Value, event: &serde_json::Value) -> String {
+    if let Some(id) = item.get("id").and_then(|i| i.as_str()) {
+        return id.to_string();
+    }
+    event
+        .get("output_index")
+        .and_then(|i| i.as_u64())
+        .map(|i| i.to_string())
+        .unwrap_or_default()
+}
+
 impl StreamDecoder for ResponsesStreamDecoder {
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>> {
         let data = event.data.trim();
@@ -1706,31 +1723,54 @@ impl StreamDecoder for ResponsesStreamDecoder {
                 // (`parse_response` / `render_output_items`) is the complete,
                 // faithful round trip; a streamed approval item is simply not
                 // emitted as a delta here. <https://platform.openai.com/docs/api-reference/responses-streaming>
-                if let Some(item) = json.get("item")
-                    && item.get("type").and_then(|t| t.as_str()) == Some("function_call")
-                {
-                    let item_id = item
-                        .get("id")
-                        .and_then(|i| i.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let call_id = item
-                        .get("call_id")
-                        .and_then(|i| i.as_str())
-                        .unwrap_or(&item_id)
-                        .to_string();
-                    let name = item
-                        .get("name")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    self.function_items
-                        .push((item_id, call_id.clone(), name.clone()));
-                    parts.push(StreamPart::ToolCallDelta {
-                        id: call_id,
-                        name: Some(name),
-                        arguments: String::new(),
-                    });
+                if let Some(item) = json.get("item") {
+                    let item_type = item
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default();
+                    let item_id = block_marker_id(item, &json);
+                    match item_type {
+                        // A `message` / `reasoning` item open is an explicit
+                        // block boundary on this wire — surface it as a canonical
+                        // start marker so a framing client encoder opens a fresh
+                        // block (the merged-block fix: two distinct message items
+                        // re-encode as two blocks, not one). The block id is the
+                        // upstream item id, falling back to `output_index` if the
+                        // upstream omitted it (used only for marker correlation).
+                        "message" => parts.push(StreamPart::TextStart { id: item_id }),
+                        "reasoning" => parts.push(StreamPart::ReasoningStart { id: item_id }),
+                        "function_call" => {
+                            // A function-call item frames itself via the
+                            // `name`-bearing `ToolCallDelta` below — no separate
+                            // start marker (see the `StreamPart` enum docs).
+                            // Track the *real* upstream `item.id` (not the marker
+                            // fallback) so `function_call_arguments.delta` — which
+                            // carries `item_id` — correlates to this call (#434).
+                            let real_item_id = item
+                                .get("id")
+                                .and_then(|i| i.as_str())
+                                .unwrap_or_default()
+                                .to_string();
+                            let call_id = item
+                                .get("call_id")
+                                .and_then(|i| i.as_str())
+                                .unwrap_or(&real_item_id)
+                                .to_string();
+                            let name = item
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or_default()
+                                .to_string();
+                            self.function_items
+                                .push((real_item_id, call_id.clone(), name.clone()));
+                            parts.push(StreamPart::ToolCallDelta {
+                                id: call_id,
+                                name: Some(name),
+                                arguments: String::new(),
+                            });
+                        }
+                        _ => {}
+                    }
                 }
             }
             "response.output_text.delta" => {
@@ -1783,7 +1823,25 @@ impl StreamDecoder for ResponsesStreamDecoder {
             }
             // the `.done` event repeats the full arguments — do NOT re-emit
             // them (would duplicate, #434).
-            "response.function_call_arguments.done" | "response.output_item.done" => {}
+            "response.function_call_arguments.done" => {}
+            "response.output_item.done" => {
+                // Close the matching text / reasoning block so the boundary
+                // survives re-encoding (the merged-block fix). A `function_call`
+                // item carries no end marker (its framing is the `name`-bearing
+                // delta on open and the next item / terminal on close).
+                if let Some(item) = json.get("item") {
+                    let item_type = item
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default();
+                    let item_id = block_marker_id(item, &json);
+                    match item_type {
+                        "message" => parts.push(StreamPart::TextEnd { id: item_id }),
+                        "reasoning" => parts.push(StreamPart::ReasoningEnd { id: item_id }),
+                        _ => {}
+                    }
+                }
+            }
             "response.completed" | "response.incomplete" => {
                 // #454-2: the full `response` object is carried here..3:
                 // map `response.completed` to the dedicated `ResponseCompleted`
@@ -2041,6 +2099,19 @@ impl ResponsesStreamEncoder {
         self.completed_items.push(item);
     }
 
+    /// Force-open a *fresh* reasoning item for an explicit
+    /// [`StreamPart::ReasoningStart`]. Unlike [`Self::open_reasoning_item`] this
+    /// first closes any reasoning item already open, so two distinct upstream
+    /// `reasoning` items re-encode as two `output_item.added`s rather than one
+    /// merged block (the merged-block fix on this wire). Closing the prior item
+    /// before reopening also re-runs the cross-kind close inside
+    /// `open_reasoning_item`, so message / tool items never interleave.
+    /// <https://platform.openai.com/docs/api-reference/responses-streaming>
+    fn open_fresh_reasoning_item(&mut self, frames: &mut Vec<SseFrame>) {
+        self.close_reasoning_item(frames);
+        self.open_reasoning_item(frames);
+    }
+
     /// Open a message item: `output_item.added` (type=message) +
     /// `content_part.added` (type=output_text). Idempotent — closes any
     /// open reasoning / tool item first so items never interleave.
@@ -2121,6 +2192,19 @@ impl ResponsesStreamEncoder {
             }),
         ));
         self.completed_items.push(item);
+    }
+
+    /// Force-open a *fresh* message item for an explicit
+    /// [`StreamPart::TextStart`]. Unlike [`Self::open_text_item`] this first
+    /// closes any message item already open, so two distinct upstream `message`
+    /// items re-encode as two `output_item.added`s rather than one merged block
+    /// (the merged-block fix on this wire). Closing the prior item before
+    /// reopening also re-runs the cross-kind close inside `open_text_item`, so
+    /// reasoning / tool items never interleave.
+    /// <https://platform.openai.com/docs/api-reference/responses-streaming>
+    fn open_fresh_text_item(&mut self, frames: &mut Vec<SseFrame>) {
+        self.close_text_item(frames);
+        self.open_text_item(frames);
     }
 
     /// Open a function-call item: `output_item.added` (type=function_call).
@@ -2237,6 +2321,26 @@ impl StreamEncoder for ResponsesStreamEncoder {
             StreamPart::File { .. } => {
                 // Responses streaming surfaces generated files on the
                 // non-streaming path; no inline file-output delta is emitted here.
+            }
+            StreamPart::TextStart { .. } => {
+                // Explicit block boundary from a block-framed upstream — open a
+                // *fresh* message item so two distinct upstream text blocks
+                // re-encode as two `output_item.added`s, not one merged block.
+                self.open_fresh_text_item(&mut frames);
+            }
+            StreamPart::ReasoningStart { .. } => {
+                self.open_fresh_reasoning_item(&mut frames);
+            }
+            StreamPart::TextEnd { .. } => {
+                // Close the message item the matching start opened, emitting its
+                // `output_text.done` + `content_part.done` + `output_item.done`.
+                // A no-op if nothing is open, so a stray end is harmless.
+                self.close_text_item(&mut frames);
+            }
+            StreamPart::ReasoningEnd { .. } => {
+                // Close the reasoning item the matching start opened (its
+                // `reasoning_text.done` + `content_part.done` + `output_item.done`).
+                self.close_reasoning_item(&mut frames);
             }
             StreamPart::TextDelta { text } => {
                 // `open_text_item` closes any open reasoning / tool item

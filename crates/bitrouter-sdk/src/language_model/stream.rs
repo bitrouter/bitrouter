@@ -84,6 +84,14 @@ impl StreamInterest {
             StreamPart::ReasoningDelta { .. } => Self::REASONING_DELTA,
             StreamPart::ToolCallDelta { .. } => Self::TOOL_CALL_DELTA,
             StreamPart::Usage { .. } => Self::USAGE,
+            // Block-lifecycle markers carry no text and gate no hook — a hook
+            // interested in `TextDelta` / `ReasoningDelta` (e.g. the guardrail
+            // matcher) acts on the deltas themselves; the start/end frames pass
+            // through unfiltered so the framing is never disturbed.
+            StreamPart::TextStart { .. }
+            | StreamPart::TextEnd { .. }
+            | StreamPart::ReasoningStart { .. }
+            | StreamPart::ReasoningEnd { .. } => 0,
             // No hook subscribes to file parts yet; they pass through unfiltered.
             StreamPart::File { .. } => 0,
             // No hook subscribes to source (citation) parts; they pass through
@@ -436,6 +444,56 @@ mod tests {
         assert!(!StreamInterest::none().matches(&StreamPart::TextDelta {
             text: "x".to_string()
         }));
+        // Block-lifecycle markers gate no hook: never matched even by `all()`,
+        // so they pass through the hook chain unfiltered (the `=> 0` arm).
+        for marker in [
+            StreamPart::TextStart { id: "0".into() },
+            StreamPart::TextEnd { id: "0".into() },
+            StreamPart::ReasoningStart { id: "1".into() },
+            StreamPart::ReasoningEnd { id: "1".into() },
+        ] {
+            assert!(
+                !StreamInterest::all().matches(&marker),
+                "block markers are passthrough: {marker:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn block_markers_do_not_affect_disconnect_billing_estimate() {
+        // Disconnect-billing estimates output tokens from observed `TextDelta` /
+        // `ReasoningDelta` chars. The new block-lifecycle markers carry no text,
+        // so they must contribute zero — billing is unaffected by the boundary
+        // frames a block-framed stream now emits.
+        let mut acc = UsageAccumulator::default();
+        for marker in [
+            StreamPart::TextStart { id: "0".into() },
+            StreamPart::TextEnd { id: "0".into() },
+            StreamPart::ReasoningStart { id: "1".into() },
+            StreamPart::ReasoningEnd { id: "1".into() },
+        ] {
+            acc.observe(&marker);
+        }
+        assert_eq!(
+            acc.estimated_output_tokens(),
+            0,
+            "markers alone estimate zero output tokens"
+        );
+
+        // With real deltas interleaved, only the delta chars count toward the
+        // estimate — the markers add nothing on top.
+        let mut acc = UsageAccumulator::default();
+        for part in [
+            StreamPart::TextStart { id: "0".into() },
+            StreamPart::TextDelta {
+                text: "12345678".into(), // 8 chars
+            },
+            StreamPart::TextEnd { id: "0".into() },
+        ] {
+            acc.observe(&part);
+        }
+        // 8 chars / 4 chars-per-token = 2 tokens, same as if the markers were absent.
+        assert_eq!(acc.estimated_output_tokens(), 2);
     }
 
     #[test]

@@ -1592,6 +1592,504 @@ fn messages_stream_encoder_closes_block_on_kind_transition() {
     );
 }
 
+// ===== block-lifecycle markers (StreamPart::TextStart/TextEnd/ReasoningStart/
+// ReasoningEnd): the merged-block fix. =====
+
+/// Encode a canonical part stream through `protocol` and return every emitted
+/// SSE event as `(event_name, data_json)`. Shared by the block-marker tests.
+fn encode_stream_events(
+    protocol: ApiProtocol,
+    parts: &[StreamPart],
+) -> Vec<(String, serde_json::Value)> {
+    let adapter = adapter_for(protocol);
+    let mut encoder = adapter.stream_encoder("resp_m", "test-model");
+    let mut out = Vec::new();
+    for part in parts {
+        for frame in encoder.encode(part).unwrap() {
+            if let SseFrame::Event { event, data } = frame {
+                let json: serde_json::Value = serde_json::from_str(&data).unwrap();
+                out.push((event.unwrap_or_default(), json));
+            }
+        }
+    }
+    for frame in encoder.finish().unwrap() {
+        if let SseFrame::Event { event, data } = frame {
+            let json: serde_json::Value =
+                serde_json::from_str(&data).unwrap_or(serde_json::json!({}));
+            out.push((event.unwrap_or_default(), json));
+        }
+    }
+    out
+}
+
+/// Decode a sequence of SSE `(event_name, data_json)` through `protocol` into
+/// the canonical part stream. Shared by the round-trip tests.
+fn decode_stream(protocol: ApiProtocol, events: &[(&str, serde_json::Value)]) -> Vec<StreamPart> {
+    let adapter = adapter_for(protocol);
+    let mut decoder = adapter.stream_decoder();
+    let mut parts = Vec::new();
+    for (event, data) in events {
+        parts.extend(
+            decoder
+                .decode(&SseEvent {
+                    event: Some((*event).to_string()),
+                    data: data.to_string(),
+                })
+                .unwrap(),
+        );
+    }
+    parts.extend(decoder.finish().unwrap());
+    parts
+}
+
+/// A canonical stream of two *distinct* text blocks, each bracketed by its own
+/// start/end marker (what a block-framed upstream decoder now produces). The
+/// merged-block bug was that, without the markers, this collapsed to a flat
+/// `TextDelta,TextDelta` run that re-encoded into ONE block.
+fn two_text_blocks() -> Vec<StreamPart> {
+    vec![
+        StreamPart::TextStart { id: "0".into() },
+        StreamPart::TextDelta {
+            text: "first".into(),
+        },
+        StreamPart::TextEnd { id: "0".into() },
+        StreamPart::TextStart { id: "1".into() },
+        StreamPart::TextDelta {
+            text: "second".into(),
+        },
+        StreamPart::TextEnd { id: "1".into() },
+        StreamPart::Finish {
+            reason: FinishReason::Stop,
+        },
+    ]
+}
+
+#[test]
+fn anthropic_two_text_blocks_reencode_as_distinct_blocks_not_merged() {
+    // The merged-block fix on the Anthropic wire: two bracketed text blocks must
+    // re-encode as TWO `content_block_start`(type=text) + TWO
+    // `content_block_stop`, never a single merged block. Without the lifecycle
+    // markers both deltas land in one block.
+    let events = encode_stream_events(ApiProtocol::Messages, &two_text_blocks());
+    let text_starts = events
+        .iter()
+        .filter(|(name, data)| {
+            name == "content_block_start"
+                && data.pointer("/content_block/type").and_then(|t| t.as_str()) == Some("text")
+        })
+        .count();
+    let stops = events
+        .iter()
+        .filter(|(name, _)| name == "content_block_stop")
+        .count();
+    assert_eq!(
+        text_starts, 2,
+        "two distinct text blocks must open two text `content_block_start`s, not merge: {events:?}"
+    );
+    assert_eq!(stops, 2, "each opened block must close: {events:?}");
+    // The two blocks must carry distinct indices (not the same index reused).
+    let indices: Vec<u64> = events
+        .iter()
+        .filter(|(name, data)| {
+            name == "content_block_start"
+                && data.pointer("/content_block/type").and_then(|t| t.as_str()) == Some("text")
+        })
+        .filter_map(|(_, data)| data.get("index").and_then(|i| i.as_u64()))
+        .collect();
+    assert_eq!(indices.len(), 2);
+    assert_ne!(indices[0], indices[1], "blocks must use distinct indices");
+}
+
+#[test]
+fn responses_two_text_blocks_reencode_as_distinct_items_not_merged() {
+    // The merged-block fix on the Responses wire: two bracketed text blocks must
+    // re-encode as TWO `output_item.added`(type=message) + TWO
+    // `output_item.done`, each in its own `output_index` — never one merged
+    // message item (which would render the two upstream blocks as one).
+    let events = encode_stream_events(ApiProtocol::Responses, &two_text_blocks());
+    let message_added = events
+        .iter()
+        .filter(|(name, data)| {
+            name == "response.output_item.added"
+                && data.pointer("/item/type").and_then(|t| t.as_str()) == Some("message")
+        })
+        .count();
+    let message_done = events
+        .iter()
+        .filter(|(name, data)| {
+            name == "response.output_item.done"
+                && data.pointer("/item/type").and_then(|t| t.as_str()) == Some("message")
+        })
+        .count();
+    assert_eq!(
+        message_added, 2,
+        "two distinct text blocks must open two message items, not merge: {events:?}"
+    );
+    assert_eq!(message_done, 2, "each message item must close: {events:?}");
+    // Distinct `output_index` per item.
+    let indices: Vec<u64> = events
+        .iter()
+        .filter(|(name, data)| {
+            name == "response.output_item.added"
+                && data.pointer("/item/type").and_then(|t| t.as_str()) == Some("message")
+        })
+        .filter_map(|(_, data)| data.get("output_index").and_then(|i| i.as_u64()))
+        .collect();
+    assert_eq!(indices.len(), 2);
+    assert_ne!(
+        indices[0], indices[1],
+        "message items must use distinct output indices"
+    );
+    // The terminal `response.completed.output` must mirror both items.
+    let completed_output_len = events
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "response.completed")
+        .and_then(|(_, data)| data.pointer("/response/output"))
+        .and_then(|o| o.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    assert_eq!(
+        completed_output_len, 2,
+        "terminal envelope must replay both message items: {events:?}"
+    );
+}
+
+#[test]
+fn text_reasoning_text_reencodes_with_three_distinct_blocks() {
+    // text → reasoning → text, each bracketed, must re-encode as three distinct
+    // blocks with the right kinds on both block-framed wires — the canonical
+    // ordering (#416/#454-1) plus the merged-block fix together.
+    let parts = vec![
+        StreamPart::TextStart { id: "a".into() },
+        StreamPart::TextDelta {
+            text: "intro".into(),
+        },
+        StreamPart::TextEnd { id: "a".into() },
+        StreamPart::ReasoningStart { id: "b".into() },
+        StreamPart::ReasoningDelta {
+            text: "ponder".into(),
+        },
+        StreamPart::ReasoningEnd { id: "b".into() },
+        StreamPart::TextStart { id: "c".into() },
+        StreamPart::TextDelta {
+            text: "outro".into(),
+        },
+        StreamPart::TextEnd { id: "c".into() },
+        StreamPart::Finish {
+            reason: FinishReason::Stop,
+        },
+    ];
+
+    // Anthropic: 2 text blocks + 1 thinking block, 3 stops.
+    let anthropic = encode_stream_events(ApiProtocol::Messages, &parts);
+    let count_kind = |kind: &str| {
+        anthropic
+            .iter()
+            .filter(|(name, data)| {
+                name == "content_block_start"
+                    && data.pointer("/content_block/type").and_then(|t| t.as_str()) == Some(kind)
+            })
+            .count()
+    };
+    assert_eq!(count_kind("text"), 2, "two text blocks: {anthropic:?}");
+    assert_eq!(
+        count_kind("thinking"),
+        1,
+        "one thinking block: {anthropic:?}"
+    );
+    assert_eq!(
+        anthropic
+            .iter()
+            .filter(|(name, _)| name == "content_block_stop")
+            .count(),
+        3,
+        "three block stops: {anthropic:?}"
+    );
+
+    // Responses: 2 message items + 1 reasoning item.
+    let responses = encode_stream_events(ApiProtocol::Responses, &parts);
+    let count_item = |kind: &str| {
+        responses
+            .iter()
+            .filter(|(name, data)| {
+                name == "response.output_item.added"
+                    && data.pointer("/item/type").and_then(|t| t.as_str()) == Some(kind)
+            })
+            .count()
+    };
+    assert_eq!(count_item("message"), 2, "two message items: {responses:?}");
+    assert_eq!(
+        count_item("reasoning"),
+        1,
+        "one reasoning item: {responses:?}"
+    );
+}
+
+#[test]
+fn coarse_wires_drop_block_markers_and_emit_only_deltas() {
+    // Chat Completions and Generate Content frame no content blocks, so the
+    // block-lifecycle markers re-encode to NOTHING — a bare start/end emits zero
+    // SSE frames — while the text deltas pass through unaffected. This proves the
+    // coarse-vs-framed split: a block-framed upstream re-encoded to a coarse
+    // client simply drops the frames.
+    for protocol in [ApiProtocol::ChatCompletions, ApiProtocol::GenerateContent] {
+        let adapter = adapter_for(protocol.clone());
+        let mut encoder = adapter.stream_encoder("resp_c", "test-model");
+
+        // Each marker alone yields no frames.
+        for marker in [
+            StreamPart::TextStart { id: "0".into() },
+            StreamPart::TextEnd { id: "0".into() },
+            StreamPart::ReasoningStart { id: "1".into() },
+            StreamPart::ReasoningEnd { id: "1".into() },
+        ] {
+            assert!(
+                encoder.encode(&marker).unwrap().is_empty(),
+                "{protocol:?}: marker {marker:?} must emit no frames"
+            );
+        }
+
+        // The full two-block stream decodes back to exactly the two deltas,
+        // concatenated — the markers left no trace.
+        let events = encode_stream_events(protocol.clone(), &two_text_blocks());
+        let mut decoder = adapter.stream_decoder();
+        let mut decoded = Vec::new();
+        for (event, data) in &events {
+            decoded.extend(
+                decoder
+                    .decode(&SseEvent {
+                        event: Some(event.clone()),
+                        data: data.to_string(),
+                    })
+                    .unwrap(),
+            );
+        }
+        decoded.extend(decoder.finish().unwrap());
+        let text: String = decoded
+            .iter()
+            .filter_map(|p| match p {
+                StreamPart::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            text, "firstsecond",
+            "{protocol:?}: coarse text deltas survive unaffected"
+        );
+        assert!(
+            !decoded.iter().any(|p| matches!(
+                p,
+                StreamPart::TextStart { .. }
+                    | StreamPart::TextEnd { .. }
+                    | StreamPart::ReasoningStart { .. }
+                    | StreamPart::ReasoningEnd { .. }
+            )),
+            "{protocol:?}: coarse wire must not produce block markers: {decoded:?}"
+        );
+    }
+}
+
+#[test]
+fn block_markers_survive_anthropic_decode_then_reencode_roundtrip() {
+    // Full same-protocol round trip on Anthropic: real two-block upstream SSE
+    // decodes to a marker-bracketed canonical stream, which re-encodes back into
+    // two distinct content blocks. This is the end-to-end merged-block fix.
+    let upstream = [
+        (
+            "message_start",
+            serde_json::json!({ "type": "message_start", "message": { "id": "msg_1", "usage": { "input_tokens": 3 } } }),
+        ),
+        (
+            "content_block_start",
+            serde_json::json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "text", "text": "" } }),
+        ),
+        (
+            "content_block_delta",
+            serde_json::json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": "first" } }),
+        ),
+        (
+            "content_block_stop",
+            serde_json::json!({ "type": "content_block_stop", "index": 0 }),
+        ),
+        (
+            "content_block_start",
+            serde_json::json!({ "type": "content_block_start", "index": 1, "content_block": { "type": "text", "text": "" } }),
+        ),
+        (
+            "content_block_delta",
+            serde_json::json!({ "type": "content_block_delta", "index": 1, "delta": { "type": "text_delta", "text": "second" } }),
+        ),
+        (
+            "content_block_stop",
+            serde_json::json!({ "type": "content_block_stop", "index": 1 }),
+        ),
+        (
+            "message_delta",
+            serde_json::json!({ "type": "message_delta", "delta": { "stop_reason": "end_turn" }, "usage": { "output_tokens": 2 } }),
+        ),
+        (
+            "message_stop",
+            serde_json::json!({ "type": "message_stop" }),
+        ),
+    ];
+    let decoded = decode_stream(ApiProtocol::Messages, &upstream);
+    // The decoder must surface the two block boundaries as start/end markers.
+    assert_eq!(
+        decoded
+            .iter()
+            .filter(|p| matches!(p, StreamPart::TextStart { .. }))
+            .count(),
+        2,
+        "decode must emit two TextStart markers: {decoded:?}"
+    );
+    assert_eq!(
+        decoded
+            .iter()
+            .filter(|p| matches!(p, StreamPart::TextEnd { .. }))
+            .count(),
+        2,
+        "decode must emit two TextEnd markers: {decoded:?}"
+    );
+
+    // Re-encode and assert the two distinct blocks survive.
+    let reencoded = encode_stream_events(ApiProtocol::Messages, &decoded);
+    let text_starts = reencoded
+        .iter()
+        .filter(|(name, data)| {
+            name == "content_block_start"
+                && data.pointer("/content_block/type").and_then(|t| t.as_str()) == Some("text")
+        })
+        .count();
+    assert_eq!(
+        text_starts, 2,
+        "round trip must preserve two distinct text blocks: {reencoded:?}"
+    );
+}
+
+#[test]
+fn block_markers_survive_responses_decode_then_reencode_roundtrip() {
+    // Full same-protocol round trip on Responses: two real `message` items
+    // decode to marker-bracketed canonical parts and re-encode into two distinct
+    // message items.
+    let upstream = [
+        (
+            "response.created",
+            serde_json::json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        ),
+        (
+            "response.output_item.added",
+            serde_json::json!({ "type": "response.output_item.added", "output_index": 0, "item": { "type": "message", "id": "msg_a", "role": "assistant" } }),
+        ),
+        (
+            "response.output_text.delta",
+            serde_json::json!({ "type": "response.output_text.delta", "item_id": "msg_a", "output_index": 0, "delta": "first" }),
+        ),
+        (
+            "response.output_item.done",
+            serde_json::json!({ "type": "response.output_item.done", "output_index": 0, "item": { "type": "message", "id": "msg_a", "role": "assistant" } }),
+        ),
+        (
+            "response.output_item.added",
+            serde_json::json!({ "type": "response.output_item.added", "output_index": 1, "item": { "type": "message", "id": "msg_b", "role": "assistant" } }),
+        ),
+        (
+            "response.output_text.delta",
+            serde_json::json!({ "type": "response.output_text.delta", "item_id": "msg_b", "output_index": 1, "delta": "second" }),
+        ),
+        (
+            "response.output_item.done",
+            serde_json::json!({ "type": "response.output_item.done", "output_index": 1, "item": { "type": "message", "id": "msg_b", "role": "assistant" } }),
+        ),
+        (
+            "response.completed",
+            serde_json::json!({ "type": "response.completed", "response": { "id": "resp_1", "status": "completed" } }),
+        ),
+    ];
+    let decoded = decode_stream(ApiProtocol::Responses, &upstream);
+    assert_eq!(
+        decoded
+            .iter()
+            .filter(|p| matches!(p, StreamPart::TextStart { .. }))
+            .count(),
+        2,
+        "decode must emit two TextStart markers: {decoded:?}"
+    );
+    assert_eq!(
+        decoded
+            .iter()
+            .filter(|p| matches!(p, StreamPart::TextEnd { .. }))
+            .count(),
+        2,
+        "decode must emit two TextEnd markers: {decoded:?}"
+    );
+
+    let reencoded = encode_stream_events(ApiProtocol::Responses, &decoded);
+    let message_added = reencoded
+        .iter()
+        .filter(|(name, data)| {
+            name == "response.output_item.added"
+                && data.pointer("/item/type").and_then(|t| t.as_str()) == Some("message")
+        })
+        .count();
+    assert_eq!(
+        message_added, 2,
+        "round trip must preserve two distinct message items: {reencoded:?}"
+    );
+}
+
+#[test]
+fn tool_call_streaming_still_frames_distinctly_with_markers_present() {
+    // Regression guard: the markers must not disturb tool-call framing. A text
+    // block followed by two tool calls must still produce, on Responses, one
+    // message item + two distinct `function_call` items (each tool call in its
+    // own output slot) — tool blocks carry no start/end marker by design.
+    let parts = vec![
+        StreamPart::TextStart { id: "0".into() },
+        StreamPart::TextDelta {
+            text: "calling".into(),
+        },
+        StreamPart::TextEnd { id: "0".into() },
+        StreamPart::ToolCallDelta {
+            id: "call_a".into(),
+            name: Some("first".into()),
+            arguments: "{}".into(),
+        },
+        StreamPart::ToolCallDelta {
+            id: "call_b".into(),
+            name: Some("second".into()),
+            arguments: "{}".into(),
+        },
+        StreamPart::Finish {
+            reason: FinishReason::Stop,
+        },
+    ];
+    let events = encode_stream_events(ApiProtocol::Responses, &parts);
+    let function_added = events
+        .iter()
+        .filter(|(name, data)| {
+            name == "response.output_item.added"
+                && data.pointer("/item/type").and_then(|t| t.as_str()) == Some("function_call")
+        })
+        .count();
+    assert_eq!(
+        function_added, 2,
+        "two tool calls must open two function_call items: {events:?}"
+    );
+    // And exactly one message item from the single text block.
+    let message_added = events
+        .iter()
+        .filter(|(name, data)| {
+            name == "response.output_item.added"
+                && data.pointer("/item/type").and_then(|t| t.as_str()) == Some("message")
+        })
+        .count();
+    assert_eq!(
+        message_added, 1,
+        "one text block → one message item: {events:?}"
+    );
+}
+
 #[test]
 fn messages_stream_error_maps_to_proper_http_status() {
     // Messages mid-stream `error` events carry `error.type` — a 4xx must

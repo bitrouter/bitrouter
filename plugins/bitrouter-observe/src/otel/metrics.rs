@@ -178,8 +178,12 @@ impl OtelMetrics {
 
 fn stream_part_type(part: &StreamPart) -> &'static str {
     match part {
+        StreamPart::TextStart { .. } => "text_start",
         StreamPart::TextDelta { .. } => "text_delta",
+        StreamPart::TextEnd { .. } => "text_end",
+        StreamPart::ReasoningStart { .. } => "reasoning_start",
         StreamPart::ReasoningDelta { .. } => "reasoning_delta",
+        StreamPart::ReasoningEnd { .. } => "reasoning_end",
         StreamPart::ToolCallDelta { .. } => "tool_call_delta",
         StreamPart::File { .. } => "file",
         StreamPart::Source { .. } => "source",

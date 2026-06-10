@@ -1333,6 +1333,13 @@ impl StreamEncoder for GenerateContentStreamEncoder {
             // Observability-only metadata (upstream response id) — never
             // forwarded to the Google-protocol client.
             StreamPart::ResponseStarted { .. } => return Ok(Vec::new()),
+            // Coarse wire: Generate Content frames no content blocks (text /
+            // reasoning are flat `parts` on one candidate), so block-lifecycle
+            // markers have no native chunk and re-encode to nothing.
+            StreamPart::TextStart { .. }
+            | StreamPart::TextEnd { .. }
+            | StreamPart::ReasoningStart { .. }
+            | StreamPart::ReasoningEnd { .. } => return Ok(Vec::new()),
             // A generated file -> an `inlineData` / `fileData` part in one chunk.
             // <https://ai.google.dev/gemini-api/docs/image-generation>
             StreamPart::File { media_type, data } => {

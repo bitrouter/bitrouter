@@ -1287,18 +1287,102 @@ pub struct GenerateResult {
 /// One part of a streaming response, in canonical internal form. `StreamHook`
 /// operates on a `Stream<Item = StreamPart>` before outbound protocol
 /// conversion.
+///
+/// **Relationship to the Vercel AI SDK V3 `LanguageModelV3StreamPart`.**
+/// bitrouter is a re-encoder: it decodes an upstream's SSE into these canonical
+/// parts and re-encodes them into the client's own SSE lifecycle, so a variant
+/// is modeled only when it changes the *re-encoded* bytes. The block-lifecycle
+/// members are carried because two of the client wires frame content into
+/// explicit blocks: text-start/end ([`Self::TextStart`] / [`Self::TextEnd`]) and
+/// reasoning-start/end ([`Self::ReasoningStart`] / [`Self::ReasoningEnd`]) fix a
+/// concrete merged-block bug on the Anthropic Messages and OpenAI Responses
+/// encoders (see [`Self::TextStart`]). The following V3 members are
+/// deliberately **not** modeled, each for a no-dead-code reason:
+///
+/// - **`tool-input-start` / `tool-input-end`.** Tool-argument streaming is
+///   already framed losslessly without dedicated markers: a
+///   [`Self::ToolCallDelta`] whose `name` is `Some` *is* the start signal — both
+///   block-framed encoders force-close the open block and open a new tool block
+///   on it, so consecutive tool calls land in distinct blocks (Anthropic
+///   `tool_use`, Responses `function_call`), and the block closes on the next
+///   block/terminal. A separate `tool-input-end` would change no re-encoded
+///   byte, so it would be unconstructed-or-unconsumed churn.
+/// - **`stream-start { warnings }`.** Warnings describe settings a provider
+///   could not honor; bitrouter forwards requests faithfully and never gates a
+///   setting, and no client *response* wire has a streaming `warnings` slot, so
+///   such a part could be neither meaningfully produced nor emitted — the same
+///   reasoning that omits `warnings` from [`GenerateResult`].
+/// - **`raw` (`includeRawChunks`).** bitrouter re-encodes canonical parts into
+///   the client's wire; it never tunnels an upstream's raw chunk through, so a
+///   `raw` part would have no encoder that could emit it.
+/// - **`response-metadata` (mid-stream id/timestamp/modelId).** The response id
+///   is already surfaced once as [`Self::ResponseStarted`] (and on
+///   [`Self::ResponseCompleted`] for Responses); no client encoder consumes a
+///   mid-stream model-id/timestamp refresh, so a dedicated part would be dead.
+/// - **`error`.** A terminal upstream error is modeled as
+///   [`FinishReason::Error`] and surfaced through each encoder's
+///   `encode_error` (protocol-shaped terminal frame: Anthropic `error`, Chat
+///   error chunk, Responses `response.failed`). A separate `error` `StreamPart`
+///   would duplicate that path with no extra fidelity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StreamPart {
+    /// Opens a text block — the V3 `text-start` part. Carries the upstream
+    /// block id so a client encoder that frames text into explicit blocks
+    /// (Anthropic `content_block_start`, Responses `output_item.added` +
+    /// `content_part.added`) opens a *fresh* block here rather than inferring
+    /// the boundary from delta transitions.
+    ///
+    /// **Why this exists (the merged-block fix).** Without an explicit start/end
+    /// pair the canonical stream is a flat run of [`Self::TextDelta`]s, so two
+    /// *distinct* upstream text blocks (e.g. Anthropic `content_block` index 0
+    /// then index 2, or two Responses `message` items) decode to
+    /// `TextDelta`,`TextDelta` with no separator and re-encode into a **single**
+    /// merged block — a real fidelity loss on the two block-framed wires.
+    /// The decoder now emits this marker on each `content_block_start` (text) /
+    /// message-item open, and the encoder closes-then-reopens on it, so block
+    /// boundaries survive a same-protocol round trip. The two coarse wires
+    /// (Chat Completions / Generate Content) carry no block frame, so their
+    /// decoders never emit it and their encoders treat it as a no-op.
+    /// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-stream-part.ts>
+    TextStart {
+        /// Upstream block id (Anthropic block index rendered as a string, or a
+        /// Responses item id). Stable within one stream; used by a framing
+        /// encoder to correlate the matching [`Self::TextEnd`].
+        id: String,
+    },
     /// An incremental chunk of assistant text.
     TextDelta {
         /// The text fragment.
         text: String,
     },
+    /// Closes the text block opened by the matching [`Self::TextStart`] — the V3
+    /// `text-end` part. A framing encoder emits its block-close frame here
+    /// (Anthropic `content_block_stop`, Responses `output_text.done` +
+    /// `content_part.done` + `output_item.done`); the coarse wires no-op it.
+    TextEnd {
+        /// Block id, matching the opening [`Self::TextStart`].
+        id: String,
+    },
+    /// Opens a reasoning / thinking block — the V3 `reasoning-start` part. The
+    /// reasoning counterpart of [`Self::TextStart`]; see its docs for the
+    /// merged-block rationale. Decoded from Anthropic `thinking` /
+    /// `redacted_thinking` `content_block_start` and Responses `reasoning`
+    /// item opens.
+    ReasoningStart {
+        /// Upstream reasoning-block id.
+        id: String,
+    },
     /// An incremental chunk of reasoning / thinking text.
     ReasoningDelta {
         /// The reasoning fragment.
         text: String,
+    },
+    /// Closes the reasoning block opened by the matching [`Self::ReasoningStart`]
+    /// — the V3 `reasoning-end` part.
+    ReasoningEnd {
+        /// Reasoning-block id, matching the opening [`Self::ReasoningStart`].
+        id: String,
     },
     /// An incremental chunk of a tool call's arguments.
     ToolCallDelta {

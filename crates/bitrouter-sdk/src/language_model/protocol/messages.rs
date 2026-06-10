@@ -1732,6 +1732,11 @@ struct MessagesStreamDecoder {
     /// per content-block index → tool id (empty string for non-tool blocks),
     /// so an `input_json_delta` knows which canonical tool call it belongs to.
     block_tool_ids: Vec<String>,
+    /// per content-block index → its canonical kind, so `content_block_stop`
+    /// can emit the matching [`StreamPart::TextEnd`] / [`StreamPart::ReasoningEnd`]
+    /// for the block that just closed. `None` for an index never opened or for a
+    /// block kind that carries no lifecycle marker (tool / web-search results).
+    block_kinds: Vec<Option<BlockKind>>,
     usage: Usage,
 }
 
@@ -1815,17 +1820,36 @@ impl StreamDecoder for MessagesStreamDecoder {
                     self.block_tool_ids.push(String::new());
                 }
                 self.block_tool_ids[index] = tool_id.clone();
-                if kind == BlockKind::ToolUse {
-                    // emit an opening ToolCallDelta carrying the tool name
-                    let name = block
-                        .and_then(|b| b.get("name"))
-                        .and_then(|n| n.as_str())
-                        .map(|s| s.to_string());
-                    parts.push(StreamPart::ToolCallDelta {
-                        id: tool_id,
-                        name,
-                        arguments: String::new(),
-                    });
+                while self.block_kinds.len() <= index {
+                    self.block_kinds.push(None);
+                }
+                self.block_kinds[index] = Some(kind);
+                match kind {
+                    // Text / thinking blocks carry an explicit lifecycle on this
+                    // wire; surface the open as a canonical start marker so a
+                    // framing client encoder reopens a fresh block (the
+                    // merged-block fix). The block id is Anthropic's numeric
+                    // index rendered as a string.
+                    BlockKind::Text => parts.push(StreamPart::TextStart {
+                        id: index.to_string(),
+                    }),
+                    BlockKind::Thinking => parts.push(StreamPart::ReasoningStart {
+                        id: index.to_string(),
+                    }),
+                    BlockKind::ToolUse => {
+                        // A tool block's open already frames itself via the
+                        // `name`-bearing `ToolCallDelta` below — no separate
+                        // start marker (see the `StreamPart` enum docs).
+                        let name = block
+                            .and_then(|b| b.get("name"))
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string());
+                        parts.push(StreamPart::ToolCallDelta {
+                            id: tool_id,
+                            name,
+                            arguments: String::new(),
+                        });
+                    }
                 }
             }
             "content_block_delta" => {
@@ -1868,7 +1892,22 @@ impl StreamDecoder for MessagesStreamDecoder {
                     _ => {}
                 }
             }
-            "content_block_stop" => {}
+            "content_block_stop" => {
+                // Close the matching text / reasoning block so the boundary
+                // survives re-encoding. Tool / web-search blocks carry no end
+                // marker (their framing is the `name`-bearing delta on open and
+                // the next block / terminal on close).
+                let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                match self.block_kinds.get(index).copied().flatten() {
+                    Some(BlockKind::Text) => parts.push(StreamPart::TextEnd {
+                        id: index.to_string(),
+                    }),
+                    Some(BlockKind::Thinking) => parts.push(StreamPart::ReasoningEnd {
+                        id: index.to_string(),
+                    }),
+                    _ => {}
+                }
+            }
             "message_delta" => {
                 // `message_delta.usage` carries the cumulative final counts
                 // (<https://docs.anthropic.com/en/api/messages-streaming>).
@@ -2091,6 +2130,39 @@ impl MessagesStreamEncoder {
         }
     }
 
+    /// Force-open a *fresh* text / thinking block, emitting its
+    /// `content_block_start`. Unlike [`Self::ensure_block_open`] this always
+    /// closes any currently-open block first, so an explicit canonical
+    /// [`StreamPart::TextStart`] / [`StreamPart::ReasoningStart`] starts a new
+    /// content block at the next index even when one of the same kind was
+    /// already open — this is the merged-block fix on this wire. A `text` block
+    /// opens with an empty `text`, a `thinking` block with empty `thinking`,
+    /// matching `content_block_start` on each kind.
+    /// <https://docs.anthropic.com/en/api/messages-streaming>
+    fn open_fresh_block(&mut self, frames: &mut Vec<SseFrame>, kind: EncoderBlockKind) {
+        self.close_block(frames);
+        self.block_kind = Some(kind);
+        self.block_open = true;
+        let content_block = match kind {
+            EncoderBlockKind::Text => serde_json::json!({ "type": "text", "text": "" }),
+            EncoderBlockKind::Thinking => serde_json::json!({ "type": "thinking", "thinking": "" }),
+            // Tool blocks frame themselves via the `name`-bearing `ToolCallDelta`
+            // arm, never through a start marker; keep the payload self-consistent
+            // if a future caller routes one here.
+            EncoderBlockKind::ToolUse => {
+                serde_json::json!({ "type": "tool_use", "id": "", "name": "", "input": {} })
+            }
+        };
+        frames.push(Self::ev(
+            "content_block_start",
+            serde_json::json!({
+                "type": "content_block_start",
+                "index": self.block_index,
+                "content_block": content_block,
+            }),
+        ));
+    }
+
     /// Emit the terminal `message_delta` + `message_stop` frames. Shared by the
     /// `Finish` and `ResponseCompleted` encode arms. Anthropic's
     /// `message_delta.usage` carries `output_tokens`, `input_tokens`, and the
@@ -2165,6 +2237,20 @@ impl StreamEncoder for MessagesStreamEncoder {
             StreamPart::File { .. } => {
                 // Anthropic Messages streaming has no file-output content block;
                 // a generated file is surfaced only on the non-streaming path.
+            }
+            StreamPart::TextStart { .. } => {
+                // Explicit block boundary from a block-framed upstream — open a
+                // *fresh* text content block so two distinct upstream text blocks
+                // re-encode as two `content_block_start`s, not one merged block.
+                self.open_fresh_block(&mut frames, EncoderBlockKind::Text);
+            }
+            StreamPart::ReasoningStart { .. } => {
+                self.open_fresh_block(&mut frames, EncoderBlockKind::Thinking);
+            }
+            StreamPart::TextEnd { .. } | StreamPart::ReasoningEnd { .. } => {
+                // Close the block the matching start opened; `close_block` is a
+                // no-op if nothing is open, so a stray end is harmless.
+                self.close_block(&mut frames);
             }
             StreamPart::TextDelta { text } => {
                 if self.ensure_block_open(&mut frames, EncoderBlockKind::Text) {
