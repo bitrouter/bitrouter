@@ -5148,6 +5148,66 @@ fn generate_content_grounding_round_trip() {
     assert_eq!(sources_of(&reparsed.content), sources_of(&result.content));
 }
 
+/// Gemini SHOULD-FIX: grounding chunk kinds beyond `web` are mapped, not
+/// silently dropped. A `retrievedContext` chunk with an http(s) uri becomes a
+/// [`Source::Url`]; an `image` chunk maps via its `sourceUri`; a `maps` chunk
+/// with a `uri` becomes a URL; and a `gs://` `retrievedContext` becomes a
+/// [`Source::Document`] with the media type inferred from the path.
+#[test]
+fn generate_content_grounding_maps_all_chunk_kinds() {
+    let adapter = generate_content::GenerateContentAdapter;
+    let provider_resp = serde_json::json!({
+        "candidates": [{
+            "content": { "role": "model", "parts": [{ "text": "grounded" }] },
+            "groundingMetadata": {
+                "groundingChunks": [
+                    { "retrievedContext": { "uri": "https://example.invalid/rag", "title": "RAG" } },
+                    { "image": { "sourceUri": "https://example.invalid/page", "imageUri": "https://example.invalid/i.png", "title": "Img" } },
+                    { "maps": { "uri": "https://maps.example.invalid/p", "title": "Place" } },
+                    { "retrievedContext": { "uri": "gs://bucket/report.pdf", "title": "Report" } }
+                ]
+            },
+            "finishReason": "STOP"
+        }]
+    });
+    let result = adapter.parse_response(provider_resp).unwrap();
+    let sources = sources_of(&result.content);
+    assert_eq!(sources.len(), 4, "every grounding chunk kind is mapped");
+
+    // retrievedContext (http) -> Url
+    match sources[0] {
+        Source::Url { url, title, .. } => {
+            assert_eq!(url, "https://example.invalid/rag");
+            assert_eq!(title.as_deref(), Some("RAG"));
+        }
+        other => panic!("expected url source for retrievedContext(http), got {other:?}"),
+    }
+    // image -> Url keyed by sourceUri (not imageUri)
+    match sources[1] {
+        Source::Url { url, .. } => assert_eq!(url, "https://example.invalid/page"),
+        other => panic!("expected url source for image chunk, got {other:?}"),
+    }
+    // maps -> Url
+    match sources[2] {
+        Source::Url { url, .. } => assert_eq!(url, "https://maps.example.invalid/p"),
+        other => panic!("expected url source for maps chunk, got {other:?}"),
+    }
+    // retrievedContext (gs://) -> Document with inferred media type + filename
+    match sources[3] {
+        Source::Document {
+            media_type,
+            title,
+            filename,
+            ..
+        } => {
+            assert_eq!(media_type, "application/pdf");
+            assert_eq!(title, "Report");
+            assert_eq!(filename.as_deref(), Some("report.pdf"));
+        }
+        other => panic!("expected document source for retrievedContext(gs://), got {other:?}"),
+    }
+}
+
 /// Anthropic: both citation shapes — a text block's `citations[]`
 /// (`web_search_result_location`) and a `web_search_tool_result` block's
 /// `content[]` (`web_search_result`) — are lifted into `Content::Source` parts,
@@ -5219,6 +5279,193 @@ fn messages_citations_round_trip_both_shapes() {
     // Re-parse recovers all three sources (now all from the result block).
     let reparsed = adapter.parse_response(rendered).unwrap();
     assert_eq!(sources_of(&reparsed.content).len(), 3);
+}
+
+/// Anthropic MUST-FIX: a response carrying BOTH a `server_tool_use` and its
+/// `web_search_tool_result` renders a VALID paired wire — the originating call's
+/// real id is reused as the result block's `tool_use_id` (same-protocol reuse,
+/// no second `server_tool_use` is synthesized). A client echoing this assistant
+/// turn into a follow-up must not see an orphan call/result.
+#[test]
+fn messages_web_search_pair_reuses_real_id() {
+    let adapter = messages::MessagesAdapter;
+    // Upstream: a `server_tool_use` call followed by its result block.
+    let provider_resp = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            { "type": "server_tool_use", "id": "srvtoolu_real", "name": "web_search", "input": { "query": "q" } },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_real",
+                "content": [
+                    { "type": "web_search_result", "url": "https://example.invalid/r1", "title": "R1" }
+                ]
+            }
+        ],
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    let parsed = adapter.parse_response(provider_resp).unwrap();
+    let rendered = adapter
+        .render_response(&parsed, &sample_prompt(), "msg_1")
+        .unwrap();
+    let blocks = rendered["content"].as_array().unwrap();
+    // Exactly one `server_tool_use` (the real one) — no synthesized duplicate.
+    let server_calls: Vec<&serde_json::Value> = blocks
+        .iter()
+        .filter(|b| b["type"] == "server_tool_use")
+        .collect();
+    assert_eq!(
+        server_calls.len(),
+        1,
+        "no duplicate server_tool_use synthesized"
+    );
+    let call_id = server_calls[0]["id"].as_str().unwrap();
+    let result = blocks
+        .iter()
+        .find(|b| b["type"] == "web_search_tool_result")
+        .expect("a web_search_tool_result block was rendered");
+    // The pair correlates: the result's tool_use_id == the call's real id.
+    assert_eq!(call_id, "srvtoolu_real");
+    assert_eq!(
+        result["tool_use_id"].as_str().unwrap(),
+        call_id,
+        "result block reuses the originating server_tool_use id"
+    );
+}
+
+/// Anthropic MUST-FIX (mixed wire): when an inline-cited text block's `Source`
+/// precedes the `server_tool_use` in canonical order, the render must still
+/// reuse the REAL call id (not synthesize a second pair that would orphan the
+/// real `server_tool_use`). Exactly one `server_tool_use` is emitted and its id
+/// equals the single result block's `tool_use_id`.
+#[test]
+fn messages_web_search_pair_no_orphan_with_inline_citation() {
+    let adapter = messages::MessagesAdapter;
+    let provider_resp = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "cited",
+                "citations": [{
+                    "type": "web_search_result_location",
+                    "url": "https://example.invalid/inline",
+                    "title": "Inline",
+                    "cited_text": "snippet",
+                    "encrypted_index": "abc"
+                }]
+            },
+            { "type": "server_tool_use", "id": "srvtoolu_real", "name": "web_search", "input": { "query": "q" } },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_real",
+                "content": [
+                    { "type": "web_search_result", "url": "https://example.invalid/r1", "title": "R1" }
+                ]
+            }
+        ],
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    let parsed = adapter.parse_response(provider_resp).unwrap();
+    let rendered = adapter
+        .render_response(&parsed, &sample_prompt(), "msg_1")
+        .unwrap();
+    let blocks = rendered["content"].as_array().unwrap();
+    // Exactly one server_tool_use (the real one): no synthesized duplicate, so
+    // no orphan call.
+    let server_calls: Vec<&serde_json::Value> = blocks
+        .iter()
+        .filter(|b| b["type"] == "server_tool_use")
+        .collect();
+    assert_eq!(
+        server_calls.len(),
+        1,
+        "no orphaned/duplicate server_tool_use"
+    );
+    assert_eq!(server_calls[0]["id"], "srvtoolu_real");
+    // Exactly one result block, pairing with the real call id; it carries every
+    // URL source (the inline one + the result hit).
+    let results: Vec<&serde_json::Value> = blocks
+        .iter()
+        .filter(|b| b["type"] == "web_search_tool_result")
+        .collect();
+    assert_eq!(
+        results.len(),
+        1,
+        "all sources collapse into one result block"
+    );
+    assert_eq!(results[0]["tool_use_id"], "srvtoolu_real");
+    assert_eq!(results[0]["content"].as_array().unwrap().len(), 2);
+}
+
+/// Anthropic MUST-FIX (cross-protocol): a Gemini grounding response rendered to
+/// an Anthropic client has no originating `server_tool_use`, so the render
+/// SYNTHESIZES a matching call block immediately before the
+/// `web_search_tool_result`. Both blocks must be present and share one id, so
+/// the emitted wire is a valid pair.
+#[test]
+fn messages_web_search_pair_synthesized_cross_protocol() {
+    let gemini = generate_content::GenerateContentAdapter;
+    let messages = messages::MessagesAdapter;
+    let gemini_resp = serde_json::json!({
+        "candidates": [{
+            "content": { "role": "model", "parts": [{ "text": "grounded" }] },
+            "groundingMetadata": {
+                "groundingChunks": [
+                    { "web": { "uri": "https://example.invalid/g", "title": "G" } }
+                ]
+            },
+            "finishReason": "STOP"
+        }]
+    });
+    // Gemini upstream -> canonical (a bare `Source`, no provider-executed call).
+    let canonical = gemini.parse_response(gemini_resp).unwrap();
+    assert_eq!(sources_of(&canonical.content).len(), 1);
+    assert!(
+        !canonical
+            .content
+            .iter()
+            .any(|c| matches!(c, Content::ToolCall { .. })),
+        "Gemini grounding carries no tool call"
+    );
+
+    // canonical -> Anthropic client response.
+    let rendered = messages
+        .render_response(&canonical, &sample_prompt(), "msg_1")
+        .unwrap();
+    let blocks = rendered["content"].as_array().unwrap();
+    let server_call = blocks
+        .iter()
+        .find(|b| b["type"] == "server_tool_use")
+        .expect("a server_tool_use block was synthesized");
+    let result = blocks
+        .iter()
+        .find(|b| b["type"] == "web_search_tool_result")
+        .expect("a web_search_tool_result block was rendered");
+    assert_eq!(server_call["name"], "web_search");
+    // The synthesized pair shares one id -> valid wire.
+    assert_eq!(
+        server_call["id"].as_str().unwrap(),
+        result["tool_use_id"].as_str().unwrap(),
+        "synthesized pair shares one tool_use_id"
+    );
+    // The synthesized call precedes its result block on the wire.
+    let call_pos = blocks.iter().position(|b| b["type"] == "server_tool_use");
+    let result_pos = blocks
+        .iter()
+        .position(|b| b["type"] == "web_search_tool_result");
+    assert!(call_pos < result_pos, "the call precedes its result block");
+
+    // The rendered wire re-parses cleanly: the synthesized call becomes a
+    // provider-executed tool call, the result block its source.
+    let reparsed = messages.parse_response(rendered).unwrap();
+    assert_eq!(sources_of(&reparsed.content).len(), 1);
 }
 
 /// Responses: an `output_text` part's `annotations[]` — a `url_citation` and a
@@ -5449,20 +5696,119 @@ fn messages_streams_and_reencodes_source() {
         other => panic!("expected url source, got {other:?}"),
     }
 
-    // Re-encode: the Messages encoder emits a `web_search_tool_result`
-    // content_block_start carrying the same hit.
+    // Re-encode: the Messages encoder buffers streamed citations and flushes
+    // them as one collapsed `server_tool_use` ↔ `web_search_tool_result` pair at
+    // terminal. The `Source` part alone emits no result block (it is buffered);
+    // the terminal `Finish` triggers the flush.
     let mut encoder = adapter.stream_encoder("msg_1", "m");
-    let frames = encoder.encode(&StreamPart::Source { source: src }).unwrap();
-    let has_block = frames.iter().any(|f| match f {
+    let buffered = encoder.encode(&StreamPart::Source { source: src }).unwrap();
+    assert!(
+        !buffered.iter().any(|f| match f {
+            SseFrame::Event { data, .. } => {
+                let v: serde_json::Value = serde_json::from_str(data).unwrap();
+                v["content_block"]["type"] == "web_search_tool_result"
+            }
+            _ => false,
+        }),
+        "the source is buffered, not emitted as its own block yet"
+    );
+    let frames = encoder
+        .encode(&StreamPart::Finish {
+            reason: FinishReason::Stop,
+        })
+        .unwrap();
+    // Collect the synthesized pair's blocks and assert the wire is a VALID pair:
+    // a `server_tool_use` and a `web_search_tool_result` sharing one id.
+    let server_tool_id = frames.iter().find_map(|f| match f {
         SseFrame::Event { data, .. } => {
             let v: serde_json::Value = serde_json::from_str(data).unwrap();
-            v["content_block"]["type"] == "web_search_tool_result"
-                && v["content_block"]["content"][0]["url"] == "https://example.invalid/s"
+            (v["content_block"]["type"] == "server_tool_use")
+                .then(|| v["content_block"]["id"].as_str().unwrap().to_string())
         }
-        _ => false,
+        _ => None,
     });
-    assert!(
-        has_block,
-        "encoder re-emitted the web_search_tool_result block"
+    let result_tool_use_id = frames.iter().find_map(|f| match f {
+        SseFrame::Event { data, .. } => {
+            let v: serde_json::Value = serde_json::from_str(data).unwrap();
+            (v["content_block"]["type"] == "web_search_tool_result"
+                && v["content_block"]["content"][0]["url"] == "https://example.invalid/s")
+                .then(|| {
+                    v["content_block"]["tool_use_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                })
+        }
+        _ => None,
+    });
+    let server_tool_id =
+        server_tool_id.expect("encoder emitted a synthesized server_tool_use block");
+    let result_tool_use_id =
+        result_tool_use_id.expect("encoder emitted the paired web_search_tool_result block");
+    assert_eq!(
+        server_tool_id, result_tool_use_id,
+        "the streamed pair shares one tool_use_id (valid wire)"
     );
+}
+
+/// Streaming, Responses SHOULD-FIX: a `response.output_text.annotation.added`
+/// event decodes to a `StreamPart::Source` (no longer dropped by the catch-all),
+/// and the Responses encoder re-emits it as the same annotation event — a live
+/// streamed-citation round-trip on the Responses wire.
+#[test]
+fn responses_streams_and_reencodes_annotation() {
+    let adapter = responses::ResponsesAdapter;
+    let mut decoder = adapter.stream_decoder();
+    let event = SseEvent {
+        event: Some("response.output_text.annotation.added".to_string()),
+        data: serde_json::json!({
+            "type": "response.output_text.annotation.added",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "annotation_index": 0,
+            "annotation": {
+                "type": "url_citation",
+                "url": "https://example.invalid/s",
+                "title": "S",
+                "start_index": 0,
+                "end_index": 5
+            }
+        })
+        .to_string(),
+    };
+    let parts = decoder.decode(&event).unwrap();
+    let src = parts
+        .iter()
+        .find_map(|p| match p {
+            StreamPart::Source { source } => Some(source.clone()),
+            _ => None,
+        })
+        .expect("decoded a StreamPart::Source from response.output_text.annotation.added");
+    match &src {
+        Source::Url { url, title, .. } => {
+            assert_eq!(url, "https://example.invalid/s");
+            assert_eq!(title.as_deref(), Some("S"));
+        }
+        other => panic!("expected url source, got {other:?}"),
+    }
+
+    // Re-encode the decoded source: it reappears as a
+    // `response.output_text.annotation.added` event with the same citation.
+    let mut encoder = adapter.stream_encoder("resp_1", "m");
+    let frames = encoder.encode(&StreamPart::Source { source: src }).unwrap();
+    let ann = frames
+        .iter()
+        .find_map(|f| match f {
+            SseFrame::Event { data, .. } => {
+                let v: serde_json::Value = serde_json::from_str(data).unwrap();
+                (v["type"] == "response.output_text.annotation.added")
+                    .then_some(v["annotation"].clone())
+            }
+            _ => None,
+        })
+        .expect("encoder re-emitted a response.output_text.annotation.added event");
+    assert_eq!(ann["type"], "url_citation");
+    assert_eq!(ann["url"], "https://example.invalid/s");
+    assert_eq!(ann["title"], "S");
 }

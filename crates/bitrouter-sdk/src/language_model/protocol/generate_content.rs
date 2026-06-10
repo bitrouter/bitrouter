@@ -451,14 +451,127 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
     out
 }
 
+/// Infer a document IANA media type from a Gemini `retrievedContext` file
+/// path's extension (e.g. a `gs://…/report.pdf` uri). Mirrors the AI SDK's
+/// extension table; an unrecognized extension falls back to
+/// `application/octet-stream`.
+/// <https://github.com/vercel/ai/blob/main/packages/google/src/google-language-model.ts>
+fn grounding_doc_media_type(uri: &str) -> &'static str {
+    if uri.ends_with(".pdf") {
+        "application/pdf"
+    } else if uri.ends_with(".txt") {
+        "text/plain"
+    } else if uri.ends_with(".docx") {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    } else if uri.ends_with(".doc") {
+        "application/msword"
+    } else if uri.ends_with(".md") || uri.ends_with(".markdown") {
+        "text/markdown"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+/// The trailing path segment of a `gs://`/file-path uri, used as a document
+/// `filename` (mirrors the AI SDK's `uri.split('/').pop()`).
+fn grounding_filename(uri: &str) -> Option<String> {
+    uri.rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Parse one Gemini grounding chunk into a canonical [`Content::Source`].
+/// Mirrors the AI SDK `extractSources`, handling every chunk kind:
+/// - `web` (`{uri, title?}`) → [`Source::Url`] — the server Search tool's hits;
+/// - `image` (`{sourceUri, title?}`) → [`Source::Url`] keyed by `sourceUri`
+///   (Google requires attribution to the source page, not the image bytes);
+/// - `retrievedContext` (`{uri?, title?, fileSearchStore?}`) — an `http(s)` uri
+///   → [`Source::Url`]; any other uri (e.g. `gs://`) → [`Source::Document`] with
+///   the media type/filename inferred from the path; a `fileSearchStore`-only
+///   chunk → [`Source::Document`] keyed by the store's trailing segment;
+/// - `maps` (`{uri?, title?}`) → [`Source::Url`] when it carries a `uri`.
+///
+/// The chunk carries no citation id, so one is synthesized from the
+/// url/filename + index. A chunk with no usable field yields `None` (e.g. a
+/// `maps`/`retrievedContext` chunk with neither uri nor store) — these are the
+/// only documented drops, and they carry nothing representable.
+/// <https://ai.google.dev/api/generate-content#GroundingChunk>
+/// <https://github.com/vercel/ai/blob/main/packages/google/src/google-language-model.ts>
+fn parse_grounding_chunk(chunk: &serde_json::Value, index: usize) -> Option<Content> {
+    let title_of = |obj: &serde_json::Value| {
+        obj.get("title")
+            .and_then(|t| t.as_str())
+            .map(str::to_string)
+    };
+    let url_source = |url: String, title: Option<String>| Content::Source {
+        source: Source::Url {
+            id: Source::synthesize_id(&url, index),
+            url,
+            title,
+        },
+    };
+    if let Some(web) = chunk.get("web") {
+        let url = web.get("uri").and_then(|u| u.as_str())?.to_string();
+        return Some(url_source(url, title_of(web)));
+    }
+    if let Some(image) = chunk.get("image") {
+        // Attribution uses the source page URI, not the raw `imageUri`.
+        let url = image.get("sourceUri").and_then(|u| u.as_str())?.to_string();
+        return Some(url_source(url, title_of(image)));
+    }
+    if let Some(ctx) = chunk.get("retrievedContext") {
+        let uri = ctx.get("uri").and_then(|u| u.as_str());
+        if let Some(uri) = uri {
+            // An http(s) RAG source is representable as a URL today; a
+            // file-path source (`gs://`, …) becomes a document citation.
+            if uri.starts_with("http://") || uri.starts_with("https://") {
+                return Some(url_source(uri.to_string(), title_of(ctx)));
+            }
+            let filename = grounding_filename(uri);
+            let title = title_of(ctx).unwrap_or_else(|| "Unknown Document".to_string());
+            return Some(Content::Source {
+                source: Source::Document {
+                    id: Source::synthesize_id(uri, index),
+                    media_type: grounding_doc_media_type(uri).to_string(),
+                    title,
+                    filename,
+                },
+            });
+        }
+        // File Search format: a store id with no uri.
+        if let Some(store) = ctx.get("fileSearchStore").and_then(|s| s.as_str()) {
+            let title = title_of(ctx).unwrap_or_else(|| "Unknown Document".to_string());
+            return Some(Content::Source {
+                source: Source::Document {
+                    id: Source::synthesize_id(store, index),
+                    media_type: "application/octet-stream".to_string(),
+                    title,
+                    filename: grounding_filename(store),
+                },
+            });
+        }
+        return None;
+    }
+    if let Some(maps) = chunk.get("maps") {
+        let url = maps.get("uri").and_then(|u| u.as_str())?.to_string();
+        return Some(url_source(url, title_of(maps)));
+    }
+    // An unrecognized, forward-compatible chunk kind carries no representable
+    // citation field. The only grounding chunk kinds Gemini documents are
+    // `web`, `image`, `retrievedContext`, and `maps` (all handled above); a new
+    // kind is skipped rather than silently mismapped.
+    // <https://ai.google.dev/api/generate-content#GroundingChunk>
+    None
+}
+
 /// Parse a Gemini `candidate.groundingMetadata` object into canonical
-/// [`Content::Source`] (URL) parts. Web search grounding surfaces as
-/// `groundingMetadata.groundingChunks[]`, each `{web:{uri, title?}}`; the
-/// model's own server-side Search tool emits these instead of any
-/// `functionCall`. The chunk carries no citation id, so synthesize a stable one
-/// from the uri + index. Non-`web` chunks (`retrievedContext` RAG sources) are
-/// not mapped here — they require document-source plumbing the response wire
-/// does not expose uniformly. Mirrors the AI SDK `extractSources`.
+/// [`Content::Source`] parts. Web search grounding surfaces as
+/// `groundingMetadata.groundingChunks[]`; the model's own server-side Search
+/// tool emits these instead of any `functionCall`. Each chunk is mapped by
+/// [`parse_grounding_chunk`] (every documented chunk kind is handled). The chunk
+/// carries no citation id, so one is synthesized from the uri/filename + index.
+/// Mirrors the AI SDK `extractSources`.
 /// <https://ai.google.dev/gemini-api/docs/grounding>
 /// <https://github.com/vercel/ai/blob/main/packages/google/src/google-language-model.ts>
 fn parse_grounding_sources(grounding: Option<&serde_json::Value>) -> Vec<Content> {
@@ -471,21 +584,7 @@ fn parse_grounding_sources(grounding: Option<&serde_json::Value>) -> Vec<Content
     chunks
         .iter()
         .enumerate()
-        .filter_map(|(i, chunk)| {
-            let web = chunk.get("web")?;
-            let url = web.get("uri").and_then(|u| u.as_str())?.to_string();
-            let title = web
-                .get("title")
-                .and_then(|t| t.as_str())
-                .map(str::to_string);
-            Some(Content::Source {
-                source: Source::Url {
-                    id: Source::synthesize_id(&url, i),
-                    url,
-                    title,
-                },
-            })
-        })
+        .filter_map(|(i, chunk)| parse_grounding_chunk(chunk, i))
         .collect()
 }
 
@@ -982,12 +1081,13 @@ struct GenerateContentStreamDecoder {
     /// Whether the one-shot [`StreamPart::ResponseStarted`] has been emitted.
     /// Every chunk repeats `responseId`; we surface it only once.
     response_started_emitted: bool,
-    /// URLs of grounding sources already emitted as `StreamPart::Source`.
-    /// `streamGenerateContent` repeats the accumulating `groundingMetadata` on
-    /// successive chunks, so dedupe by URL to emit each citation once — matching
-    /// the AI SDK's `emittedSourceUrls` set.
+    /// Dedup keys of grounding sources already emitted as `StreamPart::Source`
+    /// — the citation URL for a [`Source::Url`], the synthesized id for a
+    /// [`Source::Document`]. `streamGenerateContent` repeats the accumulating
+    /// `groundingMetadata` on successive chunks, so dedupe to emit each citation
+    /// once — matching the AI SDK's `emittedSourceUrls` set.
     /// <https://github.com/vercel/ai/blob/main/packages/google/src/google-language-model.ts>
-    emitted_source_urls: std::collections::HashSet<String>,
+    emitted_source_keys: std::collections::HashSet<String>,
 }
 
 impl StreamDecoder for GenerateContentStreamDecoder {
@@ -1060,17 +1160,20 @@ impl StreamDecoder for GenerateContentStreamDecoder {
             }
             // Web-search grounding arrives on `candidate.groundingMetadata`,
             // accumulating across chunks. Emit each new citation once as a whole
-            // `StreamPart::Source`, deduped by URL.
+            // `StreamPart::Source`, deduped by URL (or document id). Every
+            // grounding chunk kind `parse_grounding_sources` recognizes — URL
+            // and document sources alike — is forwarded; none is silently
+            // dropped here.
             // <https://ai.google.dev/gemini-api/docs/grounding>
             for content in parse_grounding_sources(candidate.get("groundingMetadata")) {
-                if let Content::Source {
-                    source: Source::Url { url, title, id },
-                } = content
-                    && self.emitted_source_urls.insert(url.clone())
-                {
-                    parts.push(StreamPart::Source {
-                        source: Source::Url { url, title, id },
-                    });
+                if let Content::Source { source } = content {
+                    let key = match &source {
+                        Source::Url { url, .. } => url.clone(),
+                        Source::Document { id, .. } => id.clone(),
+                    };
+                    if self.emitted_source_keys.insert(key) {
+                        parts.push(StreamPart::Source { source });
+                    }
                 }
             }
             if let Some(reason) = candidate

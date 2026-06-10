@@ -671,13 +671,14 @@ impl InboundAdapter for MessagesAdapter {
             .iter()
             .filter_map(render_content_block)
             .collect();
-        // Re-attach web-search citations as one `web_search_tool_result` block
-        // (the faithful Anthropic citation location — see
-        // `render_web_search_result_block`). Appended after the answer blocks,
-        // matching the wire order (the result block follows the text it cites).
-        if let Some(block) = render_web_search_result_block(result) {
-            content.push(block);
-        }
+        // Re-attach web-search citations as a valid `server_tool_use` ↔
+        // `web_search_tool_result` pair (the faithful Anthropic citation
+        // location — see `render_web_search_result_blocks`). Appended after the
+        // answer blocks, matching the wire order (the result follows the text it
+        // cites). When the originating provider-executed call is already present
+        // among the answer blocks, only the result block is appended and it
+        // reuses that call's id; otherwise a synthetic call block is prepended.
+        content.extend(render_web_search_result_blocks(result));
         let usage = result.usage.unwrap_or_default();
         let stop_reason = result
             .finish_reason
@@ -709,6 +710,7 @@ impl InboundAdapter for MessagesAdapter {
             block_open: false,
             block_kind: None,
             block_index: 0,
+            pending_sources: Vec::new(),
         })
     }
 }
@@ -1062,21 +1064,67 @@ fn parse_messages_block_sources(block: &serde_json::Value, next_index: &mut usiz
     out
 }
 
-/// Render canonical [`Content::Source`] parts into a single Anthropic
-/// `web_search_tool_result` block whose `content[]` carries one
-/// `web_search_result` entry per URL source.
-///
-/// This is the chosen render location among the two Anthropic citation shapes.
-/// A `web_search_tool_result` block is the faithful form because it natively
-/// holds an array of `{url, title}` results with **no** required text linkage,
-/// so it reproduces url+title+id losslessly. The alternative — `citations[]` on
-/// a `text` block — would demand a `cited_text` span and char offsets that the
-/// canonical `Source` does not carry (and could not reconstruct), so emitting it
-/// would fabricate the very text-linkage data the parity target drops.
-/// [`Source::Document`] citations have no `web_search_result` form and are
-/// skipped here. Returns `None` when the result carries no URL sources.
+/// Synthetic `server_tool_use` id used to pair a synthesized web-search
+/// call with its `web_search_tool_result` when the canonical content has no
+/// originating provider-executed call to borrow a real id from (cross-protocol,
+/// e.g. a Gemini grounding response rendered to an Anthropic client). It is
+/// opaque to clients and only correlates the two blocks on the wire.
+const SYNTHETIC_WEB_SEARCH_ID: &str = "srvtoolu_citations";
+
+/// Anthropic's server `web_search` tool name, used on a synthesized
+/// `server_tool_use` block so the emitted pair is a valid web-search call.
 /// <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
-fn render_web_search_result_block(result: &GenerateResult) -> Option<serde_json::Value> {
+const ANTHROPIC_WEB_SEARCH_TOOL: &str = "web_search";
+
+/// True when a canonical [`Content::ToolCall`] is a provider-executed web-search
+/// call — the originating block of a `web_search_tool_result`. Anthropic's
+/// server web search emits a `server_tool_use{name:"web_search"}` block paired
+/// with its result by a shared `tool_use_id`; on parse that block becomes a
+/// `ToolCall{provider_executed:true, name:"web_search"}`, so the render path
+/// recognizes it here to reuse its real id when re-pairing.
+/// <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
+fn is_web_search_call(c: &Content) -> bool {
+    matches!(
+        c,
+        Content::ToolCall {
+            provider_executed: true,
+            name,
+            ..
+        } if name == ANTHROPIC_WEB_SEARCH_TOOL
+    )
+}
+
+/// Render canonical [`Content::Source`] parts into a valid Anthropic
+/// `server_tool_use` ↔ `web_search_tool_result` pair. The result block's
+/// `content[]` carries one `web_search_result` entry per URL source.
+///
+/// A `web_search_tool_result` block is the faithful render location among the
+/// two Anthropic citation shapes: it natively holds an array of `{url, title}`
+/// results with **no** required text linkage, so it reproduces url+title+id
+/// losslessly. The alternative — `citations[]` on a `text` block — would demand
+/// a `cited_text` span and char offsets the canonical `Source` cannot
+/// reconstruct, fabricating the very text-linkage data the parity target drops.
+/// [`Source::Document`] citations have no `web_search_result` form and are
+/// skipped here. Returns an empty Vec when the result carries no URL sources.
+///
+/// **Pairing strategy (correlate by order).** On the Anthropic wire a
+/// `web_search_tool_result` is invalid on its own: it must pair with a
+/// `server_tool_use` block sharing one `tool_use_id`, or a client echoing the
+/// assistant turn into a follow-up triggers `invalid_request_error`.
+/// - Same-protocol: the upstream `server_tool_use` parsed to a
+///   `ToolCall{provider_executed:true, name:"web_search"}` and is re-rendered as
+///   a real `server_tool_use` by [`render_content_block`]. Here we detect that
+///   preceding call and **reuse its id** as `tool_use_id` (real pairing; no
+///   second `server_tool_use` is emitted), so `srvtoolu_…` ids correlate.
+/// - Cross-protocol (no such call, e.g. Gemini grounding → Anthropic client):
+///   we **synthesize** a matching `server_tool_use{id, name:"web_search",
+///   input:{}}` immediately before the result block so the pair is still valid.
+///
+/// Preserving the *exact* original id across a full canonical round-trip is
+/// deferred to provider-metadata plumbing; the emitted wire must never be
+/// invalid in the meantime.
+/// <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
+fn render_web_search_result_blocks(result: &GenerateResult) -> Vec<serde_json::Value> {
     let results: Vec<serde_json::Value> = result
         .content
         .iter()
@@ -1096,16 +1144,46 @@ fn render_web_search_result_block(result: &GenerateResult) -> Option<serde_json:
         })
         .collect();
     if results.is_empty() {
-        return None;
+        return Vec::new();
     }
-    Some(serde_json::json!({
-        "type": "web_search_tool_result",
-        // The wire pairs this block with the originating `server_tool_use` id;
-        // the canonical `Source` does not carry it, so a synthetic placeholder
-        // is used. It is opaque to clients and only correlates the result block.
-        "tool_use_id": "srvtoolu_citations",
-        "content": results,
-    }))
+    // Correlate by order: borrow the id of the originating provider-executed
+    // `web_search` call. All URL sources collapse into one result block, and
+    // Anthropic emits one web-search call per result block, so the last such
+    // call in the content is the originator. That call is already re-rendered as
+    // a real `server_tool_use` by `render_content_block`, so reusing its id
+    // keeps the pair correlated without emitting a duplicate call block — and
+    // crucially without leaving that real call orphaned (the bug the synthetic
+    // `srvtoolu_citations` placeholder used to cause). Scanning the whole
+    // content (not just before the first source) covers the wire shape where an
+    // inline-cited text block's `Source` precedes the `server_tool_use`.
+    let paired_id = result.content.iter().rev().find_map(|c| match c {
+        Content::ToolCall { id, .. } if is_web_search_call(c) => Some(id.clone()),
+        _ => None,
+    });
+    match paired_id {
+        // Real pairing: the originating `server_tool_use` already rendered with
+        // this id; only the result block is added, sharing that id.
+        Some(id) => vec![serde_json::json!({
+            "type": "web_search_tool_result",
+            "tool_use_id": id,
+            "content": results,
+        })],
+        // No originating call (cross-protocol): synthesize the `server_tool_use`
+        // so the emitted pair is valid, both blocks sharing one synthetic id.
+        None => vec![
+            serde_json::json!({
+                "type": "server_tool_use",
+                "id": SYNTHETIC_WEB_SEARCH_ID,
+                "name": ANTHROPIC_WEB_SEARCH_TOOL,
+                "input": {},
+            }),
+            serde_json::json!({
+                "type": "web_search_tool_result",
+                "tool_use_id": SYNTHETIC_WEB_SEARCH_ID,
+                "content": results,
+            }),
+        ],
+    }
 }
 
 fn render_content_block(c: &Content) -> Option<serde_json::Value> {
@@ -1163,8 +1241,9 @@ fn render_content_block(c: &Content) -> Option<serde_json::Value> {
             Some(serde_json::json!({ "type": block_type, "source": source }))
         }
         // Citations are not a per-block render: they are collected across the
-        // whole reply and re-attached as one `web_search_tool_result` block by
-        // `render_response` (see `render_web_search_result_block`). Skip here.
+        // whole reply and re-attached as a `server_tool_use` ↔
+        // `web_search_tool_result` pair by `render_response` (see
+        // `render_web_search_result_blocks`). Skip here.
         Content::Source { .. } => None,
     }
 }
@@ -1573,6 +1652,12 @@ struct MessagesStreamEncoder {
     /// Meaningful only when `block_open == true`.
     block_kind: Option<EncoderBlockKind>,
     block_index: usize,
+    /// `web_search_result` entries buffered from streamed `StreamPart::Source`
+    /// parts, flushed as one collapsed `server_tool_use` ↔
+    /// `web_search_tool_result` pair (see `flush_pending_sources`). Buffered
+    /// rather than emitted per-source so the streamed wire matches the
+    /// non-streaming render (one block) and stays a valid pair.
+    pending_sources: Vec<serde_json::Value>,
 }
 
 impl MessagesStreamEncoder {
@@ -1616,6 +1701,60 @@ impl MessagesStreamEncoder {
         }
     }
 
+    /// Flush any buffered streamed citations as one collapsed
+    /// `server_tool_use` ↔ `web_search_tool_result` pair. `StreamPart` carries
+    /// no provider-executed flag, so the stream never reconstructs the
+    /// originating call — the pair is always synthesized (both blocks sharing
+    /// one synthetic `tool_use_id`) so a client echoing the turn into a
+    /// follow-up request does not see an orphan result block
+    /// (`invalid_request_error`). Each block opens and closes as a whole
+    /// `content_block`, mirroring the non-streaming render
+    /// (`render_web_search_result_blocks`).
+    /// <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
+    fn flush_pending_sources(&mut self, frames: &mut Vec<SseFrame>) {
+        if self.pending_sources.is_empty() {
+            return;
+        }
+        let results = std::mem::take(&mut self.pending_sources);
+        self.close_block(frames);
+        // Synthesized originating call, so the result block is a valid pair.
+        frames.push(Self::ev(
+            "content_block_start",
+            serde_json::json!({
+                "type": "content_block_start",
+                "index": self.block_index,
+                "content_block": {
+                    "type": "server_tool_use",
+                    "id": SYNTHETIC_WEB_SEARCH_ID,
+                    "name": ANTHROPIC_WEB_SEARCH_TOOL,
+                    "input": {},
+                },
+            }),
+        ));
+        frames.push(Self::ev(
+            "content_block_stop",
+            serde_json::json!({ "type": "content_block_stop", "index": self.block_index }),
+        ));
+        self.block_index += 1;
+        frames.push(Self::ev(
+            "content_block_start",
+            serde_json::json!({
+                "type": "content_block_start",
+                "index": self.block_index,
+                "content_block": {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": SYNTHETIC_WEB_SEARCH_ID,
+                    "content": results,
+                },
+            }),
+        ));
+        frames.push(Self::ev(
+            "content_block_stop",
+            serde_json::json!({ "type": "content_block_stop", "index": self.block_index }),
+        ));
+        self.block_index += 1;
+    }
+
     /// If a block of a different kind is currently open, close it; then ensure
     /// a block of `wanted` is open. Returns whether a *new* block was opened
     /// this call so the caller can append the right `content_block_start`.
@@ -1643,6 +1782,9 @@ impl MessagesStreamEncoder {
         stop_reason: &str,
         usage: Option<Usage>,
     ) {
+        // Collapse all buffered citations into one pair just before the
+        // terminal frames, matching the non-streaming render's tail placement.
+        self.flush_pending_sources(frames);
         self.close_block(frames);
         let u = usage.unwrap_or_default();
         frames.push(Self::ev(
@@ -1776,40 +1918,22 @@ impl StreamEncoder for MessagesStreamEncoder {
                 }
             }
             StreamPart::Source { source } => {
-                // Re-attach a streamed citation as its own
-                // `web_search_tool_result` content block (the decode path's
-                // mirror): close any open block, emit a `content_block_start`
-                // carrying a one-entry `content[]` result array, then close it.
-                // Only a URL source has a `web_search_result` form; a document
-                // citation is dropped here (no such block on this wire).
+                // Buffer a streamed citation as a `web_search_result` entry; all
+                // entries flush together as one collapsed `server_tool_use` ↔
+                // `web_search_tool_result` pair at terminal
+                // (`flush_pending_sources`), matching the non-streaming render's
+                // single-block shape. Only a URL source has a `web_search_result`
+                // form; a document citation is dropped here (no such block on
+                // this wire).
                 // <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
                 if let Source::Url { url, title, .. } = source {
-                    self.close_block(&mut frames);
                     let mut entry = serde_json::Map::new();
                     entry.insert("type".into(), "web_search_result".into());
                     entry.insert("url".into(), url.clone().into());
                     if let Some(title) = title {
                         entry.insert("title".into(), title.clone().into());
                     }
-                    frames.push(Self::ev(
-                        "content_block_start",
-                        serde_json::json!({
-                            "type": "content_block_start",
-                            "index": self.block_index,
-                            "content_block": {
-                                "type": "web_search_tool_result",
-                                "tool_use_id": "srvtoolu_citations",
-                                "content": [serde_json::Value::Object(entry)],
-                            },
-                        }),
-                    ));
-                    frames.push(Self::ev(
-                        "content_block_stop",
-                        serde_json::json!({
-                            "type": "content_block_stop", "index": self.block_index,
-                        }),
-                    ));
-                    self.block_index += 1;
+                    self.pending_sources.push(serde_json::Value::Object(entry));
                 }
             }
             StreamPart::Usage { .. } => {}

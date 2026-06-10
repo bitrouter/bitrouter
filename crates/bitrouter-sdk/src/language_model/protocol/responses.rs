@@ -315,31 +315,41 @@ fn render_responses_annotations(result: &GenerateResult) -> Vec<serde_json::Valu
         .content
         .iter()
         .filter_map(|c| match c {
-            Content::Source {
-                source: Source::Url { url, title, .. },
-            } => {
-                let mut ann = serde_json::Map::new();
-                ann.insert("type".into(), "url_citation".into());
-                ann.insert("url".into(), url.clone().into());
-                if let Some(title) = title {
-                    ann.insert("title".into(), title.clone().into());
-                }
-                Some(serde_json::Value::Object(ann))
-            }
-            Content::Source {
-                source: Source::Document {
-                    title, filename, ..
-                },
-            } => {
-                let name = filename.clone().unwrap_or_else(|| title.clone());
-                Some(serde_json::json!({
-                    "type": "file_citation",
-                    "filename": name,
-                }))
-            }
+            Content::Source { source } => Some(render_source_annotation(source)),
             _ => None,
         })
         .collect()
+}
+
+/// Render one canonical [`Source`] into a Responses `annotations[]` entry —
+/// shared by the non-streaming [`render_responses_annotations`] and the
+/// streaming `response.output_text.annotation.added` encode path.
+/// [`Source::Url`] → `url_citation`; [`Source::Document`] → `file_citation`
+/// (keyed by `filename`). The `file_id`/`container_id` provider fields cannot be
+/// reconstructed from the canonical `Source` and are omitted on the document
+/// path (documented loss).
+/// <https://platform.openai.com/docs/api-reference/responses/object> (`annotations`)
+fn render_source_annotation(source: &Source) -> serde_json::Value {
+    match source {
+        Source::Url { url, title, .. } => {
+            let mut ann = serde_json::Map::new();
+            ann.insert("type".into(), "url_citation".into());
+            ann.insert("url".into(), url.clone().into());
+            if let Some(title) = title {
+                ann.insert("title".into(), title.clone().into());
+            }
+            serde_json::Value::Object(ann)
+        }
+        Source::Document {
+            title, filename, ..
+        } => {
+            let name = filename.clone().unwrap_or_else(|| title.clone());
+            serde_json::json!({
+                "type": "file_citation",
+                "filename": name,
+            })
+        }
+    }
 }
 
 /// Parse the Responses `input` field — a string or a heterogeneous item array.
@@ -611,6 +621,7 @@ impl InboundAdapter for ResponsesAdapter {
             text_item: None,
             tool_item: None,
             completed_items: Vec::new(),
+            annotation_index: 0,
         })
     }
 }
@@ -1392,6 +1403,10 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
 struct ResponsesStreamDecoder {
     /// item_id → (call_id, tool_name) for in-flight function-call items.
     function_items: Vec<(String, String, String)>,
+    /// Running citation count across `response.output_text.annotation.added`
+    /// events, so synthesized [`Source`] ids stay unique within the stream
+    /// (mirrors `next_index` on the non-streaming `parse_responses_annotations`).
+    source_index: usize,
 }
 
 impl ResponsesStreamDecoder {
@@ -1466,6 +1481,24 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     parts.push(StreamPart::TextDelta {
                         text: delta.to_string(),
                     });
+                }
+            }
+            "response.output_text.annotation.added" => {
+                // A streamed citation mutates an open `output_text` item: the
+                // single new annotation rides on the `annotation` field with the
+                // same shape `parse_responses_annotations` reads. Lift it into a
+                // `StreamPart::Source` (the client-side encoder re-attaches it at
+                // the protocol's native citation location). Wrapped in a
+                // one-element array to reuse the array parser; `source_index`
+                // keeps synthesized ids unique across the stream.
+                // <https://platform.openai.com/docs/api-reference/responses-streaming/response/output_text/annotation_added>
+                if let Some(annotation) = json.get("annotation") {
+                    let arr = serde_json::Value::Array(vec![annotation.clone()]);
+                    for content in parse_responses_annotations(Some(&arr), &mut self.source_index) {
+                        if let Content::Source { source } = content {
+                            parts.push(StreamPart::Source { source });
+                        }
+                    }
                 }
             }
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
@@ -1595,6 +1628,10 @@ struct ResponsesStreamEncoder {
     /// Codex CLI reconstructs the assistant turn from this array, so an
     /// empty `output` renders as a blank turn (the symptom this fixes).
     completed_items: Vec<serde_json::Value>,
+    /// Running count of `response.output_text.annotation.added` events emitted,
+    /// supplying the monotonically increasing `annotation_index` each event
+    /// carries.
+    annotation_index: u64,
 }
 
 /// Tracking state for one open message / reasoning item.
@@ -2012,17 +2049,31 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     ));
                 }
             }
-            StreamPart::Source { .. } => {
-                // Streaming citations are NOT re-encoded onto the Responses wire.
-                // On this protocol a citation is a `response.output_text.annotation.added`
-                // event that mutates an already-open `output_text` item's
-                // `annotations[]`; a cross-protocol `StreamPart::Source` arrives
-                // with no guaranteed open text item to attach to, and faithfully
-                // re-emitting the `*.annotation.added` lifecycle would require
-                // buffering against the text item-state machine. Documented gap:
-                // the citation survives the non-streaming Responses render
-                // (`render_output_items`) but is dropped on the streamed path.
+            StreamPart::Source { source } => {
+                // A citation is a `response.output_text.annotation.added` event
+                // that mutates an `output_text` item. Ensure a text item is open
+                // (a cross-protocol source may arrive before any text delta), so
+                // the annotation has a valid item to attach to, then emit it
+                // referencing that item. This mirrors the decode arm above and
+                // the non-streaming `render_responses_annotations`.
                 // <https://platform.openai.com/docs/api-reference/responses-streaming/response/output_text/annotation_added>
+                self.open_text_item(&mut frames);
+                if let Some(state) = self.text_item.as_ref() {
+                    let (item_id, output_index) = (state.item_id.clone(), state.output_index);
+                    let annotation_index = self.annotation_index;
+                    self.annotation_index += 1;
+                    let annotation = render_source_annotation(source);
+                    frames.push(self.ev(
+                        "response.output_text.annotation.added",
+                        serde_json::json!({
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "content_index": 0,
+                            "annotation_index": annotation_index,
+                            "annotation": annotation,
+                        }),
+                    ));
+                }
             }
             StreamPart::Usage { .. } => {}
             StreamPart::ResponseStarted { .. } => {
