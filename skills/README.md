@@ -7,7 +7,9 @@ a skill change ships in the same PR as the change that motivates it.
 
 ## What's here
 
-One skill: **`/bitrouter`**, at [`bitrouter/`](bitrouter/).
+Two skills, both following the [Agent Skills specification](https://agentskills.io/specification).
+
+### `/bitrouter`, at [`bitrouter/`](bitrouter/)
 
 ```
 skills/bitrouter/
@@ -21,9 +23,30 @@ skills/bitrouter/
     └── harness-*.md
 ```
 
-It covers the Local-or-Cloud decision, install, daemon lifecycle, cloud
-onboarding, provider config, migration off other gateways, diagnostics, and
-per-harness wiring. Follows the [Agent Skills specification](https://agentskills.io/specification).
+Covers the Local-or-Cloud decision, install, daemon lifecycle, cloud onboarding,
+provider config, migration off other gateways, diagnostics, and per-harness wiring.
+
+### `/cost-routed-subagents`, at [`cost-routed-subagents/`](cost-routed-subagents/)
+
+```
+skills/cost-routed-subagents/
+├── SKILL.md          # entry point — keep under ~200 lines
+├── dispatch.sh       # spawn one headless worker on a cheap model via BitRouter
+├── references/       # loaded on demand
+│   ├── setup.md            # env contract + secret-safe key handling
+│   ├── model-tiers.md      # tier policy, populate from /v1/models
+│   ├── dispatch-protocol.md# controller loop, status, two-stage review
+│   └── attribution.md      # methodology adapted from obra/superpowers (MIT)
+└── role-prompts/     # injected into workers via --append-system-prompt
+    ├── implementer.md
+    ├── spec-reviewer.md
+    └── quality-reviewer.md
+```
+
+A usage pattern for the Anthropic-shaped `/v1/messages` surface: a flagship
+controller session delegates sub-tasks to cheaper models by spawning headless
+`claude -p` workers whose `ANTHROPIC_*` env is pointed at a BitRouter endpoint.
+HTTP API + environment variables only — no CLI in the dispatch path.
 
 ## Install
 
