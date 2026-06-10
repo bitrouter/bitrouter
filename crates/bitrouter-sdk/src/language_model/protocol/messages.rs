@@ -1531,6 +1531,14 @@ fn render_content_block(c: &Content) -> Option<serde_json::Value> {
         // `web_search_tool_result` pair by `render_response` (see
         // `render_web_search_result_blocks`). Skip here.
         Content::Source { .. } => None,
+        // The Anthropic Messages wire has no tool-approval handshake: it carries
+        // no `mcp_approval_request` / `mcp_approval_response` block. The AI SDK's
+        // Anthropic converter likewise drops a `tool-approval-response` part
+        // (`continue`), so both approval parts are skipped here. A denied
+        // execution still degrades to a plain `tool_result` string on the
+        // request side (`render_tool_result_content` via `to_provider_string`).
+        // <https://github.com/vercel/ai/blob/main/packages/anthropic/src/convert-to-anthropic-prompt.ts>
+        Content::ToolApprovalRequest { .. } | Content::ToolApprovalResponse { .. } => None,
     }
 }
 

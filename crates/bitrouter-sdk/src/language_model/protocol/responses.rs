@@ -34,6 +34,17 @@ use crate::language_model::types::{
     set_provider_metadata,
 };
 
+/// Synthesize a stable `tool_call_id` for a [`Content::ToolApprovalRequest`]
+/// parsed from a Responses `mcp_approval_request`. That item transmits an
+/// `approval_request_id` but no separate tool-call id, and V3's
+/// `ToolApprovalRequest` requires one (the AI SDK generates a fresh id here);
+/// deriving it deterministically from the approval id (`approval:<id>`) keeps a
+/// same-protocol round-trip stable without fabricating provider-side identity.
+/// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-tool-approval-request.ts>
+fn synthesize_approval_tool_call_id(approval_id: &str) -> String {
+    format!("approval:{approval_id}")
+}
+
 /// The Responses protocol adapter.
 pub struct ResponsesAdapter;
 
@@ -451,6 +462,54 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                             }],
                         });
                     }
+                    // OpenAI Responses `mcp_approval_response {approval_request_id,
+                    // approve}` — the human-in-the-loop grant/deny for a
+                    // provider-executed MCP tool call. It becomes a
+                    // `Content::ToolApprovalResponse` (a `tool`-role part). A
+                    // **denial** (`approve == false`) additionally yields a paired
+                    // `ToolResult` whose output is `ExecutionDenied`, carrying the
+                    // approval id under `provider_metadata["openai"]["approvalId"]`
+                    // so render knows the denial was already conveyed by the
+                    // approval item and skips re-emitting it as a string — matching
+                    // the AI SDK's `execution-denied` skip rule.
+                    // <https://platform.openai.com/docs/api-reference/responses/object>
+                    // <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+                    Some("mcp_approval_response") => {
+                        let approval_id = item
+                            .get("approval_request_id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let approved = item
+                            .get("approve")
+                            .and_then(|a| a.as_bool())
+                            .unwrap_or(false);
+                        let mut content = vec![Content::ToolApprovalResponse {
+                            approval_id: approval_id.clone(),
+                            approved,
+                            reason: None,
+                            provider_metadata: ProviderMetadata::new(),
+                        }];
+                        if !approved {
+                            let mut denial_meta = ProviderMetadata::new();
+                            set_provider_metadata(
+                                &mut denial_meta,
+                                PROVIDER_ID_OPENAI,
+                                "approvalId",
+                                approval_id.clone().into(),
+                            );
+                            content.push(Content::ToolResult {
+                                call_id: approval_id,
+                                tool_name: None,
+                                output: ToolResultOutput::ExecutionDenied { reason: None },
+                                provider_metadata: denial_meta,
+                            });
+                        }
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content,
+                        });
+                    }
                     Some("reasoning") => {
                         let text = item
                             .get("summary")
@@ -852,6 +911,49 @@ impl OutboundAdapter for ResponsesAdapter {
                         provider_metadata: ProviderMetadata::new(),
                     });
                 }
+                // OpenAI Responses `mcp_approval_request {id, server_label, name,
+                // arguments}` — a provider-executed MCP tool call paused for
+                // human approval. It becomes a `Content::ToolApprovalRequest`. The
+                // MCP server identity (`server_label` / `name` / `arguments`) has
+                // no slot on the flat content shape, so it rides in
+                // `provider_metadata["openai"]` to reproduce the exact item on
+                // render. `approval_id` is the item's `approval_request_id`,
+                // falling back to its `id`; `tool_call_id` is synthesized from it
+                // (the wire carries no separate tool-call id), mirroring the AI
+                // SDK reference which generates a fresh id here.
+                // <https://platform.openai.com/docs/api-reference/responses/object>
+                // <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/openai-responses-language-model.ts>
+                Some("mcp_approval_request") => {
+                    let approval_id = item
+                        .get("approval_request_id")
+                        .or_else(|| item.get("id"))
+                        .and_then(|i| i.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let mut meta = ProviderMetadata::new();
+                    for key in ["server_label", "name", "arguments"] {
+                        if let Some(v) = item.get(key) {
+                            // Store under the camelCase form the AI SDK uses for
+                            // the OpenAI namespace (`serverLabel`).
+                            let meta_key = if key == "server_label" {
+                                "serverLabel"
+                            } else {
+                                key
+                            };
+                            set_provider_metadata(
+                                &mut meta,
+                                PROVIDER_ID_OPENAI,
+                                meta_key,
+                                v.clone(),
+                            );
+                        }
+                    }
+                    content.push(Content::ToolApprovalRequest {
+                        tool_call_id: synthesize_approval_tool_call_id(&approval_id),
+                        approval_id,
+                        provider_metadata: meta,
+                    });
+                }
                 // Deferred output-item types — intentionally skipped, not parsed,
                 // and documented here so the omission is explicit rather than a
                 // silent drop:
@@ -1151,17 +1253,56 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
             // string or content-part array, with no error flag and no tool name,
             // so an error output degrades to its value and `tool_name` is dropped.
             // `Json` / `ErrorJson` stringify; `Content` becomes a part array.
+            //
+            // An `ExecutionDenied` output paired with an approval (its approval id
+            // rides in `provider_metadata["openai"]["approvalId"]`) is **skipped**
+            // here: the sibling `ToolApprovalResponse` already re-emits the
+            // `mcp_approval_response` that conveys the denial, so emitting a
+            // `function_call_output` too would duplicate it. An *unpaired* denial
+            // (no approval id) falls through and degrades to the denial string.
             // <https://platform.openai.com/docs/api-reference/responses/create>
+            // <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/convert-to-openai-responses-input.ts>
             Content::ToolResult {
-                call_id, output, ..
+                call_id,
+                output,
+                provider_metadata,
+                ..
             } => {
-                let output_value = render_responses_tool_output(output);
+                let denial_paired_with_approval =
+                    matches!(output, ToolResultOutput::ExecutionDenied { .. })
+                        && provider_namespace(provider_metadata, PROVIDER_ID_OPENAI)
+                            .is_some_and(|o| o.contains_key("approvalId"));
+                if !denial_paired_with_approval {
+                    let output_value = render_responses_tool_output(output);
+                    items.push(serde_json::json!({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": output_value,
+                    }));
+                }
+            }
+            // Responses `mcp_approval_response {approval_request_id, approve}` —
+            // the grant/deny for a provider-executed MCP tool call, re-emitted on
+            // the input wire. The optional canonical `reason` has no slot on this
+            // item and is dropped (the wire carries none).
+            // <https://platform.openai.com/docs/api-reference/responses/object>
+            // <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+            Content::ToolApprovalResponse {
+                approval_id,
+                approved,
+                ..
+            } => {
                 items.push(serde_json::json!({
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": output_value,
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approval_id,
+                    "approve": approved,
                 }));
             }
+            // A `mcp_approval_request` is an *output* item (an assistant reply), so
+            // it never appears in a request `input` array — the request render
+            // skips it. It round-trips via the response path
+            // (`render_output_items`).
+            Content::ToolApprovalRequest { .. } => {}
             // Citation sources are response-side metadata only; they are never
             // re-sent as a request input item, so the request path skips them.
             Content::Source { .. } => {}
@@ -1391,6 +1532,35 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
             }
         }
     }
+    // Reproduce a `mcp_approval_request` output item from each
+    // `Content::ToolApprovalRequest`. The MCP server identity (`server_label` /
+    // `name` / `arguments`) is restored from `provider_metadata["openai"]`; the
+    // item is keyed by the approval id, matching the wire shape the parse path
+    // reads. <https://platform.openai.com/docs/api-reference/responses/object>
+    for c in &result.content {
+        if let Content::ToolApprovalRequest {
+            approval_id,
+            provider_metadata,
+            ..
+        } = c
+        {
+            let mut item = serde_json::Map::new();
+            item.insert("type".into(), "mcp_approval_request".into());
+            item.insert("id".into(), approval_id.clone().into());
+            if let Some(openai) = provider_namespace(provider_metadata, PROVIDER_ID_OPENAI) {
+                if let Some(label) = openai.get("serverLabel") {
+                    item.insert("server_label".into(), label.clone());
+                }
+                if let Some(name) = openai.get("name") {
+                    item.insert("name".into(), name.clone());
+                }
+                if let Some(arguments) = openai.get("arguments") {
+                    item.insert("arguments".into(), arguments.clone());
+                }
+            }
+            items.push(serde_json::Value::Object(item));
+        }
+    }
     // Best-effort: a generated file becomes an image message item. The Responses
     // API has no standard output-image item, so this preserves the data rather
     // than dropping it. <https://platform.openai.com/docs/api-reference/responses>
@@ -1507,6 +1677,14 @@ impl StreamDecoder for ResponsesStreamDecoder {
             | "response.output_text.done"
             | "response.reasoning_summary_text.done" => {}
             "response.output_item.added" => {
+                // Streaming approval gap: a streamed `mcp_approval_request` item
+                // would need a dedicated `StreamPart` variant to surface, but no
+                // outbound encoder has a target for it (the other three protocols
+                // carry no streaming approval frame), so adding one would be
+                // unconstructed dead code. The non-streaming handshake
+                // (`parse_response` / `render_output_items`) is the complete,
+                // faithful round trip; a streamed approval item is simply not
+                // emitted as a delta here. <https://platform.openai.com/docs/api-reference/responses-streaming>
                 if let Some(item) = json.get("item")
                     && item.get("type").and_then(|t| t.as_str()) == Some("function_call")
                 {

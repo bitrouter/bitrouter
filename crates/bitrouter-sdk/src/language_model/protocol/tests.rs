@@ -3812,6 +3812,13 @@ fn tool_result_output_serde_uses_snake_case_tags() {
     assert_eq!(content["value"][0]["type"], "media");
     assert_eq!(content["value"][0]["media_type"], "image/png");
     assert_eq!(content["value"][0]["data"]["kind"], "url");
+
+    let denied = serde_json::to_value(ToolResultOutput::ExecutionDenied {
+        reason: Some("nope".to_string()),
+    })
+    .unwrap();
+    assert_eq!(denied["type"], "execution_denied");
+    assert_eq!(denied["reason"], "nope");
 }
 
 #[test]
@@ -6817,4 +6824,429 @@ fn generate_content_thought_signature_round_trips_on_function_call() {
     let part = &rendered["contents"][0]["parts"][0];
     assert!(part.get("functionCall").is_some());
     assert_eq!(part["thoughtSignature"], "TS-fc-1");
+}
+
+// ===== tool-approval flow (human-in-the-loop) + execution-denied =====
+//
+// Only OpenAI Responses carries the approval handshake on the wire
+// (`mcp_approval_request` output item / `mcp_approval_response` input item); the
+// other three protocols have no approval item and drop the parts on render. The
+// `execution-denied` tool-result output is the denial leg of that flow.
+
+/// A Responses `mcp_approval_request` output item parses into a
+/// `Content::ToolApprovalRequest` whose `approval_id` is the item id, with the
+/// MCP server identity lifted into `provider_metadata["openai"]`, and renders
+/// back to the identical output item (same-protocol round trip).
+#[test]
+fn responses_mcp_approval_request_round_trips() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "id": "resp_1",
+        "status": "completed",
+        "output": [
+            {
+                "id": "mcpr_abc",
+                "type": "mcp_approval_request",
+                "server_label": "dmcp",
+                "name": "roll",
+                "arguments": "{\"diceRollExpression\":\"2d4 + 1\"}",
+            }
+        ]
+    });
+    let result = adapter.parse_response(body).unwrap();
+    // Parsed into a ToolApprovalRequest carrying the server identity.
+    let (approval_id, tool_call_id, meta) = result
+        .content
+        .iter()
+        .find_map(|c| match c {
+            Content::ToolApprovalRequest {
+                approval_id,
+                tool_call_id,
+                provider_metadata,
+            } => Some((
+                approval_id.as_str(),
+                tool_call_id.as_str(),
+                provider_metadata,
+            )),
+            _ => None,
+        })
+        .expect("an approval request part");
+    assert_eq!(approval_id, "mcpr_abc");
+    // The wire carries no separate tool-call id; it is synthesized deterministically.
+    assert_eq!(tool_call_id, "approval:mcpr_abc");
+    let openai = meta.get("openai").and_then(|o| o.as_object()).unwrap();
+    assert_eq!(openai["serverLabel"], "dmcp");
+    assert_eq!(openai["name"], "roll");
+    assert_eq!(openai["arguments"], "{\"diceRollExpression\":\"2d4 + 1\"}");
+
+    // Render back: the exact `mcp_approval_request` output item reappears.
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "resp_1")
+        .unwrap();
+    let item = rendered["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["type"] == "mcp_approval_request")
+        .expect("mcp_approval_request re-emitted");
+    assert_eq!(item["id"], "mcpr_abc");
+    assert_eq!(item["server_label"], "dmcp");
+    assert_eq!(item["name"], "roll");
+    assert_eq!(item["arguments"], "{\"diceRollExpression\":\"2d4 + 1\"}");
+}
+
+/// A Responses `mcp_approval_request` with no `approval_request_id` falls back to
+/// the item `id` for the approval id (mirroring the AI SDK reference).
+#[test]
+fn responses_mcp_approval_request_prefers_approval_request_id() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "id": "resp_1",
+        "status": "completed",
+        "output": [
+            {
+                "id": "item_xyz",
+                "approval_request_id": "mcpr_real",
+                "type": "mcp_approval_request",
+                "name": "roll",
+                "server_label": "dmcp",
+            }
+        ]
+    });
+    let result = adapter.parse_response(body).unwrap();
+    let approval_id = result
+        .content
+        .iter()
+        .find_map(|c| match c {
+            Content::ToolApprovalRequest { approval_id, .. } => Some(approval_id.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    // `approval_request_id` wins over the item `id`.
+    assert_eq!(approval_id, "mcpr_real");
+}
+
+/// An approved `mcp_approval_response` input item round-trips through Responses as
+/// a `Content::ToolApprovalResponse` (and emits NO paired execution-denied).
+#[test]
+fn responses_mcp_approval_response_approved_round_trips() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "model": "gpt-5",
+        "input": [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "mcpr_abc",
+                "approve": true,
+            }
+        ]
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let parts: Vec<&Content> = prompt.messages.iter().flat_map(|m| &m.content).collect();
+    // Exactly the approval-response part; no execution-denied result on approval.
+    assert_eq!(
+        parts.len(),
+        1,
+        "approved response yields only the approval part"
+    );
+    match parts[0] {
+        Content::ToolApprovalResponse {
+            approval_id,
+            approved,
+            reason,
+            ..
+        } => {
+            assert_eq!(approval_id, "mcpr_abc");
+            assert!(*approved);
+            assert!(reason.is_none(), "the wire carries no reason");
+        }
+        other => panic!("expected approval response, got {other:?}"),
+    }
+
+    // Render back to the identical input item.
+    let rendered = adapter.render_request(&prompt).unwrap();
+    let item = rendered["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["type"] == "mcp_approval_response")
+        .expect("mcp_approval_response re-emitted");
+    assert_eq!(item["approval_request_id"], "mcpr_abc");
+    assert_eq!(item["approve"], true);
+}
+
+/// A denied `mcp_approval_response` parses into the approval-response part PLUS a
+/// paired `ExecutionDenied` tool result (carrying the approval id), and renders
+/// back to a single `mcp_approval_response` — the denial is NOT duplicated as a
+/// `function_call_output`, matching the AI SDK's execution-denied skip rule.
+#[test]
+fn responses_mcp_approval_response_denied_pairs_execution_denied() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "model": "gpt-5",
+        "input": [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "mcpr_abc",
+                "approve": false,
+            }
+        ]
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let parts: Vec<&Content> = prompt.messages.iter().flat_map(|m| &m.content).collect();
+    assert_eq!(
+        parts.len(),
+        2,
+        "denial yields the approval part + a denied result"
+    );
+    // The approval-response part records the denial.
+    assert!(matches!(
+        parts[0],
+        Content::ToolApprovalResponse {
+            approved: false,
+            ..
+        }
+    ));
+    // The paired tool result is an ExecutionDenied carrying the approval id.
+    match parts[1] {
+        Content::ToolResult {
+            call_id,
+            output,
+            provider_metadata,
+            ..
+        } => {
+            assert_eq!(call_id, "mcpr_abc");
+            assert!(matches!(
+                output,
+                ToolResultOutput::ExecutionDenied { reason: None }
+            ));
+            assert_eq!(
+                provider_metadata["openai"]["approvalId"],
+                serde_json::json!("mcpr_abc"),
+                "the denial carries its approval id so render can skip it",
+            );
+        }
+        other => panic!("expected a tool result, got {other:?}"),
+    }
+
+    // Render: only the `mcp_approval_response` is emitted; the approval-paired
+    // execution-denied is skipped (no duplicate `function_call_output`).
+    let rendered = adapter.render_request(&prompt).unwrap();
+    let input = rendered["input"].as_array().unwrap();
+    let approval_items = input
+        .iter()
+        .filter(|i| i["type"] == "mcp_approval_response")
+        .count();
+    let denial_outputs = input
+        .iter()
+        .filter(|i| i["type"] == "function_call_output")
+        .count();
+    assert_eq!(
+        approval_items, 1,
+        "the denial is conveyed by mcp_approval_response"
+    );
+    assert_eq!(
+        denial_outputs, 0,
+        "an approval-paired execution-denied is not also emitted as a string: {rendered}"
+    );
+}
+
+/// A full approve handshake: the assistant's `mcp_approval_request` is answered
+/// by an approved `mcp_approval_response`, and the tool's actual output rides as
+/// an ordinary `function_call_output`. Both legs survive a same-protocol route.
+#[test]
+fn responses_approval_then_tool_runs_full_handshake() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "model": "gpt-5",
+        "input": [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "mcpr_abc",
+                "approve": true,
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "mcpr_abc",
+                "output": "4",
+            }
+        ]
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    let input = rendered["input"].as_array().unwrap();
+    // The approval grant is preserved.
+    assert!(input.iter().any(|i| i["type"] == "mcp_approval_response"
+        && i["approve"] == true
+        && i["approval_request_id"] == "mcpr_abc"));
+    // The tool's real result is preserved as a function_call_output.
+    let out = input
+        .iter()
+        .find(|i| i["type"] == "function_call_output")
+        .expect("the approved tool's output survives");
+    assert_eq!(out["call_id"], "mcpr_abc");
+    assert_eq!(out["output"], "4");
+}
+
+/// An *unpaired* `ExecutionDenied` (no approval id in metadata) degrades to a
+/// `function_call_output` whose `output` is the denial string on Responses, and
+/// re-parses as `Text` — exactly as documented (the structured denial has no
+/// distinct tag on the wire without an approval).
+#[test]
+fn responses_unpaired_execution_denied_degrades_to_string() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let prompt = tool_result_prompt(
+        "call_1",
+        None,
+        ToolResultOutput::ExecutionDenied {
+            reason: Some("user refused".to_string()),
+        },
+    );
+    let rendered = adapter.render_request(&prompt).unwrap();
+    let out = rendered["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["type"] == "function_call_output")
+        .expect("an unpaired denial renders as function_call_output");
+    assert_eq!(out["output"], "user refused");
+    // Re-parses as Text (the wire has no execution-denied tag without an approval).
+    let back = round_trip_tool_output(
+        ApiProtocol::Responses,
+        ToolResultOutput::ExecutionDenied {
+            reason: Some("user refused".to_string()),
+        },
+    );
+    assert_eq!(
+        back,
+        ToolResultOutput::Text {
+            value: "user refused".to_string()
+        }
+    );
+}
+
+/// An unpaired `ExecutionDenied` with no reason renders the AI SDK's default
+/// denial sentinel.
+#[test]
+fn responses_execution_denied_without_reason_uses_default_sentinel() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let prompt = tool_result_prompt(
+        "call_1",
+        None,
+        ToolResultOutput::ExecutionDenied { reason: None },
+    );
+    let rendered = adapter.render_request(&prompt).unwrap();
+    let out = rendered["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["type"] == "function_call_output")
+        .unwrap();
+    assert_eq!(out["output"], "Tool call execution denied.");
+}
+
+/// On the three non-Responses wires there is no approval handshake, so an
+/// `ExecutionDenied` tool result degrades to the denial string (or the default
+/// sentinel) via `to_provider_string`, never silently dropped.
+#[test]
+fn execution_denied_degrades_to_string_on_non_responses_wires() {
+    for protocol in [
+        ApiProtocol::ChatCompletions,
+        ApiProtocol::Messages,
+        ApiProtocol::GenerateContent,
+    ] {
+        let adapter = adapter_for(protocol.clone());
+        let prompt = tool_result_prompt(
+            "call_1",
+            Some("roll"),
+            ToolResultOutput::ExecutionDenied {
+                reason: Some("denied by policy".to_string()),
+            },
+        );
+        let rendered = adapter
+            .render_request(&prompt)
+            .unwrap_or_else(|e| panic!("{protocol:?} render_request: {e}"));
+        // The denial reason text must appear somewhere in the rendered request.
+        let blob = serde_json::to_string(&rendered).unwrap();
+        assert!(
+            blob.contains("denied by policy"),
+            "{protocol:?} dropped the execution-denied reason: {rendered}"
+        );
+    }
+}
+
+/// The three non-Responses adapters drop a `ToolApprovalResponse` request part
+/// (no wire item for it), mirroring the AI SDK converters' `continue`. The
+/// request must still render successfully (no panic, no error).
+#[test]
+fn approval_response_part_is_dropped_on_non_responses_wires() {
+    for protocol in [
+        ApiProtocol::ChatCompletions,
+        ApiProtocol::Messages,
+        ApiProtocol::GenerateContent,
+    ] {
+        let adapter = adapter_for(protocol.clone());
+        let prompt = Prompt {
+            model: "m".to_string(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message {
+                role: Role::Tool,
+                content: vec![Content::ToolApprovalResponse {
+                    approval_id: "mcpr_abc".to_string(),
+                    approved: true,
+                    reason: None,
+                    provider_metadata: Default::default(),
+                }],
+            }],
+            tools: vec![],
+            params: GenerationParams::default(),
+            response_format: None,
+            stream: false,
+        };
+        // Renders without error; the approval part has no wire item and is dropped.
+        adapter
+            .render_request(&prompt)
+            .unwrap_or_else(|e| panic!("{protocol:?} render_request: {e}"));
+    }
+}
+
+/// The new content variants and the `ExecutionDenied` output round-trip through
+/// serde unchanged, with the expected tagged-union shapes.
+#[test]
+fn approval_types_serde_round_trip() {
+    // ToolApprovalRequest
+    let req = Content::ToolApprovalRequest {
+        approval_id: "mcpr_abc".to_string(),
+        tool_call_id: "approval:mcpr_abc".to_string(),
+        provider_metadata: Default::default(),
+    };
+    let v = serde_json::to_value(&req).unwrap();
+    assert_eq!(v["type"], "tool_approval_request");
+    assert_eq!(v["approval_id"], "mcpr_abc");
+    assert_eq!(v["tool_call_id"], "approval:mcpr_abc");
+    assert_eq!(serde_json::from_value::<Content>(v).unwrap(), req);
+
+    // ToolApprovalResponse, with an optional reason set.
+    let resp = Content::ToolApprovalResponse {
+        approval_id: "mcpr_abc".to_string(),
+        approved: false,
+        reason: Some("nope".to_string()),
+        provider_metadata: Default::default(),
+    };
+    let v = serde_json::to_value(&resp).unwrap();
+    assert_eq!(v["type"], "tool_approval_response");
+    assert_eq!(v["approved"], false);
+    assert_eq!(v["reason"], "nope");
+    assert_eq!(serde_json::from_value::<Content>(v).unwrap(), resp);
+
+    // ExecutionDenied output, reason omitted when None.
+    let denied = ToolResultOutput::ExecutionDenied { reason: None };
+    let v = serde_json::to_value(&denied).unwrap();
+    assert_eq!(v["type"], "execution_denied");
+    assert!(v.get("reason").is_none(), "None reason omits the key: {v}");
+    assert_eq!(
+        serde_json::from_value::<ToolResultOutput>(v).unwrap(),
+        denied
+    );
 }

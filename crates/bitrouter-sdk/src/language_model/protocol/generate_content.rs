@@ -1141,6 +1141,14 @@ fn render_part(c: &Content) -> Option<serde_json::Value> {
         // they are re-attached under `groundingMetadata` in `render_response`,
         // not rendered as a content `part`. Skip on the request path.
         Content::Source { .. } => None,
+        // The Gemini Generate Content wire has no tool-approval handshake: there
+        // is no `mcp_approval_request` / `mcp_approval_response` part. The AI
+        // SDK's Google converter drops a `tool-approval-response` part
+        // (`continue`), so both approval parts are skipped here. A denied
+        // execution degrades to a `functionResponse {result: <denial string>}`
+        // via the `ToolResult` arm above (`to_provider_string`).
+        // <https://github.com/vercel/ai/blob/main/packages/google/src/convert-to-google-messages.ts>
+        Content::ToolApprovalRequest { .. } | Content::ToolApprovalResponse { .. } => None,
     }
 }
 
@@ -1259,6 +1267,10 @@ impl StreamDecoder for GenerateContentStreamDecoder {
                         // candidate metadata, not a content part); it is decoded
                         // from `groundingMetadata` below.
                         Content::Source { .. } => {}
+                        // The Gemini wire carries no tool-approval handshake, so
+                        // `parse_parts` never yields these; nothing to stream.
+                        Content::ToolApprovalRequest { .. }
+                        | Content::ToolApprovalResponse { .. } => {}
                     }
                 }
             }

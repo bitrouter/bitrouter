@@ -316,6 +316,79 @@ pub enum Content {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         provider_metadata: ProviderMetadata,
     },
+    /// A human-in-the-loop **tool-approval request** — the V3
+    /// `LanguageModelV3ToolApprovalRequest` content part. Emitted by a provider
+    /// (assistant output) for a provider-executed tool call that needs explicit
+    /// user approval before it runs; the matching [`Self::ToolApprovalResponse`]
+    /// (keyed by [`approval_id`](Self::ToolApprovalRequest::approval_id)) carries
+    /// the grant or denial back on the next turn.
+    /// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-tool-approval-request.ts>
+    ///
+    /// The only wire that carries this handshake is OpenAI Responses, where it is
+    /// the `mcp_approval_request` output item (`{id, type, server_label, name,
+    /// arguments}`). On parse, `approval_id` is the item's `approval_request_id`
+    /// (falling back to its `id`), and the MCP `server_label` / `name` /
+    /// `arguments` ride in `provider_metadata["openai"]` so the render reproduces
+    /// the exact `mcp_approval_request` item byte-for-byte. The other three wires
+    /// (Anthropic / Generate Content / Chat Completions) have no approval-request
+    /// item and skip this variant on render (documented at each site).
+    /// <https://platform.openai.com/docs/api-reference/responses/object>
+    ToolApprovalRequest {
+        /// Approval id, referenced by the subsequent
+        /// [`Self::ToolApprovalResponse`]. On Responses this is the
+        /// `mcp_approval_request.approval_request_id` (falling back to its `id`).
+        approval_id: String,
+        /// The tool call this approval is for (V3 `toolCallId`). The Responses
+        /// `mcp_approval_request` item does not transmit a separate tool-call id,
+        /// so it is synthesized from `approval_id` (`approval:<approval_id>`) — a
+        /// deterministic value, mirroring how the AI SDK generates one — and round
+        /// trips stably on a same-protocol hop.
+        tool_call_id: String,
+        /// Per-part namespaced provider metadata. On a Responses
+        /// `mcp_approval_request` this carries the MCP server identity under
+        /// `provider_metadata["openai"]` (`serverLabel` / `name` / `arguments`) so
+        /// the render restores the exact item; the canonical flat shape itself has
+        /// no MCP-server slot.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        provider_metadata: ProviderMetadata,
+    },
+    /// A human-in-the-loop **tool-approval response** — the V3
+    /// `LanguageModelV3ToolApprovalResponsePart`. Supplied back by the
+    /// client/tool layer (a `tool`-role input part) to grant or deny a
+    /// provider-executed tool call that emitted a [`Self::ToolApprovalRequest`],
+    /// keyed by the shared [`approval_id`](Self::ToolApprovalResponse::approval_id).
+    /// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-prompt.ts>
+    ///
+    /// The only wire that carries it is OpenAI Responses, as the
+    /// `mcp_approval_response` input item (`{type, approval_request_id,
+    /// approve}`). On parse, `approval_id` is `approval_request_id` and `approved`
+    /// is `approve`; on render this variant re-emits exactly that item. A denial
+    /// (`approved == false`) additionally yields a paired
+    /// [`ToolResultOutput::ExecutionDenied`] result carrying the approval id, so
+    /// the structured denial survives in the canonical IR (see `parse_input` in
+    /// the Responses adapter). The other three wires drop this part on render —
+    /// the AI SDK's converters do the same (`continue`) — because they have no
+    /// approval-response item (documented at each site).
+    /// <https://platform.openai.com/docs/api-reference/responses/object>
+    ToolApprovalResponse {
+        /// The approval id this response answers — the
+        /// [`Self::ToolApprovalRequest::approval_id`] it grants or denies. On
+        /// Responses this is the `mcp_approval_response.approval_request_id`.
+        approval_id: String,
+        /// Whether the tool call is approved (`mcp_approval_response.approve`).
+        approved: bool,
+        /// Optional human-readable reason (V3 `reason`). No built-in wire carries
+        /// it on the approval item — the Responses `mcp_approval_response` has no
+        /// `reason` field — so it is `None` after any wire round-trip and rides
+        /// only when a caller sets it on the canonical value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        /// Per-part namespaced provider metadata (V3 `providerOptions`). Carries
+        /// no Responses-native field today; present for parity with the other
+        /// content parts and so a foreign provider's namespace survives a route.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        provider_metadata: ProviderMetadata,
+    },
 }
 
 /// The result body of a [`Content::ToolResult`]. A faithful port of the Vercel
@@ -325,17 +398,20 @@ pub enum Content {
 /// shape and degrade losslessly when a provider can't express a variant.
 /// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-prompt.ts>
 ///
-/// The V3 union has a sixth member, `execution-denied`
-/// (`{ type: 'execution-denied', reason? }`), that is intentionally **not**
-/// modeled here. It carries no distinct tag on any of the four request wires:
-/// the OpenAI Responses input conversion renders it as a plain
-/// `function_call_output.output` string (`reason ?? 'Tool call execution
-/// denied.'`) that re-parses indistinguishably from a [`Self::Text`], and its
-/// structured form arises only from the human-in-the-loop tool-approval flow
-/// (`tool-approval-request` / `tool-approval-response`), which this SDK does not
-/// yet implement. When that flow lands it will reintroduce the denial as part of
-/// the approval types rather than as a free-standing tool-result variant, so
-/// adding it now would be unconstructed dead code.
+/// The V3 union's sixth member, `execution-denied`
+/// (`{ type: 'execution-denied', reason? }`), is modeled by
+/// [`Self::ExecutionDenied`]. It arises from the human-in-the-loop tool-approval
+/// flow ([`Content::ToolApprovalRequest`] / [`Content::ToolApprovalResponse`]):
+/// when a user denies a provider-executed tool call, its result is a denial
+/// rather than an ordinary output. Only OpenAI Responses carries the flow on the
+/// wire; there the denial has two faithful renderings, both reproduced here
+/// (`render_responses_tool_output`): a denial paired with its approval (the
+/// approval id rides in `provider_metadata["openai"]["approvalId"]`) is **skipped**
+/// on render — the `mcp_approval_response` already conveyed it — and an unpaired
+/// denial degrades to a `function_call_output.output` string
+/// (`reason ?? 'Tool call execution denied.'`) that re-parses as a [`Self::Text`].
+/// On the other three wires it likewise degrades to that string via
+/// [`Self::to_provider_string`].
 /// <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/convert-to-openai-responses-input.ts>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -364,6 +440,21 @@ pub enum ToolResultOutput {
     Content {
         /// The ordered content parts.
         value: Vec<ToolResultContentPart>,
+    },
+    /// A denied tool execution — the V3 `execution-denied` output. The result of
+    /// a provider-executed tool call the user refused via the tool-approval flow
+    /// ([`Content::ToolApprovalResponse`] with `approved == false`). `reason` is
+    /// the optional human-readable explanation; when absent, renders fall back to
+    /// `"Tool call execution denied."` (matching the AI SDK). On OpenAI Responses
+    /// a denial paired with its approval is skipped on render (the
+    /// `mcp_approval_response` conveys it); elsewhere it degrades to the reason
+    /// string via [`Self::to_provider_string`].
+    /// <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+    ExecutionDenied {
+        /// Optional human-readable denial reason. `None` falls back to the
+        /// default denial string on render.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
 }
 
@@ -409,6 +500,12 @@ impl ToolResultOutput {
                     }
                 })
                 .collect(),
+            // A denied execution collapses to its reason, or the AI SDK's default
+            // denial sentinel when none was given.
+            // <https://github.com/vercel/ai/blob/main/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+            Self::ExecutionDenied { reason } => reason
+                .clone()
+                .unwrap_or_else(|| "Tool call execution denied.".to_string()),
         }
     }
 }

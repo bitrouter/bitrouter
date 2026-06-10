@@ -357,6 +357,14 @@ fn canonical_content_to_bedrock(blocks: &[Content]) -> Result<Vec<ContentBlock>>
                 // `citationsContent` block, which the response parser would map;
                 // the request path simply skips.)
             }
+            Content::ToolApprovalRequest { .. } | Content::ToolApprovalResponse { .. } => {
+                // The Bedrock Converse content model has no tool-approval
+                // handshake block (`mcp_approval_request` / `mcp_approval_response`
+                // are OpenAI-Responses-only), so both approval parts are skipped.
+                // A denied execution still degrades to a plain `toolResult` text
+                // block via the `ToolResult` arm (`render_tool_result_blocks`).
+                // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+            }
         }
     }
     Ok(out)
@@ -390,6 +398,14 @@ fn render_tool_result_blocks(output: &ToolResultOutput) -> Vec<ToolResultContent
                 ToolResultContentPart::Media { .. } | ToolResultContentPart::FileId { .. } => None,
             })
             .collect(),
+        // Bedrock Converse has no `execution-denied` tool-result shape, so a
+        // denied execution degrades to a plain `Text` block carrying the reason
+        // (or the default denial string), mirroring the string degrade on the
+        // other non-Responses wires.
+        // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultContentBlock.html
+        ToolResultOutput::ExecutionDenied { .. } => {
+            vec![ToolResultContentBlock::Text(output.to_provider_string())]
+        }
     }
 }
 

@@ -68,6 +68,20 @@ fn request_text(ctx: &PipelineContext) -> String {
                     // not user-authored prompt text, so they are not scanned by
                     // the request-side guardrail.
                 }
+                Content::ToolApprovalResponse { reason, .. } => {
+                    // A tool-approval response carries no model/user content other
+                    // than an optional human-authored denial reason; scan that
+                    // when present so guardrail rules still see it.
+                    if let Some(reason) = reason {
+                        buf.push_str(reason);
+                        buf.push('\n');
+                    }
+                }
+                Content::ToolApprovalRequest { .. } => {
+                    // A tool-approval request is a provider-emitted handshake
+                    // marker (approval/tool-call ids); it carries no user-authored
+                    // prompt text to scan.
+                }
             }
         }
     }
