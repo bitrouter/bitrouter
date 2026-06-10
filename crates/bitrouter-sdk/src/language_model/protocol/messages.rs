@@ -20,7 +20,8 @@ use async_trait::async_trait;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
     InboundAdapter, OutboundAdapter, PROVIDER_ID_ANTHROPIC, SseEvent, StreamDecoder, StreamEncoder,
-    Transport, describe_deser_error, provider_defined_native,
+    Transport, describe_deser_error, provider_defined_native, rendered_finish_reason,
+    stash_raw_finish_reason,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
@@ -819,9 +820,10 @@ impl InboundAdapter for MessagesAdapter {
             } = oc;
             reasoning_effort = effort;
             if let Some(MessagesOutputFormat::JsonSchema { schema }) = format {
-                // Anthropic's GA format carries no name / strict.
+                // Anthropic's GA format carries no name / description / strict.
                 response_format = Some(ResponseFormat::JsonSchema {
                     name: None,
+                    description: None,
                     strict: None,
                     schema,
                 });
@@ -889,11 +891,11 @@ impl InboundAdapter for MessagesAdapter {
         // reuses that call's id; otherwise a synthetic call block is prepended.
         content.extend(render_web_search_result_blocks(result));
         let usage = result.usage.unwrap_or_default();
-        let stop_reason = result
-            .finish_reason
-            .as_ref()
-            .map(finish_to_stop_reason)
-            .map_or(serde_json::Value::Null, serde_json::Value::String);
+        // Prefer the stashed raw `stop_reason` (e.g. `stop_sequence`) over the
+        // unified-enum mapping so a same-protocol round-trip is byte-faithful.
+        let stop_reason =
+            rendered_finish_reason(result, PROVIDER_ID_ANTHROPIC, finish_to_stop_reason)
+                .map_or(serde_json::Value::Null, serde_json::Value::String);
         let mut body = serde_json::Map::new();
         body.insert("id".into(), request_id.into());
         body.insert("type".into(), "message".into());
@@ -1099,10 +1101,11 @@ impl OutboundAdapter for MessagesAdapter {
                 _ => {}
             }
         }
-        let finish_reason = body
+        let raw_stop = body
             .get("stop_reason")
             .and_then(|s| s.as_str())
-            .and_then(stop_reason_to_finish);
+            .map(str::to_string);
+        let finish_reason = raw_stop.as_deref().and_then(stop_reason_to_finish);
         let usage = body.get("usage").and_then(parse_usage);
         // Messages: top-level `id` (`msg_...`).
         // <https://docs.anthropic.com/en/api/messages>
@@ -1116,18 +1119,29 @@ impl OutboundAdapter for MessagesAdapter {
         // non-refusal stop reason.
         // <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons#refusal-categories>
         let stop_details = body.get("stop_details").and_then(parse_stop_details);
+        // Anthropic's Messages response carries no result-level metadata field
+        // without a dedicated canonical slot (unlike OpenAI's
+        // `system_fingerprint` or Gemini's `modelVersion`); the per-block
+        // signature / cache_control above are where its provider metadata lives.
+        // The one result-level value we preserve is the raw `stop_reason` when
+        // the unified enum can't reproduce it — `stop_sequence` (→ `Stop`, which
+        // renders `end_turn`) and `refusal` are the lossy cases — so a
+        // same-protocol render restores the exact native reason.
+        let mut provider_metadata = ProviderMetadata::new();
+        stash_raw_finish_reason(
+            &mut provider_metadata,
+            PROVIDER_ID_ANTHROPIC,
+            raw_stop.as_deref(),
+            finish_reason.as_ref(),
+            finish_to_stop_reason,
+        );
         Ok(GenerateResult {
             content,
             usage,
             finish_reason,
             response_id,
             stop_details,
-            // Anthropic's Messages response carries no result-level metadata
-            // field without a dedicated canonical slot (unlike OpenAI's
-            // `system_fingerprint` or Gemini's `modelVersion`); the per-block
-            // signature / cache_control above are where its provider metadata
-            // lives. Left empty rather than inventing an unconstructed slot.
-            provider_metadata: ProviderMetadata::new(),
+            provider_metadata,
         })
     }
 
@@ -1155,6 +1169,7 @@ fn json_schema_from(format: &serde_json::Value) -> Option<ResponseFormat> {
     }
     Some(ResponseFormat::JsonSchema {
         name: None,
+        description: None,
         strict: None,
         schema: format.get("schema")?.clone(),
     })

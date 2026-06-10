@@ -140,6 +140,13 @@
           "description": "JSON constrained to a schema.",
           "type": "object",
           "properties": {
+            "description": {
+              "description": "Optional schema description — extra LLM guidance OpenAI passes to the\nmodel. Promoted to the canonical `response_format` description.\n<https://platform.openai.com/docs/api-reference/responses/create>",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "name": {
               "description": "Schema name (OpenAI requires it).",
               "type": "string"

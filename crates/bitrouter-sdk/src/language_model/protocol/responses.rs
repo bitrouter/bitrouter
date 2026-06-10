@@ -124,6 +124,11 @@ pub enum ResponsesTextFormat {
     JsonSchema {
         /// Schema name (OpenAI requires it).
         name: String,
+        /// Optional schema description — extra LLM guidance OpenAI passes to the
+        /// model. Promoted to the canonical `response_format` description.
+        /// <https://platform.openai.com/docs/api-reference/responses/create>
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
         /// Strict-mode flag.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         strict: Option<bool>,
@@ -559,6 +564,14 @@ fn openai_error_status(err_type: &str) -> u16 {
     }
 }
 
+// Responses has no native finish-reason *string* to preserve: its terminal
+// signal is the response `status` (`completed` / `incomplete` / `failed`), a
+// small closed set that the unified [`FinishReason`] enum reproduces exactly on
+// render (`Length` → `incomplete`, `Error` → `failed`, else `completed`). There
+// is therefore no lossy mapping to stash a raw value for — unlike the
+// Messages / Chat Completions / Generate Content adapters, which collapse
+// several distinct native reasons onto one variant and so stash
+// `rawFinishReason`. Hence this adapter writes no raw finish reason.
 fn finish_from_status(status: &str) -> Option<FinishReason> {
     match status {
         "completed" => Some(FinishReason::Stop),
@@ -609,6 +622,7 @@ impl InboundAdapter for ResponsesAdapter {
             }) => match format {
                 Some(ResponsesTextFormat::JsonSchema {
                     name,
+                    description,
                     strict,
                     schema,
                 }) => {
@@ -620,6 +634,7 @@ impl InboundAdapter for ResponsesAdapter {
                     }
                     Some(ResponseFormat::JsonSchema {
                         name: Some(name),
+                        description,
                         strict,
                         schema,
                     })
@@ -1080,11 +1095,14 @@ fn render_responses_tool(tool: &Tool) -> serde_json::Value {
 }
 
 /// Render a canonical [`ResponseFormat`] into Responses' native
-/// `{ type: "json_schema", name, strict, schema }` body that sits under
-/// `text.format`. OpenAI requires `name`; default it.
+/// `{ type: "json_schema", name, description?, strict?, schema }` body that sits
+/// under `text.format`. OpenAI requires `name`; default it. `description` is
+/// emitted only when the canonical slot carries it.
+/// <https://platform.openai.com/docs/api-reference/responses/create>
 fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
     let ResponseFormat::JsonSchema {
         name,
+        description,
         strict,
         schema,
     } = rf;
@@ -1096,6 +1114,9 @@ fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
             .unwrap_or_else(|| "response".to_string())
             .into(),
     );
+    if let Some(description) = description {
+        obj.insert("description".into(), description.clone().into());
+    }
     if let Some(strict) = strict {
         obj.insert("strict".into(), (*strict).into());
     }

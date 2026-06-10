@@ -15,7 +15,8 @@ use serde::Deserialize;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
     InboundAdapter, OutboundAdapter, PROVIDER_ID_GOOGLE, SseEvent, StreamDecoder, StreamEncoder,
-    Transport, describe_deser_error, provider_defined_native,
+    Transport, describe_deser_error, provider_defined_native, rendered_finish_reason,
+    stash_raw_finish_reason,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
@@ -775,6 +776,7 @@ impl InboundAdapter for GenerateContentAdapter {
                 ) {
                     (true, Some(schema)) => Some(ResponseFormat::JsonSchema {
                         name: None,
+                        description: None,
                         strict: None,
                         schema,
                     }),
@@ -851,10 +853,10 @@ impl InboundAdapter for GenerateContentAdapter {
         let usage = result.usage.unwrap_or_default();
         let mut candidate = serde_json::json!({
             "content": { "role": "model", "parts": parts },
-            "finishReason": result
-                .finish_reason
-                .as_ref()
-                .map(finish_reason_str)
+            // Prefer the stashed raw `finishReason` (e.g. `RECITATION`) over the
+            // unified-enum mapping so a same-protocol round-trip is byte-faithful;
+            // default to `STOP` when the result carries no finish reason at all.
+            "finishReason": rendered_finish_reason(result, PROVIDER_ID_GOOGLE, finish_reason_str)
                 .unwrap_or_else(|| "STOP".to_string()),
             "index": 0,
         });
@@ -987,10 +989,11 @@ impl OutboundAdapter for GenerateContentAdapter {
         // `Content::Source` parts appended after the content.
         // <https://ai.google.dev/gemini-api/docs/grounding>
         parts.extend(parse_grounding_sources(candidate.get("groundingMetadata")));
-        let finish = candidate
+        let raw_finish = candidate
             .get("finishReason")
             .and_then(|f| f.as_str())
-            .and_then(finish_reason);
+            .map(str::to_string);
+        let finish = raw_finish.as_deref().and_then(finish_reason);
         let usage = body.get("usageMetadata").and_then(parse_usage);
         // Generate Content: top-level `responseId`.
         // <https://ai.google.dev/api/generate-content#GenerateContentResponse>
@@ -1011,6 +1014,18 @@ impl OutboundAdapter for GenerateContentAdapter {
                 mv.clone(),
             );
         }
+        // Preserve the raw `finishReason` when the unified enum can't reproduce
+        // it: the content-filter family (`RECITATION` / `BLOCKLIST` /
+        // `PROHIBITED_CONTENT`) all collapse to `ContentFilter`, which renders
+        // back as the canonical `SAFETY`, so the precise sub-reason would be
+        // lost without stashing it under the `google` namespace.
+        stash_raw_finish_reason(
+            &mut provider_metadata,
+            PROVIDER_ID_GOOGLE,
+            raw_finish.as_deref(),
+            finish.as_ref(),
+            finish_reason_str,
+        );
         Ok(GenerateResult {
             content: parts,
             usage,

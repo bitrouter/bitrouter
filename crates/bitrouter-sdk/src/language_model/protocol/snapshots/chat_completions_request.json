@@ -100,6 +100,13 @@
       "description": "The `json_schema` payload of [`ChatResponseFormat::JsonSchema`].",
       "type": "object",
       "properties": {
+        "description": {
+          "description": "Optional schema description — extra LLM guidance OpenAI passes through to\nthe model. Promoted to the canonical `response_format` description.\n<https://platform.openai.com/docs/guides/structured-outputs>",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "description": "Schema name (OpenAI requires it).",
           "type": "string"

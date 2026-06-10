@@ -473,6 +473,7 @@ fn sample_prompt_with_schema() -> Prompt {
     Prompt {
         response_format: Some(ResponseFormat::JsonSchema {
             name: Some("weather".to_string()),
+            description: None,
             strict: Some(true),
             schema: serde_json::json!({
                 "type": "object",
@@ -498,6 +499,7 @@ fn chat_completions_inbound_promotes_json_schema_response_format() {
             "type": "json_schema",
             "json_schema": {
                 "name": "weather",
+                "description": "Structured weather report",
                 "strict": true,
                 "schema": {"type": "object", "properties": {"x": {"type": "string"}}}
             }
@@ -507,10 +509,13 @@ fn chat_completions_inbound_promotes_json_schema_response_format() {
     match prompt.response_format {
         Some(ResponseFormat::JsonSchema {
             name,
+            description,
             strict,
             schema,
         }) => {
             assert_eq!(name.as_deref(), Some("weather"));
+            // The OpenAI `json_schema.description` is promoted, not dropped.
+            assert_eq!(description.as_deref(), Some("Structured weather report"));
             assert_eq!(strict, Some(true));
             assert_eq!(schema["properties"]["x"]["type"], "string");
         }
@@ -562,6 +567,7 @@ fn chat_completions_outbound_supplies_default_name() {
     let prompt = Prompt {
         response_format: Some(ResponseFormat::JsonSchema {
             name: None,
+            description: None,
             strict: None,
             schema: serde_json::json!({"type": "object"}),
         }),
@@ -576,6 +582,12 @@ fn chat_completions_outbound_supplies_default_name() {
     assert!(
         rendered["response_format"]["json_schema"]
             .get("strict")
+            .is_none()
+    );
+    // description is likewise omitted, not emitted as null, when unset.
+    assert!(
+        rendered["response_format"]["json_schema"]
+            .get("description")
             .is_none()
     );
 }
@@ -758,6 +770,7 @@ fn messages_outbound_merges_format_and_effort_into_output_config() {
         },
         response_format: Some(ResponseFormat::JsonSchema {
             name: None,
+            description: None,
             strict: None,
             schema: serde_json::json!({"type": "object"}),
         }),
@@ -7249,4 +7262,271 @@ fn approval_types_serde_round_trip() {
         serde_json::from_value::<ToolResultOutput>(v).unwrap(),
         denied
     );
+}
+
+// ===== raw finish-reason preservation (V3 `finishReason.raw`) =====
+//
+// The canonical `FinishReason` enum maps several native reasons onto one
+// variant; for the lossy cases an adapter stashes the raw provider string under
+// `provider_metadata["<provider>"]["rawFinishReason"]` on parse and reads it
+// back on render so a same-protocol round-trip is byte-faithful. These tests
+// pin both halves (parse stashes, render restores) plus the negative case
+// (lossless reasons stash nothing).
+
+/// The `rawFinishReason` value stashed under `provider_id`, if any.
+fn raw_finish(result: &GenerateResult, provider_id: &str) -> Option<String> {
+    result
+        .provider_metadata
+        .get(provider_id)?
+        .as_object()?
+        .get("rawFinishReason")?
+        .as_str()
+        .map(str::to_string)
+}
+
+#[test]
+fn messages_stop_sequence_raw_round_trips() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    // `stop_sequence` maps to the unified `Stop`, which would otherwise render
+    // back as `end_turn` and lose the distinction.
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-7",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "stop_sequence",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert_eq!(result.finish_reason, Some(FinishReason::Stop));
+    assert_eq!(
+        raw_finish(&result, PROVIDER_ID_ANTHROPIC).as_deref(),
+        Some("stop_sequence"),
+        "lossy stop_reason is stashed for faithful re-render"
+    );
+    // Render restores the exact native value rather than the enum's `end_turn`.
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "msg_1")
+        .unwrap();
+    assert_eq!(rendered["stop_reason"], "stop_sequence");
+}
+
+#[test]
+fn messages_end_turn_raw_is_not_stashed() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    // `end_turn` → `Stop` → renders `end_turn`: lossless, so nothing is stashed.
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-7",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert_eq!(result.finish_reason, Some(FinishReason::Stop));
+    assert!(
+        raw_finish(&result, PROVIDER_ID_ANTHROPIC).is_none(),
+        "a lossless reason stashes no raw value"
+    );
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "msg_1")
+        .unwrap();
+    assert_eq!(rendered["stop_reason"], "end_turn");
+}
+
+#[test]
+fn generate_content_recitation_raw_round_trips() {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
+    // `RECITATION` collapses to `ContentFilter`, which renders back as `SAFETY`;
+    // the precise sub-reason must survive via the stash.
+    let body = serde_json::json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "hi"}]},
+            "finishReason": "RECITATION",
+            "index": 0,
+        }],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert_eq!(result.finish_reason, Some(FinishReason::ContentFilter));
+    assert_eq!(
+        raw_finish(&result, PROVIDER_ID_GOOGLE).as_deref(),
+        Some("RECITATION")
+    );
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "r1")
+        .unwrap();
+    assert_eq!(rendered["candidates"][0]["finishReason"], "RECITATION");
+}
+
+#[test]
+fn generate_content_stop_raw_is_not_stashed() {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
+    let body = serde_json::json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "hi"}]},
+            "finishReason": "STOP",
+            "index": 0,
+        }],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert_eq!(result.finish_reason, Some(FinishReason::Stop));
+    assert!(raw_finish(&result, PROVIDER_ID_GOOGLE).is_none());
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "r1")
+        .unwrap();
+    assert_eq!(rendered["candidates"][0]["finishReason"], "STOP");
+}
+
+#[test]
+fn chat_completions_function_call_raw_round_trips() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    // The legacy `function_call` reason maps to `ToolCalls`, which renders back
+    // as `tool_calls`; the original string must survive via the stash.
+    let body = serde_json::json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi"},
+            "finish_reason": "function_call",
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert_eq!(result.finish_reason, Some(FinishReason::ToolCalls));
+    assert_eq!(
+        raw_finish(&result, PROVIDER_ID_OPENAI).as_deref(),
+        Some("function_call")
+    );
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "chatcmpl-1")
+        .unwrap();
+    assert_eq!(rendered["choices"][0]["finish_reason"], "function_call");
+}
+
+#[test]
+fn chat_completions_stop_raw_is_not_stashed() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let body = serde_json::json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi"},
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    });
+    let result = adapter.parse_response(body).unwrap();
+    assert_eq!(result.finish_reason, Some(FinishReason::Stop));
+    assert!(raw_finish(&result, PROVIDER_ID_OPENAI).is_none());
+    let rendered = adapter
+        .render_response(&result, &sample_prompt(), "chatcmpl-1")
+        .unwrap();
+    assert_eq!(rendered["choices"][0]["finish_reason"], "stop");
+}
+
+// ===== response_format `description` (V3 `responseFormat.description`) =====
+
+#[test]
+fn responses_inbound_promotes_json_schema_description() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "input": "weather?",
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "weather",
+                "description": "Structured weather report",
+                "schema": {"type": "object"},
+            }
+        }
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    match prompt.response_format {
+        Some(ResponseFormat::JsonSchema {
+            name, description, ..
+        }) => {
+            assert_eq!(name.as_deref(), Some("weather"));
+            assert_eq!(description.as_deref(), Some("Structured weather report"));
+        }
+        other => panic!("expected JsonSchema, got {other:?}"),
+    }
+}
+
+#[test]
+fn responses_outbound_renders_json_schema_description() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let prompt = Prompt {
+        response_format: Some(ResponseFormat::JsonSchema {
+            name: Some("weather".to_string()),
+            description: Some("Structured weather report".to_string()),
+            strict: None,
+            schema: serde_json::json!({"type": "object"}),
+        }),
+        ..sample_prompt()
+    };
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(
+        rendered["text"]["format"]["description"],
+        "Structured weather report"
+    );
+}
+
+#[test]
+fn chat_completions_outbound_renders_json_schema_description() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let prompt = Prompt {
+        response_format: Some(ResponseFormat::JsonSchema {
+            name: Some("weather".to_string()),
+            description: Some("Structured weather report".to_string()),
+            strict: None,
+            schema: serde_json::json!({"type": "object"}),
+        }),
+        ..sample_prompt()
+    };
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(
+        rendered["response_format"]["json_schema"]["description"],
+        "Structured weather report"
+    );
+}
+
+#[test]
+fn json_schema_description_round_trips_openai_family() {
+    // A description survives a same-protocol render→parse hop on both OpenAI
+    // wires (Chat Completions and Responses), and is dropped on the
+    // Anthropic/Google wires that carry no schema description.
+    for proto in [ApiProtocol::ChatCompletions, ApiProtocol::Responses] {
+        let adapter = adapter_for(proto.clone());
+        let prompt = Prompt {
+            response_format: Some(ResponseFormat::JsonSchema {
+                name: Some("weather".to_string()),
+                description: Some("Structured weather report".to_string()),
+                strict: None,
+                schema: serde_json::json!({"type": "object"}),
+            }),
+            ..sample_prompt()
+        };
+        let rendered = adapter.render_request(&prompt).unwrap();
+        let back = adapter.parse_request(rendered).unwrap();
+        match back.response_format {
+            Some(ResponseFormat::JsonSchema { description, .. }) => {
+                assert_eq!(
+                    description.as_deref(),
+                    Some("Structured weather report"),
+                    "{proto:?} should round-trip the description"
+                );
+            }
+            other => panic!("{proto:?}: expected JsonSchema, got {other:?}"),
+        }
+    }
 }

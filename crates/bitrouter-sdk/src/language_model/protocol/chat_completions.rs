@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
     InboundAdapter, OutboundAdapter, PROVIDER_ID_OPENAI, SseEvent, StreamDecoder, StreamEncoder,
-    Transport, describe_deser_error,
+    Transport, describe_deser_error, rendered_finish_reason, stash_raw_finish_reason,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
@@ -97,6 +97,11 @@ pub enum ChatResponseFormat {
 pub struct ChatJsonSchema {
     /// Schema name (OpenAI requires it).
     name: String,
+    /// Optional schema description — extra LLM guidance OpenAI passes through to
+    /// the model. Promoted to the canonical `response_format` description.
+    /// <https://platform.openai.com/docs/guides/structured-outputs>
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     /// Strict-mode flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     strict: Option<bool>,
@@ -521,6 +526,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
             Some(ChatResponseFormat::JsonSchema { json_schema }) => {
                 Some(ResponseFormat::JsonSchema {
                     name: Some(json_schema.name),
+                    description: json_schema.description,
                     strict: json_schema.strict,
                     schema: json_schema.schema,
                 })
@@ -664,7 +670,10 @@ impl InboundAdapter for ChatCompletionsAdapter {
             serde_json::json!([{
                 "index": 0,
                 "message": serde_json::Value::Object(message),
-                "finish_reason": result.finish_reason.as_ref().map(finish_reason_str),
+                // Prefer the stashed raw finish reason (e.g. `function_call`)
+                // over the unified-enum mapping so a same-protocol round-trip
+                // reproduces the exact native value.
+                "finish_reason": rendered_finish_reason(result, PROVIDER_ID_OPENAI, finish_reason_str),
             }]),
         );
         if let Some(usage) = result.usage {
@@ -871,9 +880,12 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         // <https://platform.openai.com/docs/api-reference/chat/object> (`annotations`)
         content.extend(parse_chat_annotations(message.get("annotations")));
 
-        let finish_reason = choice
+        let raw_finish = choice
             .get("finish_reason")
             .and_then(|f| f.as_str())
+            .map(str::to_string);
+        let finish_reason = raw_finish
+            .as_deref()
             .and_then(parse_finish_reason)
             // A `refusal` field signals content-filter regardless of what
             // `finish_reason` claims, so the caller can surface the refusal.
@@ -904,6 +916,19 @@ impl OutboundAdapter for ChatCompletionsAdapter {
                 fp.clone(),
             );
         }
+        // Preserve the raw `finish_reason` when the unified enum would not
+        // re-render it verbatim — e.g. `function_call` (→ `tool_calls`) or an
+        // Anthropic-flavoured `end_turn` / `max_tokens` accepted here. A refusal
+        // override also diverges from the wire string. Stash it under the
+        // `openai` namespace so `render_response` reproduces the exact native
+        // value on a same-protocol hop.
+        stash_raw_finish_reason(
+            &mut provider_metadata,
+            PROVIDER_ID_OPENAI,
+            raw_finish.as_deref(),
+            finish_reason.as_ref(),
+            finish_reason_str,
+        );
 
         Ok(GenerateResult {
             content,
@@ -970,11 +995,15 @@ fn render_chat_tool(tool: &Tool) -> serde_json::Value {
 }
 
 /// Render a canonical [`ResponseFormat`] into Chat Completions' native
-/// `{ type: "json_schema", json_schema: { name, strict, schema } }`. OpenAI
-/// requires `name`; supply a stable default when the caller didn't set one.
+/// `{ type: "json_schema", json_schema: { name, description?, strict?, schema } }`.
+/// OpenAI requires `name`; supply a stable default when the caller didn't set
+/// one. `description` is emitted only when the canonical slot carries it (the
+/// OpenAI family is the only wire that transmits a schema description).
+/// <https://platform.openai.com/docs/guides/structured-outputs>
 fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
     let ResponseFormat::JsonSchema {
         name,
+        description,
         strict,
         schema,
     } = rf;
@@ -985,6 +1014,9 @@ fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
             .unwrap_or_else(|| "response".to_string())
             .into(),
     );
+    if let Some(description) = description {
+        js.insert("description".into(), description.clone().into());
+    }
     if let Some(strict) = strict {
         js.insert("strict".into(), (*strict).into());
     }

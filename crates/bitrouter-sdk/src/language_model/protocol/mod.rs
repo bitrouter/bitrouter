@@ -73,8 +73,67 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, GenerateResult, Prompt, RoutingTarget, StreamPart,
+    ApiProtocol, FinishReason, GenerateResult, Prompt, ProviderMetadata, RoutingTarget, StreamPart,
+    provider_namespace, set_provider_metadata,
 };
+
+/// The provider-metadata key under which a lossy finish-reason mapping stashes
+/// the **raw** provider finish reason. The canonical [`FinishReason`] enum maps
+/// several distinct native reasons onto one variant (Anthropic `stop_sequence`
+/// and `end_turn` both → `Stop`; Gemini `RECITATION` / `BLOCKLIST` /
+/// `PROHIBITED_CONTENT` and `SAFETY` all → `ContentFilter`; Chat Completions
+/// `function_call` → `ToolCalls`), so re-rendering from the enum alone would
+/// lose the exact native string on a same-protocol round-trip. Adapters stash
+/// the raw string here under their own provider id when (and only when) the
+/// mapping is lossy, and read it back on render.
+pub(crate) const RAW_FINISH_REASON: &str = "rawFinishReason";
+
+/// Record the raw provider finish-reason string under
+/// `meta[provider_id]["rawFinishReason"]` **iff** re-rendering the unified
+/// `finish` through `render` would not reproduce `raw` verbatim. Reasons that
+/// already round-trip losslessly (e.g. Chat Completions `stop`, Gemini `STOP`)
+/// store nothing, keeping the metadata map empty in the common case.
+///
+/// This is the single source of truth every adapter's `parse_response` uses to
+/// avoid the documented cross-mapping loss; the matching read is
+/// [`rendered_finish_reason`].
+pub(crate) fn stash_raw_finish_reason(
+    meta: &mut ProviderMetadata,
+    provider_id: &str,
+    raw: Option<&str>,
+    finish: Option<&FinishReason>,
+    render: impl Fn(&FinishReason) -> String,
+) {
+    if let (Some(raw), Some(finish)) = (raw, finish)
+        && render(finish) != raw
+    {
+        set_provider_metadata(
+            meta,
+            provider_id,
+            RAW_FINISH_REASON,
+            serde_json::Value::String(raw.to_string()),
+        );
+    }
+}
+
+/// Render a result's finish reason to its native wire string, preferring a
+/// stashed [`RAW_FINISH_REASON`] (under `provider_id`) over the enum mapping so
+/// a lossy parse round-trips byte-for-byte. Falls back to `render(finish)` when
+/// no raw was stashed (the lossless case) and to `None` when the result carries
+/// no finish reason at all.
+///
+/// The matching write is [`stash_raw_finish_reason`].
+pub(crate) fn rendered_finish_reason(
+    result: &GenerateResult,
+    provider_id: &str,
+    render: impl Fn(&FinishReason) -> String,
+) -> Option<String> {
+    let finish = result.finish_reason.as_ref()?;
+    let raw = provider_namespace(&result.provider_metadata, provider_id)
+        .and_then(|o| o.get(RAW_FINISH_REASON))
+        .and_then(|v| v.as_str());
+    Some(raw.map_or_else(|| render(finish), str::to_string))
+}
 
 pub mod chat_completions;
 pub mod generate_content;

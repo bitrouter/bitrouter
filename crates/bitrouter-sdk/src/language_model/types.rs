@@ -876,6 +876,17 @@ pub enum ResponseFormat {
         /// Messages and Generate Content.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        /// Optional schema description — the V3 `responseFormat.description`.
+        /// Used by some providers as extra LLM guidance for the structured
+        /// output. Carried by the OpenAI family only: Chat Completions'
+        /// `response_format.json_schema.description` and Responses'
+        /// `text.format.description`. Anthropic `output_config.format` and
+        /// Gemini `responseSchema` carry no schema-level description, so it is
+        /// `None` after a round-trip through those wires (the same
+        /// OpenAI-family-only treatment as [`name`](Self::JsonSchema::name)).
+        /// <https://platform.openai.com/docs/guides/structured-outputs>
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
         /// Strict-mode flag. Chat Completions / Responses only; Messages and Generate Content are always strict.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         strict: Option<bool>,
@@ -1100,6 +1111,23 @@ impl Prompt {
 
 /// Token usage counts. Counts use `0` (not `null`) for "known to be zero";
 /// missing usage is represented by `Option<Usage>` being `None` upstream.
+///
+/// Field-level parity with the Vercel AI SDK V3 `LanguageModelV3Usage`
+/// (`inputTokens` / `outputTokens` / `totalTokens` / `reasoningTokens` /
+/// `cachedInputTokens`): [`prompt_tokens`](Self::prompt_tokens) is V3
+/// `inputTokens`, [`completion_tokens`](Self::completion_tokens) is
+/// `outputTokens`, [`reasoning_tokens`](Self::reasoning_tokens) is
+/// `reasoningTokens`, and [`cache_read_tokens`](Self::cache_read_tokens) is
+/// `cachedInputTokens`. V3's `totalTokens` is **not** a stored field here: it is
+/// purely `prompt_tokens + completion_tokens` ([`total`](Self::total)) in this
+/// model — the cache buckets are folded into `prompt_tokens` at parse time (see
+/// the Messages `parse_usage`), so the derived total already equals every
+/// provider's reported total. Storing a separate `total_tokens` would be a
+/// redundant field that could disagree with its own components, so it is
+/// intentionally omitted. [`cache_write_tokens`](Self::cache_write_tokens) has
+/// no V3 counterpart (V3 folds cache-write into `inputTokens`); bitrouter keeps
+/// it distinct so a billing layer can meter cache creation separately.
+/// <https://github.com/vercel/ai/blob/main/packages/provider/src/language-model/v3/language-model-v3-usage.ts>
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     /// Prompt / input tokens.
@@ -1181,6 +1209,34 @@ pub struct StopDetails {
 }
 
 /// A complete non-streaming generation result.
+///
+/// **Relationship to the Vercel AI SDK V3 `LanguageModelV3GenerateResult`.** This
+/// type carries `content`, `usage`, `finishReason`, `providerMetadata`, and the
+/// `response.id` (as [`response_id`](Self::response_id)). Three V3 result members
+/// are intentionally **not** modeled as fields here, each for a concrete
+/// no-dead-code reason:
+///
+/// - **`warnings`** (V3 `Array<SharedV3Warning>` — settings a provider could not
+///   honor). bitrouter forwards provider requests **faithfully** and never gates
+///   or silently substitutes a setting, so the "unsupported setting" class barely
+///   arises; the residual cross-protocol degrades (e.g. a function `strict` flag
+///   dropped when routing to Anthropic/Gemini) happen inside
+///   [`render_request`](crate::language_model::protocol::OutboundAdapter::render_request),
+///   which returns only a request body and has **no channel** to the separate
+///   [`parse_response`](crate::language_model::protocol::OutboundAdapter::parse_response)
+///   that builds this result. Moreover none of the four client-facing response
+///   wires (Chat Completions / Messages / Responses / Generate Content) has a
+///   `warnings` slot in its **response** body, so a warning could never be
+///   emitted back to a client either. A `warnings` field would therefore be both
+///   unconstructed and unconsumed — pure dead weight — so it is omitted rather
+///   than added empty.
+/// - **`response.modelId`** and **`response.timestamp`**. The model id is already
+///   surfaced from the routed [`ExecutionResult::model_id`] (which observability
+///   stamps onto `gen_ai.response.model`), and Gemini's wire `modelVersion` rides
+///   [`Self::provider_metadata`]`["google"]`; no consumer needs the raw echoed
+///   `model`/`created` of the response body, so storing them here would be a dead
+///   field. Raw `response.headers` and `request.body` are out of scope (telemetry
+///   passthrough, not part of the canonical result).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GenerateResult {
     /// Ordered content blocks of the model's reply.
@@ -1207,8 +1263,22 @@ pub struct GenerateResult {
     /// Result-level namespaced provider metadata (V3 `providerMetadata` on the
     /// generation result). Carries response-level provider nuances that have no
     /// dedicated canonical field: OpenAI `system_fingerprint`
-    /// (`provider_metadata["openai"]["systemFingerprint"]`) and Gemini
-    /// `modelVersion` (`provider_metadata["google"]["modelVersion"]`).
+    /// (`provider_metadata["openai"]["systemFingerprint"]`), Gemini
+    /// `modelVersion` (`provider_metadata["google"]["modelVersion"]`), and the
+    /// **raw provider finish reason** under
+    /// `provider_metadata["<provider>"]["rawFinishReason"]` for finish reasons
+    /// that the unified [`FinishReason`] enum cannot reproduce on its own. The
+    /// canonical enum maps several native reasons onto one variant (Anthropic
+    /// `stop_sequence` and `end_turn` both → [`FinishReason::Stop`]; Gemini
+    /// `RECITATION` / `BLOCKLIST` / `PROHIBITED_CONTENT` and `SAFETY` all →
+    /// [`FinishReason::ContentFilter`]; Chat Completions `function_call` →
+    /// [`FinishReason::ToolCalls`]), so rendering from the enum alone would lose
+    /// the exact native string on a same-protocol round-trip. The lossy
+    /// mappings stash the raw string here at parse time, and each adapter's
+    /// `render_response` reads it back (preferring it over the enum mapping) so
+    /// the native finish reason survives byte-for-byte — and so observability
+    /// can surface the precise upstream reason. Reasons that already map
+    /// losslessly (e.g. `STOP`, `MAX_TOKENS`) store nothing.
     /// <https://platform.openai.com/docs/api-reference/chat/object>
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_metadata: ProviderMetadata,
@@ -1492,6 +1562,7 @@ mod tests {
         let mut p = bare_prompt();
         p.response_format = Some(ResponseFormat::JsonSchema {
             name: None,
+            description: None,
             strict: None,
             schema: serde_json::json!({ "type": "object" }),
         });
@@ -1526,6 +1597,7 @@ mod tests {
         let mut p = bare_prompt();
         p.response_format = Some(ResponseFormat::JsonSchema {
             name: None,
+            description: None,
             strict: None,
             schema: serde_json::json!({ "type": "object" }),
         });

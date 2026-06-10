@@ -932,6 +932,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         params: GenerationParams::default(),
         response_format: Some(ResponseFormat::JsonSchema {
             name: None,
+            description: None,
             strict: None,
             schema: serde_json::json!({"type": "object"}),
         }),
