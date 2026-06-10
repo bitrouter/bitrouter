@@ -8,7 +8,11 @@
 [![Telegram](https://img.shields.io/badge/Telegram-26A5E4?logo=telegram&logoColor=white)](https://t.me/bitrouterai)
 [![Docs](https://img.shields.io/badge/Docs-bitrouter.ai-green)](https://bitrouter.ai)
 
-Agent-native LLM router that optimizes your agent with every run. Zero harness changes — every model call reliable, traceable, secure, and cost-effective.
+Optimize your agent for cost and performance — with every run.
+An open-source LLM router that sends routine calls to open models and pays frontier prices only for the calls that earn them. Zero harness changes.
+
+> **Not every agent run needs Claude Opus 4.8 — or even Claude 5.**
+> \~80% of agent workloads run just fine on cheaper open-source models without sacrificing performance. Use BitRouter alongside Claude Code (or any coding agent) to reserve your subscription budget for the calls that actually need it. **Enjoy 25% off all open-source model calls on BitRouter Cloud today.**
 
 ## What it does
 
@@ -20,6 +24,19 @@ BitRouter is a local proxy that sits between your agent and every upstream LLM p
 ```
 
 That one env-var change is the only harness modification required. BitRouter auto-detects every API key in your environment and makes those providers immediately routable — no config file needed to get started.
+
+## Before & After
+
+Without BitRouter, your coding agent routes every call — file reads, summaries, tool calls, scaffolding — through the same frontier model. With BitRouter, routine work goes to open models automatically; frontier models get invoked only when they're justified.
+
+| | Without BitRouter | With BitRouter |
+| --- | --- | --- |
+| **Routing** | All calls → one frontier model | Routine calls → open models; complex calls → frontier |
+| **Cost** | Frontier pricing on every request | Frontier prices only where they're earned |
+| **Setup change** | — | One env var |
+| **Code change** | — | None |
+
+<!-- Screenshots coming — will be added here -->
 
 ## Install
 
@@ -143,7 +160,9 @@ Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out 
 | Openclaw       | ✅     | Native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw)      |
 | Pi-Agent       | ✅     | [Model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) |
 
-**Building an agent runtime?** We partner with teams on native integrations — email [contact@bitrouter.ai](mailto:contact@bitrouter.ai) or [book a meeting with the founder](https://cal.com/kelsenliu/founder-meeting).
+**Building an agent runtime?** We partner with teams on native integrations — email [contact@bitrouter.ai](mailto:contact@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu).
+
+**Building an open-source agent?** Reach out at [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu) — we offer **up to 50% off** for you and your community.
 
 The full provider and harness catalog lives at [github.com/bitrouter/provider-registry](https://github.com/bitrouter/provider-registry).
 
