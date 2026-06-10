@@ -58,7 +58,7 @@ claude -p "$(cat task.md)" \
   --bare \                                   # skip hooks/plugins/CLAUDE.md/keychain — a lean worker
   --output-format stream-json \
   --permission-mode acceptEdits \
-  --allowed-tools "Read,Edit,Bash,Grep,Glob" \
+  --allowed-tools "Read,Write,Edit,Bash,Grep,Glob" \
   --append-system-prompt "$(cat role-prompts/implementer.md)"
 ```
 

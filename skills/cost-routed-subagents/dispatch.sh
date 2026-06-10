@@ -39,7 +39,7 @@ Options:
                            spec-reviewer, quality-reviewer) or a file path. Default: implementer.
   --dir <path>             Working directory for the worker (also passed via --add-dir).
                            Default: current directory. Use a git worktree for isolation.
-  --allowed-tools <csv>    Tools the worker may use. Default: Read,Edit,Bash,Grep,Glob.
+  --allowed-tools <csv>    Tools the worker may use. Default: Read,Write,Edit,Bash,Grep,Glob.
   --permission-mode <m>    Claude Code permission mode. Default: acceptEdits.
   --output-format <f>      stream-json | json | text. Default: stream-json.
   --timeout <secs>         Wall-clock timeout for the worker. Default: none.
@@ -65,7 +65,7 @@ die() { echo "dispatch.sh: $*" >&2; exit 2; }
 require2() { [[ $# -ge 2 ]] || die "$1 needs a value."; }
 
 # --- parse args ---------------------------------------------------------------
-TASK="" TIER="" MODEL="" ROLE="implementer" DIR="" ALLOWED_TOOLS="Read,Edit,Bash,Grep,Glob"
+TASK="" TIER="" MODEL="" ROLE="implementer" DIR="" ALLOWED_TOOLS="Read,Write,Edit,Bash,Grep,Glob"
 PERM_MODE="acceptEdits" OUTPUT_FORMAT="stream-json" TIMEOUT="" DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
