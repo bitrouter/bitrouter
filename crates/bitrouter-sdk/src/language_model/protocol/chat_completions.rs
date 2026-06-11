@@ -20,7 +20,7 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
+    ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice, Usage,
 };
 
 /// The Chat Completions inbound + outbound protocol adapter.
@@ -295,6 +295,11 @@ impl InboundAdapter for ChatCompletionsAdapter {
             None => None,
         };
 
+        // Promote a known-shape `tool_choice` into the canonical slot so it can
+        // translate across protocols (the v0 #547 bug: Anthropic's object form
+        // reaching an OpenAI upstream). Unmapped shapes stay in `extra`.
+        let tool_choice = parse_chat_tool_choice(&mut extra);
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -305,12 +310,13 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_tokens.or(req.max_completion_tokens),
                 reasoning_effort: req.reasoning_effort,
-                // Every Chat Completions field without a typed slot — tool_choice,
-                // stop / stop_sequences, seed, n, presence/frequency_penalty,
+                // Every Chat Completions field without a typed slot — stop /
+                // stop_sequences, seed, n, presence/frequency_penalty,
                 // logit_bias, … — rides in `extra` and is splatted back on render.
                 extra,
             },
             response_format,
+            tool_choice,
             stream: req.stream,
         })
     }
@@ -452,9 +458,15 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         if let Some(rf) = &prompt.response_format {
             req.insert("response_format".into(), render_chat_response_format(rf));
         }
+        // Render the canonical tool_choice into Chat Completions' native shape.
+        // Inserted before the extras splat so it wins over any leftover
+        // `tool_choice` (matching how response_format is handled).
+        if let Some(tc) = &prompt.tool_choice {
+            req.insert("tool_choice".into(), render_chat_tool_choice(tc));
+        }
         // Splat the extras back into the outbound request — this is how
-        // `tool_choice`, `stop`, `seed`, etc. survive the round trip. Typed
-        // fields above win over any same-named extra.
+        // `stop`, `seed`, `parallel_tool_calls`, etc. survive the round trip.
+        // Typed fields above win over any same-named extra.
         for (k, v) in &prompt.params.extra {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -614,6 +626,52 @@ fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
     }
     js.insert("schema".into(), schema.clone());
     serde_json::json!({ "type": "json_schema", "json_schema": serde_json::Value::Object(js) })
+}
+
+/// Promote a Chat Completions `tool_choice` into the canonical [`ToolChoice`],
+/// removing it from `extra` when it maps to a known shape. Unmapped shapes
+/// (e.g. `{ "type": "allowed_tools", … }`) are left untouched so they pass
+/// through opaquely.
+/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tool_choice>
+fn parse_chat_tool_choice(extra: &mut HashMap<String, serde_json::Value>) -> Option<ToolChoice> {
+    let parsed = match extra.get("tool_choice")? {
+        serde_json::Value::String(s) => match s.as_str() {
+            "auto" => Some(ToolChoice::Auto),
+            "required" => Some(ToolChoice::Required),
+            "none" => Some(ToolChoice::None),
+            _ => None,
+        },
+        serde_json::Value::Object(o)
+            if o.get("type").and_then(|t| t.as_str()) == Some("function") =>
+        {
+            o.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|name| ToolChoice::Tool {
+                    name: name.to_string(),
+                })
+        }
+        _ => None,
+    };
+    if parsed.is_some() {
+        extra.remove("tool_choice");
+    }
+    parsed
+}
+
+/// Render the canonical [`ToolChoice`] into Chat Completions' native shape: the
+/// bare strings `auto` / `required` / `none`, or a `{ type: "function",
+/// function: { name } }` object to force one tool.
+fn render_chat_tool_choice(tc: &ToolChoice) -> serde_json::Value {
+    match tc {
+        ToolChoice::Auto => serde_json::json!("auto"),
+        ToolChoice::Required => serde_json::json!("required"),
+        ToolChoice::None => serde_json::json!("none"),
+        ToolChoice::Tool { name } => serde_json::json!({
+            "type": "function",
+            "function": { "name": name },
+        }),
+    }
 }
 
 #[async_trait]

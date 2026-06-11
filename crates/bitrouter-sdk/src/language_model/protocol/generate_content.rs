@@ -20,7 +20,7 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
+    ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice, Usage,
 };
 
 /// The Generate Content protocol adapter.
@@ -230,13 +230,72 @@ fn finish_reason_str(r: &FinishReason) -> String {
     }
 }
 
+/// Promote Google's `toolConfig.functionCallingConfig` into the canonical
+/// [`ToolChoice`], removing the function-calling config (and `toolConfig` itself
+/// when it becomes empty) from the top-level `extra` map. `ANY` with exactly one
+/// `allowedFunctionNames` maps to a forced single tool; `ANY` otherwise to
+/// `Required`. Unmapped modes are left untouched.
+/// <https://ai.google.dev/api/caching#FunctionCallingConfig>
+fn parse_gc_tool_choice(
+    extra: &mut std::collections::HashMap<String, serde_json::Value>,
+) -> Option<ToolChoice> {
+    let tool_config = extra.get_mut("toolConfig")?.as_object_mut()?;
+    let fcc = tool_config.get("functionCallingConfig")?.as_object()?;
+    let mode = fcc
+        .get("mode")
+        .and_then(|m| m.as_str())
+        .map(|s| s.to_ascii_uppercase());
+    let names: Vec<String> = fcc
+        .get("allowedFunctionNames")
+        .and_then(|n| n.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let parsed = match mode.as_deref() {
+        Some("AUTO") => Some(ToolChoice::Auto),
+        Some("NONE") => Some(ToolChoice::None),
+        Some("ANY") if names.len() == 1 => Some(ToolChoice::Tool {
+            name: names[0].clone(),
+        }),
+        Some("ANY") => Some(ToolChoice::Required),
+        _ => None,
+    };
+    let drop_tool_config = if parsed.is_some() {
+        tool_config.remove("functionCallingConfig");
+        tool_config.is_empty()
+    } else {
+        false
+    };
+    if drop_tool_config {
+        extra.remove("toolConfig");
+    }
+    parsed
+}
+
+/// Render the canonical [`ToolChoice`] into Google's `functionCallingConfig`
+/// body (`{ mode, allowedFunctionNames? }`).
+fn render_gc_function_calling_config(tc: &ToolChoice) -> serde_json::Value {
+    match tc {
+        ToolChoice::Auto => serde_json::json!({ "mode": "AUTO" }),
+        ToolChoice::Required => serde_json::json!({ "mode": "ANY" }),
+        ToolChoice::None => serde_json::json!({ "mode": "NONE" }),
+        ToolChoice::Tool { name } => serde_json::json!({
+            "mode": "ANY",
+            "allowedFunctionNames": [name],
+        }),
+    }
+}
+
 impl InboundAdapter for GenerateContentAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::GenerateContent
     }
 
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
-        let req: GenerateContentRequest = serde_json::from_value(body.clone())
+        let mut req: GenerateContentRequest = serde_json::from_value(body.clone())
             .map_err(|e| describe_deser_error("GenerateContentRequest", &e, &body))?;
 
         let system = req.system_instruction.as_ref().map(|si| {
@@ -327,6 +386,10 @@ impl InboundAdapter for GenerateContentAdapter {
             }
             None => (GenerationParams::default(), None),
         };
+        // Promote `toolConfig.functionCallingConfig` into the canonical
+        // tool_choice slot so it translates across protocols; the rest of
+        // `toolConfig` (and other top-level extras) still ride through.
+        let tool_choice = parse_gc_tool_choice(&mut req.extra);
         // Preserve top-level Google fields (`toolConfig`, `safetySettings`,
         // `cachedContent`, …) across the round-trip. They're namespaced so they
         // don't collide with `generationConfig`-level extras above and only the
@@ -345,6 +408,7 @@ impl InboundAdapter for GenerateContentAdapter {
             tools,
             params,
             response_format,
+            tool_choice,
             stream: req.stream,
         })
     }
@@ -445,6 +509,21 @@ impl OutboundAdapter for GenerateContentAdapter {
         {
             for (k, v) in top {
                 req.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+        // Render the canonical tool_choice into Google's
+        // `toolConfig.functionCallingConfig`, merging into any lifted `toolConfig`
+        // (e.g. a passed-through `retrievalConfig`) and overriding its
+        // function-calling config so the canonical slot wins.
+        if let Some(tc) = &prompt.tool_choice {
+            let tool_config = req
+                .entry("toolConfig".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(obj) = tool_config.as_object_mut() {
+                obj.insert(
+                    "functionCallingConfig".into(),
+                    render_gc_function_calling_config(tc),
+                );
             }
         }
         Ok(serde_json::Value::Object(req))

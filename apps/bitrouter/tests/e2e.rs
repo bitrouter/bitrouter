@@ -79,6 +79,7 @@ fn chat_prompt() -> Prompt {
         tools: Vec::new(),
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     }
 }

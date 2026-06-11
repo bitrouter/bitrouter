@@ -190,6 +190,45 @@ pub enum ResponseFormat {
     },
 }
 
+/// Constraint on whether — and which — tool the model may call.
+///
+/// Like [`ResponseFormat`], each inbound adapter promotes the provider-native
+/// `tool_choice` (Generate Content: `tool_config.function_calling_config`) into
+/// this typed slot at `parse_request` time, and each outbound adapter renders it
+/// back into the upstream's native shape on `render_request`. Cross-protocol
+/// routing therefore translates automatically: an Anthropic Messages client
+/// sending `tool_choice: {"type":"auto"}` against an OpenAI Chat Completions
+/// upstream emits the bare string `"auto"` — not the object form, which OpenAI
+/// rejects (the v0 #547 bug). Provider-specific shapes a given adapter can't map
+/// (e.g. Responses hosted-tool selectors) are left in `extra` and pass through
+/// opaquely, exactly as before.
+///
+/// Parallel-tool-use control is a distinct concern, not part of this slot. The
+/// Messages adapter translates Anthropic's nested `disable_parallel_tool_use`
+/// to/from the protocol-neutral top-level `parallel_tool_calls` (the shape Chat
+/// Completions / Responses use), which rides `extra`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolChoice {
+    /// The model decides freely whether to call a tool. Chat Completions /
+    /// Responses `"auto"`, Messages `{"type":"auto"}`, Generate Content `AUTO`.
+    Auto,
+    /// The model must call at least one tool. Chat Completions / Responses
+    /// `"required"`, Messages `{"type":"any"}`, Generate Content `ANY`.
+    Required,
+    /// The model must not call any tool. Chat Completions / Responses `"none"`,
+    /// Messages `{"type":"none"}`, Generate Content `NONE`.
+    None,
+    /// The model must call exactly this tool. Chat Completions
+    /// `{"type":"function","function":{"name":…}}`, Responses
+    /// `{"type":"function","name":…}`, Messages `{"type":"tool","name":…}`,
+    /// Generate Content `ANY` + `allowedFunctionNames`.
+    Tool {
+        /// The tool the model is forced to call.
+        name: String,
+    },
+}
+
 /// An optional inference feature a request may require and a provider may
 /// advertise. Capabilities are API-agnostic: the same capability maps to a
 /// different wire parameter in each protocol (structured outputs is Chat
@@ -273,6 +312,11 @@ pub struct Prompt {
     /// adapters render it back natively.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
+    /// Constraint on whether / which tool the model may call. Inbound adapters
+    /// promote the provider-native `tool_choice` into this slot; outbound
+    /// adapters render it back natively, so it translates across protocols.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
     /// Whether the caller requested a streaming response.
     pub stream: bool,
 }
@@ -655,6 +699,7 @@ mod tests {
             tools: vec![],
             params: GenerationParams::default(),
             response_format: None,
+            tool_choice: None,
             stream: false,
         }
     }

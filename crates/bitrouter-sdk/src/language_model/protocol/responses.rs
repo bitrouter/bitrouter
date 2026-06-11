@@ -29,7 +29,7 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, Usage,
+    ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice, Usage,
 };
 
 /// The Responses protocol adapter.
@@ -365,6 +365,11 @@ impl InboundAdapter for ResponsesAdapter {
             None => None,
         };
 
+        // Promote a known-shape `tool_choice` into the canonical slot so it can
+        // translate across protocols; unmapped shapes (hosted-tool selectors,
+        // `allowed_tools`, …) stay in `extra` and pass through.
+        let tool_choice = parse_responses_tool_choice(&mut extra);
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -376,12 +381,13 @@ impl InboundAdapter for ResponsesAdapter {
                 max_tokens: req.max_output_tokens,
                 reasoning_effort: req.reasoning.and_then(|r| r.effort),
                 // Splat every Responses-API field without a typed slot —
-                // tool_choice, parallel_tool_calls, max_tool_calls, metadata,
-                // include[], previous_response_id, store, stream_options, … —
-                // into `extra` so render_request can put them back.
+                // parallel_tool_calls, max_tool_calls, metadata, include[],
+                // previous_response_id, store, stream_options, … — into `extra`
+                // so render_request can put them back.
                 extra,
             },
             response_format,
+            tool_choice,
             stream: req.stream,
         })
     }
@@ -488,9 +494,13 @@ impl OutboundAdapter for ResponsesAdapter {
             text.insert("format".into(), render_responses_response_format(rf));
             req.insert("text".into(), serde_json::Value::Object(text));
         }
-        // Splat Responses-API extras (tool_choice, parallel_tool_calls,
-        // metadata, include, …) back onto the outbound request. Typed fields
-        // win.
+        // Render the canonical tool_choice into Responses' native shape, before
+        // the extras splat so it wins over any leftover `tool_choice`.
+        if let Some(tc) = &prompt.tool_choice {
+            req.insert("tool_choice".into(), render_responses_tool_choice(tc));
+        }
+        // Splat Responses-API extras (parallel_tool_calls, metadata, include, …)
+        // back onto the outbound request. Typed fields win.
         for (k, v) in &prompt.params.extra {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -605,6 +615,51 @@ fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
     }
     obj.insert("schema".into(), schema.clone());
     serde_json::Value::Object(obj)
+}
+
+/// Promote a Responses `tool_choice` into the canonical [`ToolChoice`], removing
+/// it from `extra` when it maps to a known shape. Hosted-tool / `allowed_tools`
+/// selectors are left untouched so they pass through opaquely.
+/// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tool_choice>
+fn parse_responses_tool_choice(
+    extra: &mut std::collections::HashMap<String, serde_json::Value>,
+) -> Option<ToolChoice> {
+    let parsed = match extra.get("tool_choice")? {
+        serde_json::Value::String(s) => match s.as_str() {
+            "auto" => Some(ToolChoice::Auto),
+            "required" => Some(ToolChoice::Required),
+            "none" => Some(ToolChoice::None),
+            _ => None,
+        },
+        serde_json::Value::Object(o)
+            if o.get("type").and_then(|t| t.as_str()) == Some("function") =>
+        {
+            // Responses carries the forced function name flat on the object,
+            // not nested under `function` as Chat Completions does.
+            o.get("name")
+                .and_then(|n| n.as_str())
+                .map(|name| ToolChoice::Tool {
+                    name: name.to_string(),
+                })
+        }
+        _ => None,
+    };
+    if parsed.is_some() {
+        extra.remove("tool_choice");
+    }
+    parsed
+}
+
+/// Render the canonical [`ToolChoice`] into Responses' native shape: the bare
+/// strings `auto` / `required` / `none`, or `{ type: "function", name }` to
+/// force one tool (flat `name`, unlike Chat Completions' nested form).
+fn render_responses_tool_choice(tc: &ToolChoice) -> serde_json::Value {
+    match tc {
+        ToolChoice::Auto => serde_json::json!("auto"),
+        ToolChoice::Required => serde_json::json!("required"),
+        ToolChoice::None => serde_json::json!("none"),
+        ToolChoice::Tool { name } => serde_json::json!({ "type": "function", "name": name }),
+    }
 }
 
 #[async_trait]

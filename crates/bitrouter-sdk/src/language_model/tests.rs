@@ -43,6 +43,7 @@ fn request() -> PipelineRequest {
         tools: Vec::new(),
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     PipelineRequest::new("test-model", CallerContext::new("k1", "u1"), prompt)
@@ -921,6 +922,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
             strict: None,
             schema: serde_json::json!({"type": "object"}),
         }),
+        tool_choice: None,
         stream: false,
     };
     let req = PipelineRequest::new("m", CallerContext::new("k", "u"), prompt.clone());

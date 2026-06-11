@@ -28,6 +28,7 @@ fn prompt(text: &str, stream: bool) -> Prompt {
         tools: Vec::new(),
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream,
     }
 }
