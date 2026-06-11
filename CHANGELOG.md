@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.13](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.12...v1.0.0-alpha.13)
+
+
+### ⛰️ Features
+
+- *(language-model)* LanguageModelV3 parity for the canonical IR ([#548](https://github.com/bitrouter/bitrouter/pull/548)) - ([610ee27](https://github.com/bitrouter/bitrouter/commit/610ee2788f0496cf7268dd5244b7676543de9303))
+- *(metering)* Context-tier ("staged") pricing ([#551](https://github.com/bitrouter/bitrouter/pull/551)) - ([0464703](https://github.com/bitrouter/bitrouter/commit/04647033f11f3e908178b354482bd1333ee289eb))
+
+### 🐛 Bug Fixes
+
+- *(protocol)* Don't fragment streamed tool calls ([#552](https://github.com/bitrouter/bitrouter/pull/552)) - ([e140b2f](https://github.com/bitrouter/bitrouter/commit/e140b2fb105de59b600104ed0f1019cad66d1cc9))
+
+
 ## [1.0.0-alpha.12](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.11...v1.0.0-alpha.12)
 
 
