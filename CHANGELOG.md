@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.12](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.11...v1.0.0-alpha.12)
+
+
+### ⛰️ Features
+
+- *(mcp)* Origin MCP server for BitRouter ([#526](https://github.com/bitrouter/bitrouter/pull/526)) ([#530](https://github.com/bitrouter/bitrouter/pull/530)) - ([aa71d4c](https://github.com/bitrouter/bitrouter/commit/aa71d4c3bf571cae64c2a50ed1bf54603328f8f2))
+
+### 🐛 Bug Fixes
+
+- *(protocol)* Translate tool_choice across protocols ([#549](https://github.com/bitrouter/bitrouter/pull/549)) - ([8e60ce5](https://github.com/bitrouter/bitrouter/commit/8e60ce5e9e855d13f9d82e1381bafd4fcd0564bf))
+
+
 ## [1.0.0-alpha.11](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.10...v1.0.0-alpha.11)
 
 
