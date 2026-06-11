@@ -2967,3 +2967,31 @@ fn unmapped_tool_choice_passes_through_unchanged() {
         "an unmapped tool_choice must pass through verbatim"
     );
 }
+
+/// Generate Content's `allowedFunctionNames` is a restricting *set*; the
+/// canonical slot only models the single-tool case. A multi-name `ANY` (or an
+/// `AUTO`/`NONE` carrying names) must therefore be left in `extra` and pass
+/// through verbatim — never narrowed to a bare `Required`/`Auto` that would
+/// silently widen the constraint.
+#[test]
+fn gc_tool_choice_with_restricting_set_passes_through() {
+    let gc = adapter_for(ApiProtocol::GenerateContent);
+    let cases = [
+        serde_json::json!({ "mode": "ANY", "allowedFunctionNames": ["A", "B"] }),
+        serde_json::json!({ "mode": "AUTO", "allowedFunctionNames": ["A"] }),
+    ];
+    for fcc in cases {
+        let mut body = minimal_request(ApiProtocol::GenerateContent);
+        body["toolConfig"] = serde_json::json!({ "functionCallingConfig": fcc });
+        let prompt = gc.parse_request(body.clone()).unwrap();
+        assert_eq!(
+            prompt.tool_choice, None,
+            "a restricting-set config must not be force-fit into the canonical slot: {fcc}"
+        );
+        let rendered = gc.render_request(&prompt).unwrap();
+        assert_eq!(
+            rendered["toolConfig"], body["toolConfig"],
+            "a restricting-set toolConfig must pass through verbatim: {fcc}"
+        );
+    }
+}

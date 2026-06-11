@@ -233,8 +233,12 @@ fn finish_reason_str(r: &FinishReason) -> String {
 /// Promote Google's `toolConfig.functionCallingConfig` into the canonical
 /// [`ToolChoice`], removing the function-calling config (and `toolConfig` itself
 /// when it becomes empty) from the top-level `extra` map. `ANY` with exactly one
-/// `allowedFunctionNames` maps to a forced single tool; `ANY` otherwise to
-/// `Required`. Unmapped modes are left untouched.
+/// `allowedFunctionNames` maps to a forced single tool; `ANY` with none maps to
+/// `Required`. `allowedFunctionNames` is a restricting set with no canonical
+/// equivalent beyond that single-tool case, so shapes that would lose it — `ANY`
+/// with two or more names, or `AUTO`/`NONE` carrying names — are left untouched
+/// to pass through verbatim rather than silently widened. Unmapped modes are
+/// likewise left untouched.
 /// <https://ai.google.dev/api/caching#FunctionCallingConfig>
 fn parse_gc_tool_choice(
     extra: &mut std::collections::HashMap<String, serde_json::Value>,
@@ -255,12 +259,12 @@ fn parse_gc_tool_choice(
         })
         .unwrap_or_default();
     let parsed = match mode.as_deref() {
-        Some("AUTO") => Some(ToolChoice::Auto),
-        Some("NONE") => Some(ToolChoice::None),
+        Some("AUTO") if names.is_empty() => Some(ToolChoice::Auto),
+        Some("NONE") if names.is_empty() => Some(ToolChoice::None),
+        Some("ANY") if names.is_empty() => Some(ToolChoice::Required),
         Some("ANY") if names.len() == 1 => Some(ToolChoice::Tool {
             name: names[0].clone(),
         }),
-        Some("ANY") => Some(ToolChoice::Required),
         _ => None,
     };
     let drop_tool_config = if parsed.is_some() {
