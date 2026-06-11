@@ -1384,14 +1384,16 @@ impl StreamDecoder for GenerateContentStreamDecoder {
     }
 }
 
-/// Generate Content `streamGenerateContent` SSE encoder — each canonical part becomes one
-/// `GenerateContentResponse` chunk.
-/// Generate Content has no incremental tool-argument frame — a `functionCall`
-/// part carries the whole `{name, args}` at once. So unlike Chat Completions /
-/// Responses (which stream argument deltas), this encoder must BUFFER a tool
-/// call and emit it as one chunk once complete. Accumulating also makes it
-/// robust to upstreams that re-send `name:""` on every continuation chunk
-/// (which would otherwise emit one broken `functionCall` per fragment).
+/// Generate Content `streamGenerateContent` SSE encoder — most canonical parts
+/// become one `GenerateContentResponse` chunk each.
+///
+/// Tool calls are the exception: Generate Content has no incremental
+/// tool-argument frame — a `functionCall` part carries the whole `{name, args}`
+/// at once. So unlike Chat Completions / Responses (which stream argument
+/// deltas), this encoder must BUFFER a tool call and emit it as one chunk once
+/// complete. Accumulating also makes it robust to upstreams that re-send
+/// `name:""` on every continuation chunk (which would otherwise emit one broken
+/// `functionCall` per fragment).
 #[derive(Default)]
 struct GenerateContentStreamEncoder {
     /// `(name, accumulated raw-JSON arguments)` of the tool call awaiting emission.
@@ -1585,7 +1587,9 @@ impl StreamEncoder for GenerateContentStreamEncoder {
 
     fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
         // Generate Content surfaces a mid-stream error as a chunk carrying an `error`
-        // object (mirrors the non-streaming error envelope).
+        // object (mirrors the non-streaming error envelope). Any buffered tool call
+        // is intentionally dropped — a partial `functionCall` must not be emitted
+        // alongside an error.
         vec![SseFrame::Event {
             event: None,
             data: serde_json::json!({
