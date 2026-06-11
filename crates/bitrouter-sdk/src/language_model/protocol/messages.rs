@@ -2613,10 +2613,14 @@ impl StreamEncoder for MessagesStreamEncoder {
                 name,
                 arguments,
             } => {
-                if let Some(name) = name {
+                if let Some(name) = name.as_deref().filter(|n| !n.is_empty()) {
                     // A new tool call always opens its own block, even if a
                     // tool_use block was already open (consecutive tool calls
-                    // are distinct blocks). Force-close, then open.
+                    // are distinct blocks). Force-close, then open. Only a
+                    // *non-empty* name opens a block: some upstreams re-send
+                    // `name:""` on every argument-continuation delta, and
+                    // treating `Some("")` as a new call would fragment one tool
+                    // call into one empty-named `tool_use` block per delta.
                     self.close_block(&mut frames);
                     self.ensure_block_open(&mut frames, EncoderBlockKind::ToolUse);
                     frames.push(Self::ev(

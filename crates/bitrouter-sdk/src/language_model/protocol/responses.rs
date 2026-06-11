@@ -2795,11 +2795,16 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 name,
                 arguments,
             } => {
-                // A delta carrying a `name` starts a new function-call
-                // item. `open_tool_item` closes any previously-open item
-                // (reasoning / message / prior tool) first, so each tool
-                // call lands in its own output slot.
-                if let Some(name) = name {
+                // A delta carrying a *non-empty* `name` starts a new
+                // function-call item. `open_tool_item` closes any previously-open
+                // item (reasoning / message / prior tool) first, so each tool
+                // call lands in its own output slot. An empty name is NOT a new
+                // call: some upstreams re-send `name:""` on every
+                // argument-continuation delta, and treating `Some("")` as a new
+                // call fragments one tool call into one broken item per delta
+                // (empty name + partial args) — which Codex rejects as
+                // "unsupported call" / unparsable arguments.
+                if let Some(name) = name.as_deref().filter(|n| !n.is_empty()) {
                     self.open_tool_item(&mut frames, id, name);
                 }
                 if !arguments.is_empty() {

@@ -9013,3 +9013,392 @@ fn json_schema_description_round_trips_openai_family() {
         }
     }
 }
+
+// ===== regression: empty-string continuation tool-name fragments tool calls =====
+//
+// Some OpenAI-compatible upstreams (e.g. Kimi / DeepSeek serving stacks that
+// emit `functions.<name>:<idx>` tool ids) re-send `"function":{"name":""}` on
+// every argument-continuation chunk. Treating that empty name as a *new* tool
+// call fragmented one call into one broken `function_call` item per delta
+// (item 0: real name + empty args; the rest: empty name + a partial-args
+// fragment), so a Responses-API client rejected every item ("unsupported call"
+// / "EOF while parsing function arguments") and looped forever.
+
+/// Encode a canonical stream into Responses SSE and return the `function_call`
+/// items present in the terminal `response.completed.output` array.
+fn responses_encode_tool_items(parts: &[StreamPart]) -> Vec<serde_json::Value> {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut encoder = adapter.stream_encoder("resp_repro", "kimi");
+    let mut frames = Vec::new();
+    for p in parts {
+        frames.extend(encoder.encode(p).unwrap());
+    }
+    let completed = frames
+        .iter()
+        .find_map(|f| match f {
+            SseFrame::Event { event, data } if event.as_deref() == Some("response.completed") => {
+                Some(serde_json::from_str::<serde_json::Value>(data).unwrap())
+            }
+            _ => None,
+        })
+        .expect("response.completed present");
+    completed["response"]["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["type"] == "function_call")
+        .cloned()
+        .collect()
+}
+
+/// Decoder normalizes an empty continuation `name` to `None` so the canonical
+/// IR never carries `Some("")` as a (non-)name announcement.
+#[test]
+fn chat_decode_empty_continuation_name_normalized_to_none() {
+    let parts = decode_stream(
+        ApiProtocol::ChatCompletions,
+        &[
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"functions.exec_command:0","type":"function",
+                     "function":{"name":"exec_command","arguments":""}}]}}]}),
+            ),
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"functions.exec_command:0","type":"function",
+                     "function":{"name":"","arguments":"{\"cmd\":\""}}]}}]}),
+            ),
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"functions.exec_command:0","type":"function",
+                     "function":{"name":"","arguments":"ls\"}"}}]}}]}),
+            ),
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ),
+        ],
+    );
+    let names: Vec<Option<String>> = parts
+        .iter()
+        .filter_map(|p| match p {
+            StreamPart::ToolCallDelta { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names[0].as_deref(), Some("exec_command"));
+    assert_eq!(names[1], None, "empty continuation name normalized to None");
+    assert_eq!(names[2], None, "empty continuation name normalized to None");
+}
+
+/// End-to-end (chat upstream → Responses client): an empty-name continuation
+/// stream re-encodes to exactly ONE function_call item with the full arguments.
+#[test]
+fn responses_encode_empty_continuation_name_single_tool_call() {
+    let parts = decode_stream(
+        ApiProtocol::ChatCompletions,
+        &[
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"functions.exec_command:0","type":"function",
+                     "function":{"name":"exec_command","arguments":""}}]}}]}),
+            ),
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"functions.exec_command:0","type":"function",
+                     "function":{"name":"","arguments":"{\"cmd\":\""}}]}}]}),
+            ),
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"functions.exec_command:0","type":"function",
+                     "function":{"name":"","arguments":"ls\"}"}}]}}]}),
+            ),
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ),
+        ],
+    );
+    let items = responses_encode_tool_items(&parts);
+    assert_eq!(
+        items.len(),
+        1,
+        "one tool call, not one item per delta: {items:?}"
+    );
+    assert_eq!(items[0]["name"], "exec_command");
+    assert_eq!(items[0]["call_id"], "functions.exec_command:0");
+    assert_eq!(items[0]["arguments"], "{\"cmd\":\"ls\"}");
+}
+
+/// Encoder defense-in-depth: even if a `Some("")` continuation name reaches the
+/// Responses encoder directly (any protocol decoder / future upstream), it is
+/// treated as a continuation, not a new call.
+#[test]
+fn responses_encoder_treats_empty_name_delta_as_continuation() {
+    let id = "functions.exec_command:0".to_string();
+    let parts = vec![
+        StreamPart::ToolCallDelta {
+            id: id.clone(),
+            name: Some("exec_command".into()),
+            arguments: "".into(),
+        },
+        StreamPart::ToolCallDelta {
+            id: id.clone(),
+            name: Some("".into()),
+            arguments: "{\"cmd\":\"".into(),
+        },
+        StreamPart::ToolCallDelta {
+            id: id.clone(),
+            name: Some("".into()),
+            arguments: "ls\"}".into(),
+        },
+        StreamPart::Finish {
+            reason: FinishReason::ToolCalls,
+        },
+    ];
+    let items = responses_encode_tool_items(&parts);
+    assert_eq!(
+        items.len(),
+        1,
+        "empty-name deltas must not open new items: {items:?}"
+    );
+    assert_eq!(items[0]["name"], "exec_command");
+    assert_eq!(items[0]["arguments"], "{\"cmd\":\"ls\"}");
+}
+
+/// The empty-name continuation chunks used by the Codex repro, reused to prove
+/// the Anthropic (Messages) and Gemini encoder paths behave the same way.
+fn empty_continuation_name_chat_events() -> Vec<(&'static str, serde_json::Value)> {
+    vec![
+        (
+            "",
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"functions.exec_command:0","type":"function",
+                 "function":{"name":"exec_command","arguments":""}}]}}]}),
+        ),
+        (
+            "",
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"functions.exec_command:0","type":"function",
+                 "function":{"name":"","arguments":"{\"cmd\":\""}}]}}]}),
+        ),
+        (
+            "",
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"functions.exec_command:0","type":"function",
+                 "function":{"name":"","arguments":"ls\"}"}}]}}]}),
+        ),
+        (
+            "",
+            serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+        ),
+    ]
+}
+
+/// Encode a canonical stream as Anthropic Messages SSE and return one
+/// `(name, accumulated_input_json)` per `tool_use` block (keyed by block index).
+fn messages_encode_tool_blocks(parts: &[StreamPart]) -> Vec<(String, String)> {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let mut encoder = adapter.stream_encoder("msg_repro", "claude");
+    let mut frames = Vec::new();
+    for p in parts {
+        frames.extend(encoder.encode(p).unwrap());
+    }
+    use std::collections::BTreeMap;
+    let mut blocks: BTreeMap<i64, (String, String)> = BTreeMap::new();
+    for f in &frames {
+        if let SseFrame::Event { event, data } = f {
+            let v: serde_json::Value = serde_json::from_str(data).unwrap();
+            match event.as_deref() {
+                Some("content_block_start") if v["content_block"]["type"] == "tool_use" => {
+                    let idx = v["index"].as_i64().unwrap_or(-1);
+                    let name = v["content_block"]["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    blocks.entry(idx).or_insert((name, String::new()));
+                }
+                Some("content_block_delta") if v["delta"]["type"] == "input_json_delta" => {
+                    let idx = v["index"].as_i64().unwrap_or(-1);
+                    if let Some(b) = blocks.get_mut(&idx) {
+                        b.1.push_str(v["delta"]["partial_json"].as_str().unwrap_or(""));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    blocks.into_values().collect()
+}
+
+/// Anthropic path (e.g. headless Claude Code): an empty-name continuation
+/// stream re-encodes to exactly ONE `tool_use` block with the full input,
+/// rather than one empty-named block per delta.
+#[test]
+fn messages_encode_empty_continuation_name_single_tool_use() {
+    let parts = decode_stream(
+        ApiProtocol::ChatCompletions,
+        &empty_continuation_name_chat_events(),
+    );
+    let blocks = messages_encode_tool_blocks(&parts);
+    assert_eq!(
+        blocks.len(),
+        1,
+        "one tool_use block, not one per delta: {blocks:?}"
+    );
+    assert_eq!(blocks[0].0, "exec_command");
+    assert_eq!(blocks[0].1, "{\"cmd\":\"ls\"}");
+}
+
+/// Messages encoder defense-in-depth: a `Some("")` continuation reaching the
+/// encoder directly is a continuation, not a new tool_use block.
+#[test]
+fn messages_encoder_treats_empty_name_delta_as_continuation() {
+    let id = "functions.exec_command:0".to_string();
+    let parts = vec![
+        StreamPart::ToolCallDelta {
+            id: id.clone(),
+            name: Some("exec_command".into()),
+            arguments: "".into(),
+        },
+        StreamPart::ToolCallDelta {
+            id: id.clone(),
+            name: Some("".into()),
+            arguments: "{\"cmd\":\"".into(),
+        },
+        StreamPart::ToolCallDelta {
+            id: id.clone(),
+            name: Some("".into()),
+            arguments: "ls\"}".into(),
+        },
+        StreamPart::Finish {
+            reason: FinishReason::ToolCalls,
+        },
+    ];
+    let blocks = messages_encode_tool_blocks(&parts);
+    assert_eq!(
+        blocks.len(),
+        1,
+        "empty-name deltas must not open new blocks: {blocks:?}"
+    );
+    assert_eq!(blocks[0].0, "exec_command");
+    assert_eq!(blocks[0].1, "{\"cmd\":\"ls\"}");
+}
+
+/// Encode a canonical stream as Generate Content SSE (including the terminal
+/// `finish()` flush) and return one `(name, args_json_string)` per emitted
+/// `functionCall` part.
+fn gemini_encode_function_calls(parts: &[StreamPart]) -> Vec<(String, String)> {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
+    let mut encoder = adapter.stream_encoder("g_repro", "gemini");
+    let mut frames = Vec::new();
+    for p in parts {
+        frames.extend(encoder.encode(p).unwrap());
+    }
+    frames.extend(encoder.finish().unwrap());
+    let mut calls = Vec::new();
+    for f in &frames {
+        if let SseFrame::Event { data, .. } = f {
+            let v: serde_json::Value = serde_json::from_str(data).unwrap();
+            if let Some(arr) = v["candidates"][0]["content"]["parts"].as_array() {
+                for part in arr {
+                    if let Some(fc) = part.get("functionCall") {
+                        calls.push((
+                            fc["name"].as_str().unwrap_or("").to_string(),
+                            fc["args"].to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    calls
+}
+
+/// Gemini path: a fragmented tool call (name on first chunk, args streamed
+/// across deltas) re-encodes to ONE `functionCall` with the FULL args — the
+/// encoder accumulates instead of emitting one `functionCall{args:{}}` per
+/// delta.
+#[test]
+fn gemini_encode_fragmented_args_single_function_call() {
+    let id = "call_1".to_string();
+    let parts = vec![
+        StreamPart::ToolCallDelta {
+            id: id.clone(),
+            name: Some("exec_command".into()),
+            arguments: "".into(),
+        },
+        StreamPart::ToolCallDelta {
+            id: id.clone(),
+            name: None,
+            arguments: "{\"cmd\":".into(),
+        },
+        StreamPart::ToolCallDelta {
+            id: id.clone(),
+            name: None,
+            arguments: "\"ls\"}".into(),
+        },
+        StreamPart::Finish {
+            reason: FinishReason::ToolCalls,
+        },
+    ];
+    let calls = gemini_encode_function_calls(&parts);
+    assert_eq!(
+        calls.len(),
+        1,
+        "one functionCall, not one per delta: {calls:?}"
+    );
+    assert_eq!(calls[0].0, "exec_command");
+    assert_eq!(calls[0].1, "{\"cmd\":\"ls\"}");
+}
+
+/// Gemini path: empty-name continuation chunks (upstreams that re-send
+/// `name:""` every chunk) also collapse to ONE complete `functionCall`.
+#[test]
+fn gemini_encode_empty_continuation_name_single_function_call() {
+    let parts = decode_stream(
+        ApiProtocol::ChatCompletions,
+        &empty_continuation_name_chat_events(),
+    );
+    let calls = gemini_encode_function_calls(&parts);
+    assert_eq!(
+        calls.len(),
+        1,
+        "one functionCall, not fragmented: {calls:?}"
+    );
+    assert_eq!(calls[0].0, "exec_command");
+    assert_eq!(calls[0].1, "{\"cmd\":\"ls\"}");
+}
+
+/// Gemini path: two distinct (parallel) tool calls still emit two complete
+/// `functionCall` parts — accumulation must not merge separate calls.
+#[test]
+fn gemini_encode_two_tool_calls_emit_two_function_calls() {
+    let parts = vec![
+        StreamPart::ToolCallDelta {
+            id: "a".into(),
+            name: Some("first".into()),
+            arguments: "{\"x\":1}".into(),
+        },
+        StreamPart::ToolCallDelta {
+            id: "b".into(),
+            name: Some("second".into()),
+            arguments: "{\"y\":2}".into(),
+        },
+        StreamPart::Finish {
+            reason: FinishReason::ToolCalls,
+        },
+    ];
+    let calls = gemini_encode_function_calls(&parts);
+    assert_eq!(calls.len(), 2, "two distinct calls: {calls:?}");
+    assert_eq!(calls[0].0, "first");
+    assert_eq!(calls[0].1, "{\"x\":1}");
+    assert_eq!(calls[1].0, "second");
+    assert_eq!(calls[1].1, "{\"y\":2}");
+}
