@@ -51,6 +51,21 @@ const ANTHROPIC_REDACTED_DATA: &str = "redactedData";
 /// restore the exact pairing id instead of reusing one by position.
 /// <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
 const ANTHROPIC_TOOL_USE_ID: &str = "toolUseId";
+/// The metadata key tagging a [`Content::ToolCall`] / [`Content::ToolResult`] as
+/// an Anthropic **MCP** block. Set to the marker [`ANTHROPIC_MCP_TOOL_USE`] so
+/// the render path re-emits `mcp_tool_use` / `mcp_tool_result` rather than a
+/// plain `tool_use` / `tool_result`, mirroring the AI SDK's
+/// `providerOptions.anthropic.type === 'mcp-tool-use'` gate.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/convert-to-anthropic-messages-prompt.ts>
+const ANTHROPIC_MCP_TYPE: &str = "type";
+/// The [`ANTHROPIC_MCP_TYPE`] marker value identifying an MCP tool-use block.
+const ANTHROPIC_MCP_TOOL_USE: &str = "mcp-tool-use";
+/// The metadata key carrying an MCP tool call's remote **server identifier**
+/// (`mcp_tool_use.server_name`). Required by the wire — Anthropic rejects an
+/// `mcp_tool_use` block without it — so it is preserved under the `anthropic`
+/// namespace and restored on render.
+/// <https://platform.claude.com/docs/en/agents-and-tools/mcp-connector>
+const ANTHROPIC_MCP_SERVER_NAME: &str = "serverName";
 
 /// Lift an Anthropic block/tool's `cache_control` object into a fresh
 /// [`ProviderMetadata`] under `anthropic.cacheControl`. Anthropic's prompt
@@ -163,6 +178,74 @@ fn render_reasoning_block(text: &str, meta: &ProviderMetadata) -> serde_json::Va
             obj["signature"] = sig.clone();
         }
         obj
+    }
+}
+
+/// Build the `provider_metadata` for an Anthropic `mcp_tool_use` block: the MCP
+/// marker (`type: "mcp-tool-use"`) plus the remote `server_name`, alongside any
+/// block-level `cache_control`. The pair lets the render path reproduce the exact
+/// `mcp_tool_use` block — and any non-Anthropic wire ignores the namespace.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/anthropic-messages-language-model.ts>
+fn parse_mcp_tool_use_metadata(block: &serde_json::Value) -> ProviderMetadata {
+    let mut meta = parse_cache_control(block);
+    set_provider_metadata(
+        &mut meta,
+        PROVIDER_ID_ANTHROPIC,
+        ANTHROPIC_MCP_TYPE,
+        serde_json::Value::String(ANTHROPIC_MCP_TOOL_USE.to_string()),
+    );
+    if let Some(server) = block.get("server_name") {
+        set_provider_metadata(
+            &mut meta,
+            PROVIDER_ID_ANTHROPIC,
+            ANTHROPIC_MCP_SERVER_NAME,
+            server.clone(),
+        );
+    }
+    meta
+}
+
+/// The MCP `server_name` carried in `provider_metadata` (set by
+/// [`parse_mcp_tool_use_metadata`]), if this part was tagged as an Anthropic MCP
+/// tool-use. `None` means the part is not a renderable `mcp_tool_use` — either it
+/// is an ordinary call, or it is a `dynamic` MCP call that arrived on a *different*
+/// wire (e.g. an OpenAI `mcp_call`) and so has no Anthropic server name; such a
+/// call degrades to a plain `tool_use` block, dropping the foreign server id.
+fn mcp_server_name(meta: &ProviderMetadata) -> Option<String> {
+    let ns = provider_namespace(meta, PROVIDER_ID_ANTHROPIC)?;
+    let is_mcp = ns
+        .get(ANTHROPIC_MCP_TYPE)
+        .and_then(|v| v.as_str())
+        .is_some_and(|t| t == ANTHROPIC_MCP_TOOL_USE);
+    if !is_mcp {
+        return None;
+    }
+    ns.get(ANTHROPIC_MCP_SERVER_NAME)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+/// Parse an Anthropic `mcp_tool_result` block's body into a [`ToolResultOutput`].
+/// The wire `content` is the raw MCP result (a string or a `[{type:"text",
+/// text}]` array); it is kept as a structured JSON value — `Json`, or `ErrorJson`
+/// when `is_error` is set — so a same-protocol render re-emits the exact
+/// `content`. (The AI SDK reference carries `result: part.content` and its render
+/// only re-accepts a `json` / `error-json` body, which this mirrors.) A missing
+/// `content` defaults to JSON `null`, the faithful empty value.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/convert-to-anthropic-messages-prompt.ts>
+fn parse_mcp_tool_result_output(block: &serde_json::Value) -> ToolResultOutput {
+    let value = block
+        .get("content")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let is_error = block
+        .get("is_error")
+        .and_then(|e| e.as_bool())
+        .unwrap_or(false);
+    if is_error {
+        ToolResultOutput::ErrorJson { value }
+    } else {
+        ToolResultOutput::Json { value }
     }
 }
 
@@ -595,8 +678,38 @@ fn parse_content(value: &serde_json::Value) -> Result<Vec<Content>> {
                             .map(|i| i.to_string())
                             .unwrap_or_else(|| "{}".to_string()),
                         provider_executed: block_type == "server_tool_use",
+                        // Neither block is a runtime MCP (`dynamic`) tool call.
+                        dynamic: false,
                         // Preserve a block-level `cache_control` breakpoint.
                         provider_metadata: parse_cache_control(block),
+                    }),
+                    // Anthropic `mcp_tool_use` block `{id, name, input, server_name}`
+                    // — a provider-executed remote MCP tool call (the beta MCP
+                    // connector). It maps to a `dynamic`, provider-executed
+                    // `ToolCall`; the load-bearing `server_name` has no core field
+                    // and rides in `provider_metadata["anthropic"]` (with the
+                    // `type: "mcp-tool-use"` marker) so the render reproduces the
+                    // exact block. Mirrors the AI SDK reference mapping.
+                    // <https://platform.claude.com/docs/en/agents-and-tools/mcp-connector>
+                    // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/anthropic-messages-language-model.ts>
+                    "mcp_tool_use" => out.push(Content::ToolCall {
+                        id: block
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: block
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        arguments: block
+                            .get("input")
+                            .map(|i| i.to_string())
+                            .unwrap_or_else(|| "{}".to_string()),
+                        provider_executed: true,
+                        dynamic: true,
+                        provider_metadata: parse_mcp_tool_use_metadata(block),
                     }),
                     // Anthropic `tool_result` block `{tool_use_id, content, is_error}`:
                     // `content` is a string or a block array (text / image); the
@@ -617,7 +730,29 @@ fn parse_content(value: &serde_json::Value) -> Result<Vec<Content>> {
                                 .and_then(|e| e.as_bool())
                                 .unwrap_or(false),
                         ),
+                        // An ordinary `tool_result` is not an MCP inline result.
+                        dynamic: false,
                         // Preserve a block-level `cache_control` breakpoint.
+                        provider_metadata: parse_cache_control(block),
+                    }),
+                    // Anthropic `mcp_tool_result` block `{tool_use_id, content,
+                    // is_error}` — the inline result of an `mcp_tool_use` call. It
+                    // maps to a `dynamic` `ToolResult` whose body is the raw MCP
+                    // `content` (a JSON value), kept as `Json` / `ErrorJson` so the
+                    // render re-emits it verbatim; the AI SDK reference likewise
+                    // carries `result: part.content` and only accepts a JSON body
+                    // back. The `cache_control` breakpoint is preserved.
+                    // <https://platform.claude.com/docs/en/agents-and-tools/mcp-connector>
+                    // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/anthropic-messages-language-model.ts>
+                    "mcp_tool_result" => out.push(Content::ToolResult {
+                        call_id: block
+                            .get("tool_use_id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        tool_name: None,
+                        output: parse_mcp_tool_result_output(block),
+                        dynamic: true,
                         provider_metadata: parse_cache_control(block),
                     }),
                     // image/* and documents (PDF, …) -> a canonical File part.
@@ -780,12 +915,17 @@ impl InboundAdapter for MessagesAdapter {
         let mut messages = Vec::with_capacity(req.messages.len());
         for m in &req.messages {
             let role = parse_role(&m.role)?;
-            // A user-role message may carry tool_result blocks — split those
-            // into a canonical Tool-role message so the IR stays clean.
+            // A user-role message may carry client `tool_result` blocks — split
+            // those into a canonical Tool-role message so the IR stays clean. A
+            // `dynamic` MCP result (an `mcp_tool_result`), however, is part of the
+            // assistant turn — it pairs with its `mcp_tool_use` call — so it is
+            // kept in place (NOT partitioned out), and re-renders as an
+            // `mcp_tool_result` block rather than a request-side `tool_result`.
+            // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/convert-to-anthropic-messages-prompt.ts>
             let parsed = parse_content(&m.content)?;
             let (tool_results, rest): (Vec<_>, Vec<_>) = parsed
                 .into_iter()
-                .partition(|c| matches!(c, Content::ToolResult { .. }));
+                .partition(|c| matches!(c, Content::ToolResult { dynamic: false, .. }));
             if !tool_results.is_empty() {
                 messages.push(Message {
                     role: Role::Tool,
@@ -1114,6 +1254,48 @@ impl OutboundAdapter for MessagesAdapter {
                         .map(|i| i.to_string())
                         .unwrap_or_else(|| "{}".to_string()),
                     provider_executed: kind == "server_tool_use",
+                    // Neither block is a runtime MCP (`dynamic`) tool call.
+                    dynamic: false,
+                    provider_metadata: parse_cache_control(block),
+                }),
+                // An `mcp_tool_use` block — a provider-executed remote MCP tool
+                // call on the response side; same mapping as the request parse
+                // above (`dynamic`, provider-executed, server identity in
+                // `provider_metadata["anthropic"]`).
+                // <https://platform.claude.com/docs/en/agents-and-tools/mcp-connector>
+                Some("mcp_tool_use") => content.push(Content::ToolCall {
+                    id: block
+                        .get("id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    name: block
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    arguments: block
+                        .get("input")
+                        .map(|i| i.to_string())
+                        .unwrap_or_else(|| "{}".to_string()),
+                    provider_executed: true,
+                    dynamic: true,
+                    provider_metadata: parse_mcp_tool_use_metadata(block),
+                }),
+                // An `mcp_tool_result` block — the inline result of an
+                // `mcp_tool_use` call, emitted in the assistant turn right after
+                // the call. Mapped to a `dynamic` `ToolResult` carrying the raw MCP
+                // `content`, paired by `tool_use_id`.
+                // <https://platform.claude.com/docs/en/agents-and-tools/mcp-connector>
+                Some("mcp_tool_result") => content.push(Content::ToolResult {
+                    call_id: block
+                        .get("tool_use_id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    tool_name: None,
+                    output: parse_mcp_tool_result_output(block),
+                    dynamic: true,
                     provider_metadata: parse_cache_control(block),
                 }),
                 // A `web_search_tool_result` block carries the raw search hits
@@ -1516,10 +1698,34 @@ fn render_content_block(c: &Content) -> Option<serde_json::Value> {
             name,
             arguments,
             provider_executed,
+            dynamic,
             provider_metadata,
         } => {
             let input: serde_json::Value =
                 serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
+            // A `dynamic` provider-executed MCP call that carries an Anthropic
+            // `server_name` (the `mcp-tool-use` metadata marker) reproduces its
+            // native `mcp_tool_use` block, restoring the load-bearing server id.
+            // The AI SDK gates the same way on `providerOptions.anthropic.type ===
+            // 'mcp-tool-use'` and warns/drops when the server name is missing; here
+            // a dynamic call WITHOUT an Anthropic server name (e.g. one routed in
+            // from an OpenAI `mcp_call`) simply degrades to a plain `tool_use`,
+            // dropping the foreign server identity.
+            // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/convert-to-anthropic-messages-prompt.ts>
+            if *dynamic
+                && *provider_executed
+                && let Some(server_name) = mcp_server_name(provider_metadata)
+            {
+                let mut block = serde_json::json!({
+                    "type": "mcp_tool_use",
+                    "id": id,
+                    "name": name,
+                    "input": input,
+                    "server_name": server_name,
+                });
+                apply_cache_control(&mut block, provider_metadata);
+                return Some(block);
+            }
             // Reproduce the server-tool block shape on the same wire: a
             // provider-executed call (e.g. web search) renders as
             // `server_tool_use`, a client call as `tool_use`. Both carry the
@@ -1537,7 +1743,38 @@ fn render_content_block(c: &Content) -> Option<serde_json::Value> {
             apply_cache_control(&mut block, provider_metadata);
             Some(block)
         }
-        // tool results are request-side only; not part of an assistant reply
+        // A `dynamic` MCP tool result is part of the assistant turn — it follows
+        // its `mcp_tool_use` call as an `mcp_tool_result` block (rather than a
+        // request-side `tool_result`). Re-emit that block, carrying the raw MCP
+        // `content` back from the structured output and the `is_error` flag. The
+        // AI SDK reference only round-trips a JSON-bodied MCP result, so a
+        // non-`Json`/`ErrorJson` output (only reachable from a hand-built value or
+        // a cross-protocol route) has no faithful `mcp_tool_result` form and is
+        // dropped here — exactly as the reference warns-and-skips it.
+        // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/convert-to-anthropic-messages-prompt.ts>
+        Content::ToolResult {
+            call_id,
+            output,
+            dynamic,
+            provider_metadata,
+            ..
+        } if *dynamic => {
+            let (value, is_error) = match output {
+                ToolResultOutput::Json { value } => (value.clone(), false),
+                ToolResultOutput::ErrorJson { value } => (value.clone(), true),
+                _ => return None,
+            };
+            let mut block = serde_json::json!({
+                "type": "mcp_tool_result",
+                "tool_use_id": call_id,
+                "is_error": is_error,
+                "content": value,
+            });
+            apply_cache_control(&mut block, provider_metadata);
+            Some(block)
+        }
+        // Ordinary tool results are request-side only; not part of an assistant
+        // reply (they ride a Tool-role message rendered by `render_message`).
         Content::ToolResult { .. } => None,
         // image/* -> an `image` block, everything else -> a `document` block.
         // Source is `{type:base64,media_type,data}` or `{type:url,url}`.

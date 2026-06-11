@@ -241,25 +241,34 @@ pub enum Content {
         /// upstream as a client `function_call` on a follow-up turn (the
         /// provider already ran it), so render paths branch on this flag.
         /// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/provider/src/language-model/v3/language-model-v3-tool-call.ts>
-        ///
-        /// The sibling V3 `dynamic` flag (provider-executed MCP tools defined at
-        /// runtime) is intentionally **not** modeled. It arises only from
-        /// Anthropic `mcp_tool_use` and OpenAI Responses `mcp_call`, both of
-        /// which carry a load-bearing server identifier (`server_name` /
-        /// `server_label`) that this flat `ToolCall` has no slot for. Setting
-        /// `dynamic` without also preserving that identifier would re-render an
-        /// MCP block missing its server — worse than omitting it — and the
-        /// Anthropic MCP connector is still beta-gated, not GA. So a faithful
-        /// `dynamic` round-trip is deferred until the `ToolCall` shape grows a
-        /// server-identifier slot, mirroring how the `execution-denied`
-        /// tool-result variant is deferred above.
-        /// <https://platform.claude.com/docs/en/agents-and-tools/mcp-connector>
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         provider_executed: bool,
+        /// The sibling V3 `dynamic` flag — a provider-executed tool defined at
+        /// **runtime**, i.e. an MCP (Model Context Protocol) tool the provider
+        /// runs on a remote server. `false` (the default) is an ordinary,
+        /// statically-declared tool. `true` marks a call that arrived as an
+        /// Anthropic `mcp_tool_use` block or an OpenAI Responses `mcp_call` item;
+        /// such a call carries a load-bearing **server identifier** — Anthropic's
+        /// `server_name` or OpenAI's `server_label` — which this flat shape has no
+        /// core field for, so it rides in
+        /// [`provider_metadata`](Self::ToolCall::provider_metadata) under the
+        /// originating provider's namespace (`provider_metadata["anthropic"]`'s
+        /// `serverName` / `type: "mcp-tool-use"`, or
+        /// `provider_metadata["openai"]`). The render paths branch on this flag to
+        /// re-emit the MCP-native block on the **same** wire (`mcp_tool_use` /
+        /// `mcp_call`) and degrade it to a plain tool call on every other wire,
+        /// where the server identity is provider-specific and is dropped.
+        /// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/provider/src/language-model/v3/language-model-v3-tool-call.ts>
+        /// <https://platform.claude.com/docs/en/agents-and-tools/mcp-connector>
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        dynamic: bool,
         /// Per-part namespaced provider metadata. On a `tool_use` block this
         /// carries the Anthropic block-level `cacheControl` breakpoint
         /// (`provider_metadata["anthropic"]["cacheControl"]`) — prompt caching
-        /// applies to `tool_use` blocks just like text/image/document blocks.
+        /// applies to `tool_use` blocks just like text/image/document blocks. For
+        /// a [`dynamic`](Self::ToolCall::dynamic) MCP call it ALSO carries the MCP
+        /// server identity (Anthropic `serverName` + `type: "mcp-tool-use"`, or
+        /// OpenAI `serverLabel`).
         /// <https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching>
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         provider_metadata: ProviderMetadata,
@@ -288,11 +297,28 @@ pub enum Content {
         tool_name: Option<String>,
         /// The typed result body.
         output: ToolResultOutput,
+        /// The V3 `LanguageModelV3ToolResult` `dynamic` flag — set when this
+        /// result answers a [`dynamic`](Self::ToolCall::dynamic) provider-executed
+        /// MCP tool call, i.e. it arrived **inline** with its call as an Anthropic
+        /// `mcp_tool_result` block or as the `output`/`error` carried on an OpenAI
+        /// Responses `mcp_call` item. `false` (the default) is an ordinary tool
+        /// result. The render paths use it to pair the result back with its MCP
+        /// call: Anthropic re-emits an `mcp_tool_result` block (rather than a plain
+        /// `tool_result`), and OpenAI recombines this result with its same-id
+        /// dynamic [`ToolCall`](Self::ToolCall) into a single `mcp_call` output
+        /// item. On any non-MCP wire the flag is simply dropped and the result
+        /// degrades to that provider's ordinary tool-result shape.
+        /// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/provider/src/language-model/v3/language-model-v3-tool-result.ts>
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        dynamic: bool,
         /// Per-part namespaced provider metadata. On a `tool_result` block this
         /// carries the Anthropic block-level `cacheControl` breakpoint
         /// (`provider_metadata["anthropic"]["cacheControl"]`) — prompt caching
         /// applies to `tool_result` blocks too, so a long tool output can mark a
-        /// cache boundary.
+        /// cache boundary. For an OpenAI Responses `mcp_call` result it also
+        /// carries the originating item id under
+        /// `provider_metadata["openai"]["itemId"]`, restored when recombining the
+        /// inline `mcp_call`.
         /// <https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching>
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         provider_metadata: ProviderMetadata,

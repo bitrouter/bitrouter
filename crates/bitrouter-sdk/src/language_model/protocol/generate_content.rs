@@ -436,6 +436,8 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
                 // fields, never as a `functionCall`, so there is no
                 // provider-executed call to parse here.
                 provider_executed: false,
+                // Gemini has no provider-executed MCP (`dynamic`) call envelope.
+                dynamic: false,
                 // A `functionCall` part may carry a `thoughtSignature` (it
                 // continues a reasoning chain); preserve it so a follow-up turn
                 // can replay the chain.
@@ -470,6 +472,8 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
                 call_id,
                 tool_name: (!name.is_empty()).then_some(name),
                 output,
+                // Gemini has no MCP tool-result wire.
+                dynamic: false,
                 provider_metadata: ProviderMetadata::new(),
             });
         } else if let Some(inline) = part.get("inlineData") {

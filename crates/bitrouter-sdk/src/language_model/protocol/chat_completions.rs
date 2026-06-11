@@ -496,6 +496,8 @@ impl InboundAdapter for ChatCompletionsAdapter {
                     call_id,
                     tool_name: None,
                     output,
+                    // Chat Completions has no MCP tool-result wire.
+                    dynamic: false,
                     provider_metadata: ProviderMetadata::new(),
                 });
             } else {
@@ -510,6 +512,8 @@ impl InboundAdapter for ChatCompletionsAdapter {
                         // Chat Completions `tool_calls` are always client tools —
                         // there is no server-tool slot on this wire.
                         provider_executed: false,
+                        // …and no provider-executed MCP (`dynamic`) call envelope.
+                        dynamic: false,
                         provider_metadata: ProviderMetadata::new(),
                     });
                 }
@@ -909,6 +913,8 @@ impl OutboundAdapter for ChatCompletionsAdapter {
                     // The Chat Completions response wire has no server-tool item;
                     // every `tool_calls` entry is a client tool call.
                     provider_executed: false,
+                    // …and no provider-executed MCP (`dynamic`) call envelope.
+                    dynamic: false,
                     provider_metadata: ProviderMetadata::new(),
                 });
             }

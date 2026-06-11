@@ -476,8 +476,10 @@ fn bedrock_content_to_canonical(blocks: &[ContentBlock]) -> Vec<Content> {
                     name: tu.name().to_string(),
                     arguments,
                     // Bedrock `toolUse` blocks are client tool calls; the
-                    // Converse content model has no provider-executed marker.
+                    // Converse content model has no provider-executed marker, and
+                    // no provider-executed MCP (`dynamic`) call envelope.
                     provider_executed: false,
+                    dynamic: false,
                     provider_metadata: Default::default(),
                 });
             }
@@ -524,6 +526,8 @@ fn bedrock_content_to_canonical(blocks: &[ContentBlock]) -> Vec<Content> {
                     call_id: tr.tool_use_id().to_string(),
                     tool_name: None,
                     output,
+                    // Bedrock Converse has no MCP tool-result wire.
+                    dynamic: false,
                     provider_metadata: Default::default(),
                 });
             }
@@ -702,6 +706,7 @@ mod tests {
             call_id: "call_1".to_string(),
             tool_name: None,
             output,
+            dynamic: false,
             provider_metadata: Default::default(),
         }])
         .expect("render to Bedrock content blocks");
@@ -741,6 +746,7 @@ mod tests {
             call_id: "c1".to_string(),
             tool_name: None,
             output: output.clone(),
+            dynamic: false,
             provider_metadata: Default::default(),
         }])
         .unwrap();

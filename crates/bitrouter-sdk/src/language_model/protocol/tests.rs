@@ -76,6 +76,7 @@ fn sample_result() -> GenerateResult {
                 name: "calculator".to_string(),
                 arguments: "{\"op\":\"add\"}".to_string(),
                 provider_executed: false,
+                dynamic: false,
                 provider_metadata: Default::default(),
             },
         ],
@@ -3694,6 +3695,7 @@ fn tool_result_prompt(call_id: &str, tool_name: Option<&str>, output: ToolResult
                 call_id: call_id.to_string(),
                 tool_name: tool_name.map(str::to_string),
                 output,
+                dynamic: false,
                 provider_metadata: Default::default(),
             }],
         }],
@@ -4352,6 +4354,7 @@ fn tool_result_content_serde_round_trips() {
                 },
             ],
         },
+        dynamic: false,
         provider_metadata: Default::default(),
     };
     let value = serde_json::to_value(&original).unwrap();
@@ -4371,6 +4374,7 @@ fn tool_result_without_tool_name_omits_the_field() {
         output: ToolResultOutput::Text {
             value: "x".to_string(),
         },
+        dynamic: false,
         provider_metadata: Default::default(),
     })
     .unwrap();
@@ -4427,6 +4431,7 @@ fn messages_renders_provider_executed_as_server_tool_use() {
                 name: "get_weather".to_string(),
                 arguments: "{}".to_string(),
                 provider_executed: false,
+                dynamic: false,
                 provider_metadata: Default::default(),
             },
             Content::ToolCall {
@@ -4434,6 +4439,7 @@ fn messages_renders_provider_executed_as_server_tool_use() {
                 name: "web_search".to_string(),
                 arguments: "{\"query\":\"x\"}".to_string(),
                 provider_executed: true,
+                dynamic: false,
                 provider_metadata: Default::default(),
             },
         ],
@@ -4469,6 +4475,493 @@ fn messages_server_tool_use_round_trips() {
         .unwrap();
     assert_eq!(rendered["content"][0]["type"], "server_tool_use");
     assert_eq!(rendered["content"][0]["id"], "srvtoolu_1");
+}
+
+// ===== A2: Anthropic MCP (`mcp_tool_use` / `mcp_tool_result`) =====
+
+/// An Anthropic `mcp_tool_use` block parses to a `dynamic`, provider-executed
+/// `ToolCall` whose `server_name` is preserved in `provider_metadata`.
+#[test]
+fn messages_parses_mcp_tool_use_as_dynamic_with_server_name() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "content": [
+            {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_1",
+                "name": "search_docs",
+                "input": { "query": "q" },
+                "server_name": "docs-server"
+            }
+        ],
+        "stop_reason": "end_turn"
+    });
+    let result = adapter.parse_response(body).unwrap();
+    let call = result
+        .content
+        .iter()
+        .find_map(|c| match c {
+            Content::ToolCall {
+                id,
+                name,
+                dynamic,
+                provider_executed,
+                provider_metadata,
+                ..
+            } => Some((id, name, *dynamic, *provider_executed, provider_metadata)),
+            _ => None,
+        })
+        .expect("an mcp_tool_use call");
+    assert_eq!(call.0, "mcptoolu_1");
+    assert_eq!(call.1, "search_docs");
+    assert!(call.2, "mcp_tool_use is dynamic");
+    assert!(call.3, "mcp_tool_use is provider-executed");
+    // The server identity rides the anthropic namespace.
+    let anthropic = call.4.get("anthropic").and_then(|v| v.as_object()).unwrap();
+    assert_eq!(anthropic["type"], "mcp-tool-use");
+    assert_eq!(anthropic["serverName"], "docs-server");
+}
+
+/// A full Anthropic MCP round-trip: an `mcp_tool_use` call followed by its inline
+/// `mcp_tool_result` parses to a `dynamic` `ToolCall` + `dynamic` `ToolResult`
+/// and renders back to the SAME two blocks, preserving `server_name`, the tool
+/// args, and the inline result content (the A2 fidelity goal).
+#[test]
+fn messages_mcp_tool_use_and_result_round_trip() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "content": [
+            {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_1",
+                "name": "search_docs",
+                "input": { "query": "rust" },
+                "server_name": "docs-server"
+            },
+            {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcptoolu_1",
+                "is_error": false,
+                "content": [ { "type": "text", "text": "found 3 docs" } ]
+            }
+        ],
+        "stop_reason": "end_turn"
+    });
+    let parsed = adapter.parse_response(body).unwrap();
+    // Canonical IR: a dynamic call + a dynamic result.
+    assert!(matches!(
+        parsed.content.first(),
+        Some(Content::ToolCall { dynamic: true, .. })
+    ));
+    assert!(matches!(
+        parsed.content.get(1),
+        Some(Content::ToolResult { dynamic: true, .. })
+    ));
+    let rendered = adapter
+        .render_response(&parsed, &sample_prompt(), "msg_1")
+        .unwrap();
+    let blocks = rendered["content"].as_array().unwrap();
+    // The MCP call block round-trips with its server name and args.
+    assert_eq!(blocks[0]["type"], "mcp_tool_use");
+    assert_eq!(blocks[0]["id"], "mcptoolu_1");
+    assert_eq!(blocks[0]["name"], "search_docs");
+    assert_eq!(blocks[0]["server_name"], "docs-server");
+    assert_eq!(blocks[0]["input"]["query"], "rust");
+    // The inline result block round-trips with its content and pairing id.
+    assert_eq!(blocks[1]["type"], "mcp_tool_result");
+    assert_eq!(blocks[1]["tool_use_id"], "mcptoolu_1");
+    assert_eq!(blocks[1]["is_error"], false);
+    assert_eq!(
+        blocks[1]["content"],
+        serde_json::json!([{ "type": "text", "text": "found 3 docs" }])
+    );
+}
+
+/// An `mcp_tool_result` carrying `is_error: true` round-trips as an error result.
+#[test]
+fn messages_mcp_tool_result_error_round_trips() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "content": [
+            {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_1",
+                "name": "do_thing",
+                "input": {},
+                "server_name": "srv"
+            },
+            {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcptoolu_1",
+                "is_error": true,
+                "content": "boom"
+            }
+        ],
+        "stop_reason": "end_turn"
+    });
+    let parsed = adapter.parse_response(body).unwrap();
+    // The result is an error variant in the canonical IR.
+    let is_error = parsed.content.iter().find_map(|c| match c {
+        Content::ToolResult { output, .. } => Some(output.is_error()),
+        _ => None,
+    });
+    assert_eq!(is_error, Some(true));
+    let rendered = adapter
+        .render_response(&parsed, &sample_prompt(), "msg_1")
+        .unwrap();
+    assert_eq!(rendered["content"][1]["type"], "mcp_tool_result");
+    assert_eq!(rendered["content"][1]["is_error"], true);
+    assert_eq!(rendered["content"][1]["content"], "boom");
+}
+
+/// An Anthropic **request** echoing an assistant turn with `mcp_tool_use` +
+/// `mcp_tool_result` blocks round-trips: the inline MCP result stays in the
+/// assistant turn (it is NOT split into a request-side `tool_result`) and
+/// re-renders as an `mcp_tool_result` block.
+#[test]
+fn messages_request_mcp_blocks_round_trip_in_assistant_turn() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude",
+        "max_tokens": 100,
+        "messages": [
+            { "role": "user", "content": "search the docs" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "mcp_tool_use",
+                        "id": "mcptoolu_1",
+                        "name": "search_docs",
+                        "input": { "query": "rust" },
+                        "server_name": "docs-server"
+                    },
+                    {
+                        "type": "mcp_tool_result",
+                        "tool_use_id": "mcptoolu_1",
+                        "is_error": false,
+                        "content": [ { "type": "text", "text": "ok" } ]
+                    }
+                ]
+            }
+        ]
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    // The MCP result is NOT split into a separate Tool-role message — both blocks
+    // ride the single assistant turn.
+    let assistant = prompt
+        .messages
+        .iter()
+        .find(|m| m.role == Role::Assistant)
+        .expect("an assistant message");
+    assert!(
+        prompt.messages.iter().all(|m| m.role != Role::Tool),
+        "a dynamic MCP result must not become a Tool-role message"
+    );
+    assert!(matches!(
+        assistant.content.first(),
+        Some(Content::ToolCall { dynamic: true, .. })
+    ));
+    assert!(matches!(
+        assistant.content.get(1),
+        Some(Content::ToolResult { dynamic: true, .. })
+    ));
+    // Re-render onto the Anthropic request wire: the assistant content reproduces
+    // both MCP blocks.
+    let rendered = adapter.render_request(&prompt).unwrap();
+    let assistant_msg = rendered["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "assistant")
+        .expect("an assistant request message");
+    let blocks = assistant_msg["content"].as_array().unwrap();
+    assert_eq!(blocks[0]["type"], "mcp_tool_use");
+    assert_eq!(blocks[0]["server_name"], "docs-server");
+    assert_eq!(blocks[1]["type"], "mcp_tool_result");
+    assert_eq!(blocks[1]["tool_use_id"], "mcptoolu_1");
+    assert_eq!(
+        blocks[1]["content"],
+        serde_json::json!([{ "type": "text", "text": "ok" }])
+    );
+}
+
+// ===== A1: Responses MCP (`mcp_call`) + `local_shell_call` =====
+
+/// An OpenAI Responses `mcp_call` (with an inline `output`) parses to a
+/// `dynamic` provider-executed `ToolCall` + a paired `dynamic` `ToolResult`, and
+/// renders back to a SINGLE `mcp_call` item that preserves the inline result —
+/// the A1 fidelity goal (the inline result was previously dropped).
+#[test]
+fn responses_mcp_call_round_trips_with_inline_result() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "id": "resp_1",
+        "status": "completed",
+        "output": [
+            {
+                "type": "mcp_call",
+                "id": "mcp_1",
+                "server_label": "my-mcp",
+                "name": "lookup",
+                "arguments": "{\"q\":\"x\"}",
+                "output": "the answer"
+            }
+        ]
+    });
+    let parsed = adapter.parse_response(body).unwrap();
+    // Lowered to a dynamic provider-executed call + its dynamic inline result.
+    assert!(matches!(
+        parsed.content.first(),
+        Some(Content::ToolCall {
+            dynamic: true,
+            provider_executed: true,
+            ..
+        })
+    ));
+    assert!(matches!(
+        parsed.content.get(1),
+        Some(Content::ToolResult { dynamic: true, .. })
+    ));
+    let rendered = adapter
+        .render_response(&parsed, &sample_prompt(), "resp_1")
+        .unwrap();
+    // Exactly ONE mcp_call item is re-emitted (the call + result recombined).
+    let mcp_items: Vec<_> = rendered["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["type"] == "mcp_call")
+        .collect();
+    assert_eq!(
+        mcp_items.len(),
+        1,
+        "call + result recombine into one mcp_call"
+    );
+    let item = mcp_items[0];
+    assert_eq!(item["id"], "mcp_1");
+    assert_eq!(item["server_label"], "my-mcp");
+    assert_eq!(item["name"], "lookup");
+    assert_eq!(item["arguments"], "{\"q\":\"x\"}");
+    assert_eq!(item["output"], "the answer", "inline result preserved");
+    // No stray function_call / function_call_output leaked from the split pair.
+    assert!(
+        rendered["output"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["type"] != "function_call" && i["type"] != "function_call_output"),
+        "the dynamic call/result must not leak as plain function items"
+    );
+}
+
+/// An `mcp_call` carrying an inline `error` (instead of `output`) round-trips the
+/// error faithfully on the single recombined `mcp_call` item.
+#[test]
+fn responses_mcp_call_round_trips_inline_error() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "id": "resp_1",
+        "status": "completed",
+        "output": [
+            {
+                "type": "mcp_call",
+                "id": "mcp_1",
+                "server_label": "my-mcp",
+                "name": "lookup",
+                "arguments": "{}",
+                "error": "upstream exploded"
+            }
+        ]
+    });
+    let parsed = adapter.parse_response(body).unwrap();
+    let rendered = adapter
+        .render_response(&parsed, &sample_prompt(), "resp_1")
+        .unwrap();
+    let item = rendered["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["type"] == "mcp_call")
+        .unwrap();
+    assert_eq!(item["error"], "upstream exploded");
+    assert!(
+        item.get("output").is_none(),
+        "no output key when only error"
+    );
+}
+
+/// A Responses `local_shell_call` parses to a client `ToolCall` named
+/// `local_shell` whose `action` is preserved, and renders back to a
+/// `local_shell_call` item (same-protocol round-trip of the call).
+#[test]
+fn responses_local_shell_call_round_trips() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "id": "resp_1",
+        "status": "completed",
+        "output": [
+            {
+                "type": "local_shell_call",
+                "id": "ls_item_1",
+                "call_id": "ls_call_1",
+                "action": {
+                    "type": "exec",
+                    "command": ["echo", "hi"],
+                    "timeout_ms": 1000
+                }
+            }
+        ]
+    });
+    let parsed = adapter.parse_response(body).unwrap();
+    let call = parsed
+        .content
+        .iter()
+        .find_map(|c| match c {
+            Content::ToolCall {
+                id,
+                name,
+                arguments,
+                provider_executed,
+                dynamic,
+                ..
+            } => Some((id, name, arguments, *provider_executed, *dynamic)),
+            _ => None,
+        })
+        .expect("a local_shell call");
+    assert_eq!(call.0, "ls_call_1");
+    assert_eq!(call.1, "local_shell");
+    assert!(
+        !call.3,
+        "local_shell is a client call, not provider-executed"
+    );
+    assert!(!call.4, "local_shell is not a dynamic MCP call");
+    // The action payload survives in the call input.
+    let input: serde_json::Value = serde_json::from_str(call.2).unwrap();
+    assert_eq!(
+        input["action"]["command"],
+        serde_json::json!(["echo", "hi"])
+    );
+    assert_eq!(input["action"]["timeout_ms"], 1000);
+    let rendered = adapter
+        .render_response(&parsed, &sample_prompt(), "resp_1")
+        .unwrap();
+    let item = rendered["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["type"] == "local_shell_call")
+        .expect("a local_shell_call output item");
+    assert_eq!(item["call_id"], "ls_call_1");
+    assert_eq!(
+        item["id"], "ls_item_1",
+        "the item id is restored from metadata"
+    );
+    assert_eq!(item["action"]["command"], serde_json::json!(["echo", "hi"]));
+    assert_eq!(item["action"]["timeout_ms"], 1000);
+}
+
+// ===== cross-protocol degrade =====
+
+/// A `dynamic` MCP `ToolCall` (parsed from an Anthropic `mcp_tool_use`) routed to
+/// a non-MCP wire (Chat Completions) degrades faithfully to a regular tool call:
+/// the call survives with its name + args, but the MCP server identity — which
+/// has no slot on that wire — is dropped.
+#[test]
+fn dynamic_mcp_call_degrades_to_plain_tool_call_cross_protocol() {
+    let messages = adapter_for(ApiProtocol::Messages);
+    let chat = adapter_for(ApiProtocol::ChatCompletions);
+    // Parse an Anthropic MCP call into the canonical IR.
+    let body = serde_json::json!({
+        "id": "msg_1",
+        "content": [
+            {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_1",
+                "name": "search_docs",
+                "input": { "query": "q" },
+                "server_name": "docs-server"
+            }
+        ],
+        "stop_reason": "end_turn"
+    });
+    let result = messages.parse_response(body).unwrap();
+    // Render that result onto the Chat Completions wire.
+    let rendered = chat
+        .render_response(&result, &sample_prompt(), "chatcmpl_1")
+        .unwrap();
+    let tool_calls = rendered["choices"][0]["message"]["tool_calls"]
+        .as_array()
+        .expect("a plain tool_calls array");
+    assert_eq!(tool_calls.len(), 1);
+    // The call degrades to a regular function tool call: name + args survive…
+    assert_eq!(tool_calls[0]["function"]["name"], "search_docs");
+    assert_eq!(tool_calls[0]["id"], "mcptoolu_1");
+    // …and there is no MCP server identity anywhere on this wire's tool call.
+    let serialized = serde_json::to_string(&tool_calls[0]).unwrap();
+    assert!(
+        !serialized.contains("docs-server") && !serialized.contains("server_name"),
+        "MCP server identity must not leak onto a non-MCP wire: {serialized}"
+    );
+}
+
+/// The new `dynamic` flag is omitted from JSON when false (V3
+/// `skip_serializing_if`) and present when true, on both `ToolCall` and
+/// `ToolResult`.
+#[test]
+fn dynamic_flag_serde_defaults() {
+    // false → omitted on a ToolCall.
+    let call_false = serde_json::to_value(Content::ToolCall {
+        id: "c1".to_string(),
+        name: "t".to_string(),
+        arguments: "{}".to_string(),
+        provider_executed: false,
+        dynamic: false,
+        provider_metadata: Default::default(),
+    })
+    .unwrap();
+    assert!(
+        call_false.get("dynamic").is_none(),
+        "false dynamic must be omitted: {call_false}"
+    );
+    // true → present on a ToolCall.
+    let call_true = serde_json::to_value(Content::ToolCall {
+        id: "c1".to_string(),
+        name: "t".to_string(),
+        arguments: "{}".to_string(),
+        provider_executed: true,
+        dynamic: true,
+        provider_metadata: Default::default(),
+    })
+    .unwrap();
+    assert_eq!(call_true["dynamic"], true);
+    // Defaulting back: a payload without `dynamic` deserializes to false.
+    let back: Content = serde_json::from_value(serde_json::json!({
+        "type": "tool_call",
+        "id": "c1",
+        "name": "t",
+        "arguments": "{}"
+    }))
+    .unwrap();
+    assert!(matches!(back, Content::ToolCall { dynamic: false, .. }));
+    // false → omitted on a ToolResult too.
+    let result_false = serde_json::to_value(Content::ToolResult {
+        call_id: "c1".to_string(),
+        tool_name: None,
+        output: ToolResultOutput::Text {
+            value: "x".to_string(),
+        },
+        dynamic: false,
+        provider_metadata: Default::default(),
+    })
+    .unwrap();
+    assert!(
+        result_false.get("dynamic").is_none(),
+        "false dynamic must be omitted on a result: {result_false}"
+    );
 }
 
 /// OpenAI Responses built-in tool output items parse as provider-executed tool
@@ -4528,6 +5021,7 @@ fn responses_render_request_drops_provider_executed_calls() {
                     name: "get_weather".to_string(),
                     arguments: "{}".to_string(),
                     provider_executed: false,
+                    dynamic: false,
                     provider_metadata: Default::default(),
                 },
                 Content::ToolCall {
@@ -4535,6 +5029,7 @@ fn responses_render_request_drops_provider_executed_calls() {
                     name: "web_search".to_string(),
                     arguments: "{}".to_string(),
                     provider_executed: true,
+                    dynamic: false,
                     provider_metadata: Default::default(),
                 },
             ],
@@ -4569,6 +5064,7 @@ fn responses_render_response_reproduces_server_tool_item() {
             name: "web_search".to_string(),
             arguments: "{}".to_string(),
             provider_executed: true,
+            dynamic: false,
             provider_metadata: Default::default(),
         }],
         usage: None,
@@ -4595,8 +5091,9 @@ fn responses_render_response_reproduces_server_tool_item() {
 /// `image_generation_call` and `computer_call` output items are parsed as
 /// provider-executed tool calls (no echoed input, matching the AI SDK), and they
 /// round-trip: `render_response` reproduces each as its native `<name>_call`
-/// item keyed by `id`. `local_shell_call` / `mcp_call` are deferred and not
-/// parsed (so they must NOT appear as tool calls), per the documented skip.
+/// item keyed by `id`. (`local_shell_call` / `mcp_call` now parse too — exercised
+/// by their dedicated round-trip tests — so this test no longer asserts they are
+/// dropped.)
 #[test]
 fn responses_parses_and_reproduces_image_and_computer_calls() {
     let adapter = adapter_for(ApiProtocol::Responses);
@@ -4605,10 +5102,7 @@ fn responses_parses_and_reproduces_image_and_computer_calls() {
         "status": "completed",
         "output": [
             { "type": "image_generation_call", "id": "ig_1", "result": "BASE64..." },
-            { "type": "computer_call", "id": "cu_1", "status": "completed" },
-            // deferred — must not surface as tool calls
-            { "type": "local_shell_call", "call_id": "ls_1", "action": {"command": ["ls"]} },
-            { "type": "mcp_call", "id": "mc_1", "name": "fetch", "arguments": "{}" }
+            { "type": "computer_call", "id": "cu_1", "status": "completed" }
         ]
     });
     let result = adapter.parse_response(body).unwrap();
@@ -4625,11 +5119,10 @@ fn responses_parses_and_reproduces_image_and_computer_calls() {
             _ => None,
         })
         .collect();
-    // Only the two (a)-mapped server tools are parsed; the deferred items drop.
     assert_eq!(
         calls,
         vec![("image_generation", true, "{}"), ("computer", true, "{}"),],
-        "image_generation_call/computer_call parse; local_shell_call/mcp_call defer"
+        "image_generation_call/computer_call parse as provider-executed server tools"
     );
 
     // Live, not dead: each parsed call is consumed by the reproduction site,
@@ -4663,6 +5156,7 @@ fn tool_call_provider_executed_omitted_when_false() {
         name: "t".to_string(),
         arguments: "{}".to_string(),
         provider_executed: false,
+        dynamic: false,
         provider_metadata: Default::default(),
     })
     .unwrap();
@@ -4675,6 +5169,7 @@ fn tool_call_provider_executed_omitted_when_false() {
         name: "t".to_string(),
         arguments: "{}".to_string(),
         provider_executed: true,
+        dynamic: false,
         provider_metadata: Default::default(),
     })
     .unwrap();

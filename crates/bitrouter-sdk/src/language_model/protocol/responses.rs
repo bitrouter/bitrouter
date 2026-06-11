@@ -45,6 +45,181 @@ fn synthesize_approval_tool_call_id(approval_id: &str) -> String {
     format!("approval:{approval_id}")
 }
 
+/// The tool-name prefix the AI SDK gives a remote MCP tool surfaced from an
+/// `mcp_call` item (`mcp.<name>`). bitrouter keeps the same prefix so the tool
+/// name round-trips and the render can recover the bare MCP tool name.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+const RESPONSES_MCP_TOOL_PREFIX: &str = "mcp.";
+/// The synthetic tool name for an OpenAI Responses `local_shell_call` — a
+/// client-executed shell tool keyed by `call_id`. Matches the AI SDK's custom
+/// tool name so the input `action` payload round-trips.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/tool/local-shell.ts>
+const RESPONSES_LOCAL_SHELL_TOOL: &str = "local_shell";
+/// The `provider_metadata["openai"]` key holding a Responses output item's `id`,
+/// distinct from its `call_id`. Restored on render so a same-protocol round-trip
+/// reproduces the original item id (mirrors the AI SDK `itemId` key).
+/// <https://platform.openai.com/docs/api-reference/responses/object>
+const RESPONSES_ITEM_ID: &str = "itemId";
+/// The discriminator the AI SDK stamps on an `mcp_call`'s lowered tool-result
+/// body (`{ type: 'call', serverLabel, name, arguments, output?, error? }`). The
+/// Responses encoder recognises it to recombine a dynamic `ToolCall` + its
+/// same-id `ToolResult` back into a single `mcp_call` item.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/tool/mcp.ts>
+const RESPONSES_MCP_CALL_TAG: &str = "call";
+
+/// Lower an OpenAI Responses `mcp_call` item — a provider-executed remote MCP
+/// tool call whose result is carried **inline** — into the canonical pair the
+/// AI SDK reference produces: a `dynamic`, provider-executed [`Content::ToolCall`]
+/// plus a paired [`Content::ToolResult`] whose body is the MCP-specific
+/// `{ type: 'call', serverLabel, name, arguments, output?, error? }` JSON object.
+/// Keeping the result as that exact structure (rather than splitting `output`
+/// onto a bare string) lets [`render_output_items`] recombine the two parts into
+/// one `mcp_call` item, so the inline result round-trips same-protocol exactly.
+/// The item `id` correlates the pair and is preserved under
+/// `provider_metadata["openai"]["itemId"]`.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+fn parse_mcp_call(item: &serde_json::Value) -> Vec<Content> {
+    let id = item
+        .get("id")
+        .and_then(|i| i.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let name = item
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let arguments = item
+        .get("arguments")
+        .and_then(|a| a.as_str())
+        .unwrap_or_default()
+        .to_string();
+    // Build the MCP result body, mirroring the AI SDK `mcpOutputSchema`:
+    // `{type:'call', serverLabel, name, arguments, output?, error?}`. `output`
+    // and `error` are only present when the wire carried them.
+    let mut result = serde_json::Map::new();
+    result.insert("type".into(), RESPONSES_MCP_CALL_TAG.into());
+    if let Some(label) = item.get("server_label") {
+        result.insert("serverLabel".into(), label.clone());
+    }
+    result.insert("name".into(), name.clone().into());
+    result.insert("arguments".into(), arguments.clone().into());
+    if let Some(output) = item.get("output").filter(|v| !v.is_null()) {
+        result.insert("output".into(), output.clone());
+    }
+    if let Some(error) = item.get("error").filter(|v| !v.is_null()) {
+        result.insert("error".into(), error.clone());
+    }
+    let mut meta = ProviderMetadata::new();
+    set_provider_metadata(
+        &mut meta,
+        PROVIDER_ID_OPENAI,
+        RESPONSES_ITEM_ID,
+        serde_json::Value::String(id.clone()),
+    );
+    vec![
+        Content::ToolCall {
+            id: id.clone(),
+            name: format!("{RESPONSES_MCP_TOOL_PREFIX}{name}"),
+            arguments,
+            provider_executed: true,
+            dynamic: true,
+            provider_metadata: ProviderMetadata::new(),
+        },
+        Content::ToolResult {
+            call_id: id,
+            tool_name: Some(format!("{RESPONSES_MCP_TOOL_PREFIX}{name}")),
+            output: ToolResultOutput::Json {
+                value: serde_json::Value::Object(result),
+            },
+            dynamic: true,
+            provider_metadata: meta,
+        },
+    ]
+}
+
+/// The OpenAI `itemId` preserved in `provider_metadata`, if any.
+fn responses_item_id(meta: &ProviderMetadata) -> Option<String> {
+    provider_namespace(meta, PROVIDER_ID_OPENAI)
+        .and_then(|o| o.get(RESPONSES_ITEM_ID))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+/// Recombine a `dynamic` provider-executed MCP [`Content::ToolCall`] with its
+/// inline result — the [`Content::ToolResult`] whose `output` is the
+/// `{type:'call', …}` body lowered by [`parse_mcp_call`] — back into a single
+/// Responses `mcp_call` output item, inverting the parse split. Returns `None`
+/// when `result_output` is not such an MCP-call body (so a dynamic call routed in
+/// from a different wire, with no matching MCP result, is not mis-recombined).
+/// The emitted item restores `id`, `server_label`, `name`, `arguments`, and the
+/// inline `output`/`error`.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/tool/mcp.ts>
+fn render_mcp_call_item(
+    call_id: &str,
+    result_meta: &ProviderMetadata,
+    result_output: &ToolResultOutput,
+) -> Option<serde_json::Value> {
+    let body = match result_output {
+        ToolResultOutput::Json { value } => value.as_object()?,
+        _ => return None,
+    };
+    if body.get("type").and_then(|t| t.as_str()) != Some(RESPONSES_MCP_CALL_TAG) {
+        return None;
+    }
+    let mut item = serde_json::Map::new();
+    item.insert("type".into(), "mcp_call".into());
+    // Prefer the preserved item id; fall back to the correlating call id.
+    let item_id = responses_item_id(result_meta).unwrap_or_else(|| call_id.to_string());
+    item.insert("id".into(), item_id.into());
+    if let Some(label) = body.get("serverLabel") {
+        item.insert("server_label".into(), label.clone());
+    }
+    if let Some(name) = body.get("name") {
+        item.insert("name".into(), name.clone());
+    }
+    if let Some(arguments) = body.get("arguments") {
+        item.insert("arguments".into(), arguments.clone());
+    }
+    if let Some(output) = body.get("output") {
+        item.insert("output".into(), output.clone());
+    }
+    if let Some(error) = body.get("error") {
+        item.insert("error".into(), error.clone());
+    }
+    Some(serde_json::Value::Object(item))
+}
+
+/// Reconstruct a Responses `local_shell_call` output item from a client
+/// `local_shell` [`Content::ToolCall`], inverting the `local_shell_call` parse.
+/// The `action` is carried verbatim in the call's `{action}` input (so a
+/// same-protocol round-trip is byte-faithful), `call_id` is the call id, and the
+/// item `id` is restored from `provider_metadata["openai"]["itemId"]`. Returns
+/// `None` when the input is not the expected `{action}` object.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+fn render_local_shell_call_item(c: &Content) -> Option<serde_json::Value> {
+    let Content::ToolCall {
+        id,
+        arguments,
+        provider_metadata,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let input: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let action = input.get("action")?.clone();
+    let mut item = serde_json::Map::new();
+    item.insert("type".into(), "local_shell_call".into());
+    item.insert("call_id".into(), id.clone().into());
+    // The item `id` is distinct from `call_id` on this wire; restore it when it
+    // round-tripped, else fall back to the call id so the item is still valid.
+    let item_id = responses_item_id(provider_metadata).unwrap_or_else(|| id.clone());
+    item.insert("id".into(), item_id.into());
+    item.insert("action".into(), action);
+    Some(serde_json::Value::Object(item))
+}
+
 /// The Responses protocol adapter.
 pub struct ResponsesAdapter;
 
@@ -436,6 +611,9 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                 // (`web_search_call`, …) are never re-sent as
                                 // input items.
                                 provider_executed: false,
+                                // …nor is it a provider-executed MCP (`dynamic`)
+                                // call (those arrive as `mcp_call` items).
+                                dynamic: false,
                                 provider_metadata: ProviderMetadata::new(),
                             }],
                         });
@@ -463,6 +641,9 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                     .to_string(),
                                 tool_name: None,
                                 output,
+                                // A `function_call_output` is a plain client
+                                // tool-result item, never an inline MCP result.
+                                dynamic: false,
                                 provider_metadata: ProviderMetadata::new(),
                             }],
                         });
@@ -507,6 +688,8 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                 call_id: approval_id,
                                 tool_name: None,
                                 output: ToolResultOutput::ExecutionDenied { reason: None },
+                                // An approval denial is not an MCP inline result.
+                                dynamic: false,
                                 provider_metadata: denial_meta,
                             });
                         }
@@ -535,6 +718,48 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                 }],
                             });
                         }
+                    }
+                    // An `mcp_call` echoed back into the request `input[]` (a
+                    // stateless client replaying the assistant turn) is lowered to
+                    // the same `dynamic` `ToolCall` + inline `ToolResult` pair as
+                    // on the response side, carried as one assistant message so a
+                    // same-protocol round-trip is symmetric.
+                    Some("mcp_call") => {
+                        messages.push(Message {
+                            role: Role::Assistant,
+                            content: parse_mcp_call(item),
+                        });
+                    }
+                    // A `local_shell_call` input item — a client shell call replayed
+                    // into the request. Mapped to the same client `local_shell`
+                    // `ToolCall` as the response parse, as an assistant message.
+                    Some("local_shell_call") => {
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let action = item.get("action").cloned().unwrap_or(serde_json::json!({}));
+                        let mut meta = ProviderMetadata::new();
+                        if let Some(id) = item.get("id").and_then(|i| i.as_str()) {
+                            set_provider_metadata(
+                                &mut meta,
+                                PROVIDER_ID_OPENAI,
+                                RESPONSES_ITEM_ID,
+                                serde_json::Value::String(id.to_string()),
+                            );
+                        }
+                        messages.push(Message {
+                            role: Role::Assistant,
+                            content: vec![Content::ToolCall {
+                                id: call_id,
+                                name: RESPONSES_LOCAL_SHELL_TOOL.to_string(),
+                                arguments: serde_json::json!({ "action": action }).to_string(),
+                                provider_executed: false,
+                                dynamic: false,
+                                provider_metadata: meta,
+                            }],
+                        });
                     }
                     // forward-compatible: unknown item types are skipped, not fatal
                     Some(_) => {}
@@ -874,6 +1099,7 @@ impl OutboundAdapter for ResponsesAdapter {
                             .to_string(),
                         // A `function_call` output item is a client tool call.
                         provider_executed: false,
+                        dynamic: false,
                         provider_metadata: ProviderMetadata::new(),
                     });
                 }
@@ -911,6 +1137,8 @@ impl OutboundAdapter for ResponsesAdapter {
                         // emits an empty input object.
                         arguments: "{}".to_string(),
                         provider_executed: true,
+                        // OpenAI's built-in server tools are not runtime MCP tools.
+                        dynamic: false,
                         provider_metadata: ProviderMetadata::new(),
                     });
                 }
@@ -934,6 +1162,8 @@ impl OutboundAdapter for ResponsesAdapter {
                         name: "code_interpreter".to_string(),
                         arguments: serde_json::Value::Object(input).to_string(),
                         provider_executed: true,
+                        // `code_interpreter` is a built-in server tool, not MCP.
+                        dynamic: false,
                         provider_metadata: ProviderMetadata::new(),
                     });
                 }
@@ -1005,38 +1235,70 @@ impl OutboundAdapter for ResponsesAdapter {
                         provider_metadata: meta,
                     });
                 }
-                // KNOWN LIMITATION — these output items are dropped on parse,
-                // which is a fidelity gap (not a clean N/A) honestly recorded
-                // here. Carrying them faithfully needs a content-shape change
-                // that is deliberately out of scope for this change:
-                //   - `mcp_call`: a provider-executed remote MCP tool call whose
-                //     *result* is carried **inline** on the same item
-                //     (`{ server_label, name, arguments, output?, error? }`). The
-                //     AI SDK reference lowers it to a provider-executed tool-call
-                //     PLUS a separate tool-result whose body is an MCP-specific
-                //     `{ type: 'call', serverLabel, name, arguments, output?,
-                //     error? }` structure. bitrouter's flat `ToolCall` has no
-                //     server-identifier slot and its `ToolResult` renders only as
-                //     a *separate* `function_call_output` input item — so there is
-                //     no shape today that re-emits a single `mcp_call` item with
-                //     its inline output. Mapping `output`/`error` onto a paired
-                //     `ToolResult`/`ExecutionDenied` would NOT round-trip (it
-                //     would split one wire item into two, and `ExecutionDenied`
-                //     means *approval-denied*, not a tool error), so it is left
-                //     uncarried rather than mis-modeled — the same deferral as the
-                //     `Content::ToolCall` `dynamic` flag and Anthropic
-                //     `mcp_tool_use`. **Result: Responses MCP tool-call results
-                //     are not yet carried; this is a deferred gap.**
-                //   - `local_shell_call`: a *client*-executed call (the AI SDK
-                //     leaves `providerExecuted` unset and keys it by `call_id`),
-                //     which must round-trip its `action` payload and be paired
-                //     with a `local_shell_call_output`. That is a distinct client
-                //     tool-call shape, not the provider-executed `<name>_call`
-                //     reproduction path used above, so it is deferred too.
-                //   - any other unknown item type is skipped for forward
-                //     compatibility (mirrors the input-side `Some(_) => {}`),
-                //     rather than failing the whole response.
+                // `mcp_call` — a provider-executed remote MCP tool call whose
+                // *result* is carried **inline** on the same item
+                // (`{ server_label, name, arguments, output?, error? }`). It is
+                // lowered (mirroring the AI SDK reference) to a `dynamic`,
+                // provider-executed `ToolCall` PLUS a paired `ToolResult` whose
+                // body is the MCP-specific `{ type: 'call', serverLabel, name,
+                // arguments, output?, error? }` structure. `render_output_items`
+                // recombines the two back into a single `mcp_call` item, so the
+                // inline result round-trips same-protocol exactly.
                 // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+                Some("mcp_call") => content.extend(parse_mcp_call(item)),
+                // `mcp_list_tools` — the catalogue of tools a remote MCP server
+                // advertised. The AI SDK reference skips it (it is neither a call
+                // nor a result the model acts on), and so does bitrouter; there is
+                // no canonical content part for a tool catalogue.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+                Some("mcp_list_tools") => {}
+                // `local_shell_call` — a *client*-executed shell tool call (the AI
+                // SDK leaves `providerExecuted` unset and keys it by `call_id`),
+                // carrying an `action` payload. It maps to an ordinary client
+                // `ToolCall` named `local_shell` whose input is `{action}` (the
+                // wire action preserved verbatim); `render_output_items`
+                // reconstructs the `local_shell_call` item from the same name, so
+                // the call round-trips same-protocol. The item `id` (distinct from
+                // `call_id`) rides in `provider_metadata["openai"]["itemId"]`.
+                //
+                // Residual gap: the paired `local_shell_call_output` is a
+                // *client*-supplied result on a follow-up **request**. bitrouter's
+                // `ToolResult` does not carry the tool name on the Responses wire
+                // (which keys results purely by `call_id`), so the request render
+                // cannot distinguish a `local_shell` result from an ordinary
+                // `function_call_output`; the output therefore degrades to
+                // `function_call_output` rather than `local_shell_call_output`.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/tool/local-shell.ts>
+                Some("local_shell_call") => {
+                    let call_id = item
+                        .get("call_id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let action = item.get("action").cloned().unwrap_or(serde_json::json!({}));
+                    let mut meta = ProviderMetadata::new();
+                    if let Some(id) = item.get("id").and_then(|i| i.as_str()) {
+                        set_provider_metadata(
+                            &mut meta,
+                            PROVIDER_ID_OPENAI,
+                            RESPONSES_ITEM_ID,
+                            serde_json::Value::String(id.to_string()),
+                        );
+                    }
+                    content.push(Content::ToolCall {
+                        id: call_id,
+                        name: RESPONSES_LOCAL_SHELL_TOOL.to_string(),
+                        arguments: serde_json::json!({ "action": action }).to_string(),
+                        // A `local_shell_call` is a client tool call (the client
+                        // runs the shell), not a provider-executed or MCP call.
+                        provider_executed: false,
+                        dynamic: false,
+                        provider_metadata: meta,
+                    });
+                }
+                // Any other unknown item type is skipped for forward
+                // compatibility (mirrors the input-side `Some(_) => {}`), rather
+                // than failing the whole response.
                 _ => {}
             }
         }
@@ -1273,15 +1535,25 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
                 // `function_call` input item — the provider already ran it, and
                 // the Responses input wire has no slot to replay a server-tool
                 // call (the AI SDK reference drops it / emits an item_reference).
-                // Only client tool calls round-trip as `function_call`.
+                // This also covers a `dynamic` provider-executed MCP call.
+                // Only client tool calls round-trip as input items.
                 // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
                 if !provider_executed {
-                    items.push(serde_json::json!({
-                        "type": "function_call",
-                        "call_id": id,
-                        "name": name,
-                        "arguments": arguments,
-                    }));
+                    // A client `local_shell` call reproduces its `local_shell_call`
+                    // input item (with the `action` payload), matching the AI SDK;
+                    // every other client call is a `function_call`.
+                    if name == RESPONSES_LOCAL_SHELL_TOOL
+                        && let Some(item) = render_local_shell_call_item(c)
+                    {
+                        items.push(item);
+                    } else {
+                        items.push(serde_json::json!({
+                            "type": "function_call",
+                            "call_id": id,
+                            "name": name,
+                            "arguments": arguments,
+                        }));
+                    }
                 }
             }
             // image/* -> `input_image`, other media -> `input_file`; the payload
@@ -1336,14 +1608,22 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
             Content::ToolResult {
                 call_id,
                 output,
+                dynamic,
                 provider_metadata,
                 ..
             } => {
+                // A `dynamic` MCP result is the inline result of a
+                // provider-executed `mcp_call`; the provider already ran it, so it
+                // is NOT re-sent as a client `function_call_output` (the AI SDK
+                // reference likewise does not replay provider-executed results on
+                // the input wire). It rides the response path instead, where the
+                // `mcp_call` item recombines its call and inline result.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
                 let denial_paired_with_approval =
                     matches!(output, ToolResultOutput::ExecutionDenied { .. })
                         && provider_namespace(provider_metadata, PROVIDER_ID_OPENAI)
                             .is_some_and(|o| o.contains_key("approvalId"));
-                if !denial_paired_with_approval {
+                if !*dynamic && !denial_paired_with_approval {
                     let output_value = render_responses_tool_output(output);
                     items.push(serde_json::json!({
                         "type": "function_call_output",
@@ -1568,9 +1848,49 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
             name,
             arguments,
             provider_executed,
+            dynamic,
             ..
         } = c
         {
+            // A `dynamic` provider-executed MCP call recombines with its inline
+            // result — the same-id `ToolResult` carrying the `{type:'call', …}`
+            // body — back into ONE `mcp_call` item, so the inline output/error
+            // round-trips. If no such paired result is present (e.g. the call was
+            // routed in from a non-Responses wire), fall through and degrade the
+            // call to a plain `function_call`.
+            if *dynamic
+                && *provider_executed
+                && let Some(item) = result
+                    .content
+                    .iter()
+                    .filter_map(|r| match r {
+                        Content::ToolResult {
+                            call_id,
+                            output,
+                            dynamic: result_dynamic,
+                            provider_metadata,
+                            ..
+                        } if *result_dynamic && call_id == id => {
+                            render_mcp_call_item(call_id, provider_metadata, output)
+                        }
+                        _ => None,
+                    })
+                    .next()
+            {
+                items.push(item);
+                continue;
+            }
+            // A client `local_shell` call reproduces its `local_shell_call` output
+            // item, keyed by `call_id`, restoring the `action` payload and the
+            // item `id` from `provider_metadata["openai"]["itemId"]`.
+            // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+            if !*provider_executed
+                && name == RESPONSES_LOCAL_SHELL_TOOL
+                && let Some(item) = render_local_shell_call_item(c)
+            {
+                items.push(item);
+                continue;
+            }
             if *provider_executed {
                 // Reproduce the provider-executed server-tool output item on the
                 // same wire. The Responses API names these items `<tool>_call`
