@@ -746,16 +746,12 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         let mut req = serde_json::Map::new();
         req.insert("model".into(), prompt.model.clone().into());
         req.insert("messages".into(), messages.into());
-        if !prompt.tools.is_empty() {
-            req.insert(
-                "tools".into(),
-                prompt
-                    .tools
-                    .iter()
-                    .map(render_chat_tool)
-                    .collect::<Vec<_>>()
-                    .into(),
-            );
+        // Drop tools with no Chat Completions wire form (provider-defined /
+        // server tools); only emit `tools` if at least one function tool remains,
+        // so a request that carried only server tools doesn't send `tools: []`.
+        let tools: Vec<_> = prompt.tools.iter().filter_map(render_chat_tool).collect();
+        if !tools.is_empty() {
+            req.insert("tools".into(), tools.into());
         }
         // Absent params are omitted entirely, never serialised as null (#454-5).
         if let Some(t) = prompt.params.temperature {
@@ -1001,17 +997,22 @@ impl OutboundAdapter for ChatCompletionsAdapter {
 ///
 /// A [`Tool::Function`] becomes `{type:"function", function:{name, description,
 /// parameters, strict?}}`; the `strict` flag is emitted when set (previously it
-/// was always dropped).
+/// was always dropped). Returns `Some(_)`.
 /// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tools>
 ///
 /// Chat Completions has **no** provider-defined ("server") tool envelope on the
-/// wire, so a [`Tool::ProviderDefined`] only reaches here on a cross-protocol
-/// route (a client targeting another provider's server tool, routed to an
-/// OpenAI-compatible upstream). Per the faithful-passthrough rule it is
-/// preserved verbatim in its source-native shape so the upstream decides; the
-/// object is splatted directly into the `tools` array rather than dropped or
-/// lossily mapped.
-fn render_chat_tool(tool: &Tool) -> serde_json::Value {
+/// wire — its `tools` array accepts only `{type:"function", …}`. A
+/// [`Tool::ProviderDefined`] therefore has no valid Chat Completions
+/// representation: emitting its source-native shape (e.g. `{type:"web_search"}`,
+/// or a Codex `{type:"namespace"}` group) is a structurally-invalid `tools`
+/// entry that a strict upstream (DeepSeek, Kimi, OpenAI itself) rejects — which
+/// fails the **entire request** with an opaque error rather than ignoring one
+/// tool. Such a server tool could not be executed on a Chat Completions upstream
+/// anyway, so it is dropped (returns `None`), keeping the request — and its
+/// function tools — valid. This is wire-structural, not capability gating: a
+/// tool the target wire cannot express is omitted, never a function tool the
+/// model might support.
+fn render_chat_tool(tool: &Tool) -> Option<serde_json::Value> {
     match tool {
         Tool::Function {
             name,
@@ -1034,11 +1035,9 @@ fn render_chat_tool(tool: &Tool) -> serde_json::Value {
             if let Some(strict) = strict {
                 function.insert("strict".into(), (*strict).into());
             }
-            serde_json::json!({ "type": "function", "function": function })
+            Some(serde_json::json!({ "type": "function", "function": function }))
         }
-        Tool::ProviderDefined { id, name, args, .. } => {
-            super::provider_defined_native(id, name, args)
-        }
+        Tool::ProviderDefined { .. } => None,
     }
 }
 
