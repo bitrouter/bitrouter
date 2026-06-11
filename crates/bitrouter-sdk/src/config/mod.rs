@@ -210,12 +210,40 @@ pub struct RateLimit {
 }
 
 /// Per-model pricing as written in config: micro-USD per token.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+///
+/// The top-level rates are the **base bracket**. [`context_tiers`] optionally
+/// raises the per-token rate once a request's input (prompt) token count
+/// crosses a threshold — some upstreams bill a steeper rate above a context
+/// length (e.g. a higher rate past 128k input tokens). Empty ⇒ flat pricing.
+///
+/// [`context_tiers`]: PricingConfig::context_tiers
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PricingConfig {
-    /// Micro-USD per prompt (input) token.
+    /// Micro-USD per prompt (input) token (base bracket).
     #[serde(default)]
     pub input_micro_usd_per_token: f64,
-    /// Micro-USD per completion (output) token.
+    /// Micro-USD per completion (output) token (base bracket).
+    #[serde(default)]
+    pub output_micro_usd_per_token: f64,
+    /// Optional higher context brackets, applied by total input-token count.
+    /// The selected bracket's rates apply to the whole request (a step
+    /// function); the consumer's bracket pick is order-independent.
+    #[serde(default)]
+    pub context_tiers: Vec<PricingTierConfig>,
+}
+
+/// One higher context-pricing bracket in config — see
+/// [`PricingConfig::context_tiers`].
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PricingTierConfig {
+    /// Exclusive lower bound on total input tokens: a request whose input
+    /// size is strictly greater than this enters the bracket (a base bracket
+    /// documented as "≤ 128k" is written as `above_input_tokens: 128000`).
+    pub above_input_tokens: u64,
+    /// Micro-USD per prompt (input) token for this bracket.
+    #[serde(default)]
+    pub input_micro_usd_per_token: f64,
+    /// Micro-USD per completion (output) token for this bracket.
     #[serde(default)]
     pub output_micro_usd_per_token: f64,
 }

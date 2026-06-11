@@ -26,7 +26,7 @@ use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
 use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvider};
-use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
+use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 
 /// A running application plus the database connection it was assembled
@@ -436,15 +436,25 @@ fn build_pricing_table(config: &Config) -> PricingTable {
     let mut table = PricingTable::new();
     for (provider_id, provider) in &config.providers {
         for model in &provider.models {
-            if let Some(pricing) = model.pricing {
-                table.insert(
-                    provider_id.clone(),
-                    model.id.clone(),
-                    ModelPricing::new(
-                        pricing.input_micro_usd_per_token,
-                        pricing.output_micro_usd_per_token,
-                    ),
+            if let Some(pricing) = &model.pricing {
+                let mut model_pricing = ModelPricing::new(
+                    pricing.input_micro_usd_per_token,
+                    pricing.output_micro_usd_per_token,
                 );
+                // Carry any context ("staged") brackets through to the
+                // metering table; config rates are concrete f64s, so an
+                // omitted per-bracket rate defaults to 0 (free), matching the
+                // base-rate mapping above.
+                model_pricing.context_tiers = pricing
+                    .context_tiers
+                    .iter()
+                    .map(|t| ContextTier {
+                        above_input_tokens: t.above_input_tokens,
+                        input_micro_usd_per_token: Some(t.input_micro_usd_per_token),
+                        output_micro_usd_per_token: Some(t.output_micro_usd_per_token),
+                    })
+                    .collect();
+                table.insert(provider_id.clone(), model.id.clone(), model_pricing);
             }
         }
     }

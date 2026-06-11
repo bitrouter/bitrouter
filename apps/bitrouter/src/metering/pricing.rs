@@ -33,21 +33,45 @@ use bitrouter_sdk::language_model::Usage;
 ///   model)` miss is reported, not papered over.
 /// - **#443 → #445** — the lookup is keyed by `(provider, service_id)` so a
 ///   service id that differs from the public model name still resolves.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModelPricing {
-    /// Micro-USD charged per prompt (input) token. `None` = unconfigured.
+    /// Micro-USD charged per prompt (input) token (base bracket). `None` =
+    /// unconfigured.
     pub input_micro_usd_per_token: Option<f64>,
-    /// Micro-USD charged per completion (output) token. `None` = unconfigured.
+    /// Micro-USD charged per completion (output) token (base bracket).
+    /// `None` = unconfigured.
+    pub output_micro_usd_per_token: Option<f64>,
+    /// Optional higher context brackets, applied by total input-token count.
+    /// Empty ⇒ flat pricing. See [`ContextTier`] and
+    /// [`resolve_for_input_tokens`](Self::resolve_for_input_tokens).
+    pub context_tiers: Vec<ContextTier>,
+}
+
+/// A higher context-pricing bracket: a steeper per-token rate that applies
+/// once a request's input (prompt) token count crosses
+/// [`above_input_tokens`](Self::above_input_tokens). The selected bracket's
+/// rates apply to the whole request (a step function, not graduated marginal
+/// brackets). Mirrors the base [`ModelPricing`] rate fields.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ContextTier {
+    /// Exclusive lower bound on total input tokens. A request whose input
+    /// size is strictly greater than this enters the bracket; one exactly at
+    /// the bound stays in the lower bracket.
+    pub above_input_tokens: u64,
+    /// Micro-USD per prompt (input) token for this bracket.
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per completion (output) token for this bracket.
     pub output_micro_usd_per_token: Option<f64>,
 }
 
 impl ModelPricing {
-    /// Build a pricing entry with both rates set. Use [`partial`](Self::partial)
-    /// when only some rates are known.
+    /// Build a pricing entry with both base rates set and no context tiers.
+    /// Use [`partial`](Self::partial) when only some rates are known.
     pub fn new(input_micro_usd_per_token: f64, output_micro_usd_per_token: f64) -> Self {
         Self {
             input_micro_usd_per_token: Some(input_micro_usd_per_token),
             output_micro_usd_per_token: Some(output_micro_usd_per_token),
+            context_tiers: Vec::new(),
         }
     }
 
@@ -57,6 +81,31 @@ impl ModelPricing {
         Self {
             input_micro_usd_per_token: input,
             output_micro_usd_per_token: output,
+            context_tiers: Vec::new(),
+        }
+    }
+
+    /// Resolve the effective bracket for a request with `input_tokens` total
+    /// prompt tokens: the `context_tiers` entry with the greatest
+    /// `above_input_tokens` strictly below `input_tokens`, or the base rates
+    /// when none qualifies. Returns flat pricing (no tiers); order-independent.
+    pub fn resolve_for_input_tokens(&self, input_tokens: u64) -> ModelPricing {
+        match self
+            .context_tiers
+            .iter()
+            .filter(|t| input_tokens > t.above_input_tokens)
+            .max_by_key(|t| t.above_input_tokens)
+        {
+            Some(tier) => ModelPricing {
+                input_micro_usd_per_token: tier.input_micro_usd_per_token,
+                output_micro_usd_per_token: tier.output_micro_usd_per_token,
+                context_tiers: Vec::new(),
+            },
+            None => ModelPricing {
+                input_micro_usd_per_token: self.input_micro_usd_per_token,
+                output_micro_usd_per_token: self.output_micro_usd_per_token,
+                context_tiers: Vec::new(),
+            },
         }
     }
 
@@ -112,7 +161,7 @@ impl PricingTable {
     pub fn resolve(&self, provider: &str, service_id: &str) -> Option<ModelPricing> {
         self.entries
             .get(&BorrowedKey(provider, service_id) as &dyn KeyLike)
-            .copied()
+            .cloned()
     }
 }
 
@@ -178,7 +227,12 @@ pub const MAX_TRUSTED_TOKENS: u64 = 10_000_000;
 /// Each bucket's token count is clamped to [`MAX_TRUSTED_TOKENS`] before the
 /// math; an adversarial upstream can't drive the charge to overflow.
 /// Result rounds to the nearest whole micro-USD; never negative.
+///
+/// Context-tier pricing is resolved here: the prompt-token count selects the
+/// bracket (see [`ModelPricing::resolve_for_input_tokens`]) and its rates bill
+/// the whole request. Flat pricing (no tiers) resolves to its base rates.
 pub fn calculate_charge_micro_usd(usage: &Usage, pricing: &ModelPricing) -> Option<i64> {
+    let pricing = pricing.resolve_for_input_tokens(usage.prompt_tokens);
     let input = bucket_charge(usage.prompt_tokens, pricing.input_micro_usd_per_token)?;
     let output = bucket_charge(usage.completion_tokens, pricing.output_micro_usd_per_token)?;
     Some((input + output).round().max(0.0) as i64)
@@ -280,5 +334,132 @@ mod tests {
         assert!(table.resolve("openai", "gpt-5-2026-01").is_some());
         assert!(table.resolve("openai", "gpt-5").is_none());
         assert!(table.resolve("anthropic", "gpt-5-2026-01").is_none());
+    }
+
+    /// Base ≤128k = 1.3/7.8 µ$/token; higher bracket >128k = 2.0/12.0.
+    fn tiered() -> ModelPricing {
+        ModelPricing {
+            input_micro_usd_per_token: Some(1.3),
+            output_micro_usd_per_token: Some(7.8),
+            context_tiers: vec![ContextTier {
+                above_input_tokens: 128_000,
+                input_micro_usd_per_token: Some(2.0),
+                output_micro_usd_per_token: Some(12.0),
+            }],
+        }
+    }
+
+    #[test]
+    fn resolve_picks_base_at_or_below_threshold() {
+        let p = tiered();
+        assert_eq!(
+            p.resolve_for_input_tokens(0).input_micro_usd_per_token,
+            Some(1.3)
+        );
+        assert_eq!(
+            p.resolve_for_input_tokens(128_000)
+                .input_micro_usd_per_token,
+            Some(1.3)
+        );
+    }
+
+    #[test]
+    fn resolve_picks_tier_above_threshold() {
+        let p = tiered();
+        let hi = p.resolve_for_input_tokens(128_001);
+        assert_eq!(hi.input_micro_usd_per_token, Some(2.0));
+        assert_eq!(hi.output_micro_usd_per_token, Some(12.0));
+        assert!(hi.context_tiers.is_empty(), "resolved bracket is flat");
+    }
+
+    #[test]
+    fn resolve_highest_applicable_tier_is_order_independent() {
+        let p = ModelPricing {
+            input_micro_usd_per_token: Some(1.0),
+            output_micro_usd_per_token: Some(2.0),
+            context_tiers: vec![
+                ContextTier {
+                    above_input_tokens: 256_000,
+                    input_micro_usd_per_token: Some(4.0),
+                    output_micro_usd_per_token: Some(8.0),
+                },
+                ContextTier {
+                    above_input_tokens: 128_000,
+                    input_micro_usd_per_token: Some(2.0),
+                    output_micro_usd_per_token: Some(4.0),
+                },
+            ],
+        };
+        assert_eq!(
+            p.resolve_for_input_tokens(1_000).input_micro_usd_per_token,
+            Some(1.0)
+        );
+        assert_eq!(
+            p.resolve_for_input_tokens(200_000)
+                .input_micro_usd_per_token,
+            Some(2.0)
+        );
+        assert_eq!(
+            p.resolve_for_input_tokens(300_000)
+                .input_micro_usd_per_token,
+            Some(4.0)
+        );
+    }
+
+    #[test]
+    fn charge_uses_the_bracket_selected_by_prompt_size() {
+        let pricing = tiered();
+        // ≤128k → base: 100_000*1.3 + 1_000*7.8 = 137_800.
+        let lo = Usage {
+            prompt_tokens: 100_000,
+            completion_tokens: 1_000,
+            ..Default::default()
+        };
+        assert_eq!(calculate_charge_micro_usd(&lo, &pricing), Some(137_800));
+        // >128k → tier: 200_000*2.0 + 1_000*12.0 = 412_000.
+        let hi = Usage {
+            prompt_tokens: 200_000,
+            completion_tokens: 1_000,
+            ..Default::default()
+        };
+        assert_eq!(calculate_charge_micro_usd(&hi, &pricing), Some(412_000));
+    }
+
+    #[test]
+    fn flat_pricing_charges_identically_at_every_size() {
+        // No tiers ⇒ base rate for any prompt size (back-compat).
+        let pricing = ModelPricing::new(2.0, 10.0);
+        for n in [10_u64, 200_000] {
+            let usage = Usage {
+                prompt_tokens: n,
+                completion_tokens: 0,
+                ..Default::default()
+            };
+            assert_eq!(
+                calculate_charge_micro_usd(&usage, &pricing),
+                Some((n as f64 * 2.0) as i64)
+            );
+        }
+    }
+
+    #[test]
+    fn tier_inherits_partial_skip_when_bucket_rate_missing() {
+        // A tier with no output rate must skip (None) when output is nonzero,
+        // exactly like a partial flat entry.
+        let pricing = ModelPricing {
+            input_micro_usd_per_token: Some(1.3),
+            output_micro_usd_per_token: Some(7.8),
+            context_tiers: vec![ContextTier {
+                above_input_tokens: 128_000,
+                input_micro_usd_per_token: Some(2.0),
+                output_micro_usd_per_token: None,
+            }],
+        };
+        let hi = Usage {
+            prompt_tokens: 200_000,
+            completion_tokens: 1_000, // nonzero, but tier output rate missing
+            ..Default::default()
+        };
+        assert_eq!(calculate_charge_micro_usd(&hi, &pricing), None);
     }
 }

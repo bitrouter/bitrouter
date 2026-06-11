@@ -32,6 +32,6 @@ pub mod store;
 mod tests;
 
 pub use db::RequestMetric;
-pub use pricing::{ModelPricing, PricingTable, calculate_charge_micro_usd};
+pub use pricing::{ContextTier, ModelPricing, PricingTable, calculate_charge_micro_usd};
 pub use recorder::MeteringRecorder;
 pub use store::{MeteringStore, RateMetrics, TimeWindow, TokenUsage};

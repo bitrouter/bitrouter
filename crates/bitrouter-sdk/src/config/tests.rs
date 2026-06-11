@@ -74,6 +74,54 @@ providers:
 }
 
 #[test]
+fn parses_context_tier_pricing() {
+    let yaml = r#"
+providers:
+  alibaba:
+    api_base: https://example.test/v1
+    api_key: k
+    models:
+      - id: qwen-max
+        pricing:
+          input_micro_usd_per_token: 1.3
+          output_micro_usd_per_token: 7.8
+          context_tiers:
+            - above_input_tokens: 128000
+              input_micro_usd_per_token: 2.0
+              output_micro_usd_per_token: 12.0
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let model = &cfg.providers.get("alibaba").unwrap().models[0];
+    let pricing = model.pricing.as_ref().expect("pricing present");
+    assert_eq!(pricing.input_micro_usd_per_token, 1.3);
+    assert_eq!(pricing.context_tiers.len(), 1);
+    assert_eq!(pricing.context_tiers[0].above_input_tokens, 128_000);
+    assert_eq!(pricing.context_tiers[0].output_micro_usd_per_token, 12.0);
+}
+
+#[test]
+fn pricing_without_tiers_parses_flat() {
+    // Back-compat: a model priced the old way has no tiers.
+    let yaml = r#"
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: k
+    models:
+      - id: gpt-5
+        pricing:
+          input_micro_usd_per_token: 1.25
+          output_micro_usd_per_token: 10.0
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let pricing = cfg.providers.get("openai").unwrap().models[0]
+        .pricing
+        .as_ref()
+        .expect("pricing present");
+    assert!(pricing.context_tiers.is_empty());
+}
+
+#[test]
 fn protocol_inference_from_api_base() {
     assert_eq!(
         infer_protocol("https://api.anthropic.com/v1"),
