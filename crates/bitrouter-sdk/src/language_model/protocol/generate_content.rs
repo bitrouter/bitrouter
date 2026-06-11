@@ -921,7 +921,7 @@ impl InboundAdapter for GenerateContentAdapter {
     }
 
     fn stream_encoder(&self, _request_id: &str, _model: &str) -> Box<dyn StreamEncoder> {
-        Box::new(GenerateContentStreamEncoder)
+        Box::new(GenerateContentStreamEncoder::default())
     }
 }
 
@@ -1386,11 +1386,44 @@ impl StreamDecoder for GenerateContentStreamDecoder {
 
 /// Generate Content `streamGenerateContent` SSE encoder — each canonical part becomes one
 /// `GenerateContentResponse` chunk.
-struct GenerateContentStreamEncoder;
+/// Generate Content has no incremental tool-argument frame — a `functionCall`
+/// part carries the whole `{name, args}` at once. So unlike Chat Completions /
+/// Responses (which stream argument deltas), this encoder must BUFFER a tool
+/// call and emit it as one chunk once complete. Accumulating also makes it
+/// robust to upstreams that re-send `name:""` on every continuation chunk
+/// (which would otherwise emit one broken `functionCall` per fragment).
+#[derive(Default)]
+struct GenerateContentStreamEncoder {
+    /// `(name, accumulated raw-JSON arguments)` of the tool call awaiting emission.
+    pending_tool: Option<(String, String)>,
+}
+
+impl GenerateContentStreamEncoder {
+    /// Emit the buffered tool call, if any, as one `functionCall` chunk.
+    fn flush_pending_tool(&mut self) -> Option<serde_json::Value> {
+        let (name, args) = self.pending_tool.take()?;
+        let args: serde_json::Value =
+            serde_json::from_str(if args.is_empty() { "{}" } else { &args })
+                .unwrap_or_else(|_| serde_json::json!({}));
+        Some(serde_json::json!({
+            "candidates": [{ "content": { "role": "model", "parts": [{
+                "functionCall": { "name": name, "args": args }
+            }] } }]
+        }))
+    }
+
+    fn to_frame(chunk: serde_json::Value) -> SseFrame {
+        SseFrame::Event {
+            event: None,
+            data: chunk.to_string(),
+        }
+    }
+}
 
 impl StreamEncoder for GenerateContentStreamEncoder {
     fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
-        let chunk = match part {
+        let mut chunks: Vec<serde_json::Value> = Vec::new();
+        match part {
             // Observability-only metadata (upstream response id) — never
             // forwarded to the Google-protocol client.
             StreamPart::ResponseStarted { .. } => return Ok(Vec::new()),
@@ -1401,9 +1434,33 @@ impl StreamEncoder for GenerateContentStreamEncoder {
             | StreamPart::TextEnd { .. }
             | StreamPart::ReasoningStart { .. }
             | StreamPart::ReasoningEnd { .. } => return Ok(Vec::new()),
+            // A tool call buffers until complete (see struct docs). A delta with
+            // a *non-empty* name starts a new call (flush the previous one); an
+            // empty/absent name is an argument continuation of the open call —
+            // some upstreams re-send `name:""` on every chunk, which must NOT be
+            // read as a new call.
+            StreamPart::ToolCallDelta {
+                name, arguments, ..
+            } => match name.as_deref().filter(|n| !n.is_empty()) {
+                Some(name) => {
+                    if let Some(c) = self.flush_pending_tool() {
+                        chunks.push(c);
+                    }
+                    self.pending_tool = Some((name.to_string(), arguments.clone()));
+                }
+                None => match self.pending_tool.as_mut() {
+                    Some((_, acc)) => acc.push_str(arguments),
+                    None => self.pending_tool = Some((String::new(), arguments.clone())),
+                },
+            },
+            // Every other emitting part flushes the buffered tool call first, so
+            // a completed `functionCall` is never stranded behind later content.
             // A generated file -> an `inlineData` / `fileData` part in one chunk.
             // <https://ai.google.dev/gemini-api/docs/image-generation>
             StreamPart::File { media_type, data } => {
+                if let Some(c) = self.flush_pending_tool() {
+                    chunks.push(c);
+                }
                 let file_part = match data {
                     DataContent::Base64 { data } => serde_json::json!({
                         "inlineData": { "mimeType": media_type, "data": data }
@@ -1412,31 +1469,26 @@ impl StreamEncoder for GenerateContentStreamEncoder {
                         "fileData": { "mimeType": media_type, "fileUri": url }
                     }),
                 };
-                serde_json::json!({
+                chunks.push(serde_json::json!({
                     "candidates": [{ "content": { "role": "model", "parts": [file_part] } }]
-                })
+                }));
             }
-            StreamPart::TextDelta { text } => serde_json::json!({
-                "candidates": [{ "content": { "role": "model", "parts": [{ "text": text }] } }]
-            }),
-            StreamPart::ReasoningDelta { text } => serde_json::json!({
-                "candidates": [{ "content": { "role": "model",
-                    "parts": [{ "text": text, "thought": true }] } }]
-            }),
-            StreamPart::ToolCallDelta {
-                name, arguments, ..
-            } => {
-                let args: serde_json::Value = serde_json::from_str(if arguments.is_empty() {
-                    "{}"
-                } else {
-                    arguments
-                })
-                .unwrap_or(serde_json::json!({}));
-                serde_json::json!({
-                    "candidates": [{ "content": { "role": "model", "parts": [{
-                        "functionCall": { "name": name.clone().unwrap_or_default(), "args": args }
-                    }] } }]
-                })
+            StreamPart::TextDelta { text } => {
+                if let Some(c) = self.flush_pending_tool() {
+                    chunks.push(c);
+                }
+                chunks.push(serde_json::json!({
+                    "candidates": [{ "content": { "role": "model", "parts": [{ "text": text }] } }]
+                }));
+            }
+            StreamPart::ReasoningDelta { text } => {
+                if let Some(c) = self.flush_pending_tool() {
+                    chunks.push(c);
+                }
+                chunks.push(serde_json::json!({
+                    "candidates": [{ "content": { "role": "model",
+                        "parts": [{ "text": text, "thought": true }] } }]
+                }));
             }
             // Re-attach a streamed citation as a one-chunk
             // `candidate.groundingMetadata.groundingChunks` web entry — the
@@ -1445,38 +1497,54 @@ impl StreamEncoder for GenerateContentStreamEncoder {
             // <https://ai.google.dev/api/generate-content#GroundingChunk>
             StreamPart::Source { source } => match source {
                 Source::Url { url, title, .. } => {
+                    if let Some(c) = self.flush_pending_tool() {
+                        chunks.push(c);
+                    }
                     let mut web = serde_json::Map::new();
                     web.insert("uri".into(), url.clone().into());
                     if let Some(title) = title {
                         web.insert("title".into(), title.clone().into());
                     }
-                    serde_json::json!({
+                    chunks.push(serde_json::json!({
                         "candidates": [{
                             "content": { "role": "model", "parts": [] },
                             "groundingMetadata": {
                                 "groundingChunks": [{ "web": serde_json::Value::Object(web) }]
                             },
                         }]
-                    })
+                    }));
                 }
                 // No `groundingChunks.web` form for a document citation.
                 Source::Document { .. } => return Ok(Vec::new()),
             },
-            StreamPart::Usage { usage } => serde_json::json!({
-                "usageMetadata": {
-                    "promptTokenCount": usage.prompt_tokens,
-                    "candidatesTokenCount": usage.completion_tokens,
-                    "totalTokenCount": usage.total(),
-                    "thoughtsTokenCount": usage.reasoning_tokens,
+            StreamPart::Usage { usage } => {
+                if let Some(c) = self.flush_pending_tool() {
+                    chunks.push(c);
                 }
-            }),
-            StreamPart::Finish { reason } => serde_json::json!({
-                "candidates": [{
-                    "content": { "role": "model", "parts": [] },
-                    "finishReason": finish_reason_str(reason),
-                }]
-            }),
+                chunks.push(serde_json::json!({
+                    "usageMetadata": {
+                        "promptTokenCount": usage.prompt_tokens,
+                        "candidatesTokenCount": usage.completion_tokens,
+                        "totalTokenCount": usage.total(),
+                        "thoughtsTokenCount": usage.reasoning_tokens,
+                    }
+                }));
+            }
+            StreamPart::Finish { reason } => {
+                if let Some(c) = self.flush_pending_tool() {
+                    chunks.push(c);
+                }
+                chunks.push(serde_json::json!({
+                    "candidates": [{
+                        "content": { "role": "model", "parts": [] },
+                        "finishReason": finish_reason_str(reason),
+                    }]
+                }));
+            }
             StreamPart::ResponseCompleted { status, usage, .. } => {
+                if let Some(c) = self.flush_pending_tool() {
+                    chunks.push(c);
+                }
                 // Inbound was Responses; Generate Content has no response-completed
                 // concept — emit a terminal candidate with a mapped
                 // `finishReason`, plus `usageMetadata` if usage was carried.
@@ -1499,13 +1567,20 @@ impl StreamEncoder for GenerateContentStreamEncoder {
                         "thoughtsTokenCount": u.reasoning_tokens,
                     });
                 }
-                chunk
+                chunks.push(chunk);
             }
         };
-        Ok(vec![SseFrame::Event {
-            event: None,
-            data: chunk.to_string(),
-        }])
+        Ok(chunks.into_iter().map(Self::to_frame).collect())
+    }
+
+    /// Flush any tool call still buffered when the stream ends without a
+    /// trailing `Finish` / `ResponseCompleted` part.
+    fn finish(&mut self) -> Result<Vec<SseFrame>> {
+        Ok(self
+            .flush_pending_tool()
+            .map(Self::to_frame)
+            .into_iter()
+            .collect())
     }
 
     fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {

@@ -1410,9 +1410,10 @@ fn render_usage(usage: &Usage) -> serde_json::Value {
 /// state machine — unknown chunk shapes are ignored, never panicked on.
 #[derive(Default)]
 struct ChatStreamDecoder {
-    /// Accumulates tool-call name per index so the canonical
-    /// `ToolCallDelta.id` is stable across chunks.
-    tool_ids: Vec<(String, String)>,
+    /// Remembers the tool-call id per `index` (only the first chunk of a call
+    /// carries `id`) so the canonical `ToolCallDelta.id` is stable across the
+    /// continuation chunks.
+    tool_ids: Vec<String>,
     done: bool,
     /// Whether the one-shot [`StreamPart::ResponseStarted`] has been emitted.
     /// Every chunk repeats the top-level `id`; we surface it only once.
@@ -1477,23 +1478,27 @@ impl StreamDecoder for ChatStreamDecoder {
                         let name = tc
                             .get("function")
                             .and_then(|f| f.get("name"))
-                            .and_then(|n| n.as_str());
+                            .and_then(|n| n.as_str())
+                            // Some OpenAI-compatible upstreams (e.g. Kimi / DeepSeek
+                            // serving stacks that emit `functions.<name>:<idx>` tool
+                            // ids) re-send `"name":""` on every argument-continuation
+                            // chunk. An empty string is not a name announcement, so
+                            // normalize it to `None` — otherwise a downstream encoder
+                            // reads it as the start of a *new* tool call.
+                            .filter(|n| !n.is_empty());
                         let args = tc
                             .get("function")
                             .and_then(|f| f.get("arguments"))
                             .and_then(|a| a.as_str())
                             .unwrap_or("");
                         while self.tool_ids.len() <= idx {
-                            self.tool_ids.push((String::new(), String::new()));
+                            self.tool_ids.push(String::new());
                         }
                         if let Some(id) = id {
-                            self.tool_ids[idx].0 = id.to_string();
-                        }
-                        if let Some(name) = name {
-                            self.tool_ids[idx].1 = name.to_string();
+                            self.tool_ids[idx] = id.to_string();
                         }
                         parts.push(StreamPart::ToolCallDelta {
-                            id: self.tool_ids[idx].0.clone(),
+                            id: self.tool_ids[idx].clone(),
                             name: name.map(|n| n.to_string()),
                             arguments: args.to_string(),
                         });
