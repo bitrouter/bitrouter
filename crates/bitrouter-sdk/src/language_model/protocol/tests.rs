@@ -34,6 +34,25 @@ fn all_protocols() -> [ApiProtocol; 4] {
     ]
 }
 
+/// A minimal valid request body for `protocol`, carrying a single user turn —
+/// enough for `parse_request` to succeed so a test can layer one extra field on.
+fn minimal_request(protocol: ApiProtocol) -> serde_json::Value {
+    match protocol {
+        ApiProtocol::Messages => serde_json::json!({
+            "model": "m", "max_tokens": 1024,
+            "messages": [{ "role": "user", "content": "hi" }],
+        }),
+        ApiProtocol::ChatCompletions => serde_json::json!({
+            "model": "m", "messages": [{ "role": "user", "content": "hi" }],
+        }),
+        ApiProtocol::Responses => serde_json::json!({ "model": "m", "input": "hi" }),
+        ApiProtocol::GenerateContent => serde_json::json!({
+            "model": "m", "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
+        }),
+        ApiProtocol::Custom(_) => unreachable!("test helper only handles built-in protocols"),
+    }
+}
+
 /// A canonical prompt exercising system + a user message + a tool definition.
 fn sample_prompt() -> Prompt {
     Prompt {
@@ -54,6 +73,7 @@ fn sample_prompt() -> Prompt {
             ..Default::default()
         },
         response_format: None,
+        tool_choice: None,
         stream: false,
     }
 }
@@ -748,6 +768,7 @@ fn messages_outbound_renders_output_config_effort() {
             ..Default::default()
         },
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_request(&prompt).unwrap();
@@ -775,6 +796,7 @@ fn messages_outbound_merges_format_and_effort_into_output_config() {
             strict: None,
             schema: serde_json::json!({"type": "object"}),
         }),
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_request(&prompt).unwrap();
@@ -890,6 +912,7 @@ fn messages_outbound_renders_mid_conversation_system() {
         tools: vec![],
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_request(&prompt).unwrap();
@@ -3294,6 +3317,7 @@ fn image_file_prompt() -> Prompt {
             ..Default::default()
         },
         response_format: None,
+        tool_choice: None,
         stream: false,
     }
 }
@@ -3705,6 +3729,7 @@ fn tool_result_prompt(call_id: &str, tool_name: Option<&str>, output: ToolResult
             ..Default::default()
         },
         response_format: None,
+        tool_choice: None,
         stream: false,
     }
 }
@@ -4003,6 +4028,142 @@ fn tool_result_content_skips_non_image_media_on_anthropic() {
             assert!(
                 mt.is_empty() || mt.starts_with("image/"),
                 "an image block must not carry a non-image media_type: {mt}"
+            );
+        }
+    }
+}
+
+/// #547 — an Anthropic Messages client (Claude Code) sends `tool_choice` in
+/// Anthropic's object shape. Routed to an OpenAI Chat Completions upstream it
+/// MUST become OpenAI's native shape (the bare string `"auto"`, not the object
+/// `{"type":"auto"}`, which OpenAI rejects), not pass through verbatim. Before
+/// the fix `tool_choice` rode `extra` opaquely and broke tool use on
+/// non-Anthropic models while plain-text generation still worked.
+#[test]
+fn regression_547_messages_tool_choice_translates_to_chat() {
+    let inbound = adapter_for(ApiProtocol::Messages);
+    let outbound = adapter_for(ApiProtocol::ChatCompletions);
+
+    // auto / any / none map to the bare strings; a forced tool maps to the
+    // nested `{type:function, function:{name}}` object.
+    let cases = [
+        (
+            serde_json::json!({ "type": "auto" }),
+            serde_json::json!("auto"),
+        ),
+        (
+            serde_json::json!({ "type": "any" }),
+            serde_json::json!("required"),
+        ),
+        (
+            serde_json::json!({ "type": "none" }),
+            serde_json::json!("none"),
+        ),
+        (
+            serde_json::json!({ "type": "tool", "name": "Edit" }),
+            serde_json::json!({ "type": "function", "function": { "name": "Edit" } }),
+        ),
+    ];
+
+    for (anthropic, expected_openai) in cases {
+        let request = serde_json::json!({
+            "model": "deepseek/deepseek-v4-pro",
+            "max_tokens": 1024,
+            "messages": [{ "role": "user", "content": "edit the file" }],
+            "tools": [{ "name": "Edit", "input_schema": { "type": "object" } }],
+            "tool_choice": anthropic,
+        });
+        let prompt = inbound
+            .parse_request(request)
+            .expect("parse messages request");
+        let rendered = outbound
+            .render_request(&prompt)
+            .expect("render chat request");
+        assert_eq!(
+            rendered["tool_choice"], expected_openai,
+            "Anthropic {anthropic} must render as OpenAI {expected_openai}"
+        );
+        // The translated value must not leak the inbound object shape.
+        assert_ne!(rendered["tool_choice"], anthropic);
+    }
+}
+
+/// `tool_choice` is canonical, so it round-trips across every inbound→outbound
+/// pair in the 4×4 matrix. Drives each native shape and asserts the canonical
+/// promotion + re-rendering for a forced-tool choice (the variant that differs
+/// most between protocols).
+#[test]
+fn tool_choice_round_trips_across_protocol_matrix() {
+    // Native `tool_choice` (or, for Google, `toolConfig`) that forces tool "X".
+    fn force_tool_field(p: ApiProtocol) -> (&'static str, serde_json::Value) {
+        match p {
+            ApiProtocol::Messages => (
+                "tool_choice",
+                serde_json::json!({ "type": "tool", "name": "X" }),
+            ),
+            ApiProtocol::ChatCompletions => (
+                "tool_choice",
+                serde_json::json!({ "type": "function", "function": { "name": "X" } }),
+            ),
+            ApiProtocol::Responses => (
+                "tool_choice",
+                serde_json::json!({ "type": "function", "name": "X" }),
+            ),
+            ApiProtocol::GenerateContent => (
+                "toolConfig",
+                serde_json::json!({
+                    "functionCallingConfig": { "mode": "ANY", "allowedFunctionNames": ["X"] }
+                }),
+            ),
+            ApiProtocol::Custom(_) => unreachable!(),
+        }
+    }
+
+    // Did the outbound request force exactly tool "X"?
+    fn forces_tool_x(p: ApiProtocol, req: &serde_json::Value) -> bool {
+        match p {
+            ApiProtocol::Messages => {
+                req["tool_choice"] == serde_json::json!({ "type": "tool", "name": "X" })
+            }
+            ApiProtocol::ChatCompletions => {
+                req["tool_choice"]["type"] == "function"
+                    && req["tool_choice"]["function"]["name"] == "X"
+            }
+            ApiProtocol::Responses => {
+                req["tool_choice"]["type"] == "function" && req["tool_choice"]["name"] == "X"
+            }
+            ApiProtocol::GenerateContent => {
+                let fcc = &req["toolConfig"]["functionCallingConfig"];
+                fcc["mode"] == "ANY" && fcc["allowedFunctionNames"][0] == "X"
+            }
+            ApiProtocol::Custom(_) => unreachable!(),
+        }
+    }
+
+    for from in all_protocols() {
+        for to in all_protocols() {
+            let inbound = adapter_for(from.clone());
+            let outbound = adapter_for(to.clone());
+
+            let mut body = minimal_request(from.clone());
+            let (field, value) = force_tool_field(from.clone());
+            body[field] = value;
+
+            let prompt = inbound
+                .parse_request(body)
+                .unwrap_or_else(|e| panic!("{from:?} parse_request: {e}"));
+            assert_eq!(
+                prompt.tool_choice,
+                Some(ToolChoice::Tool { name: "X".into() }),
+                "{from:?} must promote a forced-tool choice into the canonical slot"
+            );
+
+            let rendered = outbound
+                .render_request(&prompt)
+                .unwrap_or_else(|e| panic!("{to:?} render_request: {e}"));
+            assert!(
+                forces_tool_x(to.clone(), &rendered),
+                "{from:?} → {to:?} must force tool X; got {rendered}"
             );
         }
     }
@@ -4986,6 +5147,7 @@ fn responses_request_function_call_pair_independent_of_dynamic_mcp() {
         tools: vec![],
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_request(&prompt).unwrap();
@@ -5272,6 +5434,7 @@ fn responses_render_request_drops_provider_executed_calls() {
         tools: Vec::new(),
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_request(&prompt).unwrap();
@@ -5413,242 +5576,107 @@ fn tool_call_provider_executed_omitted_when_false() {
 
 // ===== Part B: typed tool choice (V3 toolChoice) =====
 
-/// Read whatever a protocol renders for `tool_choice` from an outbound request
-/// body, normalising Gemini's top-level `toolConfig` and the simple-string
-/// forms into a comparable canonical [`ToolChoice`] via the inbound parse path.
-fn rendered_tool_choice(protocol: ApiProtocol, prompt: &Prompt) -> Option<ToolChoice> {
-    let adapter = adapter_for(protocol);
-    let rendered = adapter.render_request(prompt).unwrap();
-    // Round-trip back through the same protocol's parser, which is the public
-    // contract: render then parse must recover the typed choice.
-    adapter.parse_request(rendered).unwrap().params.tool_choice
-}
-
-/// A prompt carrying a specific tool choice.
-fn prompt_with_tool_choice(choice: ToolChoice) -> Prompt {
-    Prompt {
-        model: "m".to_string(),
-        system: None,
-        system_provider_metadata: Default::default(),
-        messages: vec![Message::text(Role::User, "hi")],
-        tools: vec![Tool::Function {
-            name: "search".to_string(),
-            description: None,
-            parameters: serde_json::json!({"type": "object"}),
-            strict: None,
-            provider_metadata: Default::default(),
-        }],
-        params: GenerationParams {
-            tool_choice: Some(choice),
-            ..Default::default()
-        },
-        response_format: None,
-        stream: false,
-    }
-}
-
-/// Each canonical [`ToolChoice`] survives a render→parse round-trip on every
-/// protocol — the same-protocol fidelity contract.
+/// Anthropic nests `disable_parallel_tool_use` inside `tool_choice`; every other
+/// protocol carries it as a top-level `parallel_tool_calls`. Canonicalizing
+/// `tool_choice` must not drop it — it translates both ways and survives an
+/// Anthropic round-trip.
 #[test]
-fn tool_choice_same_protocol_round_trips_on_all_protocols() {
-    let choices = [
-        ToolChoice::Auto,
-        ToolChoice::None,
-        ToolChoice::Required,
-        ToolChoice::Tool {
-            name: "search".to_string(),
-        },
-    ];
-    for choice in choices {
-        for proto in all_protocols() {
-            let prompt = prompt_with_tool_choice(choice.clone());
-            assert_eq!(
-                rendered_tool_choice(proto.clone(), &prompt),
-                Some(choice.clone()),
-                "{proto:?} must round-trip tool_choice {choice:?}"
-            );
-        }
-    }
-}
-
-/// Cross-protocol translation: a `Required` choice authored in one protocol
-/// reaches every other protocol as that protocol's "must call a tool" form
-/// (Chat `required` ↔ Anthropic `any` ↔ Gemini `ANY` ↔ Responses `required`).
-#[test]
-fn tool_choice_required_translates_across_protocols() {
-    // Author it as a raw Chat Completions body, parse to canonical, then render
-    // to every protocol and assert the native shape.
+fn tool_choice_preserves_parallel_tool_use_control() {
+    let messages = adapter_for(ApiProtocol::Messages);
     let chat = adapter_for(ApiProtocol::ChatCompletions);
-    let body = serde_json::json!({
-        "model": "gpt-5",
-        "messages": [{"role": "user", "content": "hi"}],
-        "tool_choice": "required"
+
+    // Anthropic → OpenAI: nested flag becomes the top-level boolean.
+    let anthropic_req = serde_json::json!({
+        "model": "m",
+        "max_tokens": 1024,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "tool_choice": { "type": "auto", "disable_parallel_tool_use": true },
     });
-    let prompt = chat.parse_request(body).unwrap();
-    assert_eq!(prompt.params.tool_choice, Some(ToolChoice::Required));
+    let prompt = messages.parse_request(anthropic_req).unwrap();
+    let chat_out = chat.render_request(&prompt).unwrap();
+    assert_eq!(chat_out["tool_choice"], "auto");
+    assert_eq!(
+        chat_out["parallel_tool_calls"], false,
+        "disable_parallel_tool_use must survive as parallel_tool_calls"
+    );
 
-    // Anthropic -> {type:"any"}
-    let anthropic = adapter_for(ApiProtocol::Messages)
-        .render_request(&prompt)
-        .unwrap();
-    assert_eq!(anthropic["tool_choice"], serde_json::json!({"type": "any"}));
-    // Responses -> "required"
-    let responses = adapter_for(ApiProtocol::Responses)
-        .render_request(&prompt)
-        .unwrap();
-    assert_eq!(responses["tool_choice"], "required");
-    // Gemini -> toolConfig.functionCallingConfig.mode = ANY
-    let gemini = adapter_for(ApiProtocol::GenerateContent)
-        .render_request(&prompt)
-        .unwrap();
-    assert_eq!(gemini["toolConfig"]["functionCallingConfig"]["mode"], "ANY");
-}
-
-/// Cross-protocol translation of a forced specific tool (V3 `tool`) — by name —
-/// reaches all four protocols in their native shape.
-#[test]
-fn tool_choice_specific_tool_translates_across_protocols() {
-    let prompt = prompt_with_tool_choice(ToolChoice::Tool {
-        name: "search".to_string(),
+    // OpenAI → Anthropic: top-level boolean becomes the nested flag.
+    let chat_req = serde_json::json!({
+        "model": "m",
+        "messages": [{ "role": "user", "content": "hi" }],
+        "parallel_tool_calls": false,
     });
-    // Chat Completions: {type:"function", function:{name}}
-    let chat = adapter_for(ApiProtocol::ChatCompletions)
-        .render_request(&prompt)
-        .unwrap();
+    let prompt = chat.parse_request(chat_req).unwrap();
+    let anthropic_out = messages.render_request(&prompt).unwrap();
     assert_eq!(
-        chat["tool_choice"],
-        serde_json::json!({"type": "function", "function": {"name": "search"}})
+        anthropic_out["tool_choice"],
+        serde_json::json!({ "type": "auto", "disable_parallel_tool_use": true }),
+        "parallel_tool_calls must reach Anthropic nested under tool_choice"
     );
-    // Responses: {type:"function", name} (flat)
-    let responses = adapter_for(ApiProtocol::Responses)
-        .render_request(&prompt)
+    // ...and not leak as a top-level field Anthropic doesn't define.
+    assert!(anthropic_out.get("parallel_tool_calls").is_none());
+
+    // Anthropic → Anthropic round-trip keeps the nested flag intact.
+    let round_trip = messages
+        .render_request(&messages.parse_request(anthropic_out).unwrap())
         .unwrap();
     assert_eq!(
-        responses["tool_choice"],
-        serde_json::json!({"type": "function", "name": "search"})
-    );
-    // Anthropic: {type:"tool", name}
-    let anthropic = adapter_for(ApiProtocol::Messages)
-        .render_request(&prompt)
-        .unwrap();
-    assert_eq!(
-        anthropic["tool_choice"],
-        serde_json::json!({"type": "tool", "name": "search"})
-    );
-    // Gemini: mode ANY + allowedFunctionNames:[name]
-    let gemini = adapter_for(ApiProtocol::GenerateContent)
-        .render_request(&prompt)
-        .unwrap();
-    assert_eq!(
-        gemini["toolConfig"]["functionCallingConfig"],
-        serde_json::json!({"mode": "ANY", "allowedFunctionNames": ["search"]})
+        round_trip["tool_choice"]["disable_parallel_tool_use"], true,
+        "Anthropic round-trip must not drop disable_parallel_tool_use"
     );
 }
 
-/// `None` is faithfully expressed on every protocol (Chat `"none"`, Anthropic
-/// `{type:"none"}` — which Anthropic natively supports — Responses `"none"`,
-/// Gemini `mode:"NONE"`).
+/// A `tool_choice` shape an adapter can't map to the canonical slot (e.g. a
+/// Responses hosted-tool / `allowed_tools` selector) is left in `extra` and
+/// passes through verbatim on a same-protocol round-trip — never silently
+/// dropped or mangled.
 #[test]
-fn tool_choice_none_translates_across_protocols() {
-    let prompt = prompt_with_tool_choice(ToolChoice::None);
-    assert_eq!(
-        adapter_for(ApiProtocol::ChatCompletions)
-            .render_request(&prompt)
-            .unwrap()["tool_choice"],
-        "none"
-    );
-    assert_eq!(
-        adapter_for(ApiProtocol::Messages)
-            .render_request(&prompt)
-            .unwrap()["tool_choice"],
-        serde_json::json!({"type": "none"})
-    );
-    assert_eq!(
-        adapter_for(ApiProtocol::Responses)
-            .render_request(&prompt)
-            .unwrap()["tool_choice"],
-        "none"
-    );
-    assert_eq!(
-        adapter_for(ApiProtocol::GenerateContent)
-            .render_request(&prompt)
-            .unwrap()["toolConfig"]["functionCallingConfig"]["mode"],
-        "NONE"
-    );
-}
-
-/// A parsed `tool_choice` must NOT also remain in the raw `extra` passthrough —
-/// otherwise it would be double-written (and forwarded verbatim cross-protocol).
-#[test]
-fn parsed_tool_choice_is_not_duplicated_in_extra() {
-    // Chat Completions
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
-    let prompt = chat
-        .parse_request(serde_json::json!({
-            "model": "gpt-5",
-            "messages": [{"role": "user", "content": "hi"}],
-            "tool_choice": "required"
-        }))
-        .unwrap();
-    assert!(prompt.params.tool_choice.is_some());
-    assert!(
-        !prompt.params.extra.contains_key("tool_choice"),
-        "Chat Completions tool_choice must be removed from extra"
-    );
-
-    // Anthropic
-    let anthropic = adapter_for(ApiProtocol::Messages);
-    let prompt = anthropic
-        .parse_request(serde_json::json!({
-            "model": "claude-opus-4-8",
-            "max_tokens": 16,
-            "messages": [{"role": "user", "content": "hi"}],
-            "tool_choice": {"type": "any"}
-        }))
-        .unwrap();
-    assert!(prompt.params.tool_choice.is_some());
-    assert!(
-        !prompt.params.extra.contains_key("tool_choice"),
-        "Anthropic tool_choice must be removed from extra"
-    );
-
-    // Responses
+fn unmapped_tool_choice_passes_through_unchanged() {
     let responses = adapter_for(ApiProtocol::Responses);
-    let prompt = responses
-        .parse_request(serde_json::json!({
-            "model": "gpt-5",
-            "input": "hi",
-            "tool_choice": "auto"
-        }))
-        .unwrap();
-    assert!(prompt.params.tool_choice.is_some());
-    assert!(
-        !prompt.params.extra.contains_key("tool_choice"),
-        "Responses tool_choice must be removed from extra"
+    let exotic = serde_json::json!({ "type": "allowed_tools", "mode": "auto", "tools": [] });
+    let req = serde_json::json!({
+        "model": "m",
+        "input": "hi",
+        "tool_choice": exotic,
+    });
+    let prompt = responses.parse_request(req).unwrap();
+    assert_eq!(
+        prompt.tool_choice, None,
+        "an unmapped shape must not be force-fit into the canonical slot"
     );
+    let rendered = responses.render_request(&prompt).unwrap();
+    assert_eq!(
+        rendered["tool_choice"], exotic,
+        "an unmapped tool_choice must pass through verbatim"
+    );
+}
 
-    // Gemini: toolConfig is lifted out of the top-level sentinel entirely.
-    let gemini = adapter_for(ApiProtocol::GenerateContent);
-    let prompt = gemini
-        .parse_request(serde_json::json!({
-            "model": "gemini-2.0-flash",
-            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-            "toolConfig": {"functionCallingConfig": {"mode": "ANY"}}
-        }))
-        .unwrap();
-    assert_eq!(prompt.params.tool_choice, Some(ToolChoice::Required));
-    let top_level = prompt
-        .params
-        .extra
-        .get("__google_top_level__")
-        .and_then(|v| v.as_object());
-    assert!(
-        top_level
-            .map(|t| !t.contains_key("toolConfig"))
-            .unwrap_or(true),
-        "Gemini toolConfig must be lifted out of the top-level extras: {:?}",
-        prompt.params.extra
-    );
+/// Generate Content's `allowedFunctionNames` is a restricting *set*; the
+/// canonical slot only models the single-tool case. A multi-name `ANY` (or an
+/// `AUTO`/`NONE` carrying names) must therefore be left in `extra` and pass
+/// through verbatim — never narrowed to a bare `Required`/`Auto` that would
+/// silently widen the constraint.
+#[test]
+fn gc_tool_choice_with_restricting_set_passes_through() {
+    let gc = adapter_for(ApiProtocol::GenerateContent);
+    let cases = [
+        serde_json::json!({ "mode": "ANY", "allowedFunctionNames": ["A", "B"] }),
+        serde_json::json!({ "mode": "AUTO", "allowedFunctionNames": ["A"] }),
+    ];
+    for fcc in cases {
+        let mut body = minimal_request(ApiProtocol::GenerateContent);
+        body["toolConfig"] = serde_json::json!({ "functionCallingConfig": fcc });
+        let prompt = gc.parse_request(body.clone()).unwrap();
+        assert_eq!(
+            prompt.tool_choice, None,
+            "a restricting-set config must not be force-fit into the canonical slot: {fcc}"
+        );
+        let rendered = gc.render_request(&prompt).unwrap();
+        assert_eq!(
+            rendered["toolConfig"], body["toolConfig"],
+            "a restricting-set toolConfig must pass through verbatim: {fcc}"
+        );
+    }
 }
 
 // ===== typed sampling params (top_k / seed / stop / presence_penalty /
@@ -6004,178 +6032,6 @@ fn parsed_sampling_params_are_not_duplicated_in_extra() {
     assert_eq!(gc["stopSequences"], serde_json::json!(["END"]));
 }
 
-/// An exotic `tool_choice` shape that does not map onto any V3 variant is
-/// preserved verbatim via [`ToolChoice::Other`] and round-trips losslessly on
-/// the same protocol.
-#[test]
-fn exotic_tool_choice_falls_back_to_other_and_round_trips() {
-    // Responses `allowed_tools` constraint — no V3 equivalent.
-    let exotic = serde_json::json!({
-        "type": "allowed_tools",
-        "mode": "auto",
-        "tools": [{"type": "function", "name": "search"}]
-    });
-    let responses = adapter_for(ApiProtocol::Responses);
-    let prompt = responses
-        .parse_request(serde_json::json!({
-            "model": "gpt-5",
-            "input": "hi",
-            "tool_choice": exotic.clone()
-        }))
-        .unwrap();
-    assert_eq!(
-        prompt.params.tool_choice,
-        Some(ToolChoice::Other {
-            value: exotic.clone()
-        })
-    );
-    let rendered = responses.render_request(&prompt).unwrap();
-    assert_eq!(
-        rendered["tool_choice"], exotic,
-        "Other tool_choice must render back byte-for-byte"
-    );
-
-    // Gemini `ANY` + multiple allowedFunctionNames — also no V3 equivalent.
-    let gemini = adapter_for(ApiProtocol::GenerateContent);
-    let tool_config = serde_json::json!({
-        "functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["a", "b"]}
-    });
-    let prompt = gemini
-        .parse_request(serde_json::json!({
-            "model": "gemini-2.0-flash",
-            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-            "toolConfig": tool_config.clone()
-        }))
-        .unwrap();
-    assert!(matches!(
-        prompt.params.tool_choice,
-        Some(ToolChoice::Other { .. })
-    ));
-    let rendered = gemini.render_request(&prompt).unwrap();
-    assert_eq!(
-        rendered["toolConfig"], tool_config,
-        "Gemini exotic toolConfig must render back verbatim"
-    );
-}
-
-/// Regression: a Gemini `toolConfig` whose `functionCallingConfig` cannot be
-/// reduced to a typed [`ToolChoice`] — because it omits `mode`, or carries an
-/// unmodelled sibling key — must NOT vanish. Before the parser was made
-/// infallible it returned `None` for these shapes while the caller had already
-/// removed `toolConfig` from the top-level extras, so the choice was dropped and
-/// broke even a same-protocol Gemini→Gemini round-trip. It must now degrade to
-/// `ToolChoice::Other` and re-emit verbatim, with no duplicate left in extras.
-#[test]
-fn gemini_unreducible_tool_config_survives_round_trip() {
-    let gemini = adapter_for(ApiProtocol::GenerateContent);
-    // Case 1: `functionCallingConfig` with `allowedFunctionNames` but NO `mode`.
-    // Case 2: a different shape — a `functionCallingConfig` carrying an unknown
-    // sibling key alongside a recognised `mode`.
-    let configs = [
-        serde_json::json!({
-            "functionCallingConfig": {"allowedFunctionNames": ["lookup"]}
-        }),
-        serde_json::json!({
-            "functionCallingConfig": {"mode": "VALIDATED", "responseSchema": {"x": 1}}
-        }),
-    ];
-    for tool_config in configs {
-        let prompt = gemini
-            .parse_request(serde_json::json!({
-                "model": "gemini-2.0-flash",
-                "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-                "toolConfig": tool_config.clone()
-            }))
-            .unwrap();
-        // The unreducible config is preserved verbatim in the typed slot, not
-        // dropped.
-        assert_eq!(
-            prompt.params.tool_choice,
-            Some(ToolChoice::Other {
-                value: tool_config.clone()
-            }),
-            "unreducible toolConfig must be preserved as Other: {tool_config}"
-        );
-        // It must NOT also linger in the top-level extras sentinel (otherwise it
-        // would be double-written on render).
-        let lingering = prompt
-            .params
-            .extra
-            .get("__google_top_level__")
-            .and_then(|v| v.as_object())
-            .map(|t| t.contains_key("toolConfig"))
-            .unwrap_or(false);
-        assert!(
-            !lingering,
-            "toolConfig must be lifted out of extras, not duplicated: {:?}",
-            prompt.params.extra
-        );
-        // Gemini→Gemini render re-emits the original toolConfig byte-for-byte,
-        // exactly once at the request root.
-        let rendered = gemini.render_request(&prompt).unwrap();
-        assert_eq!(
-            rendered["toolConfig"], tool_config,
-            "unreducible toolConfig must round-trip verbatim"
-        );
-        // And a second render→parse→render hop is still stable (no drift).
-        let reparsed = gemini.parse_request(rendered).unwrap();
-        let rerendered = gemini.render_request(&reparsed).unwrap();
-        assert_eq!(
-            rerendered["toolConfig"], tool_config,
-            "unreducible toolConfig must remain stable across a second hop"
-        );
-    }
-}
-
-/// Cross-protocol translation of `Auto`: authored as a Chat Completions
-/// `"auto"`, it must reach Anthropic as `{type:"auto"}` and Gemini as
-/// `mode:"AUTO"` (and stay `"auto"` on Responses).
-#[test]
-fn tool_choice_auto_translates_across_protocols() {
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
-    let prompt = chat
-        .parse_request(serde_json::json!({
-            "model": "gpt-5",
-            "messages": [{"role": "user", "content": "hi"}],
-            "tool_choice": "auto"
-        }))
-        .unwrap();
-    assert_eq!(prompt.params.tool_choice, Some(ToolChoice::Auto));
-
-    // Anthropic -> {type:"auto"}
-    assert_eq!(
-        adapter_for(ApiProtocol::Messages)
-            .render_request(&prompt)
-            .unwrap()["tool_choice"],
-        serde_json::json!({"type": "auto"})
-    );
-    // Gemini -> toolConfig.functionCallingConfig.mode = AUTO
-    assert_eq!(
-        adapter_for(ApiProtocol::GenerateContent)
-            .render_request(&prompt)
-            .unwrap()["toolConfig"]["functionCallingConfig"]["mode"],
-        "AUTO"
-    );
-    // Responses -> "auto"
-    assert_eq!(
-        adapter_for(ApiProtocol::Responses)
-            .render_request(&prompt)
-            .unwrap()["tool_choice"],
-        "auto"
-    );
-}
-
-/// The canonical `tool_choice` field is omitted from the serialized
-/// `GenerationParams` when absent (no JSON `null`).
-#[test]
-fn generation_params_omits_absent_tool_choice() {
-    let value = serde_json::to_value(GenerationParams::default()).unwrap();
-    assert!(
-        value.get("tool_choice").is_none(),
-        "absent tool_choice must be omitted: {value}"
-    );
-}
-
 // ===== Part C: typed tools (V3 function `strict` + provider-defined tools) =====
 
 /// A prompt carrying exactly the given tool list (and nothing else interesting).
@@ -6188,6 +6044,7 @@ fn prompt_with_tools(tools: Vec<Tool>) -> Prompt {
         tools,
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     }
 }
@@ -7762,6 +7619,7 @@ fn render_content_block_via_request(
             ..Default::default()
         },
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_request(&prompt).unwrap();
@@ -7801,6 +7659,7 @@ fn chat_system_fingerprint_round_trips_on_result() {
         tools: vec![],
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter
@@ -7839,6 +7698,7 @@ fn generate_content_model_version_round_trips_on_result() {
         tools: vec![],
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_response(&result, &prompt, "resp_1").unwrap();
@@ -7884,6 +7744,7 @@ fn generate_content_thought_signature_round_trips() {
         tools: vec![],
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_request(&prompt).unwrap();
@@ -8020,6 +7881,7 @@ fn messages_source_tool_use_id_correlation_is_exact() {
         tools: vec![],
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter
@@ -8074,6 +7936,7 @@ fn messages_source_with_surviving_call_reuses_call_id() {
         tools: vec![],
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_response(&result, &prompt, "msg_1").unwrap();
@@ -8412,6 +8275,7 @@ fn generate_content_thought_signature_round_trips_on_function_call() {
         tools: vec![],
         params: GenerationParams::default(),
         response_format: None,
+        tool_choice: None,
         stream: false,
     };
     let rendered = adapter.render_request(&prompt).unwrap();
@@ -8833,6 +8697,7 @@ fn approval_response_part_is_dropped_on_non_responses_wires() {
             tools: vec![],
             params: GenerationParams::default(),
             response_format: None,
+            tool_choice: None,
             stream: false,
         };
         // Renders without error; the approval part has no wire item and is dropped.

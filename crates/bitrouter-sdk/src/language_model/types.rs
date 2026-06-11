@@ -781,7 +781,8 @@ impl Message {
 ///   provider's native shape and splatted into the target request so the
 ///   upstream — not bitrouter — decides what to do with it; bitrouter never
 ///   silently drops it and never invents a lossy "equivalent" (the same
-///   faithful-passthrough rule as [`ToolChoice::Other`]). See
+///   faithful-passthrough rule [`ToolChoice`] applies to provider-specific
+///   shapes it cannot map, which stay in `extra`). See
 ///   [`provider_defined_native`](crate::language_model::protocol) for the shared
 ///   reconstruction.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -854,48 +855,6 @@ impl Tool {
     }
 }
 
-/// How the model must treat the available [`Tool`]s on this request — a faithful
-/// port of the Vercel AI SDK `LanguageModelV3ToolChoice` tagged union.
-/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/provider/src/language-model/v3/language-model-v3-tool-choice.ts>
-///
-/// Each protocol expresses tool choice with a different wire shape (Chat
-/// Completions `"auto"|"none"|"required"` or `{type:"function",…}`; Anthropic
-/// `{type:"auto"|"any"|"tool"|"none"}`; Responses `"auto"|"none"|"required"` or
-/// `{type:"function",name}`; Gemini `functionCallingConfig.mode`). Each inbound
-/// adapter promotes its native field into this typed slot at parse time and
-/// **removes it from the raw `extra`** so it is not double-written; each outbound
-/// adapter renders it back into the upstream's native shape. Promoting it makes
-/// cross-protocol routing correct: without it a raw provider-shaped `tool_choice`
-/// (e.g. an OpenAI `{type:"function",…}`) would be splatted verbatim into a
-/// different provider's request and be silently ignored or rejected.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ToolChoice {
-    /// The model decides whether to call a tool (V3 `auto`). The default when
-    /// tools are present.
-    Auto,
-    /// The model must not call any tool (V3 `none`).
-    None,
-    /// The model must call one of the available tools, but which one is its
-    /// choice (V3 `required`).
-    Required,
-    /// The model must call this specific tool by name (V3 `tool`).
-    Tool {
-        /// The tool name the model is forced to call.
-        name: String,
-    },
-    /// A provider-specific tool-choice shape that does not map onto any of the
-    /// four V3 variants (e.g. Gemini's `mode: "ANY"` paired with
-    /// `allowedFunctionNames`, or an OpenAI `allowed_tools` constraint),
-    /// preserved verbatim so an exotic choice is never lost on a same-protocol
-    /// round-trip. Carries the raw provider-native JSON; an adapter that cannot
-    /// express it on its own wire degrades it (documented at each render site).
-    Other {
-        /// The provider-native `tool_choice` value, untouched.
-        value: serde_json::Value,
-    },
-}
-
 /// Constraint on the shape of the model's response.
 ///
 /// Mirrors the Vercel AI SDK V3 `responseFormat` call option. V3 has **no**
@@ -941,6 +900,45 @@ pub enum ResponseFormat {
         strict: Option<bool>,
         /// The JSON Schema.
         schema: serde_json::Value,
+    },
+}
+
+/// Constraint on whether — and which — tool the model may call.
+///
+/// Like [`ResponseFormat`], each inbound adapter promotes the provider-native
+/// `tool_choice` (Generate Content: `tool_config.function_calling_config`) into
+/// this typed slot at `parse_request` time, and each outbound adapter renders it
+/// back into the upstream's native shape on `render_request`. Cross-protocol
+/// routing therefore translates automatically: an Anthropic Messages client
+/// sending `tool_choice: {"type":"auto"}` against an OpenAI Chat Completions
+/// upstream emits the bare string `"auto"` — not the object form, which OpenAI
+/// rejects (the v0 #547 bug). Provider-specific shapes a given adapter can't map
+/// (e.g. Responses hosted-tool selectors) are left in `extra` and pass through
+/// opaquely, exactly as before.
+///
+/// Parallel-tool-use control is a distinct concern, not part of this slot. The
+/// Messages adapter translates Anthropic's nested `disable_parallel_tool_use`
+/// to/from the protocol-neutral top-level `parallel_tool_calls` (the shape Chat
+/// Completions / Responses use), which rides `extra`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolChoice {
+    /// The model decides freely whether to call a tool. Chat Completions /
+    /// Responses `"auto"`, Messages `{"type":"auto"}`, Generate Content `AUTO`.
+    Auto,
+    /// The model must call at least one tool. Chat Completions / Responses
+    /// `"required"`, Messages `{"type":"any"}`, Generate Content `ANY`.
+    Required,
+    /// The model must not call any tool. Chat Completions / Responses `"none"`,
+    /// Messages `{"type":"none"}`, Generate Content `NONE`.
+    None,
+    /// The model must call exactly this tool. Chat Completions
+    /// `{"type":"function","function":{"name":…}}`, Responses
+    /// `{"type":"function","name":…}`, Messages `{"type":"tool","name":…}`,
+    /// Generate Content `ANY` + `allowedFunctionNames`.
+    Tool {
+        /// The tool the model is forced to call.
+        name: String,
     },
 }
 
@@ -1058,13 +1056,6 @@ pub struct GenerationParams {
     /// `image_output` / `audio_output` capability detection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub response_modalities: Vec<Modality>,
-    /// How the model must treat the available tools (V3 `toolChoice`). Each
-    /// inbound adapter promotes its native `tool_choice` field into this typed
-    /// slot and removes it from `extra`; each outbound adapter renders it back
-    /// into the upstream's native shape, so it routes correctly across
-    /// protocols instead of leaking a raw provider-shaped value through `extra`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<ToolChoice>,
     /// Top-k sampling cutoff. Carried by Anthropic (`top_k`) and Gemini
     /// (`generationConfig.topK`); Chat Completions and Responses have no such
     /// wire field and never render it. Like every typed sampling slot below,
@@ -1136,6 +1127,11 @@ pub struct Prompt {
     /// adapters render it back natively.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
+    /// Constraint on whether / which tool the model may call. Inbound adapters
+    /// promote the provider-native `tool_choice` into this slot; outbound
+    /// adapters render it back natively, so it translates across protocols.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
     /// Whether the caller requested a streaming response.
     pub stream: bool,
 }
@@ -1745,6 +1741,7 @@ mod tests {
             tools: vec![],
             params: GenerationParams::default(),
             response_format: None,
+            tool_choice: None,
             stream: false,
         }
     }

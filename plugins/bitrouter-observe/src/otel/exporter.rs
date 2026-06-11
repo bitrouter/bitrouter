@@ -1122,6 +1122,7 @@ mod hop_tests {
             tools: Vec::new(),
             params,
             response_format: None,
+            tool_choice: None,
             stream: false,
         };
         PipelineRequest::new("test-model", CallerContext::new("k1", "u1"), prompt)

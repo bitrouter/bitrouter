@@ -885,10 +885,10 @@ impl InboundAdapter for ResponsesAdapter {
             None => None,
         };
 
-        // Promote `tool_choice` into the typed slot and drop it from `extra` so
-        // it is not also splatted back verbatim into a (possibly non-OpenAI)
-        // upstream.
-        let tool_choice = extra.remove("tool_choice").map(parse_responses_tool_choice);
+        // Promote a known-shape `tool_choice` into the canonical slot so it can
+        // translate across protocols; unmapped shapes (hosted-tool selectors,
+        // `allowed_tools`, …) stay in `extra` and pass through.
+        let tool_choice = parse_responses_tool_choice(&mut extra);
 
         Ok(Prompt {
             model: req.model,
@@ -903,7 +903,6 @@ impl InboundAdapter for ResponsesAdapter {
                 max_tokens: req.max_output_tokens,
                 reasoning_effort: req.reasoning.and_then(|r| r.effort),
                 response_modalities: Vec::new(),
-                tool_choice,
                 // The Responses API has no top-level top_k / seed / stop /
                 // presence_penalty / frequency_penalty — they are unsupported on
                 // this wire and dropped by the reference implementation, so the
@@ -922,6 +921,7 @@ impl InboundAdapter for ResponsesAdapter {
                 extra,
             },
             response_format,
+            tool_choice,
             stream: req.stream,
         })
     }
@@ -1022,13 +1022,13 @@ impl OutboundAdapter for ResponsesAdapter {
             text.insert("format".into(), render_responses_response_format(rf));
             req.insert("text".into(), serde_json::Value::Object(text));
         }
-        // Render the canonical tool_choice into the Responses native shape,
-        // before the extras splat so the typed slot wins.
-        if let Some(tc) = &prompt.params.tool_choice {
+        // Render the canonical tool_choice into Responses' native shape, before
+        // the extras splat so it wins over any leftover `tool_choice`.
+        if let Some(tc) = &prompt.tool_choice {
             req.insert("tool_choice".into(), render_responses_tool_choice(tc));
         }
-        // Splat remaining Responses-API extras (parallel_tool_calls, metadata,
-        // include, …) back onto the outbound request. Typed fields win.
+        // Splat Responses-API extras (parallel_tool_calls, metadata, include, …)
+        // back onto the outbound request. Typed fields win.
         for (k, v) in &prompt.params.extra {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -1440,46 +1440,48 @@ fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
     serde_json::Value::Object(obj)
 }
 
-/// Parse a Responses `tool_choice` value into the canonical [`ToolChoice`]. The
-/// wire is a string (`"auto"|"none"|"required"`) or an object — `{type:
-/// "function", name}` forces a specific function (note: the name is flat, unlike
-/// Chat Completions' nested `function.name`). Built-in-tool choices
-/// (`{type:"web_search"|…}`), `allowed_tools`, and any other shape are preserved
-/// verbatim via [`ToolChoice::Other`].
+/// Promote a Responses `tool_choice` into the canonical [`ToolChoice`], removing
+/// it from `extra` when it maps to a known shape. Hosted-tool / `allowed_tools`
+/// selectors are left untouched so they pass through opaquely.
 /// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tool_choice>
-fn parse_responses_tool_choice(value: serde_json::Value) -> ToolChoice {
-    match &value {
+fn parse_responses_tool_choice(
+    extra: &mut std::collections::HashMap<String, serde_json::Value>,
+) -> Option<ToolChoice> {
+    let parsed = match extra.get("tool_choice")? {
         serde_json::Value::String(s) => match s.as_str() {
-            "auto" => ToolChoice::Auto,
-            "none" => ToolChoice::None,
-            "required" => ToolChoice::Required,
-            _ => ToolChoice::Other { value },
+            "auto" => Some(ToolChoice::Auto),
+            "required" => Some(ToolChoice::Required),
+            "none" => Some(ToolChoice::None),
+            _ => None,
         },
-        serde_json::Value::Object(obj)
-            if obj.get("type").and_then(|t| t.as_str()) == Some("function") =>
+        serde_json::Value::Object(o)
+            if o.get("type").and_then(|t| t.as_str()) == Some("function") =>
         {
-            match obj.get("name").and_then(|n| n.as_str()) {
-                Some(name) => ToolChoice::Tool {
+            // Responses carries the forced function name flat on the object,
+            // not nested under `function` as Chat Completions does.
+            o.get("name")
+                .and_then(|n| n.as_str())
+                .map(|name| ToolChoice::Tool {
                     name: name.to_string(),
-                },
-                None => ToolChoice::Other { value },
-            }
+                })
         }
-        _ => ToolChoice::Other { value },
+        _ => None,
+    };
+    if parsed.is_some() {
+        extra.remove("tool_choice");
     }
+    parsed
 }
 
-/// Render a canonical [`ToolChoice`] into the Responses native shape:
-/// `"auto"|"none"|"required"` strings, `{type:"function",name}` for a specific
-/// tool (flat `name`), and the preserved raw value for [`ToolChoice::Other`].
-/// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tool_choice>
-fn render_responses_tool_choice(choice: &ToolChoice) -> serde_json::Value {
-    match choice {
-        ToolChoice::Auto => "auto".into(),
-        ToolChoice::None => "none".into(),
-        ToolChoice::Required => "required".into(),
+/// Render the canonical [`ToolChoice`] into Responses' native shape: the bare
+/// strings `auto` / `required` / `none`, or `{ type: "function", name }` to
+/// force one tool (flat `name`, unlike Chat Completions' nested form).
+fn render_responses_tool_choice(tc: &ToolChoice) -> serde_json::Value {
+    match tc {
+        ToolChoice::Auto => serde_json::json!("auto"),
+        ToolChoice::Required => serde_json::json!("required"),
+        ToolChoice::None => serde_json::json!("none"),
         ToolChoice::Tool { name } => serde_json::json!({ "type": "function", "name": name }),
-        ToolChoice::Other { value } => value.clone(),
     }
 }
 

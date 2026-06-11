@@ -428,6 +428,7 @@ mod tests {
             tools: vec![],
             params: Default::default(),
             response_format: None,
+            tool_choice: None,
             stream: false,
         }
     }
@@ -501,6 +502,7 @@ mod tests {
             tools: vec![],
             params: Default::default(),
             response_format: None,
+            tool_choice: None,
             stream: true,
         }
     }
@@ -547,6 +549,7 @@ mod tests {
             tools: vec![],
             params: Default::default(),
             response_format: None,
+            tool_choice: None,
             stream: true,
         };
         let ctx = ctx_from_prompt(prompt);

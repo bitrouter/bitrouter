@@ -571,11 +571,10 @@ impl InboundAdapter for ChatCompletionsAdapter {
             .and_then(|v| serde_json::from_value::<Vec<Modality>>(v).ok())
             .unwrap_or_default();
 
-        // `tool_choice` is a typed field. Promote it into the canonical slot so
-        // cross-protocol routing renders it natively for the target provider, and
-        // remove it from `extra` so it is not also splatted back verbatim (which
-        // would forward an OpenAI-shaped choice into a non-OpenAI upstream).
-        let tool_choice = extra.remove("tool_choice").map(parse_chat_tool_choice);
+        // Promote a known-shape `tool_choice` into the canonical slot so it can
+        // translate across protocols (the v0 #547 bug: Anthropic's object form
+        // reaching an OpenAI upstream). Unmapped shapes stay in `extra`.
+        let tool_choice = parse_chat_tool_choice(&mut extra);
 
         Ok(Prompt {
             model: req.model,
@@ -590,7 +589,6 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 max_tokens: req.max_tokens.or(req.max_completion_tokens),
                 reasoning_effort: req.reasoning_effort,
                 response_modalities,
-                tool_choice,
                 // Chat Completions carries no top-k.
                 top_k: None,
                 seed: req.seed,
@@ -603,6 +601,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 extra,
             },
             response_format,
+            tool_choice,
             stream: req.stream,
         })
     }
@@ -784,10 +783,10 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         {
             req.insert("modalities".into(), value);
         }
-        // Render the canonical tool_choice into Chat Completions' native shape,
-        // before the extras splat so the typed slot wins over any stale
-        // `tool_choice` left in extras.
-        if let Some(tc) = &prompt.params.tool_choice {
+        // Render the canonical tool_choice into Chat Completions' native shape.
+        // Inserted before the extras splat so it wins over any leftover
+        // `tool_choice` (matching how response_format is handled).
+        if let Some(tc) = &prompt.tool_choice {
             req.insert("tool_choice".into(), render_chat_tool_choice(tc));
         }
         // Render the typed sampling slots into their Chat Completions wire names.
@@ -808,8 +807,9 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             req.insert("frequency_penalty".into(), fp.into());
         }
         // Splat the extras back into the outbound request — this is how
-        // remaining untyped fields survive the round trip. Typed fields above
-        // win over any same-named extra.
+        // remaining untyped fields (`parallel_tool_calls`, n, logit_bias, …)
+        // survive the round trip. Typed fields above win over any same-named
+        // extra.
         for (k, v) in &prompt.params.extra {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -1092,52 +1092,49 @@ fn parse_chat_stop(value: Option<serde_json::Value>) -> Vec<String> {
     }
 }
 
-/// Parse a Chat Completions `tool_choice` value into the canonical [`ToolChoice`].
-/// The wire is either a string (`"auto"|"none"|"required"`) or an object
-/// `{type:"function",function:{name}}`. Anything else (e.g. the legacy
-/// `{type:"none"}` object form, or a provider extension) is preserved verbatim
-/// via [`ToolChoice::Other`] so it round-trips losslessly.
+/// Promote a Chat Completions `tool_choice` into the canonical [`ToolChoice`],
+/// removing it from `extra` when it maps to a known shape. Unmapped shapes
+/// (e.g. `{ "type": "allowed_tools", … }`) are left untouched so they pass
+/// through opaquely.
 /// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tool_choice>
-fn parse_chat_tool_choice(value: serde_json::Value) -> ToolChoice {
-    match &value {
+fn parse_chat_tool_choice(extra: &mut HashMap<String, serde_json::Value>) -> Option<ToolChoice> {
+    let parsed = match extra.get("tool_choice")? {
         serde_json::Value::String(s) => match s.as_str() {
-            "auto" => ToolChoice::Auto,
-            "none" => ToolChoice::None,
-            "required" => ToolChoice::Required,
-            _ => ToolChoice::Other { value },
+            "auto" => Some(ToolChoice::Auto),
+            "required" => Some(ToolChoice::Required),
+            "none" => Some(ToolChoice::None),
+            _ => None,
         },
-        serde_json::Value::Object(obj)
-            if obj.get("type").and_then(|t| t.as_str()) == Some("function") =>
+        serde_json::Value::Object(o)
+            if o.get("type").and_then(|t| t.as_str()) == Some("function") =>
         {
-            match obj
-                .get("function")
+            o.get("function")
                 .and_then(|f| f.get("name"))
                 .and_then(|n| n.as_str())
-            {
-                Some(name) => ToolChoice::Tool {
+                .map(|name| ToolChoice::Tool {
                     name: name.to_string(),
-                },
-                None => ToolChoice::Other { value },
-            }
+                })
         }
-        _ => ToolChoice::Other { value },
+        _ => None,
+    };
+    if parsed.is_some() {
+        extra.remove("tool_choice");
     }
+    parsed
 }
 
-/// Render a canonical [`ToolChoice`] into Chat Completions' native shape:
-/// `"auto"|"none"|"required"` for the simple variants, `{type:"function",
-/// function:{name}}` for a specific tool, and the preserved raw value for
-/// [`ToolChoice::Other`].
-/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tool_choice>
-fn render_chat_tool_choice(choice: &ToolChoice) -> serde_json::Value {
-    match choice {
-        ToolChoice::Auto => "auto".into(),
-        ToolChoice::None => "none".into(),
-        ToolChoice::Required => "required".into(),
-        ToolChoice::Tool { name } => {
-            serde_json::json!({ "type": "function", "function": { "name": name } })
-        }
-        ToolChoice::Other { value } => value.clone(),
+/// Render the canonical [`ToolChoice`] into Chat Completions' native shape: the
+/// bare strings `auto` / `required` / `none`, or a `{ type: "function",
+/// function: { name } }` object to force one tool.
+fn render_chat_tool_choice(tc: &ToolChoice) -> serde_json::Value {
+    match tc {
+        ToolChoice::Auto => serde_json::json!("auto"),
+        ToolChoice::Required => serde_json::json!("required"),
+        ToolChoice::None => serde_json::json!("none"),
+        ToolChoice::Tool { name } => serde_json::json!({
+            "type": "function",
+            "function": { "name": name },
+        }),
     }
 }
 

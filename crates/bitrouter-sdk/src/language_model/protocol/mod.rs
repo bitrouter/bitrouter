@@ -174,8 +174,8 @@ pub(crate) fn split_provider_id(id: &str) -> (&str, &str) {
 ///   faithful 1:1 equivalent on a different provider's wire (V3 namespaces these
 ///   tools by provider for exactly this reason), so the *faithful* behavior is to
 ///   preserve the tool **verbatim** in its source-native shape and let the
-///   upstream decide — the same rule as
-///   [`ToolChoice::Other`](crate::language_model::types::ToolChoice::Other). The
+///   upstream decide — the same rule [`ToolChoice`](crate::language_model::types::ToolChoice)
+///   applies to provider-specific shapes it cannot map, which stay in `extra`. The
 ///   caller splats this object into the target request's tool list unchanged.
 ///
 /// Native shapes (one comment-linked doc per provider lives at each adapter's
