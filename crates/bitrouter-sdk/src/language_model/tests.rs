@@ -39,6 +39,7 @@ fn request() -> PipelineRequest {
     let prompt = Prompt {
         model: "test-model".to_string(),
         system: None,
+        system_provider_metadata: Default::default(),
         messages: vec![Message::text(Role::User, "hi")],
         tools: Vec::new(),
         params: GenerationParams::default(),
@@ -330,11 +331,13 @@ async fn fallback_tries_next_on_5xx_then_succeeds() {
             MockResponse::Generate(GenerateResult {
                 content: vec![Content::Text {
                     text: "from b".into(),
+                    provider_metadata: Default::default(),
                 }],
                 usage: None,
                 finish_reason: Some(FinishReason::Stop),
                 response_id: None,
                 stop_details: None,
+                provider_metadata: Default::default(),
             }),
         ])),
         |_b| {},
@@ -344,7 +347,8 @@ async fn fallback_tries_next_on_5xx_then_succeeds() {
     assert_eq!(
         resp.result.content,
         vec![Content::Text {
-            text: "from b".into()
+            text: "from b".into(),
+            provider_metadata: Default::default(),
         }]
     );
 }
@@ -365,11 +369,13 @@ async fn fallback_tries_next_on_payment_required_then_succeeds() {
             MockResponse::Generate(GenerateResult {
                 content: vec![Content::Text {
                     text: "from account b".into(),
+                    provider_metadata: Default::default(),
                 }],
                 usage: None,
                 finish_reason: Some(FinishReason::Stop),
                 response_id: None,
                 stop_details: None,
+                provider_metadata: Default::default(),
             }),
         ])),
         |_b| {},
@@ -382,7 +388,8 @@ async fn fallback_tries_next_on_payment_required_then_succeeds() {
     assert_eq!(
         resp.result.content,
         vec![Content::Text {
-            text: "from account b".into()
+            text: "from account b".into(),
+            provider_metadata: Default::default(),
         }]
     );
 }
@@ -398,11 +405,15 @@ async fn fallback_does_not_retry_on_4xx() {
             }),
             // b would succeed, but a 400 must not fall through to it.
             MockResponse::Generate(GenerateResult {
-                content: vec![Content::Text { text: "b".into() }],
+                content: vec![Content::Text {
+                    text: "b".into(),
+                    provider_metadata: Default::default(),
+                }],
                 usage: None,
                 finish_reason: None,
                 response_id: None,
                 stop_details: None,
+                provider_metadata: Default::default(),
             }),
         ])),
         |_b| {},
@@ -452,11 +463,15 @@ async fn fallback_does_not_retry_on_4xx_even_with_observe_only_execution_hook() 
                 message: "bad".into(),
             }),
             MockResponse::Generate(GenerateResult {
-                content: vec![Content::Text { text: "b".into() }],
+                content: vec![Content::Text {
+                    text: "b".into(),
+                    provider_metadata: Default::default(),
+                }],
                 usage: None,
                 finish_reason: None,
                 response_id: None,
                 stop_details: None,
+                provider_metadata: Default::default(),
             }),
         ])),
         |b| {
@@ -914,11 +929,13 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
     let prompt = Prompt {
         model: "m".into(),
         system: None,
+        system_provider_metadata: Default::default(),
         messages: vec![Message::text(Role::User, "hi")],
         tools: vec![],
         params: GenerationParams::default(),
         response_format: Some(ResponseFormat::JsonSchema {
             name: None,
+            description: None,
             strict: None,
             schema: serde_json::json!({"type": "object"}),
         }),
@@ -966,6 +983,7 @@ impl Executor for GatedExecutor {
             result: GenerateResult {
                 content: vec![Content::Text {
                     text: "done".into(),
+                    provider_metadata: Default::default(),
                 }],
                 usage: Some(Usage {
                     prompt_tokens,
@@ -975,6 +993,7 @@ impl Executor for GatedExecutor {
                 finish_reason: Some(FinishReason::Stop),
                 response_id: None,
                 stop_details: None,
+                provider_metadata: Default::default(),
             },
             latency_ms: 1,
             generation_time_ms: 1,

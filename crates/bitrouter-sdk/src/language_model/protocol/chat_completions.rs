@@ -14,13 +14,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
-    describe_deser_error,
+    InboundAdapter, OutboundAdapter, PROVIDER_ID_OPENAI, SseEvent, StreamDecoder, StreamEncoder,
+    Transport, describe_deser_error, rendered_finish_reason, stash_raw_finish_reason,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice, Usage,
+    ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
+    Modality, Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart,
+    Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, provider_namespace,
+    set_provider_metadata,
 };
 
 /// The Chat Completions inbound + outbound protocol adapter.
@@ -60,10 +62,29 @@ pub struct ChatRequest {
     /// <https://platform.openai.com/docs/guides/structured-outputs>
     #[serde(default)]
     response_format: Option<ChatResponseFormat>,
+    /// Deterministic-sampling seed. Promoted to the canonical `seed` slot so it
+    /// translates across protocols (e.g. to a Gemini upstream's
+    /// `generationConfig.seed`) instead of no-op'ing as a top-level key on a
+    /// nested-config wire.
+    /// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-seed>
+    #[serde(default)]
+    seed: Option<i64>,
+    /// Stop sequences — a single string or an array of up to four. Promoted to
+    /// the canonical `stop` slot.
+    /// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop>
+    #[serde(default)]
+    stop: Option<serde_json::Value>,
+    /// Presence penalty. Promoted to the canonical `presence_penalty` slot.
+    /// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-presence_penalty>
+    #[serde(default)]
+    presence_penalty: Option<f64>,
+    /// Frequency penalty. Promoted to the canonical `frequency_penalty` slot.
+    /// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-frequency_penalty>
+    #[serde(default)]
+    frequency_penalty: Option<f64>,
     #[serde(default)]
     stream: bool,
-    /// Every other field — `tool_choice`, `stop` / `stop_sequences`, `seed`,
-    /// `n`, `presence_penalty`, `frequency_penalty`, `logit_bias`, `logprobs`,
+    /// Every other field — `tool_choice`, `n`, `logit_bias`, `logprobs`,
     /// `top_logprobs`, `user`, `stream_options`, `parallel_tool_calls`, … —
     /// survives parse/render via `extra`. v0 passed these through; v1 must too.
     /// Skipped from the published schema so the documented contract is the set
@@ -95,6 +116,11 @@ pub enum ChatResponseFormat {
 pub struct ChatJsonSchema {
     /// Schema name (OpenAI requires it).
     name: String,
+    /// Optional schema description — extra LLM guidance OpenAI passes through to
+    /// the model. Promoted to the canonical `response_format` description.
+    /// <https://platform.openai.com/docs/guides/structured-outputs>
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     /// Strict-mode flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     strict: Option<bool>,
@@ -151,7 +177,8 @@ pub struct ChatTool {
 }
 
 /// The `function` payload of a [`ChatTool`]: name + description + JSON-Schema
-/// parameters.
+/// parameters + optional `strict` flag.
+/// <https://platform.openai.com/docs/guides/function-calling#strict-mode>
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct ChatToolFunction {
     name: String,
@@ -159,6 +186,10 @@ pub struct ChatToolFunction {
     description: Option<String>,
     #[serde(default)]
     parameters: serde_json::Value,
+    /// OpenAI strict-mode flag (V3 `strict`). Captured so it is not lost across
+    /// the canonical boundary.
+    #[serde(default)]
+    strict: Option<bool>,
 }
 
 // ===== role mapping (total — v0 #454-4) =====
@@ -206,6 +237,211 @@ fn content_text(value: &serde_json::Value) -> String {
     }
 }
 
+/// Parse an OpenAI `tool` message `content` value into a canonical
+/// [`ToolResultOutput`]. A string → [`ToolResultOutput::Text`]. A content-part
+/// array that carries any media part → [`ToolResultOutput::Content`] (text +
+/// media, in order); a text-only array collapses to `Text` so a trivial
+/// `[{type:text}]` does not gratuitously promote to the multimodal variant. Any
+/// other JSON value → [`ToolResultOutput::Json`].
+/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-messages>
+fn parse_tool_result_output(value: &serde_json::Value) -> ToolResultOutput {
+    match value {
+        serde_json::Value::String(s) => ToolResultOutput::Text { value: s.clone() },
+        serde_json::Value::Array(parts) => {
+            let canonical: Vec<Content> = parts.iter().filter_map(parse_chat_part).collect();
+            let has_media = canonical.iter().any(|c| matches!(c, Content::File { .. }));
+            if has_media {
+                let value = canonical
+                    .into_iter()
+                    .filter_map(content_to_tool_result_part)
+                    .collect();
+                ToolResultOutput::Content { value }
+            } else {
+                ToolResultOutput::Text {
+                    value: content_text(value),
+                }
+            }
+        }
+        other => ToolResultOutput::from_untyped_value(other),
+    }
+}
+
+/// Map a canonical text/file [`Content`] into a [`ToolResultContentPart`].
+/// Only text and media parts have a tool-result-content representation; any
+/// other content kind yields `None`.
+fn content_to_tool_result_part(c: Content) -> Option<ToolResultContentPart> {
+    match c {
+        Content::Text { text, .. } => Some(ToolResultContentPart::Text { text }),
+        Content::File {
+            media_type, data, ..
+        } => Some(ToolResultContentPart::Media { media_type, data }),
+        _ => None,
+    }
+}
+
+/// Parse an OpenAI `content` value (string, or array of content parts) into
+/// ordered canonical content. Text + media parts are preserved in order; other
+/// part shapes are skipped.
+fn parse_chat_content(value: &serde_json::Value) -> Vec<Content> {
+    match value {
+        serde_json::Value::String(s) if !s.is_empty() => vec![Content::Text {
+            text: s.clone(),
+            provider_metadata: ProviderMetadata::new(),
+        }],
+        serde_json::Value::Array(parts) => parts.iter().filter_map(parse_chat_part).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Parse one OpenAI content part into canonical content.
+fn parse_chat_part(part: &serde_json::Value) -> Option<Content> {
+    match part.get("type").and_then(|t| t.as_str())? {
+        "text" => {
+            let text = part.get("text").and_then(|t| t.as_str())?.to_string();
+            (!text.is_empty()).then_some(Content::Text {
+                text,
+                provider_metadata: ProviderMetadata::new(),
+            })
+        }
+        // <https://platform.openai.com/docs/guides/vision>
+        "image_url" => {
+            let image_url = part.get("image_url")?;
+            let url = image_url.get("url").and_then(|u| u.as_str())?;
+            let (media_type, data) = DataContent::from_url(url);
+            // The OpenAI image `detail` hint (`auto` | `low` | `high`) is
+            // provider metadata, not a payload field — preserve it under the
+            // `openai` namespace so it survives a round-trip (and is ignored,
+            // not leaked, on a non-OpenAI upstream).
+            // <https://platform.openai.com/docs/guides/vision>
+            let mut provider_metadata = ProviderMetadata::new();
+            if let Some(detail) = image_url.get("detail") {
+                set_provider_metadata(
+                    &mut provider_metadata,
+                    PROVIDER_ID_OPENAI,
+                    "detail",
+                    detail.clone(),
+                );
+            }
+            Some(Content::File {
+                media_type: media_type.unwrap_or_else(|| "image/*".to_string()),
+                data,
+                filename: None,
+                provider_metadata,
+            })
+        }
+        // <https://platform.openai.com/docs/guides/audio>
+        "input_audio" => {
+            let audio = part.get("input_audio")?;
+            let format = audio
+                .get("format")
+                .and_then(|f| f.as_str())
+                .unwrap_or("mp3");
+            let data = if let Some(d) = audio.get("data").and_then(|d| d.as_str()) {
+                DataContent::Base64 {
+                    data: d.to_string(),
+                }
+            } else {
+                DataContent::Url {
+                    url: audio.get("url").and_then(|u| u.as_str())?.to_string(),
+                }
+            };
+            Some(Content::File {
+                media_type: format!("audio/{format}"),
+                data,
+                filename: None,
+                provider_metadata: ProviderMetadata::new(),
+            })
+        }
+        "file" => {
+            let file = part.get("file")?;
+            let file_data = file.get("file_data").and_then(|d| d.as_str())?;
+            let (media_type, data) = DataContent::from_url(file_data);
+            Some(Content::File {
+                media_type: media_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+                data,
+                filename: file
+                    .get("filename")
+                    .and_then(|f| f.as_str())
+                    .map(str::to_string),
+                provider_metadata: ProviderMetadata::new(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Parse an OpenAI Chat `message.annotations[]` array into canonical
+/// [`Content::Source`] parts. Only `url_citation` entries
+/// (`{type:"url_citation", url_citation:{url, title?}}`) are mapped — the only
+/// annotation kind Chat Completions emits for web search. The citation id is
+/// synthesized from the url + index (the wire carries none); the `start_index`/
+/// `end_index` text offsets are dropped (no canonical slot). Mirrors the AI SDK
+/// OpenAI chat mapping.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/chat/openai-chat-language-model.ts>
+fn parse_chat_annotations(annotations: Option<&serde_json::Value>) -> Vec<Content> {
+    let Some(arr) = annotations.and_then(|a| a.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .enumerate()
+        .filter_map(|(i, ann)| {
+            if ann.get("type").and_then(|t| t.as_str()) != Some("url_citation") {
+                return None;
+            }
+            let cite = ann.get("url_citation")?;
+            let url = cite.get("url").and_then(|u| u.as_str())?.to_string();
+            let title = cite
+                .get("title")
+                .and_then(|t| t.as_str())
+                .map(str::to_string);
+            Some(Content::Source {
+                source: Source::Url {
+                    id: Source::synthesize_id(&url, i),
+                    url,
+                    title,
+                },
+                provider_metadata: ProviderMetadata::new(),
+            })
+        })
+        .collect()
+}
+
+/// Render canonical [`Content::Source`] parts back into OpenAI Chat
+/// `message.annotations[]` `url_citation` entries. Only [`Source::Url`] has a
+/// Chat representation; a [`Source::Document`] citation (which only OpenAI
+/// Responses / Anthropic documents produce) has no `url_citation` shape on this
+/// wire and is dropped — documented cross-protocol loss. Returns an empty Vec
+/// when the result carries no URL sources.
+/// <https://platform.openai.com/docs/api-reference/chat/object> (`annotations`)
+fn render_chat_annotations(result: &GenerateResult) -> Vec<serde_json::Value> {
+    result
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Source {
+                source: Source::Url { url, title, .. },
+                ..
+            } => {
+                let mut cite = serde_json::Map::new();
+                cite.insert("url".into(), url.clone().into());
+                if let Some(title) = title {
+                    cite.insert("title".into(), title.clone().into());
+                }
+                Some(serde_json::json!({
+                    "type": "url_citation",
+                    "url_citation": serde_json::Value::Object(cite),
+                }))
+            }
+            // Document citations have no `url_citation` form on the Chat wire.
+            Content::Source {
+                source: Source::Document { .. },
+                ..
+            } => None,
+            _ => None,
+        })
+        .collect()
+}
+
 impl InboundAdapter for ChatCompletionsAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::ChatCompletions
@@ -234,42 +470,73 @@ impl InboundAdapter for ChatCompletionsAdapter {
             if let Some(reasoning) = m.reasoning_content
                 && !reasoning.is_empty()
             {
-                content.push(Content::Reasoning { text: reasoning });
+                content.push(Content::Reasoning {
+                    text: reasoning,
+                    provider_metadata: ProviderMetadata::new(),
+                });
             }
             if role == Role::Tool {
-                let result = m.content.as_ref().map(content_text).unwrap_or_default();
+                // OpenAI tool messages carry `{role:"tool", tool_call_id, content}`;
+                // `content` is a string or a content-part array, with no tool
+                // name and no error flag on the wire. A string → Text, a part
+                // array carrying media → Content, any other structured value →
+                // Json.
+                // <https://platform.openai.com/docs/api-reference/chat/create#chat-create-messages>
+                let output = m
+                    .content
+                    .as_ref()
+                    .map(parse_tool_result_output)
+                    .unwrap_or_else(|| ToolResultOutput::Text {
+                        value: String::new(),
+                    });
                 let call_id = m.tool_call_id.ok_or_else(|| {
                     BitrouterError::bad_request("tool message missing 'tool_call_id'")
                 })?;
                 content.push(Content::ToolResult {
                     call_id,
-                    content: result,
+                    tool_name: None,
+                    output,
+                    // Chat Completions has no MCP tool-result wire.
+                    dynamic: false,
+                    provider_metadata: ProviderMetadata::new(),
                 });
             } else {
-                if let Some(text) = &m.content {
-                    let text = content_text(text);
-                    if !text.is_empty() {
-                        content.push(Content::Text { text });
-                    }
+                if let Some(value) = &m.content {
+                    content.extend(parse_chat_content(value));
                 }
                 for tc in m.tool_calls {
                     content.push(Content::ToolCall {
                         id: tc.id,
                         name: tc.function.name,
                         arguments: tc.function.arguments,
+                        // Chat Completions `tool_calls` are always client tools —
+                        // there is no server-tool slot on this wire.
+                        provider_executed: false,
+                        // …and no provider-executed MCP (`dynamic`) call envelope.
+                        dynamic: false,
+                        provider_metadata: ProviderMetadata::new(),
                     });
                 }
             }
             messages.push(Message { role, content });
         }
 
+        // Chat Completions is function-only on the wire — there is no
+        // provider-defined ("server") tool envelope, so every entry parses to a
+        // `Tool::Function`. The `strict` flag is captured into the canonical slot
+        // (previously dropped here).
+        // <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tools>
         let tools = req
             .tools
             .into_iter()
-            .map(|t| crate::language_model::types::Tool {
+            .map(|t| crate::language_model::types::Tool::Function {
                 name: t.function.name,
                 description: t.function.description,
                 parameters: t.function.parameters,
+                strict: t.function.strict,
+                // Chat Completions has no per-tool `cache_control`; no provider
+                // metadata to lift here.
+                provider_metadata: ProviderMetadata::new(),
             })
             .collect();
 
@@ -282,6 +549,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
             Some(ChatResponseFormat::JsonSchema { json_schema }) => {
                 Some(ResponseFormat::JsonSchema {
                     name: Some(json_schema.name),
+                    description: json_schema.description,
                     strict: json_schema.strict,
                     schema: json_schema.schema,
                 })
@@ -295,6 +563,14 @@ impl InboundAdapter for ChatCompletionsAdapter {
             None => None,
         };
 
+        // Output modalities (OpenAI `modalities`, e.g. ["text","audio"]). Promote
+        // to the typed slot so capability detection sees them; remove from extra
+        // so they are not double-rendered.
+        let response_modalities = extra
+            .remove("modalities")
+            .and_then(|v| serde_json::from_value::<Vec<Modality>>(v).ok())
+            .unwrap_or_default();
+
         // Promote a known-shape `tool_choice` into the canonical slot so it can
         // translate across protocols (the v0 #547 bug: Anthropic's object form
         // reaching an OpenAI upstream). Unmapped shapes stay in `extra`.
@@ -303,6 +579,8 @@ impl InboundAdapter for ChatCompletionsAdapter {
         Ok(Prompt {
             model: req.model,
             system,
+            // Chat Completions has no system-level `cache_control` on its wire.
+            system_provider_metadata: ProviderMetadata::new(),
             messages,
             tools,
             params: GenerationParams {
@@ -310,9 +588,16 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_tokens.or(req.max_completion_tokens),
                 reasoning_effort: req.reasoning_effort,
-                // Every Chat Completions field without a typed slot — stop /
-                // stop_sequences, seed, n, presence/frequency_penalty,
-                // logit_bias, … — rides in `extra` and is splatted back on render.
+                response_modalities,
+                // Chat Completions carries no top-k.
+                top_k: None,
+                seed: req.seed,
+                stop: parse_chat_stop(req.stop),
+                presence_penalty: req.presence_penalty,
+                frequency_penalty: req.frequency_penalty,
+                // Every remaining Chat Completions field without a typed slot —
+                // n, logit_bias, … — rides in `extra` and is splatted back on
+                // render.
                 extra,
             },
             response_format,
@@ -330,22 +615,39 @@ impl InboundAdapter for ChatCompletionsAdapter {
         let mut message = serde_json::Map::new();
         message.insert("role".into(), "assistant".into());
 
-        let text: String = result
+        // `content` is a plain string for text-only replies; when the reply
+        // carries a generated file (e.g. an image), emit a parts array — the same
+        // shape OpenAI uses for input media. Non-standard for a chat *response*,
+        // but it preserves the data rather than dropping it.
+        if result
             .content
             .iter()
-            .filter_map(|c| match c {
-                Content::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        // `content` is always present (possibly an empty string) — never null.
-        message.insert("content".into(), text.into());
+            .any(|c| matches!(c, Content::File { .. }))
+        {
+            let parts: Vec<serde_json::Value> = result
+                .content
+                .iter()
+                .filter_map(render_input_part)
+                .collect();
+            message.insert("content".into(), parts.into());
+        } else {
+            let text: String = result
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    Content::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            // `content` is always present (possibly an empty string) — never null.
+            message.insert("content".into(), text.into());
+        }
 
         let reasoning: String = result
             .content
             .iter()
             .filter_map(|c| match c {
-                Content::Reasoning { text } => Some(text.as_str()),
+                Content::Reasoning { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect();
@@ -353,6 +655,9 @@ impl InboundAdapter for ChatCompletionsAdapter {
             message.insert("reasoning_content".into(), reasoning.into());
         }
 
+        // Chat Completions has no provider-executed server-tool slot, so a
+        // `provider_executed` call degrades to a plain `tool_calls` entry here
+        // (the flag is dropped) — `..` ignores it deliberately.
         let tool_calls: Vec<_> = result
             .content
             .iter()
@@ -361,6 +666,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
                     id,
                     name,
                     arguments,
+                    ..
                 } => Some(serde_json::json!({
                     "id": id,
                     "type": "function",
@@ -373,6 +679,16 @@ impl InboundAdapter for ChatCompletionsAdapter {
             message.insert("tool_calls".into(), tool_calls.into());
         }
 
+        // Re-attach web-search citations as `message.annotations[]`
+        // `url_citation` entries — the same location `parse_response` lifts them
+        // from. Collected from the result's `Content::Source` parts rather than
+        // rendered per-part (citations are response annotations, not content).
+        // <https://platform.openai.com/docs/api-reference/chat/object> (`annotations`)
+        let annotations = render_chat_annotations(result);
+        if !annotations.is_empty() {
+            message.insert("annotations".into(), annotations.into());
+        }
+
         let mut response = serde_json::Map::new();
         response.insert("id".into(), request_id.into());
         response.insert("object".into(), "chat.completion".into());
@@ -382,11 +698,23 @@ impl InboundAdapter for ChatCompletionsAdapter {
             serde_json::json!([{
                 "index": 0,
                 "message": serde_json::Value::Object(message),
-                "finish_reason": result.finish_reason.as_ref().map(finish_reason_str),
+                // Prefer the stashed raw finish reason (e.g. `function_call`)
+                // over the unified-enum mapping so a same-protocol round-trip
+                // reproduces the exact native value.
+                "finish_reason": rendered_finish_reason(result, PROVIDER_ID_OPENAI, finish_reason_str),
             }]),
         );
         if let Some(usage) = result.usage {
             response.insert("usage".into(), render_usage(&usage));
+        }
+        // Restore the OpenAI `system_fingerprint` from result-level provider
+        // metadata when present (only ever set by this protocol's
+        // `parse_response`), so a same-protocol round-trip reproduces it.
+        // <https://platform.openai.com/docs/api-reference/chat/object>
+        if let Some(fp) = provider_namespace(&result.provider_metadata, PROVIDER_ID_OPENAI)
+            .and_then(|o| o.get("systemFingerprint"))
+        {
+            response.insert("system_fingerprint".into(), fp.clone());
         }
         Ok(serde_json::Value::Object(response))
     }
@@ -424,16 +752,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
                 prompt
                     .tools
                     .iter()
-                    .map(|t| {
-                        serde_json::json!({
-                            "type": "function",
-                            "function": {
-                                "name": t.name,
-                                "description": t.description,
-                                "parameters": t.parameters,
-                            }
-                        })
-                    })
+                    .map(render_chat_tool)
                     .collect::<Vec<_>>()
                     .into(),
             );
@@ -458,15 +777,39 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         if let Some(rf) = &prompt.response_format {
             req.insert("response_format".into(), render_chat_response_format(rf));
         }
+        // Output modalities -> OpenAI `modalities`.
+        if !prompt.params.response_modalities.is_empty()
+            && let Ok(value) = serde_json::to_value(&prompt.params.response_modalities)
+        {
+            req.insert("modalities".into(), value);
+        }
         // Render the canonical tool_choice into Chat Completions' native shape.
         // Inserted before the extras splat so it wins over any leftover
         // `tool_choice` (matching how response_format is handled).
         if let Some(tc) = &prompt.tool_choice {
             req.insert("tool_choice".into(), render_chat_tool_choice(tc));
         }
+        // Render the typed sampling slots into their Chat Completions wire names.
+        // Chat Completions carries no top-k, so `top_k` is intentionally not
+        // rendered here (it reaches Anthropic/Gemini upstreams instead). `stop`
+        // renders as an array, which the API accepts for any count.
+        // <https://platform.openai.com/docs/api-reference/chat/create>
+        if let Some(seed) = prompt.params.seed {
+            req.insert("seed".into(), seed.into());
+        }
+        if !prompt.params.stop.is_empty() {
+            req.insert("stop".into(), prompt.params.stop.clone().into());
+        }
+        if let Some(pp) = prompt.params.presence_penalty {
+            req.insert("presence_penalty".into(), pp.into());
+        }
+        if let Some(fp) = prompt.params.frequency_penalty {
+            req.insert("frequency_penalty".into(), fp.into());
+        }
         // Splat the extras back into the outbound request — this is how
-        // `stop`, `seed`, `parallel_tool_calls`, etc. survive the round trip.
-        // Typed fields above win over any same-named extra.
+        // remaining untyped fields (`parallel_tool_calls`, n, logit_bias, …)
+        // survive the round trip. Typed fields above win over any same-named
+        // extra.
         for (k, v) in &prompt.params.extra {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -517,6 +860,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         {
             content.push(Content::Reasoning {
                 text: reasoning.to_string(),
+                provider_metadata: ProviderMetadata::new(),
             });
         }
         if let Some(text) = message
@@ -525,7 +869,10 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             .map(content_text)
             .filter(|s| !s.is_empty())
         {
-            content.push(Content::Text { text });
+            content.push(Content::Text {
+                text,
+                provider_metadata: ProviderMetadata::new(),
+            });
         }
         // Chat Completions' `message.refusal` (when non-empty) is the model's
         // declined-response text. Carry it through so the caller sees the
@@ -539,6 +886,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         {
             content.push(Content::Text {
                 text: refusal.to_string(),
+                provider_metadata: ProviderMetadata::new(),
             });
             refusal_seen = true;
         }
@@ -562,13 +910,30 @@ impl OutboundAdapter for ChatCompletionsAdapter {
                         .and_then(|a| a.as_str())
                         .unwrap_or_default()
                         .to_string(),
+                    // The Chat Completions response wire has no server-tool item;
+                    // every `tool_calls` entry is a client tool call.
+                    provider_executed: false,
+                    // …and no provider-executed MCP (`dynamic`) call envelope.
+                    dynamic: false,
+                    provider_metadata: ProviderMetadata::new(),
                 });
             }
         }
+        // Web-search citations ride `message.annotations[]` as `url_citation`
+        // entries `{type:"url_citation", url_citation:{url, title, ...}}`. Lift
+        // each into a canonical `Content::Source` (URL) so it is not dropped.
+        // The wire carries no citation id, so synthesize a stable one from the
+        // url + index. `start_index`/`end_index` (the text offsets) have no slot
+        // on the canonical `Source` and are dropped — see [`Source`].
+        // <https://platform.openai.com/docs/api-reference/chat/object> (`annotations`)
+        content.extend(parse_chat_annotations(message.get("annotations")));
 
-        let finish_reason = choice
+        let raw_finish = choice
             .get("finish_reason")
             .and_then(|f| f.as_str())
+            .map(str::to_string);
+        let finish_reason = raw_finish
+            .as_deref()
             .and_then(parse_finish_reason)
             // A `refusal` field signals content-filter regardless of what
             // `finish_reason` claims, so the caller can surface the refusal.
@@ -586,6 +951,32 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             .get("id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // OpenAI's `system_fingerprint` identifies the backend config the
+        // response was produced with — it has no dedicated canonical field, so
+        // carry it at result level under the `openai` namespace.
+        // <https://platform.openai.com/docs/api-reference/chat/object>
+        let mut provider_metadata = ProviderMetadata::new();
+        if let Some(fp) = body.get("system_fingerprint").filter(|v| !v.is_null()) {
+            set_provider_metadata(
+                &mut provider_metadata,
+                PROVIDER_ID_OPENAI,
+                "systemFingerprint",
+                fp.clone(),
+            );
+        }
+        // Preserve the raw `finish_reason` when the unified enum would not
+        // re-render it verbatim — e.g. `function_call` (→ `tool_calls`) or an
+        // Anthropic-flavoured `end_turn` / `max_tokens` accepted here. A refusal
+        // override also diverges from the wire string. Stash it under the
+        // `openai` namespace so `render_response` reproduces the exact native
+        // value on a same-protocol hop.
+        stash_raw_finish_reason(
+            &mut provider_metadata,
+            PROVIDER_ID_OPENAI,
+            raw_finish.as_deref(),
+            finish_reason.as_ref(),
+            finish_reason_str,
+        );
 
         Ok(GenerateResult {
             content,
@@ -593,6 +984,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             finish_reason,
             response_id,
             stop_details: None,
+            provider_metadata,
         })
     }
 
@@ -605,12 +997,61 @@ impl OutboundAdapter for ChatCompletionsAdapter {
     }
 }
 
+/// Render one canonical [`Tool`] into a Chat Completions `tools` entry.
+///
+/// A [`Tool::Function`] becomes `{type:"function", function:{name, description,
+/// parameters, strict?}}`; the `strict` flag is emitted when set (previously it
+/// was always dropped).
+/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-tools>
+///
+/// Chat Completions has **no** provider-defined ("server") tool envelope on the
+/// wire, so a [`Tool::ProviderDefined`] only reaches here on a cross-protocol
+/// route (a client targeting another provider's server tool, routed to an
+/// OpenAI-compatible upstream). Per the faithful-passthrough rule it is
+/// preserved verbatim in its source-native shape so the upstream decides; the
+/// object is splatted directly into the `tools` array rather than dropped or
+/// lossily mapped.
+fn render_chat_tool(tool: &Tool) -> serde_json::Value {
+    match tool {
+        Tool::Function {
+            name,
+            description,
+            parameters,
+            strict,
+            ..
+        } => {
+            let mut function = serde_json::Map::new();
+            function.insert("name".into(), name.clone().into());
+            // `description` rides through as JSON null when absent for parity with
+            // the prior render; callers tolerate it.
+            function.insert(
+                "description".into(),
+                description
+                    .clone()
+                    .map_or(serde_json::Value::Null, serde_json::Value::String),
+            );
+            function.insert("parameters".into(), parameters.clone());
+            if let Some(strict) = strict {
+                function.insert("strict".into(), (*strict).into());
+            }
+            serde_json::json!({ "type": "function", "function": function })
+        }
+        Tool::ProviderDefined { id, name, args, .. } => {
+            super::provider_defined_native(id, name, args)
+        }
+    }
+}
+
 /// Render a canonical [`ResponseFormat`] into Chat Completions' native
-/// `{ type: "json_schema", json_schema: { name, strict, schema } }`. OpenAI
-/// requires `name`; supply a stable default when the caller didn't set one.
+/// `{ type: "json_schema", json_schema: { name, description?, strict?, schema } }`.
+/// OpenAI requires `name`; supply a stable default when the caller didn't set
+/// one. `description` is emitted only when the canonical slot carries it (the
+/// OpenAI family is the only wire that transmits a schema description).
+/// <https://platform.openai.com/docs/guides/structured-outputs>
 fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
     let ResponseFormat::JsonSchema {
         name,
+        description,
         strict,
         schema,
     } = rf;
@@ -621,11 +1062,34 @@ fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
             .unwrap_or_else(|| "response".to_string())
             .into(),
     );
+    if let Some(description) = description {
+        js.insert("description".into(), description.clone().into());
+    }
     if let Some(strict) = strict {
         js.insert("strict".into(), (*strict).into());
     }
     js.insert("schema".into(), schema.clone());
     serde_json::json!({ "type": "json_schema", "json_schema": serde_json::Value::Object(js) })
+}
+
+/// Normalize a Chat Completions `stop` value into the canonical stop-sequence
+/// list. The wire accepts either a single string or an array of strings;
+/// non-string array members and any other JSON shape are ignored (the canonical
+/// slot is string-only, matching Anthropic's `stop_sequences` and Gemini's
+/// `stopSequences`). `None`/empty yields an empty list, which renders nothing.
+/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop>
+fn parse_chat_stop(value: Option<serde_json::Value>) -> Vec<String> {
+    match value {
+        Some(serde_json::Value::String(s)) => vec![s],
+        Some(serde_json::Value::Array(items)) => items
+            .into_iter()
+            .filter_map(|v| match v {
+                serde_json::Value::String(s) => Some(s),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Promote a Chat Completions `tool_choice` into the canonical [`ToolChoice`],
@@ -702,36 +1166,143 @@ impl Transport for ChatCompletionsTransport {
     }
 }
 
+/// Render one canonical content part into an OpenAI content-array element
+/// (text + media). Reasoning / tool calls ride sibling fields, not the content
+/// array, so they yield `None` here.
+fn render_input_part(c: &Content) -> Option<serde_json::Value> {
+    match c {
+        Content::Text { text, .. } => Some(serde_json::json!({ "type": "text", "text": text })),
+        Content::File {
+            media_type,
+            data,
+            filename,
+            provider_metadata,
+        } => Some(if media_type.starts_with("image/") {
+            // <https://platform.openai.com/docs/guides/vision>
+            let mut image_url = serde_json::Map::new();
+            image_url.insert("url".into(), data.to_url(media_type).into());
+            // Restore the OpenAI `detail` hint from the `openai` namespace when
+            // it round-tripped through `provider_metadata` (set by this
+            // protocol's `parse_chat_part`).
+            // <https://platform.openai.com/docs/guides/vision>
+            if let Some(detail) = provider_namespace(provider_metadata, PROVIDER_ID_OPENAI)
+                .and_then(|o| o.get("detail"))
+            {
+                image_url.insert("detail".into(), detail.clone());
+            }
+            serde_json::json!({
+                "type": "image_url",
+                "image_url": serde_json::Value::Object(image_url),
+            })
+        } else if let Some(format) = media_type.strip_prefix("audio/") {
+            // <https://platform.openai.com/docs/guides/audio>
+            let audio = match data {
+                DataContent::Base64 { data } => {
+                    serde_json::json!({ "data": data, "format": format })
+                }
+                DataContent::Url { url } => serde_json::json!({ "url": url, "format": format }),
+            };
+            serde_json::json!({ "type": "input_audio", "input_audio": audio })
+        } else {
+            // Documents (PDF, …) — OpenAI `file` part.
+            let mut file = serde_json::json!({ "file_data": data.to_url(media_type) });
+            if let Some(name) = filename {
+                file["filename"] = serde_json::Value::String(name.clone());
+            }
+            serde_json::json!({ "type": "file", "file": file })
+        }),
+        _ => None,
+    }
+}
+
+/// Render a [`ToolResultOutput`] into the value of an OpenAI tool message's
+/// `content` field. A multimodal [`ToolResultOutput::Content`] becomes a
+/// content-part array (reusing [`render_input_part`]); every other variant
+/// collapses to a plain string (the error variants lose their flag, which the
+/// OpenAI tool wire cannot represent).
+/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-messages>
+fn render_tool_result_content(output: &ToolResultOutput) -> serde_json::Value {
+    match output {
+        ToolResultOutput::Content { value } => {
+            let parts: Vec<serde_json::Value> = value
+                .iter()
+                .filter_map(tool_result_part_to_content)
+                .filter_map(|c| render_input_part(&c))
+                .collect();
+            parts.into()
+        }
+        other => other.to_provider_string().into(),
+    }
+}
+
+/// Lift a [`ToolResultContentPart`] into a canonical [`Content`] so the shared
+/// [`render_input_part`] media renderer can be reused for tool-result content.
+/// Returns `None` for a provider file reference: the OpenAI Chat Completions
+/// `content` parts (`text` / `image_url` / `input_audio` / `file{file_data}`)
+/// have no bare-`file_id` form, so a [`ToolResultContentPart::FileId`] has no
+/// faithful representation here and is dropped rather than fabricated.
+/// <https://platform.openai.com/docs/api-reference/chat/create#chat-create-messages>
+fn tool_result_part_to_content(part: &ToolResultContentPart) -> Option<Content> {
+    match part {
+        ToolResultContentPart::Text { text } => Some(Content::Text {
+            text: text.clone(),
+            provider_metadata: ProviderMetadata::new(),
+        }),
+        ToolResultContentPart::Media { media_type, data } => Some(Content::File {
+            media_type: media_type.clone(),
+            data: data.clone(),
+            filename: None,
+            provider_metadata: ProviderMetadata::new(),
+        }),
+        ToolResultContentPart::FileId { .. } => None,
+    }
+}
+
 fn render_message(m: &Message) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     obj.insert("role".into(), role_str(m.role).into());
 
     if m.role == Role::Tool {
-        // tool messages carry a tool_call_id + flat string content
+        // OpenAI tool messages carry `{tool_call_id, content}`. `content` is a
+        // string, or a content-part array when the result is multimodal. The
+        // wire has no error flag and no tool-name field, so an error output
+        // degrades to its text/JSON string and `tool_name` is dropped.
+        // <https://platform.openai.com/docs/api-reference/chat/create#chat-create-messages>
         for c in &m.content {
-            if let Content::ToolResult { call_id, content } = c {
+            if let Content::ToolResult {
+                call_id, output, ..
+            } = c
+            {
                 obj.insert("tool_call_id".into(), call_id.clone().into());
-                obj.insert("content".into(), content.clone().into());
+                obj.insert("content".into(), render_tool_result_content(output));
             }
         }
         return serde_json::Value::Object(obj);
     }
 
-    let text: String = m
-        .content
-        .iter()
-        .filter_map(|c| match c {
-            Content::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    obj.insert("content".into(), text.into());
+    // `content` is a plain string for text-only messages (back-compat) or an
+    // ordered parts array when the message carries media.
+    if m.content.iter().any(|c| matches!(c, Content::File { .. })) {
+        let parts: Vec<serde_json::Value> =
+            m.content.iter().filter_map(render_input_part).collect();
+        obj.insert("content".into(), parts.into());
+    } else {
+        let text: String = m
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        obj.insert("content".into(), text.into());
+    }
 
     let reasoning: String = m
         .content
         .iter()
         .filter_map(|c| match c {
-            Content::Reasoning { text } => Some(text.as_str()),
+            Content::Reasoning { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -739,6 +1310,9 @@ fn render_message(m: &Message) -> serde_json::Value {
         obj.insert("reasoning_content".into(), reasoning.into());
     }
 
+    // Chat Completions has no provider-executed server-tool slot, so a
+    // `provider_executed` call degrades to a plain `tool_calls` entry here (the
+    // flag is dropped) — `..` ignores it deliberately.
     let tool_calls: Vec<_> = m
         .content
         .iter()
@@ -747,6 +1321,7 @@ fn render_message(m: &Message) -> serde_json::Value {
                 id,
                 name,
                 arguments,
+                ..
             } => Some(serde_json::json!({
                 "id": id,
                 "type": "function",
@@ -924,6 +1499,16 @@ impl StreamDecoder for ChatStreamDecoder {
                         });
                     }
                 }
+                // Streamed web-search citations arrive on `delta.annotations`
+                // (same `url_citation` shape as the non-streaming response).
+                // Each becomes one whole `StreamPart::Source`; the id is
+                // synthesized from the url + this chunk's annotation index.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/chat/openai-chat-language-model.ts>
+                for content in parse_chat_annotations(delta.get("annotations")) {
+                    if let Content::Source { source, .. } = content {
+                        parts.push(StreamPart::Source { source });
+                    }
+                }
             }
             if let Some(reason) = choice
                 .get("finish_reason")
@@ -1038,6 +1623,42 @@ impl StreamEncoder for ChatStreamEncoder {
             }
             StreamPart::Usage { .. } => {
                 // usage is attached to the Finish chunk below; nothing here.
+            }
+            StreamPart::File { .. } => {
+                // Chat Completions streaming has no native file-output frame
+                // (image generation is a separate API), so a generated file is
+                // surfaced only on the non-streaming path. Documented limitation.
+            }
+            StreamPart::TextStart { .. }
+            | StreamPart::TextEnd { .. }
+            | StreamPart::ReasoningStart { .. }
+            | StreamPart::ReasoningEnd { .. } => {
+                // Coarse wire: Chat Completions frames no content blocks (deltas
+                // are a flat run on one `choices[0].delta`), so block-lifecycle
+                // markers have no native frame and re-encode to nothing.
+            }
+            StreamPart::Source { source } => {
+                // Re-attach a streamed citation as a `delta.annotations[]`
+                // `url_citation` chunk — the location the decoder reads. Only a
+                // URL source has a Chat representation; a document citation is
+                // dropped here (no `url_citation` form on this wire).
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/chat/openai-chat-language-model.ts>
+                if let Source::Url { url, title, .. } = source {
+                    let mut cite = serde_json::Map::new();
+                    cite.insert("url".into(), url.clone().into());
+                    if let Some(title) = title {
+                        cite.insert("title".into(), title.clone().into());
+                    }
+                    let mut delta = self.open_delta();
+                    delta.insert(
+                        "annotations".into(),
+                        serde_json::json!([{
+                            "type": "url_citation",
+                            "url_citation": serde_json::Value::Object(cite),
+                        }]),
+                    );
+                    frames.push(self.chunk(serde_json::Value::Object(delta), None));
+                }
             }
             StreamPart::ResponseStarted { .. } => {
                 // Observability-only metadata (upstream response id); not

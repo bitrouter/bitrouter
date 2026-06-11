@@ -75,6 +75,7 @@ fn chat_prompt() -> Prompt {
     Prompt {
         model: "test-model".to_string(),
         system: None,
+        system_provider_metadata: Default::default(),
         messages: vec![Message::text(Role::User, "hello")],
         tools: Vec::new(),
         params: GenerationParams::default(),
@@ -108,7 +109,7 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() {
         .content
         .iter()
         .filter_map(|c| match c {
-            bitrouter_sdk::language_model::Content::Text { text } => Some(text.as_str()),
+            bitrouter_sdk::language_model::Content::Text { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();

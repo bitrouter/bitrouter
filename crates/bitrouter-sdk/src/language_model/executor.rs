@@ -78,7 +78,10 @@ impl MockExecutor {
     pub fn always_text(text: impl Into<String>) -> Self {
         use crate::language_model::types::{Content, FinishReason, Usage};
         let result = GenerateResult {
-            content: vec![Content::Text { text: text.into() }],
+            content: vec![Content::Text {
+                text: text.into(),
+                provider_metadata: Default::default(),
+            }],
             usage: Some(Usage {
                 prompt_tokens: 10,
                 completion_tokens: 5,
@@ -87,6 +90,7 @@ impl MockExecutor {
             finish_reason: Some(FinishReason::Stop),
             response_id: None,
             stop_details: None,
+            provider_metadata: Default::default(),
         };
         Self::new(vec![MockResponse::Generate(result)])
     }

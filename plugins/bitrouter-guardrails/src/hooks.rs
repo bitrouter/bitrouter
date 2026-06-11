@@ -45,17 +45,42 @@ fn request_text(ctx: &PipelineContext) -> String {
     for message in &prompt.messages {
         for content in &message.content {
             match content {
-                Content::Text { text } | Content::Reasoning { text } => {
+                Content::Text { text, .. } | Content::Reasoning { text, .. } => {
                     buf.push_str(text);
                     buf.push('\n');
                 }
-                Content::ToolResult { content, .. } => {
-                    buf.push_str(content);
+                Content::ToolResult { output, .. } => {
+                    // Scan the flattened text of the tool result (text parts and
+                    // stringified JSON) so guardrail rules still see tool output.
+                    buf.push_str(&output.to_provider_string());
                     buf.push('\n');
                 }
                 Content::ToolCall { arguments, .. } => {
                     buf.push_str(arguments);
                     buf.push('\n');
+                }
+                Content::File { .. } => {
+                    // File parts (image / audio / document) carry no scannable
+                    // text, so they contribute nothing to the guardrail buffer.
+                }
+                Content::Source { .. } => {
+                    // Citation sources are response-side metadata (a url/title),
+                    // not user-authored prompt text, so they are not scanned by
+                    // the request-side guardrail.
+                }
+                Content::ToolApprovalResponse { reason, .. } => {
+                    // A tool-approval response carries no model/user content other
+                    // than an optional human-authored denial reason; scan that
+                    // when present so guardrail rules still see it.
+                    if let Some(reason) = reason {
+                        buf.push_str(reason);
+                        buf.push('\n');
+                    }
+                }
+                Content::ToolApprovalRequest { .. } => {
+                    // A tool-approval request is a provider-emitted handshake
+                    // marker (approval/tool-call ids); it carries no user-authored
+                    // prompt text to scan.
                 }
             }
         }

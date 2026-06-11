@@ -73,8 +73,67 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, GenerateResult, Prompt, RoutingTarget, StreamPart,
+    ApiProtocol, FinishReason, GenerateResult, Prompt, ProviderMetadata, RoutingTarget, StreamPart,
+    provider_namespace, set_provider_metadata,
 };
+
+/// The provider-metadata key under which a lossy finish-reason mapping stashes
+/// the **raw** provider finish reason. The canonical [`FinishReason`] enum maps
+/// several distinct native reasons onto one variant (Anthropic `stop_sequence`
+/// and `end_turn` both → `Stop`; Gemini `RECITATION` / `BLOCKLIST` /
+/// `PROHIBITED_CONTENT` and `SAFETY` all → `ContentFilter`; Chat Completions
+/// `function_call` → `ToolCalls`), so re-rendering from the enum alone would
+/// lose the exact native string on a same-protocol round-trip. Adapters stash
+/// the raw string here under their own provider id when (and only when) the
+/// mapping is lossy, and read it back on render.
+pub(crate) const RAW_FINISH_REASON: &str = "rawFinishReason";
+
+/// Record the raw provider finish-reason string under
+/// `meta[provider_id]["rawFinishReason"]` **iff** re-rendering the unified
+/// `finish` through `render` would not reproduce `raw` verbatim. Reasons that
+/// already round-trip losslessly (e.g. Chat Completions `stop`, Gemini `STOP`)
+/// store nothing, keeping the metadata map empty in the common case.
+///
+/// This is the single source of truth every adapter's `parse_response` uses to
+/// avoid the documented cross-mapping loss; the matching read is
+/// [`rendered_finish_reason`].
+pub(crate) fn stash_raw_finish_reason(
+    meta: &mut ProviderMetadata,
+    provider_id: &str,
+    raw: Option<&str>,
+    finish: Option<&FinishReason>,
+    render: impl Fn(&FinishReason) -> String,
+) {
+    if let (Some(raw), Some(finish)) = (raw, finish)
+        && render(finish) != raw
+    {
+        set_provider_metadata(
+            meta,
+            provider_id,
+            RAW_FINISH_REASON,
+            serde_json::Value::String(raw.to_string()),
+        );
+    }
+}
+
+/// Render a result's finish reason to its native wire string, preferring a
+/// stashed [`RAW_FINISH_REASON`] (under `provider_id`) over the enum mapping so
+/// a lossy parse round-trips byte-for-byte. Falls back to `render(finish)` when
+/// no raw was stashed (the lossless case) and to `None` when the result carries
+/// no finish reason at all.
+///
+/// The matching write is [`stash_raw_finish_reason`].
+pub(crate) fn rendered_finish_reason(
+    result: &GenerateResult,
+    provider_id: &str,
+    render: impl Fn(&FinishReason) -> String,
+) -> Option<String> {
+    let finish = result.finish_reason.as_ref()?;
+    let raw = provider_namespace(&result.provider_metadata, provider_id)
+        .and_then(|o| o.get(RAW_FINISH_REASON))
+        .and_then(|v| v.as_str());
+    Some(raw.map_or_else(|| render(finish), str::to_string))
+}
 
 pub mod chat_completions;
 pub mod generate_content;
@@ -83,6 +142,88 @@ pub mod responses;
 
 #[cfg(test)]
 mod tests;
+
+/// Provider-id prefix for OpenAI tools (Responses wire): `openai.<tool>`.
+pub(crate) const PROVIDER_ID_OPENAI: &str = "openai";
+/// Provider-id prefix for Anthropic tools (Messages wire): `anthropic.<tool>`.
+pub(crate) const PROVIDER_ID_ANTHROPIC: &str = "anthropic";
+/// Provider-id prefix for Google tools (Generate Content wire): `google.<tool>`.
+pub(crate) const PROVIDER_ID_GOOGLE: &str = "google";
+
+/// Split a provider-namespaced tool id (`<provider-id>.<tool-name>`, e.g.
+/// `openai.web_search_preview`) into `(provider_id, tool_name)`. If the id has
+/// no `.` separator the whole string is treated as the tool name with an empty
+/// provider id, so a malformed id never panics — the caller renders it verbatim.
+pub(crate) fn split_provider_id(id: &str) -> (&str, &str) {
+    match id.split_once('.') {
+        Some((provider, tool)) => (provider, tool),
+        None => ("", id),
+    }
+}
+
+/// Reconstruct a provider-defined tool's **source-native** wire object from its
+/// canonical `(id, name, args)`, as the originating provider serializes it.
+///
+/// This is the single source of truth for both directions of provider-defined
+/// tools:
+///
+/// - **Same-protocol render** (the tool's `id` prefix matches the target wire):
+///   the output is exactly the native shape the provider expects, so a
+///   provider-defined tool round-trips losslessly.
+/// - **Cross-protocol render** (foreign `id` prefix): bitrouter does not have a
+///   faithful 1:1 equivalent on a different provider's wire (V3 namespaces these
+///   tools by provider for exactly this reason), so the *faithful* behavior is to
+///   preserve the tool **verbatim** in its source-native shape and let the
+///   upstream decide — the same rule [`ToolChoice`](crate::language_model::types::ToolChoice)
+///   applies to provider-specific shapes it cannot map, which stay in `extra`. The
+///   caller splats this object into the target request's tool list unchanged.
+///
+/// Native shapes (one comment-linked doc per provider lives at each adapter's
+/// tool render site):
+/// - OpenAI / Responses — a flat object `{type:<tool>, …args}`.
+/// - Anthropic / Messages — `{type:<tool>, name, …args}` (versioned `type` + a
+///   stable `name`).
+/// - Google / Generate Content — a single-key object `{<toolKey>: args}` (the
+///   `args` already carry the camelCase tool key's value).
+///
+/// `args` must be a JSON object; a non-object `args` (only reachable from a
+/// hand-built canonical value) is treated as empty so this never panics.
+pub(crate) fn provider_defined_native(
+    id: &str,
+    name: &str,
+    args: &serde_json::Value,
+) -> serde_json::Value {
+    let (provider, tool) = split_provider_id(id);
+    let arg_fields = args.as_object().cloned().unwrap_or_default();
+    match provider {
+        PROVIDER_ID_ANTHROPIC => {
+            // Anthropic server tools: `{type:"web_search_20250305", name:"web_search", …args}`.
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".into(), tool.into());
+            obj.insert("name".into(), name.into());
+            obj.extend(arg_fields);
+            serde_json::Value::Object(obj)
+        }
+        PROVIDER_ID_GOOGLE => {
+            // Google tools live as a single camelCase key on the tool object:
+            // `{googleSearch:{}}`, `{codeExecution:{}}`, `{urlContext:{}}`, …
+            // The key is the tool name; its value is the (possibly empty) args.
+            let value = args.as_object().map_or_else(
+                || serde_json::json!({}),
+                |m| serde_json::Value::Object(m.clone()),
+            );
+            serde_json::json!({ tool: value })
+        }
+        // OpenAI / Responses (and any other provider id) — a flat `{type, …args}`
+        // object, which is also the most faithful generic verbatim form.
+        _ => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".into(), tool.into());
+            obj.extend(arg_fields);
+            serde_json::Value::Object(obj)
+        }
+    }
+}
 
 /// A parsed Server-Sent-Events event from an upstream stream.
 #[derive(Debug, Clone, Default)]

@@ -24,6 +24,7 @@ fn prompt(text: &str, stream: bool) -> Prompt {
     Prompt {
         model: "m".to_string(),
         system: None,
+        system_provider_metadata: Default::default(),
         messages: vec![Message::text(Role::User, text)],
         tools: Vec::new(),
         params: GenerationParams::default(),

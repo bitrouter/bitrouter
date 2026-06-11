@@ -95,6 +95,15 @@
       "description": "`generationConfig` knobs on a [`GenerateContentRequest`].",
       "type": "object",
       "properties": {
+        "frequencyPenalty": {
+          "description": "Frequency penalty. Promoted to the canonical `frequency_penalty` slot.\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
         "maxOutputTokens": {
           "type": [
             "integer",
@@ -103,6 +112,15 @@
           "format": "uint32",
           "default": null,
           "minimum": 0
+        },
+        "presencePenalty": {
+          "description": "Presence penalty. Promoted to the canonical `presence_penalty` slot.\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
         },
         "responseMimeType": {
           "description": "Response MIME type. `application/json` paired with `response_schema` is\nthe structured-output contract; other values (e.g. `text/x.enum`) pass\nthrough opaquely.\n<https://ai.google.dev/gemini-api/docs/structured-output>",
@@ -116,6 +134,26 @@
           "description": "JSON Schema constraining the response (with\n`response_mime_type: \"application/json\"`).",
           "default": null
         },
+        "seed": {
+          "description": "Deterministic-sampling seed. Promoted to the canonical `seed` slot.\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "default": null
+        },
+        "stopSequences": {
+          "description": "Stop sequences. Promoted to the canonical `stop` slot, so it can render\nas a Chat Completions `stop` or an Anthropic `stop_sequences`.\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
         "temperature": {
           "type": [
             "number",
@@ -123,6 +161,16 @@
           ],
           "format": "double",
           "default": null
+        },
+        "topK": {
+          "description": "Top-k sampling. Promoted to the canonical `top_k` slot so it translates\nacross protocols (e.g. to an Anthropic upstream's `top_k`).\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
         },
         "topP": {
           "type": [
@@ -135,7 +183,7 @@
       }
     },
     "GenerateContentTool": {
-      "description": "One element of [`GenerateContentRequest`]'s `tools` array — Google's\n`{ functionDeclarations: [...] }` envelope.",
+      "description": "One element of [`GenerateContentRequest`]'s `tools` array.\n\nA single Google tool object may carry client function declarations\n(`functionDeclarations`) **and/or** one or more provider-defined (\"built-in\")\ntool keys on the same object — `googleSearch`, `codeExecution`,\n`googleSearchRetrieval`, `urlContext`. Function declarations parse to\n[`Tool::Function`]; every other key is a provider-defined tool namespaced\n`google.<key>`, its value preserved verbatim as `args`. The non-function keys\nride in `extra`.\n<https://ai.google.dev/gemini-api/docs/function-calling>\n<https://ai.google.dev/gemini-api/docs/google-search>\n<https://ai.google.dev/gemini-api/docs/code-execution>",
       "type": "object",
       "properties": {
         "functionDeclarations": {

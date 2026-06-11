@@ -1117,6 +1117,7 @@ mod hop_tests {
         let prompt = Prompt {
             model: "test-model".to_string(),
             system: None,
+            system_provider_metadata: Default::default(),
             messages: vec![Message::text(Role::User, "hi")],
             tools: Vec::new(),
             params,
@@ -1133,7 +1134,10 @@ mod hop_tests {
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
             result: GenerateResult {
-                content: vec![Content::Text { text: "ok".into() }],
+                content: vec![Content::Text {
+                    text: "ok".into(),
+                    provider_metadata: Default::default(),
+                }],
                 usage: Some(Usage {
                     prompt_tokens: 11,
                     completion_tokens: 7,
@@ -1142,6 +1146,7 @@ mod hop_tests {
                 finish_reason: Some(FinishReason::Stop),
                 response_id: Some("chatcmpl-test123".into()),
                 stop_details: None,
+                provider_metadata: Default::default(),
             },
             latency_ms: 42,
             generation_time_ms: 40,

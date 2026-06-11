@@ -23,14 +23,202 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
-    describe_deser_error,
+    InboundAdapter, OutboundAdapter, PROVIDER_ID_OPENAI, SseEvent, StreamDecoder, StreamEncoder,
+    Transport, describe_deser_error, provider_defined_native,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice, Usage,
+    ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
+    Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart, Tool,
+    ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, provider_namespace,
+    set_provider_metadata,
 };
+
+/// Synthesize a stable `tool_call_id` for a [`Content::ToolApprovalRequest`]
+/// parsed from a Responses `mcp_approval_request`. That item transmits an
+/// `approval_request_id` but no separate tool-call id, and V3's
+/// `ToolApprovalRequest` requires one (the AI SDK generates a fresh id here);
+/// deriving it deterministically from the approval id (`approval:<id>`) keeps a
+/// same-protocol round-trip stable without fabricating provider-side identity.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/provider/src/language-model/v3/language-model-v3-tool-approval-request.ts>
+fn synthesize_approval_tool_call_id(approval_id: &str) -> String {
+    format!("approval:{approval_id}")
+}
+
+/// The tool-name prefix the AI SDK gives a remote MCP tool surfaced from an
+/// `mcp_call` item (`mcp.<name>`). bitrouter keeps the same prefix so the tool
+/// name round-trips and the render can recover the bare MCP tool name.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+const RESPONSES_MCP_TOOL_PREFIX: &str = "mcp.";
+/// The synthetic tool name for an OpenAI Responses `local_shell_call` — a
+/// client-executed shell tool keyed by `call_id`. Matches the AI SDK's custom
+/// tool name so the input `action` payload round-trips.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/tool/local-shell.ts>
+const RESPONSES_LOCAL_SHELL_TOOL: &str = "local_shell";
+/// The `provider_metadata["openai"]` key holding a Responses output item's `id`,
+/// distinct from its `call_id`. Restored on render so a same-protocol round-trip
+/// reproduces the original item id (mirrors the AI SDK `itemId` key).
+/// <https://platform.openai.com/docs/api-reference/responses/object>
+const RESPONSES_ITEM_ID: &str = "itemId";
+/// The discriminator the AI SDK stamps on an `mcp_call`'s lowered tool-result
+/// body (`{ type: 'call', serverLabel, name, arguments, output?, error? }`). The
+/// Responses encoder recognises it to recombine a dynamic `ToolCall` + its
+/// same-id `ToolResult` back into a single `mcp_call` item.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/tool/mcp.ts>
+const RESPONSES_MCP_CALL_TAG: &str = "call";
+
+/// Lower an OpenAI Responses `mcp_call` item — a provider-executed remote MCP
+/// tool call whose result is carried **inline** — into the canonical pair the
+/// AI SDK reference produces: a `dynamic`, provider-executed [`Content::ToolCall`]
+/// plus a paired [`Content::ToolResult`] whose body is the MCP-specific
+/// `{ type: 'call', serverLabel, name, arguments, output?, error? }` JSON object.
+/// Keeping the result as that exact structure (rather than splitting `output`
+/// onto a bare string) lets [`render_output_items`] recombine the two parts into
+/// one `mcp_call` item, so the inline result round-trips same-protocol exactly.
+/// The item `id` correlates the pair and is preserved under
+/// `provider_metadata["openai"]["itemId"]`.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+fn parse_mcp_call(item: &serde_json::Value) -> Vec<Content> {
+    let id = item
+        .get("id")
+        .and_then(|i| i.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let name = item
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let arguments = item
+        .get("arguments")
+        .and_then(|a| a.as_str())
+        .unwrap_or_default()
+        .to_string();
+    // Build the MCP result body, mirroring the AI SDK `mcpOutputSchema`:
+    // `{type:'call', serverLabel, name, arguments, output?, error?}`. `output`
+    // and `error` are only present when the wire carried them.
+    let mut result = serde_json::Map::new();
+    result.insert("type".into(), RESPONSES_MCP_CALL_TAG.into());
+    if let Some(label) = item.get("server_label") {
+        result.insert("serverLabel".into(), label.clone());
+    }
+    result.insert("name".into(), name.clone().into());
+    result.insert("arguments".into(), arguments.clone().into());
+    if let Some(output) = item.get("output").filter(|v| !v.is_null()) {
+        result.insert("output".into(), output.clone());
+    }
+    if let Some(error) = item.get("error").filter(|v| !v.is_null()) {
+        result.insert("error".into(), error.clone());
+    }
+    let mut meta = ProviderMetadata::new();
+    set_provider_metadata(
+        &mut meta,
+        PROVIDER_ID_OPENAI,
+        RESPONSES_ITEM_ID,
+        serde_json::Value::String(id.clone()),
+    );
+    vec![
+        Content::ToolCall {
+            id: id.clone(),
+            name: format!("{RESPONSES_MCP_TOOL_PREFIX}{name}"),
+            arguments,
+            provider_executed: true,
+            dynamic: true,
+            provider_metadata: ProviderMetadata::new(),
+        },
+        Content::ToolResult {
+            call_id: id,
+            tool_name: Some(format!("{RESPONSES_MCP_TOOL_PREFIX}{name}")),
+            output: ToolResultOutput::Json {
+                value: serde_json::Value::Object(result),
+            },
+            dynamic: true,
+            provider_metadata: meta,
+        },
+    ]
+}
+
+/// The OpenAI `itemId` preserved in `provider_metadata`, if any.
+fn responses_item_id(meta: &ProviderMetadata) -> Option<String> {
+    provider_namespace(meta, PROVIDER_ID_OPENAI)
+        .and_then(|o| o.get(RESPONSES_ITEM_ID))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+/// Recombine a `dynamic` provider-executed MCP [`Content::ToolCall`] with its
+/// inline result — the [`Content::ToolResult`] whose `output` is the
+/// `{type:'call', …}` body lowered by [`parse_mcp_call`] — back into a single
+/// Responses `mcp_call` output item, inverting the parse split. Returns `None`
+/// when `result_output` is not such an MCP-call body (so a dynamic call routed in
+/// from a different wire, with no matching MCP result, is not mis-recombined).
+/// The emitted item restores `id`, `server_label`, `name`, `arguments`, and the
+/// inline `output`/`error`.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/tool/mcp.ts>
+fn render_mcp_call_item(
+    call_id: &str,
+    result_meta: &ProviderMetadata,
+    result_output: &ToolResultOutput,
+) -> Option<serde_json::Value> {
+    let body = match result_output {
+        ToolResultOutput::Json { value } => value.as_object()?,
+        _ => return None,
+    };
+    if body.get("type").and_then(|t| t.as_str()) != Some(RESPONSES_MCP_CALL_TAG) {
+        return None;
+    }
+    let mut item = serde_json::Map::new();
+    item.insert("type".into(), "mcp_call".into());
+    // Prefer the preserved item id; fall back to the correlating call id.
+    let item_id = responses_item_id(result_meta).unwrap_or_else(|| call_id.to_string());
+    item.insert("id".into(), item_id.into());
+    if let Some(label) = body.get("serverLabel") {
+        item.insert("server_label".into(), label.clone());
+    }
+    if let Some(name) = body.get("name") {
+        item.insert("name".into(), name.clone());
+    }
+    if let Some(arguments) = body.get("arguments") {
+        item.insert("arguments".into(), arguments.clone());
+    }
+    if let Some(output) = body.get("output") {
+        item.insert("output".into(), output.clone());
+    }
+    if let Some(error) = body.get("error") {
+        item.insert("error".into(), error.clone());
+    }
+    Some(serde_json::Value::Object(item))
+}
+
+/// Reconstruct a Responses `local_shell_call` output item from a client
+/// `local_shell` [`Content::ToolCall`], inverting the `local_shell_call` parse.
+/// The `action` is carried verbatim in the call's `{action}` input (so a
+/// same-protocol round-trip is byte-faithful), `call_id` is the call id, and the
+/// item `id` is restored from `provider_metadata["openai"]["itemId"]`. Returns
+/// `None` when the input is not the expected `{action}` object.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+fn render_local_shell_call_item(c: &Content) -> Option<serde_json::Value> {
+    let Content::ToolCall {
+        id,
+        arguments,
+        provider_metadata,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let input: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let action = input.get("action")?.clone();
+    let mut item = serde_json::Map::new();
+    item.insert("type".into(), "local_shell_call".into());
+    item.insert("call_id".into(), id.clone().into());
+    // The item `id` is distinct from `call_id` on this wire; restore it when it
+    // round-tripped, else fall back to the call id so the item is still valid.
+    let item_id = responses_item_id(provider_metadata).unwrap_or_else(|| id.clone());
+    item.insert("id".into(), item_id.into());
+    item.insert("action".into(), action);
+    Some(serde_json::Value::Object(item))
+}
 
 /// The Responses protocol adapter.
 pub struct ResponsesAdapter;
@@ -111,6 +299,11 @@ pub enum ResponsesTextFormat {
     JsonSchema {
         /// Schema name (OpenAI requires it).
         name: String,
+        /// Optional schema description — extra LLM guidance OpenAI passes to the
+        /// model. Promoted to the canonical `response_format` description.
+        /// <https://platform.openai.com/docs/api-reference/responses/create>
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
         /// Strict-mode flag.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         strict: Option<bool>,
@@ -119,8 +312,17 @@ pub enum ResponsesTextFormat {
     },
 }
 
-/// One element of [`ResponsesRequest`]'s `tools` array — the Responses-flavoured
-/// flat tool definition (`{ type: "function", name, description, parameters }`).
+/// One element of [`ResponsesRequest`]'s `tools` array.
+///
+/// Responses uses one flat array for both kinds of tool:
+/// - a **function** tool — `{type:"function", name, description?, parameters, strict?}`;
+/// - a **provider-defined** server tool — `{type:"web_search_preview"|…, …config}`
+///   (`code_interpreter`, `file_search`, `image_generation`, `computer_use_preview`).
+///
+/// `kind` (`type`) discriminates the two; for a server tool the configuration
+/// keys ride in `extra` so they are preserved verbatim into the canonical
+/// `Tool::ProviderDefined.args`.
+/// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct ResponsesTool {
     #[serde(default, rename = "type")]
@@ -131,6 +333,17 @@ pub struct ResponsesTool {
     description: Option<String>,
     #[serde(default)]
     parameters: serde_json::Value,
+    /// OpenAI strict-mode flag (V3 `strict`) on a function tool. Captured so it
+    /// is not lost across the canonical boundary.
+    #[serde(default)]
+    strict: Option<bool>,
+    /// Server-tool configuration keys (e.g. `search_context_size`,
+    /// `container`, `vector_store_ids`) for a provider-defined tool. Preserved
+    /// verbatim. Skipped from the published schema — the documented contract is
+    /// the typed function-tool shape.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 /// `reasoning` knob on [`ResponsesRequest`] — only `effort` is read; other
@@ -162,17 +375,194 @@ fn role_str(role: Role) -> &'static str {
     }
 }
 
-/// Extract text from a Responses `content` value: a string, or an array of
-/// `{type:"input_text"|"output_text"|"text", text}` parts.
-fn content_text(value: &serde_json::Value) -> String {
+/// Parse a Responses `content` value (string or array of content parts) into
+/// ordered canonical content.
+fn parse_responses_content(value: Option<&serde_json::Value>) -> Vec<Content> {
     match value {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(parts) => parts
-            .iter()
-            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
-            .collect::<Vec<_>>()
-            .join(""),
-        _ => String::new(),
+        Some(serde_json::Value::String(s)) => vec![Content::Text {
+            text: s.clone(),
+            provider_metadata: ProviderMetadata::new(),
+        }],
+        Some(serde_json::Value::Array(parts)) => {
+            parts.iter().filter_map(parse_responses_part).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Parse one Responses content part into canonical content.
+/// <https://platform.openai.com/docs/api-reference/responses/create>
+fn parse_responses_part(part: &serde_json::Value) -> Option<Content> {
+    match part.get("type").and_then(|t| t.as_str())? {
+        "input_text" | "output_text" | "text" => Some(Content::Text {
+            text: part.get("text").and_then(|t| t.as_str())?.to_string(),
+            provider_metadata: ProviderMetadata::new(),
+        }),
+        "input_image" => {
+            let url = part.get("image_url").and_then(|u| u.as_str())?;
+            let (media_type, data) = DataContent::from_url(url);
+            // The Responses `input_image` carries the same `detail` hint
+            // (`auto` | `low` | `high`) as Chat Completions' `image_url`; it is
+            // provider metadata, not a payload field. Preserve it under the
+            // `openai` namespace so it round-trips on a Responses request and
+            // survives a hop from a Chat Completions client (same namespace).
+            // <https://platform.openai.com/docs/api-reference/responses/create>
+            let mut provider_metadata = ProviderMetadata::new();
+            if let Some(detail) = part.get("detail").filter(|v| !v.is_null()) {
+                set_provider_metadata(
+                    &mut provider_metadata,
+                    PROVIDER_ID_OPENAI,
+                    "detail",
+                    detail.clone(),
+                );
+            }
+            Some(Content::File {
+                media_type: media_type.unwrap_or_else(|| "image/*".to_string()),
+                data,
+                filename: None,
+                provider_metadata,
+            })
+        }
+        "input_file" => {
+            let file_data = part.get("file_data").and_then(|d| d.as_str())?;
+            let (media_type, data) = DataContent::from_url(file_data);
+            Some(Content::File {
+                media_type: media_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+                data,
+                filename: part
+                    .get("filename")
+                    .and_then(|f| f.as_str())
+                    .map(str::to_string),
+                provider_metadata: ProviderMetadata::new(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Parse a Responses `output_text` part's `annotations[]` into canonical
+/// [`Content::Source`] parts, with `next_index` tracking the running citation
+/// count so synthesized ids stay unique across parts/items. Mirrors the AI SDK
+/// OpenAI Responses mapping:
+/// - `url_citation` (`{url, title}`) → [`Source::Url`];
+/// - `file_citation` / `container_file_citation` (`{filename, file_id}`) →
+///   [`Source::Document`] with `media_type: text/plain`, `title`/`filename` from
+///   `filename`;
+/// - `file_path` (`{file_id}`) → [`Source::Document`] with
+///   `media_type: application/octet-stream`, `title`/`filename` from `file_id`.
+///
+/// The wire carries no citation id, so one is synthesized (from the url, or from
+/// `file_id`/`filename` for documents) + index. The `index`/`start_index` text
+/// offsets and the `file_id`/`container_id` provider fields have no canonical
+/// slot and are dropped — see [`Source`].
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+fn parse_responses_annotations(
+    annotations: Option<&serde_json::Value>,
+    next_index: &mut usize,
+) -> Vec<Content> {
+    let Some(arr) = annotations.and_then(|a| a.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for ann in arr {
+        let source = match ann.get("type").and_then(|t| t.as_str()) {
+            Some("url_citation") => {
+                let Some(url) = ann.get("url").and_then(|u| u.as_str()) else {
+                    continue;
+                };
+                Source::Url {
+                    id: Source::synthesize_id(url, *next_index),
+                    url: url.to_string(),
+                    title: ann
+                        .get("title")
+                        .and_then(|t| t.as_str())
+                        .map(str::to_string),
+                }
+            }
+            Some("file_citation") | Some("container_file_citation") => {
+                let filename = ann
+                    .get("filename")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                Source::Document {
+                    id: Source::synthesize_id(&filename, *next_index),
+                    media_type: "text/plain".to_string(),
+                    title: filename.clone(),
+                    filename: (!filename.is_empty()).then_some(filename),
+                }
+            }
+            Some("file_path") => {
+                let file_id = ann
+                    .get("file_id")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                Source::Document {
+                    id: Source::synthesize_id(&file_id, *next_index),
+                    media_type: "application/octet-stream".to_string(),
+                    title: file_id.clone(),
+                    filename: (!file_id.is_empty()).then_some(file_id),
+                }
+            }
+            _ => continue,
+        };
+        out.push(Content::Source {
+            source,
+            provider_metadata: ProviderMetadata::new(),
+        });
+        *next_index += 1;
+    }
+    out
+}
+
+/// Render canonical [`Content::Source`] parts into a Responses `annotations[]`
+/// array for an `output_text` part — the location [`parse_responses_annotations`]
+/// reads. [`Source::Url`] → `url_citation`; [`Source::Document`] →
+/// `file_citation` (keyed by `filename`). The `file_id`/`container_id` provider
+/// fields cannot be reconstructed from the canonical `Source` and are omitted on
+/// the document path (documented loss). Returns an empty Vec when the result
+/// carries no sources.
+/// <https://platform.openai.com/docs/api-reference/responses/object> (`annotations`)
+fn render_responses_annotations(result: &GenerateResult) -> Vec<serde_json::Value> {
+    result
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Source { source, .. } => Some(render_source_annotation(source)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Render one canonical [`Source`] into a Responses `annotations[]` entry —
+/// shared by the non-streaming [`render_responses_annotations`] and the
+/// streaming `response.output_text.annotation.added` encode path.
+/// [`Source::Url`] → `url_citation`; [`Source::Document`] → `file_citation`
+/// (keyed by `filename`). The `file_id`/`container_id` provider fields cannot be
+/// reconstructed from the canonical `Source` and are omitted on the document
+/// path (documented loss).
+/// <https://platform.openai.com/docs/api-reference/responses/object> (`annotations`)
+fn render_source_annotation(source: &Source) -> serde_json::Value {
+    match source {
+        Source::Url { url, title, .. } => {
+            let mut ann = serde_json::Map::new();
+            ann.insert("type".into(), "url_citation".into());
+            ann.insert("url".into(), url.clone().into());
+            if let Some(title) = title {
+                ann.insert("title".into(), title.clone().into());
+            }
+            serde_json::Value::Object(ann)
+        }
+        Source::Document {
+            title, filename, ..
+        } => {
+            let name = filename.clone().unwrap_or_else(|| title.clone());
+            serde_json::json!({
+                "type": "file_citation",
+                "filename": name,
+            })
+        }
     }
 }
 
@@ -191,13 +581,14 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                     Some("message") | None => {
                         if let Some(role) = item.get("role").and_then(|r| r.as_str()) {
                             let role = parse_role(role)?;
-                            let text = item.get("content").map(content_text).unwrap_or_default();
-                            messages.push(Message::text(role, text));
+                            let content = parse_responses_content(item.get("content"));
+                            messages.push(Message { role, content });
                         }
                     }
                     Some("function_call") => {
                         messages.push(Message {
                             role: Role::Assistant,
+                            // tool calls are single-part assistant turns
                             content: vec![Content::ToolCall {
                                 id: item
                                     .get("call_id")
@@ -215,10 +606,31 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                     .and_then(|a| a.as_str())
                                     .unwrap_or_default()
                                     .to_string(),
+                                // A `function_call` input item is always a client
+                                // tool call; provider-executed server-tool calls
+                                // (`web_search_call`, …) are never re-sent as
+                                // input items.
+                                provider_executed: false,
+                                // …nor is it a provider-executed MCP (`dynamic`)
+                                // call (those arrive as `mcp_call` items).
+                                dynamic: false,
+                                provider_metadata: ProviderMetadata::new(),
                             }],
                         });
                     }
+                    // OpenAI Responses `function_call_output {call_id, output}`:
+                    // `output` is a string, a content-part array, or (loosely) a
+                    // bare JSON value, with no tool name and no error flag on the
+                    // wire. A string → Text, a part array → Content, any other
+                    // value → Json.
+                    // <https://platform.openai.com/docs/api-reference/responses/create>
                     Some("function_call_output") => {
+                        let output = item
+                            .get("output")
+                            .map(parse_responses_tool_output)
+                            .unwrap_or_else(|| ToolResultOutput::Text {
+                                value: String::new(),
+                            });
                         messages.push(Message {
                             role: Role::Tool,
                             content: vec![Content::ToolResult {
@@ -227,14 +639,63 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                     .and_then(|i| i.as_str())
                                     .unwrap_or_default()
                                     .to_string(),
-                                content: item
-                                    .get("output")
-                                    .map(|o| match o {
-                                        serde_json::Value::String(s) => s.clone(),
-                                        other => other.to_string(),
-                                    })
-                                    .unwrap_or_default(),
+                                tool_name: None,
+                                output,
+                                // A `function_call_output` is a plain client
+                                // tool-result item, never an inline MCP result.
+                                dynamic: false,
+                                provider_metadata: ProviderMetadata::new(),
                             }],
+                        });
+                    }
+                    // OpenAI Responses `mcp_approval_response {approval_request_id,
+                    // approve}` — the human-in-the-loop grant/deny for a
+                    // provider-executed MCP tool call. It becomes a
+                    // `Content::ToolApprovalResponse` (a `tool`-role part). A
+                    // **denial** (`approve == false`) additionally yields a paired
+                    // `ToolResult` whose output is `ExecutionDenied`, carrying the
+                    // approval id under `provider_metadata["openai"]["approvalId"]`
+                    // so render knows the denial was already conveyed by the
+                    // approval item and skips re-emitting it as a string — matching
+                    // the AI SDK's `execution-denied` skip rule.
+                    // <https://platform.openai.com/docs/api-reference/responses/object>
+                    // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+                    Some("mcp_approval_response") => {
+                        let approval_id = item
+                            .get("approval_request_id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let approved = item
+                            .get("approve")
+                            .and_then(|a| a.as_bool())
+                            .unwrap_or(false);
+                        let mut content = vec![Content::ToolApprovalResponse {
+                            approval_id: approval_id.clone(),
+                            approved,
+                            reason: None,
+                            provider_metadata: ProviderMetadata::new(),
+                        }];
+                        if !approved {
+                            let mut denial_meta = ProviderMetadata::new();
+                            set_provider_metadata(
+                                &mut denial_meta,
+                                PROVIDER_ID_OPENAI,
+                                "approvalId",
+                                approval_id.clone().into(),
+                            );
+                            content.push(Content::ToolResult {
+                                call_id: approval_id,
+                                tool_name: None,
+                                output: ToolResultOutput::ExecutionDenied { reason: None },
+                                // An approval denial is not an MCP inline result.
+                                dynamic: false,
+                                provider_metadata: denial_meta,
+                            });
+                        }
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content,
                         });
                     }
                     Some("reasoning") => {
@@ -251,9 +712,58 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                         if !text.is_empty() {
                             messages.push(Message {
                                 role: Role::Assistant,
-                                content: vec![Content::Reasoning { text }],
+                                content: vec![Content::Reasoning {
+                                    text,
+                                    provider_metadata: ProviderMetadata::new(),
+                                }],
                             });
                         }
+                    }
+                    // An `mcp_call` echoed back into the request `input[]` (a
+                    // stateless client replaying the assistant turn) is lowered to
+                    // the same `dynamic` `ToolCall` + inline `ToolResult` pair as
+                    // on the response side, carried as one assistant message. This
+                    // is symmetric in IR-lowering only: `render_request` then drops
+                    // the dynamic pair (a provider-executed call is not replayed on
+                    // the input wire, mirroring the AI SDK), so the pair survives a
+                    // request→response re-render, not a request→request one.
+                    // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+                    Some("mcp_call") => {
+                        messages.push(Message {
+                            role: Role::Assistant,
+                            content: parse_mcp_call(item),
+                        });
+                    }
+                    // A `local_shell_call` input item — a client shell call replayed
+                    // into the request. Mapped to the same client `local_shell`
+                    // `ToolCall` as the response parse, as an assistant message.
+                    Some("local_shell_call") => {
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let action = item.get("action").cloned().unwrap_or(serde_json::json!({}));
+                        let mut meta = ProviderMetadata::new();
+                        if let Some(id) = item.get("id").and_then(|i| i.as_str()) {
+                            set_provider_metadata(
+                                &mut meta,
+                                PROVIDER_ID_OPENAI,
+                                RESPONSES_ITEM_ID,
+                                serde_json::Value::String(id.to_string()),
+                            );
+                        }
+                        messages.push(Message {
+                            role: Role::Assistant,
+                            content: vec![Content::ToolCall {
+                                id: call_id,
+                                name: RESPONSES_LOCAL_SHELL_TOOL.to_string(),
+                                arguments: serde_json::json!({ "action": action }).to_string(),
+                                provider_executed: false,
+                                dynamic: false,
+                                provider_metadata: meta,
+                            }],
+                        });
                     }
                     // forward-compatible: unknown item types are skipped, not fatal
                     Some(_) => {}
@@ -283,6 +793,14 @@ fn openai_error_status(err_type: &str) -> u16 {
     }
 }
 
+// Responses has no native finish-reason *string* to preserve: its terminal
+// signal is the response `status` (`completed` / `incomplete` / `failed`), a
+// small closed set that the unified [`FinishReason`] enum reproduces exactly on
+// render (`Length` → `incomplete`, `Error` → `failed`, else `completed`). There
+// is therefore no lossy mapping to stash a raw value for — unlike the
+// Messages / Chat Completions / Generate Content adapters, which collapse
+// several distinct native reasons onto one variant and so stash
+// `rawFinishReason`. Hence this adapter writes no raw finish reason.
 fn finish_from_status(status: &str) -> Option<FinishReason> {
     match status {
         "completed" => Some(FinishReason::Stop),
@@ -307,19 +825,19 @@ impl InboundAdapter for ResponsesAdapter {
         let messages = parse_input(&req.input)?;
         let system = req.instructions.filter(|s| !s.is_empty());
 
+        // Responses packs function tools and provider-defined ("server") tools
+        // into one flat array, discriminated by `type`. `type:"function"` (or a
+        // typeless entry that still carries a `name`, tolerated for lenient
+        // clients) becomes a `Tool::Function`; every other `type`
+        // (`web_search_preview`, `code_interpreter`, `file_search`,
+        // `image_generation`, `computer_use_preview`, …) is a provider-defined
+        // tool whose config keys ride in `extra` and are preserved verbatim under
+        // an `openai.<type>` id.
+        // <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>
         let tools = req
             .tools
             .into_iter()
-            .filter(|t| t.kind.as_deref() == Some("function") || t.name.is_some())
-            .map(|t| crate::language_model::types::Tool {
-                name: t.name.unwrap_or_default(),
-                description: t.description,
-                parameters: if t.parameters.is_null() {
-                    serde_json::json!({})
-                } else {
-                    t.parameters
-                },
-            })
+            .filter_map(parse_responses_tool)
             .collect();
 
         // `text` is a typed field. Promote `text.format: json_schema` into the
@@ -333,6 +851,7 @@ impl InboundAdapter for ResponsesAdapter {
             }) => match format {
                 Some(ResponsesTextFormat::JsonSchema {
                     name,
+                    description,
                     strict,
                     schema,
                 }) => {
@@ -344,6 +863,7 @@ impl InboundAdapter for ResponsesAdapter {
                     }
                     Some(ResponseFormat::JsonSchema {
                         name: Some(name),
+                        description,
                         strict,
                         schema,
                     })
@@ -373,6 +893,8 @@ impl InboundAdapter for ResponsesAdapter {
         Ok(Prompt {
             model: req.model,
             system,
+            // Responses carries no system-level `cache_control` on its wire.
+            system_provider_metadata: ProviderMetadata::new(),
             messages,
             tools,
             params: GenerationParams {
@@ -380,8 +902,20 @@ impl InboundAdapter for ResponsesAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_output_tokens,
                 reasoning_effort: req.reasoning.and_then(|r| r.effort),
-                // Splat every Responses-API field without a typed slot —
-                // parallel_tool_calls, max_tool_calls, metadata, include[],
+                response_modalities: Vec::new(),
+                // The Responses API has no top-level top_k / seed / stop /
+                // presence_penalty / frequency_penalty — they are unsupported on
+                // this wire and dropped by the reference implementation, so the
+                // canonical slots stay empty here and the outbound adapter
+                // renders none of them.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+                top_k: None,
+                seed: None,
+                stop: Vec::new(),
+                presence_penalty: None,
+                frequency_penalty: None,
+                // Splat every remaining Responses-API field without a typed slot
+                // — parallel_tool_calls, max_tool_calls, metadata, include[],
                 // previous_response_id, store, stream_options, … — into `extra`
                 // so render_request can put them back.
                 extra,
@@ -431,6 +965,7 @@ impl InboundAdapter for ResponsesAdapter {
             text_item: None,
             tool_item: None,
             completed_items: Vec::new(),
+            annotation_index: 0,
         })
     }
 }
@@ -457,14 +992,7 @@ impl OutboundAdapter for ResponsesAdapter {
                 prompt
                     .tools
                     .iter()
-                    .map(|t| {
-                        serde_json::json!({
-                            "type": "function",
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters,
-                        })
-                    })
+                    .map(render_responses_tool)
                     .collect::<Vec<_>>()
                     .into(),
             );
@@ -514,6 +1042,9 @@ impl OutboundAdapter for ResponsesAdapter {
             .and_then(|o| o.as_array())
             .ok_or_else(|| BitrouterError::bad_request("responses response missing 'output'"))?;
         let mut content = Vec::new();
+        // Running citation counter so synthesized source ids stay unique across
+        // every annotated output_text part in the response.
+        let mut source_index = 0usize;
         for item in output {
             match item.get("type").and_then(|t| t.as_str()) {
                 Some("message") => {
@@ -522,8 +1053,16 @@ impl OutboundAdapter for ResponsesAdapter {
                             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                                 content.push(Content::Text {
                                     text: text.to_string(),
+                                    provider_metadata: ProviderMetadata::new(),
                                 });
                             }
+                            // An `output_text` part may carry web-search / file
+                            // citations on `annotations[]`; lift them into
+                            // `Content::Source` parts right after the text.
+                            content.extend(parse_responses_annotations(
+                                part.get("annotations"),
+                                &mut source_index,
+                            ));
                         }
                     }
                 }
@@ -539,7 +1078,10 @@ impl OutboundAdapter for ResponsesAdapter {
                         })
                         .unwrap_or_default();
                     if !text.is_empty() {
-                        content.push(Content::Reasoning { text });
+                        content.push(Content::Reasoning {
+                            text,
+                            provider_metadata: ProviderMetadata::new(),
+                        });
                     }
                 }
                 Some("function_call") => {
@@ -559,8 +1101,208 @@ impl OutboundAdapter for ResponsesAdapter {
                             .and_then(|a| a.as_str())
                             .unwrap_or_default()
                             .to_string(),
+                        // A `function_call` output item is a client tool call.
+                        provider_executed: false,
+                        dynamic: false,
+                        provider_metadata: ProviderMetadata::new(),
                     });
                 }
+                // OpenAI Responses built-in (server-side) tools surface as their
+                // own output-item types rather than `function_call`. The SDK
+                // exposes each as a provider-executed tool call keyed by item
+                // `id`, with a synthetic tool name and the call's distinguishing
+                // input, matching the AI SDK reference mapping. These must be
+                // marked `provider_executed` so they are not re-sent as client
+                // `function_call` items on a later turn. `image_generation_call`
+                // and `computer_call` join the no-echoed-input group: the AI SDK
+                // emits an empty input for both (`'{}'` and `''` respectively)
+                // and surfaces their payload only via a *separate* tool-result
+                // (the generated image / the computer-use status). The flat
+                // `ToolCall` cannot carry that result, so — exactly as for
+                // `web_search_call`/`file_search_call` — only the call itself is
+                // modeled here; it round-trips via `render_output_items`, which
+                // re-emits `<name>_call` keyed by `id`.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+                Some(
+                    server_tool @ ("web_search_call"
+                    | "file_search_call"
+                    | "image_generation_call"
+                    | "computer_call"),
+                ) => {
+                    content.push(Content::ToolCall {
+                        id: item
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: server_tool.trim_end_matches("_call").to_string(),
+                        // The Responses API does not echo these tools' query
+                        // arguments on the output item, so the SDK reference
+                        // emits an empty input object.
+                        arguments: "{}".to_string(),
+                        provider_executed: true,
+                        // OpenAI's built-in server tools are not runtime MCP tools.
+                        dynamic: false,
+                        provider_metadata: ProviderMetadata::new(),
+                    });
+                }
+                Some("code_interpreter_call") => {
+                    // `code_interpreter_call` does carry its `code` and
+                    // `container_id`; preserve them as the call input (matching
+                    // the AI SDK `{ code, containerId }` shape).
+                    let mut input = serde_json::Map::new();
+                    if let Some(code) = item.get("code").and_then(|c| c.as_str()) {
+                        input.insert("code".into(), code.into());
+                    }
+                    if let Some(container) = item.get("container_id").and_then(|c| c.as_str()) {
+                        input.insert("containerId".into(), container.into());
+                    }
+                    content.push(Content::ToolCall {
+                        id: item
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: "code_interpreter".to_string(),
+                        arguments: serde_json::Value::Object(input).to_string(),
+                        provider_executed: true,
+                        // `code_interpreter` is a built-in server tool, not MCP.
+                        dynamic: false,
+                        provider_metadata: ProviderMetadata::new(),
+                    });
+                }
+                // OpenAI Responses `mcp_approval_request {id, server_label, name,
+                // arguments, approval_request_id?}` — a provider-executed MCP tool
+                // call paused for human approval. It becomes a
+                // `Content::ToolApprovalRequest`. The MCP server identity
+                // (`server_label` / `name` / `arguments`) has no slot on the flat
+                // content shape, so it rides in `provider_metadata["openai"]` to
+                // reproduce the exact item on render.
+                //
+                // The wire carries TWO ids that can differ: the item `id` and the
+                // optional `approval_request_id` (the correlation key the later
+                // `mcp_approval_response.approval_request_id` and any `mcp_call`
+                // reference). `approval_id` takes the correlation key —
+                // `approval_request_id`, falling back to `id` — matching the AI SDK
+                // reference (`approval_request_id ?? id`). When the item ALSO had a
+                // distinct `id`, that raw item id would otherwise be lost on a
+                // same-protocol round-trip (render keys the item by `approval_id`),
+                // so it is preserved under `provider_metadata["openai"]["itemId"]`
+                // — the same key the AI SDK uses for the OpenAI item id — and
+                // restored on render. `tool_call_id` is synthesized from
+                // `approval_id` (the wire carries no separate tool-call id),
+                // mirroring the AI SDK reference which generates a fresh id here.
+                // <https://platform.openai.com/docs/api-reference/responses/object>
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+                Some("mcp_approval_request") => {
+                    let item_id = item.get("id").and_then(|i| i.as_str());
+                    let approval_id = item
+                        .get("approval_request_id")
+                        .and_then(|i| i.as_str())
+                        .or(item_id)
+                        .unwrap_or_default()
+                        .to_string();
+                    let mut meta = ProviderMetadata::new();
+                    for key in ["server_label", "name", "arguments"] {
+                        if let Some(v) = item.get(key) {
+                            // Store under the camelCase form the AI SDK uses for
+                            // the OpenAI namespace (`serverLabel`).
+                            let meta_key = if key == "server_label" {
+                                "serverLabel"
+                            } else {
+                                key
+                            };
+                            set_provider_metadata(
+                                &mut meta,
+                                PROVIDER_ID_OPENAI,
+                                meta_key,
+                                v.clone(),
+                            );
+                        }
+                    }
+                    // Preserve the raw item `id` only when it differs from the
+                    // chosen `approval_id`, so it round-trips without bloating the
+                    // common case (where the two coincide and `id` is recoverable).
+                    if let Some(id) = item_id
+                        && id != approval_id
+                    {
+                        set_provider_metadata(
+                            &mut meta,
+                            PROVIDER_ID_OPENAI,
+                            "itemId",
+                            serde_json::Value::String(id.to_string()),
+                        );
+                    }
+                    content.push(Content::ToolApprovalRequest {
+                        tool_call_id: synthesize_approval_tool_call_id(&approval_id),
+                        approval_id,
+                        provider_metadata: meta,
+                    });
+                }
+                // `mcp_call` — a provider-executed remote MCP tool call whose
+                // *result* is carried **inline** on the same item
+                // (`{ server_label, name, arguments, output?, error? }`). It is
+                // lowered (mirroring the AI SDK reference) to a `dynamic`,
+                // provider-executed `ToolCall` PLUS a paired `ToolResult` whose
+                // body is the MCP-specific `{ type: 'call', serverLabel, name,
+                // arguments, output?, error? }` structure. `render_output_items`
+                // recombines the two back into a single `mcp_call` item, so the
+                // inline result round-trips same-protocol exactly.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+                Some("mcp_call") => content.extend(parse_mcp_call(item)),
+                // `mcp_list_tools` — the catalogue of tools a remote MCP server
+                // advertised. The AI SDK reference skips it (it is neither a call
+                // nor a result the model acts on), and so does bitrouter; there is
+                // no canonical content part for a tool catalogue.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+                Some("mcp_list_tools") => {}
+                // `local_shell_call` — a *client*-executed shell tool call (the AI
+                // SDK leaves `providerExecuted` unset and keys it by `call_id`),
+                // carrying an `action` payload. It maps to an ordinary client
+                // `ToolCall` named `local_shell` whose input is `{action}` (the
+                // wire action preserved verbatim); `render_output_items`
+                // reconstructs the `local_shell_call` item from the same name, so
+                // the call round-trips same-protocol. The item `id` (distinct from
+                // `call_id`) rides in `provider_metadata["openai"]["itemId"]`.
+                //
+                // Residual gap: the paired `local_shell_call_output` is a
+                // *client*-supplied result on a follow-up **request**. bitrouter's
+                // `ToolResult` does not carry the tool name on the Responses wire
+                // (which keys results purely by `call_id`), so the request render
+                // cannot distinguish a `local_shell` result from an ordinary
+                // `function_call_output`; the output therefore degrades to
+                // `function_call_output` rather than `local_shell_call_output`.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/tool/local-shell.ts>
+                Some("local_shell_call") => {
+                    let call_id = item
+                        .get("call_id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let action = item.get("action").cloned().unwrap_or(serde_json::json!({}));
+                    let mut meta = ProviderMetadata::new();
+                    if let Some(id) = item.get("id").and_then(|i| i.as_str()) {
+                        set_provider_metadata(
+                            &mut meta,
+                            PROVIDER_ID_OPENAI,
+                            RESPONSES_ITEM_ID,
+                            serde_json::Value::String(id.to_string()),
+                        );
+                    }
+                    content.push(Content::ToolCall {
+                        id: call_id,
+                        name: RESPONSES_LOCAL_SHELL_TOOL.to_string(),
+                        arguments: serde_json::json!({ "action": action }).to_string(),
+                        // A `local_shell_call` is a client tool call (the client
+                        // runs the shell), not a provider-executed or MCP call.
+                        provider_executed: false,
+                        dynamic: false,
+                        provider_metadata: meta,
+                    });
+                }
+                // Any other unknown item type is skipped for forward
+                // compatibility (mirrors the input-side `Some(_) => {}`), rather
+                // than failing the whole response.
                 _ => {}
             }
         }
@@ -581,6 +1323,10 @@ impl OutboundAdapter for ResponsesAdapter {
             finish_reason,
             response_id,
             stop_details: None,
+            // The Responses object carries no result-level field that lacks a
+            // dedicated canonical slot (no `system_fingerprint`, unlike Chat
+            // Completions), so result-level provider metadata is empty here.
+            provider_metadata: ProviderMetadata::new(),
         })
     }
 
@@ -593,12 +1339,86 @@ impl OutboundAdapter for ResponsesAdapter {
     }
 }
 
+/// Parse one Responses `tools` entry into a canonical [`Tool`]. A
+/// `type:"function"` entry (or a typeless one that still has a `name`) is a
+/// [`Tool::Function`]; anything else is a provider-defined server tool keyed by
+/// its `type`, namespaced `openai.<type>`, with its config keys preserved
+/// verbatim as `args`. An entry that is neither (no `type`, no `name`) is
+/// dropped — there is nothing to forward.
+fn parse_responses_tool(t: ResponsesTool) -> Option<Tool> {
+    let is_function = t.kind.as_deref() == Some("function");
+    if is_function || (t.kind.is_none() && t.name.is_some()) {
+        return Some(Tool::Function {
+            name: t.name.unwrap_or_default(),
+            description: t.description,
+            parameters: if t.parameters.is_null() {
+                serde_json::json!({})
+            } else {
+                t.parameters
+            },
+            strict: t.strict,
+            provider_metadata: ProviderMetadata::new(),
+        });
+    }
+    // Provider-defined server tool. `type` is the tool kind (and the tool name);
+    // config keys live in `extra`. A few server tools (`file_search`) accept a
+    // distinct `name`; default to the kind when absent.
+    let kind = t.kind?;
+    Some(Tool::ProviderDefined {
+        id: format!("{PROVIDER_ID_OPENAI}.{kind}"),
+        name: t.name.unwrap_or_else(|| kind.clone()),
+        args: serde_json::Value::Object(t.extra.into_iter().collect()),
+        provider_metadata: ProviderMetadata::new(),
+    })
+}
+
+/// Render one canonical [`Tool`] into a Responses `tools` entry.
+///
+/// A [`Tool::Function`] becomes the flat `{type:"function", name, description?,
+/// parameters, strict?}` shape; `strict` is emitted when set (previously always
+/// dropped). A [`Tool::ProviderDefined`] is rendered to its source-native shape
+/// via [`provider_defined_native`]: for an `openai.*` id this is the exact
+/// Responses server-tool object (`{type:<tool>, …args}`), a lossless
+/// same-protocol round-trip; a foreign-provider id is preserved verbatim
+/// (faithful passthrough) so the upstream decides.
+/// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>
+fn render_responses_tool(tool: &Tool) -> serde_json::Value {
+    match tool {
+        Tool::Function {
+            name,
+            description,
+            parameters,
+            strict,
+            ..
+        } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".into(), "function".into());
+            obj.insert("name".into(), name.clone().into());
+            obj.insert(
+                "description".into(),
+                description
+                    .clone()
+                    .map_or(serde_json::Value::Null, serde_json::Value::String),
+            );
+            obj.insert("parameters".into(), parameters.clone());
+            if let Some(strict) = strict {
+                obj.insert("strict".into(), (*strict).into());
+            }
+            serde_json::Value::Object(obj)
+        }
+        Tool::ProviderDefined { id, name, args, .. } => provider_defined_native(id, name, args),
+    }
+}
+
 /// Render a canonical [`ResponseFormat`] into Responses' native
-/// `{ type: "json_schema", name, strict, schema }` body that sits under
-/// `text.format`. OpenAI requires `name`; default it.
+/// `{ type: "json_schema", name, description?, strict?, schema }` body that sits
+/// under `text.format`. OpenAI requires `name`; default it. `description` is
+/// emitted only when the canonical slot carries it.
+/// <https://platform.openai.com/docs/api-reference/responses/create>
 fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
     let ResponseFormat::JsonSchema {
         name,
+        description,
         strict,
         schema,
     } = rf;
@@ -610,6 +1430,9 @@ fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
             .unwrap_or_else(|| "response".to_string())
             .into(),
     );
+    if let Some(description) = description {
+        obj.insert("description".into(), description.clone().into());
+    }
     if let Some(strict) = strict {
         obj.insert("strict".into(), (*strict).into());
     }
@@ -696,7 +1519,7 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
     let mut text_parts = Vec::new();
     for c in &m.content {
         match c {
-            Content::Text { text } => {
+            Content::Text { text, .. } => {
                 let kind = if m.role == Role::Assistant {
                     "output_text"
                 } else {
@@ -711,21 +1534,135 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
                 id,
                 name,
                 arguments,
+                provider_executed,
+                ..
+            } => {
+                // A provider-executed server-tool call is NOT re-sent as a client
+                // `function_call` input item — the provider already ran it, and
+                // the Responses input wire has no slot to replay a server-tool
+                // call (the AI SDK reference drops it / emits an item_reference).
+                // This also covers a `dynamic` provider-executed MCP call.
+                // Only client tool calls round-trip as input items.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+                if !provider_executed {
+                    // A client `local_shell` call reproduces its `local_shell_call`
+                    // input item (with the `action` payload), matching the AI SDK;
+                    // every other client call is a `function_call`.
+                    if name == RESPONSES_LOCAL_SHELL_TOOL
+                        && let Some(item) = render_local_shell_call_item(c)
+                    {
+                        items.push(item);
+                    } else {
+                        items.push(serde_json::json!({
+                            "type": "function_call",
+                            "call_id": id,
+                            "name": name,
+                            "arguments": arguments,
+                        }));
+                    }
+                }
+            }
+            // image/* -> `input_image`, other media -> `input_file`; the payload
+            // is a URL or `data:` URI via the shared helper.
+            // <https://platform.openai.com/docs/api-reference/responses/create>
+            Content::File {
+                media_type,
+                data,
+                filename,
+                provider_metadata,
+            } => {
+                let part = if media_type.starts_with("image/") {
+                    let mut image = serde_json::json!({
+                        "type": "input_image", "image_url": data.to_url(media_type)
+                    });
+                    // Restore the OpenAI `detail` hint from the `openai`
+                    // namespace when it round-tripped through `provider_metadata`
+                    // (set by this protocol's parse path, or by Chat Completions'
+                    // image_url parse — same namespace).
+                    // <https://platform.openai.com/docs/api-reference/responses/create>
+                    if let Some(detail) = provider_namespace(provider_metadata, PROVIDER_ID_OPENAI)
+                        .and_then(|o| o.get("detail"))
+                        && let Some(obj) = image.as_object_mut()
+                    {
+                        obj.insert("detail".into(), detail.clone());
+                    }
+                    image
+                } else {
+                    let mut file = serde_json::json!({
+                        "type": "input_file", "file_data": data.to_url(media_type)
+                    });
+                    if let Some(name) = filename {
+                        file["filename"] = serde_json::Value::String(name.clone());
+                    }
+                    file
+                };
+                text_parts.push(part);
+            }
+            // Responses `function_call_output {call_id, output}`. `output` is a
+            // string or content-part array, with no error flag and no tool name,
+            // so an error output degrades to its value and `tool_name` is dropped.
+            // `Json` / `ErrorJson` stringify; `Content` becomes a part array.
+            //
+            // An `ExecutionDenied` output paired with an approval (its approval id
+            // rides in `provider_metadata["openai"]["approvalId"]`) is **skipped**
+            // here: the sibling `ToolApprovalResponse` already re-emits the
+            // `mcp_approval_response` that conveys the denial, so emitting a
+            // `function_call_output` too would duplicate it. An *unpaired* denial
+            // (no approval id) falls through and degrades to the denial string.
+            // <https://platform.openai.com/docs/api-reference/responses/create>
+            // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+            Content::ToolResult {
+                call_id,
+                output,
+                dynamic,
+                provider_metadata,
+                ..
+            } => {
+                // A `dynamic` MCP result is the inline result of a
+                // provider-executed `mcp_call`; the provider already ran it, so it
+                // is NOT re-sent as a client `function_call_output` (the AI SDK
+                // reference likewise does not replay provider-executed results on
+                // the input wire). It rides the response path instead, where the
+                // `mcp_call` item recombines its call and inline result.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+                let denial_paired_with_approval =
+                    matches!(output, ToolResultOutput::ExecutionDenied { .. })
+                        && provider_namespace(provider_metadata, PROVIDER_ID_OPENAI)
+                            .is_some_and(|o| o.contains_key("approvalId"));
+                if !*dynamic && !denial_paired_with_approval {
+                    let output_value = render_responses_tool_output(output);
+                    items.push(serde_json::json!({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": output_value,
+                    }));
+                }
+            }
+            // Responses `mcp_approval_response {approval_request_id, approve}` —
+            // the grant/deny for a provider-executed MCP tool call, re-emitted on
+            // the input wire. The optional canonical `reason` has no slot on this
+            // item and is dropped (the wire carries none).
+            // <https://platform.openai.com/docs/api-reference/responses/object>
+            // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+            Content::ToolApprovalResponse {
+                approval_id,
+                approved,
+                ..
             } => {
                 items.push(serde_json::json!({
-                    "type": "function_call",
-                    "call_id": id,
-                    "name": name,
-                    "arguments": arguments,
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approval_id,
+                    "approve": approved,
                 }));
             }
-            Content::ToolResult { call_id, content } => {
-                items.push(serde_json::json!({
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": content,
-                }));
-            }
+            // A `mcp_approval_request` is an *output* item (an assistant reply), so
+            // it never appears in a request `input` array — the request render
+            // skips it. It round-trips via the response path
+            // (`render_output_items`).
+            Content::ToolApprovalRequest { .. } => {}
+            // Citation sources are response-side metadata only; they are never
+            // re-sent as a request input item, so the request path skips them.
+            Content::Source { .. } => {}
         }
     }
     if !text_parts.is_empty() {
@@ -741,6 +1678,134 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
     items
 }
 
+/// Render a [`ToolResultOutput`] into a Responses `function_call_output.output`
+/// value. The wire's `output` is `string | content-part-array`, never a bare
+/// JSON-value slot: `Text` / `ErrorText` pass through as a string, `Json` /
+/// `ErrorJson` are **stringified** (the reference does `JSON.stringify`), and a
+/// multimodal `Content` becomes a part array of `input_text` / `input_image` /
+/// `input_file` — the same wire shapes a user message uses, so media survives
+/// rather than being flattened to text. The error flag and tool name have no
+/// slot here and are dropped.
+/// <https://platform.openai.com/docs/api-reference/responses/create>
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+fn render_responses_tool_output(output: &ToolResultOutput) -> serde_json::Value {
+    match output {
+        // `output` is a string slot, not a JSON-value slot: stringify the value
+        // (matching the reference's `JSON.stringify(output.value)`) rather than
+        // emitting a bare object the wire would reject.
+        ToolResultOutput::Json { value } | ToolResultOutput::ErrorJson { value } => {
+            serde_json::Value::String(value.to_string())
+        }
+        ToolResultOutput::Content { value } => serde_json::Value::Array(
+            value
+                .iter()
+                .map(render_responses_tool_output_part)
+                .collect(),
+        ),
+        other => serde_json::Value::String(other.to_provider_string()),
+    }
+}
+
+/// Render one [`ToolResultContentPart`] into a Responses tool-output content
+/// part. `text` → `input_text`; `image/*` media or an image file reference →
+/// `input_image`; any other media or file reference → `input_file`. Media bytes
+/// ride as a `data:` URL or a plain URL; a provider file reference rides as
+/// `file_id`.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+fn render_responses_tool_output_part(part: &ToolResultContentPart) -> serde_json::Value {
+    match part {
+        ToolResultContentPart::Text { text } => {
+            serde_json::json!({ "type": "input_text", "text": text })
+        }
+        ToolResultContentPart::Media { media_type, data } => {
+            if media_type.starts_with("image/") {
+                serde_json::json!({
+                    "type": "input_image", "image_url": data.to_url(media_type)
+                })
+            } else {
+                // The reference renders a `url`-form file as `file_url` and a
+                // `data`-form file as `file_data`; `to_url` already collapses
+                // inline bytes into a `data:` URL, so both land in `file_data`
+                // here — a value the Responses wire accepts for either form.
+                serde_json::json!({
+                    "type": "input_file", "file_data": data.to_url(media_type)
+                })
+            }
+        }
+        ToolResultContentPart::FileId { media_type, id } => {
+            let kind = match media_type {
+                Some(mt) if mt.starts_with("image/") => "input_image",
+                _ => "input_file",
+            };
+            serde_json::json!({ "type": kind, "file_id": id })
+        }
+    }
+}
+
+/// Parse a Responses `function_call_output.output` value into a canonical
+/// [`ToolResultOutput`]. A string or bare JSON value uses the untyped mapping
+/// (string → `Text`, else `Json`); a content-part array becomes the multimodal
+/// `Content` variant, inverting [`render_responses_tool_output`].
+/// <https://platform.openai.com/docs/api-reference/responses/create>
+fn parse_responses_tool_output(value: &serde_json::Value) -> ToolResultOutput {
+    match value {
+        serde_json::Value::Array(parts) => ToolResultOutput::Content {
+            value: parts
+                .iter()
+                .filter_map(parse_responses_tool_output_part)
+                .collect(),
+        },
+        other => ToolResultOutput::from_untyped_value(other),
+    }
+}
+
+/// Parse one Responses tool-output content part into a [`ToolResultContentPart`].
+/// `input_text` → text; `input_image` / `input_file` carry either a `file_id`
+/// (→ [`ToolResultContentPart::FileId`]) or an inline/URL payload
+/// (→ [`ToolResultContentPart::Media`]).
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
+fn parse_responses_tool_output_part(part: &serde_json::Value) -> Option<ToolResultContentPart> {
+    match part.get("type").and_then(|t| t.as_str())? {
+        "input_text" | "text" => Some(ToolResultContentPart::Text {
+            text: part.get("text").and_then(|t| t.as_str())?.to_string(),
+        }),
+        "input_image" => {
+            if let Some(id) = part.get("file_id").and_then(|f| f.as_str()) {
+                return Some(ToolResultContentPart::FileId {
+                    media_type: Some("image/*".to_string()),
+                    id: id.to_string(),
+                });
+            }
+            let url = part.get("image_url").and_then(|u| u.as_str())?;
+            let (media_type, data) = DataContent::from_url(url);
+            Some(ToolResultContentPart::Media {
+                media_type: media_type.unwrap_or_else(|| "image/*".to_string()),
+                data,
+            })
+        }
+        "input_file" => {
+            if let Some(id) = part.get("file_id").and_then(|f| f.as_str()) {
+                return Some(ToolResultContentPart::FileId {
+                    media_type: None,
+                    id: id.to_string(),
+                });
+            }
+            // The data form carries `file_data` (a `data:` URL); the url form
+            // carries `file_url`. Either resolves through the shared parser.
+            let payload = part
+                .get("file_data")
+                .or_else(|| part.get("file_url"))
+                .and_then(|d| d.as_str())?;
+            let (media_type, data) = DataContent::from_url(payload);
+            Some(ToolResultContentPart::Media {
+                media_type: media_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+                data,
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Render a canonical result into Responses `output` items.
 fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
     let mut items = Vec::new();
@@ -748,7 +1813,7 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
         .content
         .iter()
         .filter_map(|c| match c {
-            Content::Reasoning { text } => Some(text.as_str()),
+            Content::Reasoning { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -762,15 +1827,25 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
         .content
         .iter()
         .filter_map(|c| match c {
-            Content::Text { text } => Some(text.as_str()),
+            Content::Text { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();
     if !text.is_empty() {
+        // Re-attach citations as the `output_text` part's `annotations[]` (the
+        // location `parse_response` lifts them from), collected from the result's
+        // `Content::Source` parts rather than rendered per-part. The key is
+        // omitted entirely when there are no sources (#454-5: never emit null /
+        // gratuitous empty fields).
+        let mut part = serde_json::json!({ "type": "output_text", "text": text });
+        let annotations = render_responses_annotations(result);
+        if !annotations.is_empty() {
+            part["annotations"] = annotations.into();
+        }
         items.push(serde_json::json!({
             "type": "message",
             "role": "assistant",
-            "content": [{ "type": "output_text", "text": text }],
+            "content": [part],
         }));
     }
     for c in &result.content {
@@ -778,13 +1853,146 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
             id,
             name,
             arguments,
+            provider_executed,
+            dynamic,
+            ..
+        } = c
+        {
+            // A `dynamic` provider-executed MCP call recombines with its inline
+            // result — the same-id `ToolResult` carrying the `{type:'call', …}`
+            // body — back into ONE `mcp_call` item, so the inline output/error
+            // round-trips. If no such paired result is present (e.g. an upstream
+            // truncated the response after the call but before its inline result,
+            // or the call was routed in from a non-Responses wire), the call is
+            // degraded to a plain `function_call` below — it must NOT fall into
+            // the `{name}_call` server-tool branch, which would emit an invalid
+            // `mcp.<name>_call` item the Responses API does not define.
+            if *dynamic
+                && *provider_executed
+                && let Some(item) = result
+                    .content
+                    .iter()
+                    .filter_map(|r| match r {
+                        Content::ToolResult {
+                            call_id,
+                            output,
+                            dynamic: result_dynamic,
+                            provider_metadata,
+                            ..
+                        } if *result_dynamic && call_id == id => {
+                            render_mcp_call_item(call_id, provider_metadata, output)
+                        }
+                        _ => None,
+                    })
+                    .next()
+            {
+                items.push(item);
+                continue;
+            }
+            // A client `local_shell` call reproduces its `local_shell_call` output
+            // item, keyed by `call_id`, restoring the `action` payload and the
+            // item `id` from `provider_metadata["openai"]["itemId"]`.
+            // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+            if !*provider_executed
+                && name == RESPONSES_LOCAL_SHELL_TOOL
+                && let Some(item) = render_local_shell_call_item(c)
+            {
+                items.push(item);
+                continue;
+            }
+            if *provider_executed && !*dynamic {
+                // Reproduce the provider-executed server-tool output item on the
+                // same wire. The Responses API names these items `<tool>_call`
+                // (e.g. `web_search_call`) and keys them by item `id` rather than
+                // `call_id`. `code_interpreter_call` carries its `code` /
+                // `container_id` back out; the others have no echoed input.
+                // A `dynamic` MCP call is deliberately excluded here: its native
+                // shape is `mcp_call` (emitted only when its inline result is
+                // paired, above), and `mcp.<name>_call` is not a valid Responses
+                // item type — an unpaired one degrades to `function_call` instead.
+                // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/openai-responses-language-model.ts>
+                let mut item = serde_json::Map::new();
+                item.insert("type".into(), format!("{name}_call").into());
+                item.insert("id".into(), id.clone().into());
+                if name == "code_interpreter"
+                    && let Ok(serde_json::Value::Object(input)) =
+                        serde_json::from_str::<serde_json::Value>(arguments)
+                {
+                    if let Some(code) = input.get("code") {
+                        item.insert("code".into(), code.clone());
+                    }
+                    if let Some(container) = input.get("containerId") {
+                        item.insert("container_id".into(), container.clone());
+                    }
+                }
+                items.push(serde_json::Value::Object(item));
+            } else {
+                // A client `function_call`, or a `dynamic` MCP call whose inline
+                // result was not paired (handled above): both render as a valid
+                // `function_call` item. The MCP tool name keeps its `mcp.` prefix
+                // so a downstream consumer can still recover the bare tool name.
+                items.push(serde_json::json!({
+                    "type": "function_call",
+                    "call_id": id,
+                    "name": name,
+                    "arguments": arguments,
+                }));
+            }
+        }
+    }
+    // Reproduce a `mcp_approval_request` output item from each
+    // `Content::ToolApprovalRequest`. The MCP server identity (`server_label` /
+    // `name` / `arguments`) is restored from `provider_metadata["openai"]`. The
+    // item `id` is the preserved raw `itemId` when the source carried one distinct
+    // from the correlation key; otherwise it falls back to `approval_id`. When a
+    // distinct `itemId` was preserved, `approval_request_id` is emitted alongside
+    // (= `approval_id`) so the original two-id item round-trips byte-faithfully —
+    // inverting the parse path. <https://platform.openai.com/docs/api-reference/responses/object>
+    for c in &result.content {
+        if let Content::ToolApprovalRequest {
+            approval_id,
+            provider_metadata,
+            ..
+        } = c
+        {
+            let mut item = serde_json::Map::new();
+            item.insert("type".into(), "mcp_approval_request".into());
+            let openai = provider_namespace(provider_metadata, PROVIDER_ID_OPENAI);
+            let item_id = openai
+                .and_then(|o| o.get("itemId"))
+                .and_then(|v| v.as_str());
+            item.insert("id".into(), item_id.unwrap_or(approval_id).into());
+            // The correlation key is carried separately only when it differs from
+            // the item id (i.e. the source had both); otherwise `id` alone conveys
+            // it, matching the single-id items the parse path also accepts.
+            if item_id.is_some() {
+                item.insert("approval_request_id".into(), approval_id.clone().into());
+            }
+            if let Some(openai) = openai {
+                if let Some(label) = openai.get("serverLabel") {
+                    item.insert("server_label".into(), label.clone());
+                }
+                if let Some(name) = openai.get("name") {
+                    item.insert("name".into(), name.clone());
+                }
+                if let Some(arguments) = openai.get("arguments") {
+                    item.insert("arguments".into(), arguments.clone());
+                }
+            }
+            items.push(serde_json::Value::Object(item));
+        }
+    }
+    // Best-effort: a generated file becomes an image message item. The Responses
+    // API has no standard output-image item, so this preserves the data rather
+    // than dropping it. <https://platform.openai.com/docs/api-reference/responses>
+    for c in &result.content {
+        if let Content::File {
+            media_type, data, ..
         } = c
         {
             items.push(serde_json::json!({
-                "type": "function_call",
-                "call_id": id,
-                "name": name,
-                "arguments": arguments,
+                "type": "message", "role": "assistant",
+                "content": [{ "type": "output_image", "image_url": data.to_url(media_type) }],
             }));
         }
     }
@@ -844,6 +2052,10 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
 struct ResponsesStreamDecoder {
     /// item_id → (call_id, tool_name) for in-flight function-call items.
     function_items: Vec<(String, String, String)>,
+    /// Running citation count across `response.output_text.annotation.added`
+    /// events, so synthesized [`Source`] ids stay unique within the stream
+    /// (mirrors `next_index` on the non-streaming `parse_responses_annotations`).
+    source_index: usize,
 }
 
 impl ResponsesStreamDecoder {
@@ -853,6 +2065,23 @@ impl ResponsesStreamDecoder {
             .find(|(id, _, _)| id == item_id)
             .map(|(_, call_id, name)| (call_id.clone(), name.clone()))
     }
+}
+
+/// Derive the block id for a [`StreamPart::TextStart`] / [`StreamPart::TextEnd`]
+/// (and reasoning counterpart) from an `output_item.added` / `output_item.done`
+/// event: prefer the upstream `item.id`, falling back to the event's
+/// `output_index` when an upstream omits it. The id is used only to correlate a
+/// start with its matching end; outbound encoders generate their own item ids,
+/// so an exact value is not required for fidelity.
+fn block_marker_id(item: &serde_json::Value, event: &serde_json::Value) -> String {
+    if let Some(id) = item.get("id").and_then(|i| i.as_str()) {
+        return id.to_string();
+    }
+    event
+        .get("output_index")
+        .and_then(|i| i.as_u64())
+        .map(|i| i.to_string())
+        .unwrap_or_default()
 }
 
 impl StreamDecoder for ResponsesStreamDecoder {
@@ -886,31 +2115,75 @@ impl StreamDecoder for ResponsesStreamDecoder {
             | "response.output_text.done"
             | "response.reasoning_summary_text.done" => {}
             "response.output_item.added" => {
-                if let Some(item) = json.get("item")
-                    && item.get("type").and_then(|t| t.as_str()) == Some("function_call")
-                {
-                    let item_id = item
-                        .get("id")
-                        .and_then(|i| i.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let call_id = item
-                        .get("call_id")
-                        .and_then(|i| i.as_str())
-                        .unwrap_or(&item_id)
-                        .to_string();
-                    let name = item
-                        .get("name")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    self.function_items
-                        .push((item_id, call_id.clone(), name.clone()));
-                    parts.push(StreamPart::ToolCallDelta {
-                        id: call_id,
-                        name: Some(name),
-                        arguments: String::new(),
-                    });
+                // Streaming approval gap: a streamed `mcp_approval_request` item
+                // would need a dedicated `StreamPart` variant to surface, but no
+                // outbound encoder has a target for it (the other three protocols
+                // carry no streaming approval frame), so adding one would be
+                // unconstructed dead code. The non-streaming handshake
+                // (`parse_response` / `render_output_items`) is the complete,
+                // faithful round trip; a streamed approval item is simply not
+                // emitted as a delta here. <https://platform.openai.com/docs/api-reference/responses-streaming>
+                if let Some(item) = json.get("item") {
+                    let item_type = item
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default();
+                    let item_id = block_marker_id(item, &json);
+                    match item_type {
+                        // A `message` / `reasoning` item open is an explicit
+                        // block boundary on this wire — surface it as a canonical
+                        // start marker so a framing client encoder opens a fresh
+                        // block (the merged-block fix: two distinct message items
+                        // re-encode as two blocks, not one). The block id is the
+                        // upstream item id, falling back to `output_index` if the
+                        // upstream omitted it (used only for marker correlation).
+                        "message" => parts.push(StreamPart::TextStart { id: item_id }),
+                        "reasoning" => parts.push(StreamPart::ReasoningStart { id: item_id }),
+                        "function_call" => {
+                            // A function-call item frames itself via the
+                            // `name`-bearing `ToolCallDelta` below — no separate
+                            // start marker (see the `StreamPart` enum docs).
+                            // Track the *real* upstream `item.id` (not the marker
+                            // fallback) so `function_call_arguments.delta` — which
+                            // carries `item_id` — correlates to this call (#434).
+                            let real_item_id = item
+                                .get("id")
+                                .and_then(|i| i.as_str())
+                                .unwrap_or_default()
+                                .to_string();
+                            let call_id = item
+                                .get("call_id")
+                                .and_then(|i| i.as_str())
+                                .unwrap_or(&real_item_id)
+                                .to_string();
+                            let name = item
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or_default()
+                                .to_string();
+                            self.function_items
+                                .push((real_item_id, call_id.clone(), name.clone()));
+                            parts.push(StreamPart::ToolCallDelta {
+                                id: call_id,
+                                name: Some(name),
+                                arguments: String::new(),
+                            });
+                        }
+                        // Streaming MCP gap: a streamed `mcp_call` item (a
+                        // provider-executed remote MCP call with its inline
+                        // result) is currently dropped on this delta path — like
+                        // the `mcp_approval_request` gap documented above, it has
+                        // no `StreamPart` variant to carry the call+inline-result
+                        // pair, and surfacing it would require new cross-protocol
+                        // `StreamPart` plumbing the other encoders cannot yet
+                        // target. The non-streaming handshake (`parse_response` /
+                        // `render_output_items`) is the complete, faithful round
+                        // trip; a streamed `mcp_call` is simply not emitted as a
+                        // delta here. Deferred, not lost.
+                        // <https://platform.openai.com/docs/api-reference/responses-streaming>
+                        "mcp_call" => {}
+                        _ => {}
+                    }
                 }
             }
             "response.output_text.delta" => {
@@ -918,6 +2191,24 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     parts.push(StreamPart::TextDelta {
                         text: delta.to_string(),
                     });
+                }
+            }
+            "response.output_text.annotation.added" => {
+                // A streamed citation mutates an open `output_text` item: the
+                // single new annotation rides on the `annotation` field with the
+                // same shape `parse_responses_annotations` reads. Lift it into a
+                // `StreamPart::Source` (the client-side encoder re-attaches it at
+                // the protocol's native citation location). Wrapped in a
+                // one-element array to reuse the array parser; `source_index`
+                // keeps synthesized ids unique across the stream.
+                // <https://platform.openai.com/docs/api-reference/responses-streaming/response/output_text/annotation_added>
+                if let Some(annotation) = json.get("annotation") {
+                    let arr = serde_json::Value::Array(vec![annotation.clone()]);
+                    for content in parse_responses_annotations(Some(&arr), &mut self.source_index) {
+                        if let Content::Source { source, .. } = content {
+                            parts.push(StreamPart::Source { source });
+                        }
+                    }
                 }
             }
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
@@ -945,7 +2236,25 @@ impl StreamDecoder for ResponsesStreamDecoder {
             }
             // the `.done` event repeats the full arguments — do NOT re-emit
             // them (would duplicate, #434).
-            "response.function_call_arguments.done" | "response.output_item.done" => {}
+            "response.function_call_arguments.done" => {}
+            "response.output_item.done" => {
+                // Close the matching text / reasoning block so the boundary
+                // survives re-encoding (the merged-block fix). A `function_call`
+                // item carries no end marker (its framing is the `name`-bearing
+                // delta on open and the next item / terminal on close).
+                if let Some(item) = json.get("item") {
+                    let item_type = item
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default();
+                    let item_id = block_marker_id(item, &json);
+                    match item_type {
+                        "message" => parts.push(StreamPart::TextEnd { id: item_id }),
+                        "reasoning" => parts.push(StreamPart::ReasoningEnd { id: item_id }),
+                        _ => {}
+                    }
+                }
+            }
             "response.completed" | "response.incomplete" => {
                 // #454-2: the full `response` object is carried here..3:
                 // map `response.completed` to the dedicated `ResponseCompleted`
@@ -1047,6 +2356,10 @@ struct ResponsesStreamEncoder {
     /// Codex CLI reconstructs the assistant turn from this array, so an
     /// empty `output` renders as a blank turn (the symptom this fixes).
     completed_items: Vec<serde_json::Value>,
+    /// Running count of `response.output_text.annotation.added` events emitted,
+    /// supplying the monotonically increasing `annotation_index` each event
+    /// carries.
+    annotation_index: u64,
 }
 
 /// Tracking state for one open message / reasoning item.
@@ -1199,6 +2512,19 @@ impl ResponsesStreamEncoder {
         self.completed_items.push(item);
     }
 
+    /// Force-open a *fresh* reasoning item for an explicit
+    /// [`StreamPart::ReasoningStart`]. Unlike [`Self::open_reasoning_item`] this
+    /// first closes any reasoning item already open, so two distinct upstream
+    /// `reasoning` items re-encode as two `output_item.added`s rather than one
+    /// merged block (the merged-block fix on this wire). Closing the prior item
+    /// before reopening also re-runs the cross-kind close inside
+    /// `open_reasoning_item`, so message / tool items never interleave.
+    /// <https://platform.openai.com/docs/api-reference/responses-streaming>
+    fn open_fresh_reasoning_item(&mut self, frames: &mut Vec<SseFrame>) {
+        self.close_reasoning_item(frames);
+        self.open_reasoning_item(frames);
+    }
+
     /// Open a message item: `output_item.added` (type=message) +
     /// `content_part.added` (type=output_text). Idempotent — closes any
     /// open reasoning / tool item first so items never interleave.
@@ -1279,6 +2605,19 @@ impl ResponsesStreamEncoder {
             }),
         ));
         self.completed_items.push(item);
+    }
+
+    /// Force-open a *fresh* message item for an explicit
+    /// [`StreamPart::TextStart`]. Unlike [`Self::open_text_item`] this first
+    /// closes any message item already open, so two distinct upstream `message`
+    /// items re-encode as two `output_item.added`s rather than one merged block
+    /// (the merged-block fix on this wire). Closing the prior item before
+    /// reopening also re-runs the cross-kind close inside `open_text_item`, so
+    /// reasoning / tool items never interleave.
+    /// <https://platform.openai.com/docs/api-reference/responses-streaming>
+    fn open_fresh_text_item(&mut self, frames: &mut Vec<SseFrame>) {
+        self.close_text_item(frames);
+        self.open_text_item(frames);
     }
 
     /// Open a function-call item: `output_item.added` (type=function_call).
@@ -1392,6 +2731,30 @@ impl StreamEncoder for ResponsesStreamEncoder {
         let mut frames = Vec::new();
         self.ensure_created(&mut frames);
         match part {
+            StreamPart::File { .. } => {
+                // Responses streaming surfaces generated files on the
+                // non-streaming path; no inline file-output delta is emitted here.
+            }
+            StreamPart::TextStart { .. } => {
+                // Explicit block boundary from a block-framed upstream — open a
+                // *fresh* message item so two distinct upstream text blocks
+                // re-encode as two `output_item.added`s, not one merged block.
+                self.open_fresh_text_item(&mut frames);
+            }
+            StreamPart::ReasoningStart { .. } => {
+                self.open_fresh_reasoning_item(&mut frames);
+            }
+            StreamPart::TextEnd { .. } => {
+                // Close the message item the matching start opened, emitting its
+                // `output_text.done` + `content_part.done` + `output_item.done`.
+                // A no-op if nothing is open, so a stray end is harmless.
+                self.close_text_item(&mut frames);
+            }
+            StreamPart::ReasoningEnd { .. } => {
+                // Close the reasoning item the matching start opened (its
+                // `reasoning_text.done` + `content_part.done` + `output_item.done`).
+                self.close_reasoning_item(&mut frames);
+            }
             StreamPart::TextDelta { text } => {
                 // `open_text_item` closes any open reasoning / tool item
                 // first — items never interleave their deltas.
@@ -1456,6 +2819,32 @@ impl StreamEncoder for ResponsesStreamEncoder {
                             "item_id": item_id,
                             "output_index": output_index,
                             "delta": arguments,
+                        }),
+                    ));
+                }
+            }
+            StreamPart::Source { source } => {
+                // A citation is a `response.output_text.annotation.added` event
+                // that mutates an `output_text` item. Ensure a text item is open
+                // (a cross-protocol source may arrive before any text delta), so
+                // the annotation has a valid item to attach to, then emit it
+                // referencing that item. This mirrors the decode arm above and
+                // the non-streaming `render_responses_annotations`.
+                // <https://platform.openai.com/docs/api-reference/responses-streaming/response/output_text/annotation_added>
+                self.open_text_item(&mut frames);
+                if let Some(state) = self.text_item.as_ref() {
+                    let (item_id, output_index) = (state.item_id.clone(), state.output_index);
+                    let annotation_index = self.annotation_index;
+                    self.annotation_index += 1;
+                    let annotation = render_source_annotation(source);
+                    frames.push(self.ev(
+                        "response.output_text.annotation.added",
+                        serde_json::json!({
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "content_index": 0,
+                            "annotation_index": annotation_index,
+                            "annotation": annotation,
                         }),
                     ));
                 }

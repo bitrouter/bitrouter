@@ -14,14 +14,28 @@ use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
-    InboundAdapter, OutboundAdapter, SseEvent, StreamDecoder, StreamEncoder, Transport,
-    describe_deser_error,
+    InboundAdapter, OutboundAdapter, PROVIDER_ID_GOOGLE, SseEvent, StreamDecoder, StreamEncoder,
+    Transport, describe_deser_error, provider_defined_native, rendered_finish_reason,
+    stash_raw_finish_reason,
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-    ResponseFormat, Role, RoutingTarget, StreamPart, ToolChoice, Usage,
+    ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
+    Modality, Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart,
+    Tool, ToolChoice, ToolResultOutput, Usage, provider_namespace, set_provider_metadata,
 };
+
+/// The metadata key, within the `google` namespace, carrying a reasoning part's
+/// `thoughtSignature` — the continuity token Gemini emits on thinking parts so a
+/// follow-up turn can replay the reasoning. Matches the Vercel AI SDK's
+/// `providerMetadata.google.thoughtSignature`.
+/// <https://ai.google.dev/gemini-api/docs/thinking>
+const GOOGLE_THOUGHT_SIGNATURE: &str = "thoughtSignature";
+/// The metadata key, within the `google` namespace, carrying the response's
+/// `modelVersion` (the exact model build that served the response) at result
+/// level — it has no dedicated canonical field.
+/// <https://ai.google.dev/api/generate-content#GenerateContentResponse>
+const GOOGLE_MODEL_VERSION: &str = "modelVersion";
 
 /// The Generate Content protocol adapter.
 pub struct GenerateContentAdapter;
@@ -84,13 +98,30 @@ pub struct GenerateContentContent {
     parts: Vec<serde_json::Value>,
 }
 
-/// One element of [`GenerateContentRequest`]'s `tools` array — Google's
-/// `{ functionDeclarations: [...] }` envelope.
+/// One element of [`GenerateContentRequest`]'s `tools` array.
+///
+/// A single Google tool object may carry client function declarations
+/// (`functionDeclarations`) **and/or** one or more provider-defined ("built-in")
+/// tool keys on the same object — `googleSearch`, `codeExecution`,
+/// `googleSearchRetrieval`, `urlContext`. Function declarations parse to
+/// [`Tool::Function`]; every other key is a provider-defined tool namespaced
+/// `google.<key>`, its value preserved verbatim as `args`. The non-function keys
+/// ride in `extra`.
+/// <https://ai.google.dev/gemini-api/docs/function-calling>
+/// <https://ai.google.dev/gemini-api/docs/google-search>
+/// <https://ai.google.dev/gemini-api/docs/code-execution>
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateContentTool {
     #[serde(default)]
     function_declarations: Vec<GenerateContentFunctionDecl>,
+    /// Provider-defined (built-in) tool keys on this object — `googleSearch`,
+    /// `codeExecution`, `googleSearchRetrieval`, `urlContext`, … — each preserved
+    /// verbatim. Skipped from the published schema; the documented contract is
+    /// the typed `functionDeclarations` shape.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// One function declaration inside a [`GenerateContentTool`]: name + description +
@@ -124,11 +155,33 @@ pub struct GenerateContentGenerationConfig {
     /// `response_mime_type: "application/json"`).
     #[serde(default)]
     response_schema: Option<serde_json::Value>,
-    /// `stopSequences`, `seed`, `topK`, `responseLogprobs`, `presencePenalty`,
-    /// `frequencyPenalty`, … — every generation-config knob without a typed
-    /// slot rides via `extra` and is splatted back into `generationConfig` on
-    /// render. v0 passed these through. Skipped from the published schema for
-    /// the same reason as the top-level `extra` on [`GenerateContentRequest`].
+    /// Top-k sampling. Promoted to the canonical `top_k` slot so it translates
+    /// across protocols (e.g. to an Anthropic upstream's `top_k`).
+    /// <https://ai.google.dev/api/generate-content#GenerationConfig>
+    #[serde(default)]
+    top_k: Option<u32>,
+    /// Deterministic-sampling seed. Promoted to the canonical `seed` slot.
+    /// <https://ai.google.dev/api/generate-content#GenerationConfig>
+    #[serde(default)]
+    seed: Option<i64>,
+    /// Stop sequences. Promoted to the canonical `stop` slot, so it can render
+    /// as a Chat Completions `stop` or an Anthropic `stop_sequences`.
+    /// <https://ai.google.dev/api/generate-content#GenerationConfig>
+    #[serde(default)]
+    stop_sequences: Option<Vec<String>>,
+    /// Presence penalty. Promoted to the canonical `presence_penalty` slot.
+    /// <https://ai.google.dev/api/generate-content#GenerationConfig>
+    #[serde(default)]
+    presence_penalty: Option<f64>,
+    /// Frequency penalty. Promoted to the canonical `frequency_penalty` slot.
+    /// <https://ai.google.dev/api/generate-content#GenerationConfig>
+    #[serde(default)]
+    frequency_penalty: Option<f64>,
+    /// `responseLogprobs`, `candidateCount`, `thinkingConfig`, … — every
+    /// generation-config knob without a typed slot rides via `extra` and is
+    /// splatted back into `generationConfig` on render. v0 passed these through.
+    /// Skipped from the published schema for the same reason as the top-level
+    /// `extra` on [`GenerateContentRequest`].
     #[serde(flatten)]
     #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
@@ -154,6 +207,148 @@ fn role_str(role: Role) -> &'static str {
     }
 }
 
+/// Map a Google `responseModalities` token (uppercase) to a canonical [`Modality`].
+fn modality_from_gemini(token: &str) -> Option<Modality> {
+    match token {
+        "TEXT" => Some(Modality::Text),
+        "IMAGE" => Some(Modality::Image),
+        "AUDIO" => Some(Modality::Audio),
+        _ => None,
+    }
+}
+
+/// The Google `responseModalities` token (uppercase) for a canonical [`Modality`].
+fn modality_to_gemini(modality: &Modality) -> &'static str {
+    match modality {
+        Modality::Text => "TEXT",
+        Modality::Image => "IMAGE",
+        Modality::Audio => "AUDIO",
+    }
+}
+
+/// Take `responseModalities` out of a generation-config extras map, mapping the
+/// uppercase Google tokens to canonical modalities.
+fn take_gemini_modalities(
+    extra: &mut std::collections::HashMap<String, serde_json::Value>,
+) -> Vec<Modality> {
+    extra
+        .remove("responseModalities")
+        .and_then(|v| {
+            v.as_array().map(|tokens| {
+                tokens
+                    .iter()
+                    .filter_map(|t| t.as_str())
+                    .filter_map(modality_from_gemini)
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// Expand one Google `tools[]` object into canonical [`Tool`]s: each
+/// `functionDeclarations` entry → a [`Tool::Function`]; each other (built-in)
+/// key → a [`Tool::ProviderDefined`] namespaced `google.<key>`, value preserved
+/// verbatim as `args`.
+fn parse_generate_content_tool(t: GenerateContentTool) -> Vec<Tool> {
+    let mut out: Vec<Tool> = t
+        .function_declarations
+        .into_iter()
+        .map(|f| Tool::Function {
+            name: f.name,
+            description: f.description,
+            parameters: f.parameters,
+            // Google function declarations carry no `strict` slot.
+            strict: None,
+            // Gemini has no per-tool `cache_control`; no metadata to lift.
+            provider_metadata: ProviderMetadata::new(),
+        })
+        .collect();
+    for (key, value) in t.extra {
+        out.push(Tool::ProviderDefined {
+            id: format!("{PROVIDER_ID_GOOGLE}.{key}"),
+            name: key,
+            args: value,
+            provider_metadata: ProviderMetadata::new(),
+        });
+    }
+    out
+}
+
+/// Render the canonical tool list into Google's `tools` value.
+///
+/// Google packs all client function tools into a single object's
+/// `functionDeclarations` array, while each provider-defined built-in tool is a
+/// distinct single-key object (`{googleSearch:{}}`, `{codeExecution:{}}`, …).
+/// Google's own function declarations have **no** `strict` slot, so
+/// [`Tool::Function::strict`] is intentionally dropped here (documented; mirrors
+/// the structured-output `strict` drop). A [`Tool::ProviderDefined`] renders to
+/// its source-native shape via [`provider_defined_native`]: a `google.*` id is a
+/// lossless same-protocol round-trip; a foreign-provider id is preserved verbatim
+/// (faithful passthrough) as its own tool-array element so the upstream decides.
+/// <https://ai.google.dev/gemini-api/docs/function-calling>
+/// <https://ai.google.dev/gemini-api/docs/google-search>
+fn render_generate_content_tools(tools: &[Tool]) -> serde_json::Value {
+    let mut function_declarations = Vec::new();
+    let mut entries = Vec::new();
+    for tool in tools {
+        match tool {
+            Tool::Function {
+                name,
+                description,
+                parameters,
+                strict: _,
+                ..
+            } => function_declarations.push(serde_json::json!({
+                "name": name,
+                "description": description,
+                "parameters": parameters,
+            })),
+            Tool::ProviderDefined { id, name, args, .. } => {
+                entries.push(provider_defined_native(id, name, args));
+            }
+        }
+    }
+    // The function-declarations object goes first when present, preserving the
+    // prior single-object render for the common (function-only) case.
+    let mut out = Vec::with_capacity(entries.len() + 1);
+    if !function_declarations.is_empty() {
+        out.push(serde_json::json!({ "functionDeclarations": function_declarations }));
+    }
+    out.extend(entries);
+    serde_json::Value::Array(out)
+}
+
+/// Lift a Gemini part's `thoughtSignature` into a [`ProviderMetadata`] under the
+/// `google` namespace. Gemini stamps this opaque token on thinking parts (and on
+/// the `functionCall` parts that continue a reasoning chain); it must round-trip
+/// or a follow-up turn replaying the reasoning is rejected. Returns an empty map
+/// when the part has none.
+/// <https://ai.google.dev/gemini-api/docs/thinking>
+fn parse_thought_signature(part: &serde_json::Value) -> ProviderMetadata {
+    let mut meta = ProviderMetadata::new();
+    if let Some(sig) = part.get("thoughtSignature").filter(|v| !v.is_null()) {
+        set_provider_metadata(
+            &mut meta,
+            PROVIDER_ID_GOOGLE,
+            GOOGLE_THOUGHT_SIGNATURE,
+            sig.clone(),
+        );
+    }
+    meta
+}
+
+/// Splat a Gemini `thoughtSignature` from `meta` onto an existing part JSON
+/// object (a no-op when there is none) — the inverse of
+/// [`parse_thought_signature`], used by the render path.
+fn apply_thought_signature(target: &mut serde_json::Value, meta: &ProviderMetadata) {
+    if let Some(sig) =
+        provider_namespace(meta, PROVIDER_ID_GOOGLE).and_then(|o| o.get(GOOGLE_THOUGHT_SIGNATURE))
+        && let Some(obj) = target.as_object_mut()
+    {
+        obj.insert("thoughtSignature".to_string(), sig.clone());
+    }
+}
+
 /// Parse one Google `parts[]` array into ordered canonical content. Order is
 /// preserved (#416); `thought: true` parts become `Reasoning` (#454-1).
 fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
@@ -175,18 +370,87 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
                     .get("args")
                     .map(|a| a.to_string())
                     .unwrap_or_else(|| "{}".to_string()),
+                // Gemini `functionCall` parts are client tool calls. Google's
+                // own server-side tools (Search grounding, code execution)
+                // surface as separate `groundingMetadata` / `executableCode`
+                // fields, never as a `functionCall`, so there is no
+                // provider-executed call to parse here.
+                provider_executed: false,
+                // Gemini has no provider-executed MCP (`dynamic`) call envelope.
+                dynamic: false,
+                // A `functionCall` part may carry a `thoughtSignature` (it
+                // continues a reasoning chain); preserve it so a follow-up turn
+                // can replay the chain.
+                // <https://ai.google.dev/gemini-api/docs/thinking>
+                provider_metadata: parse_thought_signature(part),
             });
         } else if let Some(fr) = part.get("functionResponse") {
+            // Gemini `functionResponse {id?, name, response}`: `name` is the tool
+            // name (required), the optional `id` correlates the originating call,
+            // and `response` is a JSON object. Map `name` → tool_name, `id` →
+            // call_id (falling back to `name` when the wire omits the id, since
+            // the canonical call_id must not be empty), and the JSON `response`
+            // → a structured Json output.
+            // <https://ai.google.dev/api/caching#FunctionResponse>
+            let name = fr
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let call_id = fr
+                .get("id")
+                .and_then(|i| i.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| name.clone());
+            let output = fr
+                .get("response")
+                .map(ToolResultOutput::from_untyped_value)
+                .unwrap_or_else(|| ToolResultOutput::Json {
+                    value: serde_json::json!({}),
+                });
             out.push(Content::ToolResult {
-                call_id: fr
-                    .get("name")
-                    .and_then(|n| n.as_str())
+                call_id,
+                tool_name: (!name.is_empty()).then_some(name),
+                output,
+                // Gemini has no MCP tool-result wire.
+                dynamic: false,
+                provider_metadata: ProviderMetadata::new(),
+            });
+        } else if let Some(inline) = part.get("inlineData") {
+            // Inline base64 media. <https://ai.google.dev/gemini-api/docs/image-understanding>
+            out.push(Content::File {
+                media_type: inline
+                    .get("mimeType")
+                    .and_then(|m| m.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                content: fr
-                    .get("response")
-                    .map(|r| r.to_string())
-                    .unwrap_or_default(),
+                data: DataContent::Base64 {
+                    data: inline
+                        .get("data")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+                filename: None,
+                provider_metadata: ProviderMetadata::new(),
+            });
+        } else if let Some(file) = part.get("fileData") {
+            // A URI the model fetches.
+            out.push(Content::File {
+                media_type: file
+                    .get("mimeType")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                data: DataContent::Url {
+                    url: file
+                        .get("fileUri")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+                filename: None,
+                provider_metadata: ProviderMetadata::new(),
             });
         } else if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
             let is_thought = part
@@ -196,16 +460,192 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
             if is_thought {
                 out.push(Content::Reasoning {
                     text: text.to_string(),
+                    // Preserve the thinking part's `thoughtSignature` continuity
+                    // token so reasoning round-trips into a follow-up turn.
+                    // <https://ai.google.dev/gemini-api/docs/thinking>
+                    provider_metadata: parse_thought_signature(part),
                 });
             } else {
                 out.push(Content::Text {
                     text: text.to_string(),
+                    provider_metadata: ProviderMetadata::new(),
                 });
             }
         }
-        // parts of other shapes (inlineData, fileData…) are skipped for now
     }
     out
+}
+
+/// Infer a document IANA media type from a Gemini `retrievedContext` file
+/// path's extension (e.g. a `gs://…/report.pdf` uri). Mirrors the AI SDK's
+/// extension table; an unrecognized extension falls back to
+/// `application/octet-stream`.
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/google/src/google-generative-ai-language-model.ts>
+fn grounding_doc_media_type(uri: &str) -> &'static str {
+    if uri.ends_with(".pdf") {
+        "application/pdf"
+    } else if uri.ends_with(".txt") {
+        "text/plain"
+    } else if uri.ends_with(".docx") {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    } else if uri.ends_with(".doc") {
+        "application/msword"
+    } else if uri.ends_with(".md") || uri.ends_with(".markdown") {
+        "text/markdown"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+/// The trailing path segment of a `gs://`/file-path uri, used as a document
+/// `filename` (mirrors the AI SDK's `uri.split('/').pop()`).
+fn grounding_filename(uri: &str) -> Option<String> {
+    uri.rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Parse one Gemini grounding chunk into a canonical [`Content::Source`].
+/// Mirrors the AI SDK `extractSources`, handling every chunk kind:
+/// - `web` (`{uri, title?}`) → [`Source::Url`] — the server Search tool's hits;
+/// - `image` (`{sourceUri, title?}`) → [`Source::Url`] keyed by `sourceUri`
+///   (Google requires attribution to the source page, not the image bytes);
+/// - `retrievedContext` (`{uri?, title?, fileSearchStore?}`) — an `http(s)` uri
+///   → [`Source::Url`]; any other uri (e.g. `gs://`) → [`Source::Document`] with
+///   the media type/filename inferred from the path; a `fileSearchStore`-only
+///   chunk → [`Source::Document`] keyed by the store's trailing segment;
+/// - `maps` (`{uri?, title?}`) → [`Source::Url`] when it carries a `uri`.
+///
+/// The chunk carries no citation id, so one is synthesized from the
+/// url/filename + index. A chunk with no usable field yields `None` (e.g. a
+/// `maps`/`retrievedContext` chunk with neither uri nor store) — these are the
+/// only documented drops, and they carry nothing representable.
+/// <https://ai.google.dev/api/generate-content#GroundingChunk>
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/google/src/google-generative-ai-language-model.ts>
+fn parse_grounding_chunk(chunk: &serde_json::Value, index: usize) -> Option<Content> {
+    let title_of = |obj: &serde_json::Value| {
+        obj.get("title")
+            .and_then(|t| t.as_str())
+            .map(str::to_string)
+    };
+    let url_source = |url: String, title: Option<String>| Content::Source {
+        source: Source::Url {
+            id: Source::synthesize_id(&url, index),
+            url,
+            title,
+        },
+        provider_metadata: ProviderMetadata::new(),
+    };
+    if let Some(web) = chunk.get("web") {
+        let url = web.get("uri").and_then(|u| u.as_str())?.to_string();
+        return Some(url_source(url, title_of(web)));
+    }
+    if let Some(image) = chunk.get("image") {
+        // Attribution uses the source page URI, not the raw `imageUri`.
+        let url = image.get("sourceUri").and_then(|u| u.as_str())?.to_string();
+        return Some(url_source(url, title_of(image)));
+    }
+    if let Some(ctx) = chunk.get("retrievedContext") {
+        let uri = ctx.get("uri").and_then(|u| u.as_str());
+        if let Some(uri) = uri {
+            // An http(s) RAG source is representable as a URL today; a
+            // file-path source (`gs://`, …) becomes a document citation.
+            if uri.starts_with("http://") || uri.starts_with("https://") {
+                return Some(url_source(uri.to_string(), title_of(ctx)));
+            }
+            let filename = grounding_filename(uri);
+            let title = title_of(ctx).unwrap_or_else(|| "Unknown Document".to_string());
+            return Some(Content::Source {
+                source: Source::Document {
+                    id: Source::synthesize_id(uri, index),
+                    media_type: grounding_doc_media_type(uri).to_string(),
+                    title,
+                    filename,
+                },
+                provider_metadata: ProviderMetadata::new(),
+            });
+        }
+        // File Search format: a store id with no uri.
+        if let Some(store) = ctx.get("fileSearchStore").and_then(|s| s.as_str()) {
+            let title = title_of(ctx).unwrap_or_else(|| "Unknown Document".to_string());
+            return Some(Content::Source {
+                source: Source::Document {
+                    id: Source::synthesize_id(store, index),
+                    media_type: "application/octet-stream".to_string(),
+                    title,
+                    filename: grounding_filename(store),
+                },
+                provider_metadata: ProviderMetadata::new(),
+            });
+        }
+        return None;
+    }
+    if let Some(maps) = chunk.get("maps") {
+        let url = maps.get("uri").and_then(|u| u.as_str())?.to_string();
+        return Some(url_source(url, title_of(maps)));
+    }
+    // An unrecognized, forward-compatible chunk kind carries no representable
+    // citation field. The only grounding chunk kinds Gemini documents are
+    // `web`, `image`, `retrievedContext`, and `maps` (all handled above); a new
+    // kind is skipped rather than silently mismapped.
+    // <https://ai.google.dev/api/generate-content#GroundingChunk>
+    None
+}
+
+/// Parse a Gemini `candidate.groundingMetadata` object into canonical
+/// [`Content::Source`] parts. Web search grounding surfaces as
+/// `groundingMetadata.groundingChunks[]`; the model's own server-side Search
+/// tool emits these instead of any `functionCall`. Each chunk is mapped by
+/// [`parse_grounding_chunk`] (every documented chunk kind is handled). The chunk
+/// carries no citation id, so one is synthesized from the uri/filename + index.
+/// Mirrors the AI SDK `extractSources`.
+/// <https://ai.google.dev/gemini-api/docs/grounding>
+/// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/google/src/google-generative-ai-language-model.ts>
+fn parse_grounding_sources(grounding: Option<&serde_json::Value>) -> Vec<Content> {
+    let Some(chunks) = grounding
+        .and_then(|g| g.get("groundingChunks"))
+        .and_then(|c| c.as_array())
+    else {
+        return Vec::new();
+    };
+    chunks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, chunk)| parse_grounding_chunk(chunk, i))
+        .collect()
+}
+
+/// Render canonical [`Content::Source`] parts into a Gemini
+/// `groundingMetadata.groundingChunks[]` array (web chunks `{web:{uri, title}}`)
+/// — the location [`parse_grounding_sources`] reads. Only [`Source::Url`] maps;
+/// a [`Source::Document`] citation has no `groundingChunks.web` form and is
+/// dropped (documented cross-protocol loss). Returns an empty Vec when the
+/// result carries no URL sources.
+/// <https://ai.google.dev/api/generate-content#GroundingChunk>
+fn render_grounding_chunks(result: &GenerateResult) -> Vec<serde_json::Value> {
+    result
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Source {
+                source: Source::Url { url, title, .. },
+                ..
+            } => {
+                let mut web = serde_json::Map::new();
+                web.insert("uri".into(), url.clone().into());
+                if let Some(title) = title {
+                    web.insert("title".into(), title.clone().into());
+                }
+                Some(serde_json::json!({ "web": serde_json::Value::Object(web) }))
+            }
+            Content::Source {
+                source: Source::Document { .. },
+                ..
+            } => None,
+            _ => None,
+        })
+        .collect()
 }
 
 fn finish_reason(s: &str) -> Option<FinishReason> {
@@ -331,15 +771,17 @@ impl InboundAdapter for GenerateContentAdapter {
             }
         }
 
+        // A Google tool object may carry `functionDeclarations` (client function
+        // tools) and/or provider-defined built-in keys (`googleSearch`,
+        // `codeExecution`, `googleSearchRetrieval`, `urlContext`, …) on the same
+        // object. Expand each object into its function tools plus one
+        // `Tool::ProviderDefined` per built-in key, namespaced `google.<key>`,
+        // value preserved verbatim as `args`.
+        // <https://ai.google.dev/gemini-api/docs/function-calling>
         let tools = req
             .tools
             .into_iter()
-            .flat_map(|t| t.function_declarations)
-            .map(|f| crate::language_model::types::Tool {
-                name: f.name,
-                description: f.description,
-                parameters: f.parameters,
-            })
+            .flat_map(parse_generate_content_tool)
             .collect();
 
         // `responseMimeType` / `responseSchema` are typed fields now. Promote
@@ -355,6 +797,11 @@ impl InboundAdapter for GenerateContentAdapter {
                     max_output_tokens,
                     response_mime_type,
                     response_schema,
+                    top_k,
+                    seed,
+                    stop_sequences,
+                    presence_penalty,
+                    frequency_penalty,
                     mut extra,
                 } = g;
                 let response_format = match (
@@ -363,6 +810,7 @@ impl InboundAdapter for GenerateContentAdapter {
                 ) {
                     (true, Some(schema)) => Some(ResponseFormat::JsonSchema {
                         name: None,
+                        description: None,
                         strict: None,
                         schema,
                     }),
@@ -377,12 +825,19 @@ impl InboundAdapter for GenerateContentAdapter {
                         None
                     }
                 };
+                let response_modalities = take_gemini_modalities(&mut extra);
                 (
                     GenerationParams {
                         temperature,
                         top_p,
                         max_tokens: max_output_tokens,
                         reasoning_effort: None,
+                        response_modalities,
+                        top_k,
+                        seed,
+                        stop: stop_sequences.unwrap_or_default(),
+                        presence_penalty,
+                        frequency_penalty,
                         extra,
                     },
                     response_format,
@@ -408,6 +863,8 @@ impl InboundAdapter for GenerateContentAdapter {
         Ok(Prompt {
             model: req.model,
             system: system.filter(|s| !s.is_empty()),
+            // Generate Content has no system-level `cache_control` on its wire.
+            system_provider_metadata: ProviderMetadata::new(),
             messages,
             tools,
             params,
@@ -425,23 +882,42 @@ impl InboundAdapter for GenerateContentAdapter {
     ) -> Result<serde_json::Value> {
         let parts: Vec<serde_json::Value> = result.content.iter().filter_map(render_part).collect();
         let usage = result.usage.unwrap_or_default();
-        Ok(serde_json::json!({
-            "candidates": [{
-                "content": { "role": "model", "parts": parts },
-                "finishReason": result
-                    .finish_reason
-                    .as_ref()
-                    .map(finish_reason_str)
-                    .unwrap_or_else(|| "STOP".to_string()),
-                "index": 0,
-            }],
+        let mut candidate = serde_json::json!({
+            "content": { "role": "model", "parts": parts },
+            // Prefer the stashed raw `finishReason` (e.g. `RECITATION`) over the
+            // unified-enum mapping so a same-protocol round-trip is byte-faithful;
+            // default to `STOP` when the result carries no finish reason at all.
+            "finishReason": rendered_finish_reason(result, PROVIDER_ID_GOOGLE, finish_reason_str)
+                .unwrap_or_else(|| "STOP".to_string()),
+            "index": 0,
+        });
+        // Re-attach web-search citations under `candidate.groundingMetadata`
+        // (the location `parse_response` lifts them from), collected from the
+        // result's `Content::Source` parts rather than rendered into `parts`
+        // (grounding is candidate metadata, not a content part).
+        // <https://ai.google.dev/gemini-api/docs/grounding>
+        let chunks = render_grounding_chunks(result);
+        if !chunks.is_empty() {
+            candidate["groundingMetadata"] = serde_json::json!({ "groundingChunks": chunks });
+        }
+        let mut body = serde_json::json!({
+            "candidates": [candidate],
             "usageMetadata": {
                 "promptTokenCount": usage.prompt_tokens,
                 "candidatesTokenCount": usage.completion_tokens,
                 "totalTokenCount": usage.total(),
                 "thoughtsTokenCount": usage.reasoning_tokens,
             },
-        }))
+        });
+        // Restore the result-level `modelVersion` when it round-tripped (only
+        // ever set by this protocol's `parse_response`).
+        // <https://ai.google.dev/api/generate-content#GenerateContentResponse>
+        if let Some(mv) = provider_namespace(&result.provider_metadata, PROVIDER_ID_GOOGLE)
+            .and_then(|o| o.get(GOOGLE_MODEL_VERSION))
+        {
+            body["modelVersion"] = mv.clone();
+        }
+        Ok(body)
     }
 
     fn stream_encoder(&self, _request_id: &str, _model: &str) -> Box<dyn StreamEncoder> {
@@ -465,16 +941,7 @@ impl OutboundAdapter for GenerateContentAdapter {
             );
         }
         if !prompt.tools.is_empty() {
-            req.insert(
-                "tools".into(),
-                serde_json::json!([{
-                    "functionDeclarations": prompt.tools.iter().map(|t| serde_json::json!({
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    })).collect::<Vec<_>>()
-                }]),
-            );
+            req.insert("tools".into(), render_generate_content_tools(&prompt.tools));
         }
         let mut gen_config = serde_json::Map::new();
         if let Some(t) = prompt.params.temperature {
@@ -494,9 +961,40 @@ impl OutboundAdapter for GenerateContentAdapter {
             gen_config.insert("responseMimeType".into(), "application/json".into());
             gen_config.insert("responseSchema".into(), schema.clone());
         }
-        // Splat Google generation-config extras (stopSequences, topK, seed, …)
-        // back into the outbound config. Typed fields above win over a same-named
-        // extra; the sentinel key carries top-level fields and is skipped here.
+        // Output modalities -> Google `responseModalities` (uppercase tokens).
+        if !prompt.params.response_modalities.is_empty() {
+            let tokens: Vec<serde_json::Value> = prompt
+                .params
+                .response_modalities
+                .iter()
+                .map(|m| modality_to_gemini(m).into())
+                .collect();
+            gen_config.insert("responseModalities".into(), tokens.into());
+        }
+        // Render the typed sampling slots into their nested `generationConfig`
+        // wire names. Gemini carries all five, so a `stop` authored on a Chat
+        // client reaches here as `stopSequences`, an Anthropic `top_k` as `topK`,
+        // and so on.
+        // <https://ai.google.dev/api/generate-content#GenerationConfig>
+        if let Some(top_k) = prompt.params.top_k {
+            gen_config.insert("topK".into(), top_k.into());
+        }
+        if let Some(seed) = prompt.params.seed {
+            gen_config.insert("seed".into(), seed.into());
+        }
+        if !prompt.params.stop.is_empty() {
+            gen_config.insert("stopSequences".into(), prompt.params.stop.clone().into());
+        }
+        if let Some(pp) = prompt.params.presence_penalty {
+            gen_config.insert("presencePenalty".into(), pp.into());
+        }
+        if let Some(fp) = prompt.params.frequency_penalty {
+            gen_config.insert("frequencyPenalty".into(), fp.into());
+        }
+        // Splat remaining Google generation-config extras (responseLogprobs,
+        // candidateCount, …) back into the outbound config. Typed fields above
+        // win over a same-named extra; the sentinel key carries top-level fields
+        // and is skipped here.
         for (k, v) in &prompt.params.extra {
             if k == GOOGLE_TOP_LEVEL_EXTRA_KEY {
                 continue;
@@ -506,8 +1004,8 @@ impl OutboundAdapter for GenerateContentAdapter {
         if !gen_config.is_empty() {
             req.insert("generationConfig".into(), gen_config.into());
         }
-        // Lift namespaced top-level extras (toolConfig / safetySettings /
-        // cachedContent / …) back to the request root.
+        // Lift namespaced top-level extras (safetySettings / cachedContent / …)
+        // back to the request root.
         if let Some(serde_json::Value::Object(top)) =
             prompt.params.extra.get(GOOGLE_TOP_LEVEL_EXTRA_KEY)
         {
@@ -541,16 +1039,22 @@ impl OutboundAdapter for GenerateContentAdapter {
             .ok_or_else(|| {
                 BitrouterError::bad_request("google response missing 'candidates[0]'")
             })?;
-        let parts = candidate
+        let mut parts = candidate
             .get("content")
             .and_then(|c| c.get("parts"))
             .and_then(|p| p.as_array())
             .map(|p| parse_parts(p))
             .unwrap_or_default();
-        let finish = candidate
+        // Web-search grounding rides `candidate.groundingMetadata`, separate
+        // from the content `parts`. Lift its `groundingChunks` into
+        // `Content::Source` parts appended after the content.
+        // <https://ai.google.dev/gemini-api/docs/grounding>
+        parts.extend(parse_grounding_sources(candidate.get("groundingMetadata")));
+        let raw_finish = candidate
             .get("finishReason")
             .and_then(|f| f.as_str())
-            .and_then(finish_reason);
+            .map(str::to_string);
+        let finish = raw_finish.as_deref().and_then(finish_reason);
         let usage = body.get("usageMetadata").and_then(parse_usage);
         // Generate Content: top-level `responseId`.
         // <https://ai.google.dev/api/generate-content#GenerateContentResponse>
@@ -558,12 +1062,38 @@ impl OutboundAdapter for GenerateContentAdapter {
             .get("responseId")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // Gemini's `modelVersion` (the exact model build that served the
+        // response) has no dedicated canonical field — carry it at result level
+        // under the `google` namespace.
+        // <https://ai.google.dev/api/generate-content#GenerateContentResponse>
+        let mut provider_metadata = ProviderMetadata::new();
+        if let Some(mv) = body.get("modelVersion").filter(|v| !v.is_null()) {
+            set_provider_metadata(
+                &mut provider_metadata,
+                PROVIDER_ID_GOOGLE,
+                GOOGLE_MODEL_VERSION,
+                mv.clone(),
+            );
+        }
+        // Preserve the raw `finishReason` when the unified enum can't reproduce
+        // it: the content-filter family (`RECITATION` / `BLOCKLIST` /
+        // `PROHIBITED_CONTENT`) all collapse to `ContentFilter`, which renders
+        // back as the canonical `SAFETY`, so the precise sub-reason would be
+        // lost without stashing it under the `google` namespace.
+        stash_raw_finish_reason(
+            &mut provider_metadata,
+            PROVIDER_ID_GOOGLE,
+            raw_finish.as_deref(),
+            finish.as_ref(),
+            finish_reason_str,
+        );
         Ok(GenerateResult {
             content: parts,
             usage,
             finish_reason: finish,
             response_id,
             stop_details: None,
+            provider_metadata,
         })
     }
 
@@ -608,22 +1138,93 @@ impl Transport for GenerateContentTransport {
 
 fn render_part(c: &Content) -> Option<serde_json::Value> {
     match c {
-        Content::Text { text } => Some(serde_json::json!({ "text": text })),
-        Content::Reasoning { text } => Some(serde_json::json!({ "text": text, "thought": true })),
+        Content::Text { text, .. } => Some(serde_json::json!({ "text": text })),
+        Content::Reasoning {
+            text,
+            provider_metadata,
+        } => {
+            let mut part = serde_json::json!({ "text": text, "thought": true });
+            // Restore the thinking part's `thoughtSignature` continuity token.
+            apply_thought_signature(&mut part, provider_metadata);
+            Some(part)
+        }
         Content::ToolCall {
-            name, arguments, ..
+            name,
+            arguments,
+            provider_metadata,
+            ..
         } => {
             let args: serde_json::Value =
                 serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
-            Some(serde_json::json!({ "functionCall": { "name": name, "args": args } }))
+            let mut part = serde_json::json!({ "functionCall": { "name": name, "args": args } });
+            // A `functionCall` continuing a reasoning chain carries a
+            // `thoughtSignature`; restore it when it round-tripped.
+            apply_thought_signature(&mut part, provider_metadata);
+            Some(part)
         }
-        Content::ToolResult { call_id, content } => {
-            let response: serde_json::Value =
-                serde_json::from_str(content).unwrap_or(serde_json::json!({ "result": content }));
-            Some(serde_json::json!({
-                "functionResponse": { "name": call_id, "response": response }
-            }))
+        // Gemini `functionResponse {id?, name, response}`: `response` must be a
+        // JSON object and there is no error flag or media slot. `name` comes from
+        // `tool_name` (Gemini keys results by name), falling back to `call_id`;
+        // `id` rides along when it differs from the name. A non-object output
+        // degrades losslessly under a `result` key.
+        //
+        // Known degrade: a multimodal `Content` output collapses to
+        // `{ result: <concatenated text> }` here — its media and provider
+        // file-reference parts are dropped. The V3 `FunctionResponse.parts[]`
+        // array (which CAN carry inline media alongside the response) is left
+        // unused; modeling it is deferred until a consumer needs Gemini-side tool
+        // media, since today no other request wire round-trips media *out* of a
+        // tool result into Gemini.
+        // <https://ai.google.dev/api/caching#FunctionResponse>
+        Content::ToolResult {
+            call_id,
+            tool_name,
+            output,
+            ..
+        } => {
+            let name = tool_name.as_deref().unwrap_or(call_id);
+            let response = match output {
+                ToolResultOutput::Json { value } | ToolResultOutput::ErrorJson { value }
+                    if value.is_object() =>
+                {
+                    value.clone()
+                }
+                ToolResultOutput::Json { value } | ToolResultOutput::ErrorJson { value } => {
+                    serde_json::json!({ "result": value })
+                }
+                other => serde_json::json!({ "result": other.to_provider_string() }),
+            };
+            let mut fr = serde_json::json!({ "name": name, "response": response });
+            // Carry the call id only when it adds information beyond the name.
+            if call_id != name && !call_id.is_empty() {
+                fr["id"] = serde_json::Value::String(call_id.clone());
+            }
+            Some(serde_json::json!({ "functionResponse": fr }))
         }
+        // Inline bytes -> `inlineData`; a URL -> `fileData`. Gemini keys media by
+        // `mimeType`. <https://ai.google.dev/gemini-api/docs/image-understanding>
+        Content::File {
+            media_type, data, ..
+        } => Some(match data {
+            DataContent::Base64 { data } => serde_json::json!({
+                "inlineData": { "mimeType": media_type, "data": data }
+            }),
+            DataContent::Url { url } => serde_json::json!({
+                "fileData": { "mimeType": media_type, "fileUri": url }
+            }),
+        }),
+        // Sources are response-side citation metadata, never a request part —
+        // they are re-attached under `groundingMetadata` in `render_response`,
+        // not rendered as a content `part`. Skip on the request path.
+        Content::Source { .. } => None,
+        // The Gemini Generate Content wire has no tool-approval handshake: there
+        // is no `mcp_approval_request` / `mcp_approval_response` part. The AI
+        // SDK's Google converter drops a `tool-approval-response` part
+        // (`continue`), so both approval parts are skipped here. A denied
+        // execution degrades to a `functionResponse {result: <denial string>}`
+        // via the `ToolResult` arm above (`to_provider_string`).
+        // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/google/src/convert-to-google-generative-ai-messages.ts>
+        Content::ToolApprovalRequest { .. } | Content::ToolApprovalResponse { .. } => None,
     }
 }
 
@@ -668,6 +1269,13 @@ struct GenerateContentStreamDecoder {
     /// Whether the one-shot [`StreamPart::ResponseStarted`] has been emitted.
     /// Every chunk repeats `responseId`; we surface it only once.
     response_started_emitted: bool,
+    /// Dedup keys of grounding sources already emitted as `StreamPart::Source`
+    /// — the citation URL for a [`Source::Url`], the synthesized id for a
+    /// [`Source::Document`]. `streamGenerateContent` repeats the accumulating
+    /// `groundingMetadata` on successive chunks, so dedupe to emit each citation
+    /// once — matching the AI SDK's `emittedSourceUrls` set.
+    /// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/google/src/google-generative-ai-language-model.ts>
+    emitted_source_keys: std::collections::HashSet<String>,
 }
 
 impl StreamDecoder for GenerateContentStreamDecoder {
@@ -706,20 +1314,57 @@ impl StreamDecoder for GenerateContentStreamDecoder {
             {
                 for content in parse_parts(content_parts) {
                     match content {
-                        Content::Text { text } => parts.push(StreamPart::TextDelta { text }),
-                        Content::Reasoning { text } => {
+                        Content::Text { text, .. } => parts.push(StreamPart::TextDelta { text }),
+                        Content::Reasoning { text, .. } => {
                             parts.push(StreamPart::ReasoningDelta { text })
                         }
+                        // The streaming `ToolCallDelta` has no provider-executed
+                        // flag (Gemini streams only client `functionCall` parts),
+                        // so the server-tool marker is not carried here — `..`
+                        // ignores it deliberately.
                         Content::ToolCall {
                             id,
                             name,
                             arguments,
+                            ..
                         } => parts.push(StreamPart::ToolCallDelta {
                             id,
                             name: Some(name),
                             arguments,
                         }),
                         Content::ToolResult { .. } => {}
+                        // A generated file (e.g. an image) becomes one whole
+                        // `StreamPart::File`, matching the AI SDK V3 stream `file`
+                        // part. <https://ai.google.dev/gemini-api/docs/image-generation>
+                        Content::File {
+                            media_type, data, ..
+                        } => parts.push(StreamPart::File { media_type, data }),
+                        // `parse_parts` never produces `Source` (grounding is
+                        // candidate metadata, not a content part); it is decoded
+                        // from `groundingMetadata` below.
+                        Content::Source { .. } => {}
+                        // The Gemini wire carries no tool-approval handshake, so
+                        // `parse_parts` never yields these; nothing to stream.
+                        Content::ToolApprovalRequest { .. }
+                        | Content::ToolApprovalResponse { .. } => {}
+                    }
+                }
+            }
+            // Web-search grounding arrives on `candidate.groundingMetadata`,
+            // accumulating across chunks. Emit each new citation once as a whole
+            // `StreamPart::Source`, deduped by URL (or document id). Every
+            // grounding chunk kind `parse_grounding_sources` recognizes — URL
+            // and document sources alike — is forwarded; none is silently
+            // dropped here.
+            // <https://ai.google.dev/gemini-api/docs/grounding>
+            for content in parse_grounding_sources(candidate.get("groundingMetadata")) {
+                if let Content::Source { source, .. } = content {
+                    let key = match &source {
+                        Source::Url { url, .. } => url.clone(),
+                        Source::Document { id, .. } => id.clone(),
+                    };
+                    if self.emitted_source_keys.insert(key) {
+                        parts.push(StreamPart::Source { source });
                     }
                 }
             }
@@ -749,6 +1394,28 @@ impl StreamEncoder for GenerateContentStreamEncoder {
             // Observability-only metadata (upstream response id) — never
             // forwarded to the Google-protocol client.
             StreamPart::ResponseStarted { .. } => return Ok(Vec::new()),
+            // Coarse wire: Generate Content frames no content blocks (text /
+            // reasoning are flat `parts` on one candidate), so block-lifecycle
+            // markers have no native chunk and re-encode to nothing.
+            StreamPart::TextStart { .. }
+            | StreamPart::TextEnd { .. }
+            | StreamPart::ReasoningStart { .. }
+            | StreamPart::ReasoningEnd { .. } => return Ok(Vec::new()),
+            // A generated file -> an `inlineData` / `fileData` part in one chunk.
+            // <https://ai.google.dev/gemini-api/docs/image-generation>
+            StreamPart::File { media_type, data } => {
+                let file_part = match data {
+                    DataContent::Base64 { data } => serde_json::json!({
+                        "inlineData": { "mimeType": media_type, "data": data }
+                    }),
+                    DataContent::Url { url } => serde_json::json!({
+                        "fileData": { "mimeType": media_type, "fileUri": url }
+                    }),
+                };
+                serde_json::json!({
+                    "candidates": [{ "content": { "role": "model", "parts": [file_part] } }]
+                })
+            }
             StreamPart::TextDelta { text } => serde_json::json!({
                 "candidates": [{ "content": { "role": "model", "parts": [{ "text": text }] } }]
             }),
@@ -771,6 +1438,30 @@ impl StreamEncoder for GenerateContentStreamEncoder {
                     }] } }]
                 })
             }
+            // Re-attach a streamed citation as a one-chunk
+            // `candidate.groundingMetadata.groundingChunks` web entry — the
+            // location the decoder reads. Only a URL source maps; a document
+            // citation is dropped (no `groundingChunks.web` form on this wire).
+            // <https://ai.google.dev/api/generate-content#GroundingChunk>
+            StreamPart::Source { source } => match source {
+                Source::Url { url, title, .. } => {
+                    let mut web = serde_json::Map::new();
+                    web.insert("uri".into(), url.clone().into());
+                    if let Some(title) = title {
+                        web.insert("title".into(), title.clone().into());
+                    }
+                    serde_json::json!({
+                        "candidates": [{
+                            "content": { "role": "model", "parts": [] },
+                            "groundingMetadata": {
+                                "groundingChunks": [{ "web": serde_json::Value::Object(web) }]
+                            },
+                        }]
+                    })
+                }
+                // No `groundingChunks.web` form for a document citation.
+                Source::Document { .. } => return Ok(Vec::new()),
+            },
             StreamPart::Usage { usage } => serde_json::json!({
                 "usageMetadata": {
                     "promptTokenCount": usage.prompt_tokens,

@@ -33,6 +33,17 @@
         }
       ]
     },
+    "stop_sequences": {
+      "description": "Custom stop sequences. Promoted to the canonical `stop` slot, so it can\nrender as a Chat Completions `stop` or a Gemini `stopSequences`.\n<https://docs.anthropic.com/en/api/messages#body-stop-sequences>",
+      "type": [
+        "array",
+        "null"
+      ],
+      "default": null,
+      "items": {
+        "type": "string"
+      }
+    },
     "stream": {
       "type": "boolean",
       "default": false
@@ -54,6 +65,16 @@
       "items": {
         "$ref": "#/$defs/MessagesTool"
       }
+    },
+    "top_k": {
+      "description": "Top-k sampling. Promoted to the canonical `top_k` slot so it translates\nacross protocols (e.g. to a Gemini upstream's `generationConfig.topK`).\n<https://docs.anthropic.com/en/api/messages#body-top-k>",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "minimum": 0
     },
     "top_p": {
       "type": [
@@ -132,7 +153,7 @@
       ]
     },
     "MessagesTool": {
-      "description": "One element of [`MessagesRequest`]'s `tools` array — Anthropic's tool definition shape.",
+      "description": "One element of [`MessagesRequest`]'s `tools` array.\n\nAnthropic uses one array for both kinds of tool:\n- a **client (function) tool** — `{name, description?, input_schema}` (no `type`);\n- a **provider-defined (server) tool** — `{type:\"web_search_20250305\"|…, name, …config}`\n  (web search, code execution, computer use, bash, text editor), where `type`\n  is the dated tool version and `name` is the stable tool name.\n\nA versioned `type` discriminates a server tool; its config keys ride in\n`extra` so they are preserved verbatim into `Tool::ProviderDefined.args`.\n<https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview>\n<https://docs.claude.com/en/docs/agents-and-tools/tool-use/web-search-tool>",
       "type": "object",
       "properties": {
         "description": {
@@ -146,12 +167,20 @@
           "default": null
         },
         "name": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
-      },
-      "required": [
-        "name"
-      ]
+      }
     }
   }
 }

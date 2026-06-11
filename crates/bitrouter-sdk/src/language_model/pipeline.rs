@@ -233,6 +233,7 @@ impl Pipeline {
                     finish_reason: None,
                     response_id: None,
                     stop_details: None,
+                    provider_metadata: Default::default(),
                 },
                 latency_ms: 0,
                 generation_time_ms: 0,

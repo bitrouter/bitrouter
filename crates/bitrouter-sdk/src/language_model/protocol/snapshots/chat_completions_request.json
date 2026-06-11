@@ -4,6 +4,15 @@
   "description": "Chat Completions request body\n(<https://platform.openai.com/docs/api-reference/chat/create>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
   "type": "object",
   "properties": {
+    "frequency_penalty": {
+      "description": "Frequency penalty. Promoted to the canonical `frequency_penalty` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-frequency_penalty>",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
     "max_completion_tokens": {
       "type": [
         "integer",
@@ -31,6 +40,15 @@
     "model": {
       "type": "string"
     },
+    "presence_penalty": {
+      "description": "Presence penalty. Promoted to the canonical `presence_penalty` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-presence_penalty>",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
     "reasoning_effort": {
       "type": [
         "string",
@@ -48,6 +66,19 @@
           "type": "null"
         }
       ],
+      "default": null
+    },
+    "seed": {
+      "description": "Deterministic-sampling seed. Promoted to the canonical `seed` slot so it\ntranslates across protocols (e.g. to a Gemini upstream's\n`generationConfig.seed`) instead of no-op'ing as a top-level key on a\nnested-config wire.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-seed>",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "default": null
+    },
+    "stop": {
+      "description": "Stop sequences — a single string or an array of up to four. Promoted to\nthe canonical `stop` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop>",
       "default": null
     },
     "stream": {
@@ -100,6 +131,13 @@
       "description": "The `json_schema` payload of [`ChatResponseFormat::JsonSchema`].",
       "type": "object",
       "properties": {
+        "description": {
+          "description": "Optional schema description — extra LLM guidance OpenAI passes through to\nthe model. Promoted to the canonical `response_format` description.\n<https://platform.openai.com/docs/guides/structured-outputs>",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "description": "Schema name (OpenAI requires it).",
           "type": "string"
@@ -231,7 +269,7 @@
       ]
     },
     "ChatToolFunction": {
-      "description": "The `function` payload of a [`ChatTool`]: name + description + JSON-Schema\nparameters.",
+      "description": "The `function` payload of a [`ChatTool`]: name + description + JSON-Schema\nparameters + optional `strict` flag.\n<https://platform.openai.com/docs/guides/function-calling#strict-mode>",
       "type": "object",
       "properties": {
         "description": {
@@ -245,6 +283,14 @@
           "type": "string"
         },
         "parameters": {
+          "default": null
+        },
+        "strict": {
+          "description": "OpenAI strict-mode flag (V3 `strict`). Captured so it is not lost across\nthe canonical boundary.",
+          "type": [
+            "boolean",
+            "null"
+          ],
           "default": null
         }
       },

@@ -257,7 +257,7 @@ impl PipelineContext {
             .map_or(0u64, |s| s.chars().count() as u64);
         for message in &prompt.messages {
             for content in &message.content {
-                if let Content::Text { text } | Content::Reasoning { text } = content {
+                if let Content::Text { text, .. } | Content::Reasoning { text, .. } = content {
                     chars = chars.saturating_add(text.chars().count() as u64);
                 }
             }
@@ -334,6 +334,7 @@ impl PipelineContext {
                 finish_reason: None,
                 response_id: None,
                 stop_details: None,
+                provider_metadata: Default::default(),
             },
         );
         PipelineResponse {
@@ -419,6 +420,7 @@ mod tests {
         Prompt {
             model: "gpt-5".into(),
             system: None,
+            system_provider_metadata: Default::default(),
             messages: vec![Message {
                 role: Role::User,
                 content: vec![],
@@ -489,10 +491,12 @@ mod tests {
         Prompt {
             model: "gpt-5".into(),
             system: system.map(str::to_string),
+            system_provider_metadata: Default::default(),
             messages: vec![Message {
                 role: Role::User,
                 content: vec![Content::Text {
                     text: user_text.to_string(),
+                    provider_metadata: Default::default(),
                 }],
             }],
             tools: vec![],
@@ -530,12 +534,16 @@ mod tests {
         let prompt = Prompt {
             model: "gpt-5".into(),
             system: Some(system.into()),
+            system_provider_metadata: Default::default(),
             messages: vec![Message {
                 role: Role::Assistant,
                 content: vec![Content::ToolCall {
                     id: "call_1".into(),
                     name: "get_weather".into(),
                     arguments: "{\"city\":\"a deliberately long value to be ignored\"}".into(),
+                    provider_executed: false,
+                    dynamic: false,
+                    provider_metadata: Default::default(),
                 }],
             }],
             tools: vec![],
