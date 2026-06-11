@@ -6479,18 +6479,104 @@ fn provider_defined_tool_cross_protocol_onto_anthropic_is_preserved() {
 }
 
 /// And onto Chat Completions (function-only on the wire): a provider-defined
-/// tool is still preserved verbatim into the `tools` array rather than dropped.
+/// tool has no valid representation, so it is DROPPED rather than splatted as a
+/// `{type:<tool>}` entry — which a strict upstream rejects, failing the whole
+/// request. A function tool alongside it still renders.
 #[test]
-fn provider_defined_tool_preserved_into_chat_completions() {
-    let tool = Tool::ProviderDefined {
+fn provider_defined_tool_dropped_from_chat_completions() {
+    let server = Tool::ProviderDefined {
         id: "openai.web_search_preview".to_string(),
         name: "web_search_preview".to_string(),
         args: serde_json::json!({ "search_context_size": "low" }),
         provider_metadata: Default::default(),
     };
-    let rendered = rendered_tools_json(&ApiProtocol::ChatCompletions, vec![tool]);
-    assert_eq!(rendered[0]["type"], "web_search_preview");
-    assert_eq!(rendered[0]["search_context_size"], "low");
+    let func = Tool::Function {
+        name: "get_weather".to_string(),
+        description: None,
+        parameters: serde_json::json!({ "type": "object" }),
+        strict: None,
+        provider_metadata: Default::default(),
+    };
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+
+    // A server tool alone leaves no tools at all — omit the key, never `tools: []`.
+    let only_server = adapter
+        .render_request(&prompt_with_tools(vec![server.clone()]))
+        .unwrap();
+    assert!(
+        only_server.get("tools").is_none(),
+        "server-only tools must be omitted, not sent as an invalid entry: {only_server}"
+    );
+
+    // Mixed with a function tool: only the function tool survives.
+    let mixed = adapter
+        .render_request(&prompt_with_tools(vec![server, func]))
+        .unwrap();
+    let tools = mixed["tools"].as_array().expect("function tool present");
+    assert_eq!(tools.len(), 1, "only the function tool survives: {tools:?}");
+    assert_eq!(tools[0]["type"], "function");
+    assert_eq!(tools[0]["function"]["name"], "get_weather");
+}
+
+/// Cross-protocol regression (Codex): a Responses request carrying OpenAI
+/// server tools (`web_search`) and a Codex `namespace` group alongside real
+/// function tools, routed to a Chat Completions upstream, renders ONLY the
+/// function tools — every entry is `{type:"function"}`. Pre-fix the server /
+/// namespace tools were splatted verbatim and DeepSeek rejected the whole
+/// request (`upstream_error`), which Codex surfaced as a stream disconnect.
+#[test]
+fn responses_server_tools_dropped_when_routed_to_chat_completions() {
+    let responses_req = serde_json::json!({
+        "model": "m",
+        "input": [{ "role": "user", "content": "hi" }],
+        "tools": [
+            { "type": "function", "name": "exec_command", "parameters": { "type": "object" } },
+            { "type": "web_search", "external_web_access": true },
+            { "type": "namespace", "name": "multi_agent_v1", "tools": [], "description": "x" }
+        ]
+    });
+    let prompt = adapter_for(ApiProtocol::Responses)
+        .parse_request(responses_req)
+        .unwrap();
+    let chat = adapter_for(ApiProtocol::ChatCompletions)
+        .render_request(&prompt)
+        .unwrap();
+    let tools = chat["tools"].as_array().expect("function tool present");
+    assert_eq!(tools.len(), 1, "only the function tool survives: {tools:?}");
+    assert!(
+        tools.iter().all(|t| t["type"] == "function"),
+        "every Chat Completions tool must be a function: {tools:?}"
+    );
+    assert_eq!(tools[0]["function"]["name"], "exec_command");
+}
+
+/// Cross-protocol regression (Claude Code): a Messages request carrying an
+/// Anthropic server tool (`web_search_20250305`) alongside a custom function
+/// tool, routed to a Chat Completions upstream, renders only the function tool.
+#[test]
+fn messages_server_tools_dropped_when_routed_to_chat_completions() {
+    let messages_req = serde_json::json!({
+        "model": "m",
+        "max_tokens": 100,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "tools": [
+            { "name": "get_weather", "input_schema": { "type": "object" } },
+            { "type": "web_search_20250305", "name": "web_search", "max_uses": 3 }
+        ]
+    });
+    let prompt = adapter_for(ApiProtocol::Messages)
+        .parse_request(messages_req)
+        .unwrap();
+    let chat = adapter_for(ApiProtocol::ChatCompletions)
+        .render_request(&prompt)
+        .unwrap();
+    let tools = chat["tools"].as_array().expect("function tool present");
+    assert_eq!(tools.len(), 1, "only the function tool survives: {tools:?}");
+    assert!(
+        tools.iter().all(|t| t["type"] == "function"),
+        "every Chat Completions tool must be a function: {tools:?}"
+    );
+    assert_eq!(tools[0]["function"]["name"], "get_weather");
 }
 
 /// The canonical `Tool` enum uses an internal `type` tag (`function` /

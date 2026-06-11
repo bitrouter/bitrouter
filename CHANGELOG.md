@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.14](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.13...v1.0.0-alpha.14)
+
+
+### 🐛 Bug Fixes
+
+- *(chat)* Drop provider-defined tools (no chat wire form) ([#553](https://github.com/bitrouter/bitrouter/pull/553)) - ([b0b4ef3](https://github.com/bitrouter/bitrouter/commit/b0b4ef365d83d9a5f2ee380067320ff5303d9f2c))
+
+
 ## [1.0.0-alpha.13](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.12...v1.0.0-alpha.13)
 
 
