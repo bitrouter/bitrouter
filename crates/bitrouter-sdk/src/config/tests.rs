@@ -74,6 +74,69 @@ providers:
 }
 
 #[test]
+fn multi_protocol_provider_resolves_set_and_endpoints() {
+    // Case 1: one provider advertising several protocols for its models, with a
+    // per-protocol endpoint override for the Anthropic Messages path.
+    let yaml = r#"
+providers:
+  minimax:
+    api_base: https://api.minimax.io
+    api_key: k
+    api_protocol:
+      - "*": [chat_completions, responses, messages]
+    protocol_endpoints:
+      messages: https://api.minimax.io/anthropic/v1
+    models:
+      - id: MiniMax-M2
+      - id: special
+        api_protocol: responses
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let p = cfg.providers.get("minimax").unwrap();
+    // The full ordered protocol set for a pattern-matched model.
+    assert_eq!(
+        p.protocols_for("MiniMax-M2"),
+        vec![
+            ApiProtocol::ChatCompletions,
+            ApiProtocol::Responses,
+            ApiProtocol::Messages
+        ]
+    );
+    // `protocol_for` is the head (preferred default).
+    assert_eq!(p.protocol_for("MiniMax-M2"), ApiProtocol::ChatCompletions);
+    // A per-model override wins and is a one-element set.
+    assert_eq!(p.protocols_for("special"), vec![ApiProtocol::Responses]);
+    // Per-protocol endpoint override is keyed by protocol name.
+    assert_eq!(
+        p.endpoint_for(&ApiProtocol::Messages),
+        Some("https://api.minimax.io/anthropic/v1")
+    );
+    assert_eq!(p.endpoint_for(&ApiProtocol::ChatCompletions), None);
+}
+
+#[test]
+fn single_protocol_string_still_parses_as_one_element_set() {
+    // Backward-compat: a bare protocol string is a one-element set, and
+    // `protocol_for` behaves exactly as before.
+    let yaml = r#"
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: k
+    api_protocol:
+      - "*": chat_completions
+    models: [{ id: gpt-4o }]
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let p = cfg.providers.get("openai").unwrap();
+    assert_eq!(
+        p.protocols_for("gpt-4o"),
+        vec![ApiProtocol::ChatCompletions]
+    );
+    assert_eq!(p.protocol_for("gpt-4o"), ApiProtocol::ChatCompletions);
+}
+
+#[test]
 fn parses_context_tier_pricing() {
     let yaml = r#"
 providers:

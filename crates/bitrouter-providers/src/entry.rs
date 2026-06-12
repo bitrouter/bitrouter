@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use bitrouter_sdk::language_model::types::ApiProtocol;
+use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
 /// One built-in provider entry.
 #[derive(Debug, Clone, Deserialize)]
@@ -32,10 +32,16 @@ pub struct ProviderEntry {
     /// Default upstream `api_base`. May be overridden by a user-written
     /// provider config.
     pub api_base: String,
-    /// The wire protocol the provider serves. Either a single protocol (most
-    /// providers) or a glob → protocol map (opencode-zen-shape: same provider,
-    /// different protocols per model id).
+    /// The wire protocol(s) the provider serves. Either one protocol set for
+    /// every model (most providers), or a glob → protocol-set map
+    /// (opencode-zen-shape: same provider, different protocols per model id).
     pub api_protocol: ProtocolMapping,
+    /// Optional per-protocol base-URL override (protocol name → base URL), for
+    /// a provider that serves different protocols at different paths under one
+    /// host — e.g. OpenAI-style under `BASE/v1` and Anthropic Messages under
+    /// `BASE/anthropic`. Empty for the common single-endpoint provider.
+    #[serde(default)]
+    pub protocol_endpoints: BTreeMap<String, String>,
     /// Authentication scheme (how the credential is placed on each request).
     pub auth: AuthScheme,
     /// Link to the provider's official API documentation. Required so future
@@ -43,44 +49,47 @@ pub struct ProviderEntry {
     pub doc_url: String,
 }
 
-/// Either a single protocol, or a glob → protocol map for providers that
-/// serve different protocols on different model ids (e.g. opencode-zen).
+/// Either one protocol set for every model, or a glob → protocol-set map for
+/// providers that serve different protocols on different model ids (e.g.
+/// opencode-zen). Each value is a [`ProtocolList`] — a bare string or an
+/// ordered sequence — so single- and multi-protocol upstreams share one schema.
 ///
-/// `#[serde(untagged)]` so the TOML can write either:
+/// `#[serde(untagged)]` so the TOML can write any of:
 /// ```toml
-/// api_protocol = "chat_completions"
+/// api_protocol = "chat_completions"                  # one protocol
+/// api_protocol = ["chat_completions", "responses"]   # an ordered set
 /// ```
-/// or
+/// or per model id:
 /// ```toml
 /// [api_protocol]
 /// "claude-*" = "messages"
-/// "*" = "chat_completions"
+/// "*" = ["chat_completions", "responses"]
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum ProtocolMapping {
-    /// Same protocol for every model.
-    Single(ApiProtocol),
-    /// Glob-prefix matched protocol per model id. Longest match wins.
-    PerModel(BTreeMap<String, ApiProtocol>),
+    /// Same protocol set for every model.
+    Single(ProtocolList),
+    /// Glob-prefix matched protocol set per model id. Longest match wins.
+    PerModel(BTreeMap<String, ProtocolList>),
 }
 
 impl ProtocolMapping {
-    /// Resolve the protocol for one model id. Returns `None` if no pattern
-    /// matches (callers fall back to a sensible default).
-    pub fn resolve(&self, model_id: &str) -> Option<ApiProtocol> {
+    /// Resolve the ordered protocol set for one model id, most preferred first.
+    /// Returns `None` if no pattern matches (callers fall back to a default).
+    pub fn resolve(&self, model_id: &str) -> Option<Vec<ApiProtocol>> {
         match self {
-            ProtocolMapping::Single(api_protocol) => Some(api_protocol.clone()),
-            ProtocolMapping::PerModel(api_protocol) => {
-                let mut best: Option<(&str, &ApiProtocol)> = None;
-                for (pat, proto) in api_protocol {
+            ProtocolMapping::Single(list) => Some(list.as_slice().to_vec()),
+            ProtocolMapping::PerModel(map) => {
+                let mut best: Option<(&str, &ProtocolList)> = None;
+                for (pat, list) in map {
                     if pattern_matches(pat, model_id)
                         && best.as_ref().is_none_or(|(b, _)| pat.len() > b.len())
                     {
-                        best = Some((pat.as_str(), proto));
+                        best = Some((pat.as_str(), list));
                     }
                 }
-                best.map(|(_, p)| p.clone())
+                best.map(|(_, l)| l.as_slice().to_vec())
             }
         }
     }
@@ -180,7 +189,7 @@ mod tests {
         assert_eq!(entry.auth.env_var(), Some("OPENAI_API_KEY"));
         assert_eq!(
             entry.api_protocol.resolve("gpt-4o"),
-            Some(ApiProtocol::ChatCompletions)
+            Some(vec![ApiProtocol::ChatCompletions])
         );
     }
 
@@ -238,11 +247,46 @@ mod tests {
         let entry: ProviderEntry = toml::from_str(src).unwrap();
         assert_eq!(
             entry.api_protocol.resolve("claude-opus-4-1"),
-            Some(ApiProtocol::Messages)
+            Some(vec![ApiProtocol::Messages])
         );
         assert_eq!(
             entry.api_protocol.resolve("gpt-5-mini"),
-            Some(ApiProtocol::ChatCompletions)
+            Some(vec![ApiProtocol::ChatCompletions])
+        );
+    }
+
+    #[test]
+    fn parses_multi_protocol_set_with_endpoints() {
+        // Case 1: one vendor serving its models over several protocols —
+        // OpenAI-style under /v1 and Anthropic Messages under /anthropic.
+        let src = r#"
+            id = "minimax"
+            display_name = "MiniMax"
+            api_base = "https://api.minimax.io"
+            doc_url = "https://www.minimax.io/platform/document"
+
+            [api_protocol]
+            "*" = ["chat_completions", "responses", "messages"]
+
+            [protocol_endpoints]
+            messages = "https://api.minimax.io/anthropic/v1"
+
+            [auth]
+            kind = "bearer"
+            env = "MINIMAX_API_KEY"
+        "#;
+        let entry: ProviderEntry = toml::from_str(src).unwrap();
+        assert_eq!(
+            entry.api_protocol.resolve("MiniMax-M2"),
+            Some(vec![
+                ApiProtocol::ChatCompletions,
+                ApiProtocol::Responses,
+                ApiProtocol::Messages,
+            ])
+        );
+        assert_eq!(
+            entry.protocol_endpoints.get("messages").map(String::as_str),
+            Some("https://api.minimax.io/anthropic/v1")
         );
     }
 

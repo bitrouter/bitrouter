@@ -8,7 +8,7 @@
 //! Opt-out: set `inherit_defaults: false` at the top level of the config.
 
 use bitrouter_sdk::config::{Config, Pattern, PatternMap, ProviderConfig};
-use bitrouter_sdk::language_model::types::ApiProtocol;
+use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
 use crate::builtin;
 use crate::entry::ProtocolMapping;
@@ -103,6 +103,13 @@ pub fn apply_builtin_defaults(config: &mut Config) {
         if provider.api_protocol.is_empty() {
             provider.api_protocol = protocol_mapping_to_pattern_map(&builtin.api_protocol);
         }
+        if provider.protocol_endpoints.is_empty() && !builtin.protocol_endpoints.is_empty() {
+            provider.protocol_endpoints = builtin
+                .protocol_endpoints
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+        }
         // A multi-account provider carries its credentials in `accounts`,
         // not the top-level `api_key`. Skip both the env-var fill and the
         // inactive guard for it — it is explicitly account-managed and
@@ -131,14 +138,14 @@ pub fn apply_builtin_defaults(config: &mut Config) {
     }
 }
 
-/// Translate a built-in's [`ProtocolMapping`] into the existing
-/// `PatternMap<ApiProtocol>` used by [`bitrouter_sdk::config::ProviderConfig`].
-/// `Single(p)` becomes a single `*` → p entry; `PerModel` keys parse via
+/// Translate a built-in's [`ProtocolMapping`] into the
+/// `PatternMap<ProtocolList>` used by [`bitrouter_sdk::config::ProviderConfig`].
+/// `Single(list)` becomes a single `*` → list entry; `PerModel` keys parse via
 /// [`Pattern::parse`] (same wildcard rules used by user-written configs).
-fn protocol_mapping_to_pattern_map(m: &ProtocolMapping) -> PatternMap<ApiProtocol> {
+fn protocol_mapping_to_pattern_map(m: &ProtocolMapping) -> PatternMap<ProtocolList> {
     let mut map = PatternMap::new();
     match m {
-        ProtocolMapping::Single(p) => map.push(Pattern::Wildcard, p.clone()),
+        ProtocolMapping::Single(list) => map.push(Pattern::Wildcard, list.clone()),
         ProtocolMapping::PerModel(items) => {
             for (k, v) in items {
                 map.push(Pattern::parse(k), v.clone());
@@ -225,7 +232,7 @@ mod tests {
         assert_eq!(p.api_base, "https://api.openai.com/v1");
         assert_eq!(
             p.api_protocol.resolve("gpt-4o"),
-            Some(&ApiProtocol::ChatCompletions)
+            Some(&ProtocolList(vec![ApiProtocol::ChatCompletions]))
         );
     }
 
@@ -239,7 +246,7 @@ mod tests {
         assert_eq!(p.api_base, "https://gateway.internal.example/v1");
         assert_eq!(
             p.api_protocol.resolve("gpt-4o"),
-            Some(&ApiProtocol::ChatCompletions)
+            Some(&ProtocolList(vec![ApiProtocol::ChatCompletions]))
         );
     }
 
@@ -290,7 +297,7 @@ mod tests {
             assert_eq!(p.api_key, "sk-ant-test");
             assert_eq!(
                 p.api_protocol.resolve("claude-opus-4-1"),
-                Some(&ApiProtocol::Messages)
+                Some(&ProtocolList(vec![ApiProtocol::Messages]))
             );
         });
     }

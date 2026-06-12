@@ -24,7 +24,7 @@ use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::routing::SortOrder;
-use crate::language_model::types::ApiProtocol;
+use crate::language_model::types::{ApiProtocol, ProtocolList};
 
 pub mod pattern;
 pub mod presets;
@@ -259,9 +259,20 @@ pub struct ProviderConfig {
     pub api_base: String,
     /// Upstream API key (often a `${VAR}` reference).
     pub api_key: String,
-    /// Glob-prefix `api_protocol` pattern list. Precedence: per-model override
-    /// > longest matching pattern > provider default (`openai`).
-    pub api_protocol: PatternMap<ApiProtocol>,
+    /// Glob-prefix `api_protocol` pattern list — each pattern maps to an
+    /// ordered set of supported wire protocols (the head is the preferred
+    /// default). Precedence: per-model override > longest matching pattern >
+    /// host-inferred default. A bare protocol string still parses to a
+    /// one-element set, so single-protocol providers are unchanged.
+    pub api_protocol: PatternMap<ProtocolList>,
+    /// Optional per-protocol base-URL override, keyed by protocol name
+    /// ([`ApiProtocol::as_str`]). When one provider serves different protocols
+    /// at different paths under a single host — e.g. OpenAI-style under
+    /// `BASE/v1` and Anthropic Messages under `BASE/anthropic` — give each
+    /// protocol's base here; protocol-native routing copies the chosen
+    /// protocol's base onto the routing target. Protocols absent here use
+    /// [`api_base`](Self::api_base).
+    pub protocol_endpoints: HashMap<String, String>,
     /// Glob-prefix `rate_limits` pattern list, keyed per matched pattern.
     pub rate_limits: PatternMap<RateLimit>,
     /// Declared model entries. Empty + `auto_discover` triggers discovery.
@@ -355,6 +366,7 @@ impl std::fmt::Debug for ProviderConfig {
                 },
             )
             .field("api_protocol", &self.api_protocol)
+            .field("protocol_endpoints", &self.protocol_endpoints)
             .field("rate_limits", &self.rate_limits)
             .field("models", &self.models)
             .field("auto_discover", &self.auto_discover)
@@ -373,6 +385,7 @@ impl Default for ProviderConfig {
             api_base: String::new(),
             api_key: String::new(),
             api_protocol: PatternMap::new(),
+            protocol_endpoints: HashMap::new(),
             rate_limits: PatternMap::new(),
             models: Vec::new(),
             auto_discover: false,
@@ -404,20 +417,44 @@ impl ProviderConfig {
 }
 
 impl ProviderConfig {
-    /// Resolve the effective `ApiProtocol` for `model_id`: per-model override
-    /// wins, then the longest matching `api_protocol` pattern, then the
-    /// provider default (`openai`). Includes the `auto_discover` protocol
-    /// inference from the api-base host.
-    pub fn protocol_for(&self, model_id: &str) -> ApiProtocol {
+    /// The ordered set of wire protocols `model_id` can be served under, most
+    /// preferred first: a per-model override wins, else the longest matching
+    /// `api_protocol` pattern, else the single host-inferred default. The
+    /// router prefers whichever member matches the inbound request (native
+    /// routing) and otherwise falls back to the head.
+    pub fn protocols_for(&self, model_id: &str) -> Vec<ApiProtocol> {
         if let Some(m) = self.models.iter().find(|m| m.id == model_id)
-            && let Some(p) = &m.api_protocol
+            && let Some(list) = &m.api_protocol
+            && !list.is_empty()
         {
-            return p.clone();
+            return list.as_slice().to_vec();
         }
-        if let Some(p) = self.api_protocol.resolve(model_id) {
-            return p.clone();
+        if let Some(list) = self.api_protocol.resolve(model_id)
+            && !list.is_empty()
+        {
+            return list.as_slice().to_vec();
         }
-        infer_protocol(&self.api_base)
+        vec![infer_protocol(&self.api_base)]
+    }
+
+    /// The preferred (default) wire protocol for `model_id` — the head of
+    /// [`protocols_for`](Self::protocols_for). Used when the inbound protocol
+    /// is not one the upstream supports. Falls back to the host-inferred
+    /// protocol for a model with an (unusual) empty protocol set.
+    pub fn protocol_for(&self, model_id: &str) -> ApiProtocol {
+        self.protocols_for(model_id)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| infer_protocol(&self.api_base))
+    }
+
+    /// The base-URL override for `protocol`, if this provider serves that
+    /// protocol at a non-default path — see
+    /// [`protocol_endpoints`](Self::protocol_endpoints).
+    pub fn endpoint_for(&self, protocol: &ApiProtocol) -> Option<&str> {
+        self.protocol_endpoints
+            .get(protocol.as_str())
+            .map(String::as_str)
     }
 }
 
@@ -438,9 +475,10 @@ pub fn infer_protocol(api_base: &str) -> ApiProtocol {
 pub struct ProviderModel {
     /// Model id at the provider.
     pub id: String,
-    /// Per-model protocol override (highest precedence).
+    /// Per-model protocol override (highest precedence) — an ordered set of
+    /// supported protocols, or a bare string for a single one.
     #[serde(default)]
-    pub api_protocol: Option<ApiProtocol>,
+    pub api_protocol: Option<ProtocolList>,
     /// Per-model rate-limit override.
     #[serde(default)]
     pub rate_limits: Option<RateLimit>,
@@ -715,6 +753,9 @@ fn resolve_one_derivation(
     // intrinsic to the child (you almost always want different endpoints).
     if child.api_protocol.is_empty() {
         child.api_protocol = parent.api_protocol.clone();
+    }
+    if child.protocol_endpoints.is_empty() {
+        child.protocol_endpoints = parent.protocol_endpoints.clone();
     }
     if child.rate_limits.is_empty() {
         child.rate_limits = parent.rate_limits.clone();

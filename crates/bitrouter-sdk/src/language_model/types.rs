@@ -147,6 +147,76 @@ impl<'de> Deserialize<'de> for ApiProtocol {
     }
 }
 
+/// One or more wire protocols a `(provider, model)` can be served under, in
+/// preference order. The list head is the *preferred* (default) outbound
+/// protocol; protocol-native routing may instead pick whichever member matches
+/// the inbound request's protocol, turning a lossy cross-protocol translation
+/// into a faithful same-protocol round-trip.
+///
+/// Deserializes from **either** a bare protocol string or a sequence, so a
+/// single-protocol provider and a multi-protocol one share one schema:
+///
+/// ```yaml
+/// api_protocol:
+///   - "*": ["chat_completions", "responses", "messages"]   # an ordered set
+///   - "claude-*": messages                                  # still a bare string
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProtocolList(pub Vec<ApiProtocol>);
+
+impl ProtocolList {
+    /// The preferred (default) protocol — the list head.
+    pub fn preferred(&self) -> Option<&ApiProtocol> {
+        self.0.first()
+    }
+
+    /// Whether `protocol` is one of the supported protocols.
+    pub fn contains(&self, protocol: &ApiProtocol) -> bool {
+        self.0.contains(protocol)
+    }
+
+    /// The supported protocols as a slice, in preference order.
+    pub fn as_slice(&self) -> &[ApiProtocol] {
+        &self.0
+    }
+
+    /// Whether no protocol is listed.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<ApiProtocol> for ProtocolList {
+    fn from(p: ApiProtocol) -> Self {
+        ProtocolList(vec![p])
+    }
+}
+
+impl Serialize for ProtocolList {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProtocolList {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Accept a bare protocol string (`"messages"`) or a sequence
+        // (`["messages", "chat_completions"]`). Both formats we parse from
+        // (YAML, TOML) are self-describing, so the untagged dispatch is
+        // unambiguous: a string deserializes `One`, a sequence `Many`.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OneOrMany {
+            One(ApiProtocol),
+            Many(Vec<ApiProtocol>),
+        }
+        Ok(match OneOrMany::deserialize(d)? {
+            OneOrMany::One(p) => ProtocolList(vec![p]),
+            OneOrMany::Many(v) => ProtocolList(v),
+        })
+    }
+}
+
 /// A conversation role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
