@@ -20,4 +20,5 @@ pub mod classify;
 pub mod config;
 pub mod loop_controller;
 pub mod mcp_toolset;
+pub mod stream;
 pub mod toolset;

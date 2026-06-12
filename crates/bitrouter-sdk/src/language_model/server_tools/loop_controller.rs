@@ -50,6 +50,42 @@ impl ServerToolLoop {
         }
     }
 
+    /// The loop's bounds.
+    pub fn config(&self) -> &ServerToolLoopConfig {
+        &self.config
+    }
+
+    /// The MCP server backing the toolset that owns `name`, if any — used to
+    /// label a streamed router tool call for `mcp_tool_use` rendering.
+    pub(crate) fn server_name_for(&self, name: &str) -> Option<String> {
+        self.registry
+            .resolve(name)
+            .and_then(|set| set.server_name())
+            .map(str::to_string)
+    }
+
+    /// Clone `base`, advertise the registry's router tools on it (failing on a
+    /// name collision with a caller tool), and return the working prompt plus
+    /// the set of router-owned tool names.
+    pub(crate) async fn inject(
+        &self,
+        base: &Prompt,
+        caller: &CallerContext,
+    ) -> Result<(Prompt, std::collections::BTreeSet<String>)> {
+        let (injected, owned) = self.registry.list_all(caller).await?;
+        let mut working = base.clone();
+        for tool in &injected {
+            if working.tools.iter().any(|t| t.name() == tool.name()) {
+                return Err(BitrouterError::Internal(format!(
+                    "router tool name collides with a caller tool: {}",
+                    tool.name()
+                )));
+            }
+        }
+        working.tools.extend(injected);
+        Ok((working, owned))
+    }
+
     /// Run the loop. `upstream` performs one upstream turn (with fallback) for a
     /// working prompt; the loop owns the working prompt, injects router tools
     /// into it, appends assistant + tool-result turns between iterations, and
@@ -64,17 +100,7 @@ impl ServerToolLoop {
         caller: &CallerContext,
         upstream: &dyn UpstreamTurn,
     ) -> Result<ExecutionResult> {
-        let (injected, owned) = self.registry.list_all(caller).await?;
-        let mut working = base.clone();
-        for tool in &injected {
-            if working.tools.iter().any(|t| t.name() == tool.name()) {
-                return Err(BitrouterError::Internal(format!(
-                    "router tool name collides with a caller tool: {}",
-                    tool.name()
-                )));
-            }
-        }
-        working.tools.extend(injected);
+        let (mut working, owned) = self.inject(base, caller).await?;
 
         let mut total = Usage::default();
         let mut had_usage = false;
@@ -114,6 +140,52 @@ impl ServerToolLoop {
         }
     }
 
+    /// Execute one router-owned call: approval gate, then the owning toolset
+    /// under the per-tool timeout. Returns the result output and whether it
+    /// errored. Shared by the non-streaming loop and the stream stitcher.
+    pub(crate) async fn call_one(
+        &self,
+        call: &RouterCall,
+        caller: &CallerContext,
+    ) -> (ToolResultOutput, bool) {
+        if !self.approval.allow(call, caller).await {
+            return (
+                ToolResultOutput::ExecutionDenied {
+                    reason: Some("denied by approval policy".to_string()),
+                },
+                false,
+            );
+        }
+        let Some(set) = self.registry.resolve(&call.name) else {
+            return (
+                ToolResultOutput::ErrorText {
+                    value: format!("no toolset owns '{}'", call.name),
+                },
+                true,
+            );
+        };
+        match tokio::time::timeout(
+            self.config.tool_timeout,
+            set.call_tool(&call.name, &call.arguments, caller),
+        )
+        .await
+        {
+            Ok(Ok(out)) => (out, false),
+            Ok(Err(err)) => (
+                ToolResultOutput::ErrorText {
+                    value: err.to_string(),
+                },
+                true,
+            ),
+            Err(_) => (
+                ToolResultOutput::ErrorText {
+                    value: format!("tool '{}' timed out", call.name),
+                },
+                true,
+            ),
+        }
+    }
+
     /// Execute each router-owned call, returning the tool-result content blocks
     /// and whether any call produced an error.
     async fn execute_calls(
@@ -124,37 +196,8 @@ impl ServerToolLoop {
         let mut results = Vec::with_capacity(calls.len());
         let mut had_error = false;
         for call in calls {
-            let output = if !self.approval.allow(call, caller).await {
-                ToolResultOutput::ExecutionDenied {
-                    reason: Some("denied by approval policy".to_string()),
-                }
-            } else if let Some(set) = self.registry.resolve(&call.name) {
-                match tokio::time::timeout(
-                    self.config.tool_timeout,
-                    set.call_tool(&call.name, &call.arguments, caller),
-                )
-                .await
-                {
-                    Ok(Ok(out)) => out,
-                    Ok(Err(err)) => {
-                        had_error = true;
-                        ToolResultOutput::ErrorText {
-                            value: err.to_string(),
-                        }
-                    }
-                    Err(_) => {
-                        had_error = true;
-                        ToolResultOutput::ErrorText {
-                            value: format!("tool '{}' timed out", call.name),
-                        }
-                    }
-                }
-            } else {
-                had_error = true;
-                ToolResultOutput::ErrorText {
-                    value: format!("no toolset owns '{}'", call.name),
-                }
-            };
+            let (output, err) = self.call_one(call, caller).await;
+            had_error |= err;
             results.push(Content::ToolResult {
                 call_id: call.id.clone(),
                 tool_name: Some(call.name.clone()),
@@ -181,7 +224,7 @@ fn append_turn(working: &mut Prompt, assistant_content: Vec<Content>, tool_resul
 }
 
 /// Sum the per-iteration usage into the running total.
-fn add_usage(total: &mut Usage, add: &Usage) {
+pub(crate) fn add_usage(total: &mut Usage, add: &Usage) {
     total.prompt_tokens += add.prompt_tokens;
     total.completion_tokens += add.completion_tokens;
     total.reasoning_tokens += add.reasoning_tokens;
