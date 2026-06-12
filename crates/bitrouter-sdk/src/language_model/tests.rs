@@ -1173,3 +1173,110 @@ async fn without_loop_a_tool_call_turn_is_returned_unchanged() {
     let resp = pipeline.execute(request()).await.expect("request succeeds");
     assert!(matches!(&resp.result.content[0], Content::ToolCall { .. }));
 }
+
+#[tokio::test]
+async fn server_tool_loop_streams_router_tool_activity() {
+    use crate::language_model::server_tools::approval::AllowAll;
+    use crate::language_model::server_tools::config::ServerToolLoopConfig;
+    use crate::language_model::server_tools::loop_controller::ServerToolLoop;
+    use crate::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
+
+    struct OneTool;
+    #[async_trait]
+    impl RouterToolset for OneTool {
+        async fn list_tools(&self, _c: &CallerContext) -> Result<Vec<Tool>> {
+            Ok(vec![Tool::Function {
+                name: "search".to_string(),
+                description: None,
+                parameters: serde_json::json!({ "type": "object" }),
+                strict: None,
+                provider_metadata: Default::default(),
+            }])
+        }
+        async fn call_tool(
+            &self,
+            _n: &str,
+            _a: &str,
+            _c: &CallerContext,
+        ) -> Result<ToolResultOutput> {
+            Ok(ToolResultOutput::Text {
+                value: "ran".to_string(),
+            })
+        }
+        fn owns(&self, name: &str) -> bool {
+            name == "search"
+        }
+        fn server_name(&self) -> Option<&str> {
+            Some("docs")
+        }
+    }
+
+    // Iteration 1 streams a router tool call; iteration 2 streams the answer.
+    let executor = Arc::new(MockExecutor::new(vec![
+        MockResponse::Stream(vec![
+            StreamPart::TextDelta {
+                text: "searching ".to_string(),
+            },
+            StreamPart::ToolCallDelta {
+                id: "c1".to_string(),
+                name: Some("search".to_string()),
+                arguments: "{}".to_string(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ]),
+        MockResponse::Stream(vec![
+            StreamPart::TextDelta {
+                text: "answer".to_string(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ]),
+    ]));
+    let server_loop = Arc::new(ServerToolLoop::new(
+        ToolsetRegistry::new(vec![Arc::new(OneTool)]),
+        ServerToolLoopConfig::default(),
+        Arc::new(AllowAll),
+    ));
+    let pipeline = pipeline_with(routing_table(&["openai"]), executor, |b| {
+        b.server_tool_loop(server_loop);
+    });
+
+    let mut stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    let mut parts = Vec::new();
+    while let Some(item) = stream.next().await {
+        parts.push(item.expect("stream part ok"));
+    }
+
+    // The router tool ran server-side, surfaced as ServerToolCall + Result...
+    assert!(
+        parts
+            .iter()
+            .any(|p| matches!(p, StreamPart::ServerToolCall { name, .. } if name == "search"))
+    );
+    assert!(
+        parts
+            .iter()
+            .any(|p| matches!(p, StreamPart::ServerToolResult { .. }))
+    );
+    // ...the raw router ToolCallDelta was suppressed...
+    assert!(
+        !parts
+            .iter()
+            .any(|p| matches!(p, StreamPart::ToolCallDelta { .. }))
+    );
+    // ...and both turns' text streamed through to one continuous answer.
+    let text: String = parts
+        .iter()
+        .filter_map(|p| match p {
+            StreamPart::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "searching answer");
+}

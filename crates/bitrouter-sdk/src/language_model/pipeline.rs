@@ -10,6 +10,7 @@ use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
 use tracing::Instrument;
 
+use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::executor::{Executor, StreamPartStream};
@@ -19,6 +20,7 @@ use crate::language_model::hooks::{
 };
 use crate::language_model::routing::{FallbackPolicy, RoutingPrefs, RoutingTable};
 use crate::language_model::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
+use crate::language_model::server_tools::stream::UpstreamStream;
 use crate::language_model::settlement::{SettlementContext, SettlementRecorder};
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 use crate::language_model::types::{
@@ -75,6 +77,27 @@ impl UpstreamTurn for PipelineUpstream<'_> {
     async fn run(&self, prompt: &Prompt) -> Result<ExecutionResult> {
         self.pipeline
             .execute_with_fallback(self.chain, prompt, self.ctx)
+            .await
+    }
+}
+
+/// Drives one upstream **streaming** turn for the server-side tool loop. The
+/// loop pins to the turn's resolved `target`, and each iteration uses a fresh
+/// throwaway [`PipelineContext`] (the executor reads it only for outbound trace
+/// headers), so the real request context stays owned by the settlement guard.
+struct PipelineStreamUpstream {
+    executor: Arc<dyn Executor>,
+    target: RoutingTarget,
+    caller: CallerContext,
+}
+
+#[async_trait]
+impl UpstreamStream for PipelineStreamUpstream {
+    async fn run(&self, prompt: &Prompt) -> Result<StreamPartStream> {
+        let req = PipelineRequest::new(prompt.model.clone(), self.caller.clone(), prompt.clone());
+        let ctx = PipelineContext::new(req);
+        self.executor
+            .execute_stream(&self.target, prompt, &ctx)
             .await
     }
 }
@@ -254,7 +277,27 @@ impl Pipeline {
         self.observe_after(Phase::Route, &ctx).await;
         log_request_received(&ctx, chain.first(), true);
 
-        let upstream = self.execute_stream_with_fallback(&chain, &ctx).await?;
+        // Route Stage 3 through the server-side tool loop when configured: the
+        // merged stream becomes the "upstream" the settlement guard drains, so
+        // settlement is unchanged. Otherwise the pipeline stays single-shot.
+        let upstream = match &self.server_tool_loop {
+            Some(server_loop) => {
+                let target = chain
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| BitrouterError::NotFound("empty routing chain".to_string()))?;
+                let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
+                    executor: self.executor.clone(),
+                    target,
+                    caller: ctx.caller().clone(),
+                });
+                server_loop
+                    .clone()
+                    .run_stream(ctx.prompt(), ctx.caller(), upstream_impl)
+                    .await?
+            }
+            None => self.execute_stream_with_fallback(&chain, &ctx).await?,
+        };
         // A placeholder execution result so Settlement has provider/model ids;
         // usage is folded in from the StreamContext at stream end.
         let head = chain.first().cloned();
