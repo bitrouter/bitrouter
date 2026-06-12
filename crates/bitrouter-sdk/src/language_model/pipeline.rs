@@ -81,13 +81,14 @@ impl UpstreamTurn for PipelineUpstream<'_> {
     }
 }
 
-/// Drives one upstream **streaming** turn for the server-side tool loop. The
-/// loop pins to the turn's resolved `target`, and each iteration uses a fresh
+/// Drives one upstream **streaming** turn for the server-side tool loop. Each
+/// iteration tries the routing `chain` in order until one stream starts
+/// (commit-on-start failover, mirroring the single-shot path), and uses a fresh
 /// throwaway [`PipelineContext`] (the executor reads it only for outbound trace
 /// headers), so the real request context stays owned by the settlement guard.
 struct PipelineStreamUpstream {
     executor: Arc<dyn Executor>,
-    target: RoutingTarget,
+    chain: Vec<RoutingTarget>,
     caller: CallerContext,
 }
 
@@ -96,9 +97,15 @@ impl UpstreamStream for PipelineStreamUpstream {
     async fn run(&self, prompt: &Prompt) -> Result<StreamPartStream> {
         let req = PipelineRequest::new(prompt.model.clone(), self.caller.clone(), prompt.clone());
         let ctx = PipelineContext::new(req);
-        self.executor
-            .execute_stream(&self.target, prompt, &ctx)
-            .await
+        let mut last_error: Option<BitrouterError> = None;
+        for target in &self.chain {
+            match self.executor.execute_stream(target, prompt, &ctx).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => last_error = Some(e),
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| BitrouterError::NotFound("empty routing chain".to_string())))
     }
 }
 
@@ -282,13 +289,9 @@ impl Pipeline {
         // settlement is unchanged. Otherwise the pipeline stays single-shot.
         let upstream = match &self.server_tool_loop {
             Some(server_loop) => {
-                let target = chain
-                    .first()
-                    .cloned()
-                    .ok_or_else(|| BitrouterError::NotFound("empty routing chain".to_string()))?;
                 let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
                     executor: self.executor.clone(),
-                    target,
+                    chain: chain.clone(),
                     caller: ctx.caller().clone(),
                 });
                 server_loop

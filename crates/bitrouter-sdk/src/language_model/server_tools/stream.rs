@@ -87,7 +87,14 @@ impl ServerToolLoop {
                             had_usage = true;
                         }
                         StreamPart::Finish { reason } => finish = Some(reason),
-                        StreamPart::ResponseCompleted { .. } => {
+                        StreamPart::ResponseCompleted { usage, .. } => {
+                            // The Responses decoder carries usage only here (never
+                            // a standalone `Usage` part), so it must be folded in
+                            // or the loop under-bills a Responses upstream.
+                            if let Some(u) = usage {
+                                add_usage(&mut total, &u);
+                                had_usage = true;
+                            }
                             if finish.is_none() {
                                 finish = Some(FinishReason::Stop);
                             }
@@ -116,6 +123,11 @@ impl ServerToolLoop {
                         other => yield Ok(other),
                     }
                 }
+
+                // Drop malformed calls whose name never arrived — they are
+                // neither router- nor client-executable, and would otherwise
+                // force a spurious hand-back of an empty-named tool call.
+                buffered.retain(|b| !b.name.is_empty());
 
                 let has_client = buffered.iter().any(|b| !owned.contains(&b.name));
                 let router: Vec<RouterCall> = buffered
@@ -435,5 +447,44 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn accumulates_usage_from_response_completed() {
+        // A Responses-style upstream carries usage only on ResponseCompleted
+        // (never a standalone Usage part); the stitcher must still emit a
+        // consolidated Usage so settlement bills the authoritative count.
+        let scripts = vec![vec![
+            StreamPart::TextDelta { text: "hi".into() },
+            StreamPart::ResponseCompleted {
+                id: "r1".into(),
+                status: "completed".into(),
+                usage: Some(Usage {
+                    prompt_tokens: 7,
+                    completion_tokens: 3,
+                    ..Default::default()
+                }),
+            },
+        ]];
+        let upstream = Arc::new(ScriptedStream {
+            scripts: Mutex::new(scripts.into()),
+        });
+        let parts = collect(
+            loop_()
+                .run_stream(&base_prompt(), &CallerContext::local(), upstream)
+                .await
+                .unwrap(),
+        )
+        .await;
+
+        let usage = parts
+            .iter()
+            .find_map(|p| match p {
+                StreamPart::Usage { usage } => Some(usage),
+                _ => None,
+            })
+            .expect("a consolidated Usage part is emitted");
+        assert_eq!(usage.prompt_tokens, 7);
+        assert_eq!(usage.completion_tokens, 3);
     }
 }

@@ -2330,8 +2330,17 @@ fn server_tool_result_content(output: &ToolResultOutput) -> (serde_json::Value, 
         ToolResultOutput::ErrorText { value } => {
             (serde_json::json!([{ "type": "text", "text": value }]), true)
         }
-        ToolResultOutput::Json { value } => (value.clone(), false),
-        ToolResultOutput::ErrorJson { value } => (value.clone(), true),
+        // `mcp_tool_result.content` must be a string or an array of content
+        // blocks — a non-text MCP result (a raw JSON body) is wrapped in a text
+        // block rather than passed through as a bare object.
+        ToolResultOutput::Json { value } => (
+            serde_json::json!([{ "type": "text", "text": value.to_string() }]),
+            false,
+        ),
+        ToolResultOutput::ErrorJson { value } => (
+            serde_json::json!([{ "type": "text", "text": value.to_string() }]),
+            true,
+        ),
         ToolResultOutput::Content { value } => {
             let parts: Vec<serde_json::Value> = value
                 .iter()
