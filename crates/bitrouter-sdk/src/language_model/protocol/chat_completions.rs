@@ -1633,6 +1633,14 @@ impl StreamEncoder for ChatStreamEncoder {
                 // (image generation is a separate API), so a generated file is
                 // surfaced only on the non-streaming path. Documented limitation.
             }
+            StreamPart::ServerToolCall { .. } | StreamPart::ServerToolResult { .. } => {
+                // Chat Completions has no server-tool / MCP wire form (cf. the
+                // provider-defined-tool drop on this wire), and emitting a
+                // `tool_calls` delta would make the client try to execute a tool
+                // BitRouter already ran. Router-executed tool activity is
+                // therefore dropped here; the model's narration and final answer
+                // still stream. Documented limitation.
+            }
             StreamPart::TextStart { .. }
             | StreamPart::TextEnd { .. }
             | StreamPart::ReasoningStart { .. }

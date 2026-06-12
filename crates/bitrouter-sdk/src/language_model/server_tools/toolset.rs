@@ -32,6 +32,13 @@ pub trait RouterToolset: Send + Sync {
 
     /// Whether this set owns `name`.
     fn owns(&self, name: &str) -> bool;
+
+    /// The MCP server backing this set, when applicable. Lets the loop label a
+    /// router tool call with its server so a framing encoder can reproduce the
+    /// native `mcp_tool_use` block. Default `None` (e.g. an in-process set).
+    fn server_name(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Composes several [`RouterToolset`]s: aggregates their advertised tools and

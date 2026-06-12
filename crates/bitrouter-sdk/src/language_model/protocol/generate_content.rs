@@ -1475,6 +1475,17 @@ impl StreamEncoder for GenerateContentStreamEncoder {
                     "candidates": [{ "content": { "role": "model", "parts": [file_part] } }]
                 }));
             }
+            // Generate Content has no server-tool / MCP stream form; emitting a
+            // functionCall/functionResponse here would look to the client like a
+            // pending call it must answer. Router-executed tool activity is
+            // dropped on this wire (the model's narration + final answer still
+            // stream); flush any buffered ordinary tool call first. Documented
+            // limitation.
+            StreamPart::ServerToolCall { .. } | StreamPart::ServerToolResult { .. } => {
+                if let Some(c) = self.flush_pending_tool() {
+                    chunks.push(c);
+                }
+            }
             StreamPart::TextDelta { text } => {
                 if let Some(c) = self.flush_pending_tool() {
                     chunks.push(c);

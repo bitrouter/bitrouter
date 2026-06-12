@@ -201,6 +201,10 @@ impl RouterToolset for McpRouterToolset {
             .lock()
             .is_ok_and(|advertised| advertised.contains(name))
     }
+
+    fn server_name(&self) -> Option<&str> {
+        Some(&self.server_name)
+    }
 }
 
 #[cfg(test)]

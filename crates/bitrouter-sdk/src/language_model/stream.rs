@@ -97,6 +97,9 @@ impl StreamInterest {
             // No hook subscribes to source (citation) parts; they pass through
             // unfiltered, exactly like file parts.
             StreamPart::Source { .. } => 0,
+            // Server-tool activity (router-executed calls + results) carries no
+            // assistant text and gates no hook; passes through unfiltered.
+            StreamPart::ServerToolCall { .. } | StreamPart::ServerToolResult { .. } => 0,
             StreamPart::ResponseStarted { .. } => Self::RESPONSE_STARTED,
             // `ResponseCompleted` is a terminal part — a hook interested in
             // `Finish` is, by construction, also interested in it.
