@@ -1,10 +1,12 @@
 //! [`ServerToolLoop`] — the non-streaming controller. It injects router tools
 //! into a working prompt, then drives upstream turns through a caller-supplied
-//! closure, executing router-owned tool calls and looping until the model
-//! stops calling them or a bound is hit.
+//! [`UpstreamTurn`], executing router-owned tool calls and looping until the
+//! model stops calling them or a bound is hit.
 
 use std::sync::Arc;
 use std::time::Instant;
+
+use async_trait::async_trait;
 
 use super::approval::ApprovalPolicy;
 use super::classify::{RouterCall, TurnDisposition, classify_turn};
@@ -16,6 +18,16 @@ use crate::language_model::types::{
     Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role,
     ToolResultOutput, Usage,
 };
+
+/// One upstream turn for a working prompt — the loop's callback into the
+/// pipeline's `execute_with_fallback`. A trait (rather than a closure) so the
+/// resulting future has a concrete, `Send` type when the pipeline spawns the
+/// request.
+#[async_trait]
+pub trait UpstreamTurn: Send + Sync {
+    /// Run one upstream turn for `prompt`.
+    async fn run(&self, prompt: &Prompt) -> Result<ExecutionResult>;
+}
 
 /// Drives the server-side tool loop over a [`ToolsetRegistry`].
 pub struct ServerToolLoop {
@@ -38,23 +50,20 @@ impl ServerToolLoop {
         }
     }
 
-    /// Run the loop. `run_upstream` performs one upstream turn (with fallback)
-    /// for a working prompt; the loop owns the working prompt, injects router
-    /// tools into it, appends assistant + tool-result turns between iterations,
-    /// and accumulates usage across iterations.
+    /// Run the loop. `upstream` performs one upstream turn (with fallback) for a
+    /// working prompt; the loop owns the working prompt, injects router tools
+    /// into it, appends assistant + tool-result turns between iterations, and
+    /// accumulates usage across iterations.
     ///
     /// Returns the final upstream [`ExecutionResult`] (its `usage` replaced by
     /// the accumulated total). On reaching a bound, the result carries a
     /// truncation finish reason.
-    pub async fn run<F>(
+    pub async fn run(
         &self,
         base: &Prompt,
         caller: &CallerContext,
-        mut run_upstream: F,
-    ) -> Result<ExecutionResult>
-    where
-        F: AsyncFnMut(&Prompt) -> Result<ExecutionResult>,
-    {
+        upstream: &dyn UpstreamTurn,
+    ) -> Result<ExecutionResult> {
         let (injected, owned) = self.registry.list_all(caller).await?;
         let mut working = base.clone();
         for tool in &injected {
@@ -74,7 +83,7 @@ impl ServerToolLoop {
         let mut rounds = 0u32;
 
         loop {
-            let mut result = run_upstream(&working).await?;
+            let mut result = upstream.run(&working).await?;
             if let Some(usage) = &result.result.usage {
                 add_usage(&mut total, usage);
                 had_usage = true;
@@ -201,8 +210,8 @@ mod tests {
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::toolset::RouterToolset;
     use crate::language_model::types::{GenerateResult, Tool};
-    use async_trait::async_trait;
-    use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
 
     struct MockToolset {
         names: Vec<String>,
@@ -240,6 +249,32 @@ mod tests {
         }
         fn owns(&self, name: &str) -> bool {
             self.names.iter().any(|n| n == name)
+        }
+    }
+
+    /// Replays canned upstream results, recording each working prompt it saw.
+    struct ScriptedUpstream {
+        responses: Mutex<VecDeque<ExecutionResult>>,
+        seen: Mutex<Vec<Prompt>>,
+    }
+
+    impl ScriptedUpstream {
+        fn new(responses: Vec<ExecutionResult>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into()),
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+        fn seen(&self) -> Vec<Prompt> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl UpstreamTurn for ScriptedUpstream {
+        async fn run(&self, prompt: &Prompt) -> Result<ExecutionResult> {
+            self.seen.lock().unwrap().push(prompt.clone());
+            Ok(self.responses.lock().unwrap().pop_front().unwrap())
         }
     }
 
@@ -314,26 +349,25 @@ mod tests {
     #[tokio::test]
     async fn executes_router_call_then_returns_text() {
         let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default());
-        let calls = AtomicU32::new(0);
+        let upstream = ScriptedUpstream::new(vec![
+            exec(vec![tool_call("search")]),
+            exec(vec![text("the answer")]),
+        ]);
         let result = loop_
-            .run(
-                &base_prompt(),
-                &CallerContext::local(),
-                async |p: &Prompt| {
-                    let n = calls.fetch_add(1, SeqCst);
-                    assert!(p.tools.iter().any(|t| t.name() == "search"));
-                    Ok(if n == 0 {
-                        exec(vec![tool_call("search")])
-                    } else {
-                        // The tool result turn must be present on the second call.
-                        assert!(p.messages.iter().any(|m| matches!(m.role, Role::Tool)));
-                        exec(vec![text("the answer")])
-                    })
-                },
-            )
+            .run(&base_prompt(), &CallerContext::local(), &upstream)
             .await
             .unwrap();
-        assert_eq!(calls.load(SeqCst), 2);
+        let seen = upstream.seen();
+        assert_eq!(seen.len(), 2);
+        // The injected router tool is on the outbound prompt...
+        assert!(seen[0].tools.iter().any(|t| t.name() == "search"));
+        // ...and the tool-result turn is present on the second call.
+        assert!(
+            seen[1]
+                .messages
+                .iter()
+                .any(|m| matches!(m.role, Role::Tool))
+        );
         assert!(
             matches!(&result.result.content[0], Content::Text { text, .. } if text == "the answer")
         );
@@ -344,19 +378,15 @@ mod tests {
     #[tokio::test]
     async fn hands_back_a_mixed_turn_without_executing() {
         let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default());
-        let calls = AtomicU32::new(0);
+        let upstream = ScriptedUpstream::new(vec![exec(vec![
+            tool_call("search"),
+            tool_call("client_fn"),
+        ])]);
         let result = loop_
-            .run(
-                &base_prompt(),
-                &CallerContext::local(),
-                async |_p: &Prompt| {
-                    calls.fetch_add(1, SeqCst);
-                    Ok(exec(vec![tool_call("search"), tool_call("client_fn")]))
-                },
-            )
+            .run(&base_prompt(), &CallerContext::local(), &upstream)
             .await
             .unwrap();
-        assert_eq!(calls.load(SeqCst), 1);
+        assert_eq!(upstream.seen().len(), 1);
         assert!(matches!(
             &result.result.content[0],
             Content::ToolCall { .. }
@@ -366,32 +396,28 @@ mod tests {
     #[tokio::test]
     async fn tool_error_is_fed_back_and_loop_continues() {
         let loop_ = loop_with(&["search"], true, ServerToolLoopConfig::default());
-        let calls = AtomicU32::new(0);
+        let upstream = ScriptedUpstream::new(vec![
+            exec(vec![tool_call("search")]),
+            exec(vec![text("recovered")]),
+        ]);
         let result = loop_
-            .run(
-                &base_prompt(),
-                &CallerContext::local(),
-                async |p: &Prompt| {
-                    let n = calls.fetch_add(1, SeqCst);
-                    Ok(if n == 0 {
-                        exec(vec![tool_call("search")])
-                    } else {
-                        // The fed-back tool result must be an error.
-                        let tool_msg = p.messages.iter().find(|m| matches!(m.role, Role::Tool));
-                        assert!(matches!(
-                            tool_msg.and_then(|m| m.content.first()),
-                            Some(Content::ToolResult {
-                                output: ToolResultOutput::ErrorText { .. },
-                                ..
-                            })
-                        ));
-                        exec(vec![text("recovered")])
-                    })
-                },
-            )
+            .run(&base_prompt(), &CallerContext::local(), &upstream)
             .await
             .unwrap();
-        assert_eq!(calls.load(SeqCst), 2);
+        let seen = upstream.seen();
+        assert_eq!(seen.len(), 2);
+        // The fed-back tool result is an error block.
+        let tool_msg = seen[1]
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, Role::Tool));
+        assert!(matches!(
+            tool_msg.and_then(|m| m.content.first()),
+            Some(Content::ToolResult {
+                output: ToolResultOutput::ErrorText { .. },
+                ..
+            })
+        ));
         assert!(
             matches!(&result.result.content[0], Content::Text { text, .. } if text == "recovered")
         );
@@ -404,20 +430,16 @@ mod tests {
             ..Default::default()
         };
         let loop_ = loop_with(&["search"], false, config);
-        let calls = AtomicU32::new(0);
+        let upstream = ScriptedUpstream::new(vec![
+            exec(vec![tool_call("search")]),
+            exec(vec![tool_call("search")]),
+        ]);
         let result = loop_
-            .run(
-                &base_prompt(),
-                &CallerContext::local(),
-                async |_p: &Prompt| {
-                    calls.fetch_add(1, SeqCst);
-                    Ok(exec(vec![tool_call("search")]))
-                },
-            )
+            .run(&base_prompt(), &CallerContext::local(), &upstream)
             .await
             .unwrap();
         // round 0 executes (rounds 0 < 1), round 1 hits the cap.
-        assert_eq!(calls.load(SeqCst), 2);
+        assert_eq!(upstream.seen().len(), 2);
         assert_eq!(
             result.result.finish_reason,
             Some(FinishReason::Other("max_tool_iterations".to_string()))
