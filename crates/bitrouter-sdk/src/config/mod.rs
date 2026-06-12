@@ -63,6 +63,10 @@ pub struct Config {
     /// `POST /mcp/{id}` and what the `mcp` pipeline's routing table looks up.
     /// Empty by default — when empty, the binary does not mount the MCP route.
     pub mcp_servers: HashMap<String, crate::mcp::transport::McpServerConfig>,
+    /// Server-side tool loop: MCP server ids whose tools BitRouter injects into
+    /// LLM requests and executes itself. Empty by default — the pipeline stays
+    /// single-shot.
+    pub server_tools: crate::language_model::server_tools::config::ServerToolsConfig,
     /// Upstream ACP agents, keyed by agent id. Looked up by the `acp`
     /// pipeline's routing table; the `bitrouter agent-proxy <id>` CLI
     /// dispatches against this. Empty by default.
@@ -83,6 +87,7 @@ impl Default for Config {
             plugins: HashMap::new(),
             mcp: McpConfig::default(),
             mcp_servers: HashMap::new(),
+            server_tools: Default::default(),
             agents: HashMap::new(),
             inherit_defaults: true,
         }

@@ -156,6 +156,18 @@ mcp_servers:
 
 Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect with `bitrouter tools list` / `bitrouter tools status` / `bitrouter tools discover <name>`.
 
+## Server tools (router-executed)
+
+Attach an MCP server's tools to LLM requests: BitRouter advertises them to the model, executes the model's calls to them itself, and loops until the model stops calling them — all inside one client response. The named servers must also be declared under `mcp_servers:` above.
+
+```yaml
+server_tools:
+  mcp_servers: [ctx7, git]   # ids from mcp_servers: above
+  max_iterations: 10         # optional; max tool rounds per request (default 10)
+```
+
+Tool names are prefixed (`<name>__<tool>`, or the server's `tool_prefix`) so they can't collide with the caller's own tools. Empty/unset leaves the pipeline single-shot. This is the inverse of `bitrouter mcp serve` (which makes BitRouter an MCP *server*): here BitRouter is an MCP *client* consuming those tools inside the request loop.
+
 ## ACP agents
 
 ```yaml
