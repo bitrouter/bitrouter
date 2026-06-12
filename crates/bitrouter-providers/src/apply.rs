@@ -8,7 +8,7 @@
 //! Opt-out: set `inherit_defaults: false` at the top level of the config.
 
 use bitrouter_sdk::config::{Config, Pattern, PatternMap, ProviderConfig};
-use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
+use bitrouter_sdk::language_model::types::ProtocolList;
 
 use crate::builtin;
 use crate::entry::ProtocolMapping;
@@ -161,6 +161,7 @@ mod tests {
     use std::env;
 
     use bitrouter_sdk::config::{Config, ProviderConfig};
+    use bitrouter_sdk::language_model::types::ApiProtocol;
 
     /// Mutating `std::env` in tests is sketchy (it's process-global), so we
     /// run env-var cases serially under a `Mutex` and always set/unset in a
