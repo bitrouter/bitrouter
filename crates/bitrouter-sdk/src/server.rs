@@ -602,6 +602,10 @@ async fn handle(
     };
     let mut req = PipelineRequest::new(prompt.model.clone(), caller, prompt.clone());
     req.headers = headers;
+    // Carry the inbound wire protocol so route resolution can prefer a native,
+    // same-protocol upstream — a faithful round-trip instead of a lossy
+    // cross-protocol translation.
+    req.inbound_protocol = Some(inbound.clone());
 
     if prompt.stream {
         stream_response(

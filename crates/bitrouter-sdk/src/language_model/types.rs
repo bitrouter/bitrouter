@@ -1773,6 +1773,12 @@ pub struct PipelineRequest {
     pub headers: http::HeaderMap,
     /// The canonical request body.
     pub prompt: Prompt,
+    /// The wire protocol the request arrived on, when known — set by the HTTP
+    /// server from the endpoint that was hit. Lets the router prefer a
+    /// same-protocol (native) upstream so a faithful round-trip replaces a
+    /// lossy cross-protocol translation. `None` for callers that build a
+    /// request directly (no native preference is then applied).
+    pub inbound_protocol: Option<ApiProtocol>,
 }
 
 impl PipelineRequest {
@@ -1785,6 +1791,7 @@ impl PipelineRequest {
             caller,
             headers: http::HeaderMap::new(),
             prompt,
+            inbound_protocol: None,
         }
     }
 }

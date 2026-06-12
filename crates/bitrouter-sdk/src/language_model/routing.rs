@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::hooks::FallbackDecision;
-use crate::language_model::types::{Capability, RoutingTarget};
+use crate::language_model::types::{ApiProtocol, Capability, RoutingTarget};
 
 /// How a cascade chain should be ordered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -48,6 +48,13 @@ pub struct RoutingPrefs {
     /// [`Prompt::required_capabilities`](crate::language_model::Prompt::required_capabilities).
     /// Empty (the default) imposes no capability constraint.
     pub require_capabilities: Vec<Capability>,
+    /// The inbound wire protocol the request arrived on, if known. A
+    /// protocol-native [`RoutingTable`] prefers, for each chosen target, the
+    /// protocol matching this when the upstream supports it (a faithful
+    /// same-protocol round-trip), otherwise the provider's configured default.
+    /// `None` imposes no native preference. Set by the pipeline from
+    /// [`PipelineContext::inbound_protocol`](crate::language_model::PipelineContext::inbound_protocol).
+    pub inbound_protocol: Option<ApiProtocol>,
 }
 
 /// Summary of a routable model, for `GET /v1/models`.

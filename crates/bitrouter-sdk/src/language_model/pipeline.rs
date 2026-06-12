@@ -334,6 +334,9 @@ impl Pipeline {
         // requests, so those route unchanged.
         let prefs = RoutingPrefs {
             require_capabilities: ctx.prompt().required_capabilities(),
+            // Carry the inbound protocol so the table can prefer a native,
+            // same-protocol upstream for each chosen target.
+            inbound_protocol: ctx.inbound_protocol(),
             ..RoutingPrefs::default()
         };
         let mut chain = self

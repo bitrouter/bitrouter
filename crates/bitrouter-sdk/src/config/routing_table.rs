@@ -18,7 +18,7 @@ use crate::caller::CallerContext;
 use crate::config::{Config, presets::resolve_presets};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
-use crate::language_model::types::RoutingTarget;
+use crate::language_model::types::{ApiProtocol, RoutingTarget};
 
 /// A `RoutingTable` over an in-memory `bitrouter.yaml` config. Reloadable.
 pub struct ConfigRoutingTable {
@@ -100,13 +100,26 @@ fn build_targets(
     provider_id: &str,
     provider: &crate::config::ProviderConfig,
     model_id: &str,
+    inbound: Option<&ApiProtocol>,
 ) -> Vec<RoutingTarget> {
-    let protocol = provider.protocol_for(model_id);
+    // Protocol-native routing: prefer the inbound protocol when this upstream
+    // supports it (a faithful same-protocol round-trip), else the provider's
+    // configured default head.
+    let protocol = select_protocol(&provider.protocols_for(model_id), inbound);
+    // A per-protocol endpoint override lets one provider serve different
+    // protocols at different paths (e.g. OpenAI under `/v1`, Anthropic Messages
+    // under `/anthropic`). It applies to the provider base, not to an account
+    // that pins its own host.
+    let protocol_base = provider.endpoint_for(&protocol);
+
     if provider.accounts.is_empty() {
+        let api_base = protocol_base
+            .map(str::to_string)
+            .unwrap_or_else(|| provider.api_base.clone());
         return vec![RoutingTarget {
             provider_name: provider_id.to_string(),
             service_id: model_id.to_string(),
-            api_base: provider.api_base.clone(),
+            api_base,
             api_key: provider.api_key.clone(),
             api_protocol: protocol,
             account_label: None,
@@ -130,10 +143,15 @@ fn build_targets(
             } else {
                 account.label.clone()
             };
-            let api_base = if account.api_base.is_empty() {
-                provider.api_base.clone()
-            } else {
+            // An account that pins its own base keeps it (multi-region /
+            // multi-org); otherwise the per-protocol endpoint, else the
+            // provider base.
+            let api_base = if !account.api_base.is_empty() {
                 account.api_base.clone()
+            } else {
+                protocol_base
+                    .map(str::to_string)
+                    .unwrap_or_else(|| provider.api_base.clone())
             };
             RoutingTarget {
                 provider_name: provider_id.to_string(),
@@ -148,6 +166,23 @@ fn build_targets(
             }
         })
         .collect()
+}
+
+/// Pick the wire protocol for a target: the inbound protocol when the upstream
+/// supports it (native — a faithful same-protocol round-trip), else the
+/// provider's preferred head. `protocols` is non-empty —
+/// [`ProviderConfig::protocols_for`](crate::config::ProviderConfig::protocols_for)
+/// always yields at least one.
+fn select_protocol(protocols: &[ApiProtocol], inbound: Option<&ApiProtocol>) -> ApiProtocol {
+    if let Some(p) = inbound
+        && protocols.contains(p)
+    {
+        return p.clone();
+    }
+    protocols
+        .first()
+        .cloned()
+        .unwrap_or(ApiProtocol::ChatCompletions)
 }
 
 /// The rotation offset in `0..n` for a `balance` provider's next
@@ -233,7 +268,12 @@ fn resolve_virtual_model(
         }
         endpoints.push((
             endpoint.provider.clone(),
-            build_targets(&endpoint.provider, provider, &endpoint.service_id),
+            build_targets(
+                &endpoint.provider,
+                provider,
+                &endpoint.service_id,
+                prefs.inbound_protocol.as_ref(),
+            ),
         ));
     }
 
@@ -278,7 +318,12 @@ pub fn resolve_route_chain(
         && let Some(provider) = config.providers.get(provider_id)
         && provider.active
     {
-        return Ok(build_targets(provider_id, provider, model_id));
+        return Ok(build_targets(
+            provider_id,
+            provider,
+            model_id,
+            prefs.inbound_protocol.as_ref(),
+        ));
     }
 
     // ---- Strategy 2: explicit virtual model ----
@@ -306,7 +351,12 @@ pub fn resolve_route_chain(
         if provider.models.iter().any(|m| m.id == clean) {
             chain.push((
                 provider_id.clone(),
-                build_targets(provider_id, provider, &clean),
+                build_targets(
+                    provider_id,
+                    provider,
+                    &clean,
+                    prefs.inbound_protocol.as_ref(),
+                ),
             ));
         }
     }
@@ -321,9 +371,25 @@ pub fn resolve_route_chain(
     // Order the cascade. `Latency` / `Cost` have no metrics source yet, so
     // they fall back to the alphabetical initial sort. Account-expanded
     // targets within one provider keep their build order.
+    //
+    // Native-protocol preference is a *tie-break only*: a stable secondary key
+    // ranking providers that already serve the inbound protocol natively ahead
+    // of those that would translate — but only among candidates the primary
+    // order ranks equal. Today the primary key (provider id) is total, so this
+    // never reorders; it becomes load-bearing once cost/latency scoring (which
+    // can tie) replaces the alphabetical fallback. It never overrides the
+    // primary order, so cost/latency stays authoritative.
+    let inbound = prefs.inbound_protocol.as_ref();
+    let serves_inbound_natively = |targets: &[RoutingTarget]| -> bool {
+        matches!(inbound, Some(p) if targets.first().is_some_and(|t| &t.api_protocol == p))
+    };
     match prefs.sort {
         SortOrder::Alphabetical | SortOrder::Latency | SortOrder::Cost => {
-            chain.sort_by(|a, b| a.0.cmp(&b.0));
+            chain.sort_by(|a, b| {
+                // native-capable (true) sorts first → compare b against a.
+                a.0.cmp(&b.0)
+                    .then_with(|| serves_inbound_natively(&b.1).cmp(&serves_inbound_natively(&a.1)))
+            });
         }
     }
     Ok(chain.into_iter().flat_map(|(_, t)| t).collect())
@@ -435,6 +501,11 @@ fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
         if !base.ignore.contains(p) {
             base.ignore.push(p.clone());
         }
+    }
+    // The inbound protocol is a per-request fact set by the pipeline (not a
+    // preset knob); carry it so target construction can route natively.
+    if extra.inbound_protocol.is_some() {
+        base.inbound_protocol = extra.inbound_protocol.clone();
     }
 }
 
@@ -976,5 +1047,123 @@ providers:
         assert_eq!(chain[2].provider_name, "zeta");
         assert_eq!(chain[1].api_key, "z1");
         assert_eq!(chain[2].api_key, "z2");
+    }
+
+    // ===== protocol-native routing =====
+
+    // Case 1: one provider serving its model over several protocols, with a
+    // per-protocol endpoint for the Anthropic Messages path.
+    const MULTI_PROTOCOL: &str = r#"
+providers:
+  minimax:
+    api_base: https://api.minimax.io/v1
+    api_key: k-mm
+    api_protocol:
+      - "*": [chat_completions, responses, messages]
+    protocol_endpoints:
+      messages: https://api.minimax.io/anthropic/v1
+    models: [{ id: MiniMax-M2 }]
+"#;
+
+    /// Routing prefs carrying an inbound protocol, the rest default.
+    fn prefs_inbound(p: ApiProtocol) -> RoutingPrefs {
+        RoutingPrefs {
+            inbound_protocol: Some(p),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn native_routing_picks_inbound_protocol_over_per_protocol_endpoint() {
+        // Inbound Messages → the upstream supports it → route Messages
+        // natively, over the per-protocol /anthropic endpoint.
+        let t = table(MULTI_PROTOCOL);
+        let chain = t
+            .route_chain(
+                "minimax:MiniMax-M2",
+                &prefs_inbound(ApiProtocol::Messages),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].api_protocol, ApiProtocol::Messages);
+        assert_eq!(chain[0].api_base, "https://api.minimax.io/anthropic/v1");
+    }
+
+    #[tokio::test]
+    async fn native_routing_picks_supported_non_head_protocol() {
+        // Inbound Responses is supported but not the head; native preference
+        // still selects it, at the provider's default base (no endpoint set).
+        let t = table(MULTI_PROTOCOL);
+        let chain = t
+            .route_chain(
+                "minimax:MiniMax-M2",
+                &prefs_inbound(ApiProtocol::Responses),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain[0].api_protocol, ApiProtocol::Responses);
+        assert_eq!(chain[0].api_base, "https://api.minimax.io/v1");
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_default_head_when_inbound_unsupported() {
+        // GenerateContent isn't in the set → fall back to the preferred head
+        // (chat_completions), at the default base.
+        let t = table(MULTI_PROTOCOL);
+        let chain = t
+            .route_chain(
+                "minimax:MiniMax-M2",
+                &prefs_inbound(ApiProtocol::GenerateContent),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain[0].api_protocol, ApiProtocol::ChatCompletions);
+        assert_eq!(chain[0].api_base, "https://api.minimax.io/v1");
+    }
+
+    #[tokio::test]
+    async fn no_inbound_protocol_uses_default_head() {
+        // Today's default path: no inbound protocol → the preferred head at the
+        // provider base. Guards the backward-compatible behaviour.
+        let t = table(MULTI_PROTOCOL);
+        let chain = t
+            .route_chain(
+                "minimax:MiniMax-M2",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain[0].api_protocol, ApiProtocol::ChatCompletions);
+        assert_eq!(chain[0].api_base, "https://api.minimax.io/v1");
+    }
+
+    #[tokio::test]
+    async fn native_preference_does_not_reorder_the_cascade() {
+        // `shared-model` is served by anthropic (messages-native, by host
+        // inference) and openai (chat). Even with inbound Messages, the primary
+        // alphabetical order is authoritative — anthropic, then openai — proving
+        // native preference is a tie-break that never changes which upstream is
+        // chosen. Each target still gets its own per-target protocol.
+        let t = table(PROVIDERS);
+        let chain = t
+            .route_chain(
+                "shared-model",
+                &prefs_inbound(ApiProtocol::Messages),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].provider_name, "anthropic");
+        assert_eq!(chain[1].provider_name, "openai");
+        // anthropic serves Messages natively; openai (host-inferred chat) does
+        // not support Messages → its configured head.
+        assert_eq!(chain[0].api_protocol, ApiProtocol::Messages);
+        assert_eq!(chain[1].api_protocol, ApiProtocol::ChatCompletions);
     }
 }
