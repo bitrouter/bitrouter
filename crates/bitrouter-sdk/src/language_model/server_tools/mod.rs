@@ -16,4 +16,5 @@
 //! downstream reaches types directly (e.g. `server_tools::toolset::RouterToolset`).
 
 pub mod classify;
+pub mod mcp_toolset;
 pub mod toolset;
