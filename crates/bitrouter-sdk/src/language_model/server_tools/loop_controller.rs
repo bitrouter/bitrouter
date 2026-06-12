@@ -1,0 +1,426 @@
+//! [`ServerToolLoop`] — the non-streaming controller. It injects router tools
+//! into a working prompt, then drives upstream turns through a caller-supplied
+//! closure, executing router-owned tool calls and looping until the model
+//! stops calling them or a bound is hit.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use super::approval::ApprovalPolicy;
+use super::classify::{RouterCall, TurnDisposition, classify_turn};
+use super::config::ServerToolLoopConfig;
+use super::toolset::ToolsetRegistry;
+use crate::caller::CallerContext;
+use crate::error::{BitrouterError, Result};
+use crate::language_model::types::{
+    Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role,
+    ToolResultOutput, Usage,
+};
+
+/// Drives the server-side tool loop over a [`ToolsetRegistry`].
+pub struct ServerToolLoop {
+    registry: ToolsetRegistry,
+    config: ServerToolLoopConfig,
+    approval: Arc<dyn ApprovalPolicy>,
+}
+
+impl ServerToolLoop {
+    /// Build a loop over `registry`, bounded by `config`, gated by `approval`.
+    pub fn new(
+        registry: ToolsetRegistry,
+        config: ServerToolLoopConfig,
+        approval: Arc<dyn ApprovalPolicy>,
+    ) -> Self {
+        Self {
+            registry,
+            config,
+            approval,
+        }
+    }
+
+    /// Run the loop. `run_upstream` performs one upstream turn (with fallback)
+    /// for a working prompt; the loop owns the working prompt, injects router
+    /// tools into it, appends assistant + tool-result turns between iterations,
+    /// and accumulates usage across iterations.
+    ///
+    /// Returns the final upstream [`ExecutionResult`] (its `usage` replaced by
+    /// the accumulated total). On reaching a bound, the result carries a
+    /// truncation finish reason.
+    pub async fn run<F>(
+        &self,
+        base: &Prompt,
+        caller: &CallerContext,
+        mut run_upstream: F,
+    ) -> Result<ExecutionResult>
+    where
+        F: AsyncFnMut(&Prompt) -> Result<ExecutionResult>,
+    {
+        let (injected, owned) = self.registry.list_all(caller).await?;
+        let mut working = base.clone();
+        for tool in &injected {
+            if working.tools.iter().any(|t| t.name() == tool.name()) {
+                return Err(BitrouterError::Internal(format!(
+                    "router tool name collides with a caller tool: {}",
+                    tool.name()
+                )));
+            }
+        }
+        working.tools.extend(injected);
+
+        let mut total = Usage::default();
+        let mut had_usage = false;
+        let start = Instant::now();
+        let mut consecutive_errors = 0u32;
+        let mut rounds = 0u32;
+
+        loop {
+            let mut result = run_upstream(&working).await?;
+            if let Some(usage) = &result.result.usage {
+                add_usage(&mut total, usage);
+                had_usage = true;
+            }
+
+            match classify_turn(&result.result.content, &owned) {
+                TurnDisposition::Done | TurnDisposition::HandBack => {
+                    if had_usage {
+                        result.result.usage = Some(total);
+                    }
+                    return Ok(result);
+                }
+                TurnDisposition::Execute(calls) => {
+                    if rounds >= self.config.max_iterations
+                        || start.elapsed() >= self.config.total_budget
+                    {
+                        return Ok(truncate(result, total, had_usage, "max_tool_iterations"));
+                    }
+                    let (tool_results, had_error) = self.execute_calls(&calls, caller).await;
+                    consecutive_errors = if had_error { consecutive_errors + 1 } else { 0 };
+                    append_turn(&mut working, result.result.content.clone(), tool_results);
+                    rounds += 1;
+                    if consecutive_errors >= self.config.max_consecutive_errors {
+                        return Ok(truncate(result, total, had_usage, "tool_errors"));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Execute each router-owned call, returning the tool-result content blocks
+    /// and whether any call produced an error.
+    async fn execute_calls(
+        &self,
+        calls: &[RouterCall],
+        caller: &CallerContext,
+    ) -> (Vec<Content>, bool) {
+        let mut results = Vec::with_capacity(calls.len());
+        let mut had_error = false;
+        for call in calls {
+            let output = if !self.approval.allow(call, caller).await {
+                ToolResultOutput::ExecutionDenied {
+                    reason: Some("denied by approval policy".to_string()),
+                }
+            } else if let Some(set) = self.registry.resolve(&call.name) {
+                match tokio::time::timeout(
+                    self.config.tool_timeout,
+                    set.call_tool(&call.name, &call.arguments, caller),
+                )
+                .await
+                {
+                    Ok(Ok(out)) => out,
+                    Ok(Err(err)) => {
+                        had_error = true;
+                        ToolResultOutput::ErrorText {
+                            value: err.to_string(),
+                        }
+                    }
+                    Err(_) => {
+                        had_error = true;
+                        ToolResultOutput::ErrorText {
+                            value: format!("tool '{}' timed out", call.name),
+                        }
+                    }
+                }
+            } else {
+                had_error = true;
+                ToolResultOutput::ErrorText {
+                    value: format!("no toolset owns '{}'", call.name),
+                }
+            };
+            results.push(Content::ToolResult {
+                call_id: call.id.clone(),
+                tool_name: Some(call.name.clone()),
+                output,
+                dynamic: false,
+                provider_metadata: ProviderMetadata::new(),
+            });
+        }
+        (results, had_error)
+    }
+}
+
+/// Append the model's tool-call turn and the tool-result turn to the working
+/// prompt so the next upstream call sees the results.
+fn append_turn(working: &mut Prompt, assistant_content: Vec<Content>, tool_results: Vec<Content>) {
+    working.messages.push(Message {
+        role: Role::Assistant,
+        content: assistant_content,
+    });
+    working.messages.push(Message {
+        role: Role::Tool,
+        content: tool_results,
+    });
+}
+
+/// Sum the per-iteration usage into the running total.
+fn add_usage(total: &mut Usage, add: &Usage) {
+    total.prompt_tokens += add.prompt_tokens;
+    total.completion_tokens += add.completion_tokens;
+    total.reasoning_tokens += add.reasoning_tokens;
+    total.cache_read_tokens += add.cache_read_tokens;
+    total.cache_write_tokens += add.cache_write_tokens;
+}
+
+/// Finish a bounded loop: replace usage with the accumulated total and set a
+/// truncation finish reason.
+fn truncate(
+    mut result: ExecutionResult,
+    total: Usage,
+    had_usage: bool,
+    reason: &str,
+) -> ExecutionResult {
+    if had_usage {
+        result.result.usage = Some(total);
+    }
+    result.result.finish_reason = Some(FinishReason::Other(reason.to_string()));
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::language_model::server_tools::approval::AllowAll;
+    use crate::language_model::server_tools::toolset::RouterToolset;
+    use crate::language_model::types::{GenerateResult, Tool};
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
+
+    struct MockToolset {
+        names: Vec<String>,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl RouterToolset for MockToolset {
+        async fn list_tools(&self, _caller: &CallerContext) -> Result<Vec<Tool>> {
+            Ok(self
+                .names
+                .iter()
+                .map(|n| Tool::Function {
+                    name: n.clone(),
+                    description: None,
+                    parameters: serde_json::json!({ "type": "object" }),
+                    strict: None,
+                    provider_metadata: ProviderMetadata::new(),
+                })
+                .collect())
+        }
+        async fn call_tool(
+            &self,
+            name: &str,
+            _arguments: &str,
+            _caller: &CallerContext,
+        ) -> Result<ToolResultOutput> {
+            if self.fail {
+                Err(BitrouterError::Internal(format!("{name} boom")))
+            } else {
+                Ok(ToolResultOutput::Text {
+                    value: format!("ran {name}"),
+                })
+            }
+        }
+        fn owns(&self, name: &str) -> bool {
+            self.names.iter().any(|n| n == name)
+        }
+    }
+
+    fn loop_with(names: &[&str], fail: bool, config: ServerToolLoopConfig) -> ServerToolLoop {
+        let toolset = Arc::new(MockToolset {
+            names: names.iter().map(|s| s.to_string()).collect(),
+            fail,
+        });
+        ServerToolLoop::new(
+            ToolsetRegistry::new(vec![toolset]),
+            config,
+            Arc::new(AllowAll),
+        )
+    }
+
+    fn base_prompt() -> Prompt {
+        Prompt {
+            model: "m".to_string(),
+            system: None,
+            system_provider_metadata: ProviderMetadata::new(),
+            messages: vec![Message::text(Role::User, "hi")],
+            tools: Vec::new(),
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
+
+    fn exec(content: Vec<Content>) -> ExecutionResult {
+        ExecutionResult {
+            provider_id: "p".to_string(),
+            model_id: "m".to_string(),
+            account_label: None,
+            result: GenerateResult {
+                content,
+                usage: Some(Usage {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                    reasoning_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
+                }),
+                finish_reason: Some(FinishReason::Stop),
+                response_id: None,
+                stop_details: None,
+                provider_metadata: ProviderMetadata::new(),
+            },
+            latency_ms: 0,
+            generation_time_ms: 0,
+        }
+    }
+
+    fn tool_call(name: &str) -> Content {
+        Content::ToolCall {
+            id: format!("{name}-1"),
+            name: name.to_string(),
+            arguments: "{}".to_string(),
+            provider_executed: false,
+            dynamic: false,
+            provider_metadata: ProviderMetadata::new(),
+        }
+    }
+
+    fn text(s: &str) -> Content {
+        Content::Text {
+            text: s.to_string(),
+            provider_metadata: ProviderMetadata::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn executes_router_call_then_returns_text() {
+        let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default());
+        let calls = AtomicU32::new(0);
+        let result = loop_
+            .run(
+                &base_prompt(),
+                &CallerContext::local(),
+                async |p: &Prompt| {
+                    let n = calls.fetch_add(1, SeqCst);
+                    assert!(p.tools.iter().any(|t| t.name() == "search"));
+                    Ok(if n == 0 {
+                        exec(vec![tool_call("search")])
+                    } else {
+                        // The tool result turn must be present on the second call.
+                        assert!(p.messages.iter().any(|m| matches!(m.role, Role::Tool)));
+                        exec(vec![text("the answer")])
+                    })
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(calls.load(SeqCst), 2);
+        assert!(
+            matches!(&result.result.content[0], Content::Text { text, .. } if text == "the answer")
+        );
+        // usage summed across the two iterations.
+        assert_eq!(result.result.usage.unwrap().prompt_tokens, 2);
+    }
+
+    #[tokio::test]
+    async fn hands_back_a_mixed_turn_without_executing() {
+        let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default());
+        let calls = AtomicU32::new(0);
+        let result = loop_
+            .run(
+                &base_prompt(),
+                &CallerContext::local(),
+                async |_p: &Prompt| {
+                    calls.fetch_add(1, SeqCst);
+                    Ok(exec(vec![tool_call("search"), tool_call("client_fn")]))
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(calls.load(SeqCst), 1);
+        assert!(matches!(
+            &result.result.content[0],
+            Content::ToolCall { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn tool_error_is_fed_back_and_loop_continues() {
+        let loop_ = loop_with(&["search"], true, ServerToolLoopConfig::default());
+        let calls = AtomicU32::new(0);
+        let result = loop_
+            .run(
+                &base_prompt(),
+                &CallerContext::local(),
+                async |p: &Prompt| {
+                    let n = calls.fetch_add(1, SeqCst);
+                    Ok(if n == 0 {
+                        exec(vec![tool_call("search")])
+                    } else {
+                        // The fed-back tool result must be an error.
+                        let tool_msg = p.messages.iter().find(|m| matches!(m.role, Role::Tool));
+                        assert!(matches!(
+                            tool_msg.and_then(|m| m.content.first()),
+                            Some(Content::ToolResult {
+                                output: ToolResultOutput::ErrorText { .. },
+                                ..
+                            })
+                        ));
+                        exec(vec![text("recovered")])
+                    })
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(calls.load(SeqCst), 2);
+        assert!(
+            matches!(&result.result.content[0], Content::Text { text, .. } if text == "recovered")
+        );
+    }
+
+    #[tokio::test]
+    async fn terminates_at_max_iterations() {
+        let config = ServerToolLoopConfig {
+            max_iterations: 1,
+            ..Default::default()
+        };
+        let loop_ = loop_with(&["search"], false, config);
+        let calls = AtomicU32::new(0);
+        let result = loop_
+            .run(
+                &base_prompt(),
+                &CallerContext::local(),
+                async |_p: &Prompt| {
+                    calls.fetch_add(1, SeqCst);
+                    Ok(exec(vec![tool_call("search")]))
+                },
+            )
+            .await
+            .unwrap();
+        // round 0 executes (rounds 0 < 1), round 1 hits the cap.
+        assert_eq!(calls.load(SeqCst), 2);
+        assert_eq!(
+            result.result.finish_reason,
+            Some(FinishReason::Other("max_tool_iterations".to_string()))
+        );
+    }
+}

@@ -15,6 +15,9 @@
 //! Per crate guideline 2, this module does not `pub use` from its submodules;
 //! downstream reaches types directly (e.g. `server_tools::toolset::RouterToolset`).
 
+pub mod approval;
 pub mod classify;
+pub mod config;
+pub mod loop_controller;
 pub mod mcp_toolset;
 pub mod toolset;
