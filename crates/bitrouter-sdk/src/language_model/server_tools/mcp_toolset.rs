@@ -1,5 +1,5 @@
-//! [`McpRouterToolset`] — a [`RouterToolset`](super::toolset::RouterToolset)
-//! backed by the [`crate::mcp`] routing module. BitRouter acts as an MCP
+//! [`McpRouterToolset`] — a [`RouterToolset`] backed by the [`crate::mcp`]
+//! routing module. BitRouter acts as an MCP
 //! *client*: it discovers an upstream MCP server's tools (`tools/list`),
 //! advertises them to the model, and executes the model's calls (`tools/call`)
 //! inside the LLM loop.
