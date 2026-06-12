@@ -500,6 +500,19 @@ mod tests {
         assert!(ctx.prompt().params.extra.is_empty());
     }
 
+    #[test]
+    fn inbound_protocol_threads_from_request_to_context() {
+        // The HTTP server stamps the inbound protocol on the request; the
+        // context exposes it to route resolution. `None` when unset.
+        let mut req = PipelineRequest::new("m", CallerContext::local(), empty_prompt());
+        assert_eq!(PipelineContext::new(req.clone()).inbound_protocol(), None);
+        req.inbound_protocol = Some(ApiProtocol::Messages);
+        assert_eq!(
+            PipelineContext::new(req).inbound_protocol(),
+            Some(ApiProtocol::Messages)
+        );
+    }
+
     fn prompt_with_text(system: Option<&str>, user_text: &str) -> Prompt {
         Prompt {
             model: "gpt-5".into(),

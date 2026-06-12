@@ -115,6 +115,21 @@ mod tests {
     }
 
     #[test]
+    fn openai_advertises_chat_and_responses() {
+        use bitrouter_sdk::language_model::types::ApiProtocol;
+        // OpenAI serves the same models over both Chat Completions and the
+        // Responses API at one base URL. Advertising the ordered set lets
+        // protocol-native routing honour an inbound Responses request without
+        // per-request config, while Chat Completions stays the preferred head
+        // (the default for any other inbound protocol).
+        let openai = find("openai").unwrap();
+        assert_eq!(
+            openai.api_protocol.resolve("gpt-5.5"),
+            Some(vec![ApiProtocol::ChatCompletions, ApiProtocol::Responses])
+        );
+    }
+
+    #[test]
     fn looks_up_by_id() {
         assert!(find("bitrouter").is_some());
         assert!(find("openai").is_some());

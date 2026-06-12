@@ -7,14 +7,17 @@
 # - https://platform.openai.com/docs/api-reference/introduction
 #   (base URL `https://api.openai.com/v1`)
 #
-# Default wire protocol: Chat Completions. The Responses API is also live and
-# accepts the same Bearer credential — operators select it per-request via
-# routing config (it shares this provider's auth and `api_base`).
+# Wire protocols: Chat Completions (the preferred default head) and Responses.
+# Both are live at this base URL and share the same Bearer credential, so the
+# provider advertises the ordered set. Protocol-native routing then serves an
+# inbound Responses request over Responses and an inbound Chat Completions
+# request over Chat — a faithful same-protocol round-trip — while the head stays
+# the default for any other inbound protocol.
 
 id = "openai"
 display_name = "OpenAI"
 api_base = "https://api.openai.com/v1"
-api_protocol = "chat_completions"
+api_protocol = ["chat_completions", "responses"]
 doc_url = "https://platform.openai.com/docs/api-reference"
 
 [auth]

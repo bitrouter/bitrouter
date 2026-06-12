@@ -232,7 +232,10 @@ mod tests {
         assert_eq!(p.api_base, "https://api.openai.com/v1");
         assert_eq!(
             p.api_protocol.resolve("gpt-4o"),
-            Some(&ProtocolList(vec![ApiProtocol::ChatCompletions]))
+            Some(&ProtocolList(vec![
+                ApiProtocol::ChatCompletions,
+                ApiProtocol::Responses
+            ]))
         );
     }
 
@@ -246,7 +249,10 @@ mod tests {
         assert_eq!(p.api_base, "https://gateway.internal.example/v1");
         assert_eq!(
             p.api_protocol.resolve("gpt-4o"),
-            Some(&ProtocolList(vec![ApiProtocol::ChatCompletions]))
+            Some(&ProtocolList(vec![
+                ApiProtocol::ChatCompletions,
+                ApiProtocol::Responses
+            ]))
         );
     }
 
