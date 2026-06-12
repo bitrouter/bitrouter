@@ -1166,4 +1166,113 @@ providers:
         assert_eq!(chain[0].api_protocol, ApiProtocol::Messages);
         assert_eq!(chain[1].api_protocol, ApiProtocol::ChatCompletions);
     }
+
+    #[tokio::test]
+    async fn native_routing_applies_through_a_virtual_model() {
+        // Strategy 2: a `models:` virtual model whose endpoint is a
+        // multi-protocol provider still routes each target natively.
+        let yaml = r#"
+providers:
+  minimax:
+    api_base: https://api.minimax.io/v1
+    api_key: k-mm
+    api_protocol:
+      - "*": [chat_completions, messages]
+    models: [{ id: MiniMax-M2 }]
+models:
+  combo:
+    endpoints:
+      - { provider: minimax, service_id: MiniMax-M2 }
+"#;
+        let t = table(yaml);
+        let chain = t
+            .route_chain(
+                "combo",
+                &prefs_inbound(ApiProtocol::Messages),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider_name, "minimax");
+        assert_eq!(chain[0].api_protocol, ApiProtocol::Messages);
+    }
+
+    #[tokio::test]
+    async fn inbound_protocol_survives_preset_resolution() {
+        // The inbound protocol (a caller pref) must survive the merge over the
+        // preset-derived prefs base, so native routing still applies when a
+        // request goes through an `@preset`.
+        let yaml = r#"
+providers:
+  minimax:
+    api_base: https://api.minimax.io/v1
+    api_key: k-mm
+    api_protocol:
+      - "*": [chat_completions, messages]
+    models: [{ id: MiniMax-M2 }]
+presets:
+  pick:
+    model: MiniMax-M2
+"#;
+        let t = table(yaml);
+        let chain = t
+            .route_chain(
+                "@pick",
+                &prefs_inbound(ApiProtocol::Messages),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain[0].provider_name, "minimax");
+        assert_eq!(chain[0].api_protocol, ApiProtocol::Messages);
+    }
+
+    #[tokio::test]
+    async fn account_base_wins_over_per_protocol_endpoint() {
+        // Per-target precedence in the multi-account branch: an account that
+        // pins its own base keeps it (multi-region); an account without one
+        // gets the per-protocol endpoint for the natively-selected protocol.
+        let yaml = r#"
+providers:
+  mm:
+    api_base: https://api.minimax.io/v1
+    api_protocol:
+      - "*": [chat_completions, messages]
+    protocol_endpoints:
+      messages: https://api.minimax.io/anthropic/v1
+    models: [{ id: m }]
+    accounts:
+      - { api_key: k-pinned, label: pinned, api_base: "https://eu.minimax.io/v1" }
+      - { api_key: k-default, label: default }
+"#;
+        let t = table(yaml);
+        let chain = t
+            .route_chain(
+                "mm:m",
+                &prefs_inbound(ApiProtocol::Messages),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 2);
+        // Both serve the inbound protocol natively.
+        assert!(
+            chain
+                .iter()
+                .all(|h| h.api_protocol == ApiProtocol::Messages)
+        );
+        let pinned = chain
+            .iter()
+            .find(|h| h.account_label.as_deref() == Some("pinned"))
+            .unwrap();
+        let default = chain
+            .iter()
+            .find(|h| h.account_label.as_deref() == Some("default"))
+            .unwrap();
+        // Pinned account keeps its own base, ignoring the per-protocol endpoint.
+        assert_eq!(pinned.api_base, "https://eu.minimax.io/v1");
+        // Account without a base gets the per-protocol /anthropic endpoint.
+        assert_eq!(default.api_base, "https://api.minimax.io/anthropic/v1");
+    }
 }
