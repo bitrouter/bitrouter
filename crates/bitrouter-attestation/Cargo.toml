@@ -19,10 +19,16 @@ dcap-qvl = { version = "0.3.12", default-features = false, features = [
 ] }
 hex.workspace = true
 jsonwebtoken = "9"
+# secp256k1 ECDSA recovery for NEAR chat signatures (EIP-191), matching the
+# gateway's k256 usage.
+k256 = { version = "0.13", features = ["ecdsa"] }
+rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# keccak256 for the EIP-191 personal_sign digest + Ethereum address derivation.
+sha3 = "0.10"
 thiserror.workspace = true
 
 [dev-dependencies]
