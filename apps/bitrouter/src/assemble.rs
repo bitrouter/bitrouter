@@ -26,6 +26,8 @@ use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
 use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvider};
+use crate::memory::config::{MemoryScopeConfig, MemoryScopeTable};
+use crate::memory::scope_executor::NamespaceScopeExecutor;
 use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 
@@ -294,6 +296,16 @@ pub async fn build_app_with_path(
             .context("building the MCP routing table from config.mcp_servers")?,
         ))
     };
+    // Strategy A memory scoping — parsed from `plugins.bitrouter-memory`.
+    // Absent or `{}` ⇒ a disabled (passthrough) scope table.
+    let memory_scope_cfg: MemoryScopeConfig = config
+        .plugins
+        .get("bitrouter-memory")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("parsing plugins.bitrouter-memory")?
+        .unwrap_or_default();
     // The MCP executor stack — composed innermost-out so a single
     // `/mcp tools/list` with cold caches dials N servers once, after which
     // it's all cache hits:
@@ -302,16 +314,21 @@ pub async fn build_app_with_path(
     // invalidates that server's slice.
     let mcp_executor = mcp_routing.as_ref().map(|_| {
         let rmcp: Arc<RmcpExecutor> = Arc::new(RmcpExecutor::new());
-        let inner_for_cache: Arc<RmcpExecutor> = rmcp.clone();
+        // Strategy A: namespace scoping wraps the leaf executor so it sees
+        // every call as a resolved Direct target with the un-prefixed tool
+        // name. A disabled scope table is a pure passthrough.
+        let scope_table = MemoryScopeTable::from_config(&memory_scope_cfg);
+        let scoped: Arc<NamespaceScopeExecutor<RmcpExecutor>> =
+            Arc::new(NamespaceScopeExecutor::new(rmcp.clone(), scope_table));
         if config.mcp.cache.enabled {
             let ttls: CacheTtls = (&config.mcp.cache).into();
-            let cached: Arc<CachingExecutor<RmcpExecutor>> = Arc::new(
-                CachingExecutor::new(inner_for_cache, ttls)
+            let cached = Arc::new(
+                CachingExecutor::new(scoped, ttls)
                     .with_invalidation(rmcp.invalidation_receiver()),
             );
             Arc::new(AggregatingExecutor::new(cached)) as Arc<dyn bitrouter_sdk::mcp::Executor>
         } else {
-            Arc::new(AggregatingExecutor::new(inner_for_cache))
+            Arc::new(AggregatingExecutor::new(scoped))
                 as Arc<dyn bitrouter_sdk::mcp::Executor>
         }
     });
