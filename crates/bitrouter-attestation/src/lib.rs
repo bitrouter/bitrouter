@@ -27,6 +27,7 @@ mod near;
 mod transport;
 mod types;
 
+pub use near::binding::{compose_matches_mr_config, report_data_binds};
 pub use near::report::{AttestationInfo, AttestationReport, ModelAttestation};
 pub use transport::{MockTransport, ReportTransport, ReqwestTransport, SIGNING_ALGO};
 pub use types::{

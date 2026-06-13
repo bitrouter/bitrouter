@@ -5,4 +5,5 @@
 //! plus the binding / quote / NRAS / DCAP-policy / signature checks added in
 //! later tasks. `NearVerifier` (Task 6) composes them.
 
+pub mod binding;
 pub mod report;
