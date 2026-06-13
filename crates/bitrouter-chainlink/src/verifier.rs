@@ -76,7 +76,7 @@ impl ConfidentialVerifier for ChainlinkVerifier {
                 .await
                 .map_err(|e| VerifyError::Transport {
                     what: "chainlink inference",
-                    source: Box::new(std::io::Error::other(e.to_string())),
+                    source: Box::new(e),
                 })?;
         let r = snapshot.resources.first();
 
