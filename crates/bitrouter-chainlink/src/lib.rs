@@ -14,8 +14,11 @@
 #![warn(missing_docs)]
 
 mod client;
+mod executor;
 mod map;
 mod wire;
+
+pub use executor::ChainlinkExecutor;
 
 /// The custom protocol id used in config (`api_protocol: chainlink_confidential`)
 /// and on the DispatchExecutor key.
