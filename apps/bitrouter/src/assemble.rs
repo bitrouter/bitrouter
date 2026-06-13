@@ -323,13 +323,11 @@ pub async fn build_app_with_path(
         if config.mcp.cache.enabled {
             let ttls: CacheTtls = (&config.mcp.cache).into();
             let cached = Arc::new(
-                CachingExecutor::new(scoped, ttls)
-                    .with_invalidation(rmcp.invalidation_receiver()),
+                CachingExecutor::new(scoped, ttls).with_invalidation(rmcp.invalidation_receiver()),
             );
             Arc::new(AggregatingExecutor::new(cached)) as Arc<dyn bitrouter_sdk::mcp::Executor>
         } else {
-            Arc::new(AggregatingExecutor::new(scoped))
-                as Arc<dyn bitrouter_sdk::mcp::Executor>
+            Arc::new(AggregatingExecutor::new(scoped)) as Arc<dyn bitrouter_sdk::mcp::Executor>
         }
     });
 

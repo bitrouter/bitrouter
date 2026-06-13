@@ -83,15 +83,20 @@ impl<E: Executor> NamespaceScopeExecutor<E> {
             ScopeDecision::Passthrough => Ok(None),
             ScopeDecision::Inject(ns) => {
                 let mut req = request.clone();
-                // Ensure `arguments` exists, then set `namespace`.
-                if let Some(params) = req.params.as_object_mut() {
-                    let args = params
-                        .entry("arguments")
-                        .or_insert_with(|| serde_json::json!({}));
-                    if let Some(obj) = args.as_object_mut() {
-                        obj.insert("namespace".to_string(), ns.into());
-                    }
-                }
+                let params = req.params.as_object_mut().ok_or_else(|| {
+                    BitrouterError::bad_request(
+                        "mcp memory: tools/call params must be a JSON object",
+                    )
+                })?;
+                let args = params
+                    .entry("arguments")
+                    .or_insert_with(|| serde_json::json!({}));
+                let obj = args.as_object_mut().ok_or_else(|| {
+                    BitrouterError::bad_request(
+                        "mcp memory: tools/call arguments must be a JSON object",
+                    )
+                })?;
+                obj.insert("namespace".to_string(), ns.into());
                 Ok(Some(req))
             }
             ScopeDecision::Deny { agent, requested } => Err(BitrouterError::Unauthorized(format!(
@@ -144,12 +149,15 @@ mod tests {
             }
         }
         fn last_namespace(&self) -> Option<String> {
+            self.last_arg("namespace")
+        }
+        fn last_arg(&self, key: &str) -> Option<String> {
             self.last
                 .lock()
                 .unwrap()
                 .as_ref()
                 .and_then(|r| r.params.get("arguments"))
-                .and_then(|a| a.get("namespace"))
+                .and_then(|a| a.get(key))
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         }
@@ -232,7 +240,12 @@ mod tests {
 
     #[tokio::test]
     async fn unrestricted_agent_is_untouched() {
-        let (inner, res) = run(call(Some("orchestrator"), "memwal_recall", Some("anything"))).await;
+        let (inner, res) = run(call(
+            Some("orchestrator"),
+            "memwal_recall",
+            Some("anything"),
+        ))
+        .await;
         assert!(res.is_ok());
         assert_eq!(inner.last_namespace().as_deref(), Some("anything"));
     }
@@ -262,6 +275,48 @@ mod tests {
             CallerContext::new("k", "u"),
         );
         assert!(exec.execute(&memory_target(), &req).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn inject_into_non_object_arguments_is_rejected() {
+        // `researcher` omits namespace (Inject path) but `arguments` is not an
+        // object — injection must fail closed rather than pass through unscoped.
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-bitrouter-agent", "researcher".parse().unwrap());
+        let req = McpRequest::direct(
+            "memory",
+            "tools/call",
+            serde_json::json!({ "name": "memwal_recall", "arguments": "oops" }),
+            CallerContext::new("k", "u"),
+        )
+        .with_headers(headers);
+        let (_inner, res) = {
+            let inner = Arc::new(RecordingExecutor::new());
+            let exec = NamespaceScopeExecutor::new(inner.clone(), table());
+            let res = exec.execute(&memory_target(), &req).await;
+            (inner, res)
+        };
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn inject_preserves_other_arguments() {
+        // `researcher` omits namespace but passes another argument; injecting the
+        // default namespace must not drop the existing argument.
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-bitrouter-agent", "researcher".parse().unwrap());
+        let req = McpRequest::direct(
+            "memory",
+            "tools/call",
+            serde_json::json!({ "name": "memwal_recall", "arguments": { "query": "hi" } }),
+            CallerContext::new("k", "u"),
+        )
+        .with_headers(headers);
+        let inner = Arc::new(RecordingExecutor::new());
+        let exec = NamespaceScopeExecutor::new(inner.clone(), table());
+        assert!(exec.execute(&memory_target(), &req).await.is_ok());
+        assert_eq!(inner.last_arg("query").as_deref(), Some("hi"));
+        assert_eq!(inner.last_namespace().as_deref(), Some("research"));
     }
 
     #[tokio::test]
