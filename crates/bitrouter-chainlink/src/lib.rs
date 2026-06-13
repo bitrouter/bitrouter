@@ -13,6 +13,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod wire;
+
 /// The custom protocol id used in config (`api_protocol: chainlink_confidential`)
 /// and on the DispatchExecutor key.
 pub const PROTOCOL: &str = "chainlink_confidential";
