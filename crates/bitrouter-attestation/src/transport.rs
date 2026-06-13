@@ -25,6 +25,14 @@ pub trait ReportTransport: Send + Sync {
         model: &str,
         nonce: &str,
     ) -> Result<AttestationReport, VerifyError>;
+
+    /// POST a model's `nvidia_payload` to NRAS and return the raw EAT response
+    /// body. The daemon calls NVIDIA **directly** (Decision 4); the default impl
+    /// does exactly that via [`crate::post_nras`], independent of the report
+    /// base URL, so most transports inherit the correct behavior.
+    async fn fetch_gpu_eat(&self, nvidia_payload: &str) -> Result<Vec<u8>, VerifyError> {
+        crate::post_nras(&reqwest::Client::new(), crate::NRAS_GPU_URL, nvidia_payload).await
+    }
 }
 
 /// Live `reqwest` transport pointed at a provider base URL (e.g. the cloud's

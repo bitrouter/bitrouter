@@ -16,6 +16,7 @@
 //! pin (Task 5b). Keeping them separate lets every other check be unit-tested
 //! offline against the golden fixture.
 
+use async_trait::async_trait;
 use dcap_qvl::quote::{Quote, Report};
 
 use crate::VerifyError;
@@ -106,6 +107,58 @@ pub async fn verify_tdx_quote(
             }
         })?;
     measurements_from_report(&verified.report)
+}
+
+/// Strategy for turning a raw TDX quote into measurements, abstracted so the
+/// composing verifier can be unit-tested offline. The production
+/// [`DcapQuoteVerifier`] performs full DCAP verification (Intel signature +
+/// collateral); tests substitute a parse-only stub.
+#[async_trait]
+pub trait QuoteVerifier: Send + Sync {
+    async fn measurements(
+        &self,
+        raw_quote: &[u8],
+        now_unix: u64,
+    ) -> Result<TdxMeasurements, VerifyError>;
+
+    /// Whether [`Self::measurements`] cryptographically authenticated the quote
+    /// (Intel signature) versus merely parsed it. Feeds
+    /// [`crate::AttestationChecks::dcap_quote_valid`] honestly.
+    fn is_authenticated(&self) -> bool;
+}
+
+/// Production [`QuoteVerifier`]: full DCAP verification against a PCCS.
+pub struct DcapQuoteVerifier {
+    pub pccs_url: String,
+}
+
+impl DcapQuoteVerifier {
+    pub fn new(pccs_url: impl Into<String>) -> Self {
+        Self {
+            pccs_url: pccs_url.into(),
+        }
+    }
+}
+
+impl Default for DcapQuoteVerifier {
+    fn default() -> Self {
+        Self::new(PHALA_PCCS_URL)
+    }
+}
+
+#[async_trait]
+impl QuoteVerifier for DcapQuoteVerifier {
+    async fn measurements(
+        &self,
+        raw_quote: &[u8],
+        now_unix: u64,
+    ) -> Result<TdxMeasurements, VerifyError> {
+        verify_tdx_quote(raw_quote, &self.pccs_url, now_unix).await
+    }
+
+    fn is_authenticated(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

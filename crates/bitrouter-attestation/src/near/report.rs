@@ -51,6 +51,16 @@ pub struct AttestationInfo {
     /// The `id` is the **KMS root** public key (a P-256 DER SPKI) the policy
     /// pins (spec §1.5 cond. 1).
     pub key_provider_info: String,
+    pub tcb_info: TcbInfo,
+}
+
+/// The dstack `tcb_info` sub-block. We model only `app_compose` — the raw
+/// compose document whose `sha256` must equal `compose_hash` (Task 3's
+/// compose↔mr_config binding). Other fields (rtmr0..3, mrtd) are cross-checked
+/// directly from the quote in [`crate::parse_tdx_quote`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TcbInfo {
+    pub app_compose: String,
 }
 
 #[cfg(test)]

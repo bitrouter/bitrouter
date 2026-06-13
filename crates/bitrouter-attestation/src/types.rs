@@ -50,6 +50,21 @@ pub struct AttestationChecks {
 }
 
 impl AttestationChecks {
+    /// All-false checks — the fail-closed default for a node whose evidence
+    /// couldn't be gathered or fully evaluated.
+    pub fn failed() -> Self {
+        Self {
+            gpu_nras_pass: false,
+            dcap_quote_valid: false,
+            report_data_binds_key_and_nonce: false,
+            compose_matches_mr_config: false,
+            policy_accepts: false,
+            debug_disabled: false,
+            event_log_rtmr_ok: None,
+            tcb_status: None,
+        }
+    }
+
     /// True iff every mandatory check passed. `tcb_status` is a claim, not a
     /// gate; `event_log_rtmr_ok` only gates when the report carried an event log
     /// (`Some(false)` fails, `None` does not).
@@ -96,16 +111,7 @@ impl AttestationVerdict {
             attested_addresses: Vec::new(),
             trust_boundary: String::new(),
             nonce: nonce.into(),
-            checks: AttestationChecks {
-                gpu_nras_pass: false,
-                dcap_quote_valid: false,
-                report_data_binds_key_and_nonce: false,
-                compose_matches_mr_config: false,
-                policy_accepts: false,
-                debug_disabled: false,
-                event_log_rtmr_ok: None,
-                tcb_status: None,
-            },
+            checks: AttestationChecks::failed(),
             verified_at_unix: now_unix,
         }
     }
