@@ -24,6 +24,7 @@ run
 temp
 
 # Keys
+.env
 .keys/
 skills/bitrouter-e2e-test/
 
