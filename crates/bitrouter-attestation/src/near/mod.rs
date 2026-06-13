@@ -17,13 +17,12 @@ pub mod tdx;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use jsonwebtoken::DecodingKey;
 
 use crate::cache::AttestationCache;
 use crate::near::binding::{compose_matches_mr_config, report_data_binds};
 use crate::near::dcap::{AciDcapVerifierPolicy, model_identity};
 use crate::near::eventlog::event_log_binds_info;
-use crate::near::nvidia::check_nras_eat;
+use crate::near::nvidia::{NvidiaEatKey, check_nras_eat};
 use crate::near::report::ModelAttestation;
 use crate::near::signature::{chat_signing_text, recover_eip191_address, sha256_hex};
 use crate::near::tdx::QuoteVerifier;
@@ -53,7 +52,7 @@ pub struct NearVerifier {
     quotes: Arc<dyn QuoteVerifier>,
     policy: Arc<AciDcapVerifierPolicy>,
     /// NVIDIA's EAT-verification key (pinned/configured by the host).
-    nvidia_key: Arc<DecodingKey>,
+    nvidia_key: Arc<NvidiaEatKey>,
     cache: AttestationCache,
     cache_ttl_seconds: u64,
 }
@@ -63,7 +62,7 @@ impl NearVerifier {
         transport: Arc<dyn ReportTransport>,
         quotes: Arc<dyn QuoteVerifier>,
         policy: Arc<AciDcapVerifierPolicy>,
-        nvidia_key: Arc<DecodingKey>,
+        nvidia_key: Arc<NvidiaEatKey>,
     ) -> Self {
         Self {
             transport,
@@ -118,7 +117,7 @@ impl NearVerifier {
         };
 
         let gpu_nras_pass = match self.transport.fetch_gpu_eat(&m.nvidia_payload).await {
-            Ok(eat) => check_nras_eat(&eat, nonce, &self.nvidia_key).passed(),
+            Ok(eat) => check_nras_eat(&eat, nonce, self.nvidia_key.decoding_key()).passed(),
             Err(_) => false,
         };
 
@@ -309,8 +308,8 @@ mod tests {
         include_str!("../../tests/fixtures/nras_test_ec_private_pkcs8.pem");
     const TEST_EC_PUBLIC_PEM: &str = include_str!("../../tests/fixtures/nras_test_ec_public.pem");
 
-    fn nvidia_key() -> Arc<DecodingKey> {
-        Arc::new(DecodingKey::from_ec_pem(TEST_EC_PUBLIC_PEM.as_bytes()).unwrap())
+    fn nvidia_key() -> Arc<NvidiaEatKey> {
+        Arc::new(NvidiaEatKey::from_ec_pem(TEST_EC_PUBLIC_PEM.as_bytes()).unwrap())
     }
 
     /// Sign an NRAS-shaped EAT carrying a passing result and the given nonce.

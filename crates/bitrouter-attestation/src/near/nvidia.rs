@@ -21,6 +21,35 @@ use crate::VerifyError;
 /// NVIDIA NRAS GPU attestation endpoint.
 pub const NRAS_GPU_URL: &str = "https://nras.attestation.nvidia.com/v3/attest/gpu";
 
+/// NVIDIA's NRAS EAT verification key, wrapping a [`jsonwebtoken::DecodingKey`]
+/// so callers (the daemon, the CLI, third parties) don't take a direct
+/// `jsonwebtoken` dependency. Pin this in the trusted process — never fetch it
+/// through the untrusted cloud (spec §1.5).
+pub struct NvidiaEatKey(DecodingKey);
+
+impl NvidiaEatKey {
+    /// Build from NVIDIA's EC public-key PEM (NRAS signs EATs with ES384/ES256).
+    pub fn from_ec_pem(pem: &[u8]) -> Result<Self, VerifyError> {
+        DecodingKey::from_ec_pem(pem)
+            .map(Self)
+            .map_err(|e| VerifyError::Malformed {
+                what: "nvidia eat key",
+                detail: e.to_string(),
+            })
+    }
+
+    /// A placeholder key that can never verify a real NVIDIA EAT — for contexts
+    /// where the key isn't configured yet. The GPU check then fails closed
+    /// (`gpu_nras_pass = false`), never a silent pass.
+    pub fn unconfigured() -> Self {
+        Self(DecodingKey::from_secret(b"nvidia-eat-key-not-configured"))
+    }
+
+    pub(crate) fn decoding_key(&self) -> &DecodingKey {
+        &self.0
+    }
+}
+
 /// Outcome of checking an NRAS EAT. Every field must hold for [`Self::passed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NrasVerdict {

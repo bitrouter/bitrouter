@@ -32,7 +32,7 @@ pub use cache::AttestationCache;
 pub use near::binding::{compose_matches_mr_config, report_data_binds};
 pub use near::dcap::{AciDcapVerifierPolicy, ModelIdentity, PolicyError, model_identity};
 pub use near::eventlog::{event_log_binds_info, replay_rtmr};
-pub use near::nvidia::{NRAS_GPU_URL, NrasVerdict, check_nras_eat, post_nras};
+pub use near::nvidia::{NRAS_GPU_URL, NrasVerdict, NvidiaEatKey, check_nras_eat, post_nras};
 pub use near::report::{
     AttestationInfo, AttestationReport, DstackEvent, ModelAttestation, TcbInfo,
 };
