@@ -135,6 +135,7 @@ pub mod server;
 pub mod acp;
 pub mod language_model;
 pub mod mcp;
+pub mod payment;
 
 pub use app::{App, AppBuilder, Plugin};
 pub use caller::CallerContext;
@@ -144,4 +145,5 @@ pub use language_model::{
     FallbackPolicy, HookDecision, PreRequestHook, RoutingTable, RoutingTarget,
 };
 pub use metrics::MetricsRenderer;
+pub use payment::{PaymentGate, PaymentGateResult, PaymentRouteRequest};
 pub use plugin::{MigrationContent, MigrationItem, PluginId};

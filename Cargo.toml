@@ -23,6 +23,28 @@ bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-al
 bitrouter-skills = { path = "crates/bitrouter-skills", version = "1.0.0-alpha.14" }
 bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.14" }
 bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.14", default-features = false }
+bitrouter-pay = { path = "plugins/bitrouter-pay", version = "1.0.0-alpha.14", default-features = false }
+
+# EVM / wallet / MPP payment stack (bitrouter-pay)
+# Pin alloy 2.x — mpp-br 0.10+ and tempo-alloy 1.6+ require a single alloy 2
+# line; mpp-br 0.9 pulled alloy 1.8 alongside tempo-alloy's alloy 2 sub-crates.
+alloy = { version = "2", default-features = false, features = [
+    "signers",
+    "consensus",
+    "network",
+    "providers",
+    "rpc-types",
+    "sol-types",
+    "contract",
+] }
+open-wallet-standard = { package = "ows-lib", version = "=1.3.2" }
+ows-core = { version = "=1.3.2" }
+ows-signer = { version = "=1.3.2" }
+mpp-br = { version = "0.10", default-features = false, features = [
+    "client",
+    "tempo",
+    "evm",
+] }
 
 # shared third-party
 anyhow = "1"

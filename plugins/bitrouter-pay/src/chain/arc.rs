@@ -1,0 +1,5 @@
+pub const ARC_TESTNET_CHAIN_ID: u64 = 5042002;
+pub const ARC_TESTNET_CAIP2: &str = "eip155:5042002";
+pub const ARC_TESTNET_RPC: &str = "https://rpc.testnet.arc.network";
+pub const ARC_TESTNET_USDC: &str = "0x3600000000000000000000000000000000000000";
+pub const AGENT_WALLET_ADDRESS: &str = "0xBB4CB05dA6ED0780cFDd0F088EaEEd420381DE38";
