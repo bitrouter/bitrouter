@@ -171,6 +171,7 @@ Read these on demand — don't load them all upfront.
 | `references/harness-hermes-agent.md` | Wiring Hermes Agent |
 | `references/harness-openclaw.md` | Wiring OpenClaw |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
+| `references/mcp-memory.md` | Walrus Memory upstream + per-agent namespace scoping (`plugins.bitrouter-memory`, `x-bitrouter-agent` header) |
 
 ## 7. Gotchas
 
