@@ -11,6 +11,7 @@ pub mod dcap;
 pub mod eventlog;
 pub mod nvidia;
 pub mod report;
+pub mod signature;
 pub mod tdx;
 
 use std::sync::Arc;
