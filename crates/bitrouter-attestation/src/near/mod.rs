@@ -6,6 +6,7 @@
 //! later tasks. `NearVerifier` (Task 6) composes them.
 
 pub mod binding;
+pub mod dcap;
 pub mod nvidia;
 pub mod report;
 pub mod tdx;

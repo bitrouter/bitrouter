@@ -36,11 +36,21 @@ pub struct ModelAttestation {
 }
 
 /// The dstack `info` block. Source of the policy-pinning fields (spec §1.5
-/// Decision 8). Only `compose_hash` is consumed at this stage; the KMS root,
-/// app/workload id, and image digests are wired in later tasks.
+/// Decision 8). These map to the ported DCAP policy's pins (see
+/// [`crate::near::dcap::model_identity`]).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AttestationInfo {
+    /// dstack app id — the **workload id** the policy allowlists.
+    pub app_id: String,
+    /// `sha256(app_compose)` — one of the **image digests** the policy
+    /// allowlists, and the target of the compose↔mr_config binding (Task 3).
     pub compose_hash: String,
+    /// Guest OS image hash — another **image digest** the policy allowlists.
+    pub os_image_hash: String,
+    /// dstack key-provider block, a JSON string `{"name":"kms","id":"<hex>"}`.
+    /// The `id` is the **KMS root** public key (a P-256 DER SPKI) the policy
+    /// pins (spec §1.5 cond. 1).
+    pub key_provider_info: String,
 }
 
 #[cfg(test)]
