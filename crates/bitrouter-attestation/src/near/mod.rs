@@ -8,6 +8,7 @@
 
 pub mod binding;
 pub mod dcap;
+pub mod eventlog;
 pub mod nvidia;
 pub mod report;
 pub mod tdx;
@@ -21,6 +22,7 @@ use rand::RngCore;
 use crate::cache::AttestationCache;
 use crate::near::binding::{compose_matches_mr_config, report_data_binds};
 use crate::near::dcap::{AciDcapVerifierPolicy, model_identity};
+use crate::near::eventlog::event_log_binds_info;
 use crate::near::nvidia::check_nras_eat;
 use crate::near::report::ModelAttestation;
 use crate::near::tdx::QuoteVerifier;
@@ -121,6 +123,15 @@ impl NearVerifier {
             .as_ref()
             .is_some_and(super::near::tdx::TdxMeasurements::debug_disabled);
 
+        // Anchor the cloud-supplied `info` fields to the genuine quote by
+        // replaying the event log into RTMR3 and binding its payloads. Only when
+        // this holds are `compose`/`policy` below checking TEE-measured facts
+        // rather than cloud assertions (spec §1.5 cond. 1). `None` when the quote
+        // never parsed (we can't anchor without its RTMR3).
+        let event_log_rtmr_ok = measurements
+            .as_ref()
+            .map(|mm| event_log_binds_info(&m.event_log, &mm.rtmr3, &m.info));
+
         let compose_matches_mr_config =
             compose_matches_mr_config(&m.info.tcb_info.app_compose, &m.info.compose_hash);
 
@@ -139,9 +150,7 @@ impl NearVerifier {
             compose_matches_mr_config,
             policy_accepts,
             debug_disabled,
-            // dstack RTMR3/event-log replay is a later enhancement; not performed
-            // here, so reported as "not checked" rather than passed.
-            event_log_rtmr_ok: None,
+            event_log_rtmr_ok,
             tcb_status: None,
         }
     }

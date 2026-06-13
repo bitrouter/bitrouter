@@ -66,8 +66,10 @@ impl AttestationChecks {
     }
 
     /// True iff every mandatory check passed. `tcb_status` is a claim, not a
-    /// gate; `event_log_rtmr_ok` only gates when the report carried an event log
-    /// (`Some(false)` fails, `None` does not).
+    /// gate. `event_log_rtmr_ok` is **required** to be `Some(true)`: it is the
+    /// anchor that binds the cloud-supplied `info` (and thus `policy_accepts`)
+    /// to the genuine TEE measurement, so a `None` ("not checked") or
+    /// `Some(false)` ("replay/binding failed") verdict must not pass.
     pub fn all_pass(&self) -> bool {
         self.gpu_nras_pass
             && self.dcap_quote_valid
@@ -75,7 +77,7 @@ impl AttestationChecks {
             && self.compose_matches_mr_config
             && self.policy_accepts
             && self.debug_disabled
-            && self.event_log_rtmr_ok != Some(false)
+            && self.event_log_rtmr_ok == Some(true)
     }
 }
 
