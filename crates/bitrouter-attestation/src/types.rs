@@ -174,20 +174,28 @@ pub struct VerifiedExchange {
 mod integrity_proof_tests {
     use super::*;
 
-    #[test]
-    fn chainlink_resource_digests_roundtrips_and_is_unsigned() {
-        let proof = IntegrityProof::ChainlinkResourceDigests {
+    fn chainlink_proof(digests_consistent: bool) -> IntegrityProof {
+        IntegrityProof::ChainlinkResourceDigests {
             inference_id: "abc".to_string(),
             request_digest: "rq".to_string(),
             response_digest: "rs".to_string(),
             resource_digest: "rd".to_string(),
             filename_digest: "fd".to_string(),
             filename_blinding: "fb".to_string(),
-            digests_consistent: true,
-        };
-        let json = serde_json::to_value(&proof).expect("serialize");
-        let back: IntegrityProof = serde_json::from_value(json).expect("deserialize");
-        assert_eq!(proof, back);
+            digests_consistent,
+        }
+    }
+
+    #[test]
+    fn chainlink_resource_digests_roundtrips() {
+        // Round-trip both `digests_consistent` cases so a future
+        // `skip_serializing_if` that drops the `false` case can't slip through.
+        for consistent in [true, false] {
+            let proof = chainlink_proof(consistent);
+            let json = serde_json::to_value(&proof).expect("serialize");
+            let back: IntegrityProof = serde_json::from_value(json).expect("deserialize");
+            assert_eq!(proof, back);
+        }
     }
 }
 
