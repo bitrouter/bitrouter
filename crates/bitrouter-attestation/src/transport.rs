@@ -10,6 +10,7 @@ use async_trait::async_trait;
 
 use crate::VerifyError;
 use crate::near::report::AttestationReport;
+use crate::near::signature::ChatSignature;
 
 /// The signing algorithm bitrouter requests and verifies (spec Decision 7):
 /// secp256k1 ECDSA with EIP-191 recovery, matching NEAR's published vector.
@@ -32,6 +33,20 @@ pub trait ReportTransport: Send + Sync {
     /// base URL, so most transports inherit the correct behavior.
     async fn fetch_gpu_eat(&self, nvidia_payload: &str) -> Result<Vec<u8>, VerifyError> {
         crate::post_nras(&reqwest::Client::new(), crate::NRAS_GPU_URL, nvidia_payload).await
+    }
+
+    /// `GET {base}/v1/signature/{chat_id}?model={model}&signing_algo=ecdsa` —
+    /// the per-chat signature (L1.5). The default errors; transports that can
+    /// reach a signature endpoint (e.g. [`ReqwestTransport`]) override it.
+    async fn fetch_signature(
+        &self,
+        _chat_id: &str,
+        _model: &str,
+    ) -> Result<ChatSignature, VerifyError> {
+        Err(VerifyError::Malformed {
+            what: "chat signature",
+            detail: "this transport does not support signature fetch".to_string(),
+        })
     }
 }
 
@@ -82,6 +97,35 @@ impl ReportTransport for ReqwestTransport {
             .await
             .map_err(|e| VerifyError::Malformed {
                 what: "attestation report",
+                detail: e.to_string(),
+            })
+    }
+
+    async fn fetch_signature(
+        &self,
+        chat_id: &str,
+        model: &str,
+    ) -> Result<ChatSignature, VerifyError> {
+        let url = format!("{}/signature/{chat_id}", self.base_url);
+        let resp = self
+            .http
+            .get(url)
+            .query(&[("model", model), ("signing_algo", SIGNING_ALGO)])
+            .send()
+            .await
+            .map_err(|e| VerifyError::Transport {
+                what: "chat signature",
+                source: Box::new(e),
+            })?
+            .error_for_status()
+            .map_err(|e| VerifyError::Transport {
+                what: "chat signature",
+                source: Box::new(e),
+            })?;
+        resp.json::<ChatSignature>()
+            .await
+            .map_err(|e| VerifyError::Malformed {
+                what: "chat signature",
                 detail: e.to_string(),
             })
     }
