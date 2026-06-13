@@ -214,6 +214,15 @@ impl PipelineContext {
         self.metadata.get(plugin_id)
     }
 
+    /// The full per-request metadata map. Used to snapshot a request's
+    /// plugin-scoped state into an owned
+    /// [`ToolContext`](crate::language_model::server_tools::toolset::ToolContext)
+    /// for a server-tool execution, which may outlive this borrow (e.g. on the
+    /// streaming path).
+    pub fn metadata(&self) -> &HashMap<PluginId, serde_json::Value> {
+        &self.metadata
+    }
+
     /// Insert a typed, request-scoped extension, replacing any existing value
     /// of the same type. The value is shared (`Arc`) and copied into the
     /// per-stream [`StreamContext`], so a Stage-1 hook can deposit a value that

@@ -14,7 +14,7 @@ use futures::StreamExt;
 
 use super::classify::RouterCall;
 use super::loop_controller::{ServerToolLoop, add_usage};
-use crate::caller::CallerContext;
+use super::toolset::ToolContext;
 use crate::error::Result;
 use crate::language_model::executor::StreamPartStream;
 use crate::language_model::types::{
@@ -43,11 +43,11 @@ impl ServerToolLoop {
     pub async fn run_stream(
         self: Arc<Self>,
         base: &Prompt,
-        caller: &CallerContext,
+        ctx: &ToolContext,
         upstream: Arc<dyn UpstreamStream>,
     ) -> Result<StreamPartStream> {
-        let (working, owned) = self.inject(base, caller).await?;
-        let caller = caller.clone();
+        let (working, owned) = self.inject(base, ctx).await?;
+        let ctx = ctx.clone();
         let loop_ = self;
 
         let stream = async_stream::stream! {
@@ -186,7 +186,7 @@ impl ServerToolLoop {
                         server_name,
                         dynamic: true,
                     });
-                    let (output, err) = loop_.call_one(call, &caller).await;
+                    let (output, err) = loop_.call_one(call, &ctx).await;
                     round_error |= err;
                     yield Ok(StreamPart::ServerToolResult {
                         call_id: call.id.clone(),
@@ -252,6 +252,7 @@ impl ServerToolLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::caller::CallerContext;
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::config::ServerToolLoopConfig;
     use crate::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
@@ -263,7 +264,7 @@ mod tests {
 
     #[async_trait]
     impl RouterToolset for OneTool {
-        async fn list_tools(&self, _caller: &CallerContext) -> Result<Vec<Tool>> {
+        async fn list_tools(&self, _ctx: &ToolContext) -> Result<Vec<Tool>> {
             Ok(vec![Tool::Function {
                 name: "search".to_string(),
                 description: None,
@@ -276,7 +277,7 @@ mod tests {
             &self,
             _name: &str,
             _arguments: &str,
-            _caller: &CallerContext,
+            _ctx: &ToolContext,
         ) -> Result<ToolResultOutput> {
             Ok(ToolResultOutput::Text {
                 value: "ran".to_string(),
@@ -308,6 +309,10 @@ mod tests {
             ServerToolLoopConfig::default(),
             Arc::new(AllowAll),
         ))
+    }
+
+    fn tool_ctx() -> ToolContext {
+        ToolContext::new(CallerContext::local(), Default::default())
     }
 
     fn base_prompt() -> Prompt {
@@ -363,7 +368,7 @@ mod tests {
         });
         let parts = collect(
             loop_()
-                .run_stream(&base_prompt(), &CallerContext::local(), upstream)
+                .run_stream(&base_prompt(), &tool_ctx(), upstream)
                 .await
                 .unwrap(),
         )
@@ -422,7 +427,7 @@ mod tests {
         });
         let parts = collect(
             loop_()
-                .run_stream(&base_prompt(), &CallerContext::local(), upstream)
+                .run_stream(&base_prompt(), &tool_ctx(), upstream)
                 .await
                 .unwrap(),
         )
@@ -471,7 +476,7 @@ mod tests {
         });
         let parts = collect(
             loop_()
-                .run_stream(&base_prompt(), &CallerContext::local(), upstream)
+                .run_stream(&base_prompt(), &tool_ctx(), upstream)
                 .await
                 .unwrap(),
         )

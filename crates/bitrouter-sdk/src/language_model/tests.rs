@@ -1102,12 +1102,14 @@ async fn server_tool_loop_resolves_a_router_tool_call() {
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::config::ServerToolLoopConfig;
     use crate::language_model::server_tools::loop_controller::ServerToolLoop;
-    use crate::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
+    use crate::language_model::server_tools::toolset::{
+        RouterToolset, ToolContext, ToolsetRegistry,
+    };
 
     struct OneTool;
     #[async_trait]
     impl RouterToolset for OneTool {
-        async fn list_tools(&self, _c: &CallerContext) -> Result<Vec<Tool>> {
+        async fn list_tools(&self, _c: &ToolContext) -> Result<Vec<Tool>> {
             Ok(vec![Tool::Function {
                 name: "search".to_string(),
                 description: None,
@@ -1120,7 +1122,7 @@ async fn server_tool_loop_resolves_a_router_tool_call() {
             &self,
             _name: &str,
             _arguments: &str,
-            _c: &CallerContext,
+            _c: &ToolContext,
         ) -> Result<ToolResultOutput> {
             Ok(ToolResultOutput::Text {
                 value: "tool ran".to_string(),
@@ -1179,12 +1181,14 @@ async fn server_tool_loop_streams_router_tool_activity() {
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::config::ServerToolLoopConfig;
     use crate::language_model::server_tools::loop_controller::ServerToolLoop;
-    use crate::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
+    use crate::language_model::server_tools::toolset::{
+        RouterToolset, ToolContext, ToolsetRegistry,
+    };
 
     struct OneTool;
     #[async_trait]
     impl RouterToolset for OneTool {
-        async fn list_tools(&self, _c: &CallerContext) -> Result<Vec<Tool>> {
+        async fn list_tools(&self, _c: &ToolContext) -> Result<Vec<Tool>> {
             Ok(vec![Tool::Function {
                 name: "search".to_string(),
                 description: None,
@@ -1197,7 +1201,7 @@ async fn server_tool_loop_streams_router_tool_activity() {
             &self,
             _n: &str,
             _a: &str,
-            _c: &CallerContext,
+            _c: &ToolContext,
         ) -> Result<ToolResultOutput> {
             Ok(ToolResultOutput::Text {
                 value: "ran".to_string(),

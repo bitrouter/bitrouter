@@ -11,8 +11,7 @@ use async_trait::async_trait;
 use super::approval::ApprovalPolicy;
 use super::classify::{RouterCall, TurnDisposition, classify_turn};
 use super::config::ServerToolLoopConfig;
-use super::toolset::ToolsetRegistry;
-use crate::caller::CallerContext;
+use super::toolset::{ToolContext, ToolsetRegistry};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::types::{
     Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role,
@@ -70,9 +69,9 @@ impl ServerToolLoop {
     pub(crate) async fn inject(
         &self,
         base: &Prompt,
-        caller: &CallerContext,
+        ctx: &ToolContext,
     ) -> Result<(Prompt, std::collections::BTreeSet<String>)> {
-        let (injected, owned) = self.registry.list_all(caller).await?;
+        let (injected, owned) = self.registry.list_all(ctx).await?;
         let mut working = base.clone();
         for tool in &injected {
             if working.tools.iter().any(|t| t.name() == tool.name()) {
@@ -97,10 +96,10 @@ impl ServerToolLoop {
     pub async fn run(
         &self,
         base: &Prompt,
-        caller: &CallerContext,
+        ctx: &ToolContext,
         upstream: &dyn UpstreamTurn,
     ) -> Result<ExecutionResult> {
-        let (mut working, owned) = self.inject(base, caller).await?;
+        let (mut working, owned) = self.inject(base, ctx).await?;
 
         let mut total = Usage::default();
         let mut had_usage = false;
@@ -128,7 +127,7 @@ impl ServerToolLoop {
                     {
                         return Ok(truncate(result, total, had_usage, "max_tool_iterations"));
                     }
-                    let (tool_results, had_error) = self.execute_calls(&calls, caller).await;
+                    let (tool_results, had_error) = self.execute_calls(&calls, ctx).await;
                     consecutive_errors = if had_error { consecutive_errors + 1 } else { 0 };
                     append_turn(&mut working, result.result.content.clone(), tool_results);
                     rounds += 1;
@@ -146,9 +145,9 @@ impl ServerToolLoop {
     pub(crate) async fn call_one(
         &self,
         call: &RouterCall,
-        caller: &CallerContext,
+        ctx: &ToolContext,
     ) -> (ToolResultOutput, bool) {
-        if !self.approval.allow(call, caller).await {
+        if !self.approval.allow(call, ctx.caller()).await {
             return (
                 ToolResultOutput::ExecutionDenied {
                     reason: Some("denied by approval policy".to_string()),
@@ -166,7 +165,7 @@ impl ServerToolLoop {
         };
         match tokio::time::timeout(
             self.config.tool_timeout,
-            set.call_tool(&call.name, &call.arguments, caller),
+            set.call_tool(&call.name, &call.arguments, ctx),
         )
         .await
         {
@@ -188,15 +187,11 @@ impl ServerToolLoop {
 
     /// Execute each router-owned call, returning the tool-result content blocks
     /// and whether any call produced an error.
-    async fn execute_calls(
-        &self,
-        calls: &[RouterCall],
-        caller: &CallerContext,
-    ) -> (Vec<Content>, bool) {
+    async fn execute_calls(&self, calls: &[RouterCall], ctx: &ToolContext) -> (Vec<Content>, bool) {
         let mut results = Vec::with_capacity(calls.len());
         let mut had_error = false;
         for call in calls {
-            let (output, err) = self.call_one(call, caller).await;
+            let (output, err) = self.call_one(call, ctx).await;
             had_error |= err;
             results.push(Content::ToolResult {
                 call_id: call.id.clone(),
@@ -250,6 +245,7 @@ fn truncate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::caller::CallerContext;
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::toolset::RouterToolset;
     use crate::language_model::types::{GenerateResult, Tool};
@@ -263,7 +259,7 @@ mod tests {
 
     #[async_trait]
     impl RouterToolset for MockToolset {
-        async fn list_tools(&self, _caller: &CallerContext) -> Result<Vec<Tool>> {
+        async fn list_tools(&self, _ctx: &ToolContext) -> Result<Vec<Tool>> {
             Ok(self
                 .names
                 .iter()
@@ -280,7 +276,7 @@ mod tests {
             &self,
             name: &str,
             _arguments: &str,
-            _caller: &CallerContext,
+            _ctx: &ToolContext,
         ) -> Result<ToolResultOutput> {
             if self.fail {
                 Err(BitrouterError::Internal(format!("{name} boom")))
@@ -331,6 +327,10 @@ mod tests {
             config,
             Arc::new(AllowAll),
         )
+    }
+
+    fn tool_ctx() -> ToolContext {
+        ToolContext::new(CallerContext::local(), Default::default())
     }
 
     fn base_prompt() -> Prompt {
@@ -397,7 +397,7 @@ mod tests {
             exec(vec![text("the answer")]),
         ]);
         let result = loop_
-            .run(&base_prompt(), &CallerContext::local(), &upstream)
+            .run(&base_prompt(), &tool_ctx(), &upstream)
             .await
             .unwrap();
         let seen = upstream.seen();
@@ -426,7 +426,7 @@ mod tests {
             tool_call("client_fn"),
         ])]);
         let result = loop_
-            .run(&base_prompt(), &CallerContext::local(), &upstream)
+            .run(&base_prompt(), &tool_ctx(), &upstream)
             .await
             .unwrap();
         assert_eq!(upstream.seen().len(), 1);
@@ -444,7 +444,7 @@ mod tests {
             exec(vec![text("recovered")]),
         ]);
         let result = loop_
-            .run(&base_prompt(), &CallerContext::local(), &upstream)
+            .run(&base_prompt(), &tool_ctx(), &upstream)
             .await
             .unwrap();
         let seen = upstream.seen();
@@ -478,7 +478,7 @@ mod tests {
             exec(vec![tool_call("search")]),
         ]);
         let result = loop_
-            .run(&base_prompt(), &CallerContext::local(), &upstream)
+            .run(&base_prompt(), &tool_ctx(), &upstream)
             .await
             .unwrap();
         // round 0 executes (rounds 0 < 1), round 1 hits the cap.

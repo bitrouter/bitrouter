@@ -1,14 +1,55 @@
 //! The [`RouterToolset`] executor seam and a [`ToolsetRegistry`] that composes
 //! several toolsets and resolves an intercepted tool call to its owner.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::caller::CallerContext;
 use crate::error::Result;
+use crate::language_model::context::PipelineContext;
 use crate::language_model::types::{Tool, ToolResultOutput};
+use crate::plugin::PluginId;
+
+/// An owned, cheap-to-clone snapshot of the per-request context handed to a
+/// [`RouterToolset`]. Carries the [`CallerContext`] and the request's
+/// plugin-scoped metadata map — where a consumer stashes request-scoped state
+/// such as the resolved principal or a per-request tool declaration.
+///
+/// Owned rather than a `&PipelineContext` because a server-tool execution can
+/// outlive the borrow: the streaming stitcher moves it into a `'static` stream.
+#[derive(Debug, Clone)]
+pub struct ToolContext {
+    caller: CallerContext,
+    metadata: HashMap<PluginId, serde_json::Value>,
+}
+
+impl ToolContext {
+    /// Build a context from explicit parts (consumers, tests).
+    pub fn new(caller: CallerContext, metadata: HashMap<PluginId, serde_json::Value>) -> Self {
+        Self { caller, metadata }
+    }
+
+    /// Snapshot the live pipeline context for a server-tool execution.
+    pub fn from_pipeline(ctx: &PipelineContext) -> Self {
+        Self {
+            caller: ctx.caller().clone(),
+            metadata: ctx.metadata().clone(),
+        }
+    }
+
+    /// The authenticated caller.
+    pub fn caller(&self) -> &CallerContext {
+        &self.caller
+    }
+
+    /// Read a plugin's request-scoped metadata blob (e.g. a resolved principal,
+    /// or a per-request tool declaration stashed by a pre-request hook).
+    pub fn get_metadata(&self, plugin_id: &PluginId) -> Option<&serde_json::Value> {
+        self.metadata.get(plugin_id)
+    }
+}
 
 /// A set of tools that BitRouter advertises to the model and executes itself.
 ///
@@ -18,16 +59,19 @@ use crate::language_model::types::{Tool, ToolResultOutput};
 /// own tools.
 #[async_trait]
 pub trait RouterToolset: Send + Sync {
-    /// Tools to advertise on this request, as canonical IR function tools.
-    async fn list_tools(&self, caller: &CallerContext) -> Result<Vec<Tool>>;
+    /// Tools to advertise on this request, as canonical IR function tools. `ctx`
+    /// exposes the caller and the request's metadata, so an implementation may
+    /// advertise tools conditionally on the request.
+    async fn list_tools(&self, ctx: &ToolContext) -> Result<Vec<Tool>>;
 
     /// Execute one model-issued call this set owns. `arguments` is the raw
-    /// JSON string carried on the model's `Content::ToolCall`.
+    /// JSON string carried on the model's `Content::ToolCall`; `ctx` carries the
+    /// caller and request metadata.
     async fn call_tool(
         &self,
         name: &str,
         arguments: &str,
-        caller: &CallerContext,
+        ctx: &ToolContext,
     ) -> Result<ToolResultOutput>;
 
     /// Whether this set owns `name`.
@@ -55,11 +99,11 @@ impl ToolsetRegistry {
 
     /// Every set's advertised tools, paired with the set of router-owned tool
     /// names (used by the loop to classify which calls it must execute).
-    pub async fn list_all(&self, caller: &CallerContext) -> Result<(Vec<Tool>, BTreeSet<String>)> {
+    pub async fn list_all(&self, ctx: &ToolContext) -> Result<(Vec<Tool>, BTreeSet<String>)> {
         let mut tools = Vec::new();
         let mut owned = BTreeSet::new();
         for set in &self.sets {
-            for tool in set.list_tools(caller).await? {
+            for tool in set.list_tools(ctx).await? {
                 owned.insert(tool.name().to_string());
                 tools.push(tool);
             }
@@ -84,14 +128,14 @@ mod tests {
 
     #[async_trait]
     impl RouterToolset for MockToolset {
-        async fn list_tools(&self, _caller: &CallerContext) -> Result<Vec<Tool>> {
+        async fn list_tools(&self, _ctx: &ToolContext) -> Result<Vec<Tool>> {
             Ok(self.tools.clone())
         }
         async fn call_tool(
             &self,
             name: &str,
             _arguments: &str,
-            _caller: &CallerContext,
+            _ctx: &ToolContext,
         ) -> Result<ToolResultOutput> {
             Ok(ToolResultOutput::Text {
                 value: format!("ran {name}"),
@@ -118,7 +162,8 @@ mod tests {
             tools: vec![func("search"), func("fetch")],
         });
         let reg = ToolsetRegistry::new(vec![mock]);
-        let (tools, owned) = reg.list_all(&CallerContext::local()).await.unwrap();
+        let ctx = ToolContext::new(CallerContext::local(), Default::default());
+        let (tools, owned) = reg.list_all(&ctx).await.unwrap();
         assert_eq!(tools.len(), 2);
         assert!(owned.contains("search"));
         assert!(owned.contains("fetch"));
