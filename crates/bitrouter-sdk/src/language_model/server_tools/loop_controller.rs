@@ -14,7 +14,7 @@ use super::config::ServerToolLoopConfig;
 use super::toolset::{ToolContext, ToolsetRegistry};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::types::{
-    Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role,
+    Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role, Tool,
     ToolResultOutput, Usage,
 };
 
@@ -66,6 +66,14 @@ impl ServerToolLoop {
     /// Clone `base`, advertise the registry's router tools on it (failing on a
     /// name collision with a caller tool), and return the working prompt plus
     /// the set of router-owned tool names.
+    ///
+    /// A caller may *declare* a router tool as a provider-defined tool (e.g. an
+    /// `{type: "<provider>:<tool>"}` server-tool entry). Such declarations are
+    /// dropped from the working prompt for any name the registry owns: the
+    /// toolset re-advertises that tool as an executable function tool, and the
+    /// raw provider-defined form must not reach the upstream — it has no
+    /// portable wire form and a same-protocol upstream would reject an unknown
+    /// server tool. Dropping them also avoids a spurious self-collision below.
     pub(crate) async fn inject(
         &self,
         base: &Prompt,
@@ -73,6 +81,9 @@ impl ServerToolLoop {
     ) -> Result<(Prompt, std::collections::BTreeSet<String>)> {
         let (injected, owned) = self.registry.list_all(ctx).await?;
         let mut working = base.clone();
+        working
+            .tools
+            .retain(|t| !(matches!(t, Tool::ProviderDefined { .. }) && owned.contains(t.name())));
         for tool in &injected {
             if working.tools.iter().any(|t| t.name() == tool.name()) {
                 return Err(BitrouterError::Internal(format!(
@@ -387,6 +398,33 @@ mod tests {
             text: s.to_string(),
             provider_metadata: ProviderMetadata::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn inject_replaces_caller_provider_defined_with_function() {
+        // A caller declared `search` as a provider-defined (server) tool; the
+        // registry owns `search`, so inject drops the raw declaration and
+        // advertises the executable function form in its place.
+        let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default());
+        let mut base = base_prompt();
+        base.tools.push(Tool::ProviderDefined {
+            id: "demo.search".to_string(),
+            name: "search".to_string(),
+            args: serde_json::json!({ "engine": "x" }),
+            provider_metadata: ProviderMetadata::new(),
+        });
+        let (working, owned) = loop_.inject(&base, &tool_ctx()).await.unwrap();
+        assert!(owned.contains("search"));
+        let search: Vec<&Tool> = working
+            .tools
+            .iter()
+            .filter(|t| t.name() == "search")
+            .collect();
+        assert_eq!(search.len(), 1, "exactly one `search` tool remains");
+        assert!(
+            matches!(search[0], Tool::Function { .. }),
+            "the remaining `search` is the executable function form"
+        );
     }
 
     #[tokio::test]
