@@ -25,9 +25,12 @@ use crate::near::dcap::{AciDcapVerifierPolicy, model_identity};
 use crate::near::eventlog::event_log_binds_info;
 use crate::near::nvidia::check_nras_eat;
 use crate::near::report::ModelAttestation;
+use crate::near::signature::{chat_signing_text, recover_eip191_address, sha256_hex};
 use crate::near::tdx::QuoteVerifier;
 use crate::transport::ReportTransport;
-use crate::types::{AttestationChecks, AttestationVerdict, ExchangeInput, VerifiedExchange};
+use crate::types::{
+    AttestationChecks, AttestationVerdict, ExchangeInput, IntegrityProof, VerifiedExchange,
+};
 use crate::{ConfidentialVerifier, VerifyError};
 
 /// Honest trust-boundary label: we verify NEAR's **model** quote directly, not
@@ -230,12 +233,62 @@ impl ConfidentialVerifier for NearVerifier {
 
     async fn verify_exchange(
         &self,
-        _ex: &ExchangeInput<'_>,
+        ex: &ExchangeInput<'_>,
     ) -> Result<VerifiedExchange, VerifyError> {
-        // L1.5 exchange integrity lands in Phase 2 (Task 12).
-        Err(VerifyError::Malformed {
-            what: "exchange",
-            detail: "verify_exchange is implemented in Phase 2 (Task 12)".to_string(),
+        let request_hash = sha256_hex(ex.request_body);
+        let response_hash = sha256_hex(ex.response_body);
+        let expected_text = chat_signing_text(ex.model, &request_hash, &response_hash);
+
+        // L1 first: the attested (policy-accepted) signing-address set this
+        // signature must recover into (spec §1.5 cond. 2).
+        let attestation = self.attestation_cached(ex.model, ex.now_unix).await?;
+
+        // Fail-closed: a withheld/invalid signature ⇒ unverified, not an error.
+        let Ok(sig) = self.transport.fetch_signature(ex.chat_id, ex.model).await else {
+            return Ok(VerifiedExchange {
+                provider: self.provider().to_string(),
+                model: ex.model.to_string(),
+                request_hash,
+                response_hash,
+                attestation,
+                integrity: IntegrityProof::NearChatSignature {
+                    text: String::new(),
+                    signature: String::new(),
+                    signing_address: String::new(),
+                },
+                verified: false,
+            });
+        };
+
+        // The signed text must equal the one our exact bytes produce, and the
+        // signature must recover to the address the TEE claims AND to a member of
+        // the policy-accepted attested set.
+        let text_matches = sig.text == expected_text;
+        let recovered = recover_eip191_address(sig.text.as_bytes(), &sig.signature);
+        let recovers_to_claim = recovered
+            .as_deref()
+            .is_some_and(|r| r.eq_ignore_ascii_case(&sig.signing_address));
+        let attested = recovered.as_deref().is_some_and(|r| {
+            attestation
+                .attested_addresses
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(r))
+        });
+
+        let verified = attestation.verified && text_matches && recovers_to_claim && attested;
+
+        Ok(VerifiedExchange {
+            provider: self.provider().to_string(),
+            model: ex.model.to_string(),
+            request_hash,
+            response_hash,
+            attestation,
+            integrity: IntegrityProof::NearChatSignature {
+                text: sig.text,
+                signature: sig.signature,
+                signing_address: sig.signing_address,
+            },
+            verified,
         })
     }
 }
@@ -455,5 +508,189 @@ mod tests {
             v.cache.get(MODEL, 1_600).is_none(),
             "expired after full TTL"
         );
+    }
+
+    // ===== L1.5: verify_exchange =====
+
+    use crate::near::signature::ChatSignature;
+
+    /// 20-byte address for secp256k1 private key = 1.
+    const ADDR1: &str = "7e5f4552091a69125d5dfcb7b8c2659029395bdf";
+
+    /// EIP-191 sign `text` with the secp256k1 key whose 32nd byte is `priv_lsb`.
+    fn sign_chat(priv_lsb: u8, text: &str) -> String {
+        use k256::ecdsa::SigningKey;
+        use sha3::{Digest, Keccak256};
+        let mut pk = [0u8; 32];
+        pk[31] = priv_lsb;
+        let key = SigningKey::from_slice(&pk).unwrap();
+        let mut h = Keccak256::new();
+        h.update(b"\x19Ethereum Signed Message:\n");
+        h.update(text.len().to_string().as_bytes());
+        h.update(text.as_bytes());
+        let digest: [u8; 32] = h.finalize().into();
+        let (sig, rec) = key.sign_prehash_recoverable(&digest).unwrap();
+        let mut out = sig.to_bytes().to_vec();
+        out.push(27 + rec.to_byte());
+        hex::encode(out)
+    }
+
+    /// The fixture report with its quote `report_data` and `signing_address`
+    /// rewritten to bind `ADDR1` + `nonce` (parse-only quote verification lets us
+    /// splice the 64-byte report_data without breaking the RTMR3/event-log
+    /// anchor, which is unchanged).
+    fn spliced_report(nonce_hex: &str) -> AttestationReport {
+        let mut report: AttestationReport = serde_json::from_str(FIXTURE).unwrap();
+        let m = &mut report.model_attestations[0];
+        let mut quote = hex::decode(&m.intel_quote).unwrap();
+        let addr = hex::decode(ADDR1).unwrap();
+        let nonce = hex::decode(nonce_hex).unwrap();
+        let mut rd = [0u8; 64];
+        rd[..20].copy_from_slice(&addr);
+        rd[32..64].copy_from_slice(&nonce);
+        quote[568..632].copy_from_slice(&rd);
+        m.intel_quote = hex::encode(&quote);
+        m.signing_address = format!("0x{ADDR1}");
+        m.request_nonce = nonce_hex.to_string();
+        report
+    }
+
+    /// Nonce-aware transport: each `fetch_report(nonce)` binds `ADDR1` + that
+    /// nonce, and `fetch_gpu_eat` echoes it, so the verifier's fresh random nonce
+    /// verifies. `chat_sig` is the canned signature (None ⇒ withheld).
+    struct ExchangeStub {
+        last_nonce: std::sync::Mutex<String>,
+        chat_sig: Option<ChatSignature>,
+    }
+
+    #[async_trait]
+    impl ReportTransport for ExchangeStub {
+        async fn fetch_report(
+            &self,
+            _model: &str,
+            nonce: &str,
+        ) -> Result<AttestationReport, VerifyError> {
+            *self.last_nonce.lock().unwrap() = nonce.to_string();
+            Ok(spliced_report(nonce))
+        }
+        async fn fetch_gpu_eat(&self, _payload: &str) -> Result<Vec<u8>, VerifyError> {
+            Ok(signed_eat(&self.last_nonce.lock().unwrap()))
+        }
+        async fn fetch_signature(
+            &self,
+            _chat_id: &str,
+            _model: &str,
+        ) -> Result<ChatSignature, VerifyError> {
+            self.chat_sig.clone().ok_or(VerifyError::Malformed {
+                what: "chat signature",
+                detail: "withheld".to_string(),
+            })
+        }
+    }
+
+    fn exchange_verifier(chat_sig: Option<ChatSignature>) -> NearVerifier {
+        NearVerifier::new(
+            Arc::new(ExchangeStub {
+                last_nonce: std::sync::Mutex::new(String::new()),
+                chat_sig,
+            }),
+            Arc::new(TrustingQuoteVerifier),
+            policy(APP_ID, KMS_ROOT_DER_SPKI),
+            nvidia_key(),
+        )
+    }
+
+    fn signature_over(model: &str, req: &[u8], resp: &[u8], priv_lsb: u8) -> ChatSignature {
+        let text =
+            crate::chat_signing_text(model, &crate::sha256_hex(req), &crate::sha256_hex(resp));
+        let signature = sign_chat(priv_lsb, &text);
+        let signing_address = crate::recover_eip191_address(text.as_bytes(), &signature).unwrap();
+        ChatSignature {
+            text,
+            signature,
+            signing_address,
+            signing_algo: "ecdsa".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn verifies_a_genuine_exchange_end_to_end() {
+        let (req, resp) = (
+            b"the request bytes".as_slice(),
+            b"the response bytes".as_slice(),
+        );
+        // Signed by privkey 1, whose address (ADDR1) is the attested signer.
+        let sig = signature_over(MODEL, req, resp, 1);
+        let v = exchange_verifier(Some(sig));
+
+        let ex = crate::ExchangeInput {
+            model: MODEL,
+            request_body: req,
+            response_body: resp,
+            chat_id: "chat-1",
+            now_unix: 1_000,
+        };
+        let out = v.verify_exchange(&ex).await.unwrap();
+
+        assert!(out.verified, "attestation: {:?}", out.attestation.checks);
+        assert_eq!(out.request_hash, crate::sha256_hex(req));
+        assert!(matches!(
+            out.integrity,
+            crate::IntegrityProof::NearChatSignature { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn tampered_response_body_fails_the_text_match() {
+        let (req, resp) = (b"req".as_slice(), b"original response".as_slice());
+        // Signature is over the ORIGINAL bodies...
+        let sig = signature_over(MODEL, req, resp, 1);
+        let v = exchange_verifier(Some(sig));
+
+        // ...but the client presents a DIFFERENT response: text won't match.
+        let ex = crate::ExchangeInput {
+            model: MODEL,
+            request_body: req,
+            response_body: b"tampered response",
+            chat_id: "chat-1",
+            now_unix: 1_000,
+        };
+        let out = v.verify_exchange(&ex).await.unwrap();
+        assert!(!out.verified);
+    }
+
+    #[tokio::test]
+    async fn signature_from_an_unattested_key_fails() {
+        // Valid signature, recovers to its claimed address — but that address
+        // (privkey 2) is NOT the attested signer (ADDR1). The load-bearing L1.5
+        // case: a real signature from the wrong key.
+        let (req, resp) = (b"req".as_slice(), b"resp".as_slice());
+        let sig = signature_over(MODEL, req, resp, 2);
+        let v = exchange_verifier(Some(sig));
+
+        let ex = crate::ExchangeInput {
+            model: MODEL,
+            request_body: req,
+            response_body: resp,
+            chat_id: "chat-1",
+            now_unix: 1_000,
+        };
+        let out = v.verify_exchange(&ex).await.unwrap();
+        assert!(!out.verified);
+    }
+
+    #[tokio::test]
+    async fn withheld_signature_is_fail_closed() {
+        let (req, resp) = (b"req".as_slice(), b"resp".as_slice());
+        let v = exchange_verifier(None); // signature withheld by the cloud
+        let ex = crate::ExchangeInput {
+            model: MODEL,
+            request_body: req,
+            response_body: resp,
+            chat_id: "chat-1",
+            now_unix: 1_000,
+        };
+        let out = v.verify_exchange(&ex).await.unwrap();
+        assert!(!out.verified);
     }
 }

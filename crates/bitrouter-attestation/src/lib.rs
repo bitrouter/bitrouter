@@ -36,7 +36,7 @@ pub use near::nvidia::{NRAS_GPU_URL, NrasVerdict, check_nras_eat, post_nras};
 pub use near::report::{
     AttestationInfo, AttestationReport, DstackEvent, ModelAttestation, TcbInfo,
 };
-pub use near::signature::{chat_signing_text, recover_eip191_address, sha256_hex};
+pub use near::signature::{ChatSignature, chat_signing_text, recover_eip191_address, sha256_hex};
 pub use near::tdx::{
     DcapQuoteVerifier, PHALA_PCCS_URL, QuoteVerifier, TdxMeasurements, parse_tdx_quote,
     verify_tdx_quote,

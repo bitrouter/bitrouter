@@ -15,6 +15,18 @@ use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use sha2::{Digest as _, Sha256};
 use sha3::Keccak256;
 
+/// NEAR's per-chat signature response (`GET {base}/v1/signature/{chat_id}`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ChatSignature {
+    /// The signed text: `"{model}:{sha256(req)}:{sha256(resp)}"`.
+    pub text: String,
+    /// 65-byte `r ‖ s ‖ v` signature, hex.
+    pub signature: String,
+    /// The address the TEE claims signed; must equal the recovered address.
+    pub signing_address: String,
+    pub signing_algo: String,
+}
+
 /// The exact text the TEE signs: `"{model}:{sha256(req)}:{sha256(resp)}"`.
 pub fn chat_signing_text(model: &str, request_hash: &str, response_hash: &str) -> String {
     format!("{model}:{request_hash}:{response_hash}")
