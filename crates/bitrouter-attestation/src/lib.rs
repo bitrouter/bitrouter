@@ -72,6 +72,28 @@ pub trait ConfidentialVerifier: Send + Sync {
         &self,
         ex: &ExchangeInput<'_>,
     ) -> Result<VerifiedExchange, VerifyError>;
+
+    /// Hot-path attestation for the plugin/cloud: a verdict for `model` without
+    /// the caller supplying a nonce. The default generates a fresh nonce and
+    /// runs a full [`Self::verify_attestation`]; impls with a cache (e.g.
+    /// `NearVerifier`) override this to serve a TTL'd verdict so NRAS/PCCS isn't
+    /// hit per request.
+    async fn attestation_cached(
+        &self,
+        model: &str,
+        now_unix: u64,
+    ) -> Result<AttestationVerdict, VerifyError> {
+        self.verify_attestation(model, &fresh_nonce_hex(), now_unix)
+            .await
+    }
+}
+
+/// A fresh 32-byte hex nonce for an attestation challenge.
+pub(crate) fn fresh_nonce_hex() -> String {
+    use rand::RngCore;
+    let mut nonce = [0u8; 32];
+    rand::rng().fill_bytes(&mut nonce);
+    hex::encode(nonce)
 }
 
 /// Dispatches by provider so the daemon/cloud can hold one handle and serve

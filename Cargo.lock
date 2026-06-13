@@ -798,6 +798,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitrouter-attestation-plugin"
+version = "1.0.0-alpha.14"
+dependencies = [
+ "async-trait",
+ "bitrouter-attestation",
+ "bitrouter-sdk",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "bitrouter-bedrock"
 version = "1.0.0-alpha.14"
 dependencies = [
