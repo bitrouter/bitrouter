@@ -17,10 +17,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_pay::payment::x402::{
     TransferAuthorization, build_transfer_authorization_typed_data,
 };
-use bitrouter_pay::{
-    ArcPaymentGate, ArcPaymentGateConfig, ArcSigner, AttestationReceipt, ChainlinkAttester,
-    Resource,
-};
+use bitrouter_pay::{ArcPaymentGate, ArcPaymentGateConfig, ArcSigner};
 use bitrouter_sdk::{PaymentGate, PaymentRouteRequest};
 use serde_json::json;
 
@@ -257,61 +254,62 @@ async fn test_x402_payment_loop() {
 
 // ── Test 2 — Chainlink Confidential AI Attester ───────────────────────────────
 
-/// Proves: inference submission, polling to completion, attestation digests.
+/// Proves: inference submission, polling to completion, honest VerifiedExchange.
 ///
 /// Steps:
-/// 1. Create ChainlinkAttester with API key.
-/// 2. Submit `app.js` code for review via qwen3.6.
-/// 3. Poll until completed (max 10 minutes).
-/// 4. Assert receipt has non-empty `request_digest` and `response_digest`.
+/// 1. Run attested inference via the shared engine.
+/// 2. Assert VerifiedExchange has a non-empty inference_id.
+/// 3. Assert verified=false (unsigned dev-preview).
 #[tokio::test]
 #[ignore]
 async fn test_chainlink_attester() {
+    use bitrouter_attestation::{IntegrityProof, VerifiedExchange};
+    use bitrouter_pay::run_attested_inference;
+
     load_env();
 
     println!("=== Test 2: Chainlink Confidential AI Attester ===\n");
 
-    let attester = ChainlinkAttester::new(chainlink_api_key());
-
     let code = "function add(a, b) { return a + b; }";
-    let resource = Resource::from_bytes("app.js", "text/plain", code.as_bytes());
 
     println!("Submitting inference request...");
     println!("  model:    qwen3.6");
-    println!("  resource: app.js ({} bytes)", code.len());
+    println!("  resource: payload ({} bytes)", code.len());
 
-    let receipt: AttestationReceipt = attester
-        .infer(
-            "qwen3.6",
-            r#"Review this code for bugs. Return JSON: {"pass": true, "issues": []}"#,
-            vec![resource],
-        )
-        .await
-        .unwrap_or_else(|e| panic!("Chainlink attester failed: {e}"));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
-    println!("\nAttestationReceipt:");
-    println!("  inference_id:    {}", receipt.inference_id);
-    println!("  model:           {}", receipt.model);
-    println!("  request_digest:  {}", receipt.request_digest);
-    println!("  response_digest: {}", receipt.response_digest);
-    println!("  resource_digest: {}", receipt.resource_digest);
-    println!("  filename_digest: {}", receipt.filename_digest);
-    println!("  filename_blind:  {}", receipt.filename_blinding);
-    println!("  completed_at:    {}", receipt.completed_at);
-    println!("  attested:        {}", receipt.attested);
+    let verified: VerifiedExchange = run_attested_inference(
+        &chainlink_api_key(),
+        "qwen3.6",
+        r#"Review this code for bugs. Return JSON: {"pass": true, "issues": []}"#,
+        code.as_bytes(),
+        now,
+    )
+    .await
+    .unwrap_or_else(|e| panic!("run_attested_inference failed: {e}"));
 
-    assert!(!receipt.inference_id.is_empty(), "inference_id is empty");
-    assert!(
-        !receipt.request_digest.is_empty(),
-        "request_digest is empty"
-    );
-    assert!(
-        !receipt.response_digest.is_empty(),
-        "response_digest is empty"
-    );
-    assert!(receipt.attested, "receipt.attested is false");
+    println!("\nVerifiedExchange:");
+    println!("  model:    {}", verified.model);
+    println!("  verified: {}", verified.verified);
 
-    println!("\n✅ Test 2 passed — Chainlink attestation completed with digests");
+    assert!(!verified.verified, "unsigned digests must never verify");
+    match verified.integrity {
+        IntegrityProof::ChainlinkResourceDigests {
+            inference_id,
+            digests_consistent,
+            ..
+        } => {
+            assert!(!inference_id.is_empty(), "inference_id is empty");
+            println!("  inference_id:      {inference_id}");
+            println!("  digests_consistent: {digests_consistent}");
+        }
+        other => panic!("expected ChainlinkResourceDigests, got {other:?}"),
+    }
+
+    println!("\n✅ Test 2 passed — Chainlink attested inference completed");
 }
 
 // ── Test 3 — Full gate flow ───────────────────────────────────────────────────
@@ -365,30 +363,22 @@ async fn test_full_gate_flow() {
         serde_json::to_string_pretty(&result.body).unwrap_or_default()
     );
 
-    let receipt: AttestationReceipt = serde_json::from_value(result.body)
-        .expect("gate result body is not a valid AttestationReceipt");
-
-    println!("\nAttestationReceipt from gate:");
-    println!("  inference_id:    {}", receipt.inference_id);
-    println!("  model:           {}", receipt.model);
-    println!("  request_digest:  {}", receipt.request_digest);
-    println!("  response_digest: {}", receipt.response_digest);
-    println!("  attested:        {}", receipt.attested);
-
-    assert!(!receipt.inference_id.is_empty(), "inference_id is empty");
-    assert!(
-        !receipt.request_digest.is_empty(),
-        "request_digest is empty"
-    );
-    assert!(receipt.attested, "receipt.attested is false");
-
-    // Ledger row is written by `record_ledger` inside gate.pay_internal.
-    // Without `observe-ledger` feature the row goes to the tracing subscriber;
-    // with it, it goes to the OTEL pipeline.  Either way the gate succeeded.
-    println!(
-        "\nLedger entry: url={PROCEEDS_URL} ref={}",
-        receipt.inference_id
-    );
+    use bitrouter_attestation::{IntegrityProof, VerifiedExchange};
+    let verified: VerifiedExchange =
+        serde_json::from_value(result.body).expect("body is a VerifiedExchange");
+    assert!(!verified.verified, "unsigned digests must never verify");
+    match verified.integrity {
+        IntegrityProof::ChainlinkResourceDigests {
+            inference_id,
+            digests_consistent,
+            ..
+        } => {
+            assert!(!inference_id.is_empty(), "inference_id is empty");
+            println!("digests_consistent: {digests_consistent}");
+            println!("\nLedger entry: url={PROCEEDS_URL} ref={inference_id}",);
+        }
+        other => panic!("expected ChainlinkResourceDigests, got {other:?}"),
+    }
 
     println!("\n✅ Test 3 passed — full gate flow (x402 + attestation) succeeded");
 }

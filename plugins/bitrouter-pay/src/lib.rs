@@ -32,7 +32,8 @@ pub enum PayError {
     Timeout,
 }
 
-pub use attester::{AttestError, AttestationReceipt, ChainlinkAttester, Resource};
+#[cfg(feature = "arc")]
+pub use attester::run_attested_inference;
 #[cfg(feature = "arc")]
 pub use chain::arc::{
     AGENT_WALLET_ADDRESS, ARC_TESTNET_CAIP2, ARC_TESTNET_CHAIN_ID, ARC_TESTNET_RPC,

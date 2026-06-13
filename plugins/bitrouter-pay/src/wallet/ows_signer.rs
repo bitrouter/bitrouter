@@ -76,20 +76,20 @@ fn vault_dir(vault_path: Option<&Path>) -> Result<PathBuf, PayError> {
 /// Prefers `OWS_BIN` from the environment, then the hardcoded install path, then
 /// falls back to `which ows`, then the bare `ows` name.
 fn ows_binary() -> String {
-    if let Ok(bin) = std::env::var("OWS_BIN") {
-        if !bin.is_empty() {
-            return bin;
-        }
+    if let Ok(bin) = std::env::var("OWS_BIN")
+        && !bin.is_empty()
+    {
+        return bin;
     }
     if Path::new(OWS_BIN_DEFAULT).exists() {
         return OWS_BIN_DEFAULT.to_string();
     }
-    if let Ok(out) = Command::new("which").arg("ows").output() {
-        if out.status.success() {
-            let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !resolved.is_empty() {
-                return resolved;
-            }
+    if let Ok(out) = Command::new("which").arg("ows").output()
+        && out.status.success()
+    {
+        let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !resolved.is_empty() {
+            return resolved;
         }
     }
     "ows".to_string()

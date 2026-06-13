@@ -10,6 +10,8 @@ rust-version.workspace = true
 
 [dependencies]
 bitrouter-sdk.workspace = true
+bitrouter-chainlink = { workspace = true }
+bitrouter-attestation = { workspace = true }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

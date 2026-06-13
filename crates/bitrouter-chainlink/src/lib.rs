@@ -19,8 +19,10 @@ mod map;
 mod verifier;
 mod wire;
 
+pub use client::{ChainlinkClient, PollConfig};
 pub use executor::ChainlinkExecutor;
 pub use verifier::ChainlinkVerifier;
+pub use wire::{InferenceRequest, Resource, Status};
 
 /// The custom protocol id used in config (`api_protocol: chainlink_confidential`)
 /// and on the DispatchExecutor key.
