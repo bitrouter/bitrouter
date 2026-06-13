@@ -7,3 +7,4 @@
 
 pub mod binding;
 pub mod report;
+pub mod tdx;

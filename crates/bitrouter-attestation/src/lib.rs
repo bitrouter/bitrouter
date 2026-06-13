@@ -29,6 +29,7 @@ mod types;
 
 pub use near::binding::{compose_matches_mr_config, report_data_binds};
 pub use near::report::{AttestationInfo, AttestationReport, ModelAttestation};
+pub use near::tdx::{PHALA_PCCS_URL, TdxMeasurements, parse_tdx_quote, verify_tdx_quote};
 pub use transport::{MockTransport, ReportTransport, ReqwestTransport, SIGNING_ALGO};
 pub use types::{
     AttestationChecks, AttestationVerdict, ExchangeInput, IntegrityProof, VerifiedExchange,
