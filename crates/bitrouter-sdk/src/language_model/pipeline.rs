@@ -21,6 +21,7 @@ use crate::language_model::hooks::{
 use crate::language_model::routing::{FallbackPolicy, RoutingPrefs, RoutingTable};
 use crate::language_model::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
 use crate::language_model::server_tools::stream::UpstreamStream;
+use crate::language_model::server_tools::toolset::ToolContext;
 use crate::language_model::settlement::{SettlementContext, SettlementRecorder};
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 use crate::language_model::types::{
@@ -227,12 +228,13 @@ impl Pipeline {
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
         let exec_outcome = match &self.server_tool_loop {
             Some(server_loop) => {
+                let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream = PipelineUpstream {
                     pipeline: self,
                     chain: &chain,
                     ctx: &ctx,
                 };
-                server_loop.run(ctx.prompt(), ctx.caller(), &upstream).await
+                server_loop.run(ctx.prompt(), &tool_ctx, &upstream).await
             }
             None => self.execute_with_fallback(&chain, ctx.prompt(), &ctx).await,
         };
@@ -289,6 +291,7 @@ impl Pipeline {
         // settlement is unchanged. Otherwise the pipeline stays single-shot.
         let upstream = match &self.server_tool_loop {
             Some(server_loop) => {
+                let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
                     executor: self.executor.clone(),
                     chain: chain.clone(),
@@ -296,7 +299,7 @@ impl Pipeline {
                 });
                 server_loop
                     .clone()
-                    .run_stream(ctx.prompt(), ctx.caller(), upstream_impl)
+                    .run_stream(ctx.prompt(), &tool_ctx, upstream_impl)
                     .await?
             }
             None => self.execute_stream_with_fallback(&chain, &ctx).await?,

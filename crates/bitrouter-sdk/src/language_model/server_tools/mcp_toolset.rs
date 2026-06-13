@@ -13,8 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use super::toolset::RouterToolset;
-use crate::caller::CallerContext;
+use super::toolset::{RouterToolset, ToolContext};
 use crate::error::Result;
 use crate::language_model::types::{
     ProviderMetadata, Tool, ToolResultContentPart, ToolResultOutput,
@@ -147,14 +146,17 @@ impl McpRouterToolset {
 
 #[async_trait]
 impl RouterToolset for McpRouterToolset {
-    async fn list_tools(&self, caller: &CallerContext) -> Result<Vec<Tool>> {
+    async fn list_tools(&self, ctx: &ToolContext) -> Result<Vec<Tool>> {
         let request = McpRequest::direct(
             self.server_name.clone(),
             "tools/list",
             serde_json::json!({}),
-            caller.clone(),
+            ctx.caller().clone(),
         );
-        let target = self.routing.resolve(&request.selector, caller).await?;
+        let target = self
+            .routing
+            .resolve(&request.selector, ctx.caller())
+            .await?;
         let response = self.executor.execute(&target, &request).await?;
         let tools = tools_from_list(&response.result, self.prefix.as_deref());
         if let Ok(mut advertised) = self.advertised.lock() {
@@ -170,7 +172,7 @@ impl RouterToolset for McpRouterToolset {
         &self,
         name: &str,
         arguments: &str,
-        caller: &CallerContext,
+        ctx: &ToolContext,
     ) -> Result<ToolResultOutput> {
         let parsed: serde_json::Value =
             serde_json::from_str(arguments).unwrap_or_else(|_| serde_json::json!({}));
@@ -182,9 +184,12 @@ impl RouterToolset for McpRouterToolset {
             self.server_name.clone(),
             "tools/call",
             params,
-            caller.clone(),
+            ctx.caller().clone(),
         );
-        let target = self.routing.resolve(&request.selector, caller).await?;
+        let target = self
+            .routing
+            .resolve(&request.selector, ctx.caller())
+            .await?;
         let response = self.executor.execute(&target, &request).await?;
         Ok(output_from_call(&response.result))
     }
@@ -210,6 +215,7 @@ impl RouterToolset for McpRouterToolset {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::caller::CallerContext;
     use crate::mcp::transport::McpTransport;
     use crate::mcp::{McpResponse, McpStreamPart, McpTarget, ServerSelector};
     use futures::stream::BoxStream;
@@ -332,15 +338,15 @@ mod tests {
             "demo",
             Some("mcp__demo__".to_string()),
         );
-        let caller = CallerContext::local();
+        let ctx = ToolContext::new(CallerContext::local(), Default::default());
 
-        let tools = toolset.list_tools(&caller).await.unwrap();
+        let tools = toolset.list_tools(&ctx).await.unwrap();
         assert_eq!(tools.len(), 2);
         assert!(toolset.owns("mcp__demo__search"));
         assert!(!toolset.owns("some_client_tool"));
 
         let out = toolset
-            .call_tool("mcp__demo__search", "{\"q\":\"rust\"}", &caller)
+            .call_tool("mcp__demo__search", "{\"q\":\"rust\"}", &ctx)
             .await
             .unwrap();
         assert_eq!(
