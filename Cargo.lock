@@ -750,6 +750,7 @@ dependencies = [
  "axum 0.8.9",
  "axum-test",
  "base64 0.22.1",
+ "bitrouter-attestation",
  "bitrouter-cloud-sdk",
  "bitrouter-guardrails",
  "bitrouter-mcp",
