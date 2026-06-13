@@ -320,8 +320,8 @@ async fn test_chainlink_attester() {
 /// Steps:
 /// 1. Create ArcPaymentGate with wallet_id + chainlink_api_key.
 /// 2. Call gate.pay() with attested=true, model=qwen3.6.
-/// 3. Assert the returned body deserializes as an AttestationReceipt.
-/// 4. Assert digests are present.
+/// 3. Assert the returned body deserializes as a VerifiedExchange.
+/// 4. Assert it is honestly unverified (unsigned digests) with an inference id.
 #[tokio::test]
 #[ignore]
 async fn test_full_gate_flow() {
