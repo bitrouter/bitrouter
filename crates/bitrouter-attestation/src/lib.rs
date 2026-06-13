@@ -23,8 +23,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+mod near;
+mod transport;
 mod types;
 
+pub use near::report::{AttestationInfo, AttestationReport, ModelAttestation};
+pub use transport::{MockTransport, ReportTransport, ReqwestTransport, SIGNING_ALGO};
 pub use types::{
     AttestationChecks, AttestationVerdict, ExchangeInput, IntegrityProof, VerifiedExchange,
     VerifyError,
