@@ -6,21 +6,20 @@
 //! export NEAR_BASE="https://cloud-api.near.ai/v1"          # or a bitrouter /v1/aci passthrough
 //! export NEAR_KMS_ROOTS="3059...bcbc"                        # accepted dstack KMS root pubkey(s), comma-separated
 //! export NEAR_IMAGE_DIGESTS="9b69...f677,c445...a698"        # and/or NEAR_WORKLOAD_IDS — at least one is required
-//! export NVIDIA_EAT_KEY_PEM=/path/to/nvidia-nras-pub.pem     # NVIDIA's NRAS EAT verification key (EC public PEM)
+//! # NVIDIA's NRAS key is fetched from its JWKS automatically; set
+//! # NVIDIA_EAT_KEY_PEM=/path/to/nvidia-nras-pub.pem to pin a single key instead.
 //! cargo run -p bitrouter-attestation --example verify_near -- zai-org/GLM-5.1-FP8
 //! ```
 //!
 //! The DCAP policy is REQUIRED to be pinned (KMS root + image/workload) — the
-//! verifier refuses to run unpinned (spec §1.5 cond. 1). Without
-//! `NVIDIA_EAT_KEY_PEM` the GPU NRAS check can't pass, so the verdict is
-//! reported `unverified` — fail-closed, by design.
+//! verifier refuses to run unpinned (spec §1.5 cond. 1).
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bitrouter_attestation::{
-    AciDcapVerifierPolicy, ConfidentialVerifier, DcapQuoteVerifier, NearVerifier, NvidiaEatKey,
-    ReportTransport, ReqwestTransport,
+    AciDcapVerifierPolicy, ConfidentialVerifier, DcapQuoteVerifier, NVIDIA_NRAS_JWKS_URL,
+    NearVerifier, NvidiaEatKey, ReportTransport, ReqwestTransport,
 };
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -49,17 +48,13 @@ async fn main() -> Result<(), Error> {
         env_list("NEAR_KMS_ROOTS"),
     )?;
 
-    // NVIDIA's NRAS EAT verification key. Pinned in the daemon, not fetched
-    // through the (untrusted) cloud. A wrong/absent key ⇒ GPU check fails closed.
+    // NVIDIA's NRAS EAT key. By default we fetch NVIDIA's JWKS (its signing keys
+    // rotate, so the right one is chosen per request by the EAT `kid`); set
+    // NVIDIA_EAT_KEY_PEM to pin a single key instead. Resolved in this trusted
+    // process, never through the (untrusted) cloud.
     let nvidia_key = match std::env::var("NVIDIA_EAT_KEY_PEM") {
         Ok(path) => NvidiaEatKey::from_ec_pem(&std::fs::read(path)?)?,
-        Err(_) => {
-            eprintln!(
-                "warning: NVIDIA_EAT_KEY_PEM unset — the GPU NRAS check cannot pass, so the \
-                 verdict will be `unverified` (fail-closed)."
-            );
-            NvidiaEatKey::unconfigured()
-        }
+        Err(_) => NvidiaEatKey::fetch_jwks(NVIDIA_NRAS_JWKS_URL).await?,
     };
 
     let transport = Arc::new(ReqwestTransport::new(&base)) as Arc<dyn ReportTransport>;

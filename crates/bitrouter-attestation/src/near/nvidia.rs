@@ -14,6 +14,9 @@
 //! decoding key); [`post_nras`] is the online POST the daemon makes directly to
 //! NVIDIA (Decision 4 — off the untrusted cloud).
 
+use std::collections::HashMap;
+
+use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 
 use crate::VerifyError;
@@ -21,32 +24,100 @@ use crate::VerifyError;
 /// NVIDIA NRAS GPU attestation endpoint.
 pub const NRAS_GPU_URL: &str = "https://nras.attestation.nvidia.com/v3/attest/gpu";
 
-/// NVIDIA's NRAS EAT verification key, wrapping a [`jsonwebtoken::DecodingKey`]
-/// so callers (the daemon, the CLI, third parties) don't take a direct
-/// `jsonwebtoken` dependency. Pin this in the trusted process — never fetch it
-/// through the untrusted cloud (spec §1.5).
-pub struct NvidiaEatKey(DecodingKey);
+/// NVIDIA's NRAS JWKS endpoint — the rotating set of EAT signing keys.
+pub const NVIDIA_NRAS_JWKS_URL: &str = "https://nras.attestation.nvidia.com/.well-known/jwks.json";
+
+/// Resolves the NVIDIA NRAS EAT verification key. Wraps `jsonwebtoken` so
+/// callers (the daemon, the CLI, third parties) don't take a direct
+/// `jsonwebtoken` dependency. NVIDIA rotates its signing keys, so the right one
+/// is selected per request by the EAT's `kid` — use [`Self::fetch_jwks`]
+/// ([`NVIDIA_NRAS_JWKS_URL`]) for that. [`Self::from_ec_pem`] pins a single key.
+/// Pin/fetch in the trusted process — never through the untrusted cloud (§1.5).
+pub struct NvidiaEatKey(KeySource);
+
+enum KeySource {
+    /// A single pinned key, used regardless of the EAT `kid`.
+    Single(DecodingKey),
+    /// NVIDIA's JWKS — resolve the key by the EAT header's `kid`.
+    Jwks(HashMap<String, DecodingKey>),
+    /// No key configured — the GPU check fails closed.
+    Unconfigured,
+}
 
 impl NvidiaEatKey {
-    /// Build from NVIDIA's EC public-key PEM (NRAS signs EATs with ES384/ES256).
+    /// Pin a single EC public-key PEM (NRAS signs EATs with ES384/ES256). Used
+    /// regardless of the EAT `kid` — fragile against NVIDIA's key rotation;
+    /// prefer [`Self::fetch_jwks`].
     pub fn from_ec_pem(pem: &[u8]) -> Result<Self, VerifyError> {
         DecodingKey::from_ec_pem(pem)
-            .map(Self)
+            .map(|k| Self(KeySource::Single(k)))
             .map_err(|e| VerifyError::Malformed {
                 what: "nvidia eat key",
                 detail: e.to_string(),
             })
     }
 
-    /// A placeholder key that can never verify a real NVIDIA EAT — for contexts
-    /// where the key isn't configured yet. The GPU check then fails closed
-    /// (`gpu_nras_pass = false`), never a silent pass.
-    pub fn unconfigured() -> Self {
-        Self(DecodingKey::from_secret(b"nvidia-eat-key-not-configured"))
+    /// Build a `kid`-keyed resolver from an NVIDIA JWKS document. Keys without a
+    /// `kid` or in an unsupported form are skipped; errors if none are usable.
+    pub fn from_jwks_json(bytes: &[u8]) -> Result<Self, VerifyError> {
+        let set: JwkSet = serde_json::from_slice(bytes).map_err(|e| VerifyError::Malformed {
+            what: "nvidia jwks",
+            detail: e.to_string(),
+        })?;
+        let mut map = HashMap::new();
+        for jwk in &set.keys {
+            if let (Some(kid), Ok(key)) = (jwk.common.key_id.clone(), DecodingKey::from_jwk(jwk)) {
+                map.insert(kid, key);
+            }
+        }
+        if map.is_empty() {
+            return Err(VerifyError::Malformed {
+                what: "nvidia jwks",
+                detail: "no usable keys with a kid".to_string(),
+            });
+        }
+        Ok(Self(KeySource::Jwks(map)))
     }
 
-    pub(crate) fn decoding_key(&self) -> &DecodingKey {
-        &self.0
+    /// Fetch NVIDIA's JWKS and build a `kid`-keyed resolver. Online; the daemon
+    /// calls NVIDIA directly (Decision 4).
+    pub async fn fetch_jwks(url: &str) -> Result<Self, VerifyError> {
+        let body = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| VerifyError::Transport {
+                what: "nvidia jwks",
+                source: Box::new(e),
+            })?
+            .error_for_status()
+            .map_err(|e| VerifyError::Transport {
+                what: "nvidia jwks",
+                source: Box::new(e),
+            })?
+            .bytes()
+            .await
+            .map_err(|e| VerifyError::Transport {
+                what: "nvidia jwks",
+                source: Box::new(e),
+            })?;
+        Self::from_jwks_json(&body)
+    }
+
+    /// No key configured — every GPU check fails closed (`gpu_nras_pass=false`),
+    /// never a silent pass.
+    pub fn unconfigured() -> Self {
+        Self(KeySource::Unconfigured)
+    }
+
+    /// The verification key for an EAT with the given `kid`, or `None` (which
+    /// fails the GPU check closed).
+    pub(crate) fn resolve(&self, kid: Option<&str>) -> Option<&DecodingKey> {
+        match &self.0 {
+            KeySource::Single(key) => Some(key),
+            KeySource::Jwks(map) => kid.and_then(|k| map.get(k)),
+            KeySource::Unconfigured => None,
+        }
     }
 }
 
@@ -132,11 +203,7 @@ fn platform_jwt(response_body: &[u8]) -> Result<String, VerifyError> {
 ///
 /// Freshness is bound by the per-request `nonce`, not the token `exp`, so `exp`
 /// is not enforced here (a cached/replayed token fails the nonce check).
-pub fn check_nras_eat(
-    response_body: &[u8],
-    nonce: &str,
-    decoding_key: &DecodingKey,
-) -> NrasVerdict {
+pub fn check_nras_eat(response_body: &[u8], nonce: &str, key: &NvidiaEatKey) -> NrasVerdict {
     let Ok(jwt) = platform_jwt(response_body) else {
         return NrasVerdict::failed();
     };
@@ -150,6 +217,11 @@ pub fn check_nras_eat(
     if !NRAS_ALGORITHMS.contains(&header.alg) {
         return NrasVerdict::failed();
     }
+    // Resolve NVIDIA's signing key by the EAT `kid` (rotated); `None` fails
+    // closed (no key configured, or an unknown kid).
+    let Some(decoding_key) = key.resolve(header.kid.as_deref()) else {
+        return NrasVerdict::failed();
+    };
     let mut validation = Validation::new(header.alg);
     validation.algorithms = vec![header.alg];
     validation.validate_exp = false;
@@ -223,29 +295,38 @@ mod tests {
 
     const NONCE: &str = "9a01356cb451dc2c3c0ce9a195245a0be984a3f73617f55f87913fc2f059cba7";
 
+    const TEST_JWKS: &str = include_str!("../../tests/fixtures/nras_test_jwks.json");
+
     fn signing_key() -> EncodingKey {
         EncodingKey::from_ec_pem(TEST_EC_PRIVATE_PKCS8_PEM.as_bytes()).expect("test priv key")
     }
 
-    fn verifying_key() -> DecodingKey {
-        DecodingKey::from_ec_pem(TEST_EC_PUBLIC_PEM.as_bytes()).expect("test pub key")
+    /// A single-pinned resolver over the test public key.
+    fn pinned_key() -> NvidiaEatKey {
+        NvidiaEatKey::from_ec_pem(TEST_EC_PUBLIC_PEM.as_bytes()).expect("test pub key")
     }
 
     /// Build an NRAS-shaped response body whose platform EAT carries the given
-    /// result + nonce, signed with the test key.
-    fn nras_body(overall: bool, eat_nonce: &str) -> Vec<u8> {
+    /// result + nonce, signed with the test key. `kid` sets the JWT header kid.
+    fn nras_body_kid(overall: bool, eat_nonce: &str, kid: Option<&str>) -> Vec<u8> {
         let claims = serde_json::json!({
             "x-nvidia-overall-att-result": overall,
             "eat_nonce": eat_nonce,
         });
-        let jwt = encode(&Header::new(Algorithm::ES256), &claims, &signing_key()).unwrap();
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = kid.map(str::to_string);
+        let jwt = encode(&header, &claims, &signing_key()).unwrap();
         serde_json::to_vec(&serde_json::json!([["JWT", jwt], {}])).unwrap()
+    }
+
+    fn nras_body(overall: bool, eat_nonce: &str) -> Vec<u8> {
+        nras_body_kid(overall, eat_nonce, None)
     }
 
     #[test]
     fn accepts_a_passing_signed_eat_with_matching_nonce() {
         let body = nras_body(true, NONCE);
-        let verdict = check_nras_eat(&body, NONCE, &verifying_key());
+        let verdict = check_nras_eat(&body, NONCE, &pinned_key());
         assert!(verdict.passed());
         assert!(verdict.signature_verified && verdict.overall_pass && verdict.nonce_matches);
     }
@@ -253,7 +334,7 @@ mod tests {
     #[test]
     fn rejects_a_failing_result_claim() {
         let body = nras_body(false, NONCE);
-        let verdict = check_nras_eat(&body, NONCE, &verifying_key());
+        let verdict = check_nras_eat(&body, NONCE, &pinned_key());
         assert!(verdict.signature_verified);
         assert!(!verdict.overall_pass);
         assert!(!verdict.passed());
@@ -262,25 +343,36 @@ mod tests {
     #[test]
     fn rejects_a_replayed_nonce() {
         let body = nras_body(true, "00000000000000000000000000000000");
-        let verdict = check_nras_eat(&body, NONCE, &verifying_key());
+        let verdict = check_nras_eat(&body, NONCE, &pinned_key());
         assert!(!verdict.nonce_matches);
         assert!(!verdict.passed());
     }
 
     #[test]
-    fn rejects_a_token_signed_by_the_wrong_key() {
-        // Verify a genuine-looking token against a *different* key: signature
-        // fails, so the whole verdict fails closed.
+    fn unconfigured_key_fails_closed() {
+        // No key resolves ⇒ the GPU check can never pass.
         let body = nras_body(true, NONCE);
-        let other = DecodingKey::from_secret(b"not the nvidia key");
-        let verdict = check_nras_eat(&body, NONCE, &other);
+        let verdict = check_nras_eat(&body, NONCE, &NvidiaEatKey::unconfigured());
         assert!(!verdict.signature_verified);
         assert!(!verdict.passed());
     }
 
     #[test]
+    fn jwks_resolves_the_signing_key_by_kid() {
+        let jwks = NvidiaEatKey::from_jwks_json(TEST_JWKS.as_bytes()).expect("jwks parses");
+
+        // A token whose kid is in the JWKS verifies...
+        let ok = nras_body_kid(true, NONCE, Some("test-kid-1"));
+        assert!(check_nras_eat(&ok, NONCE, &jwks).passed());
+
+        // ...but an unknown kid resolves to no key and fails closed.
+        let unknown = nras_body_kid(true, NONCE, Some("rotated-away-kid"));
+        assert!(!check_nras_eat(&unknown, NONCE, &jwks).signature_verified);
+    }
+
+    #[test]
     fn rejects_a_malformed_response_body() {
-        let verdict = check_nras_eat(b"[\"not jwt shaped\"]", NONCE, &verifying_key());
+        let verdict = check_nras_eat(b"[\"not jwt shaped\"]", NONCE, &pinned_key());
         assert_eq!(verdict, NrasVerdict::failed());
     }
 }

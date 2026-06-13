@@ -117,7 +117,7 @@ impl NearVerifier {
         };
 
         let gpu_nras_pass = match self.transport.fetch_gpu_eat(&m.nvidia_payload).await {
-            Ok(eat) => check_nras_eat(&eat, nonce, self.nvidia_key.decoding_key()).passed(),
+            Ok(eat) => check_nras_eat(&eat, nonce, &self.nvidia_key).passed(),
             Err(_) => false,
         };
 

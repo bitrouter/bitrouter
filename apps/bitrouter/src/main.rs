@@ -1316,8 +1316,8 @@ async fn verify_attestation(model: &str) -> Result<()> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use bitrouter_attestation::{
-        AciDcapVerifierPolicy, ConfidentialVerifier, DcapQuoteVerifier, NearVerifier, NvidiaEatKey,
-        ReportTransport, ReqwestTransport,
+        AciDcapVerifierPolicy, ConfidentialVerifier, DcapQuoteVerifier, NVIDIA_NRAS_JWKS_URL,
+        NearVerifier, NvidiaEatKey, ReportTransport, ReqwestTransport,
     };
 
     fn env_list(key: &str) -> Vec<String> {
@@ -1344,14 +1344,23 @@ async fn verify_attestation(model: &str) -> Result<()> {
         )
     })?;
 
+    // GPU EAT key: an explicit PEM override wins; otherwise fetch NVIDIA's JWKS
+    // (its signing keys rotate, so we resolve per-request by the EAT `kid`).
     let nvidia_key = match std::env::var("NVIDIA_EAT_KEY_PEM") {
         Ok(path) => NvidiaEatKey::from_ec_pem(&std::fs::read(&path)?)
             .map_err(|e| anyhow::anyhow!("invalid NVIDIA_EAT_KEY_PEM ({path}): {e}"))?,
         Err(_) => {
-            bitrouter::error_report::info(
-                "NVIDIA_EAT_KEY_PEM unset — the GPU NRAS check cannot pass (verdict will be unverified)",
-            );
-            NvidiaEatKey::unconfigured()
+            let url = std::env::var("NVIDIA_JWKS_URL")
+                .unwrap_or_else(|_| NVIDIA_NRAS_JWKS_URL.to_string());
+            match NvidiaEatKey::fetch_jwks(&url).await {
+                Ok(key) => key,
+                Err(e) => {
+                    bitrouter::error_report::info(format!(
+                        "could not fetch NVIDIA JWKS ({e}); the GPU check will fail closed"
+                    ));
+                    NvidiaEatKey::unconfigured()
+                }
+            }
         }
     };
 
