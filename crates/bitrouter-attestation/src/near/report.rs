@@ -33,6 +33,21 @@ pub struct ModelAttestation {
     /// The client nonce echoed back, bound into `report_data`.
     pub request_nonce: String,
     pub info: AttestationInfo,
+    /// The dstack event log. Replayed into RTMR3 and compared to the quote so
+    /// the `info` fields it records (app-id, compose-hash, …) are anchored to
+    /// the genuine TEE measurement, not merely cloud-asserted (spec §5.1).
+    pub event_log: Vec<DstackEvent>,
+}
+
+/// One dstack measured-boot event. Each event with `imr == 3` extends RTMR3 by
+/// `RTMR3 = sha384(RTMR3 ‖ digest)`; `event` names it (`"app-id"`,
+/// `"compose-hash"`, …) and `event_payload` is the measured value.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DstackEvent {
+    pub imr: u32,
+    pub digest: String,
+    pub event: String,
+    pub event_payload: String,
 }
 
 /// The dstack `info` block. Source of the policy-pinning fields (spec §1.5
