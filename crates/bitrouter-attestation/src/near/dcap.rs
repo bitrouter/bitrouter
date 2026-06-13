@@ -145,28 +145,78 @@ fn canonical_ec_public_key(public_key_hex: &str) -> Result<String, PolicyError> 
     Ok(hex::encode(point))
 }
 
-/// Pull the uncompressed/compressed SEC1 point out of either a raw SEC1
-/// encoding or the tail of a DER SubjectPublicKeyInfo. The EC point is the
-/// meaningful key material; this ignores DER framing so two encodings of the
-/// same key match.
+/// Return the SEC1 point for either a raw SEC1 encoding or a DER
+/// SubjectPublicKeyInfo. For DER the structure is **parsed and validated**
+/// (SEQUENCE → AlgorithmIdentifier with the `ecPublicKey` OID → BIT STRING) so
+/// the point is read from the actual `subjectPublicKey` field, not sliced by
+/// position — a crafted blob whose tail happens to equal a pinned key is
+/// rejected. `None` if it is neither a valid SEC1 point nor a valid EC SPKI.
 fn sec1_point(bytes: &[u8]) -> Option<Vec<u8>> {
-    match bytes.first() {
-        Some(0x04) if bytes.len() == 65 => return Some(bytes.to_vec()),
-        Some(0x02 | 0x03) if bytes.len() == 33 => return Some(bytes.to_vec()),
-        _ => {}
+    if is_sec1_point(bytes) {
+        return Some(bytes.to_vec());
     }
-    // DER SPKI: the subjectPublicKey BIT STRING is the tail; an uncompressed
-    // point is its final 65 bytes (leading 0x04), a compressed one its final 33.
-    if bytes.first() != Some(&0x30) {
+    let point = spki_ec_point(bytes)?;
+    is_sec1_point(&point).then_some(point)
+}
+
+/// True iff `b` is a well-formed SEC1 point: uncompressed `0x04‖X‖Y` (65 bytes)
+/// or compressed `0x02|0x03‖X` (33 bytes).
+fn is_sec1_point(b: &[u8]) -> bool {
+    (b.len() == 65 && b[0] == 0x04) || (b.len() == 33 && matches!(b[0], 0x02 | 0x03))
+}
+
+/// ASN.1/DER `1.2.840.10045.2.1` — `ecPublicKey`.
+const OID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+
+/// Parse a DER `SubjectPublicKeyInfo` for an EC key and return its SEC1 point
+/// (the `subjectPublicKey` BIT STRING content, minus the unused-bits octet).
+/// Validates the OID and structure rather than slicing by offset.
+fn spki_ec_point(der: &[u8]) -> Option<Vec<u8>> {
+    let (tag, spki, _) = der_tlv(der)?;
+    if tag != 0x30 {
+        return None; // SubjectPublicKeyInfo ::= SEQUENCE
+    }
+    let (alg_tag, alg, after_alg) = der_tlv(spki)?;
+    if alg_tag != 0x30 {
+        return None; // AlgorithmIdentifier ::= SEQUENCE
+    }
+    let (oid_tag, oid, _) = der_tlv(alg)?;
+    if oid_tag != 0x06 || oid != OID_EC_PUBLIC_KEY {
+        return None; // algorithm must be ecPublicKey
+    }
+    let (bit_tag, bit_string, _) = der_tlv(after_alg)?;
+    if bit_tag != 0x03 {
+        return None; // subjectPublicKey ::= BIT STRING
+    }
+    let (&unused_bits, point) = bit_string.split_first()?;
+    if unused_bits != 0 {
         return None;
     }
-    if bytes.len() >= 65 && bytes[bytes.len() - 65] == 0x04 {
-        return Some(bytes[bytes.len() - 65..].to_vec());
+    Some(point.to_vec())
+}
+
+/// Read one DER TLV: returns `(tag, content, remaining)`. Supports short and
+/// long definite-length forms; `None` on any malformed length.
+fn der_tlv(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let (&tag, rest) = input.split_first()?;
+    let (&len0, rest) = rest.split_first()?;
+    let (len, rest) = if len0 < 0x80 {
+        (len0 as usize, rest)
+    } else {
+        let n = (len0 & 0x7f) as usize;
+        if n == 0 || n > 4 || rest.len() < n {
+            return None;
+        }
+        let mut len = 0usize;
+        for &b in &rest[..n] {
+            len = (len << 8) | b as usize;
+        }
+        (len, &rest[n..])
+    };
+    if rest.len() < len {
+        return None;
     }
-    if bytes.len() >= 33 && matches!(bytes[bytes.len() - 33], 0x02 | 0x03) {
-        return Some(bytes[bytes.len() - 33..].to_vec());
-    }
-    None
+    Some((tag, &rest[..len], &rest[len..]))
 }
 
 #[cfg(test)]
@@ -256,6 +306,20 @@ mod tests {
             AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [raw_point.to_string()]).unwrap();
         // Report presents the full DER SPKI; it still matches the pinned point.
         assert!(policy.accepts_kms_root(KMS_ROOT_DER_SPKI));
+    }
+
+    #[test]
+    fn rejects_a_crafted_der_blob_whose_tail_spoofs_a_pinned_point() {
+        // A SEQUENCE wrapping an OCTET STRING (0x04) of the legitimate 65-byte
+        // point — its final 65 bytes equal the pinned key, but it is not a valid
+        // EC SubjectPublicKeyInfo. Byte-slicing would accept it; structure
+        // validation must reject it.
+        let raw_point = &KMS_ROOT_DER_SPKI[KMS_ROOT_DER_SPKI.len() - 130..];
+        let crafted = format!("30430441{raw_point}");
+        let policy =
+            AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
+                .unwrap();
+        assert!(!policy.accepts_kms_root(&crafted));
     }
 
     #[test]

@@ -35,6 +35,11 @@ use crate::{ConfidentialVerifier, VerifyError};
 pub const TRUST_BOUNDARY: &str = "near-ai-model";
 /// Default verdict cache TTL (spec §8).
 pub const DEFAULT_CACHE_TTL_SECONDS: u64 = 600;
+/// Cap for caching an **unverified** verdict. Failures (e.g. a transient NRAS
+/// outage) are still cached so we don't hammer NRAS per request, but only
+/// briefly so verification recovers quickly rather than denying a model for a
+/// full TTL (review finding #4).
+pub const UNVERIFIED_CACHE_TTL_SECONDS: u64 = 60;
 
 /// The NEAR [`ConfidentialVerifier`]. Composes the report fetch, GPU NRAS check,
 /// DCAP quote verification, report_data/compose bindings, and the load-bearing
@@ -86,8 +91,14 @@ impl NearVerifier {
         }
         let nonce = random_nonce_hex();
         let verdict = self.verify_attestation(model, &nonce, now_unix).await?;
-        self.cache
-            .put(verdict.clone(), self.cache_ttl_seconds, now_unix);
+        // Cache a confirmed verdict for the full TTL; cap an unverified one to a
+        // short retry window so a transient failure recovers quickly.
+        let ttl = if verdict.verified {
+            self.cache_ttl_seconds
+        } else {
+            self.cache_ttl_seconds.min(UNVERIFIED_CACHE_TTL_SECONDS)
+        };
+        self.cache.put(verdict.clone(), ttl, now_unix);
         Ok(verdict)
     }
 
@@ -402,19 +413,43 @@ mod tests {
         let transport = Arc::new(StubTransport::passing());
         let v = verifier(transport.clone(), policy(APP_ID, KMS_ROOT_DER_SPKI)).with_cache_ttl(600);
 
+        // verdict_cached uses a fresh random nonce, so against the fixed fixture
+        // the verdict is unverified and cached only for the short retry window.
         v.verdict_cached(MODEL, 1_000).await.unwrap();
-        v.verdict_cached(MODEL, 1_100).await.unwrap();
+        v.verdict_cached(MODEL, 1_030).await.unwrap();
         assert_eq!(
             transport.report_fetches.load(Ordering::SeqCst),
             1,
-            "second call hits cache"
+            "second call within the retry window hits cache"
         );
 
-        v.verdict_cached(MODEL, 1_700).await.unwrap(); // past TTL
+        v.verdict_cached(MODEL, 1_061).await.unwrap(); // past the 60s unverified TTL
         assert_eq!(
             transport.report_fetches.load(Ordering::SeqCst),
             2,
-            "re-verifies after expiry"
+            "re-verifies after the retry window"
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_verdict_caches_for_the_full_ttl() {
+        // With the fixture nonce the verdict verifies; it should cache for the
+        // full configured TTL, not the short unverified retry window.
+        let transport = Arc::new(StubTransport::passing());
+        let v = verifier(transport, policy(APP_ID, KMS_ROOT_DER_SPKI)).with_cache_ttl(600);
+        let verdict = v
+            .verify_attestation(MODEL, FIXTURE_NONCE, 1_000)
+            .await
+            .unwrap();
+        assert!(verdict.verified);
+        v.cache.put(verdict, 600, 1_000);
+        assert!(
+            v.cache.get(MODEL, 1_599).is_some(),
+            "still fresh within TTL"
+        );
+        assert!(
+            v.cache.get(MODEL, 1_600).is_none(),
+            "expired after full TTL"
         );
     }
 }

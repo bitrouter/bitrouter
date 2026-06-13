@@ -31,7 +31,10 @@ pub fn report_data_binds(report_data: &[u8], signing_address: &str, nonce: &str)
     ) else {
         return false;
     };
-    if addr.len() > 32 {
+    // An ECDSA signing address is exactly 20 bytes. Reject anything else —
+    // notably an empty address, which would otherwise match an all-zero
+    // `report_data[..32]` and pass (the zero address is not a real key).
+    if addr.len() != 20 {
         return false;
     }
     let mut expected_addr = [0u8; 32];
@@ -106,6 +109,18 @@ mod tests {
     fn report_data_rejects_wrong_length_or_bad_hex() {
         assert!(!report_data_binds(&[0u8; 10], "0xbb", "00"));
         assert!(!report_data_binds(&[0u8; 64], "nothex", &"00".repeat(32)));
+    }
+
+    #[test]
+    fn report_data_rejects_an_empty_or_short_address() {
+        // report_data = 32 zero bytes ‖ nonce. An empty/short address must NOT
+        // match the zero prefix (only a real 20-byte address may bind).
+        let nonce = "11".repeat(32);
+        let mut rd = [0u8; 64];
+        rd[32..].copy_from_slice(&hex::decode(&nonce).unwrap());
+        assert!(!report_data_binds(&rd, "", &nonce));
+        assert!(!report_data_binds(&rd, "0x", &nonce));
+        assert!(!report_data_binds(&rd, "0xdead", &nonce)); // 2 bytes, not 20
     }
 
     #[test]
