@@ -370,6 +370,33 @@ pub async fn build_app_with_path(
     } else {
         app.plugin(GuardrailsPlugin::with_static(guardrail_rules))
     };
+    // Chainlink confidential-inference attestation (demo only). Registers the
+    // ChainlinkVerifier and installs the route-hook plugin in Record mode, so
+    // Chainlink targets are tagged "unattested" (the dev-preview exposes no
+    // signed attestation) but never dropped. NEAR stays CLI-only for now.
+    #[cfg(feature = "chainlink-demo")]
+    let app = {
+        use bitrouter_attestation::VerifierRegistry;
+        use bitrouter_attestation_plugin::{
+            AttestationConfig, AttestationPlugin, AttestationPolicy,
+        };
+
+        if let Some(p) = config.providers.get("chainlink") {
+            let verifier =
+                bitrouter_chainlink::ChainlinkVerifier::new(p.api_base.clone(), p.api_key.clone());
+            let registry =
+                Arc::new(VerifierRegistry::new().with(
+                    Arc::new(verifier) as Arc<dyn bitrouter_attestation::ConfidentialVerifier>
+                ));
+            let cfg = AttestationConfig::new(AttestationPolicy::Record, registry)
+                .with_confidential_providers(vec![
+                    bitrouter_chainlink::PROTOCOL_PROVIDER.to_string(),
+                ]);
+            app.plugin(AttestationPlugin::new(cfg))
+        } else {
+            app
+        }
+    };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
     // had since v0.

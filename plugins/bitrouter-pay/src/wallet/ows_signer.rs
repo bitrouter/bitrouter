@@ -15,8 +15,8 @@ use alloy::primitives::{Address, B256, ChainId, Signature, U256};
 use alloy::signers::Signer;
 use serde::Deserialize;
 
-use crate::chain::arc::{ARC_TESTNET_CAIP2, ARC_TESTNET_CHAIN_ID};
 use crate::PayError;
+use crate::chain::arc::{ARC_TESTNET_CAIP2, ARC_TESTNET_CHAIN_ID};
 
 /// Hardcoded OWS CLI binary path (the npm shim on PATH is broken on this host).
 const OWS_BIN_DEFAULT: &str = "/home/maka/.ows/bin/ows";
@@ -76,20 +76,20 @@ fn vault_dir(vault_path: Option<&Path>) -> Result<PathBuf, PayError> {
 /// Prefers `OWS_BIN` from the environment, then the hardcoded install path, then
 /// falls back to `which ows`, then the bare `ows` name.
 fn ows_binary() -> String {
-    if let Ok(bin) = std::env::var("OWS_BIN") {
-        if !bin.is_empty() {
-            return bin;
-        }
+    if let Ok(bin) = std::env::var("OWS_BIN")
+        && !bin.is_empty()
+    {
+        return bin;
     }
     if Path::new(OWS_BIN_DEFAULT).exists() {
         return OWS_BIN_DEFAULT.to_string();
     }
-    if let Ok(out) = Command::new("which").arg("ows").output() {
-        if out.status.success() {
-            let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !resolved.is_empty() {
-                return resolved;
-            }
+    if let Ok(out) = Command::new("which").arg("ows").output()
+        && out.status.success()
+    {
+        let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !resolved.is_empty() {
+            return resolved;
         }
     }
     "ows".to_string()
@@ -127,10 +127,7 @@ fn resolve_wallet_by_name(
         })?;
 
         let wallet: VaultWallet = serde_json::from_str(&contents).map_err(|e| {
-            PayError::SignerError(format!(
-                "invalid wallet JSON in {}: {e}",
-                path.display()
-            ))
+            PayError::SignerError(format!("invalid wallet JSON in {}: {e}", path.display()))
         })?;
 
         if wallet.name == wallet_name {
@@ -211,9 +208,9 @@ impl ArcSigner {
                 cmd.env("OWS_VAULT_PATH", path);
             }
 
-            let output = cmd.output().map_err(|e| {
-                PayError::SignerError(format!("failed to invoke ows CLI: {e}"))
-            })?;
+            let output = cmd
+                .output()
+                .map_err(|e| PayError::SignerError(format!("failed to invoke ows CLI: {e}")))?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);

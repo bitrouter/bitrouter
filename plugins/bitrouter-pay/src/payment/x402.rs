@@ -12,12 +12,12 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use alloy::primitives::{Address, B256};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 
+use crate::PayError;
 use crate::chain::arc::{ARC_TESTNET_CAIP2, ARC_TESTNET_CHAIN_ID, ARC_TESTNET_USDC};
 use crate::wallet::ArcSigner;
-use crate::PayError;
 
 const PAYMENT_SIGNATURE: &str = "PAYMENT-SIGNATURE";
 
@@ -108,19 +108,15 @@ impl X402Client {
         // Parse the x402 v2 challenge from the 402 response body. Keep it as
         // raw JSON so the selected accept entry and the resource object can be
         // echoed back exactly in the payment proof.
-        let raw = first.text().await.map_err(|e| {
-            PayError::InvalidChallenge(format!("failed to read 402 body: {e}"))
-        })?;
+        let raw = first
+            .text()
+            .await
+            .map_err(|e| PayError::InvalidChallenge(format!("failed to read 402 body: {e}")))?;
         let challenge: Value = serde_json::from_str(&raw).map_err(|e| {
-            PayError::InvalidChallenge(format!(
-                "invalid x402 v2 JSON: {e} | body: {raw}"
-            ))
+            PayError::InvalidChallenge(format!("invalid x402 v2 JSON: {e} | body: {raw}"))
         })?;
 
-        let resource = challenge
-            .get("resource")
-            .cloned()
-            .unwrap_or(Value::Null);
+        let resource = challenge.get("resource").cloned().unwrap_or(Value::Null);
 
         let accepted = challenge
             .get("accepts")
@@ -193,16 +189,10 @@ impl X402Client {
             nonce,
         };
 
-        let typed_data = build_transfer_authorization_typed_data(
-            domain_name,
-            domain_version,
-            &auth,
-        );
+        let typed_data =
+            build_transfer_authorization_typed_data(domain_name, domain_version, &auth);
 
-        let sig = self
-            .signer
-            .sign_typed_data(&typed_data.to_string())
-            .await?;
+        let sig = self.signer.sign_typed_data(&typed_data.to_string()).await?;
 
         // USDC's EIP-3009 implementation uses ecrecover with v = 27 or 28.
         let mut sig_bytes = Vec::with_capacity(65);
@@ -256,7 +246,7 @@ impl X402Client {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::{keccak256, Address, B256, U256};
+    use alloy::primitives::{Address, B256, U256, keccak256};
 
     use crate::chain::arc::{ARC_TESTNET_CHAIN_ID, ARC_TESTNET_USDC};
 

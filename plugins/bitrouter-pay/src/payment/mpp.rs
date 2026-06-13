@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::PayError;
 use crate::chain::arc::{ARC_TESTNET_CAIP2, ARC_TESTNET_RPC, ARC_TESTNET_USDC};
 use crate::wallet::ArcSigner;
-use crate::PayError;
 
 /// MPP payment backend trait (matches `mpp_br::client::PaymentProvider` surface).
 #[async_trait]
@@ -89,7 +89,11 @@ impl MppClient {
         }
     }
 
-    pub async fn post(&self, url: &str, body: Option<serde_json::Value>) -> Result<serde_json::Value, PayError> {
+    pub async fn post(
+        &self,
+        url: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, PayError> {
         let first = self.send(url, body.clone(), None).await?;
         if first.status().as_u16() != 402 {
             return parse_json(first).await;
@@ -98,9 +102,7 @@ impl MppClient {
         let www_auth = first
             .headers()
             .get(reqwest::header::WWW_AUTHENTICATE)
-            .ok_or_else(|| {
-                PayError::InvalidChallenge("missing WWW-Authenticate header".into())
-            })?
+            .ok_or_else(|| PayError::InvalidChallenge("missing WWW-Authenticate header".into()))?
             .to_str()
             .map_err(|e| PayError::InvalidChallenge(e.to_string()))?;
 

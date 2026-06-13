@@ -84,6 +84,33 @@ impl ChainlinkClient {
         })
     }
 
+    /// Fetch the current snapshot for `id` (single GET, no polling). Used by the
+    /// verifier to re-read the service-reported digests on demand.
+    pub async fn fetch(&self, id: &str) -> Result<InferenceResponse> {
+        let resp = self
+            .http
+            .get(self.url(&format!("v1/inference/{id}")))
+            .bearer_auth(&self.key)
+            .send()
+            .await
+            .map_err(|e| BitrouterError::internal(format!("chainlink fetch: {e}")))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| BitrouterError::internal(format!("chainlink fetch body: {e}")))?;
+        if !status.is_success() {
+            return Err(BitrouterError::Upstream {
+                status: status.as_u16(),
+                message: text,
+            });
+        }
+        serde_json::from_str(&text).map_err(|e| BitrouterError::Upstream {
+            status: 502,
+            message: format!("chainlink fetch: malformed response: {e}; body={text}"),
+        })
+    }
+
     /// Poll `id` until the job reaches a terminal status, then return the final
     /// response. Errors on `failed`, on a timeout, or on transport/parse errors.
     pub async fn poll_until_done(&self, id: &str) -> Result<InferenceResponse> {
@@ -166,6 +193,7 @@ mod tests {
                 model: "gemma4".into(),
                 prompt: "hi".into(),
                 system_prompt: None,
+                resources: Vec::new(),
             })
             .await
             .expect("submit");

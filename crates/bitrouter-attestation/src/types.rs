@@ -136,6 +136,22 @@ pub enum IntegrityProof {
         receipt: serde_json::Value,
         gateway_attestation: serde_json::Value,
     },
+    /// Chainlink Confidential AI's per-inference resource digests. **UNSIGNED** —
+    /// the dev-preview exposes no enclave signature, so this is tamper-evidence
+    /// relative to the service's self-report, not a TEE trust anchor.
+    /// `digests_consistent` records whether the resource `digest` the client
+    /// re-computed locally (sha256 of the bytes it uploaded) matches the reported
+    /// one. The `request_digest`/`response_digest` are over Chainlink's
+    /// unpublished canonical metadata and are not client-reproducible.
+    ChainlinkResourceDigests {
+        inference_id: String,
+        request_digest: String,
+        response_digest: String,
+        resource_digest: String,
+        filename_digest: String,
+        filename_blinding: String,
+        digests_consistent: bool,
+    },
 }
 
 /// L1.5 result: a specific exchange provably ran in the attested TEE unmodified.
@@ -152,6 +168,35 @@ pub struct VerifiedExchange {
     pub integrity: IntegrityProof,
     /// `attestation.verified && integrity holds && binds to attested key`.
     pub verified: bool,
+}
+
+#[cfg(test)]
+mod integrity_proof_tests {
+    use super::*;
+
+    fn chainlink_proof(digests_consistent: bool) -> IntegrityProof {
+        IntegrityProof::ChainlinkResourceDigests {
+            inference_id: "abc".to_string(),
+            request_digest: "rq".to_string(),
+            response_digest: "rs".to_string(),
+            resource_digest: "rd".to_string(),
+            filename_digest: "fd".to_string(),
+            filename_blinding: "fb".to_string(),
+            digests_consistent,
+        }
+    }
+
+    #[test]
+    fn chainlink_resource_digests_roundtrips() {
+        // Round-trip both `digests_consistent` cases so a future
+        // `skip_serializing_if` that drops the `false` case can't slip through.
+        for consistent in [true, false] {
+            let proof = chainlink_proof(consistent);
+            let json = serde_json::to_value(&proof).expect("serialize");
+            let back: IntegrityProof = serde_json::from_value(json).expect("deserialize");
+            assert_eq!(proof, back);
+        }
+    }
 }
 
 /// Errors a [`ConfidentialVerifier`] can return. Note that a *failed

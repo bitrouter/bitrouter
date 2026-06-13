@@ -7,8 +7,8 @@ use bitrouter_sdk::error::Result;
 use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook};
 use bitrouter_sdk::{AppBuilder, Plugin, PluginId};
 
-use crate::gate::{ArcPaymentGate, ArcPaymentGateConfig};
 use crate::PayError;
+use crate::gate::{ArcPaymentGate, ArcPaymentGateConfig};
 
 /// Extension key for retrieving the active payment gate from a request context.
 pub struct PaymentGateExtension(pub Arc<ArcPaymentGate>);

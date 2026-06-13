@@ -1,8 +1,10 @@
 //! Mapping between BitRouter's canonical IR and the Chainlink wire envelope.
 
-use bitrouter_sdk::language_model::{Content, FinishReason, GenerateResult, Prompt, Role, Usage};
+use bitrouter_sdk::language_model::{
+    Content, DataContent, FinishReason, GenerateResult, Prompt, Role, Usage,
+};
 
-use crate::wire::{InferenceRequest, InferenceResponse, WireUsage};
+use crate::wire::{InferenceRequest, InferenceResponse, Resource, WireUsage};
 
 /// Concatenate the text of a message's content blocks (non-text parts ignored
 /// for the MVP — Chainlink takes a single prompt string).
@@ -63,10 +65,31 @@ pub fn prompt_to_request(model: &str, prompt: &Prompt) -> InferenceRequest {
         }
     });
 
+    let resources: Vec<Resource> = prompt
+        .messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|part| match part {
+            Content::File {
+                media_type,
+                data: DataContent::Base64 { data },
+                filename,
+                ..
+            } => Some(Resource {
+                filename: filename.clone().unwrap_or_else(|| "resource".to_string()),
+                content_type: media_type.clone(),
+                content_base64: data.clone(),
+            }),
+            // URL-based files are not forwarded in the MVP (Chainlink takes inline bytes).
+            _ => None,
+        })
+        .collect();
+
     InferenceRequest {
         model: model.to_string(),
         prompt: body,
         system_prompt,
+        resources,
     }
 }
 
@@ -98,17 +121,21 @@ pub fn completed_to_result(resp: &InferenceResponse) -> GenerateResult {
     }
 }
 
-/// Attach Chainlink attestation metadata (inference id, any digests) to the
-/// result's `provider_metadata["chainlink"]`.
-pub fn stash_attestation(result: &mut GenerateResult, resp: &InferenceResponse) {
+/// Attach Chainlink's **neutral** per-inference evidence (inference id + the
+/// unsigned resource digests) to `provider_metadata["chainlink"]`. This is data,
+/// not a verdict — it makes no attestation claim. A caller verifies it on demand
+/// via `bitrouter verify`.
+pub fn stash_evidence(result: &mut GenerateResult, resp: &InferenceResponse) {
     let resources: Vec<serde_json::Value> = resp
-        .resource_summaries
+        .resources
         .iter()
         .map(|r| {
             serde_json::json!({
-                "filename": r.filename,
                 "digest": r.digest,
+                "request_digest": r.request_digest,
                 "response_digest": r.response_digest,
+                "filename_digest": r.filename_digest,
+                "filename_blinding": r.filename_blinding,
             })
         })
         .collect();
@@ -172,6 +199,42 @@ mod request_tests {
         let req = prompt_to_request("gemma4", &p);
         assert_eq!(req.prompt, "User: hello\nAssistant: hi there\nUser: thanks");
     }
+
+    #[test]
+    fn file_parts_map_to_resources() {
+        use bitrouter_sdk::language_model::{Content, DataContent, Message};
+        let p = Prompt {
+            model: "gemma4".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![
+                    Content::Text {
+                        text: "review this".into(),
+                        provider_metadata: Default::default(),
+                    },
+                    Content::File {
+                        media_type: "text/plain".into(),
+                        data: DataContent::Base64 {
+                            data: "aGk=".into(),
+                        },
+                        filename: Some("doc.txt".into()),
+                        provider_metadata: Default::default(),
+                    },
+                ],
+            }],
+            tools: Vec::new(),
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let req = prompt_to_request("gemma4", &p);
+        assert_eq!(req.resources.len(), 1);
+        assert_eq!(req.resources[0].filename, "doc.txt");
+        assert_eq!(req.resources[0].content_base64, "aGk=");
+    }
 }
 
 #[cfg(test)]
@@ -190,7 +253,7 @@ mod response_tests {
                 completion_tokens: 5,
             }),
             error: None,
-            resource_summaries: Vec::new(),
+            resources: Vec::new(),
         }
     }
 
@@ -215,20 +278,23 @@ mod response_tests {
     }
 
     #[test]
-    fn stash_attestation_records_inference_id_and_digests() {
+    fn stash_evidence_records_inference_id_and_digests_without_claiming_attested() {
         let mut resp = completed("x");
-        resp.resource_summaries = vec![crate::wire::ResourceSummary {
-            filename: Some("report.pdf".into()),
+        resp.resources = vec![crate::wire::ResourceDigest {
             digest: Some("sha-abc".into()),
-            response_digest: Some("sha-def".into()),
+            request_digest: Some("sha-req".into()),
+            response_digest: Some("sha-resp".into()),
+            filename_digest: None,
+            filename_blinding: None,
         }];
         let mut result = completed_to_result(&resp);
-        stash_attestation(&mut result, &resp);
-        let att = result
+        stash_evidence(&mut result, &resp);
+        let ev = result
             .provider_metadata
             .get("chainlink")
             .expect("chainlink ns");
-        assert_eq!(att["inference_id"], "abc");
-        assert_eq!(att["resources"][0]["digest"], "sha-abc");
+        assert_eq!(ev["inference_id"], "abc");
+        assert_eq!(ev["resources"][0]["digest"], "sha-abc");
+        assert!(ev.get("attested").is_none(), "must not claim attested");
     }
 }

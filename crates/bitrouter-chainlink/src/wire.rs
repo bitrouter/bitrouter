@@ -4,6 +4,17 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A resource (document) attached to an inference request.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Resource {
+    /// Original filename.
+    pub filename: String,
+    /// IANA content type, e.g. `text/plain`.
+    pub content_type: String,
+    /// Base64-encoded content (no `data:` prefix).
+    pub content_base64: String,
+}
+
 /// Request body for `POST /v1/inference`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct InferenceRequest {
@@ -14,6 +25,9 @@ pub struct InferenceRequest {
     /// Optional system instruction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// Inline resources (documents) the enclave fetches + digests. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<Resource>,
 }
 
 /// Pipeline status reported by the API.
@@ -32,18 +46,25 @@ pub enum Status {
     Failed,
 }
 
-/// Integrity summary for one processed resource.
+/// Full per-resource digests returned on completion (`resources[]`). All fields
+/// optional — present once the resource has been fetched + processed.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct ResourceSummary {
-    /// Original filename, when present.
-    #[serde(default)]
-    pub filename: Option<String>,
-    /// SHA-256 of the original content.
+pub struct ResourceDigest {
+    /// SHA-256 of the original resource content (client-reproducible).
     #[serde(default)]
     pub digest: Option<String>,
-    /// SHA-256 of the canonical response metadata.
+    /// SHA-256 of Chainlink's canonical request metadata (not reproducible).
+    #[serde(default)]
+    pub request_digest: Option<String>,
+    /// SHA-256 of Chainlink's canonical response metadata (not reproducible).
     #[serde(default)]
     pub response_digest: Option<String>,
+    /// SHA-256 of the blinded filename.
+    #[serde(default)]
+    pub filename_digest: Option<String>,
+    /// Hex random blinding value for the filename.
+    #[serde(default)]
+    pub filename_blinding: Option<String>,
 }
 
 /// Token usage reported on completion.
@@ -76,9 +97,9 @@ pub struct InferenceResponse {
     /// Error detail when `status == Failed`.
     #[serde(default)]
     pub error: Option<String>,
-    /// Per-resource integrity summaries (digests) when resources were used.
+    /// Full per-resource digests when resources were used.
     #[serde(default)]
-    pub resource_summaries: Vec<ResourceSummary>,
+    pub resources: Vec<ResourceDigest>,
 }
 
 #[cfg(test)]
@@ -132,13 +153,50 @@ mod tests {
     }
 
     #[test]
-    fn serializes_request_omitting_absent_system_prompt() {
+    fn serializes_request_omitting_absent_optional_fields() {
+        // Both `system_prompt: None` and `resources: []` are skipped on the wire.
         let req = InferenceRequest {
             model: "gemma4".into(),
             prompt: "hi".into(),
             system_prompt: None,
+            resources: Vec::new(),
         };
         let v = serde_json::to_value(&req).expect("serialize");
         assert_eq!(v, serde_json::json!({ "model": "gemma4", "prompt": "hi" }));
+    }
+
+    #[test]
+    fn serializes_request_with_resources() {
+        let req = InferenceRequest {
+            model: "gemma4".into(),
+            prompt: "hi".into(),
+            system_prompt: None,
+            resources: vec![Resource {
+                filename: "payload.json".into(),
+                content_type: "text/plain".into(),
+                content_base64: "aGk=".into(),
+            }],
+        };
+        let v = serde_json::to_value(&req).expect("serialize");
+        assert_eq!(v["resources"][0]["filename"], "payload.json");
+        assert_eq!(v["resources"][0]["content_type"], "text/plain");
+        assert_eq!(v["resources"][0]["content_base64"], "aGk=");
+    }
+
+    #[test]
+    fn deserializes_completed_with_resource_digests() {
+        let body = serde_json::json!({
+            "id": "abc", "status": "completed", "output": "x",
+            "resources": [{
+                "digest": "sha-orig",
+                "request_digest": "sha-req",
+                "response_digest": "sha-resp",
+                "filename_digest": "sha-fn",
+                "filename_blinding": "beef"
+            }]
+        });
+        let r: InferenceResponse = serde_json::from_value(body).expect("parse");
+        assert_eq!(r.resources.len(), 1);
+        assert_eq!(r.resources[0].digest.as_deref(), Some("sha-orig"));
     }
 }

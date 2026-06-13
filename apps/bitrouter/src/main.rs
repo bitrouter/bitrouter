@@ -145,6 +145,25 @@ enum Command {
         /// The confidential model id, e.g. `zai-org/GLM-5.1-FP8`.
         model: String,
     },
+    /// Verify a Chainlink confidential *exchange* (L1.5) by re-checking the
+    /// service-reported resource digest against the bytes you uploaded. Reports
+    /// `digests_consistent`; never claims TEE attestation (the dev-preview
+    /// exposes no signed quote). Requires `CHAINLINK_CONFIDENTIAL_API_KEY`
+    /// (+ optional `CHAINLINK_BASE`).
+    #[cfg(feature = "chainlink-demo")]
+    VerifyExchange {
+        /// The Chainlink inference id.
+        inference_id: String,
+        /// The model id (e.g. `gemma4`).
+        #[arg(long)]
+        model: String,
+        /// Path to the original uploaded resource file (its sha256 is checked).
+        #[arg(long)]
+        resource: std::path::PathBuf,
+        /// The response/output text the client received.
+        #[arg(long, default_value = "")]
+        response: String,
+    },
     /// MCP server introspection — list/status/discover against the upstreams
     /// declared under `mcp_servers` in `bitrouter.yaml`. v1.0 does not maintain
     /// a global tool registry; these are one-shot queries.
@@ -523,6 +542,13 @@ async fn run() -> Result<()> {
             models(&source, provider.as_deref()).await
         }
         Command::Verify { model } => verify_attestation(&model).await,
+        #[cfg(feature = "chainlink-demo")]
+        Command::VerifyExchange {
+            inference_id,
+            model,
+            resource,
+            response,
+        } => verify_exchange(&inference_id, &model, &resource, &response).await,
         Command::Tools { action } => tools(action).await,
         Command::Observe { action } => observe(action).await,
         Command::Policy { action } => policy(action).await,
@@ -1438,6 +1464,72 @@ async fn verify_attestation(model: &str) -> Result<()> {
             p.red, p.reset
         );
     }
+    Ok(())
+}
+
+/// `bitrouter verify-exchange` — L1.5 digest re-check for a Chainlink inference.
+#[cfg(feature = "chainlink-demo")]
+async fn verify_exchange(
+    inference_id: &str,
+    model: &str,
+    resource: &std::path::Path,
+    response: &str,
+) -> Result<()> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use bitrouter_attestation::{ConfidentialVerifier, ExchangeInput, IntegrityProof};
+
+    let base = std::env::var("CHAINLINK_BASE")
+        .unwrap_or_else(|_| "https://confidential-ai-dev-preview.cldev.cloud".to_string());
+    let key = std::env::var("CHAINLINK_CONFIDENTIAL_API_KEY")
+        .map_err(|_| anyhow::anyhow!("set CHAINLINK_CONFIDENTIAL_API_KEY"))?;
+
+    let bytes = std::fs::read(resource)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", resource.display()))?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+
+    let verifier = bitrouter_chainlink::ChainlinkVerifier::new(base, key);
+    let ex = ExchangeInput {
+        model,
+        request_body: &bytes,
+        response_body: response.as_bytes(),
+        chat_id: inference_id,
+        now_unix: now,
+    };
+    let out = verifier.verify_exchange(&ex).await?;
+
+    let p = bitrouter::style::Palette::for_stdout();
+    let mark = |ok: bool| {
+        if ok {
+            format!("{}✓{}", p.green, p.reset)
+        } else {
+            format!("{}✗{}", p.red, p.reset)
+        }
+    };
+    println!(
+        "{bold}{model}{reset}  inference {inference_id}",
+        bold = p.bold,
+        reset = p.reset,
+    );
+    match out.integrity {
+        IntegrityProof::ChainlinkResourceDigests {
+            digests_consistent,
+            resource_digest,
+            ..
+        } => {
+            println!(
+                "  {} resource digest consistent (sha256 of your file == reported)",
+                mark(digests_consistent)
+            );
+            println!("    reported digest:   {resource_digest}");
+            println!("    your request hash: {}", out.request_hash);
+        }
+        _ => println!("  (no Chainlink digest evidence returned)"),
+    }
+    println!(
+        "  {} TEE-attested (always ✗ — dev-preview exposes no signed quote)",
+        mark(out.verified)
+    );
     Ok(())
 }
 

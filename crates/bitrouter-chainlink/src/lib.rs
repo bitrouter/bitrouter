@@ -16,10 +16,18 @@
 mod client;
 mod executor;
 mod map;
+mod verifier;
 mod wire;
 
+pub use client::{ChainlinkClient, PollConfig};
 pub use executor::ChainlinkExecutor;
+pub use verifier::ChainlinkVerifier;
+pub use wire::{InferenceRequest, Resource, Status};
 
 /// The custom protocol id used in config (`api_protocol: chainlink_confidential`)
 /// and on the DispatchExecutor key.
 pub const PROTOCOL: &str = "chainlink_confidential";
+
+/// The config provider key (`providers.chainlink`) and the `ConfidentialVerifier`
+/// provider id — what `target.provider_name` carries for Chainlink targets.
+pub const PROTOCOL_PROVIDER: &str = "chainlink";

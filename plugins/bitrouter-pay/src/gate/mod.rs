@@ -7,13 +7,13 @@ use bitrouter_sdk::{PaymentGate, PaymentGateResult, PaymentRouteRequest};
 use serde_json::Value;
 use tracing::info;
 
-use crate::attester::{ChainlinkAttester, Resource};
+use crate::PayError;
+use crate::attester::run_attested_inference;
 #[cfg(feature = "mpp")]
 use crate::payment::mpp::{ArcMppBackend, MppBackend, MppClient};
 #[cfg(feature = "x402")]
 use crate::payment::x402::X402Client;
 use crate::wallet::ArcSigner;
-use crate::PayError;
 
 /// Configuration for [`ArcPaymentGate`].
 pub struct ArcPaymentGateConfig {
@@ -28,22 +28,19 @@ pub struct ArcPaymentGate {
     x402: X402Client,
     #[cfg(feature = "mpp")]
     mpp: MppClient,
-    attester: Option<ChainlinkAttester>,
+    chainlink_api_key: Option<String>,
 }
 
 impl ArcPaymentGate {
     pub fn new(config: ArcPaymentGateConfig) -> Result<Self, PayError> {
         let signer = Arc::new(ArcSigner::new(config.wallet_id)?);
-        let attester = config
-            .chainlink_api_key
-            .map(ChainlinkAttester::new);
 
         Ok(Self {
             #[cfg(feature = "x402")]
             x402: X402Client::new(signer.clone()),
             #[cfg(feature = "mpp")]
             mpp: MppClient::new(Arc::new(ArcMppBackend::new(signer.clone())) as Arc<dyn MppBackend>),
-            attester,
+            chainlink_api_key: config.chainlink_api_key,
             signer,
         })
     }
@@ -73,21 +70,23 @@ impl ArcPaymentGate {
         };
 
         if request.attested {
-            let attester = self.attester.as_ref().ok_or_else(|| {
+            let key = self.chainlink_api_key.as_ref().ok_or_else(|| {
                 PayError::AttestError("attested route requires chainlink_api_key".into())
             })?;
-            let model = request.model.ok_or_else(|| {
-                PayError::AttestError("attested route requires model".into())
-            })?;
+            let model = request
+                .model
+                .ok_or_else(|| PayError::AttestError("attested route requires model".into()))?;
             let prompt = request.prompt.unwrap_or_default();
-            let resources = vec![Resource::from_bytes(
-                "payload.json",
-                "text/plain",
-                body.to_string().as_bytes(),
-            )];
-            let receipt = attester.infer(&model, &prompt, resources).await?;
-            record_ledger(&request.url, &receipt.inference_id);
-            return serde_json::to_value(receipt).map_err(|e| PayError::AttestError(e.to_string()));
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let verified =
+                run_attested_inference(key, &model, &prompt, body.to_string().as_bytes(), now)
+                    .await?;
+            record_ledger(&request.url, &verified_inference_id(&verified));
+            return serde_json::to_value(verified)
+                .map_err(|e| PayError::AttestError(e.to_string()));
         }
 
         record_ledger(&request.url, "x402-or-mpp");
@@ -102,6 +101,15 @@ impl PaymentGate for ArcPaymentGate {
             .await
             .map(|body| PaymentGateResult { body })
             .map_err(|e| e.to_string())
+    }
+}
+
+fn verified_inference_id(v: &bitrouter_attestation::VerifiedExchange) -> String {
+    match &v.integrity {
+        bitrouter_attestation::IntegrityProof::ChainlinkResourceDigests {
+            inference_id, ..
+        } => inference_id.clone(),
+        _ => String::new(),
     }
 }
 

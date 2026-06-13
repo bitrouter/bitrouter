@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bitrouter-attestation = { workspace = true }
 bitrouter-sdk.workspace = true
 
 async-stream.workspace = true

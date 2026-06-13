@@ -67,16 +67,16 @@ impl Executor for ChainlinkExecutor {
         let done = client.poll_until_done(&submitted.id).await?;
         let elapsed = started.elapsed().as_millis() as u64;
 
-        // Attestation: stash inference id (and digests, when present) under the
-        // `chainlink` provider-metadata namespace + log it. See plan Task 9.
+        // Chainlink returns unsigned digests, not a signed attestation. Record
+        // them as neutral evidence; verification is on-demand (`bitrouter verify`).
         let mut result = completed_to_result(&done);
-        crate::map::stash_attestation(&mut result, &done);
+        crate::map::stash_evidence(&mut result, &done);
         tracing::info!(
             target: "bitrouter_chainlink",
             inference_id = %done.id,
             model = %target.service_id,
-            resources = done.resource_summaries.len(),
-            "chainlink confidential inference completed (TEE-attested)"
+            resources = done.resources.len(),
+            "chainlink confidential inference completed (unsigned digests recorded)"
         );
 
         Ok(ExecutionResult {
