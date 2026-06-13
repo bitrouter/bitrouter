@@ -1,0 +1,26 @@
+# Local demo config for the Chainlink Confidential Inference bridge.
+#
+# Foreground (logs to stdout):
+#   cargo run -p bitrouter --features chainlink-demo -- \
+#       serve -c crates/bitrouter-chainlink/examples/chainlink.yaml
+#
+# Background daemon:
+#   cargo run -p bitrouter --features chainlink-demo -- \
+#       start -c crates/bitrouter-chainlink/examples/chainlink.yaml
+#
+# Requires:
+#   export CHAINLINK_CONFIDENTIAL_API_KEY=<your hackathon key>
+
+server:
+  listen: "127.0.0.1:4356"
+  skip_auth: true
+
+providers:
+  chainlink:
+    api_base: "https://confidential-ai-dev-preview.cldev.cloud"
+    api_key: "${CHAINLINK_CONFIDENTIAL_API_KEY}"
+    api_protocol:
+      - "*": chainlink_confidential
+    models:
+      - { id: gemma4 }
+      - { id: "qwen3.6" }

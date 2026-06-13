@@ -726,6 +726,7 @@ dependencies = [
  "axum 0.8.9",
  "axum-test",
  "base64",
+ "bitrouter-chainlink",
  "bitrouter-cloud-sdk",
  "bitrouter-guardrails",
  "bitrouter-mcp",
@@ -768,6 +769,21 @@ dependencies = [
  "bitrouter-sdk",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "bitrouter-chainlink"
+version = "1.0.0-alpha.14"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "bitrouter-sdk",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]

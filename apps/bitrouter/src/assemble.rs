@@ -176,14 +176,27 @@ pub async fn build_app_with_path(
     // request. Listed only when the user configures the provider, so an
     // operator who doesn't use Copilot doesn't pay a token-store read.
     let auth_appliers = build_auth_appliers(config)?;
-    let executor = Arc::new(
-        HttpExecutor::with_dispatch_and_auth(
-            HttpTimeouts::default(),
-            OutboundDispatch::builtin(),
-            auth_appliers,
-        )
-        .context("building the upstream HTTP executor")?,
-    );
+    let http_executor = HttpExecutor::with_dispatch_and_auth(
+        HttpTimeouts::default(),
+        OutboundDispatch::builtin(),
+        auth_appliers,
+    )
+    .context("building the upstream HTTP executor")?;
+
+    #[cfg(not(feature = "chainlink-demo"))]
+    let executor: Arc<dyn bitrouter_sdk::language_model::Executor> = Arc::new(http_executor);
+
+    #[cfg(feature = "chainlink-demo")]
+    let executor: Arc<dyn bitrouter_sdk::language_model::Executor> = {
+        use bitrouter_sdk::language_model::DispatchExecutor;
+        let http: Arc<dyn bitrouter_sdk::language_model::Executor> = Arc::new(http_executor);
+        let chainlink: Arc<dyn bitrouter_sdk::language_model::Executor> =
+            Arc::new(bitrouter_chainlink::ChainlinkExecutor::new());
+        Arc::new(DispatchExecutor::new(http).with(
+            bitrouter_chainlink::ChainlinkExecutor::protocol(),
+            chainlink,
+        ))
+    };
 
     // ---- pricing, metering, policy, guardrails — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
