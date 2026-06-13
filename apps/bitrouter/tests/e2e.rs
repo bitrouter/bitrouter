@@ -529,6 +529,82 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), 403);
 
+    // MCP lifecycle: `initialize` is answered by the gateway itself (not proxied
+    // to the executor, which only knows tools/resources/prompts), so compliant
+    // clients can complete the handshake. A supported requested protocolVersion
+    // is echoed; serverInfo identifies the gateway.
+    let init = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2025-06-18", "capabilities": {} }
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(init.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["id"], 1);
+    assert_eq!(json["result"]["protocolVersion"], "2025-06-18");
+    assert!(json["result"]["capabilities"]["tools"].is_object());
+    assert_eq!(
+        json["result"]["serverInfo"]["name"],
+        "bitrouter-mcp-gateway"
+    );
+
+    // An unsupported requested version falls back to the gateway's latest.
+    let init_old = serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": "initialize",
+        "params": { "protocolVersion": "1999-01-01" }
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(init_old.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["result"]["protocolVersion"], "2025-11-25");
+
+    // `notifications/initialized` is a notification — acked with 202, no body.
+    let note = serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(note.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 202);
+
+    // `ping` → empty result, never proxied to the executor.
+    let ping = serde_json::json!({ "jsonrpc": "2.0", "id": 9, "method": "ping" });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(ping.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["id"], 9);
+    assert!(json["result"].as_object().unwrap().is_empty());
+
     // Unknown MCP server → JSON-RPC "Method not found" wrapped in HTTP 404.
     let bad = Request::builder()
         .method("POST")
