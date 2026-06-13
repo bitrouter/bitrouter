@@ -5,9 +5,17 @@ source "$HOME/.cargo/env" 2>/dev/null || true
 SRC="/mnt/c/Users/akam leinad/bitrouter"
 DST="$HOME/bitrouter"
 
-mkdir -p "$DST/plugins/bitrouter-pay/examples"
-cp "$SRC/plugins/bitrouter-pay/examples/claude_code_demo.rs" \
-   "$DST/plugins/bitrouter-pay/examples/claude_code_demo.rs"
+mkdir -p "$DST"
+
+rm -rf "$DST/crates"
+cp -r "$SRC/crates" "$DST/crates"
+
+rm -rf "$DST/plugins/bitrouter-pay"
+mkdir -p "$DST/plugins"
+cp -r "$SRC/plugins/bitrouter-pay" "$DST/plugins/bitrouter-pay"
+
+cp "$SRC/Cargo.toml" "$DST/Cargo.toml"
+cp "$SRC/Cargo.lock" "$DST/Cargo.lock"
 
 cd "$DST"
 export OWS_VAULT_PATH=/home/maka/.ows/wallets
