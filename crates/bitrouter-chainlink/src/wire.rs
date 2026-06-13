@@ -153,7 +153,8 @@ mod tests {
     }
 
     #[test]
-    fn serializes_request_omitting_absent_system_prompt() {
+    fn serializes_request_omitting_absent_optional_fields() {
+        // Both `system_prompt: None` and `resources: []` are skipped on the wire.
         let req = InferenceRequest {
             model: "gemma4".into(),
             prompt: "hi".into(),
@@ -178,18 +179,8 @@ mod tests {
         };
         let v = serde_json::to_value(&req).expect("serialize");
         assert_eq!(v["resources"][0]["filename"], "payload.json");
-    }
-
-    #[test]
-    fn serializes_request_omitting_empty_resources() {
-        let req = InferenceRequest {
-            model: "gemma4".into(),
-            prompt: "hi".into(),
-            system_prompt: None,
-            resources: Vec::new(),
-        };
-        let v = serde_json::to_value(&req).expect("serialize");
-        assert_eq!(v, serde_json::json!({ "model": "gemma4", "prompt": "hi" }));
+        assert_eq!(v["resources"][0]["content_type"], "text/plain");
+        assert_eq!(v["resources"][0]["content_base64"], "aGk=");
     }
 
     #[test]
