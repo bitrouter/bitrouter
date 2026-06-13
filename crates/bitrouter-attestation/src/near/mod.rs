@@ -17,7 +17,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jsonwebtoken::DecodingKey;
-use rand::RngCore;
 
 use crate::cache::AttestationCache;
 use crate::near::binding::{compose_matches_mr_config, report_data_binds};
@@ -89,7 +88,7 @@ impl NearVerifier {
         if let Some(cached) = self.cache.get(model, now_unix) {
             return Ok(cached);
         }
-        let nonce = random_nonce_hex();
+        let nonce = crate::fresh_nonce_hex();
         let verdict = self.verify_attestation(model, &nonce, now_unix).await?;
         // Cache a confirmed verdict for the full TTL; cap an unverified one to a
         // short retry window so a transient failure recovers quickly.
@@ -167,16 +166,20 @@ impl NearVerifier {
     }
 }
 
-fn random_nonce_hex() -> String {
-    let mut nonce = [0u8; 32];
-    rand::rng().fill_bytes(&mut nonce);
-    hex::encode(nonce)
-}
-
 #[async_trait]
 impl ConfidentialVerifier for NearVerifier {
     fn provider(&self) -> &str {
         "near-ai"
+    }
+
+    /// Serve a TTL-cached verdict (the hot path) instead of the trait default's
+    /// fresh-nonce verify.
+    async fn attestation_cached(
+        &self,
+        model: &str,
+        now_unix: u64,
+    ) -> Result<AttestationVerdict, VerifyError> {
+        self.verdict_cached(model, now_unix).await
     }
 
     async fn verify_attestation(

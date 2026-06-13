@@ -22,6 +22,7 @@ bitrouter-cloud-sdk = { path = "crates/bitrouter-cloud-sdk", version = "1.0.0-al
 bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.14" }
 bitrouter-skills = { path = "crates/bitrouter-skills", version = "1.0.0-alpha.14" }
 bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.14" }
+bitrouter-attestation-plugin = { path = "plugins/bitrouter-attestation", version = "1.0.0-alpha.14" }
 bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.14", default-features = false }
 
 # shared third-party

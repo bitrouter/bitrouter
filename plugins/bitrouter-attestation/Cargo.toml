@@ -1,0 +1,19 @@
+[package]
+name = "bitrouter-attestation-plugin"
+description = "BitRouter attestation plugin: a RouteHook that tags (Record) or drops (Enforce) confidential routing targets by their TEE-attestation verdict."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bitrouter-sdk.workspace = true
+bitrouter-attestation.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
