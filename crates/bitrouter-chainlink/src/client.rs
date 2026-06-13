@@ -166,6 +166,7 @@ mod tests {
                 model: "gemma4".into(),
                 prompt: "hi".into(),
                 system_prompt: None,
+                resources: Vec::new(),
             })
             .await
             .expect("submit");
