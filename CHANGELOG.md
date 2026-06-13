@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.15](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.14...v1.0.0-alpha.15)
+
+
+### ⛰️ Features
+
+- *(server-tools)* Router-executed server-side tool loop ([#555](https://github.com/bitrouter/bitrouter/pull/555)) - ([e41e1ce](https://github.com/bitrouter/bitrouter/commit/e41e1cef6481929918f001ca1ec4e54e95d99988))
+- *(server-tools)* Replace owned provider-defined tools on inject ([#559](https://github.com/bitrouter/bitrouter/pull/559)) - ([df70e12](https://github.com/bitrouter/bitrouter/commit/df70e1260891f1694c802d32b319a66686bd2c17))
+- *(server-tools)* Pass ToolContext to RouterToolset ([#558](https://github.com/bitrouter/bitrouter/pull/558)) - ([bffff57](https://github.com/bitrouter/bitrouter/commit/bffff57506fec640f6aa8e25d48094fd78a01127))
+- Protocol-native routing ([#554](https://github.com/bitrouter/bitrouter/pull/554)) - ([197f812](https://github.com/bitrouter/bitrouter/commit/197f8126a108abd30a2b9f02cb59d9b0028b54d4))
+
+
 ## [1.0.0-alpha.14](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.13...v1.0.0-alpha.14)
 
 
