@@ -298,6 +298,57 @@ async fn mcp_invoke_inner(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
+    // MCP lifecycle methods are answered by the gateway itself — they negotiate
+    // the client<->gateway session and MUST NOT be proxied to an upstream
+    // executor (which dispatches only `tools/*`, `resources/*`, `prompts/*` and
+    // rejects everything else as "method not found"). Without this, every
+    // spec-compliant client (Claude clients, opencode, the MCP SDK) fails its
+    // opening `initialize` over Streamable HTTP and never reaches a tool call;
+    // only handshake-skipping callers (curl, `bitrouter tools`) worked before.
+    // See <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
+    match method.as_str() {
+        "initialize" => {
+            // Spec: echo the client's protocol version when we support it,
+            // otherwise answer with our latest. `params.protocolVersion` is the
+            // client's requested version.
+            let protocol_version = params
+                .get("protocolVersion")
+                .and_then(|v| v.as_str())
+                .filter(|v| MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(v))
+                .unwrap_or(MCP_SUPPORTED_PROTOCOL_VERSIONS[0]);
+            return Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": inbound_id,
+                "result": {
+                    "protocolVersion": protocol_version,
+                    // The gateway proxies tool calls; resources/prompts are not
+                    // advertised so clients don't probe upstreams that may not
+                    // implement them.
+                    "capabilities": { "tools": {} },
+                    "serverInfo": {
+                        "name": "bitrouter-mcp-gateway",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    },
+                },
+            }))
+            .into_response();
+        }
+        // JSON-RPC notifications carry no `id` and expect no result body — ack
+        // with 202 Accepted per the Streamable HTTP transport.
+        "notifications/initialized" | "notifications/cancelled" => {
+            return axum::http::StatusCode::ACCEPTED.into_response();
+        }
+        "ping" => {
+            return Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": inbound_id,
+                "result": {},
+            }))
+            .into_response();
+        }
+        _ => {}
+    }
+
     // Default caller: `local` when auth is disabled, otherwise an `anonymous`
     // placeholder that a downstream `mcp::PreRequestHook` may upgrade to the
     // real identity by reading `ctx.headers()` and calling `ctx.set_caller()`.
