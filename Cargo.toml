@@ -16,12 +16,14 @@ rust-version = "1.88"
 [workspace.dependencies]
 # internal crates
 bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.14", default-features = false }
+bitrouter-attestation = { path = "crates/bitrouter-attestation", version = "1.0.0-alpha.14" }
 bitrouter-bedrock = { path = "crates/bitrouter-bedrock", version = "1.0.0-alpha.14" }
 bitrouter-chainlink = { path = "crates/bitrouter-chainlink", version = "1.0.0-alpha.14" }
 bitrouter-cloud-sdk = { path = "crates/bitrouter-cloud-sdk", version = "1.0.0-alpha.14" }
 bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.14" }
 bitrouter-skills = { path = "crates/bitrouter-skills", version = "1.0.0-alpha.14" }
 bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.14" }
+bitrouter-attestation-plugin = { path = "plugins/bitrouter-attestation", version = "1.0.0-alpha.14" }
 bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.14", default-features = false }
 bitrouter-pay = { path = "plugins/bitrouter-pay", version = "1.0.0-alpha.14", default-features = false }
 
