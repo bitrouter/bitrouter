@@ -23,15 +23,21 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+mod cache;
 mod near;
 mod transport;
 mod types;
 
+pub use cache::AttestationCache;
 pub use near::binding::{compose_matches_mr_config, report_data_binds};
 pub use near::dcap::{AciDcapVerifierPolicy, ModelIdentity, PolicyError, model_identity};
 pub use near::nvidia::{NRAS_GPU_URL, NrasVerdict, check_nras_eat, post_nras};
-pub use near::report::{AttestationInfo, AttestationReport, ModelAttestation};
-pub use near::tdx::{PHALA_PCCS_URL, TdxMeasurements, parse_tdx_quote, verify_tdx_quote};
+pub use near::report::{AttestationInfo, AttestationReport, ModelAttestation, TcbInfo};
+pub use near::tdx::{
+    DcapQuoteVerifier, PHALA_PCCS_URL, QuoteVerifier, TdxMeasurements, parse_tdx_quote,
+    verify_tdx_quote,
+};
+pub use near::{DEFAULT_CACHE_TTL_SECONDS, NearVerifier, TRUST_BOUNDARY};
 pub use transport::{MockTransport, ReportTransport, ReqwestTransport, SIGNING_ALGO};
 pub use types::{
     AttestationChecks, AttestationVerdict, ExchangeInput, IntegrityProof, VerifiedExchange,

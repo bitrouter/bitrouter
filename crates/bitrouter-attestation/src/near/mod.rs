@@ -2,11 +2,410 @@
 //! [`ConfidentialVerifier`](crate::ConfidentialVerifier) impl.
 //!
 //! Verification is split across focused modules: `report` (wire types),
-//! plus the binding / quote / NRAS / DCAP-policy / signature checks added in
-//! later tasks. `NearVerifier` (Task 6) composes them.
+//! `binding` (report_data + compose), `tdx` (DCAP quote), `nvidia` (NRAS GPU
+//! EAT), `dcap` (the load-bearing policy pin), and `signature` (L1.5, Phase 2).
+//! [`NearVerifier`] composes them into one attestation verdict.
 
 pub mod binding;
 pub mod dcap;
 pub mod nvidia;
 pub mod report;
 pub mod tdx;
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use jsonwebtoken::DecodingKey;
+use rand::RngCore;
+
+use crate::cache::AttestationCache;
+use crate::near::binding::{compose_matches_mr_config, report_data_binds};
+use crate::near::dcap::{AciDcapVerifierPolicy, model_identity};
+use crate::near::nvidia::check_nras_eat;
+use crate::near::report::ModelAttestation;
+use crate::near::tdx::QuoteVerifier;
+use crate::transport::ReportTransport;
+use crate::types::{AttestationChecks, AttestationVerdict, ExchangeInput, VerifiedExchange};
+use crate::{ConfidentialVerifier, VerifyError};
+
+/// Honest trust-boundary label: we verify NEAR's **model** quote directly, not
+/// (as `nearai.py` does) trust NEAR's gateway.
+pub const TRUST_BOUNDARY: &str = "near-ai-model";
+/// Default verdict cache TTL (spec §8).
+pub const DEFAULT_CACHE_TTL_SECONDS: u64 = 600;
+
+/// The NEAR [`ConfidentialVerifier`]. Composes the report fetch, GPU NRAS check,
+/// DCAP quote verification, report_data/compose bindings, and the load-bearing
+/// policy pin into a single [`AttestationVerdict`], **fail-closed** at every
+/// step (spec §1.5 cond. 3) and TTL-cached.
+pub struct NearVerifier {
+    transport: Arc<dyn ReportTransport>,
+    quotes: Arc<dyn QuoteVerifier>,
+    policy: Arc<AciDcapVerifierPolicy>,
+    /// NVIDIA's EAT-verification key (pinned/configured by the host).
+    nvidia_key: Arc<DecodingKey>,
+    cache: AttestationCache,
+    cache_ttl_seconds: u64,
+}
+
+impl NearVerifier {
+    pub fn new(
+        transport: Arc<dyn ReportTransport>,
+        quotes: Arc<dyn QuoteVerifier>,
+        policy: Arc<AciDcapVerifierPolicy>,
+        nvidia_key: Arc<DecodingKey>,
+    ) -> Self {
+        Self {
+            transport,
+            quotes,
+            policy,
+            nvidia_key,
+            cache: AttestationCache::new(),
+            cache_ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
+        }
+    }
+
+    pub fn with_cache_ttl(mut self, ttl_seconds: u64) -> Self {
+        self.cache_ttl_seconds = ttl_seconds;
+        self
+    }
+
+    /// Serve a TTL-cached verdict, re-verifying on miss with a fresh internal
+    /// nonce — the plugin/daemon hot-path entrypoint (spec §5.1). Caches the
+    /// verdict it computes (verified or not) so a flaky NRAS/PCCS isn't hit per
+    /// request; a transient failure simply re-verifies after the TTL.
+    pub async fn verdict_cached(
+        &self,
+        model: &str,
+        now_unix: u64,
+    ) -> Result<AttestationVerdict, VerifyError> {
+        if let Some(cached) = self.cache.get(model, now_unix) {
+            return Ok(cached);
+        }
+        let nonce = random_nonce_hex();
+        let verdict = self.verify_attestation(model, &nonce, now_unix).await?;
+        self.cache
+            .put(verdict.clone(), self.cache_ttl_seconds, now_unix);
+        Ok(verdict)
+    }
+
+    /// Evaluate one serving node's attestation into a per-check breakdown.
+    /// Every sub-check fails closed: missing evidence ⇒ `false`.
+    async fn evaluate_node(
+        &self,
+        m: &ModelAttestation,
+        nonce: &str,
+        now_unix: u64,
+    ) -> AttestationChecks {
+        let Ok(raw_quote) = hex::decode(&m.intel_quote) else {
+            return AttestationChecks::failed();
+        };
+
+        let gpu_nras_pass = match self.transport.fetch_gpu_eat(&m.nvidia_payload).await {
+            Ok(eat) => check_nras_eat(&eat, nonce, &self.nvidia_key).passed(),
+            Err(_) => false,
+        };
+
+        let measurements = self.quotes.measurements(&raw_quote, now_unix).await.ok();
+        let dcap_quote_valid = measurements.is_some() && self.quotes.is_authenticated();
+
+        // report_data must bind our key+nonce AND the report must echo our nonce
+        // (so a stale report for a different nonce can't pass).
+        let nonce_echoed = m.request_nonce.eq_ignore_ascii_case(nonce);
+        let report_data_binds_key_and_nonce = nonce_echoed
+            && measurements
+                .as_ref()
+                .is_some_and(|mm| report_data_binds(&mm.report_data, &m.signing_address, nonce));
+
+        let debug_disabled = measurements
+            .as_ref()
+            .is_some_and(super::near::tdx::TdxMeasurements::debug_disabled);
+
+        let compose_matches_mr_config =
+            compose_matches_mr_config(&m.info.tcb_info.app_compose, &m.info.compose_hash);
+
+        let policy_accepts = match model_identity(&m.info) {
+            Ok(id) => {
+                self.policy.accepts(&id.workload_id, &id.image_digests)
+                    && self.policy.accepts_kms_root(&id.kms_root_public_key)
+            }
+            Err(_) => false,
+        };
+
+        AttestationChecks {
+            gpu_nras_pass,
+            dcap_quote_valid,
+            report_data_binds_key_and_nonce,
+            compose_matches_mr_config,
+            policy_accepts,
+            debug_disabled,
+            // dstack RTMR3/event-log replay is a later enhancement; not performed
+            // here, so reported as "not checked" rather than passed.
+            event_log_rtmr_ok: None,
+            tcb_status: None,
+        }
+    }
+}
+
+fn random_nonce_hex() -> String {
+    let mut nonce = [0u8; 32];
+    rand::rng().fill_bytes(&mut nonce);
+    hex::encode(nonce)
+}
+
+#[async_trait]
+impl ConfidentialVerifier for NearVerifier {
+    fn provider(&self) -> &str {
+        "near-ai"
+    }
+
+    async fn verify_attestation(
+        &self,
+        model: &str,
+        nonce: &str,
+        now_unix: u64,
+    ) -> Result<AttestationVerdict, VerifyError> {
+        // Fail-closed: a withheld report ⇒ unverified, never a silent pass.
+        let Ok(report) = self.transport.fetch_report(model, nonce).await else {
+            return Ok(AttestationVerdict::unverified(model, nonce, now_unix));
+        };
+
+        // The report may carry several serving nodes (multi-node; signature
+        // cached per node). A node is attested only if ALL its checks pass; the
+        // verdict collects every fully-passing node's signing address so L1.5
+        // can bind a chat signature to any of them (spec §1.5 cond. 2).
+        let mut attested_addresses = Vec::new();
+        let mut summary = AttestationChecks::failed();
+        let mut saw_node = false;
+        for m in report
+            .model_attestations
+            .iter()
+            .filter(|m| m.model_name == model)
+        {
+            let checks = self.evaluate_node(m, nonce, now_unix).await;
+            if !saw_node {
+                summary = checks.clone();
+                saw_node = true;
+            }
+            if checks.all_pass() {
+                summary = checks;
+                attested_addresses.push(m.signing_address.clone());
+            }
+        }
+
+        Ok(AttestationVerdict {
+            model: model.to_string(),
+            verified: !attested_addresses.is_empty(),
+            attested_addresses,
+            trust_boundary: TRUST_BOUNDARY.to_string(),
+            nonce: nonce.to_string(),
+            checks: summary,
+            verified_at_unix: now_unix,
+        })
+    }
+
+    async fn verify_exchange(
+        &self,
+        _ex: &ExchangeInput<'_>,
+    ) -> Result<VerifiedExchange, VerifyError> {
+        // L1.5 exchange integrity lands in Phase 2 (Task 12).
+        Err(VerifyError::Malformed {
+            what: "exchange",
+            detail: "verify_exchange is implemented in Phase 2 (Task 12)".to_string(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::near::report::AttestationReport;
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const FIXTURE: &str = include_str!("../../tests/fixtures/near_report.json");
+    const MODEL: &str = "zai-org/GLM-5.1-FP8";
+    const FIXTURE_NONCE: &str = "9a01356cb451dc2c3c0ce9a195245a0be984a3f73617f55f87913fc2f059cba7";
+    const APP_ID: &str = "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b";
+    const KMS_ROOT_DER_SPKI: &str = "3059301306072a8648ce3d020106082a8648ce3d03010703420004228f800590a10442cba9d0e6adb2fa9f195eea9e75e23dd35990d52b59dda2415a63674c38adebde4ffd4d4b265bf818985933820c8053cee3ce29b5fb0fbcbc";
+    const TEST_EC_PRIVATE_PKCS8_PEM: &str =
+        include_str!("../../tests/fixtures/nras_test_ec_private_pkcs8.pem");
+    const TEST_EC_PUBLIC_PEM: &str = include_str!("../../tests/fixtures/nras_test_ec_public.pem");
+
+    fn nvidia_key() -> Arc<DecodingKey> {
+        Arc::new(DecodingKey::from_ec_pem(TEST_EC_PUBLIC_PEM.as_bytes()).unwrap())
+    }
+
+    /// Sign an NRAS-shaped EAT carrying a passing result and the given nonce.
+    fn signed_eat(eat_nonce: &str) -> Vec<u8> {
+        let ek = EncodingKey::from_ec_pem(TEST_EC_PRIVATE_PKCS8_PEM.as_bytes()).unwrap();
+        let claims = serde_json::json!({
+            "x-nvidia-overall-att-result": true,
+            "eat_nonce": eat_nonce,
+        });
+        let jwt = encode(&Header::new(Algorithm::ES256), &claims, &ek).unwrap();
+        serde_json::to_vec(&serde_json::json!([["JWT", jwt], {}])).unwrap()
+    }
+
+    /// Replays the fixture report and a freshly-signed EAT bound to a fixed
+    /// nonce; counts report fetches for the cache test.
+    struct StubTransport {
+        eat_nonce: String,
+        fail_report: bool,
+        report_fetches: AtomicUsize,
+    }
+
+    impl StubTransport {
+        fn passing() -> Self {
+            Self {
+                eat_nonce: FIXTURE_NONCE.to_string(),
+                fail_report: false,
+                report_fetches: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ReportTransport for StubTransport {
+        async fn fetch_report(
+            &self,
+            _model: &str,
+            _nonce: &str,
+        ) -> Result<AttestationReport, VerifyError> {
+            self.report_fetches.fetch_add(1, Ordering::SeqCst);
+            if self.fail_report {
+                return Err(VerifyError::Malformed {
+                    what: "report",
+                    detail: "withheld".to_string(),
+                });
+            }
+            Ok(serde_json::from_str(FIXTURE).unwrap())
+        }
+
+        async fn fetch_gpu_eat(&self, _nvidia_payload: &str) -> Result<Vec<u8>, VerifyError> {
+            Ok(signed_eat(&self.eat_nonce))
+        }
+    }
+
+    /// Parse-only quote verifier: returns real measurements from the fixture
+    /// quote and claims authenticity (the live Intel-signature path is the
+    /// #[ignore]d test in `tdx`).
+    struct TrustingQuoteVerifier;
+
+    #[async_trait]
+    impl QuoteVerifier for TrustingQuoteVerifier {
+        async fn measurements(
+            &self,
+            raw_quote: &[u8],
+            _now_unix: u64,
+        ) -> Result<crate::near::tdx::TdxMeasurements, VerifyError> {
+            crate::near::tdx::parse_tdx_quote(raw_quote)
+        }
+        fn is_authenticated(&self) -> bool {
+            true
+        }
+    }
+
+    fn policy(workload: &str, kms: &str) -> Arc<AciDcapVerifierPolicy> {
+        Arc::new(AciDcapVerifierPolicy::new([workload.to_string()], [], [kms.to_string()]).unwrap())
+    }
+
+    fn verifier(
+        transport: Arc<dyn ReportTransport>,
+        pol: Arc<AciDcapVerifierPolicy>,
+    ) -> NearVerifier {
+        NearVerifier::new(
+            transport,
+            Arc::new(TrustingQuoteVerifier),
+            pol,
+            nvidia_key(),
+        )
+    }
+
+    #[tokio::test]
+    async fn verifies_the_legitimate_model_end_to_end() {
+        let v = verifier(
+            Arc::new(StubTransport::passing()),
+            policy(APP_ID, KMS_ROOT_DER_SPKI),
+        );
+        let verdict = v
+            .verify_attestation(MODEL, FIXTURE_NONCE, 1_000)
+            .await
+            .unwrap();
+        assert!(verdict.verified, "checks: {:?}", verdict.checks);
+        assert!(verdict.checks.all_pass());
+        assert_eq!(
+            verdict.attested_addresses,
+            vec!["0xbb4d2e7ffe98eefcd9690e2139be41e92b95e333".to_string()]
+        );
+        assert_eq!(verdict.trust_boundary, TRUST_BOUNDARY);
+    }
+
+    #[tokio::test]
+    async fn rejects_a_genuine_tee_when_policy_pins_a_different_model() {
+        // THE load-bearing case: every hardware check passes, but the policy
+        // doesn't allowlist this model ⇒ unverified.
+        let v = verifier(
+            Arc::new(StubTransport::passing()),
+            policy("some-other-workload", KMS_ROOT_DER_SPKI),
+        );
+        let verdict = v
+            .verify_attestation(MODEL, FIXTURE_NONCE, 1_000)
+            .await
+            .unwrap();
+        assert!(!verdict.verified);
+        assert!(!verdict.checks.policy_accepts);
+        assert!(verdict.attested_addresses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fail_closed_when_the_report_is_withheld() {
+        let transport = StubTransport {
+            fail_report: true,
+            ..StubTransport::passing()
+        };
+        let v = verifier(Arc::new(transport), policy(APP_ID, KMS_ROOT_DER_SPKI));
+        let verdict = v
+            .verify_attestation(MODEL, FIXTURE_NONCE, 1_000)
+            .await
+            .unwrap();
+        assert!(!verdict.verified);
+        assert!(!verdict.checks.all_pass());
+    }
+
+    #[tokio::test]
+    async fn stale_nonce_fails_report_data_binding() {
+        // A report bound to the fixture nonce can't satisfy a different request.
+        let v = verifier(
+            Arc::new(StubTransport::passing()),
+            policy(APP_ID, KMS_ROOT_DER_SPKI),
+        );
+        let verdict = v
+            .verify_attestation(MODEL, "00".repeat(32).as_str(), 1_000)
+            .await
+            .unwrap();
+        assert!(!verdict.verified);
+        assert!(!verdict.checks.report_data_binds_key_and_nonce);
+    }
+
+    #[tokio::test]
+    async fn verdict_cached_fetches_once_within_ttl_then_refreshes_after() {
+        let transport = Arc::new(StubTransport::passing());
+        let v = verifier(transport.clone(), policy(APP_ID, KMS_ROOT_DER_SPKI)).with_cache_ttl(600);
+
+        v.verdict_cached(MODEL, 1_000).await.unwrap();
+        v.verdict_cached(MODEL, 1_100).await.unwrap();
+        assert_eq!(
+            transport.report_fetches.load(Ordering::SeqCst),
+            1,
+            "second call hits cache"
+        );
+
+        v.verdict_cached(MODEL, 1_700).await.unwrap(); // past TTL
+        assert_eq!(
+            transport.report_fetches.load(Ordering::SeqCst),
+            2,
+            "re-verifies after expiry"
+        );
+    }
+}
