@@ -79,11 +79,10 @@ impl Default for SpawnSubagentConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "config_file"))]
 mod spawn_subagent_config_tests {
     use super::*;
 
-    #[cfg(feature = "config_file")]
     #[test]
     fn deserializes_spawn_subagent_section() {
         let yaml = r#"
@@ -101,7 +100,6 @@ spawn_subagent:
         assert_eq!(sa.models, vec!["bitrouter/z-ai/glm-5.1".to_string()]);
     }
 
-    #[cfg(feature = "config_file")]
     #[test]
     fn spawn_subagent_absent_by_default() {
         let cfg: ServerToolsConfig = serde_saphyr::from_str("mcp_servers: []").unwrap();
