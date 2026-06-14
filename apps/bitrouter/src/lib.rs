@@ -26,6 +26,7 @@ pub mod policy;
 pub mod reload;
 pub mod skills;
 pub mod style;
+pub mod subagent;
 pub mod tools;
 
 pub use assemble::{Assembled, build_app, build_app_with_path};
