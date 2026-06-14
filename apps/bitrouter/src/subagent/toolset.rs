@@ -68,11 +68,29 @@ impl SpawnSubagentToolset {
             });
         }
 
-        // 2. random suffix for the policy id + temp dir (no DB row — just entropy)
+        // 2. select the harness from the operator allowlist (first = default; the
+        //    model does NOT choose the binary). Resolved BEFORE any policy/key is
+        //    created so a misconfig fails clean without orphaning either.
+        let harness_id = self
+            .config
+            .harnesses
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("opencode");
+        let harness = match crate::subagent::harness::harness_for(harness_id) {
+            Ok(h) => h,
+            Err(e) => {
+                return Ok(ToolResultOutput::ErrorText {
+                    value: format!("harness config failed: {e}"),
+                });
+            }
+        };
+
+        // 3. random suffix for the policy id + temp dir (no DB row — just entropy)
         let unique = crate::auth::keys::generate().hash[..16].to_string();
         let policy_id = format!("pol-{unique}");
 
-        // 3. register the capped policy.
+        // 4. register the capped policy.
         // Pin `allowed_models` to the WIRE model id — the part after the first
         // `/` — because that's what opencode sends upstream (the `provider/`
         // prefix is opencode-internal and stripped before the request reaches
@@ -89,27 +107,12 @@ impl SpawnSubagentToolset {
         };
         self.policy_store.insert_policy(policy)?;
 
-        // 4. mint ONE worker key, bound to the policy that now exists
+        // 5. mint ONE worker key, bound to the policy that now exists
         let minted = crate::commands::mint_key(&self.db, "subagent-worker", Some(&policy_id))
             .await
             .map_err(|e| BitrouterError::internal(format!("minting worker key: {e}")))?;
 
-        // 5. select the harness from the operator allowlist (first = default;
-        //    the model does NOT choose the binary) and materialize the worktree.
-        let harness_id = self
-            .config
-            .harnesses
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("opencode");
-        let harness = match crate::subagent::harness::harness_for(harness_id) {
-            Ok(h) => h,
-            Err(e) => {
-                return Ok(ToolResultOutput::ErrorText {
-                    value: format!("harness config failed: {e}"),
-                });
-            }
-        };
+        // 6. materialize the worker config + worktree via the selected harness
         let ws = match harness.materialize(
             &self.config.base_url,
             &args.model,
@@ -124,7 +127,7 @@ impl SpawnSubagentToolset {
             }
         };
 
-        // 6. drive the worker over ACP
+        // 7. drive the worker over ACP
         let spawn = match harness.spawn(&ws) {
             Ok(s) => s,
             Err(e) => {
@@ -146,14 +149,14 @@ impl SpawnSubagentToolset {
             }
         };
 
-        // 7. read actual spend under the worker's key
+        // 8. read actual spend under the worker's key
         let spend: u64 = self
             .metering
             .get_spend(&minted.id, TimeWindow::ThisMonth)
             .await
             .unwrap_or_default();
 
-        // 8. structured result
+        // 9. structured result
         Ok(ToolResultOutput::Json {
             value: serde_json::json!({
                 "final_message": outcome.final_message,

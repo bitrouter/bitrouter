@@ -54,7 +54,13 @@ pub trait WorkerHarness: Send + Sync {
 /// append its own `/v1/messages`.
 fn anthropic_base(base_url: &str) -> &str {
     let trimmed = base_url.trim_end_matches('/');
-    trimmed.strip_suffix("/v1").unwrap_or(trimmed)
+    match trimmed.strip_suffix("/v1") {
+        // Guard a degenerate config (e.g. base_url just `/v1`) stripping to an
+        // empty base — which would make the SDK fall back to the public
+        // api.anthropic.com. Keep the (non-empty) trimmed value instead.
+        Some(stripped) if !stripped.is_empty() => stripped,
+        _ => trimmed,
+    }
 }
 
 /// claude-agent-acp: launched via `npx`, pinned via ENV only
