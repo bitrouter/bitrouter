@@ -13,19 +13,9 @@ use bitrouter_sdk::{BitrouterError, Result};
 use crate::metering::{MeteringStore, TimeWindow};
 use crate::policy::{Policy, PolicyStore};
 use crate::subagent::acp_client::drive_once;
-use crate::subagent::harness::WorkerHarness;
 
 /// The tool name the agent calls.
 pub const TOOL_NAME: &str = "spawn_subagent";
-
-/// The WIRE model id the daemon (and `PolicyHook`) sees — the part after the
-/// first `/`. opencode's `provider/model` reference has its `provider/` prefix
-/// stripped before the request leaves the worker, so the policy allowlist must
-/// key on this, not the full reference. Must match `worker_config::materialize`'s
-/// split (both split on the first `/`).
-fn wire_model_id(model: &str) -> &str {
-    model.split_once('/').map(|(_, m)| m).unwrap_or(model)
-}
 
 /// Native router toolset: mints a capped key, spawns an `opencode acp` worker,
 /// drives it, and returns a structured result. Holds the daemon handles it needs
@@ -90,7 +80,9 @@ impl SpawnSubagentToolset {
         // every worker call is denied as `ModelNotAllowed`.
         let policy = Policy {
             id: policy_id.clone(),
-            allowed_models: Some(vec![wire_model_id(&args.model).to_string()]),
+            allowed_models: Some(vec![
+                crate::subagent::worker_config::wire_model_id(&args.model).to_string(),
+            ]),
             max_spend_micro_usd: Some(args.budget_micro_usd),
             allowed_tools: args.allowed_tools.clone(),
             ..Default::default()
@@ -102,8 +94,22 @@ impl SpawnSubagentToolset {
             .await
             .map_err(|e| BitrouterError::internal(format!("minting worker key: {e}")))?;
 
-        // 5. materialize the worker config + worktree via the harness
-        let harness = crate::subagent::harness::OpencodeHarness;
+        // 5. select the harness from the operator allowlist (first = default;
+        //    the model does NOT choose the binary) and materialize the worktree.
+        let harness_id = self
+            .config
+            .harnesses
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("opencode");
+        let harness = match crate::subagent::harness::harness_for(harness_id) {
+            Ok(h) => h,
+            Err(e) => {
+                return Ok(ToolResultOutput::ErrorText {
+                    value: format!("harness config failed: {e}"),
+                });
+            }
+        };
         let ws = match harness.materialize(
             &self.config.base_url,
             &args.model,
@@ -234,6 +240,8 @@ mod tests {
     #[test]
     fn wire_model_id_strips_provider_prefix() {
         // The policy allowlist must match what opencode sends on the wire.
+        // This delegates to worker_config::wire_model_id (single source of truth).
+        use crate::subagent::worker_config::wire_model_id;
         assert_eq!(wire_model_id("bitrouter/z-ai/glm-5.1"), "z-ai/glm-5.1");
         assert_eq!(wire_model_id("bitrouter/kimi-k2.6"), "kimi-k2.6");
         // No provider prefix → unchanged.
@@ -303,7 +311,6 @@ mod tests {
             store.clone(),
             MeteringStore::new(db),
             SpawnSubagentConfig {
-                command: "definitely-not-a-real-binary-xyz".into(),
                 models: vec!["m1".into()],
                 ..Default::default()
             },

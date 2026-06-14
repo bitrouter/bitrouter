@@ -53,8 +53,8 @@ pub struct ServerToolsConfig {
 
 /// Settings for the `spawn_subagent` router tool. Names the model allowlist a
 /// spawned worker may use, the base URL the worker should call back on (the
-/// local daemon, so the worker's inferences are metered), and the worker
-/// command.
+/// local daemon, so the worker's inferences are metered), and the operator
+/// allowlist of permitted ACP worker harnesses.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct SpawnSubagentConfig {
@@ -62,8 +62,10 @@ pub struct SpawnSubagentConfig {
     /// THIS daemon (e.g. `http://127.0.0.1:4356/v1`) so the worker's calls carry
     /// its scoped `brvk_` and are metered + capped here.
     pub base_url: String,
-    /// The worker command to spawn in ACP mode. Default `"opencode"`.
-    pub command: String,
+    /// Operator allowlist of permitted ACP worker harnesses (by registry id,
+    /// e.g. `opencode`, `claude-acp`). The FIRST entry is the default used for
+    /// spawns. The model does NOT choose the binary. Default: `["opencode"]`.
+    pub harnesses: Vec<String>,
     /// Models a spawned worker is allowed to use. A `spawn_subagent` call naming
     /// a model outside this list is rejected.
     pub models: Vec<String>,
@@ -73,7 +75,7 @@ impl Default for SpawnSubagentConfig {
     fn default() -> Self {
         Self {
             base_url: "http://127.0.0.1:4356/v1".to_string(),
-            command: "opencode".to_string(),
+            harnesses: vec!["opencode".to_string()],
             models: Vec::new(),
         }
     }
@@ -89,14 +91,14 @@ mod spawn_subagent_config_tests {
 mcp_servers: []
 spawn_subagent:
   base_url: "http://127.0.0.1:4356/v1"
-  command: "opencode"
+  harnesses: ["opencode"]
   models:
     - "bitrouter/z-ai/glm-5.1"
 "#;
         let cfg: ServerToolsConfig = serde_saphyr::from_str(yaml).unwrap();
         let sa = cfg.spawn_subagent.expect("section present");
         assert_eq!(sa.base_url, "http://127.0.0.1:4356/v1");
-        assert_eq!(sa.command, "opencode");
+        assert_eq!(sa.harnesses, vec!["opencode".to_string()]);
         assert_eq!(sa.models, vec!["bitrouter/z-ai/glm-5.1".to_string()]);
     }
 

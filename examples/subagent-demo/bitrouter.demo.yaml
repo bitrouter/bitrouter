@@ -23,7 +23,7 @@ database:
 server_tools:
   spawn_subagent:
     base_url: "http://127.0.0.1:4356/v1"
-    command: "opencode"
+    harnesses: ["opencode"]
     models:
       # Pick a model whose upstream reports STREAMING usage so the cap accrues.
       - "bitrouter/z-ai/glm-5.1"

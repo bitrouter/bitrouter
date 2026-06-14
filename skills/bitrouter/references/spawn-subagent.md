@@ -14,16 +14,19 @@ model and budget mid-conversation.
 ## Enable it (daemon config)
 
 ```yaml
-auth:
+server:
   skip_auth: false          # brvk_ keys + Budget policies must be enforced
 
 server_tools:
   spawn_subagent:
-    base_url: "http://127.0.0.1:4356/v1"   # THIS daemon — so worker calls are metered here
-    command: "opencode"                    # the worker harness (spawned as `opencode acp`)
-    models:                                # allowlist; a call naming another model is rejected
+    base_url: "http://127.0.0.1:4356/v1"      # THIS daemon — so worker calls are metered here
+    harnesses: ["opencode", "claude-acp"]     # operator allowlist; first entry is the default
+    models:                                    # model allowlist; a call naming another model is rejected
       - "bitrouter/z-ai/glm-5.1"
 ```
+
+- **Harness selection is operator-controlled** — the model does NOT choose the binary. The first entry in `harnesses` is always used (the model picks `model` + `budget`, not `harness`).
+- **`claude-acp`** is env-pinned (`ANTHROPIC_BASE_URL` = daemon base without `/v1`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`). It reaches the daemon over the Anthropic wire (`/v1/messages`), so `base_url` must NOT have a trailing `/v1` — `ClaudeAcpHarness` strips it automatically.
 
 The parent agent must also route through this daemon (point its provider
 `baseURL` at `http://127.0.0.1:4356/v1`) so the loop can inject the tool.

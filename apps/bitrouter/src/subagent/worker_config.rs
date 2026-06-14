@@ -35,6 +35,14 @@ pub fn make_worktree(unique: &str) -> Result<(std::path::PathBuf, String)> {
     Ok((root, ws.to_string_lossy().to_string()))
 }
 
+/// The WIRE model id the daemon (and `PolicyHook`) sees — the part after the
+/// first `/` (fallback: the whole string). Both the policy allowlist and a
+/// harness's model pin MUST use this so they never diverge (else every worker
+/// call is denied as `ModelNotAllowed`).
+pub fn wire_model_id(model: &str) -> &str {
+    model.split_once('/').map(|(_, m)| m).unwrap_or(model)
+}
+
 /// The model id as opencode expects it: `provider/model`. We always route via a
 /// provider named `bitrouter` pointed at the daemon, so split on the first `/`.
 fn split_provider_model(model: &str) -> Result<(&str, &str)> {
@@ -89,6 +97,13 @@ pub fn materialize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_model_id_strips_first_segment() {
+        assert_eq!(wire_model_id("bitrouter/z-ai/glm-5.1"), "z-ai/glm-5.1");
+        assert_eq!(wire_model_id("bitrouter/kimi-k2.6"), "kimi-k2.6");
+        assert_eq!(wire_model_id("m1"), "m1");
+    }
 
     #[test]
     fn materialize_writes_pinned_config() {
