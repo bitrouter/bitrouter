@@ -142,7 +142,10 @@ pub async fn mint_key(
     )
     .await
     .context("inserting api key")?;
-    Ok(GeneratedKey { id, secret: key.secret })
+    Ok(GeneratedKey {
+        id,
+        secret: key.secret,
+    })
 }
 
 /// `bitrouter key sign` — mint a `brvk_` virtual key for `user_id`, persist only

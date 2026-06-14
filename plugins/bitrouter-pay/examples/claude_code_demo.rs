@@ -13,18 +13,17 @@
 
 use std::time::Duration;
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_attestation::IntegrityProof;
 use bitrouter_pay::{
-    payment::x402::{build_transfer_authorization_typed_data, TransferAuthorization},
-    run_attested_inference, ArcMppBackend, ArcSigner, MppBackend, MppClient,
-    AGENT_WALLET_ADDRESS, ARC_TESTNET_CAIP2,
+    AGENT_WALLET_ADDRESS, ARC_TESTNET_CAIP2, ArcMppBackend, ArcSigner, MppBackend, MppClient,
+    payment::x402::{TransferAuthorization, build_transfer_authorization_typed_data},
+    run_attested_inference,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const WALLET_NAME: &str = "agent-treasury";
-const PROCEEDS_URL: &str =
-    "https://myproceeds.xyz/api/x402/pay/cmqblj2m60004l704lp0jmr7u/infer";
+const PROCEEDS_URL: &str = "https://myproceeds.xyz/api/x402/pay/cmqblj2m60004l704lp0jmr7u/infer";
 /// BitRouter MPP endpoint used as a fallback when the Proceeds x402 upstream is
 /// unavailable. BitRouter speaks MPP natively via `mpp-br`; Proceeds is x402-only.
 const BITROUTER_MPP_URL: &str =
@@ -220,7 +219,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 let mpp = MppClient::new(std::sync::Arc::new(ArcMppBackend::new(signer.clone()))
                     as std::sync::Arc<dyn MppBackend>);
-                match mpp.post(BITROUTER_MPP_URL, Some(request_body.clone())).await {
+                match mpp
+                    .post(BITROUTER_MPP_URL, Some(request_body.clone()))
+                    .await
+                {
                     Ok(body) => {
                         let reply = body
                             .pointer("/choices/0/message/content")
@@ -266,8 +268,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            match run_attested_inference(&key, MODEL, &attest_prompt, PROMPT.as_bytes(), now2)
-                .await
+            match run_attested_inference(&key, MODEL, &attest_prompt, PROMPT.as_bytes(), now2).await
             {
                 Ok(verified) => print_receipt(&verified),
                 Err(e) => println!("[RECEIPT] Chainlink TEE attestation unavailable — {e}"),

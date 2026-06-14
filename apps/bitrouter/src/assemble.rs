@@ -819,7 +819,9 @@ mod server_tools_tests {
 
     #[tokio::test]
     async fn spawn_subagent_config_builds_a_loop() {
-        use bitrouter_sdk::language_model::server_tools::config::{ServerToolsConfig, SpawnSubagentConfig};
+        use bitrouter_sdk::language_model::server_tools::config::{
+            ServerToolsConfig, SpawnSubagentConfig,
+        };
         let mut config = Config::default();
         config.server_tools = ServerToolsConfig {
             mcp_servers: vec![],
@@ -834,6 +836,9 @@ mod server_tools_tests {
         let store = std::sync::Arc::new(crate::policy::PolicyStore::new());
         let metering = crate::metering::MeteringStore::new(db.clone());
         let built = build_server_tool_loop(&config, &None, &None, &db, &store, &metering);
-        assert!(built.is_some(), "spawn_subagent alone should build the loop");
+        assert!(
+            built.is_some(),
+            "spawn_subagent alone should build the loop"
+        );
     }
 }

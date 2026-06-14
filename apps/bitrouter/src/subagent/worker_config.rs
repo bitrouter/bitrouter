@@ -28,9 +28,9 @@ impl Drop for WorkerWorkspace {
 /// The model id as opencode expects it: `provider/model`. We always route via a
 /// provider named `bitrouter` pointed at the daemon, so split on the first `/`.
 fn split_provider_model(model: &str) -> Result<(&str, &str)> {
-    model
-        .split_once('/')
-        .ok_or_else(|| BitrouterError::bad_request(format!("model '{model}' must be 'provider/model'")))
+    model.split_once('/').ok_or_else(|| {
+        BitrouterError::bad_request(format!("model '{model}' must be 'provider/model'"))
+    })
 }
 
 /// Write `opencode.json` pinning `model` to a `bitrouter` provider at `base_url`
@@ -61,8 +61,11 @@ pub fn materialize(
         }
     });
     let cfg_path = root.join("opencode.json");
-    std::fs::write(&cfg_path, serde_json::to_vec_pretty(&cfg).unwrap_or_default())
-        .map_err(|e| BitrouterError::internal(format!("write {}: {e}", cfg_path.display())))?;
+    std::fs::write(
+        &cfg_path,
+        serde_json::to_vec_pretty(&cfg).unwrap_or_default(),
+    )
+    .map_err(|e| BitrouterError::internal(format!("write {}: {e}", cfg_path.display())))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -70,8 +73,15 @@ pub fn materialize(
     }
 
     let mut env = BTreeMap::new();
-    env.insert("OPENCODE_CONFIG".to_string(), cfg_path.to_string_lossy().to_string());
-    Ok(WorkerWorkspace { root, env, cwd: ws.to_string_lossy().to_string() })
+    env.insert(
+        "OPENCODE_CONFIG".to_string(),
+        cfg_path.to_string_lossy().to_string(),
+    );
+    Ok(WorkerWorkspace {
+        root,
+        env,
+        cwd: ws.to_string_lossy().to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -85,13 +95,20 @@ mod tests {
             "bitrouter/z-ai/glm-5.1",
             "brvk_secret_xyz",
             "test1",
-        ).unwrap();
+        )
+        .unwrap();
         let cfg_path = ws.root.join("opencode.json");
         let raw = std::fs::read_to_string(&cfg_path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(v["model"], "bitrouter/z-ai/glm-5.1");
-        assert_eq!(v["provider"]["bitrouter"]["options"]["baseURL"], "http://127.0.0.1:4356/v1");
-        assert_eq!(v["provider"]["bitrouter"]["options"]["apiKey"], "brvk_secret_xyz");
+        assert_eq!(
+            v["provider"]["bitrouter"]["options"]["baseURL"],
+            "http://127.0.0.1:4356/v1"
+        );
+        assert_eq!(
+            v["provider"]["bitrouter"]["options"]["apiKey"],
+            "brvk_secret_xyz"
+        );
         assert_eq!(v["permission"]["*"], "allow");
         assert!(ws.env.contains_key("OPENCODE_CONFIG"));
         let root = ws.root.clone();
