@@ -26,6 +26,7 @@ bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true, features = ["otel-http"] }
 bitrouter-chainlink = { workspace = true, optional = true }
 bitrouter-attestation-plugin = { workspace = true, optional = true }
+bitrouter-pay = { workspace = true, optional = true, features = ["arc", "mpp"] }
 bitrouter-mcp = { path = "../../mcp", version = "1.0.0-alpha.14" }
 chrono.workspace = true
 sha2.workspace = true
@@ -49,7 +50,7 @@ thiserror.workspace = true
 [features]
 # Off-by-default hackathon demo: route the `chainlink_confidential` protocol to
 # the Chainlink Confidential Inference executor. A plain build excludes it.
-chainlink-demo = ["dep:bitrouter-chainlink", "dep:bitrouter-attestation-plugin"]
+chainlink-demo = ["dep:bitrouter-chainlink", "dep:bitrouter-attestation-plugin", "dep:bitrouter-pay"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

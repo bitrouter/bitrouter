@@ -12,6 +12,8 @@ pub mod chain;
 #[cfg(feature = "arc")]
 pub mod gate;
 pub mod payment;
+#[cfg(feature = "mpp")]
+pub mod paywall;
 #[cfg(feature = "arc")]
 pub mod plugin;
 #[cfg(feature = "arc")]
@@ -44,9 +46,15 @@ pub use chain::arc::{
 pub use gate::{ArcPaymentGate, ArcPaymentGateConfig};
 #[cfg(feature = "mpp")]
 pub use payment::mpp::{ArcMppBackend, MppBackend, MppClient};
+#[cfg(feature = "mpp")]
+pub use payment::mpp_client::{ArcMppPayClient, PaidResponse};
 #[cfg(feature = "x402")]
 pub use payment::x402::X402Client;
+#[cfg(feature = "mpp")]
+pub use paywall::{MppPaywallConfig, MppPaywallHook, MppPaywallPlugin};
 #[cfg(feature = "arc")]
 pub use plugin::{DepositPaymentGateHook, PayPlugin, PaymentGateExtension};
+#[cfg(feature = "mpp")]
+pub use wallet::ArcLocalSigner;
 #[cfg(feature = "arc")]
 pub use wallet::ArcSigner;

@@ -26,6 +26,12 @@ alloy.workspace = true
 open-wallet-standard.workspace = true
 ows-core.workspace = true
 ows-signer.workspace = true
+# `mpp-br` is the MPP (Machine Payments Protocol) Rust SDK from mpp.dev,
+# published on crates.io. It is the same library described at
+# <https://mpp.dev/sdk/rust> (crate `mpp`, 0.10.x) — identical API surface
+# (`mpp_br::server::{Mpp, tempo, TempoConfig}`, `parse_authorization`,
+# `verify_credential`, `mpp_br::client::{TempoProvider, PaymentProvider}`).
+# We standardise on `mpp-br` repo-wide; do not add a second `mpp` alias.
 mpp-br = { workspace = true, optional = true }
 bitrouter-observe = { workspace = true, optional = true }
 
@@ -33,9 +39,17 @@ bitrouter-observe = { workspace = true, optional = true }
 default = ["arc", "x402", "mpp"]
 arc = []
 x402 = []
-mpp = ["dep:mpp-br"]
+# Enable the mpp-br sub-features explicitly (not just via the workspace dep's
+# `features`) so `server`/`client` reach the example + integration-test target
+# edges, which do not inherit the workspace dependency feature list.
+mpp = ["arc", "dep:mpp-br", "mpp-br/server", "mpp-br/client", "mpp-br/tempo", "mpp-br/evm"]
 observe-ledger = ["dep:bitrouter-observe"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 dotenvy = "0.15"
+# Used by the `payment_proxy` example and the `test_mpp_payment_proxy`
+# integration test — a standalone MPP-gated proxy in front of BitRouter.
+axum = { workspace = true }
+# Surfaces the proxy's internal MPP pay-as-you-go step logs to the terminal.
+tracing-subscriber = { workspace = true }

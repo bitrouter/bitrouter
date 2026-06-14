@@ -4,10 +4,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::OnceCell;
 
 use crate::PayError;
 use crate::chain::arc::{ARC_TESTNET_CAIP2, ARC_TESTNET_RPC, ARC_TESTNET_USDC};
-use crate::wallet::ArcSigner;
+use crate::wallet::{ArcLocalSigner, ArcSigner};
 
 /// MPP payment backend trait (matches `mpp_br::client::PaymentProvider` surface).
 #[async_trait]
@@ -16,9 +17,15 @@ pub trait MppBackend: Send + Sync {
     async fn pay(&self, www_authenticate: &str) -> Result<String, PayError>;
 }
 
-/// Arc testnet MPP charge backend using an OWS-backed alloy signer.
+/// Arc testnet MPP charge backend.
+///
+/// Wallet identity (and the x402 EIP-712 path) comes from [`ArcSigner`] (OWS
+/// CLI). On-chain MPP settlement signs a bare transaction hash, which the OWS
+/// CLI cannot do, so it is signed by an [`ArcLocalSigner`] loaded lazily from
+/// the same vault and verified to match the OWS wallet address.
 pub struct ArcMppBackend {
     signer: Arc<ArcSigner>,
+    local: OnceCell<Arc<ArcLocalSigner>>,
     usdc: String,
     rpc_url: String,
     caip2: String,
@@ -28,15 +35,42 @@ impl ArcMppBackend {
     pub fn new(signer: Arc<ArcSigner>) -> Self {
         Self {
             signer,
+            local: OnceCell::new(),
             usdc: ARC_TESTNET_USDC.to_string(),
             rpc_url: ARC_TESTNET_RPC.to_string(),
             caip2: ARC_TESTNET_CAIP2.to_string(),
         }
     }
 
+    /// Lazily load and cache the raw-key signer used for on-chain settlement,
+    /// asserting that the decrypted key matches the OWS wallet identity.
+    async fn local_signer(&self) -> Result<Arc<ArcLocalSigner>, PayError> {
+        let expected = self.signer.address();
+        self.local
+            .get_or_try_init(|| async move {
+                let local = tokio::task::spawn_blocking(ArcLocalSigner::agent_treasury)
+                    .await
+                    .map_err(|e| {
+                        PayError::SignerError(format!("local signer load task failed: {e}"))
+                    })??;
+                if local.address() != expected {
+                    return Err(PayError::SignerError(format!(
+                        "decrypted MPP key {} does not match OWS wallet {expected}",
+                        local.address()
+                    )));
+                }
+                Ok(Arc::new(local))
+            })
+            .await
+            .cloned()
+    }
+
     #[cfg(feature = "mpp")]
-    fn tempo_provider(&self) -> Result<mpp_br::client::TempoProvider, PayError> {
-        mpp_br::client::TempoProvider::new(self.signer.as_ref().clone(), &self.rpc_url)
+    fn tempo_provider(
+        &self,
+        local: ArcLocalSigner,
+    ) -> Result<mpp_br::client::TempoProvider, PayError> {
+        mpp_br::client::TempoProvider::new(local, &self.rpc_url)
             .map_err(|e| PayError::PaymentFailed(e.to_string()))
     }
 }
@@ -57,10 +91,42 @@ impl MppBackend for ArcMppBackend {
                 PayError::InvalidChallenge(format!("invalid WWW-Authenticate: {e}"))
             })?;
 
-            let provider = self.tempo_provider()?;
+            let local = self.local_signer().await?;
+            let provider = self.tempo_provider((*local).clone())?;
             let credential = PaymentProvider::pay(&provider, &challenge)
                 .await
                 .map_err(|e| PayError::PaymentFailed(e.to_string()))?;
+
+            // Diagnostics for the "-32602 failed to decode signed transaction"
+            // class of RPC rejection: surface the exact signed payload the
+            // server will broadcast. mpp-br's `tempo` method does NOT emit a
+            // standard EIP-155 / EIP-1559 RLP transaction — it emits a Tempo
+            // account-abstraction typed envelope (leading byte `0x76`, or
+            // `0x78` in fee-payer mode) wrapping ITIP20 precompile calls. That
+            // envelope is only decodable by a Tempo node (chain 4217 / 42431);
+            // a generic EVM chain such as Arc testnet (5042002) rejects it.
+            if let Ok(payload) = credential.charge_payload() {
+                let data = payload.data();
+                let kind = if payload.is_transaction() {
+                    "transaction"
+                } else if payload.is_proof() {
+                    "proof (zero-amount, no broadcast)"
+                } else {
+                    "other"
+                };
+                let type_byte = data
+                    .strip_prefix("0x")
+                    .and_then(|h| h.get(0..2))
+                    .unwrap_or("");
+                tracing::warn!(
+                    payload_kind = kind,
+                    tx_type_byte = %type_byte,
+                    tx_len = data.len(),
+                    signed_payload = %data,
+                    "MPP tempo signed payload built — type byte 0x76/0x78 is a Tempo AA \
+                     envelope (valid only on Tempo chains 4217/42431, NOT Arc 5042002)"
+                );
+            }
 
             mpp_br::format_authorization(&credential)
                 .map_err(|e| PayError::PaymentFailed(e.to_string()))

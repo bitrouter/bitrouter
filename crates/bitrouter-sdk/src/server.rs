@@ -727,14 +727,21 @@ impl IntoResponse for BitrouterError {
                     response.headers_mut().insert(header::WWW_AUTHENTICATE, v);
                 }
             }
-            BitrouterError::PaymentRequired(_) => {
-                // 402 + WWW-Authenticate: our scheme name (`Bitrouter-MPP`)
-                // and params predate the mpp.dev finalised wire format and
-                // remain compatible with v0 clients ( will revisit
-                // alignment with <https://mpp.dev/protocol/http-402>).
-                if let Ok(v) = header::HeaderValue::from_str(
-                    "Bitrouter-MPP realm=\"bitrouter\", scheme=\"tempo-voucher\"",
-                ) {
+            BitrouterError::PaymentRequired(challenge) => {
+                // 402 + WWW-Authenticate. When the carried message is itself a
+                // parseable MPP `Payment …` challenge (the server-side MPP
+                // paywall emits one verbatim), surface it in the header so an
+                // autopay client can read the challenge from either the header
+                // or the JSON body. Otherwise fall back to our static scheme
+                // marker, which predates the mpp.dev finalised wire format and
+                // stays compatible with v0 clients (revisit alignment with
+                // <https://mpp.dev/protocol/http-402>).
+                let header_value = if challenge.starts_with("Payment ") {
+                    challenge.clone()
+                } else {
+                    "Bitrouter-MPP realm=\"bitrouter\", scheme=\"tempo-voucher\"".to_string()
+                };
+                if let Ok(v) = header::HeaderValue::from_str(&header_value) {
                     response.headers_mut().insert(header::WWW_AUTHENTICATE, v);
                 }
             }

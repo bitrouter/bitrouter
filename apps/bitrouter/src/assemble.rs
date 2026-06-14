@@ -397,6 +397,17 @@ pub async fn build_app_with_path(
             app
         }
     };
+    // MPP payment gate (demo only): when `MPP_SECRET_KEY` is set, every
+    // inbound inference request must fund itself with a Tempo charge on Arc
+    // testnet before the pipeline runs. The hook denies an unpaid request with
+    // a 402 carrying a fresh MPP challenge; a request that echoes a verified
+    // credential is admitted. No `MPP_SECRET_KEY` → no paywall, so a plain
+    // demo run keeps the open (unpaid) behaviour.
+    #[cfg(feature = "chainlink-demo")]
+    let app = match build_mpp_paywall()? {
+        Some(plugin) => app.plugin(plugin),
+        None => app,
+    };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
     // had since v0.
@@ -432,6 +443,30 @@ pub async fn build_app_with_path(
         otel_exporter: otel_for_assembled,
         otel_init_error,
     })
+}
+
+/// Build the server-side MPP paywall plugin when `MPP_SECRET_KEY` is set.
+///
+/// Returns `Ok(None)` when the secret is absent or empty, so a demo run
+/// without the env var keeps the open (unpaid) behaviour and existing
+/// functionality is preserved. The collecting address and per-request price
+/// come from `MPP_RECIPIENT` / `MPP_AMOUNT`, defaulting to the Arc-testnet
+/// treasury address and `0.001` USDC respectively. The charge is always bound
+/// to Arc testnet (`eip155:5042002`).
+#[cfg(feature = "chainlink-demo")]
+fn build_mpp_paywall() -> Result<Option<bitrouter_pay::MppPaywallPlugin>> {
+    let secret = match std::env::var("MPP_SECRET_KEY") {
+        Ok(s) if !s.is_empty() => s,
+        _ => return Ok(None),
+    };
+    let recipient = std::env::var("MPP_RECIPIENT")
+        .unwrap_or_else(|_| bitrouter_pay::AGENT_WALLET_ADDRESS.to_string());
+    let amount = std::env::var("MPP_AMOUNT").unwrap_or_else(|_| "0.001".to_string());
+    let config = bitrouter_pay::MppPaywallConfig::arc_testnet(recipient, secret, amount);
+    let plugin = bitrouter_pay::MppPaywallPlugin::new(config)
+        .map_err(|e| anyhow::anyhow!("building the MPP paywall: {e}"))?;
+    tracing::info!("MPP paywall enabled — every /v1/chat/completions request must pay 0.001 USDC");
+    Ok(Some(plugin))
 }
 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a

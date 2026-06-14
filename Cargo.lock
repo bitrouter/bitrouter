@@ -1992,6 +1992,7 @@ dependencies = [
  "bitrouter-guardrails",
  "bitrouter-mcp",
  "bitrouter-observe",
+ "bitrouter-pay",
  "bitrouter-providers",
  "bitrouter-sdk",
  "bitrouter-skills",
@@ -2165,6 +2166,7 @@ version = "1.0.0-alpha.14"
 dependencies = [
  "alloy",
  "async-trait",
+ "axum 0.8.9",
  "base64 0.22.1",
  "bitrouter-attestation",
  "bitrouter-chainlink",
@@ -2183,6 +2185,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-subscriber 0.3.23",
 ]
 
 [[package]]
@@ -4830,9 +4833,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe03d2ebebfc9cc928c0fc727d8b6c6a02c6b260c39980130adfe24d2586b618"
 dependencies = [
  "alloy",
+ "async-stream",
  "base64 0.22.1",
+ "futures-core",
  "hex",
  "hmac",
+ "http 1.4.0",
  "rand 0.9.4",
  "reqwest 0.12.28",
  "serde",
@@ -4843,6 +4849,7 @@ dependencies = [
  "tempo-primitives",
  "thiserror 2.0.18",
  "time",
+ "tokio",
  "uuid",
 ]
 

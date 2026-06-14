@@ -10,6 +10,21 @@
 #
 # Requires:
 #   export CHAINLINK_CONFIDENTIAL_API_KEY=<your hackathon key>
+#
+# MPP pay-per-request gate (optional, chainlink-demo build only):
+#   Set MPP_SECRET_KEY to require an MPP payment on every POST to
+#   /v1/chat/completions before inference runs. An unpaid request gets a 402
+#   with a fresh Tempo charge challenge; a request echoing a verified
+#   credential is admitted. Charges 0.001 USDC on Arc testnet (eip155:5042002)
+#   to the agent-treasury address by default.
+#
+#   export MPP_SECRET_KEY=bitrouter-pay-secret
+#   # optional overrides:
+#   export MPP_RECIPIENT=0xBB4CB05dA6ED0780cFDd0F088EaEEd420381DE38
+#   export MPP_AMOUNT=0.001
+#
+#   When MPP_SECRET_KEY is unset, the gate is disabled and requests are served
+#   without payment (the default).
 
 server:
   listen: "127.0.0.1:4356"
