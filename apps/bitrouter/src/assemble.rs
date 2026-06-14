@@ -13,6 +13,11 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::acp::{AcpStdioExecutor, ConfigAcpRoutingTable};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
+use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
+use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
+use bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop;
+use bitrouter_sdk::language_model::server_tools::mcp_toolset::McpRouterToolset;
+use bitrouter_sdk::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
 use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
 use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
 use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
@@ -331,6 +336,12 @@ pub async fn build_app_with_path(
         }
     });
 
+    // Server-side tool loop — wired only when `server_tools.mcp_servers` names
+    // at least one configured MCP server. Reuses the MCP executor/routing built
+    // above; here BitRouter is an MCP *client* that executes the model's tool
+    // calls inside the LLM loop (distinct from the `/mcp` gateway above).
+    let server_tool_loop = build_server_tool_loop(config, &mcp_routing, &mcp_executor);
+
     // Optional ACP pure-routing pipeline — wired only when the config
     // declares at least one upstream agent. Mirrors the MCP wiring above;
     // the `bitrouter agent-proxy <id>` CLI dispatches against this pipeline.
@@ -376,6 +387,10 @@ pub async fn build_app_with_path(
                 metering_store_for_recorder,
                 pricing_for_recorder,
             ));
+            // Server-side tool loop (router-executed MCP tools), when configured.
+            if let Some(server_loop) = server_tool_loop {
+                lm.server_tool_loop(server_loop);
+            }
         });
     // Stage-1 guardrail plugin, appended after the closure so its hooks land
     // after auth + policy in registration order. Skipped when no rules are
@@ -447,6 +462,61 @@ pub async fn build_app_with_path(
         otel_exporter: otel_for_assembled,
         otel_init_error,
     })
+}
+
+/// Build the server-side tool loop from `config.server_tools` over the MCP
+/// executor/routing already assembled for the `/mcp` gateway. Returns `None`
+/// when no `server_tools.mcp_servers` are configured (or the MCP stack is
+/// absent). Each named server is attached as an [`McpRouterToolset`] using a
+/// `Direct` selector and the server's `tool_prefix` (default `"{name}__"`), so
+/// router tool names cannot collide with the caller's own tools.
+fn build_server_tool_loop(
+    config: &Config,
+    mcp_routing: &Option<Arc<ConfigMcpRoutingTable>>,
+    mcp_executor: &Option<Arc<dyn bitrouter_sdk::mcp::Executor>>,
+) -> Option<Arc<ServerToolLoop>> {
+    let settings = &config.server_tools;
+    if settings.mcp_servers.is_empty() {
+        return None;
+    }
+    let (Some(routing), Some(executor)) = (mcp_routing, mcp_executor) else {
+        tracing::warn!(
+            "server_tools.mcp_servers is set but no mcp_servers are configured; \
+             the server-side tool loop is disabled"
+        );
+        return None;
+    };
+    let routing: Arc<dyn bitrouter_sdk::mcp::RoutingTable> = routing.clone();
+    let mut sets: Vec<Arc<dyn RouterToolset>> = Vec::with_capacity(settings.mcp_servers.len());
+    for name in &settings.mcp_servers {
+        let Some(server) = config.mcp_servers.get(name) else {
+            tracing::warn!(server = %name,
+                "server_tools.mcp_servers names an MCP server absent from mcp_servers; skipping");
+            continue;
+        };
+        let prefix = server
+            .tool_prefix
+            .clone()
+            .unwrap_or_else(|| format!("{name}__"));
+        sets.push(Arc::new(McpRouterToolset::new(
+            executor.clone(),
+            routing.clone(),
+            name.clone(),
+            Some(prefix),
+        )));
+    }
+    if sets.is_empty() {
+        return None;
+    }
+    let mut loop_config = ServerToolLoopConfig::default();
+    if let Some(max) = settings.max_iterations {
+        loop_config.max_iterations = max;
+    }
+    Some(Arc::new(ServerToolLoop::new(
+        ToolsetRegistry::new(sets),
+        loop_config,
+        Arc::new(AllowAll),
+    )))
 }
 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
@@ -693,5 +763,24 @@ mod otel_config_tests {
             .expect("legacy shim is Ok")
             .expect("legacy shim yields Some");
         assert_eq!(cfg.endpoint, "http://legacy:4318");
+    }
+}
+
+#[cfg(test)]
+mod server_tools_tests {
+    use super::{Config, build_server_tool_loop};
+
+    #[test]
+    fn no_loop_when_server_tools_unset() {
+        let config = Config::default();
+        assert!(build_server_tool_loop(&config, &None, &None).is_none());
+    }
+
+    #[test]
+    fn no_loop_when_named_but_mcp_stack_absent() {
+        let mut config = Config::default();
+        config.server_tools.mcp_servers = vec!["docs".to_string()];
+        // server_tools names a server but no MCP executor/routing was built.
+        assert!(build_server_tool_loop(&config, &None, &None).is_none());
     }
 }

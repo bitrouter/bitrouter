@@ -9488,3 +9488,98 @@ fn gemini_encode_two_tool_calls_emit_two_function_calls() {
     assert_eq!(calls[1].0, "second");
     assert_eq!(calls[1].1, "{\"y\":2}");
 }
+
+// ===== server-side tool loop: ServerToolCall / ServerToolResult rendering =====
+
+fn server_tool_call_parts() -> [StreamPart; 2] {
+    [
+        StreamPart::ServerToolCall {
+            id: "c1".into(),
+            name: "mcp__docs__search".into(),
+            arguments: "{\"q\":\"rust\"}".into(),
+            server_name: Some("docs".into()),
+            dynamic: true,
+        },
+        StreamPart::ServerToolResult {
+            call_id: "c1".into(),
+            tool_name: Some("mcp__docs__search".into()),
+            output: ToolResultOutput::Text {
+                value: "found it".into(),
+            },
+            dynamic: true,
+        },
+    ]
+}
+
+#[test]
+fn messages_encodes_server_tool_call_and_result_blocks() {
+    let events = encode_stream_events(ApiProtocol::Messages, &server_tool_call_parts());
+    // An `mcp_tool_use` content block carrying the server_name.
+    assert!(
+        events.iter().any(|(ev, d)| ev == "content_block_start"
+            && d.pointer("/content_block/type").and_then(|v| v.as_str()) == Some("mcp_tool_use")
+            && d.pointer("/content_block/server_name")
+                .and_then(|v| v.as_str())
+                == Some("docs")),
+        "expected an mcp_tool_use block with server_name: {events:?}"
+    );
+    // The arguments stream as an input_json_delta.
+    assert!(
+        events.iter().any(|(ev, d)| ev == "content_block_delta"
+            && d.pointer("/delta/type").and_then(|v| v.as_str()) == Some("input_json_delta")),
+        "expected an input_json_delta: {events:?}"
+    );
+    // An `mcp_tool_result` block referencing the call, carrying the output.
+    assert!(
+        events.iter().any(|(ev, d)| ev == "content_block_start"
+            && d.pointer("/content_block/type").and_then(|v| v.as_str())
+                == Some("mcp_tool_result")
+            && d.pointer("/content_block/tool_use_id")
+                .and_then(|v| v.as_str())
+                == Some("c1")),
+        "expected an mcp_tool_result block: {events:?}"
+    );
+}
+
+#[test]
+fn responses_encodes_mcp_call_output_item() {
+    let events = encode_stream_events(ApiProtocol::Responses, &server_tool_call_parts());
+    let item = events
+        .iter()
+        .find(|(ev, d)| {
+            ev == "response.output_item.done"
+                && d.pointer("/item/type").and_then(|v| v.as_str()) == Some("mcp_call")
+        })
+        .map(|(_, d)| d)
+        .expect("expected an mcp_call output item");
+    assert_eq!(
+        item.pointer("/item/name").and_then(|v| v.as_str()),
+        Some("mcp__docs__search")
+    );
+    assert_eq!(
+        item.pointer("/item/output").and_then(|v| v.as_str()),
+        Some("found it")
+    );
+    assert_eq!(
+        item.pointer("/item/server_label").and_then(|v| v.as_str()),
+        Some("docs")
+    );
+}
+
+#[test]
+fn coarse_wires_drop_server_tool_activity() {
+    // Chat Completions and Generate Content have no server-tool / MCP stream
+    // form; the activity is dropped (the final answer still streams).
+    for proto in [ApiProtocol::ChatCompletions, ApiProtocol::GenerateContent] {
+        let events = encode_stream_events(proto.clone(), &server_tool_call_parts());
+        assert!(
+            !events.iter().any(|(_, d)| {
+                let s = d.to_string();
+                s.contains("mcp_tool_use")
+                    || s.contains("mcp_call")
+                    || s.contains("server_tool_use")
+            }),
+            "coarse wire {proto:?} must drop server-tool activity: {events:?}"
+        );
+    }
+}

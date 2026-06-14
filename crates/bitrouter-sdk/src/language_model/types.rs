@@ -1573,6 +1573,46 @@ pub enum StreamPart {
         /// Arguments fragment.
         arguments: String,
     },
+    /// A complete **provider/router-executed** tool call, emitted whole (not as
+    /// [`Self::ToolCallDelta`] fragments). The server-side tool loop emits this
+    /// for a tool BitRouter executed itself; a framing encoder renders it as the
+    /// protocol's native server-tool / MCP call block (Anthropic
+    /// `server_tool_use` / `mcp_tool_use`, Responses `mcp_call`). The coarse
+    /// wires (Chat Completions / Generate Content) degrade it — see each
+    /// encoder. `dynamic` marks an MCP (Model Context Protocol) tool, mirroring
+    /// [`Content::ToolCall::dynamic`].
+    ServerToolCall {
+        /// Provider-assigned call id, paired with the matching
+        /// [`Self::ServerToolResult`].
+        id: String,
+        /// Tool name.
+        name: String,
+        /// JSON-encoded arguments, whole.
+        arguments: String,
+        /// The MCP server that owns the tool, when known. Lets a framing
+        /// encoder reproduce the Anthropic `mcp_tool_use` block's `server_name`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server_name: Option<String>,
+        /// Whether this is a dynamic (MCP) tool call.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        dynamic: bool,
+    },
+    /// The result of a [`Self::ServerToolCall`], emitted whole. Rendered as the
+    /// protocol's native server-tool / MCP result block (Anthropic
+    /// `mcp_tool_result` / `web_search_tool_result`, Responses `mcp_call`
+    /// output); degraded on the coarse wires. Mirrors [`Content::ToolResult`].
+    ServerToolResult {
+        /// The [`Self::ServerToolCall`] id this result answers.
+        call_id: String,
+        /// The tool's name, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
+        /// The typed result body.
+        output: ToolResultOutput,
+        /// Whether this answers a dynamic (MCP) tool call.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        dynamic: bool,
+    },
     /// A complete generated file (e.g. an image), emitted whole — matching the
     /// Vercel AI SDK `LanguageModelV3` stream `file` part, where files arrive as
     /// one part rather than chunked deltas.

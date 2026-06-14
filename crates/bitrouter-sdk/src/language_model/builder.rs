@@ -12,6 +12,7 @@ use crate::language_model::hooks::{
 };
 use crate::language_model::pipeline::{DEFAULT_KEEPALIVE, Pipeline};
 use crate::language_model::routing::{DefaultFallbackPolicy, FallbackPolicy, RoutingTable};
+use crate::language_model::server_tools::loop_controller::ServerToolLoop;
 use crate::language_model::settlement::SettlementRecorder;
 
 /// Builds a [`Pipeline`] for the `language_model` protocol. Every method takes
@@ -27,6 +28,7 @@ pub struct PipelineBuilder {
     routing_table: Option<Arc<dyn RoutingTable>>,
     fallback_policy: Option<Arc<dyn FallbackPolicy>>,
     executor: Option<Arc<dyn Executor>>,
+    server_tool_loop: Option<Arc<ServerToolLoop>>,
     keepalive_interval: Duration,
 }
 
@@ -43,6 +45,7 @@ impl PipelineBuilder {
             routing_table: None,
             fallback_policy: None,
             executor: None,
+            server_tool_loop: None,
             keepalive_interval: DEFAULT_KEEPALIVE,
         }
     }
@@ -56,6 +59,14 @@ impl PipelineBuilder {
     /// Set the executor that performs upstream calls (required).
     pub fn executor(&mut self, executor: Arc<dyn Executor>) -> &mut Self {
         self.executor = Some(executor);
+        self
+    }
+
+    /// Attach a server-side tool loop (`server_tools`). When set, non-streaming
+    /// execution injects the loop's router tools, executes the model's calls to
+    /// them, and re-calls the upstream until the model stops calling them.
+    pub fn server_tool_loop(&mut self, server_loop: Arc<ServerToolLoop>) -> &mut Self {
+        self.server_tool_loop = Some(server_loop);
         self
     }
 
@@ -140,6 +151,7 @@ impl PipelineBuilder {
             routing_table,
             fallback_policy,
             executor,
+            server_tool_loop: self.server_tool_loop,
             keepalive_interval: self.keepalive_interval,
             pending_settlements: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             detached_executions: tokio_util::task::TaskTracker::new(),

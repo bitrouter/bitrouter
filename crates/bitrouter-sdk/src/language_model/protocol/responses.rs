@@ -966,6 +966,7 @@ impl InboundAdapter for ResponsesAdapter {
             tool_item: None,
             completed_items: Vec::new(),
             annotation_index: 0,
+            pending_mcp_call: None,
         })
     }
 }
@@ -2360,6 +2361,47 @@ struct ResponsesStreamEncoder {
     /// supplying the monotonically increasing `annotation_index` each event
     /// carries.
     annotation_index: u64,
+    /// A buffered [`StreamPart::ServerToolCall`] awaiting its result, so the
+    /// pair emits as one `mcp_call` output item (OpenAI carries arguments +
+    /// output on a single item).
+    pending_mcp_call: Option<PendingMcpCall>,
+}
+
+/// A buffered router tool call awaiting its [`StreamPart::ServerToolResult`].
+struct PendingMcpCall {
+    id: String,
+    name: String,
+    arguments: String,
+    server_name: Option<String>,
+}
+
+/// Map a router tool-result output to an OpenAI `mcp_call` `output` string and
+/// optional `error` string.
+fn mcp_call_output(output: &ToolResultOutput) -> (String, Option<String>) {
+    match output {
+        ToolResultOutput::Text { value } => (value.clone(), None),
+        ToolResultOutput::ErrorText { value } => (String::new(), Some(value.clone())),
+        ToolResultOutput::Json { value } => (value.to_string(), None),
+        ToolResultOutput::ErrorJson { value } => (String::new(), Some(value.to_string())),
+        ToolResultOutput::Content { value } => {
+            let text = value
+                .iter()
+                .filter_map(|p| match p {
+                    ToolResultContentPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (text, None)
+        }
+        ToolResultOutput::ExecutionDenied { reason } => (
+            String::new(),
+            Some(format!(
+                "execution denied: {}",
+                reason.as_deref().unwrap_or("")
+            )),
+        ),
+    }
 }
 
 /// Tracking state for one open message / reasoning item.
@@ -2827,6 +2869,65 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         }),
                     ));
                 }
+            }
+            // Buffer a router-executed call; the matching result completes it
+            // into one `mcp_call` output item.
+            StreamPart::ServerToolCall {
+                id,
+                name,
+                arguments,
+                server_name,
+                ..
+            } => {
+                self.pending_mcp_call = Some(PendingMcpCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                    server_name: server_name.clone(),
+                });
+            }
+            // Emit the complete `mcp_call` output item (arguments + output on one
+            // item), pairing it with the buffered call.
+            StreamPart::ServerToolResult {
+                call_id, output, ..
+            } => {
+                self.close_reasoning_item(&mut frames);
+                self.close_text_item(&mut frames);
+                self.close_tool_item(&mut frames);
+                let pending = self.pending_mcp_call.take();
+                let pending = pending.filter(|p| &p.id == call_id);
+                let name = pending.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+                let arguments = pending
+                    .as_ref()
+                    .map(|p| p.arguments.clone())
+                    .unwrap_or_default();
+                let server_label = pending.as_ref().and_then(|p| p.server_name.clone());
+                let (out_str, err) = mcp_call_output(output);
+                let output_index = self.allocate_output_index();
+                let item_id = format!("mcp_{}", uuid::Uuid::new_v4());
+                let mut item = serde_json::json!({
+                    "type": "mcp_call",
+                    "id": item_id,
+                    "name": name,
+                    "arguments": arguments,
+                    "output": out_str,
+                    "status": "completed",
+                });
+                if let Some(server) = &server_label {
+                    item["server_label"] = serde_json::Value::String(server.clone());
+                }
+                if let Some(e) = &err {
+                    item["error"] = serde_json::Value::String(e.clone());
+                }
+                frames.push(self.ev(
+                    "response.output_item.added",
+                    serde_json::json!({ "output_index": output_index, "item": item.clone() }),
+                ));
+                frames.push(self.ev(
+                    "response.output_item.done",
+                    serde_json::json!({ "output_index": output_index, "item": item.clone() }),
+                ));
+                self.completed_items.push(item);
             }
             StreamPart::Source { source } => {
                 // A citation is a `response.output_text.annotation.added` event

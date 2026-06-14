@@ -2318,6 +2318,51 @@ enum EncoderBlockKind {
     ToolUse,
 }
 
+/// Map a router tool-result output to an Anthropic `mcp_tool_result`
+/// `content` value (an array of content blocks, or a raw JSON body) plus the
+/// `is_error` flag. Mirrors the non-streaming `mcp_tool_result` render.
+fn server_tool_result_content(output: &ToolResultOutput) -> (serde_json::Value, bool) {
+    match output {
+        ToolResultOutput::Text { value } => (
+            serde_json::json!([{ "type": "text", "text": value }]),
+            false,
+        ),
+        ToolResultOutput::ErrorText { value } => {
+            (serde_json::json!([{ "type": "text", "text": value }]), true)
+        }
+        // `mcp_tool_result.content` must be a string or an array of content
+        // blocks — a non-text MCP result (a raw JSON body) is wrapped in a text
+        // block rather than passed through as a bare object.
+        ToolResultOutput::Json { value } => (
+            serde_json::json!([{ "type": "text", "text": value.to_string() }]),
+            false,
+        ),
+        ToolResultOutput::ErrorJson { value } => (
+            serde_json::json!([{ "type": "text", "text": value.to_string() }]),
+            true,
+        ),
+        ToolResultOutput::Content { value } => {
+            let parts: Vec<serde_json::Value> = value
+                .iter()
+                .filter_map(|p| match p {
+                    ToolResultContentPart::Text { text } => {
+                        Some(serde_json::json!({ "type": "text", "text": text }))
+                    }
+                    _ => None,
+                })
+                .collect();
+            (serde_json::Value::Array(parts), false)
+        }
+        ToolResultOutput::ExecutionDenied { reason } => (
+            serde_json::json!([{
+                "type": "text",
+                "text": format!("execution denied: {}", reason.as_deref().unwrap_or("")),
+            }]),
+            true,
+        ),
+    }
+}
+
 struct MessagesStreamEncoder {
     request_id: String,
     model: String,
@@ -2642,6 +2687,80 @@ impl StreamEncoder for MessagesStreamEncoder {
                         }),
                     ));
                 }
+            }
+            // A router-executed tool call rendered as a whole server-tool block:
+            // a named MCP server -> `mcp_tool_use` (carrying `server_name`), else
+            // the generic `server_tool_use`. Either marks the call
+            // provider-executed, so the client never re-runs it. Opened and
+            // closed as one block, mirroring `flush_pending_sources`.
+            StreamPart::ServerToolCall {
+                id,
+                name,
+                arguments,
+                server_name,
+                dynamic,
+            } => {
+                self.close_block(&mut frames);
+                // Open with an empty input; the arguments stream as an
+                // `input_json_delta`, matching how Anthropic frames a tool_use
+                // block (the client builds `input` from the deltas).
+                let content_block = match server_name {
+                    Some(server) if *dynamic => serde_json::json!({
+                        "type": "mcp_tool_use",
+                        "id": id, "name": name, "server_name": server, "input": {},
+                    }),
+                    _ => serde_json::json!({
+                        "type": "server_tool_use", "id": id, "name": name, "input": {},
+                    }),
+                };
+                frames.push(Self::ev(
+                    "content_block_start",
+                    serde_json::json!({
+                        "type": "content_block_start",
+                        "index": self.block_index,
+                        "content_block": content_block,
+                    }),
+                ));
+                if !arguments.is_empty() {
+                    frames.push(Self::ev(
+                        "content_block_delta",
+                        serde_json::json!({
+                            "type": "content_block_delta",
+                            "index": self.block_index,
+                            "delta": { "type": "input_json_delta", "partial_json": arguments },
+                        }),
+                    ));
+                }
+                frames.push(Self::ev(
+                    "content_block_stop",
+                    serde_json::json!({ "type": "content_block_stop", "index": self.block_index }),
+                ));
+                self.block_index += 1;
+            }
+            // The matching result, rendered as a whole `mcp_tool_result` block.
+            StreamPart::ServerToolResult {
+                call_id, output, ..
+            } => {
+                self.close_block(&mut frames);
+                let (content, is_error) = server_tool_result_content(output);
+                frames.push(Self::ev(
+                    "content_block_start",
+                    serde_json::json!({
+                        "type": "content_block_start",
+                        "index": self.block_index,
+                        "content_block": {
+                            "type": "mcp_tool_result",
+                            "tool_use_id": call_id,
+                            "is_error": is_error,
+                            "content": content,
+                        },
+                    }),
+                ));
+                frames.push(Self::ev(
+                    "content_block_stop",
+                    serde_json::json!({ "type": "content_block_stop", "index": self.block_index }),
+                ));
+                self.block_index += 1;
             }
             StreamPart::Source { source } => {
                 // Buffer a streamed citation as a `web_search_result` entry; all
