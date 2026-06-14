@@ -46,4 +46,63 @@ pub struct ServerToolsConfig {
     pub mcp_servers: Vec<String>,
     /// Optional override of the loop's maximum tool-execution rounds.
     pub max_iterations: Option<u32>,
+    /// When set, enables the router-owned `spawn_subagent` tool (in addition to
+    /// any `mcp_servers`). The agent calls it to spawn a budgeted subagent.
+    pub spawn_subagent: Option<SpawnSubagentConfig>,
+}
+
+/// Settings for the `spawn_subagent` router tool. Names the model allowlist a
+/// spawned worker may use, the base URL the worker should call back on (the
+/// local daemon, so the worker's inferences are metered), and the worker
+/// command.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SpawnSubagentConfig {
+    /// The daemon URL the spawned worker routes its inferences to. Must point at
+    /// THIS daemon (e.g. `http://127.0.0.1:4356/v1`) so the worker's calls carry
+    /// its scoped `brvk_` and are metered + capped here.
+    pub base_url: String,
+    /// The worker command to spawn in ACP mode. Default `"opencode"`.
+    pub command: String,
+    /// Models a spawned worker is allowed to use. A `spawn_subagent` call naming
+    /// a model outside this list is rejected.
+    pub models: Vec<String>,
+}
+
+impl Default for SpawnSubagentConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://127.0.0.1:4356/v1".to_string(),
+            command: "opencode".to_string(),
+            models: Vec::new(),
+        }
+    }
+}
+
+#[cfg(all(test, feature = "config_file"))]
+mod spawn_subagent_config_tests {
+    use super::*;
+
+    #[test]
+    fn deserializes_spawn_subagent_section() {
+        let yaml = r#"
+mcp_servers: []
+spawn_subagent:
+  base_url: "http://127.0.0.1:4356/v1"
+  command: "opencode"
+  models:
+    - "bitrouter/z-ai/glm-5.1"
+"#;
+        let cfg: ServerToolsConfig = serde_saphyr::from_str(yaml).unwrap();
+        let sa = cfg.spawn_subagent.expect("section present");
+        assert_eq!(sa.base_url, "http://127.0.0.1:4356/v1");
+        assert_eq!(sa.command, "opencode");
+        assert_eq!(sa.models, vec!["bitrouter/z-ai/glm-5.1".to_string()]);
+    }
+
+    #[test]
+    fn spawn_subagent_absent_by_default() {
+        let cfg: ServerToolsConfig = serde_saphyr::from_str("mcp_servers: []").unwrap();
+        assert!(cfg.spawn_subagent.is_none());
+    }
 }

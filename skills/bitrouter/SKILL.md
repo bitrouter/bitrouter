@@ -172,6 +172,7 @@ Read these on demand — don't load them all upfront.
 | `references/harness-openclaw.md` | Wiring OpenClaw |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
 | `references/mcp-memory.md` | Walrus Memory upstream + per-agent namespace scoping (`plugins.bitrouter-memory`, `x-bitrouter-agent` header) |
+| `references/spawn-subagent.md` | Agent-driven budgeted subagents — the `server_tools.spawn_subagent` config + the router-owned `spawn_subagent` tool (agent picks model + budget; runtime-minted capped `brvk_`; spawns `opencode acp`) |
 
 ## 7. Gotchas
 

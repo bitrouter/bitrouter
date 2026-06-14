@@ -1,0 +1,38 @@
+# BitRouter demo daemon config — agent-driven subagent budgets.
+#
+# The top-level agent (opencode) routes through THIS daemon, which injects the
+# router-owned `spawn_subagent` tool via the server-tool loop. When the agent
+# calls it, BitRouter mints a capped `brvk_`, spawns a headless `opencode acp`
+# worker pinned to that key+model, meters its inferences, and fails it closed at
+# the budget.
+#
+# CRITICAL (spec §8): the chosen subagent model's upstream MUST report STREAMING
+# usage, or the budget cap never accrues. Verify with the budget-deny smoke test
+# (examples/subagent-demo, and apps/bitrouter/tests/subagent_budget_e2e.rs) before
+# relying on the cap for the demo.
+
+server:
+  listen: "127.0.0.1:4356"
+  # brvk_ keys + Budget policies ARE enforced (the whole point of the demo).
+  skip_auth: false
+
+database:
+  url: "sqlite://./subagent-demo.db?mode=rwc"
+
+# Enable the router-owned spawn_subagent tool. No mcp_servers needed.
+server_tools:
+  spawn_subagent:
+    base_url: "http://127.0.0.1:4356/v1"
+    command: "opencode"
+    models:
+      # Pick a model whose upstream reports STREAMING usage so the cap accrues.
+      - "bitrouter/z-ai/glm-5.1"
+
+# Provide the cheap provider/model the worker uses, WITH a pricing block — without
+# pricing, estimated_charge stays 0 and the cap never trips. Fill this in from
+# skills/bitrouter/references for the model you choose (provider id, api_base,
+# auth env var, and per-1M-token input/output rates).
+#
+# providers:
+#   bitrouter:
+#     # ... provider config + pricing for z-ai/glm-5.1 ...

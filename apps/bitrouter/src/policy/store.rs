@@ -80,6 +80,20 @@ impl PolicyStore {
         EffectivePolicy::combine(ids.iter().filter_map(|id| map.get(*id)))
     }
 
+    /// Register (or replace) a policy at runtime, visible to the next request's
+    /// `effective_for`. Unlike `load_dir`/`reload` this needs no file on disk —
+    /// used by in-process minting (e.g. the subagent toolset). The file-based
+    /// reload path is unaffected; a later `reload()` from a configured dir will
+    /// still replace the whole set.
+    pub fn insert_policy(&self, policy: Policy) -> Result<()> {
+        let mut map = self
+            .policies
+            .write()
+            .map_err(|_| BitrouterError::internal("policy lock poisoned"))?;
+        map.insert(policy.id.clone(), policy);
+        Ok(())
+    }
+
     /// Number of loaded policies.
     pub fn len(&self) -> usize {
         self.policies.read().expect("policy lock poisoned").len()
@@ -91,6 +105,24 @@ impl PolicyStore {
             .read()
             .expect("policy lock poisoned")
             .is_empty()
+    }
+}
+
+#[cfg(test)]
+mod runtime_insert_tests {
+    use super::*;
+
+    #[test]
+    fn inserted_policy_is_visible_to_effective_for() {
+        let store = PolicyStore::new();
+        let p = Policy {
+            id: "pol-runtime".to_string(),
+            max_spend_micro_usd: Some(500_000),
+            ..Default::default()
+        };
+        store.insert_policy(p).expect("insert");
+        let eff = store.effective_for(&["pol-runtime"]);
+        assert_eq!(eff.max_spend_micro_usd, Some(500_000));
     }
 }
 

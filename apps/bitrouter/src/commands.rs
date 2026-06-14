@@ -116,6 +116,38 @@ pub struct GeneratedKey {
     pub secret: String,
 }
 
+/// Mint a `brvk_` virtual key against an already-open DB connection, persisting
+/// only its hash. Shared by the `key sign` CLI and in-process callers (the
+/// subagent toolset). Ensures the `users` row exists first.
+pub async fn mint_key(
+    db: &sea_orm::DatabaseConnection,
+    user_id: &str,
+    policy_id: Option<&str>,
+) -> Result<GeneratedKey> {
+    auth_db::upsert_user(db, user_id)
+        .await
+        .context("creating user row")?;
+    let key = generate();
+    let id = format!("brvk_id_{}", &key.hash[..16]);
+    auth_db::insert_api_key(
+        db,
+        &NewApiKey {
+            id: id.clone(),
+            key_hash: key.hash.clone(),
+            user_id: user_id.to_string(),
+            spend_limit_micro_usd: None,
+            rpm_limit: None,
+            policy_id: policy_id.map(|s| s.to_string()),
+        },
+    )
+    .await
+    .context("inserting api key")?;
+    Ok(GeneratedKey {
+        id,
+        secret: key.secret,
+    })
+}
+
 /// `bitrouter key sign` — mint a `brvk_` virtual key for `user_id`, persist only
 /// its hash, and return the plaintext once. v1 does **not** sign a JWT (004
 /// §3.0); the command keeps the `sign` name but creates a DB-backed virtual key.
@@ -130,30 +162,7 @@ pub async fn key_sign(
     crate::db::run_migrations(&db)
         .await
         .context("running database migrations")?;
-    auth_db::upsert_user(&db, user_id)
-        .await
-        .context("creating user row")?;
-
-    let key = generate();
-    let id = format!("brvk_id_{}", &key.hash[..16]);
-    auth_db::insert_api_key(
-        &db,
-        &NewApiKey {
-            id: id.clone(),
-            key_hash: key.hash.clone(),
-            user_id: user_id.to_string(),
-            spend_limit_micro_usd: None,
-            rpm_limit: None,
-            policy_id: policy_id.map(|s| s.to_string()),
-        },
-    )
-    .await
-    .context("inserting api key")?;
-
-    Ok(GeneratedKey {
-        id,
-        secret: key.secret,
-    })
+    mint_key(&db, user_id, policy_id).await
 }
 
 /// `bitrouter models [--provider <id>]` — list routable models, optionally
@@ -891,6 +900,28 @@ pub async fn skills_update(
         anyhow::bail!("{failures} skill(s) failed to update");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod mint_key_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mint_key_inserts_a_findable_key_bound_to_policy() {
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        crate::db::run_migrations(&db).await.unwrap();
+
+        let minted = mint_key(&db, "worker-1", Some("pol-x")).await.unwrap();
+        assert!(minted.secret.starts_with("brvk_"));
+
+        let hash = crate::auth::hash_key(&minted.secret);
+        let rec = crate::auth::db::find_key_by_hash(&db, &hash)
+            .await
+            .unwrap()
+            .expect("key row present");
+        assert_eq!(rec.id, minted.id);
+        assert_eq!(rec.policy_id.as_deref(), Some("pol-x"));
+    }
 }
 
 #[cfg(test)]

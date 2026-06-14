@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "bitrouter/z-ai/glm-5.1",
+  "permission": { "*": "allow" },
+  "provider": {
+    "bitrouter": {
+      "name": "BitRouter (local daemon)",
+      "npm": "@ai-sdk/openai-compatible",
+      "models": { "z-ai/glm-5.1": { "name": "GLM-5.1" } },
+      "options": {
+        "baseURL": "http://127.0.0.1:4356/v1",
+        "apiKey": "REPLACE_WITH_PARENT_BRVK_OR_SKIP_AUTH_KEY"
+      }
+    }
+  }
+}

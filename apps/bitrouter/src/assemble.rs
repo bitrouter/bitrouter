@@ -210,6 +210,7 @@ pub async fn build_app_with_path(
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
+    let metering_store_for_subagent = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
     let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
     let policy_store_for_reload = policy_store.clone();
@@ -336,11 +337,19 @@ pub async fn build_app_with_path(
         }
     });
 
-    // Server-side tool loop — wired only when `server_tools.mcp_servers` names
-    // at least one configured MCP server. Reuses the MCP executor/routing built
-    // above; here BitRouter is an MCP *client* that executes the model's tool
-    // calls inside the LLM loop (distinct from the `/mcp` gateway above).
-    let server_tool_loop = build_server_tool_loop(config, &mcp_routing, &mcp_executor);
+    // Server-side tool loop — wired when `server_tools.mcp_servers` names at
+    // least one configured MCP server, or when `server_tools.spawn_subagent`
+    // is set. Reuses the MCP executor/routing built above; here BitRouter is
+    // an MCP *client* that executes the model's tool calls inside the LLM loop
+    // (distinct from the `/mcp` gateway above).
+    let server_tool_loop = build_server_tool_loop(
+        config,
+        &mcp_routing,
+        &mcp_executor,
+        &db,
+        &policy_store,
+        &metering_store_for_subagent,
+    );
 
     // Optional ACP pure-routing pipeline — wired only when the config
     // declares at least one upstream agent. Mirrors the MCP wiring above;
@@ -466,45 +475,61 @@ pub async fn build_app_with_path(
 
 /// Build the server-side tool loop from `config.server_tools` over the MCP
 /// executor/routing already assembled for the `/mcp` gateway. Returns `None`
-/// when no `server_tools.mcp_servers` are configured (or the MCP stack is
-/// absent). Each named server is attached as an [`McpRouterToolset`] using a
-/// `Direct` selector and the server's `tool_prefix` (default `"{name}__"`), so
-/// router tool names cannot collide with the caller's own tools.
+/// when neither `server_tools.mcp_servers` nor `server_tools.spawn_subagent`
+/// is configured. Each named MCP server is attached as an [`McpRouterToolset`]
+/// using a `Direct` selector and the server's `tool_prefix` (default
+/// `"{name}__"`), so router tool names cannot collide with the caller's own
+/// tools. When `spawn_subagent` is set, a [`SpawnSubagentToolset`] is added.
 fn build_server_tool_loop(
     config: &Config,
     mcp_routing: &Option<Arc<ConfigMcpRoutingTable>>,
     mcp_executor: &Option<Arc<dyn bitrouter_sdk::mcp::Executor>>,
+    db: &sea_orm::DatabaseConnection,
+    policy_store: &Arc<PolicyStore>,
+    metering: &MeteringStore,
 ) -> Option<Arc<ServerToolLoop>> {
     let settings = &config.server_tools;
-    if settings.mcp_servers.is_empty() {
-        return None;
+    let mut sets: Vec<Arc<dyn RouterToolset>> = Vec::new();
+
+    if !settings.mcp_servers.is_empty() {
+        if let (Some(routing), Some(executor)) = (mcp_routing, mcp_executor) {
+            let routing: Arc<dyn bitrouter_sdk::mcp::RoutingTable> = routing.clone();
+            for name in &settings.mcp_servers {
+                let Some(server) = config.mcp_servers.get(name) else {
+                    tracing::warn!(server = %name,
+                        "server_tools.mcp_servers names an MCP server absent from mcp_servers; skipping");
+                    continue;
+                };
+                let prefix = server
+                    .tool_prefix
+                    .clone()
+                    .unwrap_or_else(|| format!("{name}__"));
+                sets.push(Arc::new(McpRouterToolset::new(
+                    executor.clone(),
+                    routing.clone(),
+                    name.clone(),
+                    Some(prefix),
+                )));
+            }
+        } else {
+            tracing::warn!(
+                "server_tools.mcp_servers is set but no mcp_servers are configured; \
+                 those toolsets are disabled"
+            );
+        }
     }
-    let (Some(routing), Some(executor)) = (mcp_routing, mcp_executor) else {
-        tracing::warn!(
-            "server_tools.mcp_servers is set but no mcp_servers are configured; \
-             the server-side tool loop is disabled"
-        );
-        return None;
-    };
-    let routing: Arc<dyn bitrouter_sdk::mcp::RoutingTable> = routing.clone();
-    let mut sets: Vec<Arc<dyn RouterToolset>> = Vec::with_capacity(settings.mcp_servers.len());
-    for name in &settings.mcp_servers {
-        let Some(server) = config.mcp_servers.get(name) else {
-            tracing::warn!(server = %name,
-                "server_tools.mcp_servers names an MCP server absent from mcp_servers; skipping");
-            continue;
-        };
-        let prefix = server
-            .tool_prefix
-            .clone()
-            .unwrap_or_else(|| format!("{name}__"));
-        sets.push(Arc::new(McpRouterToolset::new(
-            executor.clone(),
-            routing.clone(),
-            name.clone(),
-            Some(prefix),
-        )));
+
+    if let Some(sa) = &settings.spawn_subagent {
+        sets.push(Arc::new(
+            crate::subagent::toolset::SpawnSubagentToolset::new(
+                db.clone(),
+                policy_store.clone(),
+                metering.clone(),
+                sa.clone(),
+            ),
+        ));
     }
+
     if sets.is_empty() {
         return None;
     }
@@ -770,17 +795,50 @@ mod otel_config_tests {
 mod server_tools_tests {
     use super::{Config, build_server_tool_loop};
 
-    #[test]
-    fn no_loop_when_server_tools_unset() {
+    #[tokio::test]
+    async fn no_loop_when_server_tools_unset() {
         let config = Config::default();
-        assert!(build_server_tool_loop(&config, &None, &None).is_none());
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        crate::db::run_migrations(&db).await.unwrap();
+        let store = std::sync::Arc::new(crate::policy::PolicyStore::new());
+        let metering = crate::metering::MeteringStore::new(db.clone());
+        assert!(build_server_tool_loop(&config, &None, &None, &db, &store, &metering).is_none());
     }
 
-    #[test]
-    fn no_loop_when_named_but_mcp_stack_absent() {
+    #[tokio::test]
+    async fn no_loop_when_named_but_mcp_stack_absent() {
         let mut config = Config::default();
         config.server_tools.mcp_servers = vec!["docs".to_string()];
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        crate::db::run_migrations(&db).await.unwrap();
+        let store = std::sync::Arc::new(crate::policy::PolicyStore::new());
+        let metering = crate::metering::MeteringStore::new(db.clone());
         // server_tools names a server but no MCP executor/routing was built.
-        assert!(build_server_tool_loop(&config, &None, &None).is_none());
+        assert!(build_server_tool_loop(&config, &None, &None, &db, &store, &metering).is_none());
+    }
+
+    #[tokio::test]
+    async fn spawn_subagent_config_builds_a_loop() {
+        use bitrouter_sdk::language_model::server_tools::config::{
+            ServerToolsConfig, SpawnSubagentConfig,
+        };
+        let mut config = Config::default();
+        config.server_tools = ServerToolsConfig {
+            mcp_servers: vec![],
+            max_iterations: None,
+            spawn_subagent: Some(SpawnSubagentConfig {
+                models: vec!["bitrouter/z-ai/glm-5.1".into()],
+                ..Default::default()
+            }),
+        };
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        crate::db::run_migrations(&db).await.unwrap();
+        let store = std::sync::Arc::new(crate::policy::PolicyStore::new());
+        let metering = crate::metering::MeteringStore::new(db.clone());
+        let built = build_server_tool_loop(&config, &None, &None, &db, &store, &metering);
+        assert!(
+            built.is_some(),
+            "spawn_subagent alone should build the loop"
+        );
     }
 }
