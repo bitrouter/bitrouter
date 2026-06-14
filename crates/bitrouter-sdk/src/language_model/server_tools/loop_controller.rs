@@ -15,7 +15,7 @@ use super::toolset::{ToolContext, ToolsetRegistry};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::types::{
     Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role, Tool,
-    ToolResultOutput, Usage,
+    ToolChoice, ToolResultOutput, Usage,
 };
 
 /// One upstream turn for a working prompt — the loop's callback into the
@@ -33,6 +33,13 @@ pub struct ServerToolLoop {
     registry: ToolsetRegistry,
     config: ServerToolLoopConfig,
     approval: Arc<dyn ApprovalPolicy>,
+    /// When set, the model is forced to call this (already-prefixed) tool on the
+    /// first turn via `tool_choice`; subsequent turns revert to `Auto`. Used to
+    /// guarantee an always-on memory recall before the model answers.
+    force_first_tool: Option<String>,
+    /// When set, prepended to the working prompt's system instruction — e.g. a
+    /// mandate to persist memory before ending the turn.
+    system_instruction: Option<String>,
 }
 
 impl ServerToolLoop {
@@ -46,7 +53,22 @@ impl ServerToolLoop {
             registry,
             config,
             approval,
+            force_first_tool: None,
+            system_instruction: None,
         }
+    }
+
+    /// Force the model to call `name` (an already-prefixed router tool) on the
+    /// first turn. Ignored at runtime if no advertised tool owns `name`.
+    pub fn with_forced_first_tool(mut self, name: Option<String>) -> Self {
+        self.force_first_tool = name;
+        self
+    }
+
+    /// Prepend `instruction` to the working prompt's system text.
+    pub fn with_system_instruction(mut self, instruction: Option<String>) -> Self {
+        self.system_instruction = instruction;
+        self
     }
 
     /// The loop's bounds.
@@ -93,6 +115,30 @@ impl ServerToolLoop {
             }
         }
         working.tools.extend(injected);
+
+        // Prepend the always-on instruction (e.g. "persist memory before
+        // ending"), keeping the caller's own system prompt after it.
+        if let Some(instruction) = &self.system_instruction {
+            working.system = Some(match working.system.take() {
+                Some(existing) => format!("{instruction}\n\n{existing}"),
+                None => instruction.clone(),
+            });
+        }
+
+        // Force the first tool call (e.g. memory recall) only when the registry
+        // actually advertises it — a misconfigured name falls open to `Auto`
+        // rather than forcing a tool the model can't see.
+        if let Some(name) = &self.force_first_tool {
+            if owned.contains(name) {
+                working.tool_choice = Some(ToolChoice::Tool { name: name.clone() });
+            } else {
+                tracing::warn!(
+                    tool = %name,
+                    "forced first tool is not advertised by any toolset; leaving tool_choice unchanged"
+                );
+            }
+        }
+
         Ok((working, owned))
     }
 
@@ -111,6 +157,10 @@ impl ServerToolLoop {
         upstream: &dyn UpstreamTurn,
     ) -> Result<ExecutionResult> {
         let (mut working, owned) = self.inject(base, ctx).await?;
+        // A forced first tool (set by `inject`) must apply to the first turn
+        // only; restore the caller's original choice afterwards so the model can
+        // answer and call follow-up tools (e.g. memory remember).
+        let base_tool_choice = base.tool_choice.clone();
 
         let mut total = Usage::default();
         let mut had_usage = false;
@@ -141,6 +191,9 @@ impl ServerToolLoop {
                     let (tool_results, had_error) = self.execute_calls(&calls, ctx).await;
                     consecutive_errors = if had_error { consecutive_errors + 1 } else { 0 };
                     append_turn(&mut working, result.result.content.clone(), tool_results);
+                    if rounds == 0 {
+                        working.tool_choice = base_tool_choice.clone();
+                    }
                     rounds += 1;
                     if consecutive_errors >= self.config.max_consecutive_errors {
                         return Ok(truncate(result, total, had_usage, "tool_errors"));
@@ -502,6 +555,65 @@ mod tests {
         assert!(
             matches!(&result.result.content[0], Content::Text { text, .. } if text == "recovered")
         );
+    }
+
+    #[tokio::test]
+    async fn forces_recall_on_round_zero_then_restores_choice() {
+        // `inject` forces the tool on the first turn; after round 0 the loop
+        // restores the caller's original choice (here `None`) so the model is
+        // free to answer and call follow-up tools.
+        let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default())
+            .with_forced_first_tool(Some("search".to_string()));
+        let (working, _owned) = loop_.inject(&base_prompt(), &tool_ctx()).await.unwrap();
+        assert_eq!(
+            working.tool_choice,
+            Some(ToolChoice::Tool {
+                name: "search".to_string()
+            })
+        );
+
+        let upstream = ScriptedUpstream::new(vec![
+            exec(vec![tool_call("search")]),
+            exec(vec![text("done")]),
+        ]);
+        loop_
+            .run(&base_prompt(), &tool_ctx(), &upstream)
+            .await
+            .unwrap();
+        let seen = upstream.seen();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(
+            seen[0].tool_choice,
+            Some(ToolChoice::Tool {
+                name: "search".to_string()
+            })
+        );
+        // Round 1 reverts to the base prompt's choice (`None`).
+        assert_eq!(seen[1].tool_choice, None);
+    }
+
+    #[tokio::test]
+    async fn forced_tool_not_owned_leaves_choice_unchanged() {
+        // A forced name no toolset advertises must fall open, not force a tool
+        // the model can't see.
+        let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default())
+            .with_forced_first_tool(Some("ghost".to_string()));
+        let (working, _owned) = loop_.inject(&base_prompt(), &tool_ctx()).await.unwrap();
+        assert_eq!(working.tool_choice, None);
+    }
+
+    #[tokio::test]
+    async fn system_instruction_is_prepended() {
+        let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default())
+            .with_system_instruction(Some("REMEMBER".to_string()));
+        // No base system → instruction becomes the whole system prompt.
+        let (working, _owned) = loop_.inject(&base_prompt(), &tool_ctx()).await.unwrap();
+        assert_eq!(working.system.as_deref(), Some("REMEMBER"));
+        // Existing system prompt is preserved after the instruction.
+        let mut base = base_prompt();
+        base.system = Some("BASE".to_string());
+        let (working, _owned) = loop_.inject(&base, &tool_ctx()).await.unwrap();
+        assert_eq!(working.system.as_deref(), Some("REMEMBER\n\nBASE"));
     }
 
     #[tokio::test]

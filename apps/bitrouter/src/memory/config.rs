@@ -18,6 +18,40 @@ pub struct MemoryScopeConfig {
     /// Per-agent scopes, keyed by the `x-bitrouter-agent` identity.
     #[serde(default)]
     pub agents: HashMap<String, AgentScope>,
+    /// Optional "always-on memory" behaviour. When enabled, the memory server
+    /// is auto-wired into the server-side tool loop, recall is forced as the
+    /// first tool call, and the model is instructed to persist via remember.
+    #[serde(default)]
+    pub always: Option<AlwaysMemoryConfig>,
+}
+
+/// The `plugins.bitrouter-memory.always` block: force every agent turn to recall
+/// before answering and instruct it to persist afterwards.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AlwaysMemoryConfig {
+    /// Master switch. `false` ⇒ behaves exactly as without the block.
+    pub enabled: bool,
+    /// The unprefixed recall tool name forced as the first tool call. The
+    /// server's `tool_prefix` is prepended at wiring time.
+    pub recall_tool: String,
+    /// System-prompt instruction prepended to every turn. The `{remember}`
+    /// placeholder is replaced with the prefixed remember tool name.
+    pub remember_instruction: String,
+}
+
+impl Default for AlwaysMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            recall_tool: "memwal_recall".to_string(),
+            remember_instruction: "You have a persistent memory across turns. \
+                Before ending your turn, you MUST call the `{remember}` tool to \
+                persist any new facts, decisions, or user preferences from this \
+                exchange so future turns can recall them."
+                .to_string(),
+        }
+    }
 }
 
 /// One agent's namespace scope.

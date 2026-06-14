@@ -11,6 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 
+use bitrouter_sdk::language_model::server_tools::toolset::AGENT_HEADER;
 use bitrouter_sdk::mcp::{Executor, McpRequest, McpResponse, McpStreamPart, McpTarget};
 use bitrouter_sdk::{BitrouterError, Result};
 
@@ -29,10 +30,6 @@ const NAMESPACED_TOOLS: &[&str] = &[
     "memwal_analyze",
     "memwal_restore",
 ];
-
-/// Header carrying the calling agent's identity. The orchestrator sets it when
-/// spawning a subagent. Absent/empty ⇒ treated as an unknown (restricted) agent.
-const AGENT_HEADER: &str = "x-bitrouter-agent";
 
 /// Decorator that enforces namespace scoping over an inner [`Executor`].
 pub struct NamespaceScopeExecutor<E: Executor> {

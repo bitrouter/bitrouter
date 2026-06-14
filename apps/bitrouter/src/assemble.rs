@@ -340,7 +340,8 @@ pub async fn build_app_with_path(
     // at least one configured MCP server. Reuses the MCP executor/routing built
     // above; here BitRouter is an MCP *client* that executes the model's tool
     // calls inside the LLM loop (distinct from the `/mcp` gateway above).
-    let server_tool_loop = build_server_tool_loop(config, &mcp_routing, &mcp_executor);
+    let server_tool_loop =
+        build_server_tool_loop(config, &mcp_routing, &mcp_executor, &memory_scope_cfg);
 
     // Optional ACP pure-routing pipeline — wired only when the config
     // declares at least one upstream agent. Mirrors the MCP wiring above;
@@ -473,6 +474,101 @@ pub async fn build_app_with_path(
         otel_exporter: otel_for_assembled,
         otel_init_error,
     })
+}
+
+/// Build the server-side tool loop from `config.server_tools` plus the
+/// always-on memory wiring derived from `memory_cfg`.
+///
+/// BitRouter acts as an MCP *client* here: it injects the named servers' tools
+/// into LLM requests and executes the model's tool calls inside the loop
+/// (distinct from the `/mcp` gateway). When `memory_cfg.always.enabled` is set,
+/// the memory server is auto-added (even when absent from
+/// `server_tools.mcp_servers`), recall is forced as the first tool call, and a
+/// "persist before ending" instruction is prepended to the system prompt.
+///
+/// Returns `None` when no server is named and always-memory is off, when the
+/// MCP stack was not built, or when none of the named servers exist.
+fn build_server_tool_loop(
+    config: &Config,
+    mcp_routing: &Option<Arc<ConfigMcpRoutingTable>>,
+    mcp_executor: &Option<Arc<dyn bitrouter_sdk::mcp::Executor>>,
+    memory_cfg: &MemoryScopeConfig,
+) -> Option<Arc<ServerToolLoop>> {
+    let always = memory_cfg.always.as_ref().filter(|a| a.enabled);
+    // The memory server to auto-wire, when always-memory is on and a server is
+    // configured. `None` disables the always-memory wiring entirely.
+    let memory_server = always
+        .map(|_| memory_cfg.server.clone())
+        .filter(|s| !s.is_empty());
+
+    // Servers whose tools the loop injects: the explicit `server_tools` list,
+    // plus the memory server when always-memory is on (de-duplicated).
+    let mut server_names = config.server_tools.mcp_servers.clone();
+    if let Some(mem) = &memory_server
+        && !server_names.iter().any(|n| n == mem)
+    {
+        server_names.push(mem.clone());
+    }
+    if server_names.is_empty() {
+        return None;
+    }
+    let (Some(routing), Some(executor)) = (mcp_routing, mcp_executor) else {
+        tracing::warn!(
+            "the server-side tool loop names an MCP server but no mcp_servers are \
+             configured; the loop is disabled"
+        );
+        return None;
+    };
+    let routing: Arc<dyn bitrouter_sdk::mcp::RoutingTable> = routing.clone();
+
+    // Resolve a server's advertised tool prefix (its `tool_prefix`, or `{name}__`).
+    let prefix_of = |name: &str| -> Option<String> {
+        config.mcp_servers.get(name).map(|server| {
+            server
+                .tool_prefix
+                .clone()
+                .unwrap_or_else(|| format!("{name}__"))
+        })
+    };
+
+    let mut sets: Vec<Arc<dyn RouterToolset>> = Vec::with_capacity(server_names.len());
+    for name in &server_names {
+        let Some(prefix) = prefix_of(name) else {
+            tracing::warn!(server = %name,
+                "the server-side tool loop names an MCP server absent from mcp_servers; skipping");
+            continue;
+        };
+        sets.push(Arc::new(McpRouterToolset::new(
+            executor.clone(),
+            routing.clone(),
+            name.clone(),
+            Some(prefix),
+        )));
+    }
+    if sets.is_empty() {
+        return None;
+    }
+    let mut loop_config = ServerToolLoopConfig::default();
+    if let Some(max) = config.server_tools.max_iterations {
+        loop_config.max_iterations = max;
+    }
+    let mut server_loop =
+        ServerToolLoop::new(ToolsetRegistry::new(sets), loop_config, Arc::new(AllowAll));
+
+    // Always-on memory: force the prefixed recall tool first and instruct the
+    // model to persist via the prefixed remember tool before ending the turn.
+    if let Some(always) = always
+        && let Some(mem) = &memory_server
+        && let Some(prefix) = prefix_of(mem)
+    {
+        let recall = format!("{prefix}{}", always.recall_tool);
+        let remember = format!("{prefix}memwal_remember");
+        let instruction = always.remember_instruction.replace("{remember}", &remember);
+        server_loop = server_loop
+            .with_forced_first_tool(Some(recall))
+            .with_system_instruction(Some(instruction));
+    }
+    Some(Arc::new(server_loop))
 }
 
 /// Build the server-side MPP paywall plugin when `MPP_SECRET_KEY` is set.
@@ -748,12 +844,44 @@ mod otel_config_tests {
 
 #[cfg(test)]
 mod server_tools_tests {
-    use super::{Config, build_server_tool_loop};
+    use std::sync::Arc;
+
+    use bitrouter_sdk::mcp::transport::{McpServerConfig, McpTransport};
+
+    use super::{
+        Config, ConfigMcpRoutingTable, McpServerAggregateConfig, MemoryScopeConfig, RmcpExecutor,
+        build_server_tool_loop,
+    };
+
+    fn http_server(name: &str) -> McpServerConfig {
+        McpServerConfig::with_defaults(
+            name,
+            McpTransport::Http {
+                url: "https://relayer.example/api/mcp".to_string(),
+                headers: Default::default(),
+            },
+        )
+    }
+
+    fn routing(config: &Config) -> Arc<ConfigMcpRoutingTable> {
+        Arc::new(
+            ConfigMcpRoutingTable::from_configs(config.mcp_servers.iter().map(|(k, v)| {
+                let agg = McpServerAggregateConfig {
+                    aggregate: v.aggregate,
+                    tool_prefix: v.tool_prefix.clone().unwrap_or_else(|| format!("{k}__")),
+                };
+                (k.clone(), v.clone(), agg)
+            }))
+            .unwrap(),
+        )
+    }
 
     #[test]
     fn no_loop_when_server_tools_unset() {
         let config = Config::default();
-        assert!(build_server_tool_loop(&config, &None, &None).is_none());
+        assert!(
+            build_server_tool_loop(&config, &None, &None, &MemoryScopeConfig::default()).is_none()
+        );
     }
 
     #[test]
@@ -761,6 +889,39 @@ mod server_tools_tests {
         let mut config = Config::default();
         config.server_tools.mcp_servers = vec!["docs".to_string()];
         // server_tools names a server but no MCP executor/routing was built.
-        assert!(build_server_tool_loop(&config, &None, &None).is_none());
+        assert!(
+            build_server_tool_loop(&config, &None, &None, &MemoryScopeConfig::default()).is_none()
+        );
+    }
+
+    #[test]
+    fn always_memory_auto_adds_server_without_explicit_server_tools() {
+        // `server_tools.mcp_servers` is empty, but enabling always-memory must
+        // still wire the memory server into the loop.
+        let mut config = Config::default();
+        config
+            .mcp_servers
+            .insert("memory".to_string(), http_server("memory"));
+        let memory_cfg: MemoryScopeConfig = serde_json::from_value(serde_json::json!({
+            "server": "memory",
+            "always": { "enabled": true }
+        }))
+        .unwrap();
+        let routing = Some(routing(&config));
+        let executor: Option<Arc<dyn bitrouter_sdk::mcp::Executor>> =
+            Some(Arc::new(RmcpExecutor::new()));
+        assert!(build_server_tool_loop(&config, &routing, &executor, &memory_cfg).is_some());
+    }
+
+    #[test]
+    fn always_memory_disabled_is_no_op() {
+        // Memory server present but `always` absent and no server_tools ⇒ no loop.
+        let mut config = Config::default();
+        config
+            .mcp_servers
+            .insert("memory".to_string(), http_server("memory"));
+        let memory_cfg: MemoryScopeConfig =
+            serde_json::from_value(serde_json::json!({ "server": "memory" })).unwrap();
+        assert!(build_server_tool_loop(&config, &None, &None, &memory_cfg).is_none());
     }
 }
