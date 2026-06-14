@@ -3211,17 +3211,26 @@ fn assert_schema_snapshot<T: schemars::JsonSchema>(name: &str) {
             path.display()
         )
     });
-    // Normalise CRLF → LF before comparing. `.gitattributes` pins the
-    // snapshot files to LF, but a contributor without an autocrlf-aware
-    // setup (or a checkout made before that pin landed) can still end up
-    // with CRLF on disk on Windows. The freshly-generated `actual` always
-    // uses LF, so without this normalise step the test fails for a reason
-    // that has nothing to do with the schema.
-    let expected = expected.replace("\r\n", "\n");
+    // Compare *semantically* by parsing both sides to `serde_json::Value`
+    // rather than as strings. JSON object key order is not part of the schema
+    // contract, and it is sensitive to whether `serde_json`'s `preserve_order`
+    // feature is unified into this build — any workspace dependency can toggle
+    // that (e.g. `bitrouter-attestation`'s `dcap-qvl` does, which reorders the
+    // properties schemars emits). `Value` equality is order-insensitive for
+    // object keys while staying order-sensitive for arrays (`required`,
+    // `oneOf`, …), which *are* meaningful. Parsing also subsumes the old
+    // CRLF/whitespace normalisation. Stored snapshots stay human-readable.
+    let expected_json: serde_json::Value = serde_json::from_str(&expected).unwrap_or_else(|e| {
+        panic!(
+            "snapshot {} is not valid JSON ({e}); re-run with BITROUTER_BLESS=1 to recreate.",
+            path.display()
+        )
+    });
+    let actual_json: serde_json::Value = serde_json::from_str(&actual).unwrap();
     assert_eq!(
-        expected.trim(),
-        actual.trim(),
-        "schema snapshot for `{name}` drifted; re-run with BITROUTER_BLESS=1 to update"
+        expected_json, actual_json,
+        "schema snapshot for `{name}` drifted; re-run with BITROUTER_BLESS=1 to update.\n\
+         actual schema:\n{actual}"
     );
 }
 

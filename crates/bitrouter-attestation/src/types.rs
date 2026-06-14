@@ -1,4 +1,5 @@
-//! Normalized result types shared by every [`ConfidentialVerifier`] impl.
+//! Normalized result types shared by every
+//! [`ConfidentialVerifier`](crate::ConfidentialVerifier) impl.
 //!
 //! These mirror private-ai-gateway's `UpstreamVerifiedEvent` / `ChannelBinding`
 //! normalization (`src/aci/receipt.rs`), but are produced **client-side** and
@@ -154,7 +155,8 @@ pub struct VerifiedExchange {
     pub verified: bool,
 }
 
-/// Errors a [`ConfidentialVerifier`] can return. Note that a *failed
+/// Errors a [`ConfidentialVerifier`](crate::ConfidentialVerifier) can return.
+/// Note that a *failed
 /// verification* is not an error — it is a verdict with `verified=false`
 /// (fail-closed). `VerifyError` is reserved for the verifier being unable to
 /// even reach a verdict it can trust (misconfiguration, malformed input).

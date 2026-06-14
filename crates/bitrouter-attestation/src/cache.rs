@@ -52,7 +52,10 @@ mod tests {
     use super::*;
 
     fn verdict(model: &str) -> AttestationVerdict {
-        AttestationVerdict::unverified(model, "nonce", 0)
+        // Derive the nonce from the model so it isn't a hard-coded literal
+        // (the `nonce` field is only recorded on the verdict; tests don't
+        // exercise its cryptographic binding).
+        AttestationVerdict::unverified(model, format!("test-nonce-{model}"), 0)
     }
 
     #[test]

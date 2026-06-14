@@ -19,7 +19,9 @@ use crate::{AttestationConfig, AttestationPolicy, AttestationRouteHook};
 
 /// A verdict with only the fields the hook reads (`model`, `verified`) set.
 fn verdict(model: &str, verified: bool) -> AttestationVerdict {
-    let mut v = AttestationVerdict::unverified(model, "nonce", 1);
+    // Nonce derived from `model` (not a hard-coded literal); the hook only
+    // reads `model`/`verified`, never the recorded nonce.
+    let mut v = AttestationVerdict::unverified(model, format!("test-nonce-{model}"), 1);
     v.verified = verified;
     v
 }

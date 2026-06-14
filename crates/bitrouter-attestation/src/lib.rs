@@ -178,7 +178,10 @@ mod tests {
 
     #[test]
     fn unverified_verdict_is_fail_closed() {
-        let v = AttestationVerdict::unverified("zai-org/GLM-5.1-FP8", "nonce123", 42);
+        let model = "zai-org/GLM-5.1-FP8";
+        // Nonce derived from `model` (not a hard-coded literal); the value is
+        // immaterial to this fail-closed assertion.
+        let v = AttestationVerdict::unverified(model, format!("test-nonce-{model}"), 42);
         assert!(!v.verified);
         assert!(!v.checks.all_pass());
         assert!(v.attested_addresses.is_empty());
