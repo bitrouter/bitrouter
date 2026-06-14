@@ -66,6 +66,56 @@ matched against the live relayer's tool set, not just the docs):
 - **Unknown** agent (missing/empty header): may not name a namespace
   (rejected); an omitted namespace gets `default_namespace`.
 
+## 4. Always-on memory (forced recall + instructed remember)
+
+By default memory is opt-in: the model decides whether to call the memory tools.
+To make **every** agent/subagent turn use memory, add an `always` block under
+`plugins.bitrouter-memory`:
+
+```yaml
+plugins:
+  bitrouter-memory:
+    server: memory
+    default_namespace: shared
+    always:
+      enabled: true
+      # recall_tool: memwal_recall          # optional override (unprefixed)
+      # remember_instruction: "...{remember}..."   # optional; {remember} is
+      #                                            # replaced with the prefixed
+      #                                            # remember tool name
+    agents:
+      researcher:
+        namespaces: ["research"]
+        default: research
+```
+
+When `enabled: true`:
+
+- The memory server is **auto-wired into the server-side tool loop** — you do
+  *not* need to also list it under `server_tools.mcp_servers`. Its tools are
+  injected into every LLM request.
+- **Recall is forced** as the first tool call of each turn (`tool_choice` pins
+  the prefixed `memwal_recall`); the loop then reverts to the caller's normal
+  tool choice so the model can answer and persist.
+- **Remember is instructed**: a system-prompt line (mandating a call to the
+  prefixed `memwal_remember` before the turn ends) is prepended to every request.
+- Per-agent **namespace scoping still applies** on this `/v1` path: the
+  `x-bitrouter-agent` header is now propagated from the inbound request onto the
+  router-executed memory `tools/call`, so the same Strategy A rules above scope
+  it. Send `x-bitrouter-agent: <agent-id>` on the inbound request.
+
+Absent / `enabled: false` ⇒ behaves exactly as before (memory stays opt-in).
+
+### Agents reached over ACP (`agent-proxy`)
+
+The ACP pipeline is pure JSON-RPC routing of an opaque external agent —
+BitRouter cannot force `tool_choice` or inject a system prompt into another
+agent's own model loop. To get always-on memory for an ACP agent, configure
+that agent to use BitRouter's `/v1` endpoint as its **model provider** and to
+send `x-bitrouter-agent: <agent-id>`. Every model turn it takes is then subject
+to the forced recall + instructed remember + per-agent scoping above. There is
+no BitRouter-side enforcement on the ACP frames themselves.
+
 ## Trust boundary
 
 The `x-bitrouter-agent` header is client-supplied: a subagent that can forge it

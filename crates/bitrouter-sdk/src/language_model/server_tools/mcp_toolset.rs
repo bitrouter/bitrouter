@@ -13,12 +13,28 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use super::toolset::{RouterToolset, ToolContext};
+use super::toolset::{AGENT_HEADER, RouterToolset, ToolContext};
 use crate::error::Result;
 use crate::language_model::types::{
     ProviderMetadata, Tool, ToolResultContentPart, ToolResultOutput,
 };
 use crate::mcp::{Executor as McpExecutor, McpRequest, RoutingTable as McpRoutingTable};
+
+/// Re-attach the calling agent's identity (from [`ToolContext::agent`]) to an
+/// outbound MCP request as the [`AGENT_HEADER`] header, so a downstream scoping
+/// executor can identify the agent. A no-op when no agent is set or the
+/// identity is not a valid header value (fails open — never panics).
+fn with_agent_header(request: McpRequest, ctx: &ToolContext) -> McpRequest {
+    let Some(agent) = ctx.agent() else {
+        return request;
+    };
+    let Ok(value) = http::HeaderValue::from_str(agent) else {
+        return request;
+    };
+    let mut headers = http::HeaderMap::new();
+    headers.insert(http::HeaderName::from_static(AGENT_HEADER), value);
+    request.with_headers(headers)
+}
 
 /// Convert an MCP `tools/list` result into canonical IR function tools. Each
 /// MCP tool `{name, description?, inputSchema}` becomes a [`Tool::Function`];
@@ -147,11 +163,14 @@ impl McpRouterToolset {
 #[async_trait]
 impl RouterToolset for McpRouterToolset {
     async fn list_tools(&self, ctx: &ToolContext) -> Result<Vec<Tool>> {
-        let request = McpRequest::direct(
-            self.server_name.clone(),
-            "tools/list",
-            serde_json::json!({}),
-            ctx.caller().clone(),
+        let request = with_agent_header(
+            McpRequest::direct(
+                self.server_name.clone(),
+                "tools/list",
+                serde_json::json!({}),
+                ctx.caller().clone(),
+            ),
+            ctx,
         );
         let target = self
             .routing
@@ -180,11 +199,14 @@ impl RouterToolset for McpRouterToolset {
             "name": self.unprefixed(name),
             "arguments": parsed,
         });
-        let request = McpRequest::direct(
-            self.server_name.clone(),
-            "tools/call",
-            params,
-            ctx.caller().clone(),
+        let request = with_agent_header(
+            McpRequest::direct(
+                self.server_name.clone(),
+                "tools/call",
+                params,
+                ctx.caller().clone(),
+            ),
+            ctx,
         );
         let target = self
             .routing
@@ -283,11 +305,13 @@ mod tests {
     struct MockMcp {
         list: serde_json::Value,
         call: serde_json::Value,
+        seen: std::sync::Mutex<Vec<McpRequest>>,
     }
 
     #[async_trait]
     impl McpExecutor for MockMcp {
         async fn execute(&self, _target: &McpTarget, request: &McpRequest) -> Result<McpResponse> {
+            self.seen.lock().unwrap().push(request.clone());
             let result = if request.method == "tools/list" {
                 self.list.clone()
             } else {
@@ -331,6 +355,7 @@ mod tests {
         let mock = Arc::new(MockMcp {
             list: list_json(),
             call: serde_json::json!({ "content": [ { "type": "text", "text": "done" } ] }),
+            seen: std::sync::Mutex::new(Vec::new()),
         });
         let toolset = McpRouterToolset::new(
             mock,
@@ -355,5 +380,49 @@ mod tests {
                 value: "done".to_string()
             }
         );
+    }
+
+    #[tokio::test]
+    async fn propagates_agent_header_onto_mcp_calls() {
+        let mock = Arc::new(MockMcp {
+            list: list_json(),
+            call: serde_json::json!({ "content": [ { "type": "text", "text": "ok" } ] }),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let toolset = McpRouterToolset::new(
+            mock.clone(),
+            Arc::new(MockRouting),
+            "demo",
+            Some("mcp__demo__".to_string()),
+        );
+        // With an agent identity, the outbound tools/call carries the header so a
+        // downstream scoping executor can identify the agent.
+        let ctx = ToolContext::new(CallerContext::local(), Default::default())
+            .with_agent(Some("researcher".to_string()));
+        toolset
+            .call_tool("mcp__demo__search", "{}", &ctx)
+            .await
+            .unwrap();
+        {
+            let seen = mock.seen.lock().unwrap();
+            let call = seen
+                .iter()
+                .find(|r| r.method == "tools/call")
+                .expect("a tools/call was issued");
+            assert_eq!(
+                call.headers.get(AGENT_HEADER).and_then(|v| v.to_str().ok()),
+                Some("researcher")
+            );
+        }
+
+        // Without an agent identity, no header is attached.
+        let ctx = ToolContext::new(CallerContext::local(), Default::default());
+        toolset
+            .call_tool("mcp__demo__search", "{}", &ctx)
+            .await
+            .unwrap();
+        let seen = mock.seen.lock().unwrap();
+        let last = seen.last().expect("a request was issued");
+        assert!(last.headers.get(AGENT_HEADER).is_none());
     }
 }

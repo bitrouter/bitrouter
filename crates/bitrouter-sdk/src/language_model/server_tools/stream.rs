@@ -47,6 +47,9 @@ impl ServerToolLoop {
         upstream: Arc<dyn UpstreamStream>,
     ) -> Result<StreamPartStream> {
         let (working, owned) = self.inject(base, ctx).await?;
+        // A forced first tool applies to the first turn only; restore the
+        // caller's original choice after round 0 (mirrors the non-streaming loop).
+        let base_tool_choice = base.tool_choice.clone();
         let ctx = ctx.clone();
         let loop_ = self;
 
@@ -230,6 +233,9 @@ impl ServerToolLoop {
                     role: Role::Tool,
                     content: tool_results,
                 });
+                if rounds == 0 {
+                    working.tool_choice = base_tool_choice.clone();
+                }
 
                 rounds += 1;
                 consecutive_errors = if round_error { consecutive_errors + 1 } else { 0 };
@@ -293,11 +299,25 @@ mod tests {
 
     struct ScriptedStream {
         scripts: Mutex<VecDeque<Vec<StreamPart>>>,
+        seen: Mutex<Vec<Prompt>>,
+    }
+
+    impl ScriptedStream {
+        fn new(scripts: Vec<Vec<StreamPart>>) -> Self {
+            Self {
+                scripts: Mutex::new(scripts.into()),
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+        fn seen(&self) -> Vec<Prompt> {
+            self.seen.lock().unwrap().clone()
+        }
     }
 
     #[async_trait]
     impl UpstreamStream for ScriptedStream {
-        async fn run(&self, _prompt: &Prompt) -> Result<StreamPartStream> {
+        async fn run(&self, prompt: &Prompt) -> Result<StreamPartStream> {
+            self.seen.lock().unwrap().push(prompt.clone());
             let parts = self.scripts.lock().unwrap().pop_front().unwrap();
             Ok(Box::pin(futures::stream::iter(parts.into_iter().map(Ok))))
         }
@@ -363,9 +383,7 @@ mod tests {
                 },
             ],
         ];
-        let upstream = Arc::new(ScriptedStream {
-            scripts: Mutex::new(scripts.into()),
-        });
+        let upstream = Arc::new(ScriptedStream::new(scripts));
         let parts = collect(
             loop_()
                 .run_stream(&base_prompt(), &tool_ctx(), upstream)
@@ -411,6 +429,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_forces_recall_then_restores_choice() {
+        use crate::language_model::types::ToolChoice;
+        let loop_ = Arc::new(
+            ServerToolLoop::new(
+                ToolsetRegistry::new(vec![Arc::new(OneTool)]),
+                ServerToolLoopConfig::default(),
+                Arc::new(AllowAll),
+            )
+            .with_forced_first_tool(Some("search".to_string())),
+        );
+        let scripts = vec![
+            vec![
+                StreamPart::ToolCallDelta {
+                    id: "c1".into(),
+                    name: Some("search".into()),
+                    arguments: "{}".into(),
+                },
+                StreamPart::Finish {
+                    reason: FinishReason::ToolCalls,
+                },
+            ],
+            vec![
+                StreamPart::TextDelta {
+                    text: "answer".into(),
+                },
+                StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ],
+        ];
+        let upstream = Arc::new(ScriptedStream::new(scripts));
+        let _ = collect(
+            loop_
+                .run_stream(&base_prompt(), &tool_ctx(), upstream.clone())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let seen = upstream.seen();
+        assert_eq!(seen.len(), 2);
+        // Round 0 forces recall; round 1 reverts to the base choice (`None`).
+        assert_eq!(
+            seen[0].tool_choice,
+            Some(ToolChoice::Tool {
+                name: "search".to_string()
+            })
+        );
+        assert_eq!(seen[1].tool_choice, None);
+    }
+
+    #[tokio::test]
     async fn hands_back_a_client_tool_call() {
         let scripts = vec![vec![
             StreamPart::ToolCallDelta {
@@ -422,9 +491,7 @@ mod tests {
                 reason: FinishReason::ToolCalls,
             },
         ]];
-        let upstream = Arc::new(ScriptedStream {
-            scripts: Mutex::new(scripts.into()),
-        });
+        let upstream = Arc::new(ScriptedStream::new(scripts));
         let parts = collect(
             loop_()
                 .run_stream(&base_prompt(), &tool_ctx(), upstream)
@@ -471,9 +538,7 @@ mod tests {
                 }),
             },
         ]];
-        let upstream = Arc::new(ScriptedStream {
-            scripts: Mutex::new(scripts.into()),
-        });
+        let upstream = Arc::new(ScriptedStream::new(scripts));
         let parts = collect(
             loop_()
                 .run_stream(&base_prompt(), &tool_ctx(), upstream)

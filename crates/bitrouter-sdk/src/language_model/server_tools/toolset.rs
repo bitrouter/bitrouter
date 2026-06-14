@@ -12,6 +12,12 @@ use crate::language_model::context::PipelineContext;
 use crate::language_model::types::{Tool, ToolResultOutput};
 use crate::plugin::PluginId;
 
+/// HTTP header carrying the calling agent's identity. Read off the inbound
+/// request and propagated onto router-executed MCP calls so a downstream
+/// scoping executor (e.g. per-agent memory namespaces) can identify the agent.
+/// The app-side scope executor matches this exact name — it is a wire contract.
+pub const AGENT_HEADER: &str = "x-bitrouter-agent";
+
 /// An owned, cheap-to-clone snapshot of the per-request context handed to a
 /// [`RouterToolset`]. Carries the [`CallerContext`] and the request's
 /// plugin-scoped metadata map — where a consumer stashes request-scoped state
@@ -23,25 +29,55 @@ use crate::plugin::PluginId;
 pub struct ToolContext {
     caller: CallerContext,
     metadata: HashMap<PluginId, serde_json::Value>,
+    /// The calling agent's identity (from the [`AGENT_HEADER`] request header),
+    /// carried so a router toolset can re-attach it to outbound MCP calls. Only
+    /// the identity is carried — not the full inbound header map — so unrelated
+    /// headers (e.g. `Authorization`) never leak into MCP requests.
+    agent: Option<String>,
 }
 
 impl ToolContext {
-    /// Build a context from explicit parts (consumers, tests).
+    /// Build a context from explicit parts (consumers, tests). The agent
+    /// identity defaults to `None`; set it with [`ToolContext::with_agent`].
     pub fn new(caller: CallerContext, metadata: HashMap<PluginId, serde_json::Value>) -> Self {
-        Self { caller, metadata }
+        Self {
+            caller,
+            metadata,
+            agent: None,
+        }
     }
 
-    /// Snapshot the live pipeline context for a server-tool execution.
+    /// Set the calling agent's identity.
+    pub fn with_agent(mut self, agent: Option<String>) -> Self {
+        self.agent = agent;
+        self
+    }
+
+    /// Snapshot the live pipeline context for a server-tool execution. The
+    /// agent identity is lifted from the inbound [`AGENT_HEADER`] header.
     pub fn from_pipeline(ctx: &PipelineContext) -> Self {
+        let agent = ctx
+            .headers()
+            .get(AGENT_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         Self {
             caller: ctx.caller().clone(),
             metadata: ctx.metadata().clone(),
+            agent,
         }
     }
 
     /// The authenticated caller.
     pub fn caller(&self) -> &CallerContext {
         &self.caller
+    }
+
+    /// The calling agent's identity, when present.
+    pub fn agent(&self) -> Option<&str> {
+        self.agent.as_deref()
     }
 
     /// Read a plugin's request-scoped metadata blob (e.g. a resolved principal,
