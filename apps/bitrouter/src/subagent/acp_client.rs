@@ -92,6 +92,10 @@ pub async fn drive_once(spawn: WorkerSpawn, task: &str) -> Result<SessionOutcome
         .ok_or_else(|| BitrouterError::internal("no stdout"))?;
     let mut lines = BufReader::new(stdout).lines();
 
+    // ACP `session/new` requires an ABSOLUTE cwd for some agents (claude-agent-acp
+    // rejects a relative one; opencode tolerates "."). Use the worktree path.
+    let session_cwd = spawn.working_dir.clone().unwrap_or_else(|| ".".to_string());
+
     let mut next_id = 1i64;
     send_request(
         &mut stdin,
@@ -112,7 +116,7 @@ pub async fn drive_once(spawn: WorkerSpawn, task: &str) -> Result<SessionOutcome
         &mut stdin,
         &mut next_id,
         "session/new",
-        json!({ "cwd": ".", "mcpServers": [] }),
+        json!({ "cwd": session_cwd, "mcpServers": [] }),
     )
     .await?;
     let new_res = wait_for_result(&mut lines, 2).await?;
@@ -152,10 +156,35 @@ pub async fn drive_once(spawn: WorkerSpawn, task: &str) -> Result<SessionOutcome
             Err(_) => continue,
         };
 
-        // Server-initiated request: has both id and method. Answer defensively.
+        // Server-initiated request: has both id and method. Answer defensively
+        // so the worker never blocks. `session/request_permission` needs a
+        // proper "selected/allow" outcome (claude-agent-acp asks before running
+        // tools; an empty `{}` reads as a denial → no work). opencode never
+        // exercises this, but claude-acp does.
         if msg.get("id").is_some() && msg.get("method").is_some() {
             let id = msg.get("id").cloned().unwrap_or(Value::Null);
-            let reply = json!({ "jsonrpc": "2.0", "id": id, "result": {} });
+            let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            let result = if method == "session/request_permission" {
+                let opts = msg["params"]["options"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let option_id = opts
+                    .iter()
+                    .find(|o| o["kind"].as_str() == Some("allow_always"))
+                    .or_else(|| {
+                        opts.iter()
+                            .find(|o| o["kind"].as_str() == Some("allow_once"))
+                    })
+                    .or_else(|| opts.first())
+                    .and_then(|o| o["optionId"].as_str())
+                    .unwrap_or("allow")
+                    .to_string();
+                json!({ "outcome": { "outcome": "selected", "optionId": option_id } })
+            } else {
+                json!({})
+            };
+            let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
             let _ = stdin.write_all(format!("{}\n", reply).as_bytes()).await;
             continue;
         }
