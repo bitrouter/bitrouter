@@ -19,6 +19,7 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 |---|---|
 | `bitrouter route <model> [--config PATH]` | Resolve a model name through the routing table. Tries the running daemon first (live table), falls back to standalone config resolution. Prints the provider/service chain. |
 | `bitrouter models [--config PATH] [--provider ID]` | List every routable model the config exposes. Filter by provider. |
+| `bitrouter verify <model>` | L1 TEE-attestation check for a confidential model (NEAR AI): prints a per-check breakdown (GPU NRAS, Intel TDX DCAP quote, report_data binding, compose, event-log RTMR3 anchor, policy pin, debug-disabled) and a VERIFIED / UNVERIFIED verdict. Reads `NEAR_BASE`, `NEAR_KMS_ROOTS`, `NEAR_IMAGE_DIGESTS`/`NEAR_WORKLOAD_IDS` (≥1 pin required — the verifier refuses to run unpinned), and `NVIDIA_EAT_KEY_PEM` from the environment. |
 | `bitrouter providers list [--config PATH]` | Tab-aligned: `ID  MODELS  ACTIVE  API_BASE`. |
 | `bitrouter tools list [--config PATH]` | Enumerate tools advertised by every configured MCP server (one `tools/list` round-trip per server). |
 | `bitrouter tools status [--config PATH]` | Health-check each MCP server. Latency or error per row. |

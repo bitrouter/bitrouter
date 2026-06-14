@@ -1,0 +1,35 @@
+[package]
+name = "bitrouter-attestation"
+description = "Provider-agnostic confidential-inference verification (ConfidentialVerifier): client-side TEE attestation (L1) + exchange integrity (L1.5). First impl: NEAR AI Cloud."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+# Pinned to match the version bitrouter ports its DCAP verifier from
+# (private-ai-gateway). Same feature set: offline quote parsing + RustCrypto.
+dcap-qvl = { version = "0.3.12", default-features = false, features = [
+    "std",
+    "report",
+    "rustcrypto",
+] }
+hex.workspace = true
+jsonwebtoken = "9"
+# secp256k1 ECDSA recovery for NEAR chat signatures (EIP-191), matching the
+# gateway's k256 usage.
+k256 = { version = "0.13", features = ["ecdsa"] }
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# keccak256 for the EIP-191 personal_sign digest + Ethereum address derivation.
+sha3 = "0.10"
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

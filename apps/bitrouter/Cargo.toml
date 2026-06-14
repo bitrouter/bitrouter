@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
+bitrouter-attestation.workspace = true
 bitrouter-cloud-sdk.workspace = true
 bitrouter-providers = { workspace = true, features = ["pkce"] }
 bitrouter-skills.workspace = true
