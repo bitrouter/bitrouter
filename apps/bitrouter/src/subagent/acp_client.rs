@@ -47,6 +47,10 @@ pub struct WorkerSpawn {
     pub args: Vec<String>,
     /// Extra env (e.g. `OPENCODE_CONFIG`).
     pub env: BTreeMap<String, String>,
+    /// Working directory for the child process. Set so harnesses that ignore an
+    /// ACP `--cwd` (e.g. claude-agent-acp) still write relative paths into the
+    /// isolated worktree rather than `$HOME`.
+    pub working_dir: Option<String>,
 }
 
 /// Spawn the worker, run `initialize → session/new → session/prompt(task)`, and
@@ -64,6 +68,9 @@ pub async fn drive_once(spawn: WorkerSpawn, task: &str) -> Result<SessionOutcome
         if let Some(val) = std::env::var_os(key) {
             cmd.env(key, val);
         }
+    }
+    if let Some(dir) = &spawn.working_dir {
+        cmd.current_dir(dir);
     }
     cmd.args(&spawn.args)
         .envs(&spawn.env)
@@ -254,6 +261,7 @@ mod tests {
             command: "node".to_string(),
             args: vec![fixture.to_string()],
             env,
+            working_dir: None,
         };
         let out = drive_once(spawn, "do the task at /tmp/out.txt")
             .await

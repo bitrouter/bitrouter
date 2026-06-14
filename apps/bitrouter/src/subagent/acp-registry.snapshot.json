@@ -1,0 +1,9 @@
+{
+  "_source": "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json",
+  "_pinned": "v1/2026-06-14",
+  "_note": "Curated, PATH-launch oriented. We deliberately do NOT auto-install; launch from PATH / npx, not the registry's binary-archive cmd.",
+  "agents": {
+    "opencode":   { "cmd": "opencode", "args": ["acp"] },
+    "claude-acp": { "cmd": "npx", "args": ["@agentclientprotocol/claude-agent-acp@0.44.0"] }
+  }
+}

@@ -25,6 +25,16 @@ impl Drop for WorkerWorkspace {
     }
 }
 
+/// Create an isolated temp worktree for one subagent run: `<tmp>/bitrouter-subagent-<uniq>/ws`.
+/// Returns (root, cwd). The caller owns cleanup (e.g. via `WorkerWorkspace`'s Drop).
+pub fn make_worktree(unique: &str) -> Result<(std::path::PathBuf, String)> {
+    let root = std::env::temp_dir().join(format!("bitrouter-subagent-{unique}"));
+    let ws = root.join("ws");
+    std::fs::create_dir_all(&ws)
+        .map_err(|e| BitrouterError::internal(format!("mkdir {}: {e}", ws.display())))?;
+    Ok((root, ws.to_string_lossy().to_string()))
+}
+
 /// The model id as opencode expects it: `provider/model`. We always route via a
 /// provider named `bitrouter` pointed at the daemon, so split on the first `/`.
 fn split_provider_model(model: &str) -> Result<(&str, &str)> {
@@ -42,10 +52,7 @@ pub fn materialize(
     unique: &str,
 ) -> Result<WorkerWorkspace> {
     let (_provider, model_id) = split_provider_model(model)?;
-    let root = std::env::temp_dir().join(format!("bitrouter-subagent-{unique}"));
-    let ws = root.join("ws");
-    std::fs::create_dir_all(&ws)
-        .map_err(|e| BitrouterError::internal(format!("mkdir {}: {e}", ws.display())))?;
+    let (root, cwd) = make_worktree(unique)?;
 
     let cfg = json!({
         "$schema": "https://opencode.ai/config.json",
@@ -76,11 +83,7 @@ pub fn materialize(
         "OPENCODE_CONFIG".to_string(),
         cfg_path.to_string_lossy().to_string(),
     );
-    Ok(WorkerWorkspace {
-        root,
-        env,
-        cwd: ws.to_string_lossy().to_string(),
-    })
+    Ok(WorkerWorkspace { root, env, cwd })
 }
 
 #[cfg(test)]

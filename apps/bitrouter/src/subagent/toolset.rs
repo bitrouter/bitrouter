@@ -12,8 +12,8 @@ use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::metering::{MeteringStore, TimeWindow};
 use crate::policy::{Policy, PolicyStore};
-use crate::subagent::acp_client::{WorkerSpawn, drive_once};
-use crate::subagent::worker_config::materialize;
+use crate::subagent::acp_client::drive_once;
+use crate::subagent::harness::WorkerHarness;
 
 /// The tool name the agent calls.
 pub const TOOL_NAME: &str = "spawn_subagent";
@@ -102,8 +102,14 @@ impl SpawnSubagentToolset {
             .await
             .map_err(|e| BitrouterError::internal(format!("minting worker key: {e}")))?;
 
-        // 5. materialize the worker config + worktree
-        let ws = match materialize(&self.config.base_url, &args.model, &minted.secret, &unique) {
+        // 5. materialize the worker config + worktree via the harness
+        let harness = crate::subagent::harness::OpencodeHarness;
+        let ws = match harness.materialize(
+            &self.config.base_url,
+            &args.model,
+            &minted.secret,
+            &unique,
+        ) {
             Ok(w) => w,
             Err(e) => {
                 return Ok(ToolResultOutput::ErrorText {
@@ -113,10 +119,13 @@ impl SpawnSubagentToolset {
         };
 
         // 6. drive the worker over ACP
-        let spawn = WorkerSpawn {
-            command: self.config.command.clone(),
-            args: vec!["acp".into(), "--cwd".into(), ws.cwd.clone()],
-            env: ws.env.clone(),
+        let spawn = match harness.spawn(&ws) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(ToolResultOutput::ErrorText {
+                    value: format!("worker spawn config failed: {e}"),
+                });
+            }
         };
         let task = format!(
             "{}\n\n(Work only under {}; use absolute paths.)",
