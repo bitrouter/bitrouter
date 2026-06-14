@@ -61,11 +61,10 @@ pub fn materialize(
         }
     });
     let cfg_path = root.join("opencode.json");
-    std::fs::write(
-        &cfg_path,
-        serde_json::to_vec_pretty(&cfg).unwrap_or_default(),
-    )
-    .map_err(|e| BitrouterError::internal(format!("write {}: {e}", cfg_path.display())))?;
+    let cfg_bytes = serde_json::to_vec_pretty(&cfg)
+        .map_err(|e| BitrouterError::internal(format!("serializing worker config: {e}")))?;
+    std::fs::write(&cfg_path, cfg_bytes)
+        .map_err(|e| BitrouterError::internal(format!("write {}: {e}", cfg_path.display())))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
