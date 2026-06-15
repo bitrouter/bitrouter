@@ -43,6 +43,16 @@ impl Extensions {
     }
 }
 
+/// Count media content blocks in a content stream (observability only).
+///
+/// Only `Content::File` is treated as media — it covers all non-text IANA
+/// media types (images, audio, video, documents). `Content::Text`,
+/// `Content::Reasoning`, and `Content::ToolCall`/`Content::ToolResult` are
+/// not media.
+fn count_media<'a>(blocks: impl Iterator<Item = &'a Content>) -> u64 {
+    blocks.filter(|c| matches!(c, Content::File { .. })).count() as u64
+}
+
 /// The whole-request pipeline context. Follows a water-flow model: data flows
 /// downstream, each stage appends, downstream may read everything upstream
 /// wrote but never mutate it.
@@ -332,6 +342,20 @@ impl PipelineContext {
             reasoning_tokens: usage.reasoning_tokens,
             cache_read_tokens: usage.cache_read_tokens,
             cache_write_tokens: usage.cache_write_tokens,
+            web_search_count: usage.web_search_count,
+            media_input_count: count_media(self.prompt.messages.iter().flat_map(|m| &m.content)),
+            // Note: for streamed requests both fields below are 0 / empty.
+            // The streaming path only folds usage back (via `absorb_stream`);
+            // response content and server_tool_calls are not reconstructed in
+            // the IR. This is an intentional deferral, not a bug.
+            media_output_count: count_media(
+                exec.map(|e| e.result.content.as_slice())
+                    .unwrap_or_default()
+                    .iter(),
+            ),
+            server_tool_calls: exec
+                .map(|e| e.server_tool_calls.clone())
+                .unwrap_or_default(),
             streamed: false,
             latency_ms: exec.map(|e| e.latency_ms).unwrap_or(0),
             generation_time_ms: exec.map(|e| e.generation_time_ms).unwrap_or(0),
