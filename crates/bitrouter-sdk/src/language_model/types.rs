@@ -1752,6 +1752,10 @@ pub struct ExecutionResult {
     pub latency_ms: u64,
     /// Upstream generation time in milliseconds.
     pub generation_time_ms: u64,
+    /// Server-tool calls observed during this execution (router-executed and
+    /// provider-executed). Empty for a plain single-turn upstream call.
+    /// Observability only.
+    pub server_tool_calls: Vec<ServerToolCall>,
 }
 
 /// How an upstream's credential is presented on the wire.
