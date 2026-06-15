@@ -1331,6 +1331,51 @@ impl Usage {
     }
 }
 
+/// Which side executed a server tool. `Router` = a bitrouter router tool the
+/// server-tool loop ran itself; `Provider` = a provider-executed tool the
+/// upstream ran (e.g. Anthropic web search).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ServerToolKind {
+    /// A tool the router executed on behalf of the model.
+    Router,
+    /// A tool the upstream provider executed (e.g. a web search).
+    Provider,
+}
+
+/// Terminal status of a single server-tool call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ServerToolStatus {
+    /// The tool completed successfully.
+    Ok,
+    /// The tool returned an error.
+    Error,
+    /// The tool call was denied (e.g. by a policy hook).
+    Denied,
+    /// The tool call timed out.
+    Timeout,
+}
+
+/// One server-tool call observed during a request, for observability only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerToolCall {
+    /// Tool name (`web_search`, `subagent`, `advisor`, …).
+    pub name: String,
+    /// Which side executed the tool.
+    pub kind: ServerToolKind,
+    /// Provider/loop call id where known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    /// Terminal status of this call.
+    pub status: ServerToolStatus,
+    /// Results produced by this call (e.g. web searches); 0 when N/A.
+    #[serde(default)]
+    pub result_count: u32,
+}
+
 /// Why generation stopped.
 ///
 /// The Vercel AI SDK V3 `LanguageModelV3FinishReason` is a record carrying
@@ -2058,5 +2103,21 @@ mod tests {
             .extra
             .insert("web_search_options".into(), serde_json::json!({}));
         assert!(p.required_capabilities().is_empty());
+    }
+
+    #[test]
+    fn server_tool_call_roundtrips() {
+        let c = ServerToolCall {
+            name: "web_search".into(),
+            kind: ServerToolKind::Provider,
+            call_id: Some("srvtoolu_1".into()),
+            status: ServerToolStatus::Ok,
+            result_count: 2,
+        };
+        let j = serde_json::to_value(&c).unwrap();
+        assert_eq!(j["kind"], "provider");
+        assert_eq!(j["status"], "ok");
+        let back: ServerToolCall = serde_json::from_value(j).unwrap();
+        assert_eq!(back, c);
     }
 }
