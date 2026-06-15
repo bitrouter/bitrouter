@@ -2041,6 +2041,7 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         reasoning_tokens: reasoning,
         cache_read_tokens: cache_read,
         cache_write_tokens: 0,
+        web_search_count: 0,
     })
 }
 

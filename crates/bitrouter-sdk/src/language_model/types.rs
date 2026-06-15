@@ -1312,6 +1312,12 @@ pub struct Usage {
     /// `usage.cache_creation_input_tokens`.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub cache_write_tokens: u64,
+    /// Provider-executed web-search calls this turn. Maps to Anthropic
+    /// Messages `usage.server_tool_use.web_search_requests`
+    /// (<https://docs.anthropic.com/en/api/messages>). Default 0 when the
+    /// upstream reports none. Observability only — not a billing input.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub web_search_count: u64,
 }
 
 fn is_zero_u64(v: &u64) -> bool {

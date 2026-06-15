@@ -371,6 +371,7 @@ mod tests {
                     reasoning_tokens: 0,
                     cache_read_tokens: 0,
                     cache_write_tokens: 0,
+                    web_search_count: 0,
                 }),
                 finish_reason: Some(FinishReason::Stop),
                 response_id: None,
