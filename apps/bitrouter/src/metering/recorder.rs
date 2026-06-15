@@ -46,6 +46,7 @@ impl MeteringRecorder {
             reasoning_tokens: ctx.reasoning_tokens,
             cache_read_tokens: ctx.cache_read_tokens,
             cache_write_tokens: ctx.cache_write_tokens,
+            web_search_count: 0,
         };
         match self.pricing.resolve(&ctx.provider_id, &ctx.model_id) {
             Some(pricing) if !pricing.is_unconfigured() => {

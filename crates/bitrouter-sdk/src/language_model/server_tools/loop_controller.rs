@@ -14,8 +14,8 @@ use super::config::ServerToolLoopConfig;
 use super::toolset::{ToolContext, ToolsetRegistry};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::types::{
-    Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role, Tool,
-    ToolResultOutput, Usage,
+    Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role,
+    ServerToolCall, ServerToolKind, ServerToolStatus, Tool, ToolResultOutput, Usage,
 };
 
 /// One upstream turn for a working prompt — the loop's callback into the
@@ -117,6 +117,7 @@ impl ServerToolLoop {
         let start = Instant::now();
         let mut consecutive_errors = 0u32;
         let mut rounds = 0u32;
+        let mut server_calls: Vec<ServerToolCall> = Vec::new();
 
         loop {
             let mut result = upstream.run(&working).await?;
@@ -130,19 +131,41 @@ impl ServerToolLoop {
                     if had_usage {
                         result.result.usage = Some(total);
                     }
+                    record_provider_calls(&mut server_calls, &result.result.content);
+                    result.server_tool_calls = std::mem::take(&mut server_calls);
                     return Ok(result);
                 }
                 TurnDisposition::Execute(calls) => {
                     if rounds >= self.config.max_iterations
                         || start.elapsed() >= self.config.total_budget
                     {
+                        result.server_tool_calls = std::mem::take(&mut server_calls);
                         return Ok(truncate(result, total, had_usage, "max_tool_iterations"));
                     }
+                    record_provider_calls(&mut server_calls, &result.result.content);
                     let (tool_results, had_error) = self.execute_calls(&calls, ctx).await;
+                    // v1: status uses the turn's aggregate error flag, not per-call.
+                    // Denied calls and a single failing call among siblings are both
+                    // surfaced as Error/Ok at turn granularity; per-call status
+                    // (including ServerToolStatus::Denied) is a later refinement.
+                    for call in &calls {
+                        server_calls.push(ServerToolCall {
+                            name: call.name.clone(),
+                            kind: ServerToolKind::Router,
+                            call_id: Some(call.id.clone()),
+                            status: if had_error {
+                                ServerToolStatus::Error
+                            } else {
+                                ServerToolStatus::Ok
+                            },
+                            result_count: 0,
+                        });
+                    }
                     consecutive_errors = if had_error { consecutive_errors + 1 } else { 0 };
                     append_turn(&mut working, result.result.content.clone(), tool_results);
                     rounds += 1;
                     if consecutive_errors >= self.config.max_consecutive_errors {
+                        result.server_tool_calls = std::mem::take(&mut server_calls);
                         return Ok(truncate(result, total, had_usage, "tool_errors"));
                     }
                 }
@@ -236,6 +259,29 @@ pub(crate) fn add_usage(total: &mut Usage, add: &Usage) {
     total.reasoning_tokens += add.reasoning_tokens;
     total.cache_read_tokens += add.cache_read_tokens;
     total.cache_write_tokens += add.cache_write_tokens;
+}
+
+/// Record provider-executed tool calls found in a turn's content.
+fn record_provider_calls(out: &mut Vec<ServerToolCall>, content: &[Content]) {
+    for c in content {
+        if let Content::ToolCall {
+            name,
+            id,
+            provider_executed: true,
+            ..
+        } = c
+        {
+            out.push(ServerToolCall {
+                name: name.clone(),
+                kind: ServerToolKind::Provider,
+                call_id: Some(id.clone()),
+                status: ServerToolStatus::Ok,
+                // result_count is populated in a later stage; provider result
+                // extraction is not wired here yet.
+                result_count: 0,
+            });
+        }
+    }
 }
 
 /// Finish a bounded loop: replace usage with the accumulated total and set a
@@ -371,6 +417,7 @@ mod tests {
                     reasoning_tokens: 0,
                     cache_read_tokens: 0,
                     cache_write_tokens: 0,
+                    web_search_count: 0,
                 }),
                 finish_reason: Some(FinishReason::Stop),
                 response_id: None,
@@ -379,6 +426,7 @@ mod tests {
             },
             latency_ms: 0,
             generation_time_ms: 0,
+            server_tool_calls: Vec::new(),
         }
     }
 
@@ -525,5 +573,78 @@ mod tests {
             result.result.finish_reason,
             Some(FinishReason::Other("max_tool_iterations".to_string()))
         );
+    }
+
+    #[tokio::test]
+    async fn run_records_executed_router_call() {
+        // Turn 1: model requests a router-owned tool ("subagent").
+        // Turn 2: model returns final text — loop terminates Done.
+        let loop_ = loop_with(&["subagent"], false, ServerToolLoopConfig::default());
+        let upstream = ScriptedUpstream::new(vec![
+            exec(vec![tool_call("subagent")]),
+            exec(vec![text("done")]),
+        ]);
+        let result = loop_
+            .run(&base_prompt(), &tool_ctx(), &upstream)
+            .await
+            .unwrap();
+        let calls = &result.server_tool_calls;
+        assert_eq!(calls.len(), 1, "exactly one server-tool call recorded");
+        assert_eq!(calls[0].name, "subagent");
+        assert_eq!(calls[0].kind, ServerToolKind::Router);
+        assert_eq!(calls[0].status, ServerToolStatus::Ok);
+    }
+
+    #[tokio::test]
+    async fn run_records_intermediate_provider_call() {
+        // Turn 1: model issues BOTH a router-owned call ("subagent", provider_executed=false)
+        // AND a provider-executed call ("web_search", provider_executed=true).
+        // classify_turn skips provider_executed blocks when deciding disposition, so
+        // the turn classifies as Execute.  Before this fix the provider-executed call
+        // was silently dropped; after the fix it must appear in server_tool_calls.
+        // Turn 2: model returns final text — loop terminates Done.
+        let loop_ = loop_with(&["subagent"], false, ServerToolLoopConfig::default());
+
+        let provider_call = Content::ToolCall {
+            id: "web_search-1".to_string(),
+            name: "web_search".to_string(),
+            arguments: "{}".to_string(),
+            provider_executed: true,
+            dynamic: false,
+            provider_metadata: ProviderMetadata::new(),
+        };
+
+        let upstream = ScriptedUpstream::new(vec![
+            exec(vec![tool_call("subagent"), provider_call]),
+            exec(vec![text("done")]),
+        ]);
+        let result = loop_
+            .run(&base_prompt(), &tool_ctx(), &upstream)
+            .await
+            .unwrap();
+
+        let calls = &result.server_tool_calls;
+
+        // Expect exactly two recorded entries: one Router ("subagent") and one
+        // Provider ("web_search").
+        assert_eq!(
+            calls.len(),
+            2,
+            "both the router call and the provider call must be recorded"
+        );
+
+        let router_entry = calls
+            .iter()
+            .find(|c| c.name == "subagent")
+            .expect("Router entry for 'subagent' must be present");
+        assert_eq!(router_entry.kind, ServerToolKind::Router);
+        assert_eq!(router_entry.status, ServerToolStatus::Ok);
+
+        let provider_entry = calls
+            .iter()
+            .find(|c| c.name == "web_search")
+            .expect("Provider entry for 'web_search' must be present (intermediate-turn fix)");
+        assert_eq!(provider_entry.kind, ServerToolKind::Provider);
+        assert_eq!(provider_entry.status, ServerToolStatus::Ok);
     }
 }

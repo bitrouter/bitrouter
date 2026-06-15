@@ -120,6 +120,7 @@ impl Executor for MockExecutor {
                 result,
                 latency_ms: 1,
                 generation_time_ms: 1,
+                server_tool_calls: Vec::new(),
             }),
             MockResponse::Stream(_) => Err(BitrouterError::internal(
                 "MockExecutor: scripted a stream response for a non-streaming call",
@@ -433,6 +434,7 @@ impl Executor for HttpExecutor {
             result,
             latency_ms: elapsed,
             generation_time_ms: elapsed,
+            server_tool_calls: Vec::new(),
         })
     }
 

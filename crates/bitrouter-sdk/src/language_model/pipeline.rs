@@ -322,6 +322,7 @@ impl Pipeline {
                 },
                 latency_ms: 0,
                 generation_time_ms: 0,
+                server_tool_calls: Vec::new(),
             });
         }
         self.observe_after(Phase::Execution, &ctx).await;

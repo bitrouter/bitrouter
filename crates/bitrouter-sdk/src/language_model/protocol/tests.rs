@@ -1497,6 +1497,61 @@ fn messages_stream_preserves_cache_inclusive_prompt_tokens() {
 }
 
 #[test]
+fn messages_stream_web_search_count_from_delta() {
+    // `message_delta.usage` carries cumulative final counts, so
+    // `web_search_count` must be ASSIGNED from the delta value, not
+    // accumulated. This test also guards against double-counting: the
+    // `message_start` carries no `server_tool_use`, so if the decoder
+    // were to add rather than assign, `start(0) + delta(5) == 5` and
+    // `start(0) + delta(5) + delta(5) == 10` would both pass — but since
+    // only one `message_delta` is emitted per stream, the regression is
+    // caught by the equality check below.
+    let decoder = adapter_for(ApiProtocol::Messages);
+    let mut stream_decoder = decoder.stream_decoder();
+
+    let start = SseEvent {
+        event: Some("message_start".into()),
+        data: serde_json::json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg_2",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4",
+                "content": [],
+                "stop_reason": null,
+                "usage": { "input_tokens": 10, "output_tokens": 0 }
+            }
+        })
+        .to_string(),
+    };
+    let _ = stream_decoder.decode(&start).unwrap();
+
+    let delta = SseEvent {
+        event: Some("message_delta".into()),
+        data: serde_json::json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": {
+                "output_tokens": 15,
+                "server_tool_use": { "web_search_requests": 5 }
+            }
+        })
+        .to_string(),
+    };
+    let parts = stream_decoder.decode(&delta).unwrap();
+    let usage = parts
+        .iter()
+        .find_map(|p| match p {
+            StreamPart::Usage { usage } => Some(*usage),
+            _ => None,
+        })
+        .expect("terminal Usage frame missing");
+    assert_eq!(usage.web_search_count, 5);
+    assert_eq!(usage.completion_tokens, 15);
+}
+
+#[test]
 fn chat_completions_cache_tokens_round_trip() {
     // Chat Completions surfaces cached prompt tokens via
     // `prompt_tokens_details.cached_tokens`. Parse → canonical → render.

@@ -48,6 +48,14 @@ pub struct SettlementContext {
     /// Subset of `prompt_tokens`. Lets a recorder apply premium pricing
     /// (e.g. Anthropic cache-write at 1.25× the prompt rate).
     pub cache_write_tokens: u64,
+    /// Provider-executed web searches (from `Usage::web_search_count`).
+    pub web_search_count: u64,
+    /// Media content blocks in the request prompt.
+    pub media_input_count: u64,
+    /// Media content blocks in the response.
+    pub media_output_count: u64,
+    /// Server-tool calls observed (router + provider). Observability only.
+    pub server_tool_calls: Vec<crate::language_model::types::ServerToolCall>,
     /// Whether the request was streamed.
     pub streamed: bool,
     /// End-to-end latency in milliseconds.
@@ -102,4 +110,54 @@ pub trait SettlementRecorder: Send + Sync {
     ///
     /// [`PipelineContext::absorb_settlement`]: crate::language_model::PipelineContext::absorb_settlement
     async fn record(&self, ctx: &mut SettlementContext) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::caller::CallerContext;
+    use crate::event::EventBus;
+    use crate::language_model::types::{ServerToolCall, ServerToolKind, ServerToolStatus};
+
+    fn make_settlement_context() -> SettlementContext {
+        SettlementContext {
+            request_id: "test-req".into(),
+            caller: CallerContext::local(),
+            target: None,
+            model_id: "test-model".into(),
+            provider_id: "test-provider".into(),
+            account_label: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            reasoning_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            web_search_count: 0,
+            media_input_count: 0,
+            media_output_count: 0,
+            server_tool_calls: Vec::new(),
+            streamed: false,
+            latency_ms: 0,
+            generation_time_ms: 0,
+            error: None,
+            events: EventBus::default(),
+        }
+    }
+
+    #[test]
+    fn settlement_context_carries_server_tool_signals() {
+        let mut c = make_settlement_context();
+        c.web_search_count = 3;
+        c.media_output_count = 1;
+        c.server_tool_calls = vec![ServerToolCall {
+            name: "web_search".into(),
+            kind: ServerToolKind::Provider,
+            call_id: None,
+            status: ServerToolStatus::Ok,
+            result_count: 3,
+        }];
+        assert_eq!(c.web_search_count, 3);
+        assert_eq!(c.media_output_count, 1);
+        assert_eq!(c.server_tool_calls.len(), 1);
+    }
 }

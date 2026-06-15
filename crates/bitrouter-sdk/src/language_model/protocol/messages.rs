@@ -2016,12 +2016,21 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .get("cache_creation_input_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    // Anthropic reports provider-executed server-tool counts under
+    // `usage.server_tool_use`. Web search is the only count today.
+    // <https://docs.anthropic.com/en/api/messages> → `usage` object.
+    let web_search_count = value
+        .get("server_tool_use")
+        .and_then(|s| s.get("web_search_requests"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Some(Usage {
         prompt_tokens: input.saturating_add(cache_read).saturating_add(cache_write),
         completion_tokens: output,
         reasoning_tokens: 0,
         cache_read_tokens: cache_read,
         cache_write_tokens: cache_write,
+        web_search_count,
     })
 }
 
@@ -2259,6 +2268,15 @@ impl StreamDecoder for MessagesStreamDecoder {
                     }
                     if let Some(output) = u.get("output_tokens").and_then(|v| v.as_u64()) {
                         self.usage.completion_tokens = output;
+                    }
+                    // Cumulative final count — assign, do not accumulate
+                    // (same pattern as the sibling token fields above).
+                    if let Some(wsc) = u
+                        .get("server_tool_use")
+                        .and_then(|s| s.get("web_search_requests"))
+                        .and_then(|v| v.as_u64())
+                    {
+                        self.usage.web_search_count = wsc;
                     }
                     self.usage.prompt_tokens = new_excl_input
                         .saturating_add(self.usage.cache_read_tokens)
@@ -2813,5 +2831,26 @@ impl StreamEncoder for MessagesStreamEncoder {
                 "error": { "type": "api_error", "message": message },
             }),
         )]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_usage_extracts_web_search_requests() {
+        let v = serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "server_tool_use": { "web_search_requests": 3 }
+        });
+        let u = super::parse_usage(&v).expect("usage present");
+        assert_eq!(u.web_search_count, 3);
+        assert_eq!(u.prompt_tokens, 100);
+    }
+
+    #[test]
+    fn parse_usage_web_search_defaults_zero() {
+        let v = serde_json::json!({ "input_tokens": 10, "output_tokens": 2 });
+        assert_eq!(super::parse_usage(&v).unwrap().web_search_count, 0);
     }
 }

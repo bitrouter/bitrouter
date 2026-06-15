@@ -1312,6 +1312,12 @@ pub struct Usage {
     /// `usage.cache_creation_input_tokens`.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub cache_write_tokens: u64,
+    /// Provider-executed web-search calls this turn. Maps to Anthropic
+    /// Messages `usage.server_tool_use.web_search_requests`
+    /// (<https://docs.anthropic.com/en/api/messages>). Default 0 when the
+    /// upstream reports none. Observability only — not a billing input.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub web_search_count: u64,
 }
 
 fn is_zero_u64(v: &u64) -> bool {
@@ -1323,6 +1329,51 @@ impl Usage {
     pub fn total(&self) -> u64 {
         self.prompt_tokens + self.completion_tokens
     }
+}
+
+/// Which side executed a server tool. `Router` = a bitrouter router tool the
+/// server-tool loop ran itself; `Provider` = a provider-executed tool the
+/// upstream ran (e.g. Anthropic web search).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ServerToolKind {
+    /// A tool the router executed on behalf of the model.
+    Router,
+    /// A tool the upstream provider executed (e.g. a web search).
+    Provider,
+}
+
+/// Terminal status of a single server-tool call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ServerToolStatus {
+    /// The tool completed successfully.
+    Ok,
+    /// The tool returned an error.
+    Error,
+    /// The tool call was denied (e.g. by a policy hook).
+    Denied,
+    /// The tool call timed out.
+    Timeout,
+}
+
+/// One server-tool call observed during a request, for observability only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerToolCall {
+    /// Tool name (`web_search`, `subagent`, `advisor`, …).
+    pub name: String,
+    /// Which side executed the tool.
+    pub kind: ServerToolKind,
+    /// Provider/loop call id where known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    /// Terminal status of this call.
+    pub status: ServerToolStatus,
+    /// Results produced by this call (e.g. web searches); 0 when N/A.
+    #[serde(default)]
+    pub result_count: u32,
 }
 
 /// Why generation stopped.
@@ -1701,6 +1752,10 @@ pub struct ExecutionResult {
     pub latency_ms: u64,
     /// Upstream generation time in milliseconds.
     pub generation_time_ms: u64,
+    /// Server-tool calls observed during this execution (router-executed and
+    /// provider-executed). Empty for a plain single-turn upstream call.
+    /// Observability only.
+    pub server_tool_calls: Vec<ServerToolCall>,
 }
 
 /// How an upstream's credential is presented on the wire.
@@ -2052,5 +2107,21 @@ mod tests {
             .extra
             .insert("web_search_options".into(), serde_json::json!({}));
         assert!(p.required_capabilities().is_empty());
+    }
+
+    #[test]
+    fn server_tool_call_roundtrips() {
+        let c = ServerToolCall {
+            name: "web_search".into(),
+            kind: ServerToolKind::Provider,
+            call_id: Some("srvtoolu_1".into()),
+            status: ServerToolStatus::Ok,
+            result_count: 2,
+        };
+        let j = serde_json::to_value(&c).unwrap();
+        assert_eq!(j["kind"], "provider");
+        assert_eq!(j["status"], "ok");
+        let back: ServerToolCall = serde_json::from_value(j).unwrap();
+        assert_eq!(back, c);
     }
 }

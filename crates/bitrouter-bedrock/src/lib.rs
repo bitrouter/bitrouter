@@ -206,6 +206,7 @@ impl Executor for BedrockExecutor {
             },
             latency_ms: elapsed,
             generation_time_ms: elapsed,
+            server_tool_calls: Vec::new(),
         })
     }
 
@@ -656,6 +657,7 @@ fn token_usage_to_canonical(u: &bedrock::types::TokenUsage) -> Usage {
         reasoning_tokens: 0,
         cache_read_tokens: u.cache_read_input_tokens.unwrap_or(0).max(0) as u64,
         cache_write_tokens: u.cache_write_input_tokens.unwrap_or(0).max(0) as u64,
+        web_search_count: 0,
     }
 }
 

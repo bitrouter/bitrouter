@@ -1150,6 +1150,7 @@ mod hop_tests {
             },
             latency_ms: 42,
             generation_time_ms: 40,
+            server_tool_calls: Vec::new(),
         }
     }
 

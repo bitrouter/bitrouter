@@ -997,6 +997,7 @@ impl Executor for GatedExecutor {
             },
             latency_ms: 1,
             generation_time_ms: 1,
+            server_tool_calls: Vec::new(),
         })
     }
     async fn execute_stream(
