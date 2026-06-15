@@ -3270,7 +3270,7 @@ fn assert_schema_snapshot<T: schemars::JsonSchema>(name: &str) {
     // rather than as strings. JSON object key order is not part of the schema
     // contract, and it is sensitive to whether `serde_json`'s `preserve_order`
     // feature is unified into this build — any workspace dependency can toggle
-    // that (e.g. `bitrouter-attestation`'s `dcap-qvl` does, which reorders the
+    // that (e.g. a dependency that pulls in a crypto crate can reorder the
     // properties schemars emits). `Value` equality is order-insensitive for
     // object keys while staying order-sensitive for arrays (`required`,
     // `oneOf`, …), which *are* meaningful. Parsing also subsumes the old
