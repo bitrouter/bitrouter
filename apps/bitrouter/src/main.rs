@@ -1342,7 +1342,10 @@ async fn verify_attestation(model: &str) -> Result<()> {
             "attestation policy not pinned ({e}); set NEAR_KMS_ROOTS and \
              NEAR_IMAGE_DIGESTS/NEAR_WORKLOAD_IDS"
         )
-    })?;
+    })?
+    // TCB floor: require an up-to-date platform by default. Operators may
+    // accept specific Intel advisories (out-of-date microcode) via this env.
+    .with_allowed_tcb_advisory_ids(env_list("NEAR_TCB_ALLOWED_ADVISORIES"));
 
     // GPU EAT key: an explicit PEM override wins; otherwise fetch NVIDIA's JWKS
     // (its signing keys rotate, so we resolve per-request by the EAT `kid`).
@@ -1418,6 +1421,14 @@ async fn verify_attestation(model: &str) -> Result<()> {
         mark(c.policy_accepts)
     );
     println!("  {} TD debug disabled", mark(c.debug_disabled));
+    println!(
+        "  {} TCB level acceptable{}",
+        mark(c.tcb_level_acceptable),
+        match &c.tcb_status {
+            Some(s) => format!(" ({s})"),
+            None => String::new(),
+        }
+    );
     if !verdict.attested_addresses.is_empty() {
         println!(
             "  {dim}attested signer(s): {}{reset}",

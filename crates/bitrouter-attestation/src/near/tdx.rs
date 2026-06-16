@@ -37,6 +37,16 @@ pub struct TdxMeasurements {
     pub rtmr3: [u8; 48],
     /// TD attribute flags.
     pub td_attributes: [u8; 8],
+    /// Intel DCAP TCB status of the platform, as reported by `dcap-qvl`'s
+    /// `verify` (e.g. `"UpToDate"`, `"OutOfDate"`). `None` on the offline
+    /// parse-only path, which performs no collateral check and so learns no
+    /// TCB status. A signature-valid-but-stale quote yields `Some("OutOfDate")`
+    /// here — `dcap-qvl` returns `Ok` for it (it only `Err`s on `Revoked` or a
+    /// structural/signature failure), so the TCB floor must be enforced above.
+    pub tcb_status: Option<String>,
+    /// Intel security advisory IDs (e.g. `INTEL-SA-00615`) attached to a
+    /// non-current TCB status. Empty when up to date or on the parse-only path.
+    pub tcb_advisory_ids: Vec<String>,
 }
 
 impl TdxMeasurements {
@@ -68,6 +78,11 @@ fn measurements_from_report(report: &Report) -> Result<TdxMeasurements, VerifyEr
         rtmr2: td.rt_mr2,
         rtmr3: td.rt_mr3,
         td_attributes: td.td_attributes,
+        // The TCB status comes from collateral verification, not the quote
+        // bytes; the online `verify_tdx_quote` fills it in. Parse-only callers
+        // get `None`, which the TCB floor treats as fail-closed.
+        tcb_status: None,
+        tcb_advisory_ids: Vec::new(),
     })
 }
 
@@ -106,7 +121,14 @@ pub async fn verify_tdx_quote(
                 detail: e.to_string(),
             }
         })?;
-    measurements_from_report(&verified.report)
+    // `dcap-qvl` returns `Ok` for a signature-valid quote even when its TCB is
+    // out of date (it only `Err`s on `Revoked` or structural/signature
+    // failure), so capture the status + advisories for the caller's TCB floor
+    // rather than dropping them. See `dcap_qvl::verify::VerifiedReport`.
+    let mut measurements = measurements_from_report(&verified.report)?;
+    measurements.tcb_status = Some(verified.status);
+    measurements.tcb_advisory_ids = verified.advisory_ids;
+    Ok(measurements)
 }
 
 /// Strategy for turning a raw TDX quote into measurements, abstracted so the

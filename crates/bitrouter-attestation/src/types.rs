@@ -46,8 +46,17 @@ pub struct AttestationChecks {
     pub debug_disabled: bool,
     /// dstack RTMR3 / event-log replay, when the report carries an event log.
     pub event_log_rtmr_ok: Option<bool>,
-    /// Surfaced as a claim, not a hard fail (matches gateway behavior).
+    /// The platform's Intel DCAP TCB status, surfaced as a claim (e.g.
+    /// `"UpToDate"`, `"OutOfDate"`). `None` when no collateral verification
+    /// produced one. The hard gate is [`Self::tcb_level_acceptable`].
     pub tcb_status: Option<String>,
+    /// Whether [`Self::tcb_status`] meets the verifier's configured TCB floor
+    /// (default: require `UpToDate`; advisories may be explicitly allow-listed).
+    /// LOAD-BEARING: a signature-valid quote from a genuine TEE running
+    /// **out-of-date** microcode passes every other DCAP check, so without this
+    /// gate a known-vulnerable platform verifies. `false` fail-closed when the
+    /// status is missing or below the floor.
+    pub tcb_level_acceptable: bool,
 }
 
 impl AttestationChecks {
@@ -63,14 +72,17 @@ impl AttestationChecks {
             debug_disabled: false,
             event_log_rtmr_ok: None,
             tcb_status: None,
+            tcb_level_acceptable: false,
         }
     }
 
-    /// True iff every mandatory check passed. `tcb_status` is a claim, not a
-    /// gate. `event_log_rtmr_ok` is **required** to be `Some(true)`: it is the
-    /// anchor that binds the cloud-supplied `info` (and thus `policy_accepts`)
-    /// to the genuine TEE measurement, so a `None` ("not checked") or
-    /// `Some(false)` ("replay/binding failed") verdict must not pass.
+    /// True iff every mandatory check passed. `tcb_status` is a surfaced claim,
+    /// but `tcb_level_acceptable` (derived from it against the verifier's TCB
+    /// floor) **is** a gate: a stale-but-signature-valid quote must not pass.
+    /// `event_log_rtmr_ok` is **required** to be `Some(true)`: it is the anchor
+    /// that binds the cloud-supplied `info` (and thus `policy_accepts`) to the
+    /// genuine TEE measurement, so a `None` ("not checked") or `Some(false)`
+    /// ("replay/binding failed") verdict must not pass.
     pub fn all_pass(&self) -> bool {
         self.gpu_nras_pass
             && self.dcap_quote_valid
@@ -79,6 +91,7 @@ impl AttestationChecks {
             && self.policy_accepts
             && self.debug_disabled
             && self.event_log_rtmr_ok == Some(true)
+            && self.tcb_level_acceptable
     }
 }
 

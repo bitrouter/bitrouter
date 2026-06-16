@@ -156,6 +156,17 @@ impl NearVerifier {
             Err(_) => false,
         };
 
+        // Surface the platform TCB status as a claim, and gate it against the
+        // policy's floor. A signature-valid but out-of-date quote (`dcap-qvl`
+        // returns `Ok` for it) passes every check above, so without this gate a
+        // known-vulnerable TEE would verify. Fail closed when the quote never
+        // verified (`measurements` is `None`).
+        let tcb_status = measurements.as_ref().and_then(|mm| mm.tcb_status.clone());
+        let tcb_level_acceptable = measurements.as_ref().is_some_and(|mm| {
+            self.policy
+                .tcb_acceptable(mm.tcb_status.as_deref(), &mm.tcb_advisory_ids)
+        });
+
         AttestationChecks {
             gpu_nras_pass,
             dcap_quote_valid,
@@ -164,7 +175,8 @@ impl NearVerifier {
             policy_accepts,
             debug_disabled,
             event_log_rtmr_ok,
-            tcb_status: None,
+            tcb_status,
+            tcb_level_acceptable,
         }
     }
 }
@@ -365,8 +377,31 @@ mod tests {
 
     /// Parse-only quote verifier: returns real measurements from the fixture
     /// quote and claims authenticity (the live Intel-signature path is the
-    /// #[ignore]d test in `tdx`).
-    struct TrustingQuoteVerifier;
+    /// #[ignore]d test in `tdx`). Carries a configurable TCB status so tests can
+    /// simulate the collateral verdict the offline parse can't produce.
+    struct TrustingQuoteVerifier {
+        tcb_status: Option<String>,
+        tcb_advisory_ids: Vec<String>,
+    }
+
+    impl TrustingQuoteVerifier {
+        /// A genuine, current-TCB platform (the happy path).
+        fn up_to_date() -> Self {
+            Self {
+                tcb_status: Some("UpToDate".to_string()),
+                tcb_advisory_ids: Vec::new(),
+            }
+        }
+
+        /// A genuine TEE whose microcode is stale: signature-valid quote, but a
+        /// non-current TCB carrying the given advisories (the #566 case).
+        fn with_tcb(status: &str, advisories: &[&str]) -> Self {
+            Self {
+                tcb_status: Some(status.to_string()),
+                tcb_advisory_ids: advisories.iter().map(|s| s.to_string()).collect(),
+            }
+        }
+    }
 
     #[async_trait]
     impl QuoteVerifier for TrustingQuoteVerifier {
@@ -375,7 +410,10 @@ mod tests {
             raw_quote: &[u8],
             _now_unix: u64,
         ) -> Result<crate::near::tdx::TdxMeasurements, VerifyError> {
-            crate::near::tdx::parse_tdx_quote(raw_quote)
+            let mut m = crate::near::tdx::parse_tdx_quote(raw_quote)?;
+            m.tcb_status = self.tcb_status.clone();
+            m.tcb_advisory_ids = self.tcb_advisory_ids.clone();
+            Ok(m)
         }
         fn is_authenticated(&self) -> bool {
             true
@@ -390,12 +428,19 @@ mod tests {
         transport: Arc<dyn ReportTransport>,
         pol: Arc<AciDcapVerifierPolicy>,
     ) -> NearVerifier {
-        NearVerifier::new(
+        verifier_with_quotes(
             transport,
-            Arc::new(TrustingQuoteVerifier),
             pol,
-            nvidia_key(),
+            Arc::new(TrustingQuoteVerifier::up_to_date()),
         )
+    }
+
+    fn verifier_with_quotes(
+        transport: Arc<dyn ReportTransport>,
+        pol: Arc<AciDcapVerifierPolicy>,
+        quotes: Arc<dyn QuoteVerifier>,
+    ) -> NearVerifier {
+        NearVerifier::new(transport, quotes, pol, nvidia_key())
     }
 
     #[tokio::test]
@@ -415,6 +460,85 @@ mod tests {
             vec!["0xbb4d2e7ffe98eefcd9690e2139be41e92b95e333".to_string()]
         );
         assert_eq!(verdict.trust_boundary, TRUST_BOUNDARY);
+        // The happy path is UpToDate and gated as acceptable.
+        assert_eq!(verdict.checks.tcb_status.as_deref(), Some("UpToDate"));
+        assert!(verdict.checks.tcb_level_acceptable);
+    }
+
+    #[tokio::test]
+    async fn rejects_an_out_of_date_tcb_by_default() {
+        // The #566 case: a genuine TEE with a signature-valid quote whose TCB is
+        // OutOfDate. Every other check passes, so before the TCB gate this model
+        // verified against known-vulnerable microcode.
+        let quotes = Arc::new(TrustingQuoteVerifier::with_tcb(
+            "OutOfDate",
+            &["INTEL-SA-00615"],
+        ));
+        let v = verifier_with_quotes(
+            Arc::new(StubTransport::passing()),
+            policy(APP_ID, KMS_ROOT_DER_SPKI),
+            quotes,
+        );
+        let verdict = v
+            .verify_attestation(MODEL, FIXTURE_NONCE, 1_000)
+            .await
+            .unwrap();
+        let c = &verdict.checks;
+        // Everything EXCEPT the TCB floor passes — proving the gate is the sole
+        // reason for the rejection (i.e. this is what used to verify).
+        assert!(c.gpu_nras_pass && c.dcap_quote_valid && c.report_data_binds_key_and_nonce);
+        assert!(c.compose_matches_mr_config && c.policy_accepts && c.debug_disabled);
+        assert_eq!(c.event_log_rtmr_ok, Some(true));
+        assert_eq!(c.tcb_status.as_deref(), Some("OutOfDate"));
+        assert!(!c.tcb_level_acceptable);
+        assert!(!c.all_pass());
+        assert!(!verdict.verified, "out-of-date TCB must not verify");
+        assert!(verdict.attested_addresses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn accepts_an_out_of_date_tcb_when_its_advisory_is_allowlisted() {
+        // An operator may accept a specific advisory explicitly; then the same
+        // OutOfDate platform verifies.
+        let quotes = Arc::new(TrustingQuoteVerifier::with_tcb(
+            "OutOfDate",
+            &["INTEL-SA-00615"],
+        ));
+        let pol = Arc::new(
+            AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
+                .unwrap()
+                .with_allowed_tcb_advisory_ids(["INTEL-SA-00615".to_string()]),
+        );
+        let v = verifier_with_quotes(Arc::new(StubTransport::passing()), pol, quotes);
+        let verdict = v
+            .verify_attestation(MODEL, FIXTURE_NONCE, 1_000)
+            .await
+            .unwrap();
+        assert!(verdict.checks.tcb_level_acceptable);
+        assert!(verdict.checks.all_pass());
+        assert!(verdict.verified);
+    }
+
+    #[tokio::test]
+    async fn rejects_out_of_date_when_an_advisory_is_not_allowlisted() {
+        // A second, un-allowlisted advisory must still sink the verdict — the
+        // floor requires EVERY advisory to be accepted.
+        let quotes = Arc::new(TrustingQuoteVerifier::with_tcb(
+            "OutOfDate",
+            &["INTEL-SA-00615", "INTEL-SA-00999"],
+        ));
+        let pol = Arc::new(
+            AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
+                .unwrap()
+                .with_allowed_tcb_advisory_ids(["INTEL-SA-00615".to_string()]),
+        );
+        let v = verifier_with_quotes(Arc::new(StubTransport::passing()), pol, quotes);
+        let verdict = v
+            .verify_attestation(MODEL, FIXTURE_NONCE, 1_000)
+            .await
+            .unwrap();
+        assert!(!verdict.checks.tcb_level_acceptable);
+        assert!(!verdict.verified);
     }
 
     #[tokio::test]
@@ -593,7 +717,7 @@ mod tests {
                 last_nonce: std::sync::Mutex::new(String::new()),
                 chat_sig,
             }),
-            Arc::new(TrustingQuoteVerifier),
+            Arc::new(TrustingQuoteVerifier::up_to_date()),
             policy(APP_ID, KMS_ROOT_DER_SPKI),
             nvidia_key(),
         )

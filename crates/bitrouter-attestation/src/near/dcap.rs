@@ -38,6 +38,10 @@ pub struct AciDcapVerifierPolicy {
     accepted_workload_ids: BTreeSet<String>,
     accepted_image_digests: BTreeSet<String>,
     accepted_kms_root_public_keys: BTreeSet<String>,
+    /// Intel security advisory IDs (e.g. `INTEL-SA-00615`) the operator
+    /// explicitly accepts despite a non-current TCB. Empty (the default) means
+    /// the floor requires `UpToDate`. Normalized to upper-case for comparison.
+    allowed_tcb_advisory_ids: BTreeSet<String>,
 }
 
 impl AciDcapVerifierPolicy {
@@ -76,7 +80,45 @@ impl AciDcapVerifierPolicy {
             accepted_workload_ids,
             accepted_image_digests,
             accepted_kms_root_public_keys,
+            // Default floor: require an `UpToDate` TCB. Operators opt into
+            // accepting specific advisories via `with_allowed_tcb_advisory_ids`.
+            allowed_tcb_advisory_ids: BTreeSet::new(),
         })
+    }
+
+    /// Allow non-current TCB levels whose advisories are **all** in this set
+    /// (e.g. `INTEL-SA-00615`). Empty (the default) keeps the floor at
+    /// `UpToDate`. IDs are normalized to upper-case. Builder, so the load-
+    /// bearing [`Self::new`] pins stay mandatory and this stays opt-in.
+    #[must_use]
+    pub fn with_allowed_tcb_advisory_ids(mut self, ids: impl IntoIterator<Item = String>) -> Self {
+        self.allowed_tcb_advisory_ids = ids
+            .into_iter()
+            .map(|s| s.trim().to_uppercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        self
+    }
+
+    /// The TCB floor decision → [`crate::AttestationChecks::tcb_level_acceptable`].
+    /// `UpToDate` always passes. Any other (non-`Revoked`; `dcap-qvl` already
+    /// rejects `Revoked`) status passes **only** if it carries at least one
+    /// advisory ID and **every** advisory is allow-listed — so an empty
+    /// allow-list accepts `UpToDate` only, and a non-current status with no
+    /// nameable advisory is never silently accepted. `None` (no verified
+    /// status) fails closed.
+    pub fn tcb_acceptable(&self, status: Option<&str>, advisory_ids: &[String]) -> bool {
+        match status {
+            Some("UpToDate") => true,
+            Some(_) => {
+                !advisory_ids.is_empty()
+                    && advisory_ids.iter().all(|id| {
+                        self.allowed_tcb_advisory_ids
+                            .contains(&id.trim().to_uppercase())
+                    })
+            }
+            None => false,
+        }
     }
 
     /// The legitimacy decision: `workload_id ∈ allowlist` OR any
@@ -331,5 +373,71 @@ mod tests {
         let mut other = KMS_ROOT_DER_SPKI.to_string();
         other.replace_range(other.len() - 2.., "ff");
         assert!(!policy.accepts_kms_root(&other));
+    }
+
+    fn tcb_policy(allowed: &[&str]) -> AciDcapVerifierPolicy {
+        AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
+            .unwrap()
+            .with_allowed_tcb_advisory_ids(allowed.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn tcb_floor_accepts_up_to_date_only_by_default() {
+        let p = tcb_policy(&[]);
+        assert!(p.tcb_acceptable(Some("UpToDate"), &[]));
+        assert!(!p.tcb_acceptable(Some("OutOfDate"), &["INTEL-SA-00615".to_string()]));
+        assert!(!p.tcb_acceptable(Some("ConfigurationNeeded"), &[]));
+        assert!(!p.tcb_acceptable(Some("SWHardeningNeeded"), &[]));
+        // A missing status (no collateral verdict) fails closed.
+        assert!(!p.tcb_acceptable(None, &[]));
+    }
+
+    #[test]
+    fn tcb_floor_allows_a_fully_allowlisted_non_current_status() {
+        let p = tcb_policy(&["INTEL-SA-00615"]);
+        assert!(p.tcb_acceptable(Some("OutOfDate"), &["INTEL-SA-00615".to_string()]));
+        // Advisory IDs compare case-insensitively.
+        assert!(p.tcb_acceptable(Some("OutOfDate"), &["intel-sa-00615".to_string()]));
+    }
+
+    #[test]
+    fn tcb_floor_rejects_when_any_advisory_is_unlisted() {
+        let p = tcb_policy(&["INTEL-SA-00615"]);
+        assert!(!p.tcb_acceptable(
+            Some("OutOfDate"),
+            &["INTEL-SA-00615".to_string(), "INTEL-SA-00999".to_string()]
+        ));
+    }
+
+    #[test]
+    fn tcb_floor_never_accepts_a_non_current_status_with_no_named_advisory() {
+        // Even with a non-empty allowlist, a non-current status that names no
+        // advisory cannot be matched — fail closed, never vacuously true.
+        let p = tcb_policy(&["INTEL-SA-00615"]);
+        assert!(!p.tcb_acceptable(Some("ConfigurationNeeded"), &[]));
+    }
+
+    #[test]
+    fn tcb_floor_trims_advisory_ids_on_both_sides() {
+        // A whitespace-only allowlist entry must NOT become an empty-string
+        // entry that could match a malformed empty advisory id.
+        let p = tcb_policy(&["   "]);
+        assert!(!p.tcb_acceptable(Some("OutOfDate"), &["".to_string()]));
+        // A whitespace-padded advisory from the quote side still matches.
+        let p2 = tcb_policy(&["INTEL-SA-00615"]);
+        assert!(p2.tcb_acceptable(Some("OutOfDate"), &[" INTEL-SA-00615 ".to_string()]));
+    }
+
+    #[test]
+    fn tcb_floor_treats_revoked_as_any_non_current_status() {
+        // The hard guarantee against `Revoked` is upstream: `dcap-qvl`'s
+        // `verify` errors on it before we ever see a status, so it reaches
+        // `tcb_acceptable` only in theory. If it ever did, it is NOT special-
+        // cased here — it lands in the generic non-`UpToDate` arm: denied with
+        // no advisories, and (like any other status) gated by the allow-list
+        // otherwise. This test documents that contract rather than asserting a
+        // special-case the code does not make.
+        let p = tcb_policy(&["INTEL-SA-00615"]);
+        assert!(!p.tcb_acceptable(Some("Revoked"), &[]));
     }
 }
