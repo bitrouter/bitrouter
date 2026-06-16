@@ -5,6 +5,7 @@
 //! Reference design (behavior modeled after OpenRouter Fusion):
 //! <https://openrouter.ai/docs/guides/features/server-tools/fusion>
 
+pub mod alias;
 pub mod config;
 pub mod declarations;
 pub mod engine;
