@@ -6,3 +6,4 @@
 //! <https://openrouter.ai/docs/guides/features/server-tools/fusion>
 
 pub mod config;
+pub mod judge;
