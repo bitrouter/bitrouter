@@ -46,6 +46,10 @@ pub struct AppState {
     pub skip_auth: bool,
     /// Optional Prometheus-style metrics renderer; `GET /metrics` reads this.
     pub metrics_renderer: Option<Arc<dyn MetricsRenderer>>,
+    /// Ingress-time prompt transforms, applied in order after protocol parsing
+    /// and before a request enters the pipeline (e.g. the `bitrouter/fusion`
+    /// model alias).
+    pub prompt_transforms: Vec<Arc<dyn crate::app::PromptTransform>>,
 }
 
 impl App {
@@ -76,6 +80,7 @@ impl App {
             mcp: self.mcp().cloned(),
             skip_auth: self.skip_auth(),
             metrics_renderer: self.metrics_renderer().cloned(),
+            prompt_transforms: self.prompt_transforms().to_vec(),
         };
         let options = RouterOptions {
             omit_v1_models: false,
@@ -638,6 +643,12 @@ async fn handle(
                 p.model = model;
             }
             p.model = sanitize_model_name(&p.model);
+            // Ingress-time prompt transforms (e.g. the bitrouter/fusion model
+            // alias): the prompt body is freely mutable here, before it enters
+            // the pipeline that exposes it read-only downstream.
+            for transform in &state.prompt_transforms {
+                transform.apply(&mut p);
+            }
             p
         }
         Err(e) => return e.into_response(),

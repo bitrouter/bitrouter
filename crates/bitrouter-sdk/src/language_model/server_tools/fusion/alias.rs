@@ -14,7 +14,7 @@
 //!
 //! Reference: <https://openrouter.ai/docs/guides/features/server-tools/fusion>
 
-use super::config::{DEFAULT_MAX_STEPS, FUSION_TOOL};
+use super::config::{DEFAULT_MAX_STEPS, FUSION_TOOL, FusionSettings};
 use crate::language_model::types::{Prompt, ProviderMetadata, Tool};
 
 /// The defaults the alias expands to (the "Quality" preset by default).
@@ -36,6 +36,41 @@ pub struct FusionAliasConfig {
 }
 
 impl FusionAliasConfig {
+    /// Build an alias config from the `server_tools.fusion` settings, applying
+    /// defaults: alias = `bitrouter/fusion`; outer model = configured, else the
+    /// judge, else the first panel model; judge = configured, else the first
+    /// panel model, else the outer model; panel = configured, else the outer
+    /// model alone. Returns `None` when nothing identifies an outer model (no
+    /// outer_model, judge, or panel) — i.e. Fusion is effectively unconfigured.
+    pub fn from_settings(settings: &FusionSettings) -> Option<Self> {
+        let outer_model = settings
+            .outer_model
+            .clone()
+            .or_else(|| settings.judge.clone())
+            .or_else(|| settings.panel.first().cloned())?;
+        let judge = settings
+            .judge
+            .clone()
+            .or_else(|| settings.panel.first().cloned())
+            .unwrap_or_else(|| outer_model.clone());
+        let panel = if settings.panel.is_empty() {
+            vec![outer_model.clone()]
+        } else {
+            settings.panel.clone()
+        };
+        Some(FusionAliasConfig {
+            alias: settings
+                .alias
+                .clone()
+                .unwrap_or_else(|| "bitrouter/fusion".to_string()),
+            outer_model,
+            panel,
+            judge,
+            synthesizer: settings.synthesizer.clone(),
+            web_tools: settings.web_tools.clone(),
+        })
+    }
+
     /// Rewrite a prompt addressed to the alias: swap in the outer model, inject
     /// the `bitrouter:fusion` declaration, and nudge the model toward it. Returns
     /// `true` when the alias matched and the prompt was rewritten.
@@ -80,10 +115,18 @@ impl FusionAliasConfig {
     }
 }
 
+impl crate::app::PromptTransform for FusionAliasConfig {
+    fn apply(&self, prompt: &mut Prompt) {
+        // Discard the matched flag; the server applies every transform and a
+        // non-matching one is a no-op.
+        FusionAliasConfig::apply(self, prompt);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::config::FusionConfig;
+    use super::super::config::{FusionConfig, FusionSettings};
     use crate::language_model::types::{GenerationParams, ProviderMetadata};
 
     fn prompt_with_model(model: &str) -> Prompt {
@@ -167,6 +210,29 @@ mod tests {
         assert!(prompt.tools.is_empty());
         assert!(prompt.system.is_none());
         assert_eq!(prompt.model, "anthropic/claude-opus-4.8");
+    }
+
+    #[test]
+    fn built_from_settings_with_defaults() {
+        // Only a panel is set; outer model and judge default sensibly.
+        let settings = FusionSettings {
+            panel: vec!["a/1".to_string(), "b/2".to_string()],
+            judge: None,
+            synthesizer: None,
+            alias: None,
+            outer_model: None,
+            web_tools: Vec::new(),
+        };
+        let cfg = FusionAliasConfig::from_settings(&settings).expect("enabled");
+        assert_eq!(cfg.alias, "bitrouter/fusion");
+        assert_eq!(cfg.outer_model, "a/1");
+        assert_eq!(cfg.judge, "a/1");
+        assert_eq!(cfg.panel, vec!["a/1".to_string(), "b/2".to_string()]);
+    }
+
+    #[test]
+    fn from_settings_is_none_when_nothing_configured() {
+        assert!(FusionAliasConfig::from_settings(&FusionSettings::default()).is_none());
     }
 
     #[test]
