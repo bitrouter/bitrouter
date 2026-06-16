@@ -215,6 +215,7 @@ plugins:
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
     };
     let router = build_router(state);
     let server = TestServer::new(router);

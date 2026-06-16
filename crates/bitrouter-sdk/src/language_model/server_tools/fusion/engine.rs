@@ -67,6 +67,10 @@ pub async fn run_fusion(
     }
 
     // 2) Judge — compare (not merge) the answers into structured analysis.
+    // The judge requests structured output; pick a judge model that advertises
+    // it, since a provider that rejects `response_format` fails the call before
+    // the lenient parser (which only salvages JSON-in-text from models that
+    // accept the request) can run.
     let judge_req = NestedRequest {
         model: config.judge.model.clone(),
         system: Some(judge_system_prompt().to_string()),
@@ -107,11 +111,24 @@ pub async fn run_fusion(
                 tools: Vec::new(),
                 response_format: None,
             };
-            let synth = async { runner.run(synth_req, ctx).await }
+            match async { runner.run(synth_req, ctx).await }
                 .instrument(tracing::info_span!("fusion.synthesizer", model = %synth_model))
-                .await?;
-            accumulate(&mut usage, &synth.usage);
-            ToolResultOutput::Text { value: synth.text }
+                .await
+            {
+                Ok(synth) => {
+                    accumulate(&mut usage, &synth.usage);
+                    ToolResultOutput::Text { value: synth.text }
+                }
+                // Degrade gracefully: the panel + judge work is already done, so
+                // hand the calling model the analysis to write the answer from
+                // rather than discarding everything on a synthesizer failure.
+                Err(e) => {
+                    tracing::warn!(error = %e, "fusion synthesizer failed; returning analysis");
+                    ToolResultOutput::Json {
+                        value: json!({ "panel_models": panel_models, "analysis": analysis_json }),
+                    }
+                }
+            }
         }
     };
     Ok(FusionOutcome { output, usage })
@@ -203,7 +220,6 @@ mod tests {
                 model: judge.to_string(),
             },
             synthesizer: synth.map(str::to_string),
-            max_steps: 8,
         }
     }
 
@@ -258,6 +274,50 @@ mod tests {
             "1 panel + 1 judge + 1 synthesizer"
         );
         assert!(matches!(out.output, ToolResultOutput::Text { .. }));
+    }
+
+    #[tokio::test]
+    async fn synthesizer_failure_falls_back_to_analysis() {
+        // Panel + judge succeed; the synthesizer fails → the engine returns the
+        // analysis JSON instead of erroring out.
+        struct SynthFails;
+        #[async_trait]
+        impl NestedRunner for SynthFails {
+            async fn run(
+                &self,
+                req: NestedRequest,
+                _ctx: &ToolContext,
+            ) -> Result<NestedOutcome, String> {
+                if req.response_format.is_some() {
+                    return Ok(NestedOutcome {
+                        model: req.model,
+                        text: "{\"consensus\":[\"ok\"]}".to_string(),
+                        usage: Usage::default(),
+                    });
+                }
+                if req.model == "synth/z" {
+                    return Err("synth down".to_string());
+                }
+                Ok(NestedOutcome {
+                    model: req.model,
+                    text: "answer".to_string(),
+                    usage: Usage::default(),
+                })
+            }
+        }
+        let out = run_fusion(
+            &cfg(&["a/1"], "j", Some("synth/z")),
+            Arc::new(SynthFails),
+            "q",
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let value = match out.output {
+            ToolResultOutput::Json { value } => value,
+            _ => panic!("expected analysis fallback"),
+        };
+        assert_eq!(value["analysis"]["consensus"][0], "ok");
     }
 
     #[tokio::test]

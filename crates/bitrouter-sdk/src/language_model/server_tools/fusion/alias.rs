@@ -14,7 +14,7 @@
 //!
 //! Reference: <https://openrouter.ai/docs/guides/features/server-tools/fusion>
 
-use super::config::{DEFAULT_MAX_STEPS, FUSION_TOOL, FusionSettings};
+use super::config::{FUSION_TOOL, FusionSettings};
 use crate::language_model::types::{Prompt, ProviderMetadata, Tool};
 
 /// The defaults the alias expands to (the "Quality" preset by default).
@@ -99,7 +99,6 @@ impl FusionAliasConfig {
         let mut args = serde_json::json!({
             "panel": panel,
             "judge": { "model": self.judge },
-            "max_steps": DEFAULT_MAX_STEPS,
         });
         if let Some(synth) = &self.synthesizer {
             args["synthesizer"] = serde_json::json!(synth);

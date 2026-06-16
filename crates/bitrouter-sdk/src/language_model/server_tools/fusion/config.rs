@@ -24,8 +24,6 @@ use crate::plugin::PluginId;
 pub const FUSION_TOOL: &str = "fusion";
 /// Maximum panel size — matches the documented Fusion bound.
 pub const MAX_PANEL: usize = 8;
-/// Default per-panel-member tool-calling steps.
-pub const DEFAULT_MAX_STEPS: u32 = 8;
 
 /// Plugin id under which the resolved [`FusionConfig`] is stashed on the request
 /// context by the pre-request hook, for the toolset to read back.
@@ -65,8 +63,6 @@ pub struct FusionConfig {
     /// final answer from the returned analysis.
     #[serde(default)]
     pub synthesizer: Option<String>,
-    /// Per-panel-member tool-calling step budget.
-    pub max_steps: u32,
 }
 
 impl FusionConfig {
@@ -81,7 +77,6 @@ impl FusionConfig {
                 model: model.to_string(),
             },
             synthesizer: None,
-            max_steps: DEFAULT_MAX_STEPS,
         }
     }
 
@@ -121,17 +116,11 @@ impl FusionConfig {
             .get("synthesizer")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let max_steps = args
-            .get("max_steps")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32)
-            .unwrap_or(DEFAULT_MAX_STEPS);
 
         Some(FusionConfig {
             panel,
             judge: JudgeSpec { model: judge_model },
             synthesizer,
-            max_steps,
         })
     }
 
@@ -150,7 +139,11 @@ pub fn is_fusion_name(name: &str) -> bool {
 }
 
 fn parse_member(v: &serde_json::Value) -> Option<PanelMemberSpec> {
-    let model = v.get("model").and_then(|m| m.as_str())?.to_string();
+    let model = v
+        .get("model")
+        .and_then(|m| m.as_str())
+        .filter(|s| !s.is_empty())?
+        .to_string();
     let tools = v
         .get("tools")
         .and_then(|t| t.as_array())
@@ -243,8 +236,7 @@ mod tests {
                 "panel": [{"model": "anthropic/claude-opus-4.8"},
                           {"model": "openai/gpt-latest"},
                           {"model": "google/gemini-pro"}],
-                "judge": {"model": "anthropic/claude-opus-4.8"},
-                "max_steps": 6
+                "judge": {"model": "anthropic/claude-opus-4.8"}
             }),
         );
         let cfg = FusionConfig::from_tool(&tool, "anthropic/claude-opus-4.8").unwrap();
@@ -253,7 +245,6 @@ mod tests {
             vec!["anthropic/claude-opus-4.8", "openai/gpt-latest", "google/gemini-pro"]
         );
         assert_eq!(cfg.judge.model, "anthropic/claude-opus-4.8");
-        assert_eq!(cfg.max_steps, 6);
     }
 
     #[test]
@@ -264,7 +255,6 @@ mod tests {
         assert_eq!(cfg.panel.len(), 1);
         assert_eq!(cfg.panel[0].model, "parent/model");
         assert_eq!(cfg.judge.model, "parent/model");
-        assert_eq!(cfg.max_steps, DEFAULT_MAX_STEPS);
     }
 
     #[test]

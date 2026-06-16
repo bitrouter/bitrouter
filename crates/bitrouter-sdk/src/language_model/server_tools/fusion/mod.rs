@@ -22,9 +22,8 @@ use crate::language_model::server_tools::nested::NestedRunner;
 use crate::language_model::server_tools::toolset::{RouterToolset, ToolContext};
 use crate::language_model::types::{ProviderMetadata, Tool, ToolResultOutput};
 
-/// The `bitrouter:fusion` server tool, generic over a [`NestedRunner`] so the
-/// OSS daemon and a hosted deployment can each supply their own (the latter
-/// adds identity + billing).
+/// The `bitrouter:fusion` server tool, generic over a [`NestedRunner`] so each
+/// deployment supplies its own (a custom runner can add identity + metering).
 ///
 /// Advertise it only at the outermost loop: the engine runs nested completions,
 /// and a deployment must ensure panel members cannot recursively invoke Fusion
@@ -93,8 +92,9 @@ impl RouterToolset for FusionToolset {
         };
         match run_fusion(&config, self.runner.clone(), prompt, ctx).await {
             Ok(outcome) => {
-                // Surface the aggregated nested usage for observability; each
-                // nested completion is also metered by its own sub-pipeline.
+                // Surface the aggregated nested usage for observability. Each
+                // nested completion is also metered individually by whatever
+                // settlement recorders the runner's sub-pipeline carries.
                 tracing::info!(
                     target: "bitrouter::fusion",
                     panel = config.panel.len(),

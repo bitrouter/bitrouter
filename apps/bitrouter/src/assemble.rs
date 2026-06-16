@@ -317,11 +317,18 @@ pub async fn build_app_with_path(
     // is configured. The panel/judge run on a dedicated, loop-less
     // sub-completion pipeline (so a panel member cannot recursively invoke
     // Fusion), reusing the same routing table and upstream executor as the main
-    // pipeline.
+    // pipeline. The metering recorder is attached so each nested panel/judge
+    // completion is billed to the same caller as the parent request (no auth or
+    // policy hooks — a nested call is a sub-operation of an already-authorised
+    // request, and the parent principal is carried on the caller context).
     let fusion_runner: Option<Arc<dyn NestedRunner>> = if config.server_tools.fusion.is_some() {
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
-            .executor(executor.clone());
+            .executor(executor.clone())
+            .settlement_recorder(MeteringRecorder::new(
+                metering_store.clone(),
+                pricing.clone(),
+            ));
         let sub_pipeline = Arc::new(
             sub.build()
                 .context("building the fusion sub-completion pipeline")?,

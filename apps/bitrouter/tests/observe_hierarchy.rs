@@ -180,6 +180,7 @@ plugins:
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
     };
     let options = RouterOptions::default()
         .with_router_wrapper(bitrouter_observe::otel::http_layer::router_wrapper());

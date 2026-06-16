@@ -4,8 +4,8 @@
 //! `run` receives the per-request [`ToolContext`] so a deployment that needs
 //! identity or billing can read it off the context — this crate never models
 //! either. The plain [`PipelineNestedRunner`] below uses only the caller carried
-//! on the context; a hosted deployment supplies its own [`NestedRunner`] that
-//! layers on metering.
+//! on the context; a deployment that needs metering supplies its own
+//! [`NestedRunner`] (or wires a settlement recorder onto the sub-pipeline).
 
 use std::sync::Arc;
 
@@ -59,7 +59,8 @@ pub trait NestedRunner: Send + Sync {
 
 /// The plain runner: runs the nested completion through a sub-pipeline, using
 /// the caller carried on the [`ToolContext`]. It carries no identity or billing
-/// — those are layered by a custom [`NestedRunner`] in a hosted deployment.
+/// of its own; metering is whatever the sub-pipeline's settlement recorders do
+/// (a custom [`NestedRunner`] can add more).
 pub struct PipelineNestedRunner {
     sub_pipeline: Arc<Pipeline>,
 }
