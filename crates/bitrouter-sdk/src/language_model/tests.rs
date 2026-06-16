@@ -1160,6 +1160,88 @@ async fn server_tool_loop_resolves_a_router_tool_call() {
 }
 
 #[tokio::test]
+async fn fusion_declaration_is_advertised_and_executed_end_to_end() {
+    // Exercises the full metadata-threading path: the declaration hook parses a
+    // bitrouter:fusion declaration and stashes the resolved config; the loop
+    // snapshots it into the ToolContext; the FusionToolset advertises + runs the
+    // engine; the analysis feeds back and the model writes the final answer.
+    use crate::language_model::server_tools::approval::AllowAll;
+    use crate::language_model::server_tools::config::ServerToolLoopConfig;
+    use crate::language_model::server_tools::fusion::FusionToolset;
+    use crate::language_model::server_tools::fusion::declarations::FusionDeclarationsHook;
+    use crate::language_model::server_tools::loop_controller::ServerToolLoop;
+    use crate::language_model::server_tools::nested::{NestedOutcome, NestedRequest, NestedRunner};
+    use crate::language_model::server_tools::toolset::{ToolContext, ToolsetRegistry};
+
+    // Scripted nested runner: the judge (response_format set) returns analysis
+    // JSON; a panel member returns a plain answer.
+    struct ScriptedRunner;
+    #[async_trait]
+    impl NestedRunner for ScriptedRunner {
+        async fn run(
+            &self,
+            req: NestedRequest,
+            _c: &ToolContext,
+        ) -> std::result::Result<NestedOutcome, String> {
+            let text = if req.response_format.is_some() {
+                "{\"consensus\":[\"agreed point\"]}".to_string()
+            } else {
+                "panel answer".to_string()
+            };
+            Ok(NestedOutcome {
+                model: req.model,
+                text,
+                usage: Default::default(),
+            })
+        }
+    }
+
+    // A bare bitrouter:fusion declaration, named `fusion` so the loop strips it
+    // before upstream (empty args → single-member panel on the request model).
+    let mut req = request();
+    req.prompt.tools.push(Tool::ProviderDefined {
+        id: "bitrouter.fusion".to_string(),
+        name: "fusion".to_string(),
+        args: serde_json::json!({}),
+        provider_metadata: Default::default(),
+    });
+
+    let server_loop = Arc::new(ServerToolLoop::new(
+        ToolsetRegistry::new(vec![Arc::new(FusionToolset::new(Arc::new(ScriptedRunner)))]),
+        ServerToolLoopConfig::default(),
+        Arc::new(AllowAll),
+    ));
+
+    // Upstream: turn 1 calls the `fusion` tool; turn 2 writes the final answer.
+    let executor = Arc::new(MockExecutor::new(vec![
+        MockResponse::Generate(gen_result(vec![Content::ToolCall {
+            id: "c1".to_string(),
+            name: "fusion".to_string(),
+            arguments: "{\"prompt\":\"deliberate this\"}".to_string(),
+            provider_executed: false,
+            dynamic: false,
+            provider_metadata: Default::default(),
+        }])),
+        MockResponse::Generate(gen_result(vec![Content::Text {
+            text: "final answer".to_string(),
+            provider_metadata: Default::default(),
+        }])),
+    ]));
+
+    let pipeline = pipeline_with(routing_table(&["openai"]), executor, |b| {
+        b.pre_request_hook(FusionDeclarationsHook);
+        b.server_tool_loop(server_loop);
+    });
+
+    let resp = pipeline.execute(req).await.expect("request succeeds");
+    assert!(
+        matches!(&resp.result.content[0], Content::Text { text, .. } if text == "final answer")
+    );
+    // Two upstream turns ran (the fusion tool was executed and fed back).
+    assert_eq!(resp.result.usage.unwrap().prompt_tokens, 6);
+}
+
+#[tokio::test]
 async fn without_loop_a_tool_call_turn_is_returned_unchanged() {
     // No server_tool_loop configured: the pipeline stays single-shot and hands
     // the model's tool-call turn straight back to the caller (only one upstream
