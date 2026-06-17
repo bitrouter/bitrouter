@@ -71,8 +71,12 @@ pub struct AttestationInfo {
 
 /// The dstack `tcb_info` sub-block. We model only `app_compose` — the raw
 /// compose document whose `sha256` must equal `compose_hash` (Task 3's
-/// compose↔mr_config binding). Other fields (rtmr0..3, mrtd) are cross-checked
-/// directly from the quote in [`crate::parse_tdx_quote`].
+/// compose↔mr_config binding). The base registers (`mrtd`, `rtmr0..2`) reported
+/// here are **self-declared cloud metadata and are not trusted**: the verdict
+/// path asserts the *quote's* decoded base registers against the policy's pinned
+/// reference bundle ([`crate::AciDcapVerifierPolicy::accepts_base_measurements`],
+/// issue #567), and binds `rtmr3` via the event-log replay
+/// ([`crate::event_log_binds_info`]).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TcbInfo {
     pub app_compose: String,

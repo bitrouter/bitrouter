@@ -28,6 +28,10 @@ pub enum PolicyError {
     EmptyKmsRootPolicy,
     #[error("invalid dstack KMS root public key: {0}")]
     InvalidKmsRootPublicKey(String),
+    #[error("DCAP policy requires at least one accepted base-measurement bundle (issue #567)")]
+    EmptyBaseMeasurementPolicy,
+    #[error("invalid base-measurement bundle: {0}")]
+    InvalidBaseMeasurement(String),
 }
 
 /// The pinned acceptance policy. Constructed once at boot from operator config;
@@ -38,6 +42,18 @@ pub struct AciDcapVerifierPolicy {
     accepted_workload_ids: BTreeSet<String>,
     accepted_image_digests: BTreeSet<String>,
     accepted_kms_root_public_keys: BTreeSet<String>,
+    /// LOAD-BEARING (issue #567): accepted base-measurement bundles, each the
+    /// canonical lower-case hex of `MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2` (4 × 48 bytes).
+    /// These four registers are firmware/TDX-module-measured before the guest
+    /// gains control, so — unlike the guest-extended RTMR3 that anchors the rest
+    /// of the policy — they cannot be forged by a malicious base image on genuine
+    /// TDX hardware. Pinning them and asserting equality is what makes RTMR3 (and
+    /// thus `app_id`/`os_image_hash`/`compose_hash`) trustworthy. Mirrors dstack's
+    /// `Mrs { mrtd, rtmr0, rtmr1, rtmr2 }` equality check in its KMS
+    /// `verify_os_image_hash`, with operator-pinned reference values instead of
+    /// live `dstack-mr` recomputation. See
+    /// <https://github.com/Dstack-TEE/dstack/blob/master/kms/src/main_service.rs>.
+    accepted_base_measurements: BTreeSet<String>,
     /// Intel security advisory IDs (e.g. `INTEL-SA-00615`) the operator
     /// explicitly accepts despite a non-current TCB. Empty (the default) means
     /// the floor requires `UpToDate`. Normalized to upper-case for comparison.
@@ -48,12 +64,17 @@ impl AciDcapVerifierPolicy {
     /// Build a policy. Errors (matching the gateway) if no workload/image pin is
     /// given ([`PolicyError::EmptyPolicy`]), if no KMS root is given
     /// ([`PolicyError::EmptyKmsRootPolicy`]), or if a KMS root key is unparseable
-    /// ([`PolicyError::InvalidKmsRootPublicKey`]). There is **no** unpinned
+    /// ([`PolicyError::InvalidKmsRootPublicKey`]). It **also** requires at least
+    /// one base-measurement bundle ([`PolicyError::EmptyBaseMeasurementPolicy`]),
+    /// each a valid `MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2` hex string
+    /// ([`PolicyError::InvalidBaseMeasurement`]) — the load-bearing anchor for the
+    /// firmware-measured registers (issue #567). There is **no** unpinned
     /// constructor — that is the whole point.
     pub fn new(
         accepted_workload_ids: impl IntoIterator<Item = String>,
         accepted_image_digests: impl IntoIterator<Item = String>,
         accepted_kms_root_public_keys: impl IntoIterator<Item = String>,
+        accepted_base_measurements: impl IntoIterator<Item = String>,
     ) -> Result<Self, PolicyError> {
         let accepted_workload_ids = accepted_workload_ids
             .into_iter()
@@ -70,16 +91,25 @@ impl AciDcapVerifierPolicy {
             .filter(|s| !s.is_empty())
             .map(|key| canonical_ec_public_key(&key))
             .collect::<Result<BTreeSet<_>, _>>()?;
+        let accepted_base_measurements = accepted_base_measurements
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .map(|m| canonical_base_measurements(&m))
+            .collect::<Result<BTreeSet<_>, _>>()?;
         if accepted_workload_ids.is_empty() && accepted_image_digests.is_empty() {
             return Err(PolicyError::EmptyPolicy);
         }
         if accepted_kms_root_public_keys.is_empty() {
             return Err(PolicyError::EmptyKmsRootPolicy);
         }
+        if accepted_base_measurements.is_empty() {
+            return Err(PolicyError::EmptyBaseMeasurementPolicy);
+        }
         Ok(Self {
             accepted_workload_ids,
             accepted_image_digests,
             accepted_kms_root_public_keys,
+            accepted_base_measurements,
             // Default floor: require an `UpToDate` TCB. Operators opt into
             // accepting specific advisories via `with_allowed_tcb_advisory_ids`.
             allowed_tcb_advisory_ids: BTreeSet::new(),
@@ -139,6 +169,56 @@ impl AciDcapVerifierPolicy {
             Err(_) => false,
         }
     }
+
+    /// True iff the quote's firmware-measured base registers
+    /// (`MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2`) equal one pinned bundle. The decisive
+    /// fix for issue #567: these registers are measured before the guest runs and
+    /// cannot be forged by a malicious base image on genuine TDX hardware, so
+    /// asserting them is what makes the guest-extended RTMR3 (and the
+    /// `app_id`/`os_image_hash`/`compose_hash` it anchors) load-bearing.
+    /// → [`crate::AttestationChecks::base_measurements_match`].
+    pub fn accepts_base_measurements(
+        &self,
+        mr_td: &[u8; 48],
+        rtmr0: &[u8; 48],
+        rtmr1: &[u8; 48],
+        rtmr2: &[u8; 48],
+    ) -> bool {
+        let bundle = base_measurement_bundle(mr_td, rtmr0, rtmr1, rtmr2);
+        self.accepted_base_measurements.contains(&bundle)
+    }
+}
+
+/// The canonical lower-case hex of `MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2` — the form in
+/// which base-measurement bundles are pinned and compared.
+fn base_measurement_bundle(
+    mr_td: &[u8; 48],
+    rtmr0: &[u8; 48],
+    rtmr1: &[u8; 48],
+    rtmr2: &[u8; 48],
+) -> String {
+    let mut buf = [0u8; 192];
+    buf[..48].copy_from_slice(mr_td);
+    buf[48..96].copy_from_slice(rtmr0);
+    buf[96..144].copy_from_slice(rtmr1);
+    buf[144..192].copy_from_slice(rtmr2);
+    hex::encode(buf)
+}
+
+/// Validate an operator-pinned base-measurement bundle — the hex of four
+/// concatenated 48-byte registers (`MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2`, 192 bytes) —
+/// and return its canonical lower-case hex so config and quote compare equal
+/// regardless of input casing.
+fn canonical_base_measurements(value: &str) -> Result<String, PolicyError> {
+    let bytes = hex::decode(value.trim())
+        .map_err(|e| PolicyError::InvalidBaseMeasurement(format!("not hex: {e}")))?;
+    if bytes.len() != 192 {
+        return Err(PolicyError::InvalidBaseMeasurement(format!(
+            "expected 192 bytes (MRTD‖RTMR0‖RTMR1‖RTMR2, 4×48), got {}",
+            bytes.len()
+        )));
+    }
+    Ok(hex::encode(bytes))
 }
 
 /// The identity fields a [`ModelAttestation`](crate::ModelAttestation) presents
@@ -279,20 +359,32 @@ mod tests {
 
     #[test]
     fn constructor_refuses_without_a_workload_or_image_pin() {
-        let err = AciDcapVerifierPolicy::new([], [], [KMS_ROOT_DER_SPKI.to_string()]).unwrap_err();
+        let err = AciDcapVerifierPolicy::new(
+            [],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            [fixture_base_mrs()],
+        )
+        .unwrap_err();
         assert_eq!(err, PolicyError::EmptyPolicy);
     }
 
     #[test]
     fn constructor_refuses_without_a_kms_root_pin() {
-        let err = AciDcapVerifierPolicy::new([APP_ID.to_string()], [], []).unwrap_err();
+        let err = AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [], [fixture_base_mrs()])
+            .unwrap_err();
         assert_eq!(err, PolicyError::EmptyKmsRootPolicy);
     }
 
     #[test]
     fn constructor_rejects_an_unparseable_kms_root() {
-        let err = AciDcapVerifierPolicy::new([APP_ID.to_string()], [], ["nothex!!".to_string()])
-            .unwrap_err();
+        let err = AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            ["nothex!!".to_string()],
+            [fixture_base_mrs()],
+        )
+        .unwrap_err();
         assert!(matches!(err, PolicyError::InvalidKmsRootPublicKey(_)));
     }
 
@@ -307,9 +399,13 @@ mod tests {
 
     #[test]
     fn policy_accepts_the_legitimate_model_by_workload_id() {
-        let policy =
-            AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
-                .unwrap();
+        let policy = AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            [fixture_base_mrs()],
+        )
+        .unwrap();
         let id = model_identity(&fixture_info()).unwrap();
         assert!(policy.accepts(&id.workload_id, &id.image_digests));
         assert!(policy.accepts_kms_root(&id.kms_root_public_key));
@@ -321,6 +417,7 @@ mod tests {
             [],
             [COMPOSE_HASH.to_string()],
             [KMS_ROOT_DER_SPKI.to_string()],
+            [fixture_base_mrs()],
         )
         .unwrap();
         let id = model_identity(&fixture_info()).unwrap();
@@ -334,6 +431,7 @@ mod tests {
             ["some-other-workload".to_string()],
             ["deadbeef".to_string()],
             [KMS_ROOT_DER_SPKI.to_string()],
+            [fixture_base_mrs()],
         )
         .unwrap();
         let id = model_identity(&fixture_info()).unwrap();
@@ -344,8 +442,13 @@ mod tests {
     fn kms_root_matches_whether_pinned_as_der_spki_or_raw_point() {
         // The raw SEC1 point is the trailing 65 bytes of the DER SPKI.
         let raw_point = &KMS_ROOT_DER_SPKI[KMS_ROOT_DER_SPKI.len() - 130..];
-        let policy =
-            AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [raw_point.to_string()]).unwrap();
+        let policy = AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [raw_point.to_string()],
+            [fixture_base_mrs()],
+        )
+        .unwrap();
         // Report presents the full DER SPKI; it still matches the pinned point.
         assert!(policy.accepts_kms_root(KMS_ROOT_DER_SPKI));
     }
@@ -358,17 +461,25 @@ mod tests {
         // validation must reject it.
         let raw_point = &KMS_ROOT_DER_SPKI[KMS_ROOT_DER_SPKI.len() - 130..];
         let crafted = format!("30430441{raw_point}");
-        let policy =
-            AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
-                .unwrap();
+        let policy = AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            [fixture_base_mrs()],
+        )
+        .unwrap();
         assert!(!policy.accepts_kms_root(&crafted));
     }
 
     #[test]
     fn policy_rejects_an_unpinned_kms_root() {
-        let policy =
-            AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
-                .unwrap();
+        let policy = AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            [fixture_base_mrs()],
+        )
+        .unwrap();
         // A different P-256 SPKI (last point byte flipped) must not match.
         let mut other = KMS_ROOT_DER_SPKI.to_string();
         other.replace_range(other.len() - 2.., "ff");
@@ -376,9 +487,14 @@ mod tests {
     }
 
     fn tcb_policy(allowed: &[&str]) -> AciDcapVerifierPolicy {
-        AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
-            .unwrap()
-            .with_allowed_tcb_advisory_ids(allowed.iter().map(|s| s.to_string()))
+        AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            [fixture_base_mrs()],
+        )
+        .unwrap()
+        .with_allowed_tcb_advisory_ids(allowed.iter().map(|s| s.to_string()))
     }
 
     #[test]
@@ -439,5 +555,112 @@ mod tests {
         // special-case the code does not make.
         let p = tcb_policy(&["INTEL-SA-00615"]);
         assert!(!p.tcb_acceptable(Some("Revoked"), &[]));
+    }
+
+    // ===== base-measurement pin (issue #567) =====
+
+    use crate::near::tdx::parse_tdx_quote;
+
+    fn fixture_quote() -> Vec<u8> {
+        let r: AttestationReport = serde_json::from_str(FIXTURE).unwrap();
+        hex::decode(&r.model_attestations[0].intel_quote).unwrap()
+    }
+
+    /// `mrtd ‖ rtmr0 ‖ rtmr1 ‖ rtmr2` from the genuine fixture quote — the
+    /// legitimate base bundle an operator would pin.
+    fn fixture_base_mrs() -> String {
+        let m = parse_tdx_quote(&fixture_quote()).unwrap();
+        format!(
+            "{}{}{}{}",
+            hex::encode(m.mr_td),
+            hex::encode(m.rtmr0),
+            hex::encode(m.rtmr1),
+            hex::encode(m.rtmr2),
+        )
+    }
+
+    fn base_policy() -> AciDcapVerifierPolicy {
+        AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            [fixture_base_mrs()],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn base_pin_accepts_the_genuine_bundle_and_rejects_a_forged_base() {
+        // THE #567 case: the base registers are firmware-measured and unforgeable
+        // on genuine TDX hardware. A malicious base OS presents DIFFERENT base MRs
+        // (it cannot forge the legitimate ones), so pinning + asserting them is
+        // what distinguishes a real deployment from an attacker-owned TEE that
+        // merely forged its guest-extended RTMR3 labels.
+        let policy = base_policy();
+        let m = parse_tdx_quote(&fixture_quote()).unwrap();
+        // The genuine fixture bundle is accepted.
+        assert!(policy.accepts_base_measurements(&m.mr_td, &m.rtmr0, &m.rtmr1, &m.rtmr2));
+        // Flip a single MRTD byte (a different base image) — rejected, even though
+        // rtmr0..2 still match. The whole 4-tuple must equal a pinned bundle.
+        let mut forged_mr_td = m.mr_td;
+        forged_mr_td[0] ^= 0xff;
+        assert!(!policy.accepts_base_measurements(&forged_mr_td, &m.rtmr0, &m.rtmr1, &m.rtmr2));
+        // Likewise a forged RTMR1 (e.g. a tampered kernel) is rejected.
+        let mut forged_rtmr1 = m.rtmr1;
+        forged_rtmr1[47] ^= 0x01;
+        assert!(!policy.accepts_base_measurements(&m.mr_td, &m.rtmr0, &forged_rtmr1, &m.rtmr2));
+    }
+
+    #[test]
+    fn base_pin_normalizes_hex_casing() {
+        // An operator may paste the pin in upper case; it must still match the
+        // lower-case hex the quote decodes to.
+        let policy = AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            [fixture_base_mrs().to_uppercase()],
+        )
+        .unwrap();
+        let m = parse_tdx_quote(&fixture_quote()).unwrap();
+        assert!(policy.accepts_base_measurements(&m.mr_td, &m.rtmr0, &m.rtmr1, &m.rtmr2));
+    }
+
+    #[test]
+    fn constructor_refuses_without_a_base_measurement_pin() {
+        let err = AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            [],
+        )
+        .unwrap_err();
+        assert_eq!(err, PolicyError::EmptyBaseMeasurementPolicy);
+    }
+
+    #[test]
+    fn constructor_rejects_an_unparseable_base_measurement() {
+        // Not hex.
+        let err = AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            ["nothex!!".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(err, PolicyError::InvalidBaseMeasurement(_)));
+    }
+
+    #[test]
+    fn constructor_rejects_a_base_measurement_of_the_wrong_length() {
+        // Valid hex, but not the 192 bytes of four 48-byte registers.
+        let err = AciDcapVerifierPolicy::new(
+            [APP_ID.to_string()],
+            [],
+            [KMS_ROOT_DER_SPKI.to_string()],
+            ["abcd".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(err, PolicyError::InvalidBaseMeasurement(_)));
     }
 }

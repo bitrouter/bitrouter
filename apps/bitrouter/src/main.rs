@@ -1310,6 +1310,8 @@ fn print_route_chain(model: &str, chain: &[RouteHop], source: &str) {
 /// - `NEAR_BASE` (default `https://cloud-api.near.ai/v1`)
 /// - `NEAR_KMS_ROOTS` — accepted dstack KMS root pubkey(s), comma-separated
 /// - `NEAR_IMAGE_DIGESTS` and/or `NEAR_WORKLOAD_IDS` — at least one required
+/// - `NEAR_BASE_MEASUREMENTS` — accepted base bundle(s), comma-separated; each
+///   the hex of `MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2` (192 bytes). Required (issue #567)
 /// - `NVIDIA_EAT_KEY_PEM` — path to NVIDIA's NRAS EAT key (EC public PEM)
 async fn verify_attestation(model: &str) -> Result<()> {
     use std::sync::Arc;
@@ -1336,11 +1338,12 @@ async fn verify_attestation(model: &str) -> Result<()> {
         env_list("NEAR_WORKLOAD_IDS"),
         env_list("NEAR_IMAGE_DIGESTS"),
         env_list("NEAR_KMS_ROOTS"),
+        env_list("NEAR_BASE_MEASUREMENTS"),
     )
     .map_err(|e| {
         anyhow::anyhow!(
-            "attestation policy not pinned ({e}); set NEAR_KMS_ROOTS and \
-             NEAR_IMAGE_DIGESTS/NEAR_WORKLOAD_IDS"
+            "attestation policy not pinned ({e}); set NEAR_KMS_ROOTS, \
+             NEAR_IMAGE_DIGESTS/NEAR_WORKLOAD_IDS and NEAR_BASE_MEASUREMENTS"
         )
     })?
     // TCB floor: require an up-to-date platform by default. Operators may
@@ -1415,6 +1418,10 @@ async fn verify_attestation(model: &str) -> Result<()> {
     println!(
         "  {} event-log RTMR3 anchors policy fields",
         opt_mark(c.event_log_rtmr_ok)
+    );
+    println!(
+        "  {} base measurements match pin (MRTD/RTMR0-2)",
+        mark(c.base_measurements_match)
     );
     println!(
         "  {} policy accepts (KMS root + image/workload pin)",

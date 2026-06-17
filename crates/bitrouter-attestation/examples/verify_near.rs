@@ -6,13 +6,15 @@
 //! export NEAR_BASE="https://cloud-api.near.ai/v1"          # or a bitrouter /v1/aci passthrough
 //! export NEAR_KMS_ROOTS="3059...bcbc"                        # accepted dstack KMS root pubkey(s), comma-separated
 //! export NEAR_IMAGE_DIGESTS="9b69...f677,c445...a698"        # and/or NEAR_WORKLOAD_IDS — at least one is required
+//! export NEAR_BASE_MEASUREMENTS="b24d...3135"                 # accepted base bundle(s): hex of MRTD‖RTMR0‖RTMR1‖RTMR2 (192 bytes each), comma-separated
 //! # NVIDIA's NRAS key is fetched from its JWKS automatically; set
 //! # NVIDIA_EAT_KEY_PEM=/path/to/nvidia-nras-pub.pem to pin a single key instead.
 //! cargo run -p bitrouter-attestation --example verify_near -- zai-org/GLM-5.1-FP8
 //! ```
 //!
-//! The DCAP policy is REQUIRED to be pinned (KMS root + image/workload) — the
-//! verifier refuses to run unpinned (spec §1.5 cond. 1).
+//! The DCAP policy is REQUIRED to be pinned (KMS root + image/workload + base
+//! measurements) — the verifier refuses to run unpinned (spec §1.5 cond. 1;
+//! base-measurement pin per issue #567).
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,11 +43,13 @@ async fn main() -> Result<(), Error> {
 
     let base = std::env::var("NEAR_BASE").unwrap_or_else(|_| "https://cloud-api.near.ai/v1".into());
 
-    // The load-bearing pin (spec §1.5). Construction fails if unpinned.
+    // The load-bearing pin (spec §1.5). Construction fails if unpinned — now
+    // including the firmware base-measurement bundle(s) (issue #567).
     let policy = AciDcapVerifierPolicy::new(
         env_list("NEAR_WORKLOAD_IDS"),
         env_list("NEAR_IMAGE_DIGESTS"),
         env_list("NEAR_KMS_ROOTS"),
+        env_list("NEAR_BASE_MEASUREMENTS"),
     )?;
 
     // NVIDIA's NRAS EAT key. By default we fetch NVIDIA's JWKS (its signing keys
