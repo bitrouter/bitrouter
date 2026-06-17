@@ -189,7 +189,7 @@ fn spec_to_tool(spec: &serde_json::Value) -> Option<Tool> {
 /// server tool and the `bitrouter/fusion` model alias; its fields supply the
 /// alias defaults (the panel/judge a bare `bitrouter/fusion` request expands
 /// to). An explicit `bitrouter:fusion` declaration on a request overrides these.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct FusionSettings {
     /// Default panel models the alias expands to.

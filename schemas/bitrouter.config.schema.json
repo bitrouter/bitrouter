@@ -93,6 +93,58 @@
       },
       "type": "object"
     },
+    "FusionSettings": {
+      "description": "The `server_tools.fusion` config section. Its presence enables the Fusion\nserver tool and the `bitrouter/fusion` model alias; its fields supply the\nalias defaults (the panel/judge a bare `bitrouter/fusion` request expands\nto). An explicit `bitrouter:fusion` declaration on a request overrides these.",
+      "properties": {
+        "alias": {
+          "default": null,
+          "description": "Alias slug (defaults to `bitrouter/fusion`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "judge": {
+          "default": null,
+          "description": "Default judge model (defaults to the first panel model).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outer_model": {
+          "default": null,
+          "description": "The model the alias resolves to (defaults to the judge, then the first\npanel model).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "panel": {
+          "default": [],
+          "description": "Default panel models the alias expands to.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "synthesizer": {
+          "default": null,
+          "description": "Optional dedicated synthesizer model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "web_tools": {
+          "default": [],
+          "description": "Provider web tools forwarded to every panel member, in\nprovider-namespaced declaration form (e.g. `{type: \"<provider>:<tool>\"}`).",
+          "items": true,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "McpAggregateConfig": {
       "description": "`mcp.aggregate` — the virtual aggregate endpoint.",
       "properties": {
@@ -624,6 +676,17 @@
     "ServerToolsConfig": {
       "description": "The OSS `server_tools` config section. Names the MCP servers whose tools\nBitRouter attaches to LLM requests and executes inside the loop, with an\noptional override of the loop's iteration cap. An empty `mcp_servers`\nleaves the pipeline strictly single-shot.",
       "properties": {
+        "fusion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FusionSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Multi-model deliberation (Fusion). When set, the `bitrouter:fusion`\nserver tool and the `bitrouter/fusion` model alias are enabled."
+        },
         "max_iterations": {
           "default": null,
           "description": "Optional override of the loop's maximum tool-execution rounds.",
