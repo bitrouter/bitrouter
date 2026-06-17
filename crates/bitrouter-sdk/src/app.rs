@@ -58,8 +58,9 @@ pub trait Plugin {
     fn install(&self, app: &mut AppBuilder);
 }
 
-/// An ingress-time rewrite of a parsed request [`Prompt`], applied by the HTTP
-/// server after protocol parsing and before the request enters the pipeline.
+/// An ingress-time rewrite of a parsed request [`Prompt`](language_model::types::Prompt),
+/// applied by the HTTP server after protocol parsing and before the request
+/// enters the pipeline.
 ///
 /// This is the seam for transforms that must touch the prompt body — its
 /// `tools`, `tool_choice`, or `system` — which the pipeline context exposes

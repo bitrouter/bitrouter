@@ -124,8 +124,8 @@ impl crate::app::PromptTransform for FusionAliasConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::config::{FusionConfig, FusionSettings};
+    use super::*;
     use crate::language_model::types::{GenerationParams, ProviderMetadata};
 
     fn prompt_with_model(model: &str) -> Prompt {
@@ -240,7 +240,12 @@ mod tests {
         cfg.synthesizer = Some("openai/gpt-latest".to_string());
         let mut prompt = prompt_with_model("bitrouter/fusion");
         cfg.apply(&mut prompt);
-        let decl = prompt.tools.iter().find(|t| t.name() == "fusion").unwrap().clone();
+        let decl = prompt
+            .tools
+            .iter()
+            .find(|t| t.name() == "fusion")
+            .unwrap()
+            .clone();
         let parsed = FusionConfig::from_tool(&decl, "x").unwrap();
         assert_eq!(parsed.synthesizer.as_deref(), Some("openai/gpt-latest"));
     }

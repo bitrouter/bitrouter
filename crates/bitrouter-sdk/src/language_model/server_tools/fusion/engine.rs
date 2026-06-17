@@ -159,8 +159,8 @@ fn accumulate(total: &mut Usage, add: &Usage) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::config::{FusionConfig, JudgeSpec, PanelMemberSpec};
+    use super::*;
     use crate::caller::CallerContext;
     use crate::language_model::server_tools::nested::{NestedOutcome, NestedRequest, NestedRunner};
     use crate::language_model::server_tools::toolset::ToolContext;

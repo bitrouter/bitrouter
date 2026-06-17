@@ -87,7 +87,8 @@ impl ServerToolLoop {
         let (injected, owned) = self.registry.list_all(ctx).await?;
         let mut working = base.clone();
         working.tools.retain(|t| {
-            !(matches!(t, Tool::ProviderDefined { .. }) && self.registry.resolve(t.name()).is_some())
+            !(matches!(t, Tool::ProviderDefined { .. })
+                && self.registry.resolve(t.name()).is_some())
         });
         for tool in &injected {
             if working.tools.iter().any(|t| t.name() == tool.name()) {

@@ -115,8 +115,8 @@ impl RouterToolset for FusionToolset {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::config::{FusionConfig, fusion_plugin_id};
+    use super::*;
     use crate::caller::CallerContext;
     use crate::language_model::server_tools::nested::{NestedOutcome, NestedRequest, NestedRunner};
     use crate::language_model::server_tools::toolset::{RouterToolset, ToolContext};

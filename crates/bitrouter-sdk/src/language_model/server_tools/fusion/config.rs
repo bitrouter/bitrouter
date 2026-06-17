@@ -241,17 +241,26 @@ mod tests {
         );
         let cfg = FusionConfig::from_tool(&tool, "anthropic/claude-opus-4.8").unwrap();
         assert_eq!(
-            cfg.panel.iter().map(|m| m.model.as_str()).collect::<Vec<_>>(),
-            vec!["anthropic/claude-opus-4.8", "openai/gpt-latest", "google/gemini-pro"]
+            cfg.panel
+                .iter()
+                .map(|m| m.model.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "anthropic/claude-opus-4.8",
+                "openai/gpt-latest",
+                "google/gemini-pro"
+            ]
         );
         assert_eq!(cfg.judge.model, "anthropic/claude-opus-4.8");
     }
 
     #[test]
     fn empty_panel_falls_back_to_parent() {
-        let cfg =
-            FusionConfig::from_tool(&fusion_tool("fusion", serde_json::json!({})), "parent/model")
-                .unwrap();
+        let cfg = FusionConfig::from_tool(
+            &fusion_tool("fusion", serde_json::json!({})),
+            "parent/model",
+        )
+        .unwrap();
         assert_eq!(cfg.panel.len(), 1);
         assert_eq!(cfg.panel[0].model, "parent/model");
         assert_eq!(cfg.judge.model, "parent/model");
@@ -285,7 +294,9 @@ mod tests {
 
     #[test]
     fn ignores_non_fusion_tools() {
-        assert!(FusionConfig::from_tool(&fusion_tool("advisor", serde_json::json!({})), "p").is_none());
+        assert!(
+            FusionConfig::from_tool(&fusion_tool("advisor", serde_json::json!({})), "p").is_none()
+        );
         let func = Tool::Function {
             name: "fusion".into(),
             description: None,
@@ -300,7 +311,10 @@ mod tests {
     fn round_trips_through_context_metadata() {
         let cfg = FusionConfig::single("m/1");
         let mut meta: HashMap<_, _> = HashMap::new();
-        meta.insert(fusion_plugin_id().clone(), serde_json::to_value(&cfg).unwrap());
+        meta.insert(
+            fusion_plugin_id().clone(),
+            serde_json::to_value(&cfg).unwrap(),
+        );
         let ctx = ToolContext::new(CallerContext::local(), meta);
         assert_eq!(FusionConfig::from_context(&ctx), Some(cfg));
 
