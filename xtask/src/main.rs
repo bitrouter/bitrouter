@@ -17,9 +17,12 @@ use anyhow::{Context, Result, bail};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let task = args.next();
-    let check = args.any(|a| a == "--check");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // The task is the first non-flag argument, so flag order doesn't matter
+    // (`xtask --check generate-schema` and `xtask generate-schema --check` are
+    // equivalent).
+    let task = args.iter().find(|a| !a.starts_with("--")).cloned();
+    let check = args.iter().any(|a| a == "--check");
     let result = match task.as_deref() {
         Some("generate-schema") => generate_schema(check),
         Some(other) => Err(anyhow::anyhow!("unknown task '{other}'")),

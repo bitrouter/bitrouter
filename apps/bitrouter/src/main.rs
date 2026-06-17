@@ -574,11 +574,18 @@ async fn config_cmd(action: ConfigAction) -> Result<()> {
 /// on a malformed or unsafe config, so the command is CI-safe.
 ///
 /// Validation runs the real parse path — deserialization, `${VAR}`
-/// substitution, `derives` resolution, and the upstream-URL (SSRF) gate — but
-/// substitutes a placeholder for any *unset* `${VAR}` so a config can be
-/// validated without its secrets present (the placeholder is a reserved
-/// `.invalid` URL, which is neither loopback nor private and so passes the
-/// SSRF gate). Unresolved variables are reported as warnings.
+/// substitution, `derives` resolution, and the upstream-URL (SSRF) gate. It
+/// does **not** load the JSON Schema (that artifact is for IDE autocomplete and
+/// the `xtask` drift check); structural validation here is what `serde` +
+/// `serde-saphyr` enforce.
+///
+/// To validate without secrets present, any *unset* `${VAR}` is substituted
+/// with a reserved `.invalid` URL placeholder. Caveat: a value that embeds an
+/// unset variable *mid-string* (e.g. `api_base: https://${REGION}.host`) is
+/// checked against that placeholder, so the SSRF/structure verdict for such a
+/// value is **not authoritative** — it must be re-checked at runtime once the
+/// real value is known. Whole-value `${VAR}` (the common case) is unaffected.
+/// Unresolved variables are listed as warnings.
 async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     use bitrouter::paths::ConfigSource;
     let path = match source {
@@ -617,7 +624,9 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<()> 
             if !missing.is_empty() {
                 println!(
                     "\n  note: {} unset environment variable(s) substituted with a \
-                     placeholder for validation:",
+                     placeholder for validation (a value that embeds one mid-string, \
+                     e.g. an env-composed api_base, is not authoritatively checked — \
+                     re-validate at runtime):",
                     missing.len()
                 );
                 for name in &missing {

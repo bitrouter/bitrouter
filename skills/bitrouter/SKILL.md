@@ -107,7 +107,9 @@ bitrouter start --config ./bitrouter.yaml
 
 Config search order, lowest-priority last: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory.
 
-`bitrouter config validate` checks structure, `derives` resolution, and upstream-URL (SSRF) safety. Unset `${VAR}` references are substituted with a placeholder and reported as warnings, so it is safe to run in CI without secrets present. The JSON Schema it validates against is committed at `schemas/bitrouter.config.schema.json` and regenerated with `cargo xtask generate-schema` — add it to a YAML config for IDE autocomplete via a `# yaml-language-server: $schema=…` header.
+`bitrouter config validate` runs the real parse path — deserialization, `derives` resolution, and the upstream-URL (SSRF) gate — and exits non-zero on an invalid config. It does *not* load a JSON Schema; structural checking is what the parser enforces. Unset `${VAR}` references are substituted with a placeholder and reported as warnings, so it is safe to run in CI without secrets present.
+
+Separately, a JSON Schema for the config is committed at `schemas/bitrouter.config.schema.json` (regenerated with `cargo xtask generate-schema`). Add a `# yaml-language-server: $schema=…` header to a YAML config to get IDE autocomplete + inline validation against it.
 
 **GitHub Copilot.** Different — OAuth device flow, not an env var:
 
