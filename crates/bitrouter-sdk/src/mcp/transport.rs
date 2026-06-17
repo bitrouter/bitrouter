@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Serde tag is `type: "http" | "stdio"` to match the wire shape used in
 /// `bitrouter.yaml`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum McpTransport {
     /// Streamable HTTP transport — `POST <url>` JSON-RPC with optional SSE
@@ -56,7 +56,7 @@ pub enum McpTransport {
 /// - non-empty
 /// - no `/` (collides with the URL path segment)
 /// - not literally `sse` (reserved by the spec's deprecated transport name)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct McpServerConfig {
     /// Server id. URL-safe; no slashes.
     pub name: String,

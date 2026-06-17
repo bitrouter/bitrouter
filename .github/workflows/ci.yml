@@ -76,6 +76,35 @@ jobs:
             fi
           done
 
+  schema:
+    name: schema
+    runs-on: ubuntu-latest
+    # Guards the IaC config contract: the committed JSON Schema must match the
+    # serde structs, every committed example must validate, and the deprecated
+    # `serde_yaml` / unsound `serde_yml` parsers must stay out of the graph.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: schema is up to date with the config structs
+        run: cargo xtask generate-schema --check
+      - name: validate committed example configs
+        run: |
+          cargo build -p bitrouter
+          shopt -s nullglob
+          for f in examples/*.yaml examples/*.yml examples/*.json; do
+            echo "validating $f"
+            ./target/debug/bitrouter config validate -c "$f"
+          done
+      - name: no deprecated/unsound yaml parser in the graph
+        run: |
+          for crate in serde_yaml serde_yml; do
+            if cargo tree -i "$crate" 2>/dev/null | grep -q "^$crate"; then
+              echo "::error::$crate must not be in the dependency graph (RUSTSEC: deprecated/unsound)"
+              cargo tree -i "$crate"
+              exit 1
+            fi
+          done
+
   msrv:
     name: msrv
     runs-on: ubuntu-latest

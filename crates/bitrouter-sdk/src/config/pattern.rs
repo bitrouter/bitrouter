@@ -111,6 +111,34 @@ where
     }
 }
 
+/// JSON Schema for the `[ { "pattern": value }, … ]` wire shape produced by the
+/// [`Deserialize`] impl above: an array of single-key objects whose value is the
+/// schema of `T`. Hand-written because the in-memory `PatternMap` (a `Vec` of
+/// parsed `(Pattern, T)`) does not match the serialized shape.
+impl<T: schemars::JsonSchema> schemars::JsonSchema for PatternMap<T> {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Owned(format!("PatternMap_for_{}", T::schema_name()))
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Owned(format!("PatternMap<{}>", T::schema_id()))
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let value = generator.subschema_for::<T>();
+        schemars::json_schema!({
+            "type": "array",
+            "description": "Glob-prefix pattern list; each entry is a single-key \
+                object mapping a pattern (`*`, `prefix*`, or an exact literal) to \
+                its value.",
+            "items": {
+                "type": "object",
+                "additionalProperties": value,
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +150,21 @@ mod tests {
         assert_eq!(
             Pattern::parse("claude-sonnet-4-6"),
             Pattern::Exact("claude-sonnet-4-6".into())
+        );
+    }
+
+    #[test]
+    fn json_schema_is_array_of_single_key_objects() {
+        // The schema must mirror the `Deserialize` wire shape, not the
+        // in-memory `Vec<(Pattern, T)>`: an array whose items are objects with
+        // `additionalProperties` of `T`'s schema.
+        let schema = schemars::schema_for!(PatternMap<u32>);
+        let value = serde_json::to_value(&schema).expect("schema serializes");
+        assert_eq!(value["type"], "array");
+        assert_eq!(value["items"]["type"], "object");
+        assert!(
+            value["items"]["additionalProperties"].is_object(),
+            "items.additionalProperties should carry T's schema, got {value}"
         );
     }
 

@@ -120,6 +120,11 @@ enum Command {
         #[arg(short, long, default_value = "bitrouter.yaml")]
         config: PathBuf,
     },
+    /// Configuration tooling (validation against the published schema).
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// Virtual-key management.
     Key {
         #[command(subcommand)]
@@ -209,6 +214,21 @@ enum Command {
     Mcp {
         #[command(subcommand)]
         action: McpAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Validate a config file: structure, provider `derives` resolution, and
+    /// upstream-URL (SSRF) safety. Exits non-zero on an invalid config — safe
+    /// to run in CI. Unset `${VAR}` references are substituted with a
+    /// placeholder and reported as warnings, so secrets need not be present.
+    Validate {
+        /// Path to `bitrouter.yaml` / `bitrouter.json`. When omitted, the
+        /// standard resolution chain applies (`./bitrouter.yaml` →
+        /// `$BITROUTER_HOME` → `~/.bitrouter`).
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -517,6 +537,7 @@ async fn run() -> Result<()> {
             route(&model, &source, &socket).await
         }
         Command::Init { config } => init(&config).await,
+        Command::Config { action } => config_cmd(action).await,
         Command::Key { action } => key(action).await,
         Command::Models { config, provider } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -535,6 +556,77 @@ async fn run() -> Result<()> {
         Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action).await,
         Command::Mcp { action } => mcp_cmd(action).await,
+    }
+}
+
+// ===== `bitrouter config …` (config tooling) =====
+
+async fn config_cmd(action: ConfigAction) -> Result<()> {
+    match action {
+        ConfigAction::Validate { config } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            validate_config(&source).await
+        }
+    }
+}
+
+/// Validate a config file and print a short summary. Returns `Err` (→ exit 1)
+/// on a malformed or unsafe config, so the command is CI-safe.
+///
+/// Validation runs the real parse path — deserialization, `${VAR}`
+/// substitution, `derives` resolution, and the upstream-URL (SSRF) gate — but
+/// substitutes a placeholder for any *unset* `${VAR}` so a config can be
+/// validated without its secrets present (the placeholder is a reserved
+/// `.invalid` URL, which is neither loopback nor private and so passes the
+/// SSRF gate). Unresolved variables are reported as warnings.
+async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<()> {
+    use bitrouter::paths::ConfigSource;
+    let path = match source {
+        ConfigSource::File(p) => p,
+        ConfigSource::Default { .. } => anyhow::bail!(
+            "no config file found to validate — looked in ./bitrouter.yaml, \
+             $BITROUTER_HOME, and ~/.bitrouter. Pass --config <path>."
+        ),
+    };
+    let raw = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("reading {}", path.display()))?;
+
+    // `parse_with` takes an `Fn` lookup, so the missing-var set needs interior
+    // mutability.
+    let missing: std::cell::RefCell<std::collections::BTreeSet<String>> =
+        std::cell::RefCell::new(std::collections::BTreeSet::new());
+    let parsed = config::parse_with(&raw, |name| {
+        Some(config::env_lookup(name).unwrap_or_else(|| {
+            missing.borrow_mut().insert(name.to_string());
+            "https://env-placeholder.invalid".to_string()
+        }))
+    });
+    let missing = missing.into_inner();
+
+    match parsed {
+        Ok(cfg) => {
+            println!("✓ {} is valid", path.display());
+            println!(
+                "  providers: {}  models: {}  presets: {}  variants: {}",
+                cfg.providers.len(),
+                cfg.models.len(),
+                cfg.presets.len(),
+                cfg.variants.len(),
+            );
+            if !missing.is_empty() {
+                println!(
+                    "\n  note: {} unset environment variable(s) substituted with a \
+                     placeholder for validation:",
+                    missing.len()
+                );
+                for name in &missing {
+                    println!("    - ${{{name}}}");
+                }
+            }
+            Ok(())
+        }
+        Err(e) => anyhow::bail!("✗ {} is invalid: {e}", path.display()),
     }
 }
 

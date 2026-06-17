@@ -38,7 +38,7 @@ impl Default for ServerToolLoopConfig {
 /// BitRouter attaches to LLM requests and executes inside the loop, with an
 /// optional override of the loop's iteration cap. An empty `mcp_servers`
 /// leaves the pipeline strictly single-shot.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ServerToolsConfig {
     /// MCP server names (keys of `mcp_servers`) whose tools are injected into

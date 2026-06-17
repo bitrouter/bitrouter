@@ -16,7 +16,9 @@ use crate::language_model::hooks::FallbackDecision;
 use crate::language_model::types::{ApiProtocol, Capability, RoutingTarget};
 
 /// How a cascade chain should be ordered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
     /// Sort by provider name, ascending. The Phase-1 default; later replaced by

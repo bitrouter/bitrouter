@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// v1.0 ships stdio only — the spec lists stdio as the primary transport for
 /// agent processes spawned by an IDE / CLI client.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum AcpTransport {
     /// Stdio transport: launch `command` with `args` and exchange JSON-RPC
@@ -40,7 +40,7 @@ pub enum AcpTransport {
 /// The same `name` is what the [`super::RoutingTable`] resolves against;
 /// future inbound entry points (the `agent-proxy` CLI) address agents by
 /// this name.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AcpAgentConfig {
     /// Agent id. Non-empty; no `/`.
     pub name: String,

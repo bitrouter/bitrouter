@@ -34,6 +34,7 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 | Command | Effect |
 |---|---|
 | `bitrouter init [--config PATH]` | Write a starter `bitrouter.yaml` (default `./bitrouter.yaml`). Refuses to overwrite. Mirrors the zero-config defaults — `skip_auth: true`, `listen: 127.0.0.1:4356`, all built-in providers stubbed as `{}` so they auto-enable when their env var is set. |
+| `bitrouter config validate [--config PATH]` | Validate a config file: structure (deserialization), `derives` resolution, and upstream-URL (SSRF) safety. Exits non-zero on an invalid config — **CI-safe**. Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present. Validates against the schema committed at `schemas/bitrouter.config.schema.json` (regenerate with `cargo xtask generate-schema`). |
 | `bitrouter providers use <id>` | **No-op** in v1 (kept for v0 compatibility). Prints a hint to edit `bitrouter.yaml` instead. |
 | `bitrouter policy create <id> [--dir DIR]` | Write a starter policy file under `--dir` (default `./policies`). Bind to a key with `bitrouter key sign --user <id> --policy <id>`. |
 | `bitrouter key sign --user <id> [--db URL] [--policy ID]` | Mint a `brvk_…` virtual key in the auth DB. Plaintext is shown once; only its SHA-256 hash is stored. Default DB is `sqlite://./bitrouter.db`. |

@@ -147,6 +147,26 @@ impl<'de> Deserialize<'de> for ApiProtocol {
     }
 }
 
+/// A wire protocol always (de)serializes as a string: one of the four known
+/// values, or any other string for an externally-registered `Custom` protocol.
+/// Hand-written because the `Custom(String)` variant means the value is an
+/// open string set, not a closed enum.
+impl schemars::JsonSchema for ApiProtocol {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ApiProtocol")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Wire protocol. Known values: `chat_completions`, \
+                `messages`, `generate_content`, `responses`; any other string \
+                names an externally-registered (outbound-only) custom protocol.",
+            "examples": ["chat_completions", "messages", "generate_content", "responses"],
+        })
+    }
+}
+
 /// One or more wire protocols a `(provider, model)` can be served under, in
 /// preference order. The list head is the *preferred* (default) outbound
 /// protocol; protocol-native routing may instead pick whichever member matches
@@ -195,6 +215,24 @@ impl From<ApiProtocol> for ProtocolList {
 impl Serialize for ProtocolList {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(s)
+    }
+}
+
+/// A `ProtocolList` deserializes from **either** a bare protocol string or an
+/// array of them (see the type docs), so its schema is the union of the two.
+impl schemars::JsonSchema for ProtocolList {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ProtocolList")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let one = generator.subschema_for::<ApiProtocol>();
+        let many = generator.subschema_for::<Vec<ApiProtocol>>();
+        schemars::json_schema!({
+            "description": "One protocol (bare string) or an ordered set of them \
+                (array); the head is the preferred outbound protocol.",
+            "anyOf": [one, many],
+        })
     }
 }
 

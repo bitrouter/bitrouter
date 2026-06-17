@@ -38,7 +38,7 @@ pub use presets::{PresetResolution, PromptOverrides, resolve_presets};
 pub use routing_table::ConfigRoutingTable;
 
 /// The top-level configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
     /// HTTP server settings.
@@ -95,7 +95,7 @@ impl Default for Config {
 }
 
 /// Top-level MCP gateway settings.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct McpConfig {
     /// Aggregation (fan-out) endpoint settings.
@@ -105,7 +105,7 @@ pub struct McpConfig {
 }
 
 /// `mcp.aggregate` — the virtual aggregate endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct McpAggregateConfig {
     /// When `true` (the default), mount the aggregate route. When `false`,
@@ -125,7 +125,7 @@ impl Default for McpAggregateConfig {
 }
 
 /// `mcp.cache` — the TTL cache wrapping cheap list calls.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct McpCacheConfig {
     /// When `false`, the cache layer is not installed.
@@ -159,7 +159,7 @@ impl Default for McpCacheConfig {
 }
 
 /// HTTP server settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ServerConfig {
     /// `host:port` to listen on.
@@ -186,7 +186,7 @@ impl Default for ServerConfig {
 }
 
 /// Database connection settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct DatabaseConfig {
     /// Connection URL (e.g. `sqlite://./bitrouter.db`).
@@ -204,7 +204,7 @@ impl Default for DatabaseConfig {
 /// A rate limit for one `(provider, pattern)` bucket. Limits are keyed
 /// per-`(provider, matched pattern)` — two patterns with different RPMs get
 /// independent windows.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
 pub struct RateLimit {
     /// Requests-per-minute ceiling for this bucket.
     #[serde(default)]
@@ -222,7 +222,7 @@ pub struct RateLimit {
 /// length (e.g. a higher rate past 128k input tokens). Empty ⇒ flat pricing.
 ///
 /// [`context_tiers`]: PricingConfig::context_tiers
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct PricingConfig {
     /// Micro-USD per prompt (input) token (base bracket).
     #[serde(default)]
@@ -239,7 +239,7 @@ pub struct PricingConfig {
 
 /// One higher context-pricing bracket in config — see
 /// [`PricingConfig::context_tiers`].
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct PricingTierConfig {
     /// Exclusive lower bound on total input tokens: a request whose input
     /// size is strictly greater than this enters the bracket (a base bracket
@@ -257,7 +257,7 @@ pub struct PricingTierConfig {
 ///
 /// `Debug` redacts `api_key` (v0 audit S9) so a future `tracing::error!(?config, …)`
 /// can't dump the platform credential straight into structured logs.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ProviderConfig {
     /// Upstream API base URL.
@@ -309,7 +309,7 @@ pub struct ProviderConfig {
 /// One credential within a multi-account provider. An account varies
 /// only the credential (and optionally the base URL) — the protocol,
 /// model catalog, and rate limits are the provider's.
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ProviderAccount {
     /// This account's API key (often a `${VAR}` reference).
@@ -343,7 +343,7 @@ impl std::fmt::Debug for ProviderAccount {
 }
 
 /// How a multi-account provider's per-account targets are ordered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountStrategy {
     /// Accounts in declared order — the first is primary; routing drops
@@ -476,7 +476,7 @@ pub fn infer_protocol(api_base: &str) -> ApiProtocol {
 }
 
 /// One model entry under a provider.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ProviderModel {
     /// Model id at the provider.
     pub id: String,
@@ -493,7 +493,7 @@ pub struct ProviderModel {
 }
 
 /// An explicit virtual-model definition (Strategy 2).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct VirtualModel {
     /// How this virtual model's [`endpoints`](Self::endpoints) are ordered
     /// into the fallback chain. See [`VirtualModelStrategy`]. Defaults to
@@ -519,7 +519,7 @@ pub struct VirtualModel {
 /// advances to the next endpoint — that failover-on-error behaviour is a
 /// property of *any* chain and is shared by both. They differ only in the
 /// **order** the endpoints take in that chain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VirtualModelStrategy {
     /// Endpoints are tried in **declared YAML order** — the first is the
@@ -543,7 +543,7 @@ pub enum VirtualModelStrategy {
 }
 
 /// One endpoint of a virtual model.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct VirtualEndpoint {
     /// The provider id this endpoint routes to.
     pub provider: String,
@@ -552,7 +552,7 @@ pub struct VirtualEndpoint {
 }
 
 /// Routing knobs shared by presets and variants.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct RoutingConfig {
     /// Cascade-chain ordering.
@@ -566,7 +566,7 @@ pub struct RoutingConfig {
 }
 
 /// An `@preset` definition.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct PresetConfig {
     /// Substitute the request's model with this one.
@@ -580,7 +580,7 @@ pub struct PresetConfig {
 }
 
 /// A `:variant` definition — a routing modifier only.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct VariantConfig {
     /// Routing knobs fed into the cascade.

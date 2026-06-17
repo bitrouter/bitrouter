@@ -101,10 +101,13 @@ The daemon writes its runtime files (`bitrouter.sock`, `bitrouter.pid`, `bitrout
 ```bash
 bitrouter init                    # writes ./bitrouter.yaml (skip_auth: true)
 $EDITOR bitrouter.yaml
+bitrouter config validate -c ./bitrouter.yaml   # CI-safe: exits non-zero if invalid
 bitrouter start --config ./bitrouter.yaml
 ```
 
 Config search order, lowest-priority last: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory.
+
+`bitrouter config validate` checks structure, `derives` resolution, and upstream-URL (SSRF) safety. Unset `${VAR}` references are substituted with a placeholder and reported as warnings, so it is safe to run in CI without secrets present. The JSON Schema it validates against is committed at `schemas/bitrouter.config.schema.json` and regenerated with `cargo xtask generate-schema` — add it to a YAML config for IDE autocomplete via a `# yaml-language-server: $schema=…` header.
 
 **GitHub Copilot.** Different — OAuth device flow, not an env var:
 
