@@ -69,11 +69,16 @@ impl ServerToolLoop {
     ///
     /// A caller may *declare* a router tool as a provider-defined tool (e.g. an
     /// `{type: "<provider>:<tool>"}` server-tool entry). Such declarations are
-    /// dropped from the working prompt for any name the registry owns: the
+    /// dropped from the working prompt for any name the registry *owns*: the
     /// toolset re-advertises that tool as an executable function tool, and the
     /// raw provider-defined form must not reach the upstream — it has no
     /// portable wire form and a same-protocol upstream would reject an unknown
     /// server tool. Dropping them also avoids a spurious self-collision below.
+    ///
+    /// Ownership (`registry.resolve`), not the set of advertised names, is the
+    /// strip predicate: a toolset may own a declaration under a namespaced name
+    /// (e.g. `bitrouter:fusion`) while advertising the bare executable name
+    /// (`fusion`), and the namespaced declaration must still be stripped.
     pub(crate) async fn inject(
         &self,
         base: &Prompt,
@@ -81,9 +86,10 @@ impl ServerToolLoop {
     ) -> Result<(Prompt, std::collections::BTreeSet<String>)> {
         let (injected, owned) = self.registry.list_all(ctx).await?;
         let mut working = base.clone();
-        working
-            .tools
-            .retain(|t| !(matches!(t, Tool::ProviderDefined { .. }) && owned.contains(t.name())));
+        working.tools.retain(|t| {
+            !(matches!(t, Tool::ProviderDefined { .. })
+                && self.registry.resolve(t.name()).is_some())
+        });
         for tool in &injected {
             if working.tools.iter().any(|t| t.name() == tool.name()) {
                 return Err(BitrouterError::Internal(format!(
@@ -472,6 +478,60 @@ mod tests {
         assert!(
             matches!(search[0], Tool::Function { .. }),
             "the remaining `search` is the executable function form"
+        );
+    }
+
+    #[tokio::test]
+    async fn inject_strips_namespaced_declaration_owned_under_a_bare_name() {
+        // A toolset that owns by tail-match (like the Fusion toolset) advertises
+        // the bare `fusion` but also owns the namespaced `bitrouter:fusion`. The
+        // namespaced provider-defined declaration must be stripped so it never
+        // reaches the upstream as an unknown server tool.
+        struct TailToolset;
+        #[async_trait]
+        impl RouterToolset for TailToolset {
+            async fn list_tools(&self, _c: &ToolContext) -> Result<Vec<Tool>> {
+                Ok(vec![Tool::Function {
+                    name: "fusion".to_string(),
+                    description: None,
+                    parameters: serde_json::json!({ "type": "object" }),
+                    strict: None,
+                    provider_metadata: ProviderMetadata::new(),
+                }])
+            }
+            async fn call_tool(
+                &self,
+                _n: &str,
+                _a: &str,
+                _c: &ToolContext,
+            ) -> Result<ToolResultOutput> {
+                Ok(ToolResultOutput::Text {
+                    value: "x".to_string(),
+                })
+            }
+            fn owns(&self, name: &str) -> bool {
+                name.rsplit([':', '.']).next().unwrap_or(name) == "fusion"
+            }
+        }
+
+        let loop_ = ServerToolLoop::new(
+            ToolsetRegistry::new(vec![Arc::new(TailToolset)]),
+            ServerToolLoopConfig::default(),
+            Arc::new(AllowAll),
+        );
+        let mut base = base_prompt();
+        base.tools.push(Tool::ProviderDefined {
+            id: "bitrouter.fusion".to_string(),
+            name: "bitrouter:fusion".to_string(),
+            args: serde_json::json!({}),
+            provider_metadata: ProviderMetadata::new(),
+        });
+        let (working, _owned) = loop_.inject(&base, &tool_ctx()).await.unwrap();
+        // Only the advertised bare `fusion` function remains.
+        assert_eq!(working.tools.len(), 1);
+        assert!(
+            matches!(&working.tools[0], Tool::Function { name, .. } if name == "fusion"),
+            "namespaced declaration stripped; executable function advertised"
         );
     }
 

@@ -136,7 +136,7 @@ pub mod acp;
 pub mod language_model;
 pub mod mcp;
 
-pub use app::{App, AppBuilder, Plugin};
+pub use app::{App, AppBuilder, Plugin, PromptTransform};
 pub use caller::CallerContext;
 pub use error::{BitrouterError, Result};
 pub use event::{EventBus, PipelineEvent};

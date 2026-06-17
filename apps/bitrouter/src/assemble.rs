@@ -10,15 +10,20 @@ use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 
 use bitrouter_sdk::App;
+use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::acp::{AcpStdioExecutor, ConfigAcpRoutingTable};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
 use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
+use bitrouter_sdk::language_model::server_tools::fusion::FusionToolset;
+use bitrouter_sdk::language_model::server_tools::fusion::alias::FusionAliasConfig;
+use bitrouter_sdk::language_model::server_tools::fusion::declarations::FusionDeclarationsHook;
 use bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop;
 use bitrouter_sdk::language_model::server_tools::mcp_toolset::McpRouterToolset;
+use bitrouter_sdk::language_model::server_tools::nested::{NestedRunner, PipelineNestedRunner};
 use bitrouter_sdk::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
-use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts};
+use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts, PipelineBuilder};
 use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
 use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
 use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
@@ -308,11 +313,48 @@ pub async fn build_app_with_path(
         }
     });
 
-    // Server-side tool loop — wired only when `server_tools.mcp_servers` names
-    // at least one configured MCP server. Reuses the MCP executor/routing built
-    // above; here BitRouter is an MCP *client* that executes the model's tool
-    // calls inside the LLM loop (distinct from the `/mcp` gateway above).
-    let server_tool_loop = build_server_tool_loop(config, &mcp_routing, &mcp_executor);
+    // Fusion (multi-model deliberation) — built only when `server_tools.fusion`
+    // is configured. The panel/judge run on a dedicated, loop-less
+    // sub-completion pipeline (so a panel member cannot recursively invoke
+    // Fusion), reusing the same routing table and upstream executor as the main
+    // pipeline. The metering recorder is attached so each nested panel/judge
+    // completion is billed to the same caller as the parent request (no auth or
+    // policy hooks — a nested call is a sub-operation of an already-authorised
+    // request, and the parent principal is carried on the caller context).
+    let fusion_runner: Option<Arc<dyn NestedRunner>> = if config.server_tools.fusion.is_some() {
+        let mut sub = PipelineBuilder::new();
+        sub.routing_table(routing_table.clone())
+            .executor(executor.clone())
+            .settlement_recorder(MeteringRecorder::new(
+                metering_store.clone(),
+                pricing.clone(),
+            ));
+        let sub_pipeline = Arc::new(
+            sub.build()
+                .context("building the fusion sub-completion pipeline")?,
+        );
+        Some(Arc::new(PipelineNestedRunner::new(sub_pipeline)))
+    } else {
+        None
+    };
+
+    // Server-side tool loop — wired when `server_tools.mcp_servers` names a
+    // configured MCP server and/or Fusion is enabled. Reuses the MCP
+    // executor/routing built above; here BitRouter is an MCP *client* that
+    // executes the model's tool calls inside the LLM loop (distinct from the
+    // `/mcp` gateway above).
+    let server_tool_loop =
+        build_server_tool_loop(config, &mcp_routing, &mcp_executor, fusion_runner);
+
+    // The bitrouter/fusion model alias (an ingress prompt transform) and the
+    // Fusion declaration-parsing hook are wired below when Fusion is enabled.
+    let fusion_enabled = config.server_tools.fusion.is_some();
+    let fusion_alias: Option<Arc<dyn PromptTransform>> = config
+        .server_tools
+        .fusion
+        .as_ref()
+        .and_then(FusionAliasConfig::from_settings)
+        .map(|c| Arc::new(c) as Arc<dyn PromptTransform>);
 
     // Optional ACP pure-routing pipeline — wired only when the config
     // declares at least one upstream agent. Mirrors the MCP wiring above;
@@ -337,6 +379,13 @@ pub async fn build_app_with_path(
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
+            // Fusion declaration capture runs first and is pure observation: it
+            // parses any bitrouter:fusion declaration (or the one the alias
+            // injected) off the prompt and stashes the resolved config, before
+            // auth, so the toolset can read it regardless of credential state.
+            if fusion_enabled {
+                lm.pre_request_hook(FusionDeclarationsHook);
+            }
             // Stage 1, in order: auth → policy. The guardrail plugin appends its
             // hooks after this closure (see `.plugin(...)` below), preserving the
             // auth → policy → guardrail order.
@@ -371,6 +420,13 @@ pub async fn build_app_with_path(
         app
     } else {
         app.plugin(GuardrailsPlugin::with_static(guardrail_rules))
+    };
+    // The bitrouter/fusion model alias: an ingress prompt transform that
+    // rewrites the alias onto a real outer model and attaches the Fusion
+    // declaration. Wired only when `server_tools.fusion` resolves an alias.
+    let app = match fusion_alias {
+        Some(transform) => app.prompt_transform(transform),
+        None => app,
     };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
@@ -409,47 +465,56 @@ pub async fn build_app_with_path(
     })
 }
 
-/// Build the server-side tool loop from `config.server_tools` over the MCP
-/// executor/routing already assembled for the `/mcp` gateway. Returns `None`
-/// when no `server_tools.mcp_servers` are configured (or the MCP stack is
-/// absent). Each named server is attached as an [`McpRouterToolset`] using a
-/// `Direct` selector and the server's `tool_prefix` (default `"{name}__"`), so
-/// router tool names cannot collide with the caller's own tools.
+/// Build the server-side tool loop from `config.server_tools`. Returns `None`
+/// when neither MCP server tools nor Fusion are configured.
+///
+/// Each named MCP server is attached as an [`McpRouterToolset`] using a `Direct`
+/// selector and the server's `tool_prefix` (default `"{name}__"`), so router
+/// tool names cannot collide with the caller's own tools. When `fusion_runner`
+/// is provided, the `bitrouter:fusion` [`FusionToolset`] is added over it.
 fn build_server_tool_loop(
     config: &Config,
     mcp_routing: &Option<Arc<ConfigMcpRoutingTable>>,
     mcp_executor: &Option<Arc<dyn bitrouter_sdk::mcp::Executor>>,
+    fusion_runner: Option<Arc<dyn NestedRunner>>,
 ) -> Option<Arc<ServerToolLoop>> {
     let settings = &config.server_tools;
-    if settings.mcp_servers.is_empty() {
-        return None;
+    let mut sets: Vec<Arc<dyn RouterToolset>> = Vec::new();
+
+    // MCP-backed server tools.
+    if !settings.mcp_servers.is_empty() {
+        if let (Some(routing), Some(executor)) = (mcp_routing, mcp_executor) {
+            let routing: Arc<dyn bitrouter_sdk::mcp::RoutingTable> = routing.clone();
+            for name in &settings.mcp_servers {
+                let Some(server) = config.mcp_servers.get(name) else {
+                    tracing::warn!(server = %name,
+                        "server_tools.mcp_servers names an MCP server absent from mcp_servers; skipping");
+                    continue;
+                };
+                let prefix = server
+                    .tool_prefix
+                    .clone()
+                    .unwrap_or_else(|| format!("{name}__"));
+                sets.push(Arc::new(McpRouterToolset::new(
+                    executor.clone(),
+                    routing.clone(),
+                    name.clone(),
+                    Some(prefix),
+                )));
+            }
+        } else {
+            tracing::warn!(
+                "server_tools.mcp_servers is set but no mcp_servers are configured; \
+                 MCP server tools are disabled"
+            );
+        }
     }
-    let (Some(routing), Some(executor)) = (mcp_routing, mcp_executor) else {
-        tracing::warn!(
-            "server_tools.mcp_servers is set but no mcp_servers are configured; \
-             the server-side tool loop is disabled"
-        );
-        return None;
-    };
-    let routing: Arc<dyn bitrouter_sdk::mcp::RoutingTable> = routing.clone();
-    let mut sets: Vec<Arc<dyn RouterToolset>> = Vec::with_capacity(settings.mcp_servers.len());
-    for name in &settings.mcp_servers {
-        let Some(server) = config.mcp_servers.get(name) else {
-            tracing::warn!(server = %name,
-                "server_tools.mcp_servers names an MCP server absent from mcp_servers; skipping");
-            continue;
-        };
-        let prefix = server
-            .tool_prefix
-            .clone()
-            .unwrap_or_else(|| format!("{name}__"));
-        sets.push(Arc::new(McpRouterToolset::new(
-            executor.clone(),
-            routing.clone(),
-            name.clone(),
-            Some(prefix),
-        )));
+
+    // Fusion multi-model deliberation tool.
+    if let Some(runner) = fusion_runner {
+        sets.push(Arc::new(FusionToolset::new(runner)));
     }
+
     if sets.is_empty() {
         return None;
     }
@@ -713,19 +778,51 @@ mod otel_config_tests {
 
 #[cfg(test)]
 mod server_tools_tests {
+    use std::sync::Arc;
+
+    use bitrouter_sdk::language_model::server_tools::nested::{
+        NestedOutcome, NestedRequest, NestedRunner,
+    };
+    use bitrouter_sdk::language_model::server_tools::toolset::ToolContext;
+
     use super::{Config, build_server_tool_loop};
+
+    struct NoopRunner;
+    #[async_trait::async_trait]
+    impl NestedRunner for NoopRunner {
+        async fn run(
+            &self,
+            req: NestedRequest,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<NestedOutcome, String> {
+            Ok(NestedOutcome {
+                model: req.model,
+                text: String::new(),
+                usage: Default::default(),
+            })
+        }
+    }
 
     #[test]
     fn no_loop_when_server_tools_unset() {
         let config = Config::default();
-        assert!(build_server_tool_loop(&config, &None, &None).is_none());
+        assert!(build_server_tool_loop(&config, &None, &None, None).is_none());
     }
 
     #[test]
     fn no_loop_when_named_but_mcp_stack_absent() {
         let mut config = Config::default();
         config.server_tools.mcp_servers = vec!["docs".to_string()];
-        // server_tools names a server but no MCP executor/routing was built.
-        assert!(build_server_tool_loop(&config, &None, &None).is_none());
+        // server_tools names a server but no MCP executor/routing was built,
+        // and Fusion is not enabled.
+        assert!(build_server_tool_loop(&config, &None, &None, None).is_none());
+    }
+
+    #[test]
+    fn loop_built_for_fusion_even_without_mcp() {
+        let config = Config::default();
+        let runner: Arc<dyn NestedRunner> = Arc::new(NoopRunner);
+        // A Fusion runner alone is enough to build the loop.
+        assert!(build_server_tool_loop(&config, &None, &None, Some(runner)).is_some());
     }
 }

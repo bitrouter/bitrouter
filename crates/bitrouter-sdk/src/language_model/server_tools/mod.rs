@@ -18,7 +18,9 @@
 pub mod approval;
 pub mod classify;
 pub mod config;
+pub mod fusion;
 pub mod loop_controller;
 pub mod mcp_toolset;
+pub mod nested;
 pub mod stream;
 pub mod toolset;

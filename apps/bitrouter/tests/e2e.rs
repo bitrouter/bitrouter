@@ -145,6 +145,7 @@ async fn e2e_http_server_chat_completions_end_to_end() {
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
     };
     let server = TestServer::new(build_router(state));
 
@@ -440,6 +441,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         mcp: app.mcp().cloned(),
         skip_auth: true,
         metrics_renderer: None,
+        prompt_transforms: Vec::new(),
     };
     let router = build_router(state);
 
@@ -743,6 +745,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
         mcp: app.mcp().cloned(),
         skip_auth: true,
         metrics_renderer: None,
+        prompt_transforms: Vec::new(),
     };
     let options = RouterOptions {
         omit_v1_models: false,
@@ -1006,6 +1009,7 @@ async fn matrix_server() -> (TestServer, MockServer) {
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
     };
     (TestServer::new(build_router(state)), upstream)
 }

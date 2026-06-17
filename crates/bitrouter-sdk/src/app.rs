@@ -58,6 +58,21 @@ pub trait Plugin {
     fn install(&self, app: &mut AppBuilder);
 }
 
+/// An ingress-time rewrite of a parsed request [`Prompt`](language_model::types::Prompt),
+/// applied by the HTTP server after protocol parsing and before the request
+/// enters the pipeline.
+///
+/// This is the seam for transforms that must touch the prompt body — its
+/// `tools`, `tool_choice`, or `system` — which the pipeline context exposes
+/// read-only downstream. The `bitrouter/fusion` model alias is the first
+/// consumer: it rewrites the alias model to a real one and attaches the Fusion
+/// declaration. Transforms run in registration order.
+pub trait PromptTransform: Send + Sync {
+    /// Rewrite the prompt in place. A transform that does not apply to this
+    /// request leaves it untouched.
+    fn apply(&self, prompt: &mut language_model::types::Prompt);
+}
+
 /// A fully assembled application: one pipeline per enabled protocol, plus the
 /// injected infrastructure and the collected migration set.
 pub struct App {
@@ -70,6 +85,8 @@ pub struct App {
     migrations: Vec<MigrationItem>,
     skip_auth: bool,
     mcp_aggregate_route: Option<String>,
+    /// Ingress-time prompt transforms, applied by the HTTP server in order.
+    prompt_transforms: Vec<Arc<dyn PromptTransform>>,
 }
 
 impl App {
@@ -113,6 +130,12 @@ impl App {
         self.metrics_renderer.as_ref()
     }
 
+    /// The ingress-time prompt transforms wired into the app, applied by the
+    /// HTTP server in registration order before a request enters the pipeline.
+    pub fn prompt_transforms(&self) -> &[Arc<dyn PromptTransform>] {
+        &self.prompt_transforms
+    }
+
     /// HTTP path for the MCP aggregate route, when configured (`POST <path>`
     /// fans out across every `aggregate: true` MCP server). `None` means
     /// only per-server routes (`POST /mcp/{server}`) are mounted.
@@ -132,6 +155,7 @@ pub struct AppBuilder {
     migrations: Vec<MigrationItem>,
     skip_auth: bool,
     mcp_aggregate_route: Option<String>,
+    prompt_transforms: Vec<Arc<dyn PromptTransform>>,
 }
 
 impl AppBuilder {
@@ -145,6 +169,7 @@ impl AppBuilder {
             migrations: Vec::new(),
             skip_auth: false,
             mcp_aggregate_route: None,
+            prompt_transforms: Vec::new(),
         }
     }
 
@@ -201,6 +226,15 @@ impl AppBuilder {
     /// `Arc<PrometheusHook>` you registered as an `ObserveHook`.
     pub fn metrics_renderer(mut self, renderer: Arc<dyn MetricsRenderer>) -> Self {
         self.metrics_renderer = Some(renderer);
+        self
+    }
+
+    /// Register an ingress-time [`PromptTransform`]. The HTTP server applies it
+    /// (and any others, in registration order) after protocol parsing, before
+    /// the request enters the pipeline. Used to wire model aliases such as
+    /// `bitrouter/fusion`.
+    pub fn prompt_transform(mut self, transform: Arc<dyn PromptTransform>) -> Self {
+        self.prompt_transforms.push(transform);
         self
     }
 
@@ -264,6 +298,7 @@ impl AppBuilder {
             migrations: self.migrations,
             skip_auth: self.skip_auth,
             mcp_aggregate_route,
+            prompt_transforms: self.prompt_transforms,
         })
     }
 }
@@ -271,5 +306,44 @@ impl AppBuilder {
 impl Default for AppBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::language_model::types::{GenerationParams, Prompt, ProviderMetadata};
+
+    struct SetModel(&'static str);
+    impl PromptTransform for SetModel {
+        fn apply(&self, prompt: &mut Prompt) {
+            prompt.model = self.0.to_string();
+        }
+    }
+
+    fn bare_prompt() -> Prompt {
+        Prompt {
+            model: "orig".to_string(),
+            system: None,
+            system_provider_metadata: ProviderMetadata::new(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
+
+    #[test]
+    fn registers_and_applies_prompt_transforms() {
+        let app = AppBuilder::new()
+            .prompt_transform(Arc::new(SetModel("x/y")))
+            .build()
+            .unwrap();
+        assert_eq!(app.prompt_transforms().len(), 1);
+        let mut prompt = bare_prompt();
+        app.prompt_transforms()[0].apply(&mut prompt);
+        assert_eq!(prompt.model, "x/y");
     }
 }

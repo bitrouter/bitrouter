@@ -46,4 +46,7 @@ pub struct ServerToolsConfig {
     pub mcp_servers: Vec<String>,
     /// Optional override of the loop's maximum tool-execution rounds.
     pub max_iterations: Option<u32>,
+    /// Multi-model deliberation (Fusion). When set, the `bitrouter:fusion`
+    /// server tool and the `bitrouter/fusion` model alias are enabled.
+    pub fusion: Option<super::fusion::config::FusionSettings>,
 }
