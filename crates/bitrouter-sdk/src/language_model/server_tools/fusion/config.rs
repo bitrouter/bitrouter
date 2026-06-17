@@ -1,36 +1,24 @@
-//! Parsing of the `bitrouter:fusion` server-tool declaration into a config, and
-//! the per-request plumbing the toolset reads it back from.
+//! Parsing of the `bitrouter:fusion` server-tool declaration into a config.
 //!
 //! A caller declares Fusion by putting a provider-defined tool in the request
 //! `tools` array whose name resolves to `fusion` (bare, or namespaced:
 //! `bitrouter:fusion`, `bitrouter.fusion`). Its config rides the tool's `args`
-//! (tolerating OpenRouter's `parameters` wrapper). A pre-request hook parses it
-//! once, resolves panel/judge models against the outer request model, and
-//! stashes the result on the request context under [`fusion_plugin_id`]; the
-//! toolset reads it back from the [`ToolContext`].
+//! (tolerating OpenRouter's `parameters` wrapper). The shared
+//! [`ServerToolDeclarations`](super::super::declarations::ServerToolDeclarations)
+//! hook parses it once, resolving panel/judge models against the outer request
+//! model, and stashes it for the toolset to read back.
 //!
 //! Reference design (behavior modeled after OpenRouter Fusion):
 //! <https://openrouter.ai/docs/guides/features/server-tools/fusion>
 
-use std::sync::OnceLock;
-
 use serde::{Deserialize, Serialize};
 
-use crate::language_model::server_tools::toolset::ToolContext;
-use crate::language_model::types::{ProviderMetadata, Tool};
-use crate::plugin::PluginId;
+use crate::language_model::types::Tool;
 
 /// Router-tool name the model calls to run a deliberation.
 pub const FUSION_TOOL: &str = "fusion";
 /// Maximum panel size — matches the documented Fusion bound.
 pub const MAX_PANEL: usize = 8;
-
-/// Plugin id under which the resolved [`FusionConfig`] is stashed on the request
-/// context by the pre-request hook, for the toolset to read back.
-pub fn fusion_plugin_id() -> &'static PluginId {
-    static ID: OnceLock<PluginId> = OnceLock::new();
-    ID.get_or_init(|| PluginId::new("bitrouter:fusion-declaration"))
-}
 
 /// One panel member: a model that answers the prompt in parallel with the rest.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -38,7 +26,8 @@ pub struct PanelMemberSpec {
     /// The member's model.
     pub model: String,
     /// Provider-native server tools forwarded to this member (e.g. web_search),
-    /// in provider-namespaced declaration form; see [`forwarded_tools`].
+    /// in provider-namespaced declaration form; see
+    /// [`forwarded_tools`](super::super::declarations::forwarded_tools).
     #[serde(default)]
     pub tools: Vec<serde_json::Value>,
 }
@@ -123,13 +112,6 @@ impl FusionConfig {
             synthesizer,
         })
     }
-
-    /// Read the resolved config off a request context (the pre-request hook
-    /// stashed it under [`fusion_plugin_id`]).
-    pub fn from_context(ctx: &ToolContext) -> Option<Self> {
-        ctx.get_metadata(fusion_plugin_id())
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-    }
 }
 
 /// Recognise a Fusion declaration by tool name: the bare name, or a namespaced
@@ -150,39 +132,6 @@ fn parse_member(v: &serde_json::Value) -> Option<PanelMemberSpec> {
         .cloned()
         .unwrap_or_default();
     Some(PanelMemberSpec { model, tools })
-}
-
-/// Convert a panel member's declared server-tool specs into canonical IR tools
-/// to forward into its nested completion. Each spec `{type, name?, …config}` is
-/// a provider-defined (server) tool whose `type` is provider-namespaced
-/// (`<provider>:<tool>` or `<provider>.<tool>`); it renders back to the nested
-/// upstream's native shape via the SDK's `provider_defined_native`. Specs
-/// without a string `type` are skipped.
-pub fn forwarded_tools(specs: &[serde_json::Value]) -> Vec<Tool> {
-    specs.iter().filter_map(spec_to_tool).collect()
-}
-
-fn spec_to_tool(spec: &serde_json::Value) -> Option<Tool> {
-    let obj = spec.as_object()?;
-    let ty = obj.get("type").and_then(|v| v.as_str())?;
-    // Canonical provider-defined id is `<provider>.<tool>`; accept the `:`
-    // namespacing the declarations use and normalise the first separator.
-    let id = ty.replacen(':', ".", 1);
-    let tail = id.rsplit('.').next().unwrap_or(&id);
-    let name = obj
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or(tail)
-        .to_string();
-    let mut args = obj.clone();
-    args.remove("type");
-    args.remove("name");
-    Some(Tool::ProviderDefined {
-        id,
-        name,
-        args: serde_json::Value::Object(args),
-        provider_metadata: ProviderMetadata::new(),
-    })
 }
 
 /// The `server_tools.fusion` config section. Its presence enables the Fusion
@@ -211,10 +160,7 @@ pub struct FusionSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::caller::CallerContext;
-    use crate::language_model::server_tools::toolset::ToolContext;
-    use crate::language_model::types::{ProviderMetadata, Tool};
-    use std::collections::HashMap;
+    use crate::language_model::types::ProviderMetadata;
 
     fn fusion_tool(name: &str, args: serde_json::Value) -> Tool {
         Tool::ProviderDefined {
@@ -305,35 +251,5 @@ mod tests {
             provider_metadata: ProviderMetadata::new(),
         };
         assert!(FusionConfig::from_tool(&func, "p").is_none());
-    }
-
-    #[test]
-    fn round_trips_through_context_metadata() {
-        let cfg = FusionConfig::single("m/1");
-        let mut meta: HashMap<_, _> = HashMap::new();
-        meta.insert(
-            fusion_plugin_id().clone(),
-            serde_json::to_value(&cfg).unwrap(),
-        );
-        let ctx = ToolContext::new(CallerContext::local(), meta);
-        assert_eq!(FusionConfig::from_context(&ctx), Some(cfg));
-
-        let empty = ToolContext::new(CallerContext::local(), HashMap::new());
-        assert!(FusionConfig::from_context(&empty).is_none());
-    }
-
-    #[test]
-    fn forwards_panel_member_web_tools() {
-        let forwarded = forwarded_tools(&[serde_json::json!({
-            "type": "anthropic:web_search_20250305", "name": "web_search", "max_uses": 3
-        })]);
-        assert_eq!(forwarded.len(), 1);
-        let Tool::ProviderDefined { id, name, args, .. } = &forwarded[0] else {
-            panic!("expected a provider-defined tool");
-        };
-        assert_eq!(id, "anthropic.web_search_20250305");
-        assert_eq!(name, "web_search");
-        assert_eq!(args["max_uses"], 3);
-        assert!(args.get("type").is_none() && args.get("name").is_none());
     }
 }

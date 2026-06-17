@@ -1167,8 +1167,8 @@ async fn fusion_declaration_is_advertised_and_executed_end_to_end() {
     // engine; the analysis feeds back and the model writes the final answer.
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::config::ServerToolLoopConfig;
+    use crate::language_model::server_tools::declarations::ServerToolDeclarationsHook;
     use crate::language_model::server_tools::fusion::FusionToolset;
-    use crate::language_model::server_tools::fusion::declarations::FusionDeclarationsHook;
     use crate::language_model::server_tools::loop_controller::ServerToolLoop;
     use crate::language_model::server_tools::nested::{NestedOutcome, NestedRequest, NestedRunner};
     use crate::language_model::server_tools::toolset::{ToolContext, ToolsetRegistry};
@@ -1229,7 +1229,7 @@ async fn fusion_declaration_is_advertised_and_executed_end_to_end() {
     ]));
 
     let pipeline = pipeline_with(routing_table(&["openai"]), executor, |b| {
-        b.pre_request_hook(FusionDeclarationsHook);
+        b.pre_request_hook(ServerToolDeclarationsHook);
         b.server_tool_loop(server_loop);
     });
 

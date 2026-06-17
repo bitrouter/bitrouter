@@ -11,8 +11,9 @@ use futures::future::join_all;
 use serde_json::json;
 use tracing::Instrument;
 
-use super::config::{FusionConfig, forwarded_tools};
+use super::config::FusionConfig;
 use super::judge::{JudgeAnalysis, analysis_schema, judge_system_prompt};
+use crate::language_model::server_tools::declarations::forwarded_tools;
 use crate::language_model::server_tools::nested::{NestedRequest, NestedRunner};
 use crate::language_model::server_tools::toolset::ToolContext;
 use crate::language_model::types::{ResponseFormat, ToolResultOutput, Usage};

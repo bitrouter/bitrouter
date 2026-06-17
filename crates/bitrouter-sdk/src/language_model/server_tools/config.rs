@@ -46,6 +46,12 @@ pub struct ServerToolsConfig {
     pub mcp_servers: Vec<String>,
     /// Optional override of the loop's maximum tool-execution rounds.
     pub max_iterations: Option<u32>,
+    /// Enable the `advisor` server tool (consult a stronger model mid-task).
+    /// Advertised per-request only when the caller declares `bitrouter:advisor`.
+    pub advisor: bool,
+    /// Enable the `subagent` server tool (delegate a task to a worker model).
+    /// Advertised per-request only when the caller declares `bitrouter:subagent`.
+    pub subagent: bool,
     /// Multi-model deliberation (Fusion). When set, the `bitrouter:fusion`
     /// server tool and the `bitrouter/fusion` model alias are enabled.
     pub fusion: Option<super::fusion::config::FusionSettings>,

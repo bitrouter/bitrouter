@@ -168,6 +168,22 @@ server_tools:
 
 Tool names are prefixed (`<name>__<tool>`, or the server's `tool_prefix`) so they can't collide with the caller's own tools. Empty/unset leaves the pipeline single-shot. This is the inverse of `bitrouter mcp serve` (which makes BitRouter an MCP *server*): here BitRouter is an MCP *client* consuming those tools inside the request loop.
 
+### Model-backed server tools (advisor / sub-agent / fusion)
+
+BitRouter can also expose server tools backed by *nested model completions*. Each is advertised only when the caller declares it (a provider-defined tool in the request `tools`, e.g. `{"type":"bitrouter:advisor"}`) and runs on a loop-less sub-pipeline metered to the caller.
+
+```yaml
+server_tools:
+  advisor: true               # bitrouter:advisor — consult a stronger model mid-task
+  subagent: true              # bitrouter:subagent — delegate a task to a worker model
+  fusion:                     # bitrouter:fusion — multi-model panel + judge deliberation
+    panel: [anthropic/claude-opus-4.8, openai/gpt-latest, google/gemini-pro]
+    judge: anthropic/claude-opus-4.8
+    # optional: outer_model, alias (default bitrouter/fusion), synthesizer, web_tools
+```
+
+Setting `fusion:` also enables the `bitrouter/fusion` model alias, which expands a request to the configured panel + judge. The judge *compares* the panel's answers (consensus / contradictions / partial coverage / unique insights / blind spots); the calling model writes the final answer from that analysis.
+
 ## ACP agents
 
 ```yaml

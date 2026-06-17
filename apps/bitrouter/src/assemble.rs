@@ -14,14 +14,16 @@ use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::acp::{AcpStdioExecutor, ConfigAcpRoutingTable};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
+use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
 use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
 use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
+use bitrouter_sdk::language_model::server_tools::declarations::ServerToolDeclarationsHook;
 use bitrouter_sdk::language_model::server_tools::fusion::FusionToolset;
 use bitrouter_sdk::language_model::server_tools::fusion::alias::FusionAliasConfig;
-use bitrouter_sdk::language_model::server_tools::fusion::declarations::FusionDeclarationsHook;
 use bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop;
 use bitrouter_sdk::language_model::server_tools::mcp_toolset::McpRouterToolset;
 use bitrouter_sdk::language_model::server_tools::nested::{NestedRunner, PipelineNestedRunner};
+use bitrouter_sdk::language_model::server_tools::sub_agent::SubAgentToolset;
 use bitrouter_sdk::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
 use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts, PipelineBuilder};
 use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
@@ -313,15 +315,18 @@ pub async fn build_app_with_path(
         }
     });
 
-    // Fusion (multi-model deliberation) — built only when `server_tools.fusion`
-    // is configured. The panel/judge run on a dedicated, loop-less
-    // sub-completion pipeline (so a panel member cannot recursively invoke
-    // Fusion), reusing the same routing table and upstream executor as the main
-    // pipeline. The metering recorder is attached so each nested panel/judge
-    // completion is billed to the same caller as the parent request (no auth or
-    // policy hooks — a nested call is a sub-operation of an already-authorised
-    // request, and the parent principal is carried on the caller context).
-    let fusion_runner: Option<Arc<dyn NestedRunner>> = if config.server_tools.fusion.is_some() {
+    // Nested-completion runner for the advisor / sub-agent / fusion server tools
+    // — built when any of them is configured. Their nested calls run on a
+    // dedicated, loop-less sub-completion pipeline (so a worker cannot recursively
+    // invoke another server tool), reusing the same routing table and upstream
+    // executor as the main pipeline. The metering recorder is attached so each
+    // nested completion is billed to the same caller as the parent request (no
+    // auth or policy hooks — a nested call is a sub-operation of an
+    // already-authorised request, and the parent principal rides the caller).
+    let server_tools_enabled = config.server_tools.fusion.is_some()
+        || config.server_tools.advisor
+        || config.server_tools.subagent;
+    let nested_runner: Option<Arc<dyn NestedRunner>> = if server_tools_enabled {
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
             .executor(executor.clone())
@@ -331,7 +336,7 @@ pub async fn build_app_with_path(
             ));
         let sub_pipeline = Arc::new(
             sub.build()
-                .context("building the fusion sub-completion pipeline")?,
+                .context("building the server-tool sub-completion pipeline")?,
         );
         Some(Arc::new(PipelineNestedRunner::new(sub_pipeline)))
     } else {
@@ -339,16 +344,15 @@ pub async fn build_app_with_path(
     };
 
     // Server-side tool loop — wired when `server_tools.mcp_servers` names a
-    // configured MCP server and/or Fusion is enabled. Reuses the MCP
-    // executor/routing built above; here BitRouter is an MCP *client* that
-    // executes the model's tool calls inside the LLM loop (distinct from the
-    // `/mcp` gateway above).
+    // configured MCP server and/or a nested server tool (advisor / sub-agent /
+    // fusion) is enabled. Reuses the MCP executor/routing built above; here
+    // BitRouter is an MCP *client* that executes the model's tool calls inside
+    // the LLM loop (distinct from the `/mcp` gateway above).
     let server_tool_loop =
-        build_server_tool_loop(config, &mcp_routing, &mcp_executor, fusion_runner);
+        build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
     // The bitrouter/fusion model alias (an ingress prompt transform) and the
-    // Fusion declaration-parsing hook are wired below when Fusion is enabled.
-    let fusion_enabled = config.server_tools.fusion.is_some();
+    // server-tool declaration-parsing hook are wired below when enabled.
     let fusion_alias: Option<Arc<dyn PromptTransform>> = config
         .server_tools
         .fusion
@@ -379,12 +383,13 @@ pub async fn build_app_with_path(
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
-            // Fusion declaration capture runs first and is pure observation: it
-            // parses any bitrouter:fusion declaration (or the one the alias
-            // injected) off the prompt and stashes the resolved config, before
-            // auth, so the toolset can read it regardless of credential state.
-            if fusion_enabled {
-                lm.pre_request_hook(FusionDeclarationsHook);
+            // Server-tool declaration capture runs first and is pure
+            // observation: it parses any advisor / sub-agent / fusion
+            // declaration (or the one the fusion alias injected) off the prompt
+            // and stashes it, before auth, so the toolsets can read it
+            // regardless of credential state.
+            if server_tools_enabled {
+                lm.pre_request_hook(ServerToolDeclarationsHook);
             }
             // Stage 1, in order: auth → policy. The guardrail plugin appends its
             // hooks after this closure (see `.plugin(...)` below), preserving the
@@ -466,17 +471,18 @@ pub async fn build_app_with_path(
 }
 
 /// Build the server-side tool loop from `config.server_tools`. Returns `None`
-/// when neither MCP server tools nor Fusion are configured.
+/// when neither MCP server tools nor any nested server tool is configured.
 ///
 /// Each named MCP server is attached as an [`McpRouterToolset`] using a `Direct`
 /// selector and the server's `tool_prefix` (default `"{name}__"`), so router
-/// tool names cannot collide with the caller's own tools. When `fusion_runner`
-/// is provided, the `bitrouter:fusion` [`FusionToolset`] is added over it.
+/// tool names cannot collide with the caller's own tools. When `nested_runner`
+/// is provided, the enabled advisor / sub-agent / fusion toolsets are added over
+/// it (each advertised only when the request declares it).
 fn build_server_tool_loop(
     config: &Config,
     mcp_routing: &Option<Arc<ConfigMcpRoutingTable>>,
     mcp_executor: &Option<Arc<dyn bitrouter_sdk::mcp::Executor>>,
-    fusion_runner: Option<Arc<dyn NestedRunner>>,
+    nested_runner: Option<Arc<dyn NestedRunner>>,
 ) -> Option<Arc<ServerToolLoop>> {
     let settings = &config.server_tools;
     let mut sets: Vec<Arc<dyn RouterToolset>> = Vec::new();
@@ -510,9 +516,19 @@ fn build_server_tool_loop(
         }
     }
 
-    // Fusion multi-model deliberation tool.
-    if let Some(runner) = fusion_runner {
-        sets.push(Arc::new(FusionToolset::new(runner)));
+    // Nested server tools (advisor / sub-agent / fusion) over the shared runner.
+    // Each toolset advertises only when the request declares it, so it is safe
+    // to register every enabled one.
+    if let Some(runner) = nested_runner {
+        if settings.advisor {
+            sets.push(Arc::new(AdvisorToolset::new(runner.clone())));
+        }
+        if settings.subagent {
+            sets.push(Arc::new(SubAgentToolset::new(runner.clone())));
+        }
+        if settings.fusion.is_some() {
+            sets.push(Arc::new(FusionToolset::new(runner)));
+        }
     }
 
     if sets.is_empty() {
@@ -819,10 +835,24 @@ mod server_tools_tests {
     }
 
     #[test]
-    fn loop_built_for_fusion_even_without_mcp() {
+    fn loop_built_for_a_nested_server_tool_even_without_mcp() {
+        // Any enabled nested server tool, plus a runner, builds the loop.
+        let mut fusion_cfg = Config::default();
+        fusion_cfg.server_tools.fusion = Some(Default::default());
+        let runner: Arc<dyn NestedRunner> = Arc::new(NoopRunner);
+        assert!(build_server_tool_loop(&fusion_cfg, &None, &None, Some(runner)).is_some());
+
+        let mut advisor_cfg = Config::default();
+        advisor_cfg.server_tools.advisor = true;
+        let runner2: Arc<dyn NestedRunner> = Arc::new(NoopRunner);
+        assert!(build_server_tool_loop(&advisor_cfg, &None, &None, Some(runner2)).is_some());
+    }
+
+    #[test]
+    fn no_loop_when_runner_present_but_no_tool_enabled() {
+        // A runner with no enabled nested tool (and no MCP) yields no loop.
         let config = Config::default();
         let runner: Arc<dyn NestedRunner> = Arc::new(NoopRunner);
-        // A Fusion runner alone is enough to build the loop.
-        assert!(build_server_tool_loop(&config, &None, &None, Some(runner)).is_some());
+        assert!(build_server_tool_loop(&config, &None, &None, Some(runner)).is_none());
     }
 }

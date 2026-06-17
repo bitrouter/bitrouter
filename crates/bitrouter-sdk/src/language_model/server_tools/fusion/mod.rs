@@ -7,7 +7,6 @@
 
 pub mod alias;
 pub mod config;
-pub mod declarations;
 pub mod engine;
 pub mod judge;
 
@@ -15,9 +14,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use self::config::{FUSION_TOOL, FusionConfig, is_fusion_name};
+use self::config::{FUSION_TOOL, is_fusion_name};
 use self::engine::run_fusion;
 use crate::error::Result;
+use crate::language_model::server_tools::declarations::ServerToolDeclarations;
 use crate::language_model::server_tools::nested::NestedRunner;
 use crate::language_model::server_tools::toolset::{RouterToolset, ToolContext};
 use crate::language_model::types::{ProviderMetadata, Tool, ToolResultOutput};
@@ -50,7 +50,10 @@ impl RouterToolset for FusionToolset {
     async fn list_tools(&self, ctx: &ToolContext) -> Result<Vec<Tool>> {
         // Advertised only when the request declared Fusion (directly or via the
         // model alias). The declaration hook stashes the resolved config.
-        if FusionConfig::from_context(ctx).is_none() {
+        if ServerToolDeclarations::from_context(ctx)
+            .and_then(|d| d.fusion)
+            .is_none()
+        {
             return Ok(Vec::new());
         }
         Ok(vec![Tool::Function {
@@ -82,7 +85,7 @@ impl RouterToolset for FusionToolset {
         arguments: &str,
         ctx: &ToolContext,
     ) -> Result<ToolResultOutput> {
-        let Some(config) = FusionConfig::from_context(ctx) else {
+        let Some(config) = ServerToolDeclarations::from_context(ctx).and_then(|d| d.fusion) else {
             return Ok(error_output("fusion was not declared on this request"));
         };
         let args: serde_json::Value =
@@ -115,9 +118,12 @@ impl RouterToolset for FusionToolset {
 
 #[cfg(test)]
 mod tests {
-    use super::config::{FusionConfig, fusion_plugin_id};
+    use super::config::FusionConfig;
     use super::*;
     use crate::caller::CallerContext;
+    use crate::language_model::server_tools::declarations::{
+        ServerToolDeclarations, declarations_plugin_id,
+    };
     use crate::language_model::server_tools::nested::{NestedOutcome, NestedRequest, NestedRunner};
     use crate::language_model::server_tools::toolset::{RouterToolset, ToolContext};
     use crate::language_model::types::ToolResultOutput;
@@ -147,10 +153,14 @@ mod tests {
     }
 
     fn ctx_declared() -> ToolContext {
+        let decls = ServerToolDeclarations {
+            fusion: Some(FusionConfig::single("m/1")),
+            ..Default::default()
+        };
         let mut meta = HashMap::new();
         meta.insert(
-            fusion_plugin_id().clone(),
-            serde_json::to_value(FusionConfig::single("m/1")).unwrap(),
+            declarations_plugin_id().clone(),
+            serde_json::to_value(&decls).unwrap(),
         );
         ToolContext::new(CallerContext::local(), meta)
     }

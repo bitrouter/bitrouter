@@ -15,12 +15,15 @@
 //! Per crate guideline 2, this module does not `pub use` from its submodules;
 //! downstream reaches types directly (e.g. `server_tools::toolset::RouterToolset`).
 
+pub mod advisor;
 pub mod approval;
 pub mod classify;
 pub mod config;
+pub mod declarations;
 pub mod fusion;
 pub mod loop_controller;
 pub mod mcp_toolset;
 pub mod nested;
 pub mod stream;
+pub mod sub_agent;
 pub mod toolset;
