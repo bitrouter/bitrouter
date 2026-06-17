@@ -210,6 +210,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn call_arg_model_overrides_when_unpinned() {
+        let runner = Arc::new(MockRunner {
+            seen: Mutex::new(Vec::new()),
+        });
+        let ts = AdvisorToolset::new(runner.clone());
+        let decls = ServerToolDeclarations {
+            advisor: Some(AdvisorConfig::default()),
+            parent_model: "parent/model".to_string(),
+            ..Default::default()
+        };
+        ts.call_tool(
+            "advisor",
+            r#"{"prompt":"q","model":"override/m"}"#,
+            &ctx_with(Some(decls)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(runner.seen.lock().unwrap()[0].model, "override/m");
+    }
+
+    #[tokio::test]
     async fn missing_prompt_is_an_error_result() {
         let ts = AdvisorToolset::new(Arc::new(MockRunner {
             seen: Mutex::new(Vec::new()),
