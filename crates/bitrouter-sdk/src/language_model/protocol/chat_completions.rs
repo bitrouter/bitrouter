@@ -724,7 +724,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
             request_id: request_id.to_string(),
             model: model.to_string(),
             role_sent: false,
-            tool_call_indices: Vec::new(),
+            tool_calls: Vec::new(),
         })
     }
 }
@@ -1533,24 +1533,41 @@ impl StreamDecoder for ChatStreamDecoder {
     }
 }
 
+/// Per tool-call streaming state for the Chat Completions encoder. The slot's
+/// position in [`ChatStreamEncoder::tool_calls`] is its `tool_calls[].index`,
+/// assigned in first-seen order so parallel tool calls stay distinct and stable.
+struct ChatToolCallState {
+    /// Upstream tool-call id, the key used to group continuation deltas.
+    id: String,
+    /// Whether the opening chunk (the one carrying `function.name`) was emitted.
+    opened: bool,
+    /// Argument fragments seen before the name arrived, replayed on the opening
+    /// chunk so nothing is lost while the call is held back.
+    pending_args: String,
+}
+
 /// Encodes canonical stream parts into Chat Completions `data:` SSE chunks.
 struct ChatStreamEncoder {
     request_id: String,
     model: String,
     role_sent: bool,
-    /// Tool-call id → its `tool_calls[].index`, assigned in first-seen order so
-    /// parallel tool calls get distinct, stable indices.
-    tool_call_indices: Vec<String>,
+    /// Per tool-call state, keyed by id and ordered by first sight.
+    tool_calls: Vec<ChatToolCallState>,
 }
 
 impl ChatStreamEncoder {
-    /// Index for a tool-call id, assigning the next free slot on first sight.
+    /// Index (= `tool_calls[].index`) for a tool-call id, creating its state on
+    /// first sight.
     fn tool_call_index(&mut self, id: &str) -> usize {
-        if let Some(pos) = self.tool_call_indices.iter().position(|x| x == id) {
+        if let Some(pos) = self.tool_calls.iter().position(|s| s.id == id) {
             pos
         } else {
-            self.tool_call_indices.push(id.to_string());
-            self.tool_call_indices.len() - 1
+            self.tool_calls.push(ChatToolCallState {
+                id: id.to_string(),
+                opened: false,
+                pending_args: String::new(),
+            });
+            self.tool_calls.len() - 1
         }
     }
 }
@@ -1609,22 +1626,56 @@ impl StreamEncoder for ChatStreamEncoder {
                 arguments,
             } => {
                 let index = self.tool_call_index(id);
-                let mut function = serde_json::Map::new();
-                if let Some(name) = name {
-                    function.insert("name".into(), name.clone().into());
+                let name = name.as_deref().filter(|n| !n.is_empty());
+
+                // The Vercel AI SDK (`@ai-sdk/openai-compatible`) and other
+                // strict clients reject the FIRST streamed `tool_calls` chunk for
+                // a given index unless its `function.name` is a string. Some
+                // OpenAI-compatible upstreams (e.g. DeepSeek / Kimi) send that
+                // first delta with only `id` + partial `arguments` and deliver
+                // `name` in a later delta, so hold the call's opening chunk back
+                // — buffering argument fragments — until the name arrives, then
+                // emit one named opening chunk. Like the Generate Content encoder
+                // buffers a tool call until complete, and consistent with the
+                // Responses / Messages encoders only opening a call on a
+                // non-empty name (both added in #552).
+                // <https://github.com/anomalyco/opencode/issues/24137>
+                let mut opening_name: Option<String> = None;
+                let mut out_args: Option<String> = None;
+                if let Some(state) = self.tool_calls.get_mut(index) {
+                    if state.opened {
+                        if !arguments.is_empty() {
+                            out_args = Some(arguments.clone());
+                        }
+                    } else if let Some(name) = name {
+                        let mut args = std::mem::take(&mut state.pending_args);
+                        args.push_str(arguments);
+                        state.opened = true;
+                        opening_name = Some(name.to_string());
+                        out_args = Some(args);
+                    } else {
+                        state.pending_args.push_str(arguments);
+                    }
                 }
-                function.insert("arguments".into(), arguments.clone().into());
-                let mut delta = self.open_delta();
-                delta.insert(
-                    "tool_calls".into(),
-                    serde_json::json!([{
-                        "index": index,
-                        "id": id,
-                        "type": "function",
-                        "function": serde_json::Value::Object(function),
-                    }]),
-                );
-                frames.push(self.chunk(serde_json::Value::Object(delta), None));
+
+                if opening_name.is_some() || out_args.is_some() {
+                    let mut function = serde_json::Map::new();
+                    if let Some(name) = opening_name {
+                        function.insert("name".into(), name.into());
+                    }
+                    function.insert("arguments".into(), out_args.unwrap_or_default().into());
+                    let mut delta = self.open_delta();
+                    delta.insert(
+                        "tool_calls".into(),
+                        serde_json::json!([{
+                            "index": index,
+                            "id": id,
+                            "type": "function",
+                            "function": serde_json::Value::Object(function),
+                        }]),
+                    );
+                    frames.push(self.chunk(serde_json::Value::Object(delta), None));
+                }
             }
             StreamPart::Usage { .. } => {
                 // usage is attached to the Finish chunk below; nothing here.

@@ -9630,6 +9630,77 @@ fn responses_encodes_mcp_call_output_item() {
     );
 }
 
+/// Regression #560: some OpenAI-compatible upstreams (e.g. DeepSeek / Kimi)
+/// stream a tool call whose FIRST `tool_calls` delta carries only `id` +
+/// partial `arguments`, delivering `function.name` in a LATER delta. The Chat
+/// Completions stream encoder must hold the tool call's opening chunk back until
+/// the name is known, so the first `tool_calls` chunk a client sees always
+/// carries a string `function.name`. Otherwise strict clients (the Vercel AI
+/// SDK `@ai-sdk/openai-compatible` / opencode) abort the stream with
+/// `AI_InvalidResponseDataError: Expected 'function.name' to be a string`.
+/// <https://github.com/anomalyco/opencode/issues/24137>
+#[test]
+fn chat_encode_late_tool_name_first_chunk_carries_name() {
+    let parts = decode_stream(
+        ApiProtocol::ChatCompletions,
+        &[
+            // First delta: id + empty arguments, NO function.name yet.
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"call_123","type":"function",
+                     "function":{"arguments":""}}]}}]}),
+            ),
+            // The name arrives only on the second delta, alongside partial args.
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"call_123","type":"function",
+                     "function":{"name":"bash","arguments":"{\"cmd\":\""}}]}}]}),
+            ),
+            // Continuation re-sends an empty name (normalized to None upstream).
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"call_123","type":"function",
+                     "function":{"name":"","arguments":"ls\"}"}}]}}]}),
+            ),
+            (
+                "",
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ),
+        ],
+    );
+    let events = encode_stream_events(ApiProtocol::ChatCompletions, &parts);
+
+    // Every emitted `tool_calls[]` delta, in wire order.
+    let tool_deltas: Vec<serde_json::Value> = events
+        .iter()
+        .filter_map(|(_, chunk)| chunk["choices"][0]["delta"].get("tool_calls").cloned())
+        .flat_map(|tc| tc.as_array().cloned().unwrap_or_default())
+        .collect();
+
+    // The FIRST tool_calls chunk the client sees must name the function.
+    let first = tool_deltas
+        .first()
+        .expect("at least one tool_calls delta is emitted");
+    assert_eq!(
+        first["function"]["name"], "bash",
+        "first streamed tool_calls chunk must carry a string function.name; got {first}"
+    );
+    assert_eq!(first["id"], "call_123", "tool-call id is preserved");
+
+    // All argument fragments survive the buffering, in order.
+    let args: String = tool_deltas
+        .iter()
+        .filter_map(|d| d["function"]["arguments"].as_str())
+        .collect();
+    assert_eq!(
+        args, "{\"cmd\":\"ls\"}",
+        "argument fragments survive the hold-until-name buffering: {tool_deltas:?}"
+    );
+}
+
 #[test]
 fn coarse_wires_drop_server_tool_activity() {
     // Chat Completions and Generate Content have no server-tool / MCP stream
