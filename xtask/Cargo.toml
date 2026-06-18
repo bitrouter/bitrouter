@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[package.metadata.dist]
+dist = false
+
 [dependencies]
 # Config types are the canonical schema definition; the `config_file` feature
 # pulls the module in. `schemars` derives the JSON Schema from them.
