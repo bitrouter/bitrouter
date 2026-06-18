@@ -10,6 +10,7 @@ pr_labels = ["release"]           # add the `release` label to the release Pull 
 [[package]]
 name = "xtask"
 release = false
+publish = false
 
 # Only the main binary package gets a tag, release, and changelog entry.
 [[package]]
