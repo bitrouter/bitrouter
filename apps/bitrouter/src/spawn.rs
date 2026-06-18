@@ -54,16 +54,18 @@ impl SpawnAgent {
                 id: "claude",
                 // The executable name looked up on `PATH`.
                 binary: "claude",
-                // Claude Code reads its endpoint from `ANTHROPIC_BASE_URL`.
-                // https://code.claude.com/docs/en/settings#environment-variables
+                // Claude Code reads its gateway endpoint from
+                // `ANTHROPIC_BASE_URL`, and authenticates to that gateway with
+                // `ANTHROPIC_AUTH_TOKEN` (sent as the `Authorization: Bearer`
+                // header) — this is the documented way to route Claude Code
+                // through a custom LLM gateway, and `Authorization: Bearer` is
+                // exactly the inbound credential BitRouter expects (`brk_…`).
+                // `ANTHROPIC_API_KEY` would instead be sent as `x-api-key`, the
+                // first-party Anthropic header, which is not BitRouter's inbound
+                // scheme — so we deliberately set the auth token, not the API key.
+                // https://code.claude.com/docs/en/llm-gateway#authentication-methods
                 base_url_env: "ANTHROPIC_BASE_URL",
-                // When BitRouter admits credential-less local requests
-                // (`skip_auth: true`, the `bitrouter init` default), Claude
-                // Code still refuses to start without *some* credential. We
-                // set a sentinel only when the user hasn't already exported a
-                // real key, so the agent runs in API-key mode against the
-                // local router; BitRouter ignores the value under skip_auth.
-                api_key_env: "ANTHROPIC_API_KEY",
+                auth_token_env: "ANTHROPIC_AUTH_TOKEN",
             },
         }
     }
@@ -78,16 +80,24 @@ pub struct AgentSpec {
     pub id: &'static str,
     /// Executable name searched for on `PATH`.
     pub binary: &'static str,
-    /// Env var the agent reads its API base URL from.
+    /// Env var the agent reads its gateway base URL from.
     pub base_url_env: &'static str,
-    /// Env var the agent reads its API credential from.
-    pub api_key_env: &'static str,
+    /// Env var the agent reads its gateway bearer token from (sent as
+    /// `Authorization: Bearer`), which is BitRouter's inbound auth scheme.
+    pub auth_token_env: &'static str,
 }
 
+/// BitRouter's own API-key env var (`brk_…`). When set, we forward it to the
+/// agent as the gateway bearer token so the agent authenticates to BitRouter
+/// with the user's real credential instead of the placeholder.
+const BITROUTER_API_KEY_ENV: &str = "BITROUTER_API_KEY";
+
 /// A sentinel placeholder credential, injected into the agent's environment
-/// only when the user has *not* already exported a real key. It lets the
-/// harness start in API-key mode; under `skip_auth: true` BitRouter ignores
-/// it, and under auth the user is expected to export their own `brk_…` key.
+/// only when the user has neither set the agent's auth-token var nor exported a
+/// `BITROUTER_API_KEY`. It lets the harness start (it refuses to run without
+/// *some* credential); under `skip_auth: true` (the `bitrouter init` default)
+/// BitRouter ignores the value, and under auth the user is expected to export a
+/// real `brk_…` key.
 const PLACEHOLDER_API_KEY: &str = "bitrouter-local";
 
 /// Options gathered from the CLI for one `spawn` invocation.
@@ -129,7 +139,11 @@ pub async fn run(cfg: &bitrouter_sdk::config::Config, opts: SpawnOptions) -> Res
     // friendlier than a wall of HTTP errors inside the agent.
     warn_if_daemon_unreachable(&cfg.server.listen);
 
-    let env = build_child_env(&spec, &base_url, std::env::var_os(spec.api_key_env).is_some());
+    // Auth-token precedence (highest first): an auth token the user already
+    // exported for this agent → the BitRouter API key → a local placeholder.
+    let parent_auth = nonempty_env(spec.auth_token_env);
+    let bitrouter_key = nonempty_env(BITROUTER_API_KEY_ENV);
+    let env = build_child_env(&spec, &base_url, parent_auth, bitrouter_key);
 
     let p = Palette::for_stderr();
     eprintln!(
@@ -164,22 +178,35 @@ pub async fn run(cfg: &bitrouter_sdk::config::Config, opts: SpawnOptions) -> Res
 }
 
 /// Build the environment overrides layered on top of the inherited parent
-/// environment: always force the routing base URL, and inject a placeholder
-/// credential only when the user hasn't exported a real one.
+/// environment: always force the routing base URL, and resolve the gateway
+/// bearer token by precedence.
 ///
 /// Returned as an explicit list (rather than mutating the global env) so the
-/// logic is unit-testable. `parent_has_key` is the caller's check of whether
-/// the agent's API-key var is already present in the parent environment.
+/// logic is unit-testable. `parent_auth` is any auth token the user already
+/// exported for the agent; `bitrouter_key` is the value of `BITROUTER_API_KEY`.
+/// Precedence: `parent_auth` → `bitrouter_key` → placeholder. We always set the
+/// auth token (never just inherit) so that an inherited `ANTHROPIC_API_KEY`
+/// (which in this repo is the *upstream* Anthropic provider key, not a valid
+/// BitRouter inbound credential) cannot accidentally become the auth Claude
+/// Code sends to the router.
 fn build_child_env(
     spec: &AgentSpec,
     base_url: &str,
-    parent_has_key: bool,
+    parent_auth: Option<String>,
+    bitrouter_key: Option<String>,
 ) -> Vec<(&'static str, String)> {
-    let mut env = vec![(spec.base_url_env, base_url.to_string())];
-    if !parent_has_key {
-        env.push((spec.api_key_env, PLACEHOLDER_API_KEY.to_string()));
-    }
-    env
+    let token = parent_auth
+        .or(bitrouter_key)
+        .unwrap_or_else(|| PLACEHOLDER_API_KEY.to_string());
+    vec![
+        (spec.base_url_env, base_url.to_string()),
+        (spec.auth_token_env, token),
+    ]
+}
+
+/// Read an environment variable, treating an unset *or empty* value as absent.
+fn nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
 /// Derive the client-facing base URL from the daemon's `server.listen`
@@ -187,17 +214,40 @@ fn build_child_env(
 /// client cannot *connect* to `0.0.0.0` / `::` — those mean "bind every
 /// interface", not "reach me here".
 fn derive_base_url(listen: &str) -> String {
-    let (host, port) = match listen.rsplit_once(':') {
-        Some((h, p)) => (h, p),
-        // No port — treat the whole string as the host and use the default.
-        None => (listen, "4356"),
-    };
-    let host = match host {
+    let (host, port) = split_listen(listen);
+    format!("http://{}:{}", rewrite_host(host), port)
+}
+
+/// The default daemon port (mirrors `ServerConfig::default().listen`). Used
+/// when `server.listen` carries a bare host with no `:port`.
+const DEFAULT_PORT: &str = "4356";
+
+/// Split a `server.listen` value into `(host, port)`, defaulting the port when
+/// absent. Handles bracketed IPv6 (`[::1]:4356`, `[::1]`) so the `rsplit_once`
+/// does not mistake a colon *inside* the brackets for the port separator.
+fn split_listen(listen: &str) -> (&str, &str) {
+    // Bracketed IPv6: the port (if any) follows the closing bracket.
+    if listen.starts_with('[') {
+        return match listen.rsplit_once("]:") {
+            Some((host, port)) => (&listen[..host.len() + 1], port),
+            // `[::1]` with no port.
+            None => (listen, DEFAULT_PORT),
+        };
+    }
+    match listen.rsplit_once(':') {
+        Some((host, port)) => (host, port),
+        None => (listen, DEFAULT_PORT),
+    }
+}
+
+/// Rewrite a wildcard bind host to its loopback equivalent for a *client*
+/// connection. `0.0.0.0` / empty → `127.0.0.1`; `::` / `[::]` → `[::1]`.
+fn rewrite_host(host: &str) -> &str {
+    match host {
         "0.0.0.0" | "" => "127.0.0.1",
         "::" | "[::]" => "[::1]",
         other => other,
-    };
-    format!("http://{host}:{port}")
+    }
 }
 
 /// Locate an executable on `PATH`. Pure-`std` (no `which` crate) so the
@@ -222,7 +272,10 @@ fn find_on_path(name: &str, path: Option<OsString>, extra: &[PathBuf]) -> Option
         if is_executable_file(&candidate) {
             return Some(candidate);
         }
-        // On Windows, executables carry an extension; probe the PATHEXT set.
+        // On Windows, executables carry an extension. We probe the common
+        // launcher extensions rather than parsing the full `%PATHEXT%` set —
+        // agent CLIs ship as `.exe` or an npm `.cmd`/`.bat` shim, which these
+        // cover; an exotic `%PATHEXT%` entry (`.com`, `.ps1`) would be missed.
         #[cfg(windows)]
         {
             for ext in ["exe", "cmd", "bat"] {
@@ -354,17 +407,8 @@ fn warn_if_daemon_unreachable(listen: &str) {
 
     // Map the wildcard bind host to loopback for the *connect* attempt, same
     // as the base-URL derivation.
-    let probe = listen
-        .rsplit_once(':')
-        .map(|(h, port)| {
-            let h = match h {
-                "0.0.0.0" | "" => "127.0.0.1",
-                "::" | "[::]" => "[::1]",
-                other => other,
-            };
-            format!("{h}:{port}")
-        })
-        .unwrap_or_else(|| listen.to_string());
+    let (host, port) = split_listen(listen);
+    let probe = format!("{}:{}", rewrite_host(host), port);
 
     let reachable = probe
         .to_socket_addrs()
@@ -472,7 +516,6 @@ mod tests {
     fn base_url_rewrites_wildcard_bind_to_loopback() {
         assert_eq!(derive_base_url("0.0.0.0:4356"), "http://127.0.0.1:4356");
         assert_eq!(derive_base_url("[::]:4356"), "http://[::1]:4356");
-        assert_eq!(derive_base_url(":::4356"), "http://[::1]:4356");
     }
 
     #[test]
@@ -482,39 +525,64 @@ mod tests {
             derive_base_url("router.internal:8080"),
             "http://router.internal:8080"
         );
+        // A bracketed IPv6 literal keeps its brackets and port.
+        assert_eq!(derive_base_url("[::1]:9000"), "http://[::1]:9000");
     }
 
     #[test]
     fn base_url_defaults_port_when_missing() {
         assert_eq!(derive_base_url("127.0.0.1"), "http://127.0.0.1:4356");
+        // Bracketed IPv6 without a port must not split inside the brackets.
+        assert_eq!(derive_base_url("[::1]"), "http://[::1]:4356");
     }
 
     #[test]
     fn child_env_always_sets_base_url() {
         let spec = SpawnAgent::Claude.spec();
-        let env = build_child_env(&spec, "http://127.0.0.1:4356", false);
+        let env = build_child_env(&spec, "http://127.0.0.1:4356", None, None);
         assert!(
             env.iter()
                 .any(|(k, v)| *k == "ANTHROPIC_BASE_URL" && v == "http://127.0.0.1:4356")
         );
     }
 
+    /// Helper: pull the resolved auth-token value out of a built env.
+    fn auth_token(env: &[(&'static str, String)]) -> Option<String> {
+        env.iter()
+            .find(|(k, _)| *k == "ANTHROPIC_AUTH_TOKEN")
+            .map(|(_, v)| v.clone())
+    }
+
     #[test]
-    fn child_env_injects_placeholder_key_only_when_absent() {
+    fn child_env_auth_token_precedence() {
         let spec = SpawnAgent::Claude.spec();
 
-        // No parent key → placeholder injected.
-        let with = build_child_env(&spec, "http://x:1", false);
-        assert_eq!(
-            with.iter()
-                .find(|(k, _)| *k == "ANTHROPIC_API_KEY")
-                .map(|(_, v)| v.as_str()),
-            Some(PLACEHOLDER_API_KEY),
+        // User's explicit auth token wins over everything.
+        let explicit = build_child_env(
+            &spec,
+            "http://x:1",
+            Some("user-token".into()),
+            Some("brk_key".into()),
         );
+        assert_eq!(auth_token(&explicit).as_deref(), Some("user-token"));
 
-        // Parent already has a key → we must not clobber it.
-        let without = build_child_env(&spec, "http://x:1", true);
-        assert!(without.iter().all(|(k, _)| *k != "ANTHROPIC_API_KEY"));
+        // No explicit token → fall back to the BitRouter API key.
+        let from_key = build_child_env(&spec, "http://x:1", None, Some("brk_key".into()));
+        assert_eq!(auth_token(&from_key).as_deref(), Some("brk_key"));
+
+        // Neither set → the local placeholder so the harness still starts.
+        let placeholder = build_child_env(&spec, "http://x:1", None, None);
+        assert_eq!(auth_token(&placeholder).as_deref(), Some(PLACEHOLDER_API_KEY));
+    }
+
+    #[test]
+    fn child_env_never_inherits_api_key_as_auth() {
+        // The auth token is ALWAYS set explicitly, so a stray inherited
+        // ANTHROPIC_API_KEY can never silently become the inbound credential.
+        let spec = SpawnAgent::Claude.spec();
+        let env = build_child_env(&spec, "http://x:1", None, None);
+        assert!(env.iter().any(|(k, _)| *k == "ANTHROPIC_AUTH_TOKEN"));
+        assert!(env.iter().all(|(k, _)| *k != "ANTHROPIC_API_KEY"));
     }
 
     #[test]
@@ -522,7 +590,7 @@ mod tests {
         let spec = SpawnAgent::Claude.spec();
         assert_eq!(spec.binary, "claude");
         assert_eq!(spec.base_url_env, "ANTHROPIC_BASE_URL");
-        assert_eq!(spec.api_key_env, "ANTHROPIC_API_KEY");
+        assert_eq!(spec.auth_token_env, "ANTHROPIC_AUTH_TOKEN");
     }
 
     #[test]
@@ -562,5 +630,25 @@ mod tests {
     fn find_on_path_returns_none_when_absent() {
         let path = std::env::join_paths([std::env::temp_dir().as_os_str()]).unwrap();
         assert!(find_on_path("definitely-not-a-real-binary-xyz", Some(path), &[]).is_none());
+    }
+
+    #[test]
+    fn find_on_path_falls_back_to_extra_dirs() {
+        // The post-install re-resolution relies on `extra` (e.g. ~/.local/bin)
+        // even when PATH is empty — exercise that path explicitly.
+        let dir =
+            std::env::temp_dir().join(format!("bitrouter-spawn-extra-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("fake-agent");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // PATH is None entirely; the binary is only reachable via `extra`.
+        let found = find_on_path("fake-agent", None, std::slice::from_ref(&dir));
+        assert_eq!(found.as_deref(), Some(bin.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

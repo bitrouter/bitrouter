@@ -204,6 +204,11 @@ enum Command {
     /// bitrouter options come before `--`, everything after `--` is forwarded
     /// to the agent verbatim, e.g.
     /// `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions`.
+    ///
+    /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
+    /// set; otherwise a local placeholder is used (fine under the `skip_auth`
+    /// default written by `bitrouter init`). A missing agent binary is offered
+    /// for install via its official native installer.
     Spawn {
         /// Which agent harness to launch.
         #[arg(short, long, value_enum)]
