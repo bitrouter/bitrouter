@@ -12,10 +12,6 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 
-/// Workspace version, stamped into the schema `$id`. Every workspace crate
-/// shares `version.workspace`, so xtask's own version is the workspace version.
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The task is the first non-flag argument, so flag order doesn't matter
@@ -53,15 +49,11 @@ fn schema_path() -> PathBuf {
 fn render_schema() -> Result<String> {
     let mut root = serde_json::to_value(schemars::schema_for!(bitrouter_sdk::config::Config))
         .context("serializing generated schema")?;
-    // Stamp identity onto the root so a published copy is self-describing and
-    // tools (SchemaStore, IDEs) can pin a version.
+    // Add a stable, version-independent title. $id is intentionally omitted
+    // from the committed snapshot — it couples the file to the workspace
+    // version and breaks the drift check on every release-plz PR. A versioned
+    // $id should be injected at publish time, not stored in the repo.
     if let Some(obj) = root.as_object_mut() {
-        obj.insert(
-            "$id".to_string(),
-            serde_json::Value::String(format!(
-                "https://bitrouter.dev/schema/v{VERSION}/config.schema.json"
-            )),
-        );
         obj.insert(
             "title".to_string(),
             serde_json::Value::String("BitRouter config".to_string()),

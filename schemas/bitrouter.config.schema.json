@@ -813,7 +813,6 @@
       ]
     }
   },
-  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.15/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "The top-level configuration.",
   "properties": {
