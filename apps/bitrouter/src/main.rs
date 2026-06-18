@@ -3,7 +3,7 @@
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `route` / `init` / `key sign` / `models` / `tools` /
 //! `policy create` / `providers (list|login|logout)` / `agents` /
-//! `agent-proxy` / `cloud` / `skills`. Cloud-account sign-in lives under
+//! `agent-proxy` / `spawn` / `cloud` / `skills`. Cloud-account sign-in lives under
 //! `cloud (login|logout|whoami)`; per-provider credentials under
 //! `providers (login|logout)`. Daemon control runs over a local IPC endpoint
 //! (a Unix domain socket, or a Windows named pipe) — `start` spawns `serve`
@@ -197,6 +197,36 @@ enum Command {
         /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
+    },
+    /// Launch a coding-agent harness (Claude Code) as a child process with
+    /// its API base URL pointed at the local BitRouter daemon — no agent
+    /// config files are touched. Follows `cargo run`'s separator convention:
+    /// bitrouter options come before `--`, everything after `--` is forwarded
+    /// to the agent verbatim, e.g.
+    /// `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions`.
+    Spawn {
+        /// Which agent harness to launch.
+        #[arg(short, long, value_enum)]
+        agent: bitrouter::spawn::SpawnAgent,
+        /// Path to `bitrouter.yaml` (used to derive the daemon base URL).
+        /// When omitted, the binary resolves in this order: `./bitrouter.yaml`
+        /// → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml`
+        /// → zero-config in-memory defaults.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Override the agent's API base URL instead of deriving it from
+        /// `server.listen` (e.g. when the daemon listens on a non-default
+        /// address or a remote BitRouter).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Never offer to install a missing agent — fail with the install
+        /// command instead. (Auto-implied when stdin is not a TTY.)
+        #[arg(long)]
+        no_install: bool,
+        /// Arguments forwarded verbatim to the agent binary. Everything after
+        /// `--` lands here.
+        #[arg(last = true, allow_hyphen_values = true)]
+        agent_args: Vec<String>,
     },
     /// Manage your BitRouter Cloud account — sign in/out, API keys, usage,
     /// billing, policies, BYOK, OAuth clients. Start with `cloud login`.
@@ -552,6 +582,26 @@ async fn run() -> Result<()> {
         Command::AgentProxy { agent, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             agent_proxy_cmd(&agent, &source).await
+        }
+        Command::Spawn {
+            agent,
+            config,
+            base_url,
+            no_install,
+            agent_args,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            bitrouter::spawn::run(
+                &cfg,
+                bitrouter::spawn::SpawnOptions {
+                    agent,
+                    agent_args,
+                    base_url,
+                    no_install,
+                },
+            )
+            .await
         }
         Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action).await,
