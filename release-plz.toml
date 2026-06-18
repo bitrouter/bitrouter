@@ -6,6 +6,11 @@ pr_branch_prefix = "release-plz/" # PR branch prefix
 pr_name = "chore(release): publish v{{ version }}"
 pr_labels = ["release"]           # add the `release` label to the release Pull Request
 
+# xtask is a workspace-internal automation binary; never release or publish it.
+[[package]]
+name = "xtask"
+release = false
+
 # Only the main binary package gets a tag, release, and changelog entry.
 [[package]]
 name = "bitrouter"

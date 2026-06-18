@@ -676,6 +676,11 @@
     "ServerToolsConfig": {
       "description": "The OSS `server_tools` config section. Names the MCP servers whose tools\nBitRouter attaches to LLM requests and executes inside the loop, with an\noptional override of the loop's iteration cap. An empty `mcp_servers`\nleaves the pipeline strictly single-shot.",
       "properties": {
+        "advisor": {
+          "default": false,
+          "description": "Enable the `advisor` server tool (consult a stronger model mid-task).\nAdvertised per-request only when the caller declares `bitrouter:advisor`.",
+          "type": "boolean"
+        },
         "fusion": {
           "anyOf": [
             {
@@ -704,6 +709,11 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "subagent": {
+          "default": false,
+          "description": "Enable the `subagent` server tool (delegate a task to a worker model).\nAdvertised per-request only when the caller declares `bitrouter:subagent`.",
+          "type": "boolean"
         }
       },
       "type": "object"
