@@ -46,6 +46,14 @@ pub struct AttestationChecks {
     pub debug_disabled: bool,
     /// dstack RTMR3 / event-log replay, when the report carries an event log.
     pub event_log_rtmr_ok: Option<bool>,
+    /// LOAD-BEARING (issue #567): the quote's firmware-measured base registers
+    /// (`MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2`) match a pinned reference bundle. Those
+    /// registers are set before the guest runs and cannot be forged on genuine
+    /// TDX hardware, so without this gate a malicious base image could forge the
+    /// guest-extended RTMR3 labels (`event_log_rtmr_ok`) and pass `policy_accepts`
+    /// while running unauthorized code. `false` fail-closed when the quote never
+    /// verified or its base registers aren't pinned.
+    pub base_measurements_match: bool,
     /// The platform's Intel DCAP TCB status, surfaced as a claim (e.g.
     /// `"UpToDate"`, `"OutOfDate"`). `None` when no collateral verification
     /// produced one. The hard gate is [`Self::tcb_level_acceptable`].
@@ -71,6 +79,7 @@ impl AttestationChecks {
             policy_accepts: false,
             debug_disabled: false,
             event_log_rtmr_ok: None,
+            base_measurements_match: false,
             tcb_status: None,
             tcb_level_acceptable: false,
         }
@@ -82,7 +91,9 @@ impl AttestationChecks {
     /// `event_log_rtmr_ok` is **required** to be `Some(true)`: it is the anchor
     /// that binds the cloud-supplied `info` (and thus `policy_accepts`) to the
     /// genuine TEE measurement, so a `None` ("not checked") or `Some(false)`
-    /// ("replay/binding failed") verdict must not pass.
+    /// ("replay/binding failed") verdict must not pass. `base_measurements_match`
+    /// is likewise a hard gate (issue #567): RTMR3 is only trustworthy once the
+    /// firmware-measured base registers it sits above are pinned and matched.
     pub fn all_pass(&self) -> bool {
         self.gpu_nras_pass
             && self.dcap_quote_valid
@@ -91,6 +102,7 @@ impl AttestationChecks {
             && self.policy_accepts
             && self.debug_disabled
             && self.event_log_rtmr_ok == Some(true)
+            && self.base_measurements_match
             && self.tcb_level_acceptable
     }
 }

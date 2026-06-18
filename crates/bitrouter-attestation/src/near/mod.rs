@@ -156,6 +156,17 @@ impl NearVerifier {
             Err(_) => false,
         };
 
+        // Assert the quote's firmware-measured base registers
+        // (MRTD/RTMR0/RTMR1/RTMR2) against a pinned reference. Unlike RTMR3 above,
+        // these are measured before the guest runs and so can't be forged by a
+        // malicious base image on genuine TDX hardware — the unforgeable
+        // distinguisher the RTMR3-only anchor was missing (issue #567). Fail
+        // closed when the quote never verified (`measurements` is `None`).
+        let base_measurements_match = measurements.as_ref().is_some_and(|mm| {
+            self.policy
+                .accepts_base_measurements(&mm.mr_td, &mm.rtmr0, &mm.rtmr1, &mm.rtmr2)
+        });
+
         // Surface the platform TCB status as a claim, and gate it against the
         // policy's floor. A signature-valid but out-of-date quote (`dcap-qvl`
         // returns `Ok` for it) passes every check above, so without this gate a
@@ -175,6 +186,7 @@ impl NearVerifier {
             policy_accepts,
             debug_disabled,
             event_log_rtmr_ok,
+            base_measurements_match,
             tcb_status,
             tcb_level_acceptable,
         }
@@ -421,7 +433,32 @@ mod tests {
     }
 
     fn policy(workload: &str, kms: &str) -> Arc<AciDcapVerifierPolicy> {
-        Arc::new(AciDcapVerifierPolicy::new([workload.to_string()], [], [kms.to_string()]).unwrap())
+        Arc::new(
+            AciDcapVerifierPolicy::new(
+                [workload.to_string()],
+                [],
+                [kms.to_string()],
+                [fixture_base_mrs()],
+            )
+            .unwrap(),
+        )
+    }
+
+    /// `mrtd ‖ rtmr0 ‖ rtmr1 ‖ rtmr2` decoded from the genuine fixture quote —
+    /// the legitimate base bundle an operator pins (issue #567).
+    fn fixture_base_mrs() -> String {
+        let r: AttestationReport = serde_json::from_str(FIXTURE).unwrap();
+        let m = crate::near::tdx::parse_tdx_quote(
+            &hex::decode(&r.model_attestations[0].intel_quote).unwrap(),
+        )
+        .unwrap();
+        format!(
+            "{}{}{}{}",
+            hex::encode(m.mr_td),
+            hex::encode(m.rtmr0),
+            hex::encode(m.rtmr1),
+            hex::encode(m.rtmr2),
+        )
     }
 
     fn verifier(
@@ -463,6 +500,8 @@ mod tests {
         // The happy path is UpToDate and gated as acceptable.
         assert_eq!(verdict.checks.tcb_status.as_deref(), Some("UpToDate"));
         assert!(verdict.checks.tcb_level_acceptable);
+        // The genuine quote's base registers match the pinned bundle (#567).
+        assert!(verdict.checks.base_measurements_match);
     }
 
     #[tokio::test]
@@ -489,6 +528,7 @@ mod tests {
         assert!(c.gpu_nras_pass && c.dcap_quote_valid && c.report_data_binds_key_and_nonce);
         assert!(c.compose_matches_mr_config && c.policy_accepts && c.debug_disabled);
         assert_eq!(c.event_log_rtmr_ok, Some(true));
+        assert!(c.base_measurements_match);
         assert_eq!(c.tcb_status.as_deref(), Some("OutOfDate"));
         assert!(!c.tcb_level_acceptable);
         assert!(!c.all_pass());
@@ -505,9 +545,14 @@ mod tests {
             &["INTEL-SA-00615"],
         ));
         let pol = Arc::new(
-            AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
-                .unwrap()
-                .with_allowed_tcb_advisory_ids(["INTEL-SA-00615".to_string()]),
+            AciDcapVerifierPolicy::new(
+                [APP_ID.to_string()],
+                [],
+                [KMS_ROOT_DER_SPKI.to_string()],
+                [fixture_base_mrs()],
+            )
+            .unwrap()
+            .with_allowed_tcb_advisory_ids(["INTEL-SA-00615".to_string()]),
         );
         let v = verifier_with_quotes(Arc::new(StubTransport::passing()), pol, quotes);
         let verdict = v
@@ -528,9 +573,14 @@ mod tests {
             &["INTEL-SA-00615", "INTEL-SA-00999"],
         ));
         let pol = Arc::new(
-            AciDcapVerifierPolicy::new([APP_ID.to_string()], [], [KMS_ROOT_DER_SPKI.to_string()])
-                .unwrap()
-                .with_allowed_tcb_advisory_ids(["INTEL-SA-00615".to_string()]),
+            AciDcapVerifierPolicy::new(
+                [APP_ID.to_string()],
+                [],
+                [KMS_ROOT_DER_SPKI.to_string()],
+                [fixture_base_mrs()],
+            )
+            .unwrap()
+            .with_allowed_tcb_advisory_ids(["INTEL-SA-00615".to_string()]),
         );
         let v = verifier_with_quotes(Arc::new(StubTransport::passing()), pol, quotes);
         let verdict = v
@@ -555,6 +605,49 @@ mod tests {
             .unwrap();
         assert!(!verdict.verified);
         assert!(!verdict.checks.policy_accepts);
+        assert!(verdict.attested_addresses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejects_a_genuine_tee_whose_base_measurements_are_not_pinned() {
+        // THE #567 case end-to-end: a malicious base OS on genuine TDX hardware
+        // forges its guest-extended RTMR3 labels and binds its own signing key, so
+        // every app-level check passes — but its firmware-measured base registers
+        // differ from the legitimate ones and cannot be forged. Model that by
+        // pinning a DIFFERENT base bundle than the fixture quote presents; before
+        // this gate existed, the verdict verified anyway.
+        let mut wrong_base = fixture_base_mrs();
+        wrong_base.replace_range(0..2, "00"); // corrupt MRTD's first byte
+        let pol = Arc::new(
+            AciDcapVerifierPolicy::new(
+                [APP_ID.to_string()],
+                [],
+                [KMS_ROOT_DER_SPKI.to_string()],
+                [wrong_base],
+            )
+            .unwrap(),
+        );
+        let v = verifier(Arc::new(StubTransport::passing()), pol);
+        let verdict = v
+            .verify_attestation(MODEL, FIXTURE_NONCE, 1_000)
+            .await
+            .unwrap();
+        let c = &verdict.checks;
+        // Everything EXCEPT the base-measurement gate passes — proving it is the
+        // sole reason for rejection (i.e. exactly what used to verify pre-fix).
+        assert!(c.gpu_nras_pass && c.dcap_quote_valid && c.report_data_binds_key_and_nonce);
+        assert!(c.compose_matches_mr_config && c.policy_accepts && c.debug_disabled);
+        assert_eq!(c.event_log_rtmr_ok, Some(true));
+        assert!(c.tcb_level_acceptable);
+        assert!(
+            !c.base_measurements_match,
+            "forged base MRs must not match the pinned bundle"
+        );
+        assert!(!c.all_pass());
+        assert!(
+            !verdict.verified,
+            "a base image whose MRs aren't pinned must not verify (#567)"
+        );
         assert!(verdict.attested_addresses.is_empty());
     }
 
