@@ -3,10 +3,10 @@
 //!
 //! The agent's traffic then routes through BitRouter without ever touching the
 //! agent's own config files: instead of mutating `~/.claude/config.json` (the
-//! `cc-switch` "config takeover" model — invasive, needs backup/restore and
-//! crash recovery), we set `ANTHROPIC_BASE_URL` in the *child process
-//! environment only*. Nothing on disk changes, and if BitRouter is down the
-//! user simply runs the agent directly.
+//! "config takeover" model used by some switcher tools — invasive, needs
+//! backup/restore and crash recovery), we set `ANTHROPIC_BASE_URL` in the
+//! *child process environment only*. Nothing on disk changes, and if BitRouter
+//! is down the user simply runs the agent directly.
 //!
 //! CLI shape follows `cargo run`'s separator convention so there is no
 //! ambiguity about which flags belong to which program:
