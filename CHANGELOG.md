@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.16](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.15...v1.0.0-alpha.16)
+
+
+### ⛰️ Features
+
+- *(attestation)* NEAR confidential-inference verification (L1 + L1.5) ([#563](https://github.com/bitrouter/bitrouter/pull/563)) - ([9dc0a1d](https://github.com/bitrouter/bitrouter/commit/9dc0a1d9cea18b74f7ee112c85e5968545957103))
+- *(config)* JSON Schema + config validate for IaC ([#575](https://github.com/bitrouter/bitrouter/pull/575)) - ([8ab2382](https://github.com/bitrouter/bitrouter/commit/8ab2382240964dbbdb7804c808d4c22eead3b672))
+- *(fusion)* Multi-model deliberation server tool + alias ([#574](https://github.com/bitrouter/bitrouter/pull/574)) - ([c7bfac9](https://github.com/bitrouter/bitrouter/commit/c7bfac9482d86287e8c44d789f532edc16516e62))
+- *(mcp)* Answer the MCP initialize/ping handshake at the gateway ([#561](https://github.com/bitrouter/bitrouter/pull/561)) - ([43d1365](https://github.com/bitrouter/bitrouter/commit/43d1365fce758f4fb2b4ea528d01ef55fdd92d82))
+- *(sdk)* Expose server-tool usage for observability ([#568](https://github.com/bitrouter/bitrouter/pull/568)) - ([5eaf1c3](https://github.com/bitrouter/bitrouter/commit/5eaf1c35d399d6e84f8fd0cd9c644a0f6d1cf17b))
+
+### 🐛 Bug Fixes
+
+- *(attestation)* [**breaking**] Pin & assert TDX base MRs ([#567](https://github.com/bitrouter/bitrouter/pull/567)) ([#578](https://github.com/bitrouter/bitrouter/pull/578)) - ([62e412c](https://github.com/bitrouter/bitrouter/commit/62e412cd5b035b7b4e379cb14829f9d4c599bfec))
+- *(attestation)* Enforce DCAP TCB status floor ([#573](https://github.com/bitrouter/bitrouter/pull/573)) - ([5193bf9](https://github.com/bitrouter/bitrouter/commit/5193bf9cece32e1ae006e876e180d73d0c8e7356))
+- *(chat)* Buffer streamed tool call until name arrives ([#577](https://github.com/bitrouter/bitrouter/pull/577)) - ([ab02eb6](https://github.com/bitrouter/bitrouter/commit/ab02eb6ddc4fd56110f5d7038b5b19830bb588ea))
+
+### 🚜 Refactor
+
+- *(server-tools)* Move advisor/sub-agent into the SDK ([#576](https://github.com/bitrouter/bitrouter/pull/576)) - ([5ffe7b1](https://github.com/bitrouter/bitrouter/commit/5ffe7b13b0d808f45b82a70cc73f8450e5965114))
+
+
 ## [1.0.0-alpha.15](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.14...v1.0.0-alpha.15)
 
 
