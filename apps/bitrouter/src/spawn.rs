@@ -572,7 +572,10 @@ mod tests {
 
         // Neither set → the local placeholder so the harness still starts.
         let placeholder = build_child_env(&spec, "http://x:1", None, None);
-        assert_eq!(auth_token(&placeholder).as_deref(), Some(PLACEHOLDER_API_KEY));
+        assert_eq!(
+            auth_token(&placeholder).as_deref(),
+            Some(PLACEHOLDER_API_KEY)
+        );
     }
 
     #[test]
