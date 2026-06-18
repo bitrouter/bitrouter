@@ -11,6 +11,9 @@ jobs:
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: read

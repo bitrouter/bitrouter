@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0-alpha.16](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.15...v1.0.0-alpha.16)
+## [1.0.0-alpha.17](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.15...v1.0.0-alpha.17)
 
 
 ### ⛰️ Features
