@@ -59,8 +59,27 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Run release-plz
+        id: release-plz
         uses: release-plz/action@v0.5
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
+
+      - name: Bump schema $id to match release version
+        if: steps.release-plz.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          RELEASE_PR: ${{ steps.release-plz.outputs.pr }}
+        run: |
+          branch=$(echo "$RELEASE_PR" | jq -r '.head_branch')
+          git fetch origin "$branch"
+          git checkout "$branch"
+          cargo xtask generate-schema
+          git diff --quiet schemas/ && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add schemas/bitrouter.config.schema.json
+          git commit -m "chore: update config schema \$id for release"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git push origin "$branch"
