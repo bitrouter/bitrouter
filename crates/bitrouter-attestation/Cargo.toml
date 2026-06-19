@@ -18,7 +18,7 @@ dcap-qvl = { version = "0.3.12", default-features = false, features = [
     "rustcrypto",
 ] }
 hex.workspace = true
-jsonwebtoken = "10"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 # secp256k1 ECDSA recovery for NEAR chat signatures (EIP-191), matching the
 # gateway's k256 usage.
 k256 = { version = "0.13", features = ["ecdsa"] }
