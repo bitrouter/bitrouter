@@ -396,7 +396,7 @@ impl ObserveHook for OtelExporter {
                 // GenAI semconv span name: "{operation} {model}".
                 let span_name = format!("chat {model}");
 
-                let attributes = vec![
+                let mut attributes = vec![
                     KeyValue::new("bitrouter.request_id", ctx.request_id().to_string()),
                     // Raw values on spans — capping is a metrics concern.
                     KeyValue::new(
@@ -409,6 +409,11 @@ impl ObserveHook for OtelExporter {
                     KeyValue::new("gen_ai.operation.name", "chat"),
                     KeyValue::new("gen_ai.request.model", model),
                 ];
+                // The root `chat` span is the single gen_ai *generation* for the
+                // request, so the request parameters (temperature, max_tokens, …)
+                // live here — not on the per-hop CLIENT span, which is no longer a
+                // gen_ai generation (see `build_hop_client_attrs`).
+                attributes.extend(request_param_attrs(ctx.prompt()));
 
                 let builder = self
                     .tracer
@@ -510,7 +515,7 @@ impl ObserveHook for OtelExporter {
         };
 
         let span_name = format!("chat {}", target.service_id);
-        let attrs = build_hop_request_attrs(target, ctx.prompt());
+        let attrs = build_hop_client_attrs(target);
 
         let span = self
             .tracer
@@ -562,7 +567,7 @@ impl ObserveHook for OtelExporter {
         let hop_span = hop.context.span();
         match outcome {
             HopOutcome::Generated(result) => {
-                set_hop_response_attrs(&hop_span, result);
+                set_hop_client_attrs(&hop_span, result);
                 hop_span.set_status(Status::Ok);
             }
             HopOutcome::StreamStarted => {
@@ -856,28 +861,15 @@ fn parse_server(api_base: &str) -> Option<(String, Option<u16>)> {
     Some((host, port))
 }
 
-/// Per-hop request-side attributes. The recommended GenAI attribute set is
-/// from the current semantic conventions snapshot
-/// (<https://opentelemetry.io/docs/specs/semconv/gen-ai/>); attributes the
-/// canonical IR does not carry (e.g. `seed`, `stop_sequences`,
-/// `frequency_penalty`, `presence_penalty`) are pulled opportunistically
-/// from the prompt's untyped `extra` map under their spec-shaped key names.
-fn build_hop_request_attrs(target: &RoutingTarget, prompt: &Prompt) -> Vec<KeyValue> {
-    let mut attrs = vec![
-        KeyValue::new("gen_ai.operation.name", "chat"),
-        KeyValue::new("gen_ai.provider.name", target.provider_name.clone()),
-        KeyValue::new("gen_ai.request.model", target.service_id.clone()),
-    ];
-    if let Some(label) = &target.account_label {
-        attrs.push(KeyValue::new("bitrouter.account_label", label.clone()));
-    }
-    if let Some((host, port)) = parse_server(target.effective_api_base()) {
-        attrs.push(KeyValue::new("server.address", host));
-        if let Some(port) = port {
-            attrs.push(KeyValue::new("server.port", port as i64));
-        }
-    }
-
+/// GenAI request *parameters* read from the prompt. These live on the root
+/// `chat` generation span (the request), not on the per-hop CLIENT span. The
+/// recommended GenAI attribute set is from the current semantic conventions
+/// snapshot (<https://opentelemetry.io/docs/specs/semconv/gen-ai/>); params the
+/// canonical IR does not carry (`seed`, `stop_sequences`, `frequency_penalty`,
+/// `presence_penalty`) are pulled opportunistically from the prompt's untyped
+/// `extra` map under their spec-shaped key names.
+fn request_param_attrs(prompt: &Prompt) -> Vec<KeyValue> {
+    let mut attrs = Vec::new();
     let params = &prompt.params;
     if let Some(t) = params.temperature {
         attrs.push(KeyValue::new("gen_ai.request.temperature", t));
@@ -888,8 +880,6 @@ fn build_hop_request_attrs(target: &RoutingTarget, prompt: &Prompt) -> Vec<KeyVa
     if let Some(m) = params.max_tokens {
         attrs.push(KeyValue::new("gen_ai.request.max_tokens", m as i64));
     }
-    // Spec attrs not promoted into the canonical IR — read opportunistically
-    // from the untyped extras the prompt carries through.
     if let Some(seed) = params.extra.get("seed").and_then(|v| v.as_i64()) {
         attrs.push(KeyValue::new("gen_ai.request.seed", seed));
     }
@@ -922,49 +912,36 @@ fn build_hop_request_attrs(target: &RoutingTarget, prompt: &Prompt) -> Vec<KeyVa
     attrs
 }
 
-/// Per-hop response-side attributes. Mirrors the request-side recommended
-/// set; `gen_ai.response.id` is read from the canonical IR's
-/// `GenerateResult.response_id`, which the outbound adapters populate
-/// from the provider-native id field (OpenAI `chatcmpl-...`, Anthropic
-/// `msg_...`, Responses `resp_...`, Google `responseId`).
-///
-/// Streaming hops do not pass through here — they close at TTFB via
-/// `HopOutcome::StreamStarted` without an `ExecutionResult`. The
-/// streaming response id (when surfaced — currently only OpenAI
-/// Responses' `StreamPart::ResponseCompleted`) lands on the root chat
-/// span via `on_stream_part`, not on the hop CLIENT span.
-fn set_hop_response_attrs(span: &opentelemetry::trace::SpanRef<'_>, result: &ExecutionResult) {
-    span.set_attribute(KeyValue::new(
-        "gen_ai.response.model",
-        result.model_id.clone(),
-    ));
-    if let Some(id) = &result.result.response_id {
-        span.set_attribute(KeyValue::new("gen_ai.response.id", id.clone()));
+/// Per-hop CLIENT span attributes. The hop is a plain HTTP client span for the
+/// upstream call — **not** a gen_ai generation. The single gen_ai generation
+/// per request lives on the root `chat` span (see `on_request_start` /
+/// `on_request_end`); marking the hop with `gen_ai.*` too would make
+/// gen_ai-aware backends count two generations and double the reported cost. So
+/// the hop carries only routing/destination detail (which upstream/host/account
+/// the attempt hit) for trace inspection.
+fn build_hop_client_attrs(target: &RoutingTarget) -> Vec<KeyValue> {
+    let mut attrs = vec![
+        KeyValue::new("bitrouter.provider_id", target.provider_name.clone()),
+        KeyValue::new("bitrouter.model_id", target.service_id.clone()),
+    ];
+    if let Some(label) = &target.account_label {
+        attrs.push(KeyValue::new("bitrouter.account_label", label.clone()));
     }
-    if let Some(usage) = &result.result.usage {
-        span.set_attribute(KeyValue::new(
-            "gen_ai.usage.input_tokens",
-            usage.prompt_tokens as i64,
-        ));
-        span.set_attribute(KeyValue::new(
-            "gen_ai.usage.output_tokens",
-            usage.completion_tokens as i64,
-        ));
-        if usage.reasoning_tokens > 0 {
-            span.set_attribute(KeyValue::new(
-                "gen_ai.usage.reasoning_tokens",
-                usage.reasoning_tokens as i64,
-            ));
+    if let Some((host, port)) = parse_server(target.effective_api_base()) {
+        attrs.push(KeyValue::new("server.address", host));
+        if let Some(port) = port {
+            attrs.push(KeyValue::new("server.port", port as i64));
         }
     }
-    if let Some(reason) = &result.result.finish_reason {
-        span.set_attribute(KeyValue::new(
-            "gen_ai.response.finish_reasons",
-            opentelemetry::Value::Array(opentelemetry::Array::String(vec![
-                finish_reason_to_str(reason).into(),
-            ])),
-        ));
-    }
+    attrs
+}
+
+/// Per-hop CLIENT span finalize — timing only. The hop is not a gen_ai
+/// generation, so response/usage/finish-reason gen_ai data is **not** recorded
+/// here; it's recorded once on the root generation in `on_request_end`. Keeping
+/// it off the hop is what stops gen_ai-aware backends from counting two
+/// generations (and double-counting cost) per request.
+fn set_hop_client_attrs(span: &opentelemetry::trace::SpanRef<'_>, result: &ExecutionResult) {
     span.set_attribute(KeyValue::new(
         "bitrouter.latency_ms",
         result.latency_ms as i64,
@@ -1217,9 +1194,9 @@ mod hop_tests {
     }
 
     #[tokio::test]
-    async fn on_hop_end_writes_genai_attrs_and_parents_on_root_chat() {
+    async fn hop_is_client_span_single_genai_generation_lives_on_root() {
         let (exporter, captured) = make_test_exporter();
-        let ctx = PipelineContext::new(fresh_request());
+        let mut ctx = PipelineContext::new(fresh_request());
         let target = fresh_target("openai");
 
         exporter.after_phase(Phase::PreRequest, &ctx).await;
@@ -1228,6 +1205,9 @@ mod hop_tests {
         exporter
             .on_hop_end(&ctx, &target, HopOutcome::Generated(&result))
             .await;
+        // The generation (response/usage) lands on the root from the context's
+        // execution result, which the pipeline sets before request end.
+        ctx.execution_result = Some(result.clone());
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
@@ -1255,38 +1235,44 @@ mod hop_tests {
             root_chat.span_context.trace_id()
         );
 
-        // Required GenAI request-side attributes:
-        // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
-        assert_eq!(str_attr(hop_chat, "gen_ai.operation.name"), Some("chat"));
-        assert_eq!(str_attr(hop_chat, "gen_ai.provider.name"), Some("openai"));
-        assert_eq!(
-            str_attr(hop_chat, "gen_ai.request.model"),
-            Some("test-model")
-        );
+        // The hop is a plain HTTP CLIENT span: routing/destination detail only.
         assert_eq!(
             str_attr(hop_chat, "server.address"),
             Some("api.example.test")
         );
         assert_eq!(i64_attr(hop_chat, "server.port"), Some(8443));
+        assert_eq!(str_attr(hop_chat, "bitrouter.provider_id"), Some("openai"));
+        assert_eq!(str_attr(hop_chat, "bitrouter.model_id"), Some("test-model"));
         assert_eq!(
             str_attr(hop_chat, "bitrouter.account_label"),
             Some("primary")
         );
+        // NO gen_ai generation markers on the hop — otherwise a gen_ai-aware
+        // backend would count two generations and double the reported cost.
+        assert_eq!(str_attr(hop_chat, "gen_ai.operation.name"), None);
+        assert_eq!(str_attr(hop_chat, "gen_ai.request.model"), None);
+        assert_eq!(str_attr(hop_chat, "gen_ai.response.model"), None);
+        assert_eq!(i64_attr(hop_chat, "gen_ai.usage.input_tokens"), None);
 
-        // Response-side attributes populated on success.
+        // The single gen_ai generation per request lives entirely on the root
+        // chat span: request + provider + response + usage on one span.
+        // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
+        assert_eq!(str_attr(root_chat, "gen_ai.operation.name"), Some("chat"));
+        assert_eq!(str_attr(root_chat, "gen_ai.provider.name"), Some("openai"));
         assert_eq!(
-            str_attr(hop_chat, "gen_ai.response.model"),
+            str_attr(root_chat, "gen_ai.request.model"),
             Some("test-model")
         );
-        // `gen_ai.response.id` mirrors the canonical IR's
-        // `GenerateResult.response_id`, which the adapters extract from the
-        // provider-native id field.
         assert_eq!(
-            str_attr(hop_chat, "gen_ai.response.id"),
+            str_attr(root_chat, "gen_ai.response.model"),
+            Some("test-model")
+        );
+        assert_eq!(
+            str_attr(root_chat, "gen_ai.response.id"),
             Some("chatcmpl-test123")
         );
-        assert_eq!(i64_attr(hop_chat, "gen_ai.usage.input_tokens"), Some(11));
-        assert_eq!(i64_attr(hop_chat, "gen_ai.usage.output_tokens"), Some(7));
+        assert_eq!(i64_attr(root_chat, "gen_ai.usage.input_tokens"), Some(11));
+        assert_eq!(i64_attr(root_chat, "gen_ai.usage.output_tokens"), Some(7));
     }
 
     #[tokio::test]
