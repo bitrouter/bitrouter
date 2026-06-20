@@ -751,7 +751,7 @@ impl ObserveHook for OtelExporter {
                 if let Ok(json) = serde_json::to_string(&ctx.prompt().messages) {
                     span.set_attribute(KeyValue::new(
                         "gen_ai.input.messages",
-                        truncate_utf8(json, CONTENT_ATTR_MAX_BYTES),
+                        truncate_utf8(json, self.config.content_attr_max_bytes),
                     ));
                 }
                 if let Some(result) = &ctx.execution_result
@@ -759,7 +759,7 @@ impl ObserveHook for OtelExporter {
                 {
                     span.set_attribute(KeyValue::new(
                         "gen_ai.output.messages",
-                        truncate_utf8(json, CONTENT_ATTR_MAX_BYTES),
+                        truncate_utf8(json, self.config.content_attr_max_bytes),
                     ));
                 }
             }
@@ -801,13 +801,6 @@ impl ObserveHook for OtelExporter {
         }
     }
 }
-
-/// Maximum byte length for a single captured content attribute
-/// (`gen_ai.input.messages` / `gen_ai.output.messages`). A conservative cap so
-/// a pathological prompt or response can't produce an oversized span the
-/// collector or backend would reject. Only consulted under
-/// [`ContentCaptureMode::Full`].
-const CONTENT_ATTR_MAX_BYTES: usize = 128 * 1024;
 
 /// Truncate a `String` to at most `max` bytes, backing off to the nearest
 /// UTF-8 char boundary so the result is always valid UTF-8.
