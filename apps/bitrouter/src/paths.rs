@@ -276,6 +276,22 @@ pub fn install_id() -> Result<String> {
     get_or_create_install_id(&home)
 }
 
+/// Sentinel filename marking that the first-run telemetry notice has been shown.
+const TELEMETRY_NOTICE_SENTINEL: &str = ".telemetry-notice-shown";
+
+/// One-shot guard for the first-run telemetry notice. Returns `Ok(true)` the
+/// first time it is called for a given home (creating the sentinel), `Ok(false)`
+/// thereafter — so the caller prints the notice exactly once per install.
+pub fn mark_telemetry_notice_shown(home: &Path) -> Result<bool> {
+    let path = home.join(TELEMETRY_NOTICE_SENTINEL);
+    if path.exists() {
+        return Ok(false);
+    }
+    ensure_home_directory(home)?;
+    std::fs::write(&path, "").with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +321,14 @@ mod tests {
         // And it really is on disk.
         let on_disk = std::fs::read_to_string(home.join(INSTALL_ID_FILENAME)).unwrap();
         assert_eq!(on_disk.trim(), first);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn telemetry_notice_marked_once() {
+        let home = unique_tmp("tel-notice");
+        assert!(mark_telemetry_notice_shown(&home).unwrap());
+        assert!(!mark_telemetry_notice_shown(&home).unwrap());
         let _ = std::fs::remove_dir_all(&home);
     }
 
