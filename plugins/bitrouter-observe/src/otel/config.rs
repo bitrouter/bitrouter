@@ -169,9 +169,12 @@ impl OtelConfig {
     pub fn effective_headers(&self) -> HashMap<String, String> {
         let mut headers = self.headers.clone();
         if let Some(token) = &self.bearer_token {
-            headers
-                .entry("Authorization".to_string())
-                .or_insert_with(|| format!("Bearer {token}"));
+            // Don't clobber an operator-supplied auth header — match the slot
+            // case-insensitively (HTTP header names are case-insensitive).
+            let has_auth = headers.keys().any(|k| k.eq_ignore_ascii_case("authorization"));
+            if !has_auth {
+                headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+            }
         }
         headers
     }
@@ -368,6 +371,18 @@ mod tests {
             cfg.effective_headers().get("Authorization").map(String::as_str),
             Some("Bearer explicit")
         );
+
+        // A lowercase custom auth header also blocks injection (case-insensitive).
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), "Bearer lower".to_string());
+        let cfg = OtelConfig {
+            headers,
+            bearer_token: Some("bra_abc".to_string()),
+            ..OtelConfig::default()
+        };
+        let eff = cfg.effective_headers();
+        assert!(!eff.contains_key("Authorization"));
+        assert_eq!(eff.get("authorization").map(String::as_str), Some("Bearer lower"));
     }
 
     #[test]

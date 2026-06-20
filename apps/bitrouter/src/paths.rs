@@ -254,6 +254,13 @@ pub fn get_or_create_install_id(home: &Path) -> Result<String> {
     ensure_home_directory(home)?;
     let id = uuid::Uuid::new_v4().to_string();
     std::fs::write(&path, &id).with_context(|| format!("writing {}", path.display()))?;
+    // Match the house pattern for files inside the home (the home is already
+    // 0700; keep the artefact owner-only for consistency).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(id)
 }
 
