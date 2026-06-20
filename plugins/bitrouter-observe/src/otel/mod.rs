@@ -21,7 +21,8 @@ mod transport;
 
 pub use cardinality::CardinalityLimiter;
 pub use config::{
-    BatchConfig, ContentCaptureMode, MetricsConfig, OtelConfig, SamplerKind, TraceConfig,
+    BatchConfig, ContentCaptureMode, DEFAULT_CONTENT_ATTR_MAX_BYTES, MetricsConfig, OtelConfig,
+    SamplerKind, TraceConfig,
 };
 pub use exporter::{OtelExporter, OtelObserveHook, OtelStatus};
 pub use span_attributes::SpanAttributes;

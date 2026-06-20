@@ -171,7 +171,9 @@ impl OtelConfig {
         if let Some(token) = &self.bearer_token {
             // Don't clobber an operator-supplied auth header — match the slot
             // case-insensitively (HTTP header names are case-insensitive).
-            let has_auth = headers.keys().any(|k| k.eq_ignore_ascii_case("authorization"));
+            let has_auth = headers
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("authorization"));
             if !has_auth {
                 headers.insert("Authorization".to_string(), format!("Bearer {token}"));
             }
@@ -355,7 +357,9 @@ mod tests {
             ..OtelConfig::default()
         };
         assert_eq!(
-            cfg.effective_headers().get("Authorization").map(String::as_str),
+            cfg.effective_headers()
+                .get("Authorization")
+                .map(String::as_str),
             Some("Bearer bra_abc")
         );
 
@@ -368,7 +372,9 @@ mod tests {
             ..OtelConfig::default()
         };
         assert_eq!(
-            cfg.effective_headers().get("Authorization").map(String::as_str),
+            cfg.effective_headers()
+                .get("Authorization")
+                .map(String::as_str),
             Some("Bearer explicit")
         );
 
@@ -382,7 +388,10 @@ mod tests {
         };
         let eff = cfg.effective_headers();
         assert!(!eff.contains_key("Authorization"));
-        assert_eq!(eff.get("authorization").map(String::as_str), Some("Bearer lower"));
+        assert_eq!(
+            eff.get("authorization").map(String::as_str),
+            Some("Bearer lower")
+        );
     }
 
     #[test]
@@ -401,10 +410,7 @@ mod tests {
             "BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES",
             "bogus",
         )]));
-        assert_eq!(
-            cfg.content_attr_max_bytes,
-            DEFAULT_CONTENT_ATTR_MAX_BYTES
-        );
+        assert_eq!(cfg.content_attr_max_bytes, DEFAULT_CONTENT_ATTR_MAX_BYTES);
     }
 
     #[test]

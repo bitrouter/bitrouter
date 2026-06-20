@@ -1176,7 +1176,9 @@ fn maybe_announce_telemetry(home: &std::path::Path) {
     );
     eprintln!();
     eprintln!("  Nothing is sent unless you opt in. Two levels are offered:");
-    eprintln!("    • metadata — model, tokens, latency, finish reason, routing (no message content)");
+    eprintln!(
+        "    • metadata — model, tokens, latency, finish reason, routing (no message content)"
+    );
     eprintln!("    • full     — the above plus request + response message content");
     eprintln!();
     eprintln!("  Enable it under plugins.bitrouter-observe.telemetry in your config:");

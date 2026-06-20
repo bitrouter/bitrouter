@@ -275,9 +275,8 @@ pub fn install_id() -> Result<String> {
         let home = std::env::var_os("HOME").filter(|v| !v.is_empty());
         #[cfg(windows)]
         let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()));
-        let home = home.context(
-            "could not determine home directory (no $HOME set); set $BITROUTER_HOME",
-        )?;
+        let home =
+            home.context("could not determine home directory (no $HOME set); set $BITROUTER_HOME")?;
         PathBuf::from(home).join(".bitrouter")
     };
     get_or_create_install_id(&home)
