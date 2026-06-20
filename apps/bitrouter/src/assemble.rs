@@ -33,7 +33,9 @@ use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
 use bitrouter_guardrails::{GuardrailConfig, GuardrailsPlugin};
 use bitrouter_observe::OTEL_ENABLED;
-use bitrouter_observe::otel::{ContentCaptureMode, OtelConfig, OtelExporter, OtelObserveHook};
+use bitrouter_observe::otel::{
+    ContentCaptureMode, MetricsConfig, OtelConfig, OtelExporter, OtelObserveHook,
+};
 use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
@@ -746,10 +748,30 @@ struct TelemetryOptIn {
     bearer_token: Option<String>,
 }
 
+/// Ensure an OTLP/HTTP endpoint targets the per-signal **traces** path.
+///
+/// `opentelemetry-otlp`'s programmatic `with_endpoint` uses the URL verbatim —
+/// unlike the `OTEL_EXPORTER_OTLP_ENDPOINT` env var, it does NOT append
+/// `/v1/traces`. So a bare `scheme://host[:port]` would POST to `/` and 404.
+/// Append `/v1/traces` only when the operator gave no path of their own; a
+/// collector's full per-signal URL is respected as-is.
+///
+/// OTLP/HTTP paths: <https://opentelemetry.io/docs/specs/otlp/#otlphttp>
+fn otlp_traces_endpoint(endpoint: &str) -> String {
+    let trimmed = endpoint.trim_end_matches('/');
+    match trimmed.split_once("://") {
+        Some((_scheme, rest)) if !rest.contains('/') => format!("{trimmed}/v1/traces"),
+        _ => trimmed.to_string(),
+    }
+}
+
 /// Turn an enabled [`TelemetryOptIn`] into an [`OtelConfig`]: point at the
-/// (default or overridden) endpoint, map the level onto a content-capture mode,
-/// attach the bearer (config or `BITROUTER_TELEMETRY_TOKEN`), and stamp the
+/// (default or overridden) traces endpoint, map the level onto a content-capture
+/// mode, attach the bearer (config or `BITROUTER_TELEMETRY_TOKEN`), and stamp the
 /// stable anonymous install id so exports can be attributed without an account.
+///
+/// Telemetry is **traces-only**: metrics export is disabled so the opt-in never
+/// POSTs a metrics payload to a traces ingest.
 fn build_telemetry_otel_config(opt_in: TelemetryOptIn, install_id: Option<String>) -> OtelConfig {
     let content_capture = match opt_in.level {
         TelemetryLevel::Metadata => ContentCaptureMode::Off,
@@ -762,13 +784,22 @@ fn build_telemetry_otel_config(opt_in: TelemetryOptIn, install_id: Option<String
     if let Some(id) = install_id {
         resource_attributes.insert("bitrouter.install_id".to_string(), id);
     }
-    OtelConfig {
-        endpoint: opt_in
+    let endpoint = otlp_traces_endpoint(
+        opt_in
             .endpoint
-            .unwrap_or_else(|| DEFAULT_TELEMETRY_ENDPOINT.to_string()),
+            .as_deref()
+            .unwrap_or(DEFAULT_TELEMETRY_ENDPOINT),
+    );
+    OtelConfig {
+        endpoint,
         content_capture,
         bearer_token,
         resource_attributes,
+        // Traces-only: never export metrics to the traces ingest.
+        metrics: MetricsConfig {
+            enabled: false,
+            ..MetricsConfig::default()
+        },
         ..OtelConfig::default()
     }
 }
@@ -778,7 +809,7 @@ mod telemetry_opt_in_tests {
     use super::*;
 
     #[test]
-    fn opt_in_full_uses_default_endpoint_and_stamps_install_id() {
+    fn opt_in_full_uses_default_traces_endpoint_metrics_off_and_stamps_install_id() {
         let opt_in = TelemetryOptIn {
             enabled: true,
             endpoint: None,
@@ -786,9 +817,16 @@ mod telemetry_opt_in_tests {
             bearer_token: Some("bra_x".to_string()),
         };
         let cfg = build_telemetry_otel_config(opt_in, Some("inst-1".to_string()));
-        assert_eq!(cfg.endpoint, DEFAULT_TELEMETRY_ENDPOINT);
+        // The default base is normalized to the OTLP traces path — the exporter
+        // does not append `/v1/traces` for us.
+        assert_eq!(
+            cfg.endpoint,
+            format!("{DEFAULT_TELEMETRY_ENDPOINT}/v1/traces")
+        );
         assert_eq!(cfg.content_capture, ContentCaptureMode::Full);
         assert_eq!(cfg.bearer_token.as_deref(), Some("bra_x"));
+        // Telemetry is traces-only.
+        assert!(!cfg.metrics.enabled);
         assert_eq!(
             cfg.resource_attributes
                 .get("bitrouter.install_id")
@@ -806,9 +844,34 @@ mod telemetry_opt_in_tests {
             bearer_token: None,
         };
         let cfg = build_telemetry_otel_config(opt_in, None);
-        assert_eq!(cfg.endpoint, "https://otel.example");
+        // A bare override host is normalized to the traces path too.
+        assert_eq!(cfg.endpoint, "https://otel.example/v1/traces");
         assert_eq!(cfg.content_capture, ContentCaptureMode::Off);
         assert!(cfg.resource_attributes.is_empty());
+    }
+
+    #[test]
+    fn otlp_traces_endpoint_appends_only_when_no_path() {
+        // Bare host gets the traces path appended.
+        assert_eq!(
+            otlp_traces_endpoint("https://telemetry.bitrouter.ai"),
+            "https://telemetry.bitrouter.ai/v1/traces"
+        );
+        // Trailing slash is handled (no empty segment).
+        assert_eq!(
+            otlp_traces_endpoint("https://host:4318/"),
+            "https://host:4318/v1/traces"
+        );
+        // An already-correct traces endpoint is left unchanged.
+        assert_eq!(
+            otlp_traces_endpoint("https://host/v1/traces"),
+            "https://host/v1/traces"
+        );
+        // An operator-supplied collector path is respected, not clobbered.
+        assert_eq!(
+            otlp_traces_endpoint("https://collector.example/otlp/custom"),
+            "https://collector.example/otlp/custom"
+        );
     }
 
     #[test]
