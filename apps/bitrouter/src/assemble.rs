@@ -33,7 +33,7 @@ use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
 use bitrouter_guardrails::{GuardrailConfig, GuardrailsPlugin};
 use bitrouter_observe::OTEL_ENABLED;
-use bitrouter_observe::otel::{OtelConfig, OtelExporter, OtelObserveHook};
+use bitrouter_observe::otel::{ContentCaptureMode, OtelConfig, OtelExporter, OtelObserveHook};
 use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
@@ -662,6 +662,25 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfig>> {
     // env > YAML precedence holds for every path below without this
     // function having to re-apply it.
 
+    // 0. First-party telemetry opt-in. `plugins.bitrouter-observe.telemetry`
+    //    is a convenience wrapper over the `otel` block: when `enabled`, it
+    //    points the exporter at BitRouter's first-party telemetry endpoint and
+    //    selects the capture level. OFF by default — an absent or
+    //    `enabled: false` block leaves telemetry disabled. A malformed block is
+    //    a hard error (the operator explicitly opted in).
+    if let Some(tel_value) = observe.and_then(|c| c.get("telemetry")) {
+        let opt_in = serde_json::from_value::<TelemetryOptIn>(tel_value.clone())
+            .context("plugins.bitrouter-observe.telemetry failed to parse")?;
+        if opt_in.enabled {
+            // Best-effort install id: a missing home just means anonymous
+            // attribution downstream, never a failure to export.
+            let install_id = crate::paths::install_id()
+                .map_err(|e| tracing::warn!("telemetry: could not resolve install id: {e:#}"))
+                .ok();
+            return Ok(Some(build_telemetry_otel_config(opt_in, install_id)));
+        }
+    }
+
     // 1. New nested `otel: { … }` block. A malformed block is a hard error:
     //    the operator explicitly opted in, so silently falling back to the
     //    legacy shim / env-only path would hide their mistake and start the
@@ -694,6 +713,115 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfig>> {
     }
 
     Ok(None)
+}
+
+/// BitRouter's first-party telemetry endpoint. A neutral, overridable default
+/// used when the telemetry opt-in is enabled without an explicit `endpoint`.
+pub const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://telemetry.bitrouter.ai";
+
+/// Capture level for the telemetry opt-in. `Metadata` exports spans without
+/// message bodies; `Full` additionally includes request + response content.
+#[derive(Debug, Clone, Copy, serde::Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TelemetryLevel {
+    #[default]
+    Metadata,
+    Full,
+}
+
+/// The `plugins.bitrouter-observe.telemetry` opt-in block — a thin wrapper over
+/// [`OtelConfig`] that defaults the endpoint and selects a capture level. Off
+/// by default; nothing is exported unless `enabled` is `true`.
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[serde(default)]
+struct TelemetryOptIn {
+    /// Off by default; nothing is exported unless this is `true`.
+    enabled: bool,
+    /// Override the default first-party endpoint.
+    endpoint: Option<String>,
+    /// Capture level (`metadata` | `full`).
+    level: TelemetryLevel,
+    /// Optional bearer token authenticating the export to an account. Falls
+    /// back to the `BITROUTER_TELEMETRY_TOKEN` env var when unset.
+    bearer_token: Option<String>,
+}
+
+/// Turn an enabled [`TelemetryOptIn`] into an [`OtelConfig`]: point at the
+/// (default or overridden) endpoint, map the level onto a content-capture mode,
+/// attach the bearer (config or `BITROUTER_TELEMETRY_TOKEN`), and stamp the
+/// stable anonymous install id so exports can be attributed without an account.
+fn build_telemetry_otel_config(opt_in: TelemetryOptIn, install_id: Option<String>) -> OtelConfig {
+    let content_capture = match opt_in.level {
+        TelemetryLevel::Metadata => ContentCaptureMode::Off,
+        TelemetryLevel::Full => ContentCaptureMode::Full,
+    };
+    let bearer_token = opt_in
+        .bearer_token
+        .or_else(|| std::env::var("BITROUTER_TELEMETRY_TOKEN").ok());
+    let mut resource_attributes = std::collections::HashMap::new();
+    if let Some(id) = install_id {
+        resource_attributes.insert("bitrouter.install_id".to_string(), id);
+    }
+    OtelConfig {
+        endpoint: opt_in
+            .endpoint
+            .unwrap_or_else(|| DEFAULT_TELEMETRY_ENDPOINT.to_string()),
+        content_capture,
+        bearer_token,
+        resource_attributes,
+        ..OtelConfig::default()
+    }
+}
+
+#[cfg(test)]
+mod telemetry_opt_in_tests {
+    use super::*;
+
+    #[test]
+    fn opt_in_full_uses_default_endpoint_and_stamps_install_id() {
+        let opt_in = TelemetryOptIn {
+            enabled: true,
+            endpoint: None,
+            level: TelemetryLevel::Full,
+            bearer_token: Some("bra_x".to_string()),
+        };
+        let cfg = build_telemetry_otel_config(opt_in, Some("inst-1".to_string()));
+        assert_eq!(cfg.endpoint, DEFAULT_TELEMETRY_ENDPOINT);
+        assert_eq!(cfg.content_capture, ContentCaptureMode::Full);
+        assert_eq!(cfg.bearer_token.as_deref(), Some("bra_x"));
+        assert_eq!(
+            cfg.resource_attributes
+                .get("bitrouter.install_id")
+                .map(String::as_str),
+            Some("inst-1")
+        );
+    }
+
+    #[test]
+    fn opt_in_metadata_honors_endpoint_override_and_no_install_id() {
+        let opt_in = TelemetryOptIn {
+            enabled: true,
+            endpoint: Some("https://otel.example".to_string()),
+            level: TelemetryLevel::Metadata,
+            bearer_token: None,
+        };
+        let cfg = build_telemetry_otel_config(opt_in, None);
+        assert_eq!(cfg.endpoint, "https://otel.example");
+        assert_eq!(cfg.content_capture, ContentCaptureMode::Off);
+        assert!(cfg.resource_attributes.is_empty());
+    }
+
+    #[test]
+    fn opt_in_parses_and_defaults_off() {
+        let opt_in: TelemetryOptIn =
+            serde_json::from_value(serde_json::json!({"enabled": true, "level": "full"})).unwrap();
+        assert!(opt_in.enabled);
+        assert_eq!(opt_in.level, TelemetryLevel::Full);
+
+        let empty: TelemetryOptIn = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!empty.enabled);
+        assert_eq!(empty.level, TelemetryLevel::Metadata);
+    }
 }
 
 /// Extract the file path from a SQLite URL. Returns `None` for `:memory:`

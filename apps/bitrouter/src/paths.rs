@@ -233,6 +233,49 @@ pub fn ensure_home_directory(home: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Filename of the persisted anonymous install identifier inside the home.
+const INSTALL_ID_FILENAME: &str = "installation.id";
+
+/// Read the stable anonymous install id from `<home>/installation.id`,
+/// generating and persisting a fresh UUID v4 on first call. The id is
+/// vendor-neutral telemetry plumbing: it lets opt-in exports be attributed to
+/// an install without any account or PII. Idempotent — the same id is returned
+/// on every subsequent call for a given home.
+///
+/// A malformed/empty existing file is treated as missing and rewritten.
+pub fn get_or_create_install_id(home: &Path) -> Result<String> {
+    let path = home.join(INSTALL_ID_FILENAME);
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        let trimmed = contents.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    ensure_home_directory(home)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    std::fs::write(&path, &id).with_context(|| format!("writing {}", path.display()))?;
+    Ok(id)
+}
+
+/// Resolve the bitrouter home the same way the daemon's runtime artefacts do
+/// (`$BITROUTER_HOME`, else `$HOME/.bitrouter`, with `%USERPROFILE%` as the
+/// Windows `$HOME` fallback) and return its stable install id. Used by the
+/// telemetry opt-in, which has no [`ConfigSource`] in scope.
+pub fn install_id() -> Result<String> {
+    let home = if let Some(h) = std::env::var_os("BITROUTER_HOME").filter(|v| !v.is_empty()) {
+        PathBuf::from(h)
+    } else {
+        let home = std::env::var_os("HOME").filter(|v| !v.is_empty());
+        #[cfg(windows)]
+        let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()));
+        let home = home.context(
+            "could not determine home directory (no $HOME set); set $BITROUTER_HOME",
+        )?;
+        PathBuf::from(home).join(".bitrouter")
+    };
+    get_or_create_install_id(&home)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +290,31 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn install_id_is_generated_then_stable() {
+        let home = unique_tmp("install-id");
+        let first = get_or_create_install_id(&home).unwrap();
+        assert!(!first.is_empty());
+        // UUID v4 string form is 36 chars.
+        assert_eq!(first.len(), 36);
+        // A second call returns the same persisted id.
+        let second = get_or_create_install_id(&home).unwrap();
+        assert_eq!(first, second);
+        // And it really is on disk.
+        let on_disk = std::fs::read_to_string(home.join(INSTALL_ID_FILENAME)).unwrap();
+        assert_eq!(on_disk.trim(), first);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn install_id_rewrites_empty_file() {
+        let home = unique_tmp("install-id-empty");
+        std::fs::write(home.join(INSTALL_ID_FILENAME), "  \n").unwrap();
+        let id = get_or_create_install_id(&home).unwrap();
+        assert_eq!(id.len(), 36);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

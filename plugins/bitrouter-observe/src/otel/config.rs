@@ -57,6 +57,13 @@ pub struct OtelConfig {
     /// backend would reject. Defaults to [`DEFAULT_CONTENT_ATTR_MAX_BYTES`];
     /// override with `BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES`.
     pub content_attr_max_bytes: usize,
+
+    /// Optional bearer token. When set, an `Authorization: Bearer <token>`
+    /// header is injected into the OTLP request (see
+    /// [`OtelConfig::effective_headers`]), authenticating the exporter to a
+    /// collector that requires it. `None` leaves the request unauthenticated
+    /// (anonymous export).
+    pub bearer_token: Option<String>,
 }
 
 /// Default cap for a single captured content attribute (128 KiB).
@@ -146,7 +153,27 @@ impl Default for OtelConfig {
             metrics: MetricsConfig::default(),
             content_capture: ContentCaptureMode::Off,
             content_attr_max_bytes: DEFAULT_CONTENT_ATTR_MAX_BYTES,
+            bearer_token: None,
         }
+    }
+}
+
+impl OtelConfig {
+    /// Headers handed to the OTLP transport: the configured [`headers`] plus an
+    /// `Authorization: Bearer <token>` entry when [`bearer_token`] is set. An
+    /// explicit `Authorization` header in [`headers`] is preserved (the bearer
+    /// only fills the slot when absent).
+    ///
+    /// [`headers`]: OtelConfig::headers
+    /// [`bearer_token`]: OtelConfig::bearer_token
+    pub fn effective_headers(&self) -> HashMap<String, String> {
+        let mut headers = self.headers.clone();
+        if let Some(token) = &self.bearer_token {
+            headers
+                .entry("Authorization".to_string())
+                .or_insert_with(|| format!("Bearer {token}"));
+        }
+        headers
     }
 }
 
@@ -311,6 +338,36 @@ mod tests {
             Some("secret")
         );
         assert_eq!(cfg.headers.get("x-team").map(String::as_str), Some("infra"));
+    }
+
+    #[test]
+    fn effective_headers_injects_bearer_when_set() {
+        // No token → headers unchanged.
+        let cfg = OtelConfig::default();
+        assert!(!cfg.effective_headers().contains_key("Authorization"));
+
+        // Token set → Authorization: Bearer <token> added.
+        let cfg = OtelConfig {
+            bearer_token: Some("bra_abc".to_string()),
+            ..OtelConfig::default()
+        };
+        assert_eq!(
+            cfg.effective_headers().get("Authorization").map(String::as_str),
+            Some("Bearer bra_abc")
+        );
+
+        // An explicit Authorization header wins over the bearer.
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer explicit".to_string());
+        let cfg = OtelConfig {
+            headers,
+            bearer_token: Some("bra_abc".to_string()),
+            ..OtelConfig::default()
+        };
+        assert_eq!(
+            cfg.effective_headers().get("Authorization").map(String::as_str),
+            Some("Bearer explicit")
+        );
     }
 
     #[test]

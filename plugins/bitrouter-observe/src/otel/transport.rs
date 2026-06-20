@@ -37,7 +37,7 @@ mod imp {
     /// malformed custom header should not be fatal.
     fn metadata(config: &OtelConfig) -> MetadataMap {
         let mut headers = http::HeaderMap::new();
-        for (k, v) in &config.headers {
+        for (k, v) in &config.effective_headers() {
             if let (Ok(name), Ok(value)) = (
                 http::HeaderName::from_bytes(k.as_bytes()),
                 http::HeaderValue::from_str(v),
@@ -81,7 +81,7 @@ mod imp {
         Ok(SpanExporter::builder()
             .with_http()
             .with_endpoint(&config.endpoint)
-            .with_headers(config.headers.clone())
+            .with_headers(config.effective_headers())
             .build()?)
     }
 
@@ -91,7 +91,7 @@ mod imp {
         Ok(MetricExporter::builder()
             .with_http()
             .with_endpoint(&config.endpoint)
-            .with_headers(config.headers.clone())
+            .with_headers(config.effective_headers())
             .build()?)
     }
 }
