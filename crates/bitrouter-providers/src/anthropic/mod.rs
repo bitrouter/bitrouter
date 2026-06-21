@@ -367,12 +367,24 @@ impl AuthApplier for AnthropicOAuthApplier {
                 // OAuth requests must NOT carry x-api-key — the upstream
                 // returns 401 when both auth schemes are present.
                 headers_mut.remove("x-api-key");
-                let beta_value = headers::OAUTH_BETA_VALUES.join(",");
+                // Merge — never overwrite — the OAuth-required betas with any
+                // the client already sent. Claude Code appends feature betas
+                // (e.g. `context-management-2025-06-27`, interleaved thinking,
+                // prompt caching) alongside the matching request-body fields;
+                // clobbering the header would leave those fields with no
+                // enabling beta and the upstream 400s ("Extra inputs are not
+                // permitted").
+                let client_betas: Vec<String> = headers_mut
+                    .get_all("anthropic-beta")
+                    .iter()
+                    .filter_map(|v| v.to_str().ok())
+                    .map(str::to_string)
+                    .collect();
+                let beta_value = merged_beta_value(client_betas.iter().map(String::as_str));
                 let beta_header = HeaderValue::from_str(&beta_value).map_err(|e| {
                     BitrouterError::internal(format!("invalid anthropic-beta header: {e}"))
                 })?;
-                let beta_name = HeaderName::from_static("anthropic-beta");
-                headers_mut.insert(beta_name, beta_header);
+                headers_mut.insert(HeaderName::from_static("anthropic-beta"), beta_header);
                 // The subscription endpoint expects first-party-CLI-shaped
                 // requests; mirror Claude Code's user-agent + x-app so the
                 // OAuth credential is admitted. (Reference: OpenClaw
@@ -431,6 +443,27 @@ impl AuthApplier for AnthropicOAuthApplier {
         inject_claude_code_identity(body);
         Ok(())
     }
+}
+
+/// Merge the OAuth-required `anthropic-beta` values (which the Claude Pro/Max
+/// subscription endpoint demands) with any the client already sent, deduping
+/// while keeping the required values first. Real Claude Code traffic carries
+/// feature betas next to matching request-body fields, so the union — not an
+/// overwrite — is what keeps those requests valid upstream.
+fn merged_beta_value<'a>(client_betas: impl Iterator<Item = &'a str>) -> String {
+    let mut out: Vec<String> = headers::OAUTH_BETA_VALUES
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    for raw in client_betas {
+        for beta in raw.split(',') {
+            let beta = beta.trim();
+            if !beta.is_empty() && !out.iter().any(|x| x == beta) {
+                out.push(beta.to_string());
+            }
+        }
+    }
+    out.join(",")
 }
 
 fn apply_api_key_header(request: &mut reqwest::Request, key: &str) -> Result<()> {
@@ -660,6 +693,63 @@ mod tests {
         assert_eq!(
             h.get("x-app").and_then(|v| v.to_str().ok()),
             Some(headers::CLAUDE_CODE_X_APP)
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_merges_client_anthropic_beta_instead_of_overwriting() {
+        // Real Claude Code traffic appends feature betas
+        // (`context-management-…`, interleaved-thinking) next to the matching
+        // request-body fields. The applier must keep them while adding the
+        // OAuth-required betas — overwriting strips them and the upstream 400s
+        // ("Extra inputs are not permitted") on the now-orphaned body field.
+        let path = tmp_store_path();
+        {
+            let mut store = CredentialStore::load(&path).unwrap();
+            store
+                .set(
+                    PROVIDER_ID,
+                    DEFAULT_LABEL,
+                    Credential::from_oauth_token(OAuthToken {
+                        access_token: "sk-ant-oat".into(),
+                        expires_at: 0,
+                        refresh_token: Some("r".into()),
+                    }),
+                )
+                .unwrap();
+        }
+        let applier = AnthropicOAuthApplier::new(&path).unwrap();
+        let mut req = reqwest::Client::new()
+            .post("https://api.anthropic.com/v1/messages")
+            .build()
+            .unwrap();
+        req.headers_mut().insert(
+            "anthropic-beta",
+            HeaderValue::from_static(
+                "context-management-2025-06-27,interleaved-thinking-2025-05-14",
+            ),
+        );
+        let authed = applier.apply(req, &anthropic_target(None)).await.unwrap();
+        let beta = authed
+            .headers()
+            .get("anthropic-beta")
+            .and_then(|v| v.to_str().ok())
+            .unwrap();
+        assert!(
+            beta.contains("oauth-2025-04-20"),
+            "required beta dropped: {beta}"
+        );
+        assert!(
+            beta.contains("claude-code-20250219"),
+            "required beta dropped: {beta}"
+        );
+        assert!(
+            beta.contains("context-management-2025-06-27"),
+            "client beta dropped: {beta}"
+        );
+        assert!(
+            beta.contains("interleaved-thinking-2025-05-14"),
+            "client beta dropped: {beta}"
         );
     }
 

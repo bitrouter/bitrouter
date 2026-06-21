@@ -364,6 +364,37 @@ fn merge_outbound_trace_headers(request: &mut reqwest::Request, ctx: &PipelineCo
     }
 }
 
+/// Forward the inbound `anthropic-beta` header(s) to a Messages-protocol
+/// upstream.
+///
+/// Anthropic clients (notably Claude Code) gate request-*body* features —
+/// `context_management`, interleaved thinking, fine-grained tool streaming — on
+/// `anthropic-beta` values. The canonical decode→re-encode preserves those body
+/// fields (they ride through `extra`), but builds a fresh outbound request with
+/// no beta header, so without this forward the upstream rejects the now-orphaned
+/// field with a 400 ("Extra inputs are not permitted"). Scoped to Messages
+/// upstreams because the header is meaningless to other wire protocols; the
+/// provider's `AuthApplier` runs afterwards and may merge in any
+/// credential-required betas (e.g. the Claude Pro/Max OAuth ones).
+fn forward_inbound_anthropic_beta(
+    request: &mut reqwest::Request,
+    target: &RoutingTarget,
+    ctx: &PipelineContext,
+) {
+    if target.api_protocol != ApiProtocol::Messages {
+        return;
+    }
+    let inbound: Vec<_> = ctx
+        .headers()
+        .get_all("anthropic-beta")
+        .iter()
+        .cloned()
+        .collect();
+    for value in inbound {
+        request.headers_mut().append("anthropic-beta", value);
+    }
+}
+
 #[async_trait]
 impl Executor for HttpExecutor {
     async fn execute(
@@ -387,12 +418,13 @@ impl Executor for HttpExecutor {
         let url = transport.endpoint_url(target, false);
 
         let started = Instant::now();
-        let request = self
+        let mut request = self
             .client
             .post(&url)
             .json(&body)
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
+        forward_inbound_anthropic_beta(&mut request, target, ctx);
         let mut request = self.apply_auth(request, target, transport).await?;
         merge_outbound_trace_headers(&mut request, ctx);
         let response = self.client.execute(request).await.map_err(|e| {
@@ -458,12 +490,13 @@ impl Executor for HttpExecutor {
         self.shape_request_body(&mut body, target).await?;
         let url = transport.endpoint_url(target, true);
 
-        let request = self
+        let mut request = self
             .client
             .post(&url)
             .json(&body)
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
+        forward_inbound_anthropic_beta(&mut request, target, ctx);
         let mut request = self.apply_auth(request, target, transport).await?;
         merge_outbound_trace_headers(&mut request, ctx);
         let response = self.client.execute(request).await.map_err(|e| {
@@ -695,5 +728,103 @@ mod error_classification_tests {
             r#"{"error":{"type":"CreditsError"}}"#
         ));
         assert!(!looks_like_credit_exhaustion("invalid request: bad model"));
+    }
+}
+
+#[cfg(test)]
+mod beta_forward_tests {
+    use super::*;
+    use crate::caller::CallerContext;
+    use crate::language_model::types::Prompt;
+    use crate::language_model::{Message, PipelineRequest, Role};
+
+    fn ctx_with_beta(beta: Option<&str>) -> PipelineContext {
+        let mut headers = http::HeaderMap::new();
+        if let Some(b) = beta {
+            headers.insert("anthropic-beta", http::HeaderValue::from_str(b).unwrap());
+        }
+        let prompt = Prompt {
+            model: "claude".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![],
+            }],
+            tools: vec![],
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        PipelineContext::new(PipelineRequest {
+            request_id: "t".into(),
+            model: "claude".into(),
+            caller: CallerContext::local(),
+            headers,
+            prompt,
+            inbound_protocol: None,
+        })
+    }
+
+    fn target(proto: ApiProtocol) -> RoutingTarget {
+        RoutingTarget {
+            provider_name: "anthropic".into(),
+            service_id: "claude-haiku".into(),
+            api_base: "https://api.anthropic.com/v1".into(),
+            api_key: String::new(),
+            api_protocol: proto,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        }
+    }
+
+    fn fresh_request() -> reqwest::Request {
+        reqwest::Client::new()
+            .post("https://api.anthropic.com/v1/messages")
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn forwards_anthropic_beta_to_messages_upstream() {
+        let mut request = fresh_request();
+        forward_inbound_anthropic_beta(
+            &mut request,
+            &target(ApiProtocol::Messages),
+            &ctx_with_beta(Some("context-management-2025-06-27")),
+        );
+        let got: Vec<_> = request
+            .headers()
+            .get_all("anthropic-beta")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        assert_eq!(got, vec!["context-management-2025-06-27"]);
+    }
+
+    #[test]
+    fn does_not_forward_to_non_messages_upstream() {
+        // A messages→chat translation must not leak the Anthropic-only header.
+        let mut request = fresh_request();
+        forward_inbound_anthropic_beta(
+            &mut request,
+            &target(ApiProtocol::ChatCompletions),
+            &ctx_with_beta(Some("context-management-2025-06-27")),
+        );
+        assert!(request.headers().get("anthropic-beta").is_none());
+    }
+
+    #[test]
+    fn no_inbound_beta_is_a_noop() {
+        let mut request = fresh_request();
+        forward_inbound_anthropic_beta(
+            &mut request,
+            &target(ApiProtocol::Messages),
+            &ctx_with_beta(None),
+        );
+        assert!(request.headers().get("anthropic-beta").is_none());
     }
 }
