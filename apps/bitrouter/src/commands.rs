@@ -292,6 +292,12 @@ pub async fn create_policy(policy_dir: &std::path::Path, id: &str) -> Result<std
 /// actually supports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthMethod {
+    /// Use the user's existing Claude Code session: read its OAuth credential
+    /// live from `~/.claude` (Keychain / `.credentials.json`), or sign in via
+    /// the `claude` CLI when not yet logged in. The preferred path for
+    /// `anthropic` — no second token copy, so it can't refresh-rotate Claude
+    /// Code out (RFC 6749 §6).
+    ClaudeCodeSession,
     /// Browser-based PKCE Authorization Code flow — Anthropic Claude
     /// Pro/Max, OpenAI Codex / ChatGPT.
     PkceSubscription,
@@ -307,6 +313,9 @@ enum AuthMethod {
 impl AuthMethod {
     fn label(self) -> &'static str {
         match self {
+            AuthMethod::ClaudeCodeSession => {
+                "Use your Claude Code session (read ~/.claude, or sign in via the claude CLI)"
+            }
             AuthMethod::PkceSubscription => "Subscription (browser sign-in)",
             AuthMethod::ImportFromCli => "Import an existing session from the vendor CLI",
             AuthMethod::DeviceCode => "Device-code OAuth (show a code in browser)",
@@ -331,12 +340,22 @@ fn import_cli_for(provider_id: &str) -> Option<&'static str> {
 fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMethod> {
     use bitrouter_providers::AuthScheme;
     let mut methods = Vec::new();
+    // Anthropic's preferred path: read the user's live Claude Code session and
+    // let the `claude` CLI own login. Listed first so it's the default on
+    // <enter> / non-interactive runs.
+    let is_anthropic = entry.id == bitrouter_providers::anthropic::PROVIDER_ID;
+    if is_anthropic {
+        methods.push(AuthMethod::ClaudeCodeSession);
+    }
     let has_pkce = bitrouter_providers::oauth::registry::has_pkce_flow(&entry.id);
     if has_pkce {
         methods.push(AuthMethod::PkceSubscription);
     }
-    // Providers with a sibling vendor CLI can adopt its existing session.
-    if import_cli_for(&entry.id).is_some() {
+    // Providers with a sibling vendor CLI can adopt its existing session as a
+    // one-shot copy. For anthropic this is superseded by the live
+    // `ClaudeCodeSession` above (the copy is what risked the family-revoke), so
+    // it's offered only for the other CLI providers (Codex).
+    if import_cli_for(&entry.id).is_some() && !is_anthropic {
         methods.push(AuthMethod::ImportFromCli);
     }
     match &entry.auth {
@@ -436,6 +455,7 @@ pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
     );
 
     let credential = match chosen {
+        AuthMethod::ClaudeCodeSession => run_claude_code_session().await?,
         AuthMethod::PkceSubscription => run_pkce_subscription(provider_id).await?,
         AuthMethod::ImportFromCli => run_cli_import(provider_id)?,
         AuthMethod::DeviceCode => run_device_code(provider_id, entry).await?,
@@ -454,6 +474,90 @@ pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
     );
     eprintln!();
     Ok(())
+}
+
+/// Adopt the user's existing Claude Code session as the live credential source
+/// for `anthropic`.
+///
+/// Resolution order, mirroring how Claude Code users actually authenticate:
+/// 1. If a Claude Code session already exists in `~/.claude` (macOS Keychain /
+///    `.credentials.json`), use it as-is — the daemon reads it live and
+///    refreshes in place.
+/// 2. Otherwise sign the user in with the `claude` CLI itself (`claude auth
+///    login --claudeai`), installing it first (the same native installer
+///    `bitrouter spawn` uses) when it's missing, then re-read.
+///
+/// Returns a [`Credential::ClaudeCodeCli`] marker — no token is copied into
+/// bitrouter's own store, so bitrouter and Claude Code share one credential and
+/// can't refresh-rotate each other out (RFC 6749 §6).
+async fn run_claude_code_session()
+-> Result<bitrouter_providers::oauth::credential_store::Credential> {
+    use std::io::IsTerminal;
+
+    use bitrouter_providers::import::claude_code::ClaudeCodeStore;
+    use bitrouter_providers::oauth::credential_store::Credential;
+
+    let store = ClaudeCodeStore::system().ok_or_else(|| {
+        anyhow::anyhow!(
+            "could not resolve your home directory (set HOME) to find the Claude Code session"
+        )
+    })?;
+
+    // 1. Already signed in to Claude Code?
+    if let Some(live) = store
+        .read()
+        .context("reading your existing Claude Code session")?
+    {
+        eprintln!(
+            "  Found your Claude Code session ({}) — bitrouter will read it live.",
+            live.source
+        );
+        return Ok(Credential::ClaudeCodeCli);
+    }
+
+    // 2. Not signed in — drive the `claude` CLI's own login.
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "not signed in to Claude Code. Run `claude auth login` (install the CLI first with \
+             `curl -fsSL https://claude.ai/install.sh | bash`), then re-run \
+             `bitrouter login anthropic`."
+        );
+    }
+
+    let claude = crate::spawn::ensure_agent_installed(crate::spawn::SpawnAgent::Claude, false)
+        .await
+        .context("locating the claude CLI to sign you in")?;
+
+    eprintln!("  You're not signed in to Claude Code yet — launching `claude auth login`.");
+    let status = tokio::process::Command::new(&claude)
+        .arg("auth")
+        .arg("login")
+        .arg("--claudeai")
+        .status()
+        .await
+        .context("running `claude auth login`")?;
+    if !status.success() {
+        anyhow::bail!(
+            "`claude auth login` didn't complete — sign in, then re-run `bitrouter login anthropic`."
+        );
+    }
+
+    match store
+        .read()
+        .context("re-reading your Claude Code session after sign-in")?
+    {
+        Some(live) => {
+            eprintln!(
+                "  Signed in — bitrouter will read your session live from {}.",
+                live.source
+            );
+            Ok(Credential::ClaudeCodeCli)
+        }
+        None => anyhow::bail!(
+            "still no Claude Code session after `claude auth login` — run `claude auth status` \
+             to check, then retry."
+        ),
+    }
 }
 
 /// Run the browser-based PKCE Authorization Code flow against the
@@ -972,6 +1076,33 @@ mod tests {
             "agents block should land as parsed entries; got: {:?}",
             cfg.agents.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn anthropic_prefers_claude_code_session_first() {
+        let entry = bitrouter_providers::builtin::find("anthropic").unwrap();
+        let methods = available_methods(entry);
+        assert_eq!(
+            methods.first(),
+            Some(&AuthMethod::ClaudeCodeSession),
+            "the live Claude Code session must be the default for anthropic"
+        );
+        assert!(
+            !methods.contains(&AuthMethod::ImportFromCli),
+            "anthropic uses the live session, not the one-shot copy that can family-revoke"
+        );
+        assert!(
+            methods.contains(&AuthMethod::PkceSubscription),
+            "PKCE stays available as an explicit fallback"
+        );
+    }
+
+    #[test]
+    fn codex_keeps_oneshot_import_and_offers_no_claude_code_session() {
+        let entry = bitrouter_providers::builtin::find("openai-codex").unwrap();
+        let methods = available_methods(entry);
+        assert!(methods.contains(&AuthMethod::ImportFromCli));
+        assert!(!methods.contains(&AuthMethod::ClaudeCodeSession));
     }
 
     fn sample_config() -> Config {
