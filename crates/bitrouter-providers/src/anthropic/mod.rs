@@ -45,6 +45,7 @@ use bitrouter_sdk::language_model::AuthApplier;
 use bitrouter_sdk::language_model::types::RoutingTarget;
 use bitrouter_sdk::{BitrouterError, Result};
 
+use crate::import::claude_code::ClaudeCodeStore;
 use crate::oauth::auth_code::AuthCodeError;
 use crate::oauth::credential_store::{Credential, CredentialStore, DEFAULT_LABEL, OAuthToken};
 use crate::oauth::refresh::{needs_refresh, refresh};
@@ -83,6 +84,11 @@ pub struct AnthropicOAuthApplier {
     /// (double-checked locking) and skips the refresh if the first one
     /// already populated it.
     refresh_gates: Arc<Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// Live view of Claude Code's own credential store (`~/.claude`). Used to
+    /// resolve a [`Credential::ClaudeCodeCli`] marker: read the token live and
+    /// write any refresh back to the same source, so bitrouter and Claude Code
+    /// share one credential. `None` only when no home directory resolves.
+    claude_code: Option<ClaudeCodeStore>,
 }
 
 impl AnthropicOAuthApplier {
@@ -111,6 +117,7 @@ impl AnthropicOAuthApplier {
             token_endpoint: registry.auth.token_endpoint,
             cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             refresh_gates: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            claude_code: ClaudeCodeStore::system(),
         })
     }
 
@@ -122,6 +129,7 @@ impl AnthropicOAuthApplier {
         refresh_client: reqwest::Client,
         client_id: impl Into<String>,
         token_endpoint: impl Into<String>,
+        claude_code: Option<ClaudeCodeStore>,
     ) -> Self {
         Self {
             store_path: store_path.into(),
@@ -130,6 +138,7 @@ impl AnthropicOAuthApplier {
             token_endpoint: token_endpoint.into(),
             cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             refresh_gates: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            claude_code,
         }
     }
 
@@ -197,10 +206,14 @@ impl AnthropicOAuthApplier {
             Some(c) => c.clone(),
             None => return Ok(None),
         };
-        // 5. ApiKey: no refresh logic, return as-is.
+        // 5. ApiKey: no refresh logic, return as-is. Marker: resolve live from
+        //    the Claude Code store (read + refresh-write-back there).
         let token = match cred {
             Credential::ApiKey { value } => {
                 return Ok(Some(ResolvedCredential::ApiKey(value)));
+            }
+            Credential::ClaudeCodeCli => {
+                return self.resolve_claude_code_session(label).await;
             }
             Credential::Oauth(t) => t,
         };
@@ -219,6 +232,59 @@ impl AnthropicOAuthApplier {
             self.store_in_cache(label, &refreshed);
             return Ok(Some(ResolvedCredential::Oauth(refreshed)));
         }
+        self.store_in_cache(label, &token);
+        Ok(Some(ResolvedCredential::Oauth(token)))
+    }
+
+    /// Resolve a [`Credential::ClaudeCodeCli`] marker: read the live token from
+    /// Claude Code's own store (`~/.claude`), refreshing it in place when it is
+    /// within the refresh window and **writing the rotated token back to that
+    /// same store** so bitrouter and Claude Code never diverge (RFC 6749 §6
+    /// refresh-token rotation would otherwise family-revoke one of them).
+    ///
+    /// Called under the per-label single-flight gate, so the read → refresh →
+    /// write-back is serialised; the live read also picks up any refresh the
+    /// `claude` CLI performed in the meantime, avoiding a redundant rotation.
+    async fn resolve_claude_code_session(&self, label: &str) -> Result<Option<ResolvedCredential>> {
+        let store = self
+            .claude_code
+            .as_ref()
+            .ok_or_else(|| BitrouterError::Upstream {
+                status: 401,
+                message: "cannot locate the Claude Code session (no home directory) — set HOME \
+                      or run `bitrouter login anthropic`"
+                    .into(),
+            })?;
+        let live = store
+            .read()
+            .map_err(|e| BitrouterError::internal(format!("reading Claude Code session: {e}")))?;
+        let Some(live) = live else {
+            return Err(BitrouterError::Upstream {
+                status: 401,
+                message: "no Claude Code session found — run `claude auth login` (or \
+                          `bitrouter login anthropic`) to sign in to your Claude subscription"
+                    .into(),
+            });
+        };
+        let token = if needs_refresh(&live.token) {
+            let refreshed = refresh(
+                &self.refresh_client,
+                &self.token_endpoint,
+                &self.client_id,
+                &live.token,
+            )
+            .await
+            .map_err(refresh_to_bitrouter_error)?;
+            // Single source of truth: write the rotation back where we read it.
+            store.write_back(&refreshed, &live.source).map_err(|e| {
+                BitrouterError::internal(format!(
+                    "writing refreshed token back to the Claude Code store: {e}"
+                ))
+            })?;
+            refreshed
+        } else {
+            live.token
+        };
         self.store_in_cache(label, &token);
         Ok(Some(ResolvedCredential::Oauth(token)))
     }
@@ -620,6 +686,7 @@ mod tests {
             reqwest::Client::new(),
             "client-1",
             format!("{}/oauth/token", server.uri()),
+            None,
         );
         let req = reqwest::Client::new()
             .post("https://api.anthropic.com/v1/messages")
@@ -722,6 +789,131 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body2["system"].as_array().unwrap().len(), 2);
+    }
+
+    /// Write a `.credentials.json` in a fresh temp dir and return its path.
+    fn tmp_claude_creds(contents: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "bitrouter-anthropic-cc-{}-{id}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".credentials.json");
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn seed_marker(store_path: &std::path::Path) {
+        let mut store = CredentialStore::load(store_path).unwrap();
+        store
+            .set(PROVIDER_ID, DEFAULT_LABEL, Credential::ClaudeCodeCli)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn claude_code_cli_marker_applies_bearer_from_live_store() {
+        // Marker in bitrouter's store + a non-expiring live Claude Code session
+        // (no `expiresAt` → never refreshed) → the live access token is applied
+        // as a Bearer and any stale x-api-key is stripped.
+        let path = tmp_store_path();
+        seed_marker(&path);
+        let creds = tmp_claude_creds(
+            r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat-live","refreshToken":"r"}}"#,
+        );
+        let applier = AnthropicOAuthApplier::with_client_and_endpoint(
+            &path,
+            reqwest::Client::new(),
+            "client-1",
+            "https://example.com/oauth/token",
+            Some(ClaudeCodeStore::file_only(&creds)),
+        );
+        let mut req = reqwest::Client::new()
+            .post("https://api.anthropic.com/v1/messages")
+            .build()
+            .unwrap();
+        req.headers_mut()
+            .insert("x-api-key", HeaderValue::from_static("stale"));
+        let authed = applier.apply(req, &anthropic_target(None)).await.unwrap();
+        let h = authed.headers();
+        assert_eq!(
+            h.get(reqwest::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer sk-ant-oat-live")
+        );
+        assert!(h.get("x-api-key").is_none());
+        assert!(
+            h.get("anthropic-beta")
+                .and_then(|v| v.to_str().ok())
+                .unwrap()
+                .contains("oauth-2025-04-20")
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_code_cli_marker_missing_session_errors() {
+        // Marker present but no live Claude Code session → a helpful 401 that
+        // points the user at `claude auth login`, not a silent fall-through.
+        let path = tmp_store_path();
+        seed_marker(&path);
+        let absent = std::env::temp_dir().join("bitrouter-anthropic-cc-absent/none.json");
+        let applier = AnthropicOAuthApplier::with_client_and_endpoint(
+            &path,
+            reqwest::Client::new(),
+            "client-1",
+            "https://example.com/oauth/token",
+            Some(ClaudeCodeStore::file_only(&absent)),
+        );
+        let req = reqwest::Client::new()
+            .post("https://api.anthropic.com/v1/messages")
+            .build()
+            .unwrap();
+        let err = applier
+            .apply(req, &anthropic_target(None))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("claude auth login"),
+            "expected a login hint, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_code_cli_marker_expiring_token_triggers_refresh() {
+        // An expiring live token must drive a refresh attempt rather than serve
+        // the stale token. Pointing the endpoint at an insecure (http) URL makes
+        // `refresh` fail fast with a typed error, proving the needs_refresh
+        // branch is taken. (The happy-path refresh and write-back are covered by
+        // `oauth::refresh::tests` and `import::claude_code::tests` respectively;
+        // an http MockServer can't exercise them because `refresh` requires
+        // https.)
+        let path = tmp_store_path();
+        seed_marker(&path);
+        let creds = tmp_claude_creds(
+            r#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"RT","expiresAt":1000}}"#,
+        );
+        let applier = AnthropicOAuthApplier::with_client_and_endpoint(
+            &path,
+            reqwest::Client::new(),
+            "client-1",
+            "http://insecure.example.com/oauth/token",
+            Some(ClaudeCodeStore::file_only(&creds)),
+        );
+        let req = reqwest::Client::new()
+            .post("https://api.anthropic.com/v1/messages")
+            .build()
+            .unwrap();
+        let err = applier
+            .apply(req, &anthropic_target(None))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("refresh"),
+            "expected a refresh error proving the refresh path ran, got: {err}"
+        );
     }
 
     #[tokio::test]
