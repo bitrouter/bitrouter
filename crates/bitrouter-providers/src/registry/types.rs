@@ -107,14 +107,6 @@ impl RegistryProvider {
     pub fn is_active(&self) -> bool {
         self.status == "active"
     }
-
-    /// The provider-wide default protocol — the value of the `"*"` pattern
-    /// entry, if any.
-    pub fn default_protocol(&self) -> Option<RegistryProtocol> {
-        self.api_protocol
-            .iter()
-            .find_map(|entry| entry.get("*").copied())
-    }
 }
 
 /// One model a provider serves — a canonical id mapped to the provider's own
@@ -269,8 +261,8 @@ mod tests {
         assert!(!anthropic.community);
         assert_eq!(anthropic.billing, Billing::Token);
         assert_eq!(
-            anthropic.default_protocol(),
-            Some(RegistryProtocol::Anthropic)
+            anthropic.api_protocol[0].get("*"),
+            Some(&RegistryProtocol::Anthropic)
         );
         let m = &anthropic.models[0];
         assert_eq!(m.id, "anthropic/claude-sonnet-4.6");

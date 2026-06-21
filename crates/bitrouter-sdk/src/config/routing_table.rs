@@ -1427,4 +1427,23 @@ providers:
             .unwrap();
         assert_eq!(chain[0].service_id, "gpt-5");
     }
+
+    #[tokio::test]
+    async fn custom_provider_priority_reorders_the_cascade() {
+        // A configured `registry.provider_priority` that ranks third-party
+        // ahead of first-party inverts the default ladder: `aardvark`
+        // (third-party-api) now leads `zebra` (first-party-api). Proves the
+        // ladder is configurable, not hard-coded.
+        let yaml = format!(
+            "registry:\n  provider_priority:\n    - third-party-api\n    \
+             - first-party-api\n{CLASSED}"
+        );
+        let t = table(&yaml);
+        let chain = t
+            .route_chain("shared", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(order, vec!["aardvark", "zebra"]);
+    }
 }

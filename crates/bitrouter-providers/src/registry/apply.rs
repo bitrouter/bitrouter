@@ -517,4 +517,34 @@ mod tests {
             assert!(config.providers.is_empty());
         });
     }
+
+    #[test]
+    fn apply_registry_is_idempotent() {
+        // The merge re-runs on every reload, so a second pass over the same
+        // data must not duplicate models or change the result.
+        with_env("REGTESTPROV_API_KEY", Some("sk-test"), || {
+            let data = data_with(
+                vec![provider("regtestprov")],
+                vec!["anthropic/claude-sonnet-4.6", "deepseek/deepseek-v3.2"],
+            );
+            let mut config = Config::default();
+            // Include the hosted cloud so the all-canonical fill is exercised twice.
+            config
+                .providers
+                .insert(BITROUTER_CLOUD_ID.to_string(), ProviderConfig::default());
+
+            apply_registry(&mut config, &data);
+            let merged_models = config.providers["regtestprov"].models.len();
+            let cloud_models = config.providers[BITROUTER_CLOUD_ID].models.len();
+
+            apply_registry(&mut config, &data);
+            assert_eq!(config.providers["regtestprov"].models.len(), merged_models);
+            assert_eq!(
+                config.providers[BITROUTER_CLOUD_ID].models.len(),
+                cloud_models,
+                "re-running must not duplicate the canonical catalog"
+            );
+            assert_eq!(cloud_models, 2);
+        });
+    }
 }

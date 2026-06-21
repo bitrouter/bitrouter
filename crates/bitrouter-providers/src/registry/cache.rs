@@ -12,7 +12,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -68,11 +68,6 @@ impl DiskCache {
     pub fn default_path() -> Result<Self, CacheError> {
         let dir = default_cache_dir()?;
         Ok(Self::at(dir.join(DEFAULT_FILENAME)))
-    }
-
-    /// Path the cache reads + writes.
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 
     /// Read the cached data if it exists AND is within the TTL window. Returns

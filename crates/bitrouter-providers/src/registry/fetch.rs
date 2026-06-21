@@ -40,9 +40,8 @@ pub enum FetchError {
 ///
 /// Bounded `connect_timeout` + overall `timeout` (`rustls-tls`, the workspace's
 /// feature pin) so an unreachable registry fails fast on a no-network host
-/// rather than stalling startup for the OS-level connect window. Callers that
-/// want a longer-lived client should call [`fetch_registry_with`] with their
-/// own [`reqwest::Client`].
+/// rather than stalling startup for the OS-level connect window. Reads
+/// `providers.json` then `canonical.json` under `base` and merges them.
 pub async fn fetch_registry(base: &str) -> Result<RegistryData, FetchError> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
@@ -53,20 +52,11 @@ pub async fn fetch_registry(base: &str) -> Result<RegistryData, FetchError> {
             base: base.to_string(),
             source,
         })?;
-    fetch_registry_with(&client, base).await
-}
-
-/// Fetch the registry using a caller-owned [`reqwest::Client`]. Reads
-/// `providers.json` then `canonical.json` under `base` and merges them.
-pub async fn fetch_registry_with(
-    client: &reqwest::Client,
-    base: &str,
-) -> Result<RegistryData, FetchError> {
     let base_trimmed = base.trim_end_matches('/');
     let providers: Envelope<RegistryProvider> =
-        fetch_envelope(client, base, &format!("{base_trimmed}/providers.json")).await?;
+        fetch_envelope(&client, base, &format!("{base_trimmed}/providers.json")).await?;
     let canonical: Envelope<CanonicalModel> =
-        fetch_envelope(client, base, &format!("{base_trimmed}/canonical.json")).await?;
+        fetch_envelope(&client, base, &format!("{base_trimmed}/canonical.json")).await?;
     Ok(RegistryData {
         providers: providers.data,
         canonical: canonical.data,
