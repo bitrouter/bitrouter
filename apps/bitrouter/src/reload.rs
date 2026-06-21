@@ -80,6 +80,10 @@ impl DaemonReloader for AppReloader {
             ReloadSource::File(path) => match bitrouter_sdk::config::load(path).await {
                 Ok(mut fresh) => {
                     bitrouter_providers::apply_builtin_defaults(&mut fresh);
+                    // Re-merge the registry too, so a reload picks up newly-set
+                    // credentials (a `bitrouter reload --env` that exports a
+                    // provider key activates that provider's canonical models).
+                    crate::assemble::merge_registry_into(&mut fresh).await;
                     self.routing_table.replace_config(fresh).await
                 }
                 Err(e) => Err(e),
@@ -98,6 +102,9 @@ impl DaemonReloader for AppReloader {
                 // `$BITROUTER_API_KEY` is in the daemon's env-override map.
                 crate::cloud::enable_in_zero_config(&mut fresh);
                 bitrouter_providers::apply_builtin_defaults(&mut fresh);
+                // Merge the registry so the canonical catalog + every
+                // credentialed BYOK provider is routable after a reload too.
+                crate::assemble::merge_registry_into(&mut fresh).await;
                 self.routing_table.replace_config(fresh).await
             }
         };

@@ -18,6 +18,48 @@ Seven providers ship in the binary. Each has a baked-in `api_base`, `api_protoco
 
 Zero-config mode auto-enables every built-in whose env var is present. A built-in without its credential gets `active: false` and falls out of the routing table — startup still succeeds.
 
+## Provider registry (catalog + priority)
+
+Beyond the built-ins, BitRouter fetches the public provider registry
+(`https://github.com/bitrouter/provider-registry`) at startup and on reload: a
+curated, deterministic catalog of canonical models and the providers that serve
+them. It is fetched from the generated `dist/` artifacts, disk-cached under
+`$XDG_CACHE_HOME/bitrouter/provider-registry.json` (24h TTL, stale-fallback on a
+network outage), and merged into the routing table. The job of the merge is to
+route a **canonical** model id (e.g. `anthropic/claude-sonnet-4.6`) to a
+provider that serves it, translating to that provider's own upstream id.
+
+Rules:
+
+- **BYOK only.** Only providers open to bring-your-own-key are merged; pooled /
+  private registry entries are skipped.
+- **Credential-gated.** A registry provider becomes routable only when its key
+  is present, read from the convention `${NAME}_API_KEY` (uppercased, hyphens →
+  underscores — e.g. `DEEPSEEK_API_KEY`, `ZAI_CODING_PLAN_API_KEY`), or from the
+  built-in's env var when the provider also has a built-in entry. No key ⇒ not
+  enabled. Declare the provider explicitly with `api_key: ${MY_VAR}` to override
+  the env-var name.
+- **BitRouter Cloud serves everything.** When the `bitrouter` provider is
+  active (env key or `bitrouter auth login`), it is populated with every model
+  in the canonical list.
+
+```yaml
+registry:
+  enabled: true            # default; set false (or inherit_defaults: false) to disable the merge
+  url: "https://raw.githubusercontent.com/bitrouter/provider-registry/main/dist"
+  provider_priority:       # default ladder, highest first
+    - first-party-subscription
+    - gateway-subscription
+    - first-party-api
+    - bitrouter-cloud
+    - third-party-api
+```
+
+When several active providers serve the same canonical model, the auto-cascade
+orders them by this `provider_priority` ladder (a provider's class comes from
+the registry / built-in). Override per provider with `class:` or a numeric
+`priority:` (lower = preferred) under `providers.<id>`.
+
 ## Minimal config
 
 ```yaml

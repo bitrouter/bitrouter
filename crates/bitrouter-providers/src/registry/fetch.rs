@@ -7,12 +7,6 @@
 
 use crate::registry::types::{CanonicalModel, Envelope, RegistryData, RegistryProvider};
 
-/// Default base URL for the registry `dist/` artifacts — the raw files on the
-/// registry's `main` branch. Operators can override this (e.g. to pin a
-/// `reg-<timestamp>` tag, or to mirror the files internally) via config.
-pub const DEFAULT_REGISTRY_BASE: &str =
-    "https://raw.githubusercontent.com/bitrouter/provider-registry/main/dist";
-
 /// User-agent string sent with registry fetches — helps the upstream isolate
 /// bitrouter traffic in their logs.
 const USER_AGENT: &str = concat!("bitrouter/", env!("CARGO_PKG_VERSION"));
@@ -40,15 +34,20 @@ pub enum FetchError {
     },
 }
 
-/// Download + parse the registry from [`DEFAULT_REGISTRY_BASE`].
+/// Download + parse the registry from `base` (the base URL of the `dist/`
+/// directory; defaults to [`bitrouter_sdk::config::DEFAULT_REGISTRY_URL`] via
+/// [`RegistryConfig`](bitrouter_sdk::config::RegistryConfig)).
 ///
-/// Plain `reqwest::Client` with `rustls-tls` (the workspace's feature pin) and a
-/// per-call 30s timeout. Callers that want a longer-lived client should call
-/// [`fetch_registry_with`] with their own [`reqwest::Client`].
+/// Bounded `connect_timeout` + overall `timeout` (`rustls-tls`, the workspace's
+/// feature pin) so an unreachable registry fails fast on a no-network host
+/// rather than stalling startup for the OS-level connect window. Callers that
+/// want a longer-lived client should call [`fetch_registry_with`] with their
+/// own [`reqwest::Client`].
 pub async fn fetch_registry(base: &str) -> Result<RegistryData, FetchError> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|source| FetchError::Network {
             base: base.to_string(),

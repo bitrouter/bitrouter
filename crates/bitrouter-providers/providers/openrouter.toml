@@ -13,6 +13,7 @@
 
 id = "openrouter"
 display_name = "OpenRouter"
+class = "gateway-subscription"
 api_base = "https://openrouter.ai/api/v1"
 api_protocol = "chat_completions"
 doc_url = "https://openrouter.ai/docs/api-reference/overview"

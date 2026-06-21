@@ -22,9 +22,11 @@
 //! - [`fetch`] — async `reqwest`-driven download of the two dist files.
 //! - [`cache`] — file-based on-disk cache under `$XDG_CACHE_HOME/bitrouter/`
 //!   with a 24-hour freshness window and a stale-fallback read.
-//! - `apply` — merge a [`types::RegistryData`] into a parsed
+//! - [`apply`] — fetch-or-cache orchestration and the merge of a
+//!   [`types::RegistryData`] into a parsed
 //!   [`Config`](bitrouter_sdk::config::Config), credential-gated.
 
+pub mod apply;
 pub mod cache;
 pub mod fetch;
 pub mod types;

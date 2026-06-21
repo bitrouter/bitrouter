@@ -110,6 +110,12 @@ pub fn apply_builtin_defaults(config: &mut Config) {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
         }
+        // Routing-preference class for built-ins (gateways, the hosted cloud).
+        // Registry providers are classed by the registry merge instead; a
+        // user-set class wins over both.
+        if provider.class.is_none() {
+            provider.class = builtin.class;
+        }
         // A multi-account provider carries its credentials in `accounts`,
         // not the top-level `api_key`. Skip both the env-var fill and the
         // inactive guard for it — it is explicitly account-managed and

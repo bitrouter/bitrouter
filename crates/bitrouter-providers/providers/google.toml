@@ -14,6 +14,7 @@
 
 id = "google"
 display_name = "Generate Content"
+class = "first-party-api"
 api_base = "https://generativelanguage.googleapis.com/v1beta"
 api_protocol = "generate_content"
 doc_url = "https://ai.google.dev/api"

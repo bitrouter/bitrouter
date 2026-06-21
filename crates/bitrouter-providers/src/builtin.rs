@@ -253,4 +253,31 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn built_in_classes_are_set_for_priority() {
+        use bitrouter_sdk::config::ProviderClass;
+        // The hosted gateway and the aggregator gateways carry a class so the
+        // auto-cascade ranks them; first-party APIs likewise.
+        assert_eq!(
+            find("bitrouter").unwrap().class,
+            Some(ProviderClass::BitrouterCloud)
+        );
+        assert_eq!(
+            find("openai").unwrap().class,
+            Some(ProviderClass::FirstPartyApi)
+        );
+        assert_eq!(
+            find("openai-codex").unwrap().class,
+            Some(ProviderClass::FirstPartySubscription)
+        );
+        assert_eq!(
+            find("github-copilot").unwrap().class,
+            Some(ProviderClass::GatewaySubscription)
+        );
+        assert_eq!(
+            find("openrouter").unwrap().class,
+            Some(ProviderClass::GatewaySubscription)
+        );
+    }
 }
