@@ -66,6 +66,9 @@ pub(crate) fn parse_account(attributes_output: &str) -> Option<String> {
 /// the item is absent or the platform isn't macOS.
 #[cfg(target_os = "macos")]
 pub(crate) fn find_account(service: &str) -> Option<String> {
+    // `find-generic-password -s <service>` (no `-a`) returns the *first*
+    // matching item, so this assumes a single item per service — true for
+    // Claude Code, which writes exactly one `Claude Code-credentials` item.
     // Without `-w` the command prints the item's attributes (incl. `acct`).
     let output = std::process::Command::new("security")
         .arg("find-generic-password")

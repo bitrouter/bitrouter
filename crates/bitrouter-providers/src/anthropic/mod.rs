@@ -285,7 +285,17 @@ impl AnthropicOAuthApplier {
         } else {
             live.token
         };
-        self.store_in_cache(label, &token);
+        // Cache the resolved token to collapse the in-request double resolution
+        // (`apply` + `prepare_body`) and avoid a `security`/file read per
+        // request. The cache self-invalidates at the refresh window, so a
+        // `claude`-side rotation is picked up by the next refresh. A
+        // non-expiring token (`expires_at == 0`) is deliberately NOT cached: it
+        // would otherwise be served for the whole process lifetime without ever
+        // re-reading the live store, defeating the marker's "single source of
+        // truth" intent — so we re-read it live on each request instead.
+        if token.expires_at > 0 {
+            self.store_in_cache(label, &token);
+        }
         Ok(Some(ResolvedCredential::Oauth(token)))
     }
 
@@ -913,6 +923,63 @@ mod tests {
         assert!(
             err.to_string().contains("refresh"),
             "expected a refresh error proving the refresh path ran, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_code_cli_marker_non_expiring_is_reread_live_each_request() {
+        // A non-expiring live token must NOT be cached for the process lifetime:
+        // when `claude` rotates the on-disk token, the next request must see the
+        // new value, keeping bitrouter in lockstep with the single source of
+        // truth.
+        let path = tmp_store_path();
+        seed_marker(&path);
+        let creds =
+            tmp_claude_creds(r#"{"claudeAiOauth":{"accessToken":"first","refreshToken":"r"}}"#);
+        let applier = AnthropicOAuthApplier::with_client_and_endpoint(
+            &path,
+            reqwest::Client::new(),
+            "client-1",
+            "https://example.com/oauth/token",
+            Some(ClaudeCodeStore::file_only(&creds)),
+        );
+        let bearer = |req: reqwest::Request| {
+            req.headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        };
+        let first = applier
+            .apply(
+                reqwest::Client::new()
+                    .post("https://api.anthropic.com/v1/messages")
+                    .build()
+                    .unwrap(),
+                &anthropic_target(None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bearer(first).as_deref(), Some("Bearer first"));
+        // Claude Code rotates its stored token.
+        std::fs::write(
+            &creds,
+            r#"{"claudeAiOauth":{"accessToken":"second","refreshToken":"r"}}"#,
+        )
+        .unwrap();
+        let second = applier
+            .apply(
+                reqwest::Client::new()
+                    .post("https://api.anthropic.com/v1/messages")
+                    .build()
+                    .unwrap(),
+                &anthropic_target(None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bearer(second).as_deref(),
+            Some("Bearer second"),
+            "a non-expiring marker token must be re-read live, not served from a stale cache"
         );
     }
 
