@@ -111,6 +111,19 @@ fn build_targets(
     // under `/anthropic`). It applies to the provider base, not to an account
     // that pins its own host.
     let protocol_base = provider.endpoint_for(&protocol);
+    // Canonical → upstream id translation: when `model_id` matches a declared
+    // model carrying a distinct `provider_model_id` (the registry case, e.g.
+    // canonical `anthropic/claude-sonnet-4.6` → upstream `claude-sonnet-4-6`),
+    // dispatch against the upstream id. Hand-written configs leave
+    // `provider_model_id` unset, so `model_id` is used verbatim — and a direct
+    // `provider:upstream-id` route that matches no declared model also passes
+    // through unchanged.
+    let service_id = provider
+        .models
+        .iter()
+        .find(|m| m.id == model_id)
+        .and_then(|m| m.provider_model_id.as_deref())
+        .unwrap_or(model_id);
 
     if provider.accounts.is_empty() {
         let api_base = protocol_base
@@ -118,7 +131,7 @@ fn build_targets(
             .unwrap_or_else(|| provider.api_base.clone());
         return vec![RoutingTarget {
             provider_name: provider_id.to_string(),
-            service_id: model_id.to_string(),
+            service_id: service_id.to_string(),
             api_base,
             api_key: provider.api_key.clone(),
             api_protocol: protocol,
@@ -155,7 +168,7 @@ fn build_targets(
             };
             RoutingTarget {
                 provider_name: provider_id.to_string(),
-                service_id: model_id.to_string(),
+                service_id: service_id.to_string(),
                 api_base,
                 api_key: account.api_key.clone(),
                 api_protocol: protocol.clone(),
@@ -332,9 +345,11 @@ pub fn resolve_route_chain(
     }
 
     // ---- Strategy 3: auto-cascade across every provider declaring it ----
-    // Collect per-provider so the cascade sort is by provider id; each
-    // provider then contributes one-or-more (account-expanded) targets.
-    let mut chain: Vec<(String, Vec<RoutingTarget>)> = Vec::new();
+    // Collect per-provider, tagged with the provider's priority rank, so the
+    // cascade orders by (rank, provider id); each provider then contributes
+    // one-or-more (account-expanded) targets.
+    let order = &config.registry.provider_priority;
+    let mut chain: Vec<(i32, String, Vec<RoutingTarget>)> = Vec::new();
     for (provider_id, provider) in &config.providers {
         if !provider.active {
             continue;
@@ -350,6 +365,7 @@ pub fn resolve_route_chain(
         }
         if provider.models.iter().any(|m| m.id == clean) {
             chain.push((
+                provider_rank(provider, order),
                 provider_id.clone(),
                 build_targets(
                     provider_id,
@@ -368,17 +384,20 @@ pub fn resolve_route_chain(
         )));
     }
 
-    // Order the cascade. `Latency` / `Cost` have no metrics source yet, so
-    // they fall back to the alphabetical initial sort. Account-expanded
-    // targets within one provider keep their build order.
+    // Order the cascade. The primary key is the provider's priority rank
+    // (class position in `registry.provider_priority`, or an explicit
+    // per-provider `priority`); unclassed providers rank last and so keep the
+    // historical alphabetical order among themselves. `Latency` / `Cost` have
+    // no metrics source yet, so they fall back to this rank order.
+    // Account-expanded targets within one provider keep their build order.
     //
-    // Native-protocol preference is a *tie-break only*: a stable secondary key
+    // Native-protocol preference is a *tie-break only*: a stable tertiary key
     // ranking providers that already serve the inbound protocol natively ahead
-    // of those that would translate — but only among candidates the primary
-    // order ranks equal. Today the primary key (provider id) is total, so this
-    // never reorders; it becomes load-bearing once cost/latency scoring (which
-    // can tie) replaces the alphabetical fallback. It never overrides the
-    // primary order, so cost/latency stays authoritative.
+    // of those that would translate — but only among candidates the rank +
+    // provider-id keys rank equal. Provider id is total within a rank, so this
+    // is currently inert; it becomes load-bearing once cost/latency scoring
+    // (which can tie) replaces the rank fallback. It never overrides the rank
+    // or id order, so priority stays authoritative.
     let inbound = prefs.inbound_protocol.as_ref();
     let serves_inbound_natively = |targets: &[RoutingTarget]| -> bool {
         matches!(inbound, Some(p) if targets.first().is_some_and(|t| &t.api_protocol == p))
@@ -386,13 +405,36 @@ pub fn resolve_route_chain(
     match prefs.sort {
         SortOrder::Alphabetical | SortOrder::Latency | SortOrder::Cost => {
             chain.sort_by(|a, b| {
-                // native-capable (true) sorts first → compare b against a.
-                a.0.cmp(&b.0)
-                    .then_with(|| serves_inbound_natively(&b.1).cmp(&serves_inbound_natively(&a.1)))
+                a.0.cmp(&b.0) // priority rank ascending (lower = preferred)
+                    .then_with(|| a.1.cmp(&b.1)) // provider id alphabetical
+                    // native-capable (true) sorts first → compare b against a.
+                    .then_with(|| serves_inbound_natively(&b.2).cmp(&serves_inbound_natively(&a.2)))
             });
         }
     }
-    Ok(chain.into_iter().flat_map(|(_, t)| t).collect())
+    Ok(chain.into_iter().flat_map(|(_, _, t)| t).collect())
+}
+
+/// The auto-cascade priority rank of a provider (lower = preferred). An
+/// explicit [`ProviderConfig::priority`] wins; otherwise the provider's
+/// [`class`](crate::config::ProviderConfig::class) is ranked by its position in
+/// `order` ([`RegistryConfig::provider_priority`](crate::config::RegistryConfig::provider_priority)).
+/// An unclassed provider, or a class absent from `order`, ranks last
+/// ([`i32::MAX`]) — so plain configs keep the historical alphabetical order.
+fn provider_rank(
+    provider: &crate::config::ProviderConfig,
+    order: &[crate::config::ProviderClass],
+) -> i32 {
+    if let Some(p) = provider.priority {
+        return p;
+    }
+    match provider.class {
+        Some(class) => order
+            .iter()
+            .position(|c| *c == class)
+            .map_or(i32::MAX, |i| i as i32),
+        None => i32::MAX,
+    }
 }
 
 /// List models for a config (the §5.7 aggregation logic, shared by both tables).
@@ -1274,5 +1316,115 @@ providers:
         assert_eq!(pinned.api_base, "https://eu.minimax.io/v1");
         // Account without a base gets the per-protocol /anthropic endpoint.
         assert_eq!(default.api_base, "https://api.minimax.io/anthropic/v1");
+    }
+
+    // Two providers serving one model, classed so the higher-priority class is
+    // the *alphabetically later* provider — proving the rank, not the name,
+    // drives the order.
+    const CLASSED: &str = r#"
+providers:
+  aardvark:
+    api_base: https://aardvark.example/v1
+    api_key: k-a
+    class: third-party-api
+    models: [{ id: shared }]
+  zebra:
+    api_base: https://zebra.example/v1
+    api_key: k-z
+    class: first-party-api
+    models: [{ id: shared }]
+"#;
+
+    #[tokio::test]
+    async fn strategy_3_orders_by_provider_class_then_name() {
+        let t = table(CLASSED);
+        let chain = t
+            .route_chain("shared", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        // first-party-api (rank 2) outranks third-party-api (rank 4), so `zebra`
+        // leads despite sorting alphabetically after `aardvark`.
+        assert_eq!(order, vec!["zebra", "aardvark"]);
+    }
+
+    #[tokio::test]
+    async fn strategy_3_explicit_priority_overrides_class() {
+        // `aardvark` keeps its low-priority class but pins an explicit priority
+        // ahead of `zebra`'s class rank — the override wins.
+        let yaml = CLASSED.replace(
+            "    class: third-party-api\n",
+            "    class: third-party-api\n    priority: -1\n",
+        );
+        let t = table(&yaml);
+        let chain = t
+            .route_chain("shared", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(order, vec!["aardvark", "zebra"]);
+    }
+
+    #[tokio::test]
+    async fn strategy_3_unclassed_provider_ranks_after_classed() {
+        // Add an unclassed provider; it must sort last (rank i32::MAX) even
+        // though its name (`mid`) sorts between the two classed ones.
+        let yaml = format!(
+            "{CLASSED}  mid:\n    api_base: https://mid.example/v1\n    \
+             api_key: k-m\n    models: [{{ id: shared }}]\n"
+        );
+        let t = table(&yaml);
+        let chain = t
+            .route_chain("shared", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(order, vec!["zebra", "aardvark", "mid"]);
+    }
+
+    #[tokio::test]
+    async fn canonical_id_routes_to_provider_model_id() {
+        // A registry-style provider: the requested canonical id is the match
+        // key, but the upstream `provider_model_id` is what's dispatched.
+        let yaml = r#"
+providers:
+  anthropic:
+    api_base: https://api.anthropic.com/v1
+    api_key: k
+    models:
+      - { id: "anthropic/claude-sonnet-4.6", provider_model_id: claude-sonnet-4-6 }
+"#;
+        let t = table(yaml);
+        let chain = t
+            .route_chain(
+                "anthropic/claude-sonnet-4.6",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider_name, "anthropic");
+        // Dispatched against the upstream id, not the canonical match key.
+        assert_eq!(chain[0].service_id, "claude-sonnet-4-6");
+    }
+
+    #[tokio::test]
+    async fn missing_provider_model_id_dispatches_the_requested_id() {
+        // A hand-written entry (no `provider_model_id`) dispatches `id` verbatim
+        // — the back-compat path.
+        let yaml = r#"
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: k
+    models: [{ id: gpt-5 }]
+"#;
+        let t = table(yaml);
+        let chain = t
+            .route_chain("gpt-5", &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .unwrap();
+        assert_eq!(chain[0].service_id, "gpt-5");
     }
 }

@@ -73,6 +73,10 @@ pub struct Config {
     pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
+    /// Provider-registry integration: whether to fetch + merge the registry's
+    /// BYOK providers, where to fetch it from, and the provider-class priority
+    /// ladder used to order the auto-cascade.
+    pub registry: RegistryConfig,
 }
 
 impl Default for Config {
@@ -90,7 +94,80 @@ impl Default for Config {
             server_tools: Default::default(),
             agents: HashMap::new(),
             inherit_defaults: true,
+            registry: RegistryConfig::default(),
         }
+    }
+}
+
+/// Default base URL for the provider-registry `dist/` artifacts — the raw files
+/// on the registry's `main` branch (`providers.json` + `canonical.json` live
+/// under it). The single source of truth for the registry location; the
+/// `bitrouter-providers` fetch layer reads it through [`RegistryConfig`].
+pub const DEFAULT_REGISTRY_URL: &str =
+    "https://raw.githubusercontent.com/bitrouter/provider-registry/main/dist";
+
+/// Runtime provider-registry integration settings — the top-level `registry:`
+/// block in `bitrouter.yaml`.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct RegistryConfig {
+    /// Whether to fetch the registry and merge its BYOK providers into the
+    /// routing table. Default `true`. Also gated by
+    /// [`inherit_defaults`](Config::inherit_defaults) — either being false
+    /// disables the merge.
+    pub enabled: bool,
+    /// Base URL of the registry `dist/` artifacts. Defaults to
+    /// [`DEFAULT_REGISTRY_URL`]. Point it at a pinned `reg-<timestamp>` tag or
+    /// an internal mirror for reproducible deployments.
+    pub url: String,
+    /// Provider-class priority, highest first. A provider's auto-cascade rank
+    /// is its class's index here; a per-provider [`ProviderConfig::priority`]
+    /// overrides it, and a class absent from this list ranks last. Defaults to
+    /// [`ProviderClass::default_priority`].
+    pub provider_priority: Vec<ProviderClass>,
+}
+
+impl Default for RegistryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            url: DEFAULT_REGISTRY_URL.to_string(),
+            provider_priority: ProviderClass::default_priority(),
+        }
+    }
+}
+
+/// A provider's routing-preference class. Its position in
+/// [`RegistryConfig::provider_priority`] is its rank (earlier = preferred); the
+/// default ladder, highest first, is: first-party subscription ▸ gateway
+/// subscription ▸ first-party token API ▸ bitrouter-cloud ▸ third-party token
+/// API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderClass {
+    /// A first-party / official upstream billed by flat-rate subscription
+    /// (e.g. a first-party coding plan).
+    FirstPartySubscription,
+    /// A gateway / aggregator billed by subscription.
+    GatewaySubscription,
+    /// A first-party / official upstream billed pay-as-you-go per token.
+    FirstPartyApi,
+    /// The bitrouter hosted gateway.
+    BitrouterCloud,
+    /// A third-party / community reseller billed pay-as-you-go per token.
+    ThirdPartyApi,
+}
+
+impl ProviderClass {
+    /// The default priority ladder, highest first.
+    pub fn default_priority() -> Vec<ProviderClass> {
+        vec![
+            ProviderClass::FirstPartySubscription,
+            ProviderClass::GatewaySubscription,
+            ProviderClass::FirstPartyApi,
+            ProviderClass::BitrouterCloud,
+            ProviderClass::ThirdPartyApi,
+        ]
     }
 }
 
@@ -304,6 +381,16 @@ pub struct ProviderConfig {
     pub accounts: Vec<ProviderAccount>,
     /// How the per-account targets are ordered when `accounts` is set.
     pub account_strategy: AccountStrategy,
+    /// Routing-preference class. Set by the provider-registry merge (or
+    /// directly in config), then mapped to a numeric rank via
+    /// [`RegistryConfig::provider_priority`]. `None` ⇒ unclassed: the provider
+    /// sorts after every classed one in the auto-cascade (Strategy 3). Plain
+    /// configs leave this `None`, preserving the alphabetical default order.
+    pub class: Option<ProviderClass>,
+    /// Explicit routing priority (lower = preferred). When set it overrides the
+    /// class-derived rank, so an operator can pin one provider ahead of others
+    /// regardless of class. `None` ⇒ derive the rank from [`class`](Self::class).
+    pub priority: Option<i32>,
 }
 
 /// One credential within a multi-account provider. An account varies
@@ -380,6 +467,8 @@ impl std::fmt::Debug for ProviderConfig {
             .field("derives", &self.derives)
             .field("accounts", &self.accounts)
             .field("account_strategy", &self.account_strategy)
+            .field("class", &self.class)
+            .field("priority", &self.priority)
             .finish()
     }
 }
@@ -399,6 +488,8 @@ impl Default for ProviderConfig {
             derives: None,
             accounts: Vec::new(),
             account_strategy: AccountStrategy::default(),
+            class: None,
+            priority: None,
         }
     }
 }
@@ -478,8 +569,18 @@ pub fn infer_protocol(api_base: &str) -> ApiProtocol {
 /// One model entry under a provider.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ProviderModel {
-    /// Model id at the provider.
+    /// The id this model is addressed by — a canonical `<org>/<model>` id when
+    /// the entry comes from the provider registry, or the upstream id for a
+    /// hand-written config. This is the **match key** the auto-cascade compares
+    /// the requested model against.
     pub id: String,
+    /// The provider's own upstream model id — what is sent on the wire. When
+    /// `None`, [`id`](Self::id) is used for both matching and dispatch (the
+    /// hand-written-config case, where the two coincide). The registry merge
+    /// sets this so a canonical [`id`](Self::id) routes to the provider's
+    /// upstream name (e.g. `anthropic/claude-sonnet-4.6` → `claude-sonnet-4-6`).
+    #[serde(default)]
+    pub provider_model_id: Option<String>,
     /// Per-model protocol override (highest precedence) — an ordered set of
     /// supported protocols, or a bare string for a single one.
     #[serde(default)]
@@ -840,6 +941,7 @@ pub async fn discover_models(config: &mut Config) {
                     .into_iter()
                     .map(|id| ProviderModel {
                         id,
+                        provider_model_id: None,
                         api_protocol: None,
                         rate_limits: None,
                         pricing: None,
