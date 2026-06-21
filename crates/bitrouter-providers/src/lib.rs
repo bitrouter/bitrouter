@@ -5,8 +5,9 @@
 //! embedded into the binary via [`include_str!`] at compile time. Each entry
 //! declares how to authenticate and which wire protocol the provider serves;
 //! it does **not** declare model metadata (pricing, context length, …).
-//! Model metadata is fetched from <https://models.dev/api.json> at runtime
-//! and merged in by [`catalog`].
+//! The provider list and per-provider model catalog are fetched from the
+//! bitrouter provider registry's distribution artifacts at runtime and merged
+//! in by [`registry`].
 //!
 //! ## Where a new provider lives — `AuthApplier` vs `Executor`
 //!
@@ -18,7 +19,7 @@
 //!   credential placement (Bearer, custom header, OAuth + token-exchange,
 //!   AAD, …). Async + stateful behaviour is fine — see [`copilot`] for
 //!   the GitHub→Copilot token-exchange pattern. Implementations are small
-//!   and share the OAuth + token-store + models.dev infrastructure that
+//!   and share the OAuth + token-store + registry infrastructure that
 //!   already lives in this crate, so an additional dep is rarely needed.
 //! - **`Executor`-shaped** (its own crate). The provider replaces the
 //!   entire request path — typically because a vendor SDK owns the binary
@@ -44,7 +45,9 @@
 //! - [`oauth`] — RFC 8628 device-code flow + on-disk token store.
 //! - [`copilot`] — `CopilotAuthApplier` + GitHub→Copilot token exchange,
 //!   the worked example of an OAuth-driven `AuthApplier`.
-//! - [`catalog`] — runtime fetch + on-disk cache of <https://models.dev/api.json>.
+//! - [`registry`] — runtime fetch + on-disk cache of the provider registry's
+//!   `dist/` artifacts (the provider list + canonical model catalog), and the
+//!   merge into a parsed config.
 //!
 //! ## Adding a provider
 //!
@@ -71,7 +74,6 @@
 pub mod anthropic;
 mod apply;
 pub mod builtin;
-pub mod catalog;
 #[cfg(feature = "pkce")]
 pub mod codex;
 pub mod copilot;
@@ -79,6 +81,7 @@ mod entry;
 #[cfg(feature = "pkce")]
 pub mod import;
 pub mod oauth;
+pub mod registry;
 
 pub use apply::{apply_builtin_defaults, zero_config, zero_config_env_var_providers};
 pub use entry::{AuthScheme, ProtocolMapping, ProviderEntry};

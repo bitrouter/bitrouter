@@ -1,14 +1,14 @@
-//! File-based on-disk cache for the [models.dev](https://models.dev) catalog.
+//! File-based on-disk cache for the provider-registry distribution.
 //!
-//! Layout: a single JSON file containing `{ "fetched_at": <unix-secs>, "catalog": <Catalog> }`.
-//! Default path: `$XDG_CACHE_HOME/bitrouter/models-dev.json` (falling back to
-//! `~/.cache/bitrouter/models-dev.json` on Unix or `%LOCALAPPDATA%\bitrouter\cache\models-dev.json`
-//! on Windows). The location matches the XDG Base Directory spec
-//! (<https://specifications.freedesktop.org/basedir-spec/latest/>).
+//! Layout: a single JSON file `{ "fetched_at": <unix-secs>, "data": <RegistryData> }`.
+//! Default path: `$XDG_CACHE_HOME/bitrouter/provider-registry.json` (falling
+//! back to `~/.cache/bitrouter/…` on Unix or
+//! `%LOCALAPPDATA%\bitrouter\cache\…` on Windows), per the XDG Base Directory
+//! spec (<https://specifications.freedesktop.org/basedir-spec/latest/>).
 //!
-//! TTL: 24h. After expiry the cache is "stale" — callers should re-fetch,
-//! but [`DiskCache::read_any`] still returns the stale data so a network
-//! outage doesn't blank the model list.
+//! TTL: 24h. After expiry the cache is "stale" — callers should re-fetch, but
+//! [`DiskCache::read_any`] still returns the stale data so a network outage
+//! doesn't blank the routable provider set.
 
 use std::fs;
 use std::io;
@@ -17,19 +17,19 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::types::Catalog;
+use crate::registry::types::RegistryData;
 
 /// Freshness window — 24 hours. After this the cached payload is "stale".
 pub const TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Default filename inside the bitrouter cache directory.
-pub const DEFAULT_FILENAME: &str = "models-dev.json";
+pub const DEFAULT_FILENAME: &str = "provider-registry.json";
 
 /// Errors raised by the disk cache.
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
-    /// File I/O failure (open / write / chmod / mkdir).
-    #[error("cache I/O error at {path}: {source}")]
+    /// File I/O failure (open / write / mkdir / rename).
+    #[error("registry cache I/O error at {path}: {source}")]
     Io {
         /// The path that failed.
         path: PathBuf,
@@ -38,24 +38,23 @@ pub enum CacheError {
         source: io::Error,
     },
     /// JSON parse / serialise failure.
-    #[error("cache JSON error: {0}")]
+    #[error("registry cache JSON error: {0}")]
     Json(#[from] serde_json::Error),
-    /// No home / cache directory could be resolved (no `HOME` env var, no
-    /// `XDG_CACHE_HOME`).
+    /// No home / cache directory could be resolved.
     #[error("could not resolve a cache directory")]
     NoCacheDir,
 }
 
-/// One on-disk cache slot.
+/// One on-disk cache slot for the registry.
 pub struct DiskCache {
     path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedPayload {
-    /// Unix seconds when the catalog was fetched.
+    /// Unix seconds when the registry was fetched.
     fetched_at: u64,
-    catalog: Catalog,
+    data: RegistryData,
 }
 
 impl DiskCache {
@@ -76,31 +75,29 @@ impl DiskCache {
         &self.path
     }
 
-    /// Read the cached catalog if it exists AND is within the TTL window.
-    /// Returns `Ok(None)` for missing or stale entries — callers that don't
-    /// care about freshness should call [`Self::read_any`].
-    pub fn read_fresh(&self) -> Result<Option<Catalog>, CacheError> {
+    /// Read the cached data if it exists AND is within the TTL window. Returns
+    /// `Ok(None)` for missing or stale entries — callers that don't care about
+    /// freshness should call [`Self::read_any`].
+    pub fn read_fresh(&self) -> Result<Option<RegistryData>, CacheError> {
         let Some((payload, age)) = self.read_with_age()? else {
             return Ok(None);
         };
         if age <= TTL {
-            Ok(Some(payload.catalog))
+            Ok(Some(payload.data))
         } else {
             Ok(None)
         }
     }
 
-    /// Read the cached catalog whether or not it is fresh. Returns `Ok(None)`
-    /// only when the file is absent or unreadable. Use after [`fetch_catalog`]
-    /// fails so a transient network outage still serves model metadata.
-    ///
-    /// [`fetch_catalog`]: super::fetch::fetch_catalog
-    pub fn read_any(&self) -> Result<Option<Catalog>, CacheError> {
-        Ok(self.read_with_age()?.map(|(p, _)| p.catalog))
+    /// Read the cached data whether or not it is fresh. Returns `Ok(None)` only
+    /// when the file is absent or unreadable. Use after a fetch fails so a
+    /// transient network outage still serves the provider set.
+    pub fn read_any(&self) -> Result<Option<RegistryData>, CacheError> {
+        Ok(self.read_with_age()?.map(|(p, _)| p.data))
     }
 
-    /// Write a freshly-fetched catalog, stamping the current time.
-    pub fn write(&self, catalog: &Catalog) -> Result<(), CacheError> {
+    /// Write freshly-fetched registry data, stamping the current time.
+    pub fn write(&self, data: &RegistryData) -> Result<(), CacheError> {
         let parent = self.path.parent().ok_or(CacheError::NoCacheDir)?;
         fs::create_dir_all(parent).map_err(|source| CacheError::Io {
             path: parent.to_path_buf(),
@@ -112,12 +109,12 @@ impl DiskCache {
             .unwrap_or(0);
         let payload = CachedPayload {
             fetched_at: now,
-            catalog: catalog.clone(),
+            data: data.clone(),
         };
         let bytes = serde_json::to_vec_pretty(&payload)?;
         let tmp = self.path.with_extension("json.tmp");
-        // atomic-replace: write to a sibling file then rename, so a crash
-        // mid-write never leaves a half-truncated cache.
+        // atomic-replace: write to a sibling then rename, so a crash mid-write
+        // never leaves a half-truncated cache.
         fs::write(&tmp, &bytes).map_err(|source| CacheError::Io {
             path: tmp.clone(),
             source,
@@ -150,8 +147,8 @@ impl DiskCache {
     }
 }
 
-/// Resolve the bitrouter cache directory. Follows the XDG Base Directory
-/// spec on Unix; uses `%LOCALAPPDATA%` on Windows.
+/// Resolve the bitrouter cache directory. Follows the XDG Base Directory spec
+/// on Unix; uses `%LOCALAPPDATA%` on Windows.
 fn default_cache_dir() -> Result<PathBuf, CacheError> {
     if let Some(dir) = std::env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(dir).join("bitrouter"));
@@ -168,108 +165,86 @@ fn default_cache_dir() -> Result<PathBuf, CacheError> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
-    use crate::catalog::types::{ModelMetadata, ProviderCatalogEntry};
+    use crate::registry::types::{CanonicalModel, RegistryProvider};
 
-    fn sample_catalog() -> Catalog {
-        let mut models = BTreeMap::new();
-        models.insert(
-            "gpt-4o".to_string(),
-            ModelMetadata {
-                id: "gpt-4o".into(),
-                name: "GPT-4o".into(),
-                family: Some("gpt".into()),
-                attachment: true,
-                reasoning: false,
-                tool_call: true,
-                structured_output: true,
-                temperature: true,
-                knowledge: None,
-                release_date: None,
-                last_updated: None,
-                modalities: Default::default(),
-                open_weights: false,
-                limit: Default::default(),
-                cost: Default::default(),
-            },
-        );
-        let mut cat = BTreeMap::new();
-        cat.insert(
-            "openai".into(),
-            ProviderCatalogEntry {
-                id: "openai".into(),
-                name: "OpenAI".into(),
-                env: vec!["OPENAI_API_KEY".into()],
-                api: Some("https://api.openai.com/v1".into()),
-                npm: None,
-                doc: None,
-                models,
-            },
-        );
-        cat
+    fn sample_data() -> RegistryData {
+        RegistryData {
+            providers: vec![RegistryProvider {
+                name: "deepseek".into(),
+                api_base: "https://api.deepseek.com/v1".into(),
+                api_protocol: Vec::new(),
+                models: Vec::new(),
+                rate_limits: Vec::new(),
+                status: "active".into(),
+                community: false,
+                byok: true,
+                billing: Default::default(),
+            }],
+            canonical: vec![CanonicalModel {
+                id: "deepseek/deepseek-v3.2".into(),
+            }],
+        }
     }
 
     /// Unique tmp dir per call — tests run in parallel and a shared directory
-    /// races with itself (creator A removes the directory while reader B is
-    /// opening files inside it, surfacing as `EINVAL` on macOS).
+    /// races with itself.
     fn tmp_dir() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "bitrouter-providers-cache-{}-{id}",
+            "bitrouter-registry-cache-{}-{id}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&dir).expect("create tmp dir");
         dir
     }
 
     #[test]
     fn writes_and_reads_fresh() {
         let dir = tmp_dir();
-        let cache = DiskCache::at(dir.join("models.json"));
-        let sample = sample_catalog();
-        cache.write(&sample).unwrap();
-        let got = cache.read_fresh().unwrap().expect("fresh read");
-        assert_eq!(got.len(), 1);
-        assert!(got.contains_key("openai"));
+        let cache = DiskCache::at(dir.join("reg.json"));
+        cache.write(&sample_data()).expect("write");
+        let got = cache.read_fresh().expect("read").expect("fresh");
+        assert_eq!(got.providers.len(), 1);
+        assert_eq!(got.canonical[0].id, "deepseek/deepseek-v3.2");
     }
 
     #[test]
     fn missing_file_returns_none() {
         let dir = tmp_dir();
         let cache = DiskCache::at(dir.join("absent.json"));
-        assert!(cache.read_fresh().unwrap().is_none());
-        assert!(cache.read_any().unwrap().is_none());
+        assert!(cache.read_fresh().expect("read_fresh").is_none());
+        assert!(cache.read_any().expect("read_any").is_none());
     }
 
     #[test]
     fn stale_payload_only_visible_via_read_any() {
         let dir = tmp_dir();
-        let path = dir.join("models.json");
-        // Hand-craft a cached file dated 1970 — definitely past the 24h TTL.
+        let path = dir.join("reg.json");
         let stale = CachedPayload {
             fetched_at: 0,
-            catalog: sample_catalog(),
+            data: sample_data(),
         };
-        fs::write(&path, serde_json::to_vec_pretty(&stale).unwrap()).unwrap();
+        fs::write(&path, serde_json::to_vec_pretty(&stale).expect("ser")).expect("write");
         let cache = DiskCache::at(&path);
         assert!(
-            cache.read_fresh().unwrap().is_none(),
+            cache.read_fresh().expect("read_fresh").is_none(),
             "TTL must reject stale"
         );
-        let any = cache.read_any().unwrap();
-        assert!(any.is_some(), "read_any must still surface stale data");
+        assert!(
+            cache.read_any().expect("read_any").is_some(),
+            "read_any must still surface stale data"
+        );
     }
 
     #[test]
     fn rejects_corrupt_payload() {
         let dir = tmp_dir();
-        let path = dir.join("models.json");
-        fs::write(&path, b"not json").unwrap();
+        let path = dir.join("reg.json");
+        fs::write(&path, b"not json").expect("write");
         let cache = DiskCache::at(&path);
         assert!(matches!(cache.read_any(), Err(CacheError::Json(_))));
     }
