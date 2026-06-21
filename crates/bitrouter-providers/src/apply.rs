@@ -12,6 +12,7 @@ use bitrouter_sdk::language_model::types::ProtocolList;
 
 use crate::builtin;
 use crate::entry::ProtocolMapping;
+use crate::oauth::credential_store::CredentialStore;
 
 /// Build the in-memory **zero-config** [`Config`] used when the user
 /// runs `bitrouter serve` with no `bitrouter.yaml` anywhere on the
@@ -140,6 +141,27 @@ pub fn apply_builtin_defaults(config: &mut Config) {
         // (no `env_var`), so this guard doesn't touch it.
         if provider.api_key.is_empty() && builtin.auth.env_var().is_some() {
             provider.active = false;
+        }
+    }
+}
+
+/// Re-activate providers that hold a credential in the OAuth credential `store`
+/// even though they carry no inline / env-var api key.
+///
+/// Subscription (OAuth) and "use your Claude Code session" logins persist their
+/// credential in the store (`oauth-tokens.json`), not in the config — so
+/// [`apply_builtin_defaults`] marks a provider whose only catalog auth is an
+/// env-var key (e.g. `anthropic` with `ANTHROPIC_API_KEY`) inactive and drops it
+/// from the routing table. This pass restores it: a provider with at least one
+/// stored credential is usable, because the matching `AuthApplier` resolves that
+/// credential (the live Claude Code session, a stored OAuth token, or a pasted
+/// key) at request time. Idempotent; already-active providers are untouched, and
+/// providers with no stored credential stay as `apply_builtin_defaults` left
+/// them.
+pub fn activate_stored_credential_providers(config: &mut Config, store: &CredentialStore) {
+    for (id, provider) in config.providers.iter_mut() {
+        if !provider.active && !store.labels(id).is_empty() {
+            provider.active = true;
         }
     }
 }
@@ -340,6 +362,45 @@ mod tests {
             apply_builtin_defaults(&mut config);
             assert!(config.providers["openai"].active);
         });
+    }
+
+    #[test]
+    fn stored_credential_reactivates_keyless_provider() {
+        use crate::oauth::credential_store::{Credential, CredentialStore, DEFAULT_LABEL};
+        let dir = std::env::temp_dir().join(format!("br-activate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = CredentialStore::load(dir.join("oauth-tokens.json")).unwrap();
+        // A "use your Claude Code session" login persists this marker.
+        store
+            .set("anthropic", DEFAULT_LABEL, Credential::ClaudeCodeCli)
+            .unwrap();
+
+        let mut config = Config::default();
+        config.providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                active: false, // as apply_builtin_defaults would leave a keyless Bearer provider
+                ..ProviderConfig::default()
+            },
+        );
+        config.providers.insert(
+            "openai".to_string(),
+            ProviderConfig {
+                active: false,
+                ..ProviderConfig::default()
+            },
+        );
+
+        activate_stored_credential_providers(&mut config, &store);
+        assert!(
+            config.providers["anthropic"].active,
+            "a stored credential must re-activate the provider for routing"
+        );
+        assert!(
+            !config.providers["openai"].active,
+            "a provider with no stored credential stays inactive"
+        );
     }
 
     #[test]

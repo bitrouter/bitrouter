@@ -174,6 +174,14 @@ pub async fn build_app_with_path(
     // (api_base / api_protocol / api_key-from-env). No-op when
     // `inherit_defaults: false`, and never overrides user-set fields.
     bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    // Subscription / "use your Claude Code session" logins persist their
+    // credential in the store (not the config), so apply_builtin_defaults would
+    // mark a keyless provider like `anthropic` inactive. Re-activate any
+    // provider that has a stored credential so it stays routable.
+    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+    {
+        bitrouter_providers::activate_stored_credential_providers(&mut resolved, &store);
+    }
     bitrouter_sdk::config::discover_models(&mut resolved).await;
     let routing_table = Arc::new(match config_path {
         Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),

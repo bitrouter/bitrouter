@@ -83,7 +83,10 @@ pub mod import;
 pub mod oauth;
 pub mod registry;
 
-pub use apply::{apply_builtin_defaults, zero_config, zero_config_env_var_providers};
+pub use apply::{
+    activate_stored_credential_providers, apply_builtin_defaults, zero_config,
+    zero_config_env_var_providers,
+};
 pub use entry::{AuthScheme, ProtocolMapping, ProviderEntry};
 
 /// Errors raised while loading the compile-time registry.
