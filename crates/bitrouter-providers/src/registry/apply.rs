@@ -23,13 +23,12 @@ use bitrouter_sdk::config::{
     Config, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig, ProviderModel,
     RateLimit, RegistryConfig, env_lookup,
 };
-use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
 use crate::builtin;
 use crate::registry::cache::DiskCache;
 use crate::registry::fetch::fetch_registry;
 use crate::registry::types::{
-    Billing, RegistryData, RegistryPricing, RegistryProtocol, RegistryProvider, RegistryRateLimits,
+    Billing, RegistryData, RegistryPricing, RegistryProvider, RegistryRateLimits,
 };
 
 /// The provider id of the hosted bitrouter gateway. The pooled registry entry
@@ -200,16 +199,6 @@ fn env_var_for(provider: &RegistryProvider) -> String {
         .unwrap_or_else(|| format!("{}_API_KEY", provider.name.to_uppercase().replace('-', "_")))
 }
 
-/// Map a registry protocol onto bitrouter's wire-protocol enum.
-fn map_protocol(p: RegistryProtocol) -> ApiProtocol {
-    match p {
-        RegistryProtocol::Openai => ApiProtocol::ChatCompletions,
-        RegistryProtocol::Anthropic => ApiProtocol::Messages,
-        RegistryProtocol::Google => ApiProtocol::GenerateContent,
-        RegistryProtocol::Responses => ApiProtocol::Responses,
-    }
-}
-
 /// Translate the registry's per-model entries into `ProviderModel`s — the
 /// canonical id is the match key, `provider_model_id` the upstream dispatch id.
 ///
@@ -234,7 +223,7 @@ fn build_models(
             api_protocol: if defer_protocol_to_builtin {
                 None
             } else {
-                Some(ProtocolList(vec![map_protocol(m.api_protocol)]))
+                Some(m.api_protocol.to_protocol_list())
             },
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
@@ -286,17 +275,22 @@ fn map_pricing(p: &RegistryPricing) -> Option<PricingConfig> {
 mod tests {
     use super::*;
     use crate::registry::types::{
-        CanonicalModel, InputTokenPricing, OutputTokenPricing, RegistryModel,
+        CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet, RegistryModel,
+        RegistryProtocol,
     };
+    use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
     fn provider(name: &str) -> RegistryProvider {
         RegistryProvider {
             name: name.to_string(),
+            display_name: None,
             api_base: format!("https://{name}.example/v1"),
+            api_protocol: Vec::new(),
+            protocol_endpoints: None,
             models: vec![RegistryModel {
                 id: "deepseek/deepseek-v3.2".to_string(),
                 provider_model_id: "deepseek-v3.2".to_string(),
-                api_protocol: RegistryProtocol::Openai,
+                api_protocol: ProtocolSet::One(RegistryProtocol::Openai),
                 pricing: Some(RegistryPricing {
                     input_tokens: Some(InputTokenPricing {
                         no_cache: Some(0.27),
@@ -307,6 +301,10 @@ mod tests {
                 rate_limits: None,
             }],
             status: "active".to_string(),
+            auto_discover: false,
+            kind: None,
+            auth: None,
+            doc_url: None,
             community: false,
             byok: true,
             billing: Billing::Token,

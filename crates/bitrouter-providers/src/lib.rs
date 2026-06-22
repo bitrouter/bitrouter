@@ -1,13 +1,14 @@
 //! Compiled-in provider catalog.
 //!
 //! Built-in providers — the ones a fresh bitrouter binary already "knows how
-//! to talk to" — are authored as TOML files under `providers/*.toml` and
-//! embedded into the binary via [`include_str!`] at compile time. Each entry
-//! declares how to authenticate and which wire protocol the provider serves;
-//! it does **not** declare model metadata (pricing, context length, …).
-//! The provider list and per-provider model catalog are fetched from the
-//! bitrouter provider registry's distribution artifacts at runtime and merged
-//! in by [`registry`].
+//! to talk to" — are **derived from the compiled-in registry snapshot**
+//! ([`registry::embedded`]): every provider in the snapshot that declares an
+//! `auth` scheme becomes a [`ProviderEntry`] (auth + wire protocol + base URL).
+//! The lone exception is the hosted `bitrouter` cloud gateway, kept as a TOML
+//! (`providers/bitrouter.toml`) because its id shadows the registry's pool
+//! entry. The provider list and per-provider model catalog (pricing, context
+//! length, …) come from the same registry distribution, fetched at runtime and
+//! merged in by [`registry`].
 //!
 //! ## Where a new provider lives — `AuthApplier` vs `Executor`
 //!
@@ -34,7 +35,8 @@
 //!
 //! ## Layout
 //!
-//! - [`ProviderEntry`] — the parsed schema of one TOML file.
+//! - [`ProviderEntry`] — the compiled-in auth + transport shape of one built-in
+//!   provider (derived from the registry snapshot, or the `bitrouter` TOML).
 //! - [`AuthScheme`] — Bearer / Header / OAuth / Native variants. Bearer +
 //!   Header cover every static-credential provider; OAuth references a
 //!   handler that runs the device-code flow + applies a token; Native
@@ -53,14 +55,13 @@
 //!
 //! For a **static-credential or OAuth provider** (the `AuthApplier` slot):
 //!
-//! 1. Drop a `providers/<id>.toml` in this crate. Include the `doc_url` of
-//!    the provider's official auth + endpoint reference in the file header
-//!    — every entry MUST cite its source.
-//! 2. Add an `include_str!` line in `builtin.rs`.
-//! 3. Add a parsing test.
-//! 4. For Bearer / Header schemes, no Rust code is needed. For OAuth or
+//! 1. Add it to the provider registry with its `auth` block (and `doc_url`),
+//!    then refresh the compiled-in snapshot: `cargo xtask vendor-registry
+//!    --from <registry>/dist`. It becomes a built-in automatically.
+//! 2. For Bearer / Header schemes, no Rust code is needed. For OAuth or
 //!    anything stateful, add an `AuthApplier` impl in a sibling module
-//!    (see [`copilot`]) and register it during binary startup.
+//!    (see [`copilot`]) keyed by the registry `auth.handler` name, and
+//!    register it during binary startup.
 //!
 //! For an **SDK-driven provider** (the `Executor` slot): create a new
 //! `bitrouter-<name>` crate following the `bitrouter-bedrock` template —
@@ -113,5 +114,14 @@ pub enum LoadError {
         declared: String,
         /// The filename stem (what we registered the entry as).
         expected: String,
+    },
+    /// The compiled-in registry snapshot failed to parse, or a provider in it
+    /// declared an auth scheme missing a required field (e.g. a `bearer` scheme
+    /// with no `env`). A build-time invariant — the vendored snapshot is
+    /// registry-validated and drift-checked.
+    #[error("invalid embedded registry snapshot: {message}")]
+    Snapshot {
+        /// What was wrong with the snapshot.
+        message: String,
     },
 }

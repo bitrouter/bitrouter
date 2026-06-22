@@ -470,11 +470,14 @@ pub async fn build_app_with_path(
     })
 }
 
-/// Fetch the provider registry (best-effort, cached) and merge its BYOK
-/// providers into `config`, then re-apply built-in defaults so any provider the
-/// merge newly inserted gets its built-in `api_base` / `api_protocol` / auth
-/// shape filled. No-op when the registry is disabled (`registry.enabled =
-/// false` or `inherit_defaults = false`) or unreachable with no cache.
+/// Merge the provider registry into `config`, then re-apply built-in defaults
+/// so any provider the merge newly inserted gets its `api_base` /
+/// `api_protocol` / auth shape filled. No-op when the registry is disabled
+/// (`registry.enabled = false` or `inherit_defaults = false`).
+///
+/// The data is the **fetched-or-cached** dist when reachable, else the
+/// compiled-in [`embedded`](bitrouter_providers::registry::embedded) snapshot —
+/// so the full registry (not just the built-ins) is routable offline.
 ///
 /// Called by the `serve` entry point (before [`build_app`]) and by
 /// [`crate::reload`], the two paths that build a production routing config.
@@ -483,9 +486,19 @@ pub async fn build_app_with_path(
 /// layer (above `bitrouter-providers`) because the SDK's own routing table sits
 /// below the providers crate and cannot fetch the registry itself.
 pub async fn merge_registry_into(config: &mut Config) {
-    let Some(data) = bitrouter_providers::registry::apply::load_or_cached(&config.registry).await
-    else {
+    if !config.inherit_defaults || !config.registry.enabled {
         return;
+    }
+    // Fetched/cached dist when reachable; otherwise the compiled-in snapshot.
+    let data = match bitrouter_providers::registry::apply::load_or_cached(&config.registry).await {
+        Some(data) => data,
+        None => match bitrouter_providers::registry::embedded::data() {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::warn!(error = %e, "embedded registry snapshot failed to parse");
+                return;
+            }
+        },
     };
     bitrouter_providers::registry::apply::apply_registry(config, &data);
     bitrouter_providers::apply_builtin_defaults(config);

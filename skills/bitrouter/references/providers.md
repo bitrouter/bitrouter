@@ -4,7 +4,7 @@ How to configure `providers:`, `models:`, `mcp_servers:`, and `agents:` in `bitr
 
 ## Built-in providers
 
-Seven providers ship in the binary. Each has a baked-in `api_base`, `api_protocol`, and credential env var. Listing them with an empty body in `bitrouter.yaml` enables them — built-in defaults fill the rest.
+These providers are "built in" — bitrouter already knows their `api_base`, `api_protocol`, and credential env var, so listing them with an empty body in `bitrouter.yaml` enables them. Their definitions come from a **compiled-in snapshot of the provider registry** (refreshed by the periodic fetch); the hosted `bitrouter` cloud gateway is the one exception, defined in-binary. Listing one with an empty body enables it — the snapshot fills the rest.
 
 | Provider id | Env var | Auth | Notes |
 |---|---|---|---|

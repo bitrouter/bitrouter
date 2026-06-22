@@ -26,8 +26,11 @@
 //! - [`apply`] — fetch-or-cache orchestration and the merge of a
 //!   [`types::RegistryData`] into a parsed
 //!   [`Config`](bitrouter_sdk::config::Config), credential-gated.
+//! - [`embedded`] — the compiled-in dist snapshot (offline default + the source
+//!   the built-in [`ProviderEntry`](crate::ProviderEntry)s are derived from).
 
 pub mod apply;
 pub mod cache;
+pub mod embedded;
 pub mod fetch;
 pub mod types;

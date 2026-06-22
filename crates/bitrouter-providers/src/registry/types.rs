@@ -17,7 +17,11 @@
 //! are ignored (no `deny_unknown_fields`) so the registry can add fields
 //! without breaking this consumer.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
+
+use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
 /// The distribution envelope shared by both dist files: `{ "data": [ … ] }`.
 #[derive(Debug, Clone, Deserialize)]
@@ -37,9 +41,8 @@ pub struct RegistryData {
 }
 
 /// The wire protocol a provider serves, in the registry's vocabulary. Maps onto
-/// bitrouter's [`ApiProtocol`](bitrouter_sdk::language_model::types::ApiProtocol)
-/// at merge time: `openai`→Chat Completions, `anthropic`→Messages,
-/// `google`→Generate Content, `responses`→Responses.
+/// bitrouter's [`ApiProtocol`] at merge time: `openai`→Chat Completions,
+/// `anthropic`→Messages, `google`→Generate Content, `responses`→Responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryProtocol {
@@ -53,6 +56,101 @@ pub enum RegistryProtocol {
     Responses,
 }
 
+impl RegistryProtocol {
+    /// Map onto bitrouter's wire-protocol enum.
+    pub fn to_api_protocol(self) -> ApiProtocol {
+        match self {
+            RegistryProtocol::Openai => ApiProtocol::ChatCompletions,
+            RegistryProtocol::Anthropic => ApiProtocol::Messages,
+            RegistryProtocol::Google => ApiProtocol::GenerateContent,
+            RegistryProtocol::Responses => ApiProtocol::Responses,
+        }
+    }
+}
+
+/// A wire-protocol value in the dist — a single protocol or an ordered set
+/// (most-preferred first), e.g. `openai` or `[openai, responses]`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProtocolSet {
+    /// A single protocol.
+    One(RegistryProtocol),
+    /// An ordered set, most-preferred first.
+    Many(Vec<RegistryProtocol>),
+}
+
+impl ProtocolSet {
+    /// The protocols as an ordered slice-owning vec.
+    pub fn to_vec(&self) -> Vec<RegistryProtocol> {
+        match self {
+            ProtocolSet::One(p) => vec![*p],
+            ProtocolSet::Many(v) => v.clone(),
+        }
+    }
+
+    /// Map onto bitrouter's ordered [`ProtocolList`] (most-preferred first).
+    pub fn to_protocol_list(&self) -> ProtocolList {
+        ProtocolList(
+            self.to_vec()
+                .into_iter()
+                .map(RegistryProtocol::to_api_protocol)
+                .collect(),
+        )
+    }
+}
+
+/// Registry provider classification — drives the routing-priority class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryKind {
+    /// Official / first-party upstream.
+    FirstParty,
+    /// Aggregator gateway fronting other makers' models.
+    Gateway,
+    /// The bitrouter hosted gateway.
+    Cloud,
+    /// Unaffiliated community reseller.
+    ThirdParty,
+}
+
+/// Outbound credential scheme declared by the registry — see the registry's
+/// `Auth`. Only public config (env/header/handler names + public params); never
+/// a secret. Maps onto the compiled-in [`AuthScheme`](crate::AuthScheme).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryAuthKind {
+    /// `Authorization: Bearer <env>`.
+    Bearer,
+    /// `<header>: <env>` plus any constant `extra_headers`.
+    Header,
+    /// OAuth flow resolved by a named handler in the consumer.
+    Oauth,
+    /// SDK-driven native auth resolved by a named handler in the consumer.
+    Native,
+}
+
+/// The registry's structured auth declaration.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct RegistryAuth {
+    /// The credential scheme.
+    pub kind: RegistryAuthKind,
+    /// Env var holding the credential (bearer/header).
+    #[serde(default)]
+    pub env: Option<String>,
+    /// Header carrying the credential (header kind).
+    #[serde(default)]
+    pub header: Option<String>,
+    /// Constant headers sent alongside the credential.
+    #[serde(default)]
+    pub extra_headers: Option<BTreeMap<String, String>>,
+    /// Named handler in the consumer's registry (oauth/native).
+    #[serde(default)]
+    pub handler: Option<String>,
+    /// Handler-specific public params (client_id, scopes, endpoints, …).
+    #[serde(default)]
+    pub params: Option<BTreeMap<String, serde_json::Value>>,
+}
+
 /// How a caller pays a provider — mirrors the registry `billing` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,20 +162,46 @@ pub enum Billing {
     Subscription,
 }
 
-/// One provider entry from `providers.json` (the provider view). The dist is
-/// fully resolved: the provider-level glob `api_protocol` / `rate_limits` of the
-/// source YAML are expanded onto each model, so no pattern fields appear here.
+/// One provider entry from `providers.json` (the provider view). For a curated
+/// provider the source-YAML glob `api_protocol` / `rate_limits` are resolved
+/// onto each model (so the top-level globs are empty); for an `auto_discover`
+/// provider the catalog is runtime-discovered, so the provider-level
+/// `api_protocol` globs are kept here and applied to discovered models.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryProvider {
     /// Provider id (equals the registry filename stem and the `name` field).
     pub name: String,
+    /// Human-readable display name (UI only), if declared.
+    #[serde(default)]
+    pub display_name: Option<String>,
     /// The provider's public upstream base URL (HTTPS).
     pub api_base: String,
+    /// Provider-level wire-protocol globs (pattern → protocol set). Present only
+    /// for `auto_discover` providers; empty for curated providers (resolved onto
+    /// each model instead).
+    #[serde(default)]
+    pub api_protocol: Vec<BTreeMap<String, ProtocolSet>>,
+    /// Per-protocol base-URL override, keyed by protocol name.
+    #[serde(default)]
+    pub protocol_endpoints: Option<BTreeMap<String, String>>,
     /// Declared model entries (canonical id + upstream id + resolved config).
     #[serde(default)]
     pub models: Vec<RegistryModel>,
     /// `active` | `staging` | `suspended` | `withdrawn` — only `active` routes.
     pub status: String,
+    /// Transport+auth-only provider whose catalog is discovered at runtime.
+    #[serde(default)]
+    pub auto_discover: bool,
+    /// Provider classification, if declared (drives the routing class). When
+    /// absent the consumer derives it from `community`.
+    #[serde(default)]
+    pub kind: Option<RegistryKind>,
+    /// Structured auth declaration, if the registry knows the scheme.
+    #[serde(default)]
+    pub auth: Option<RegistryAuth>,
+    /// Link to the provider's official API documentation, if declared.
+    #[serde(default)]
+    pub doc_url: Option<String>,
     /// `true` marks an unaffiliated community reseller; `false` (default) is a
     /// first-party / official upstream.
     #[serde(default)]
@@ -109,9 +233,10 @@ pub struct RegistryModel {
     pub id: String,
     /// The provider's own upstream model id (what is sent on the wire).
     pub provider_model_id: String,
-    /// Resolved wire protocol for this (provider, model) pair — the dist
-    /// already expanded the provider's glob patterns, so this is concrete.
-    pub api_protocol: RegistryProtocol,
+    /// Resolved wire protocol(s) for this (provider, model) pair — the dist
+    /// expanded the provider's glob patterns, so this is concrete (a single
+    /// protocol or an ordered set, e.g. `[openai, responses]`).
+    pub api_protocol: ProtocolSet,
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<RegistryPricing>,
@@ -262,7 +387,10 @@ mod tests {
         assert_eq!(m.id, "anthropic/claude-sonnet-4.6");
         assert_eq!(m.provider_model_id, "claude-sonnet-4-6");
         // Resolved per-model protocol + rate limits (no glob to resolve here).
-        assert_eq!(m.api_protocol, RegistryProtocol::Anthropic);
+        assert_eq!(
+            m.api_protocol,
+            ProtocolSet::One(RegistryProtocol::Anthropic)
+        );
         assert_eq!(
             m.rate_limits.as_ref().and_then(|r| r.requests_per_minute),
             Some(60)

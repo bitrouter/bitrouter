@@ -1,50 +1,36 @@
 //! Compile-time registry of built-in provider entries.
 //!
-//! Each TOML under `providers/*.toml` is pulled in via `include_str!`. The
-//! list is hand-maintained (rather than a `build.rs`) so adding a provider
-//! is a single visible change in this file plus the TOML.
+//! Built-in providers are now **derived from the compiled-in registry snapshot**
+//! ([`crate::registry::embedded`]) rather than hand-authored TOMLs: every
+//! provider in the snapshot that declares an `auth` scheme (the upstreams and
+//! gateways the OSS knows how to talk to) becomes a [`ProviderEntry`]. The one
+//! exception is `bitrouter` — the hosted cloud *gateway* — which keeps its own
+//! TOML: its id collides with the registry's internal pool entry, and it is the
+//! cloud-applier / serves-all-canonical mechanism (an OSS built-in by design).
 
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use crate::LoadError;
-use crate::entry::ProviderEntry;
+use bitrouter_sdk::config::ProviderClass;
+use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
-/// One embedded TOML file: `(filename_stem, contents)`. The filename stem
-/// MUST match the `id` field inside the TOML (enforced at load time).
-///
-/// Order matters for user-facing output: callers that iterate this list to
-/// render a list of providers (e.g. the zero-config onboarding hint) take
-/// the first entry as the recommended default. `bitrouter` is deliberately
-/// first — it is the project's official hosted gateway and gives a new
-/// user one credential covering every supported model. The id is the
-/// short, brand-aligned form so model addressing reads naturally:
-/// `bitrouter:gpt-5.5`, `bitrouter:claude-sonnet-4.6`, …
-const EMBEDDED: &[(&str, &str)] = &[
-    ("bitrouter", include_str!("../providers/bitrouter.toml")),
-    ("openai", include_str!("../providers/openai.toml")),
-    (
-        "openai-codex",
-        include_str!("../providers/openai-codex.toml"),
-    ),
-    ("anthropic", include_str!("../providers/anthropic.toml")),
-    ("google", include_str!("../providers/google.toml")),
-    ("openrouter", include_str!("../providers/openrouter.toml")),
-    (
-        "github-copilot",
-        include_str!("../providers/github-copilot.toml"),
-    ),
-    (
-        "opencode-zen",
-        include_str!("../providers/opencode-zen.toml"),
-    ),
-    ("opencode-go", include_str!("../providers/opencode-go.toml")),
-];
+use crate::LoadError;
+use crate::entry::{AuthScheme, ProtocolMapping, ProviderEntry};
+use crate::registry::embedded;
+use crate::registry::types::{
+    Billing, RegistryAuth, RegistryAuthKind, RegistryKind, RegistryProvider,
+};
+
+/// The hosted bitrouter cloud gateway — the sole hand-authored built-in. Its id
+/// shadows the registry's pool entry, so it is kept here (not derived from the
+/// snapshot) and listed first (the zero-config onboarding hint recommends it).
+const BITROUTER_TOML: &str = include_str!("../providers/bitrouter.toml");
 
 static REGISTRY: OnceLock<Vec<ProviderEntry>> = OnceLock::new();
 
-/// Parse + return every built-in entry. Panics if a TOML fails to parse,
-/// duplicates an id, or its declared id differs from its filename — these are
-/// programming errors caught by `cargo test`, never user errors.
+/// Parse + return every built-in entry. Panics only if the compiled-in data is
+/// malformed — a build-time invariant caught by `cargo test`, never a user
+/// error (the snapshot is registry-validated and drift-checked).
 pub fn all() -> &'static [ProviderEntry] {
     REGISTRY
         .get_or_init(|| load_embedded().expect("built-in provider registry must parse"))
@@ -56,27 +42,147 @@ pub fn find(id: &str) -> Option<&'static ProviderEntry> {
     all().iter().find(|e| e.id == id)
 }
 
-/// Parse the embedded slice. Separated from [`all`] so tests can assert on
-/// the `Result` instead of catching panics.
+/// Build the built-in entries: the `bitrouter` cloud gateway (from its TOML)
+/// followed by every auth-bearing provider in the embedded registry snapshot.
+/// Separated from [`all`] so tests can assert on the `Result`.
 pub fn load_embedded() -> Result<Vec<ProviderEntry>, LoadError> {
-    let mut out = Vec::with_capacity(EMBEDDED.len());
-    for (stem, body) in EMBEDDED {
-        let entry: ProviderEntry = toml::from_str(body).map_err(|source| LoadError::Parse {
-            id: (*stem).to_string(),
+    let bitrouter: ProviderEntry =
+        toml::from_str(BITROUTER_TOML).map_err(|source| LoadError::Parse {
+            id: "bitrouter".to_string(),
             source,
         })?;
-        if entry.id != *stem {
-            return Err(LoadError::IdMismatch {
-                declared: entry.id,
-                expected: (*stem).to_string(),
-            });
+    let mut out = vec![bitrouter];
+
+    let providers = embedded::providers().map_err(|e| LoadError::Snapshot {
+        message: format!("parsing embedded providers.json: {e}"),
+    })?;
+    for provider in &providers {
+        // Only providers the OSS knows how to authenticate become built-ins;
+        // the rest are routed via the credential-gated registry merge. The
+        // `bitrouter` pool entry (no auth) is excluded — the cloud gateway
+        // above owns that id.
+        if provider.auth.is_none() || provider.name == "bitrouter" {
+            continue;
         }
+        let entry = registry_provider_to_entry(provider)?;
         if out.iter().any(|e: &ProviderEntry| e.id == entry.id) {
             return Err(LoadError::DuplicateId { id: entry.id });
         }
         out.push(entry);
     }
     Ok(out)
+}
+
+/// Derive a [`ProviderEntry`] (the OSS's compiled-in auth + transport shape)
+/// from a registry snapshot provider.
+fn registry_provider_to_entry(p: &RegistryProvider) -> Result<ProviderEntry, LoadError> {
+    let auth = p.auth.as_ref().ok_or_else(|| LoadError::Snapshot {
+        message: format!("provider '{}' has no auth", p.name),
+    })?;
+    Ok(ProviderEntry {
+        id: p.name.clone(),
+        display_name: p.display_name.clone().unwrap_or_else(|| p.name.clone()),
+        api_base: p.api_base.clone(),
+        api_protocol: derive_protocol_mapping(p),
+        protocol_endpoints: p.protocol_endpoints.clone().unwrap_or_default(),
+        auth: map_auth(&p.name, auth)?,
+        doc_url: p.doc_url.clone().unwrap_or_default(),
+        class: Some(derive_class(p)),
+    })
+}
+
+/// Map the registry's structured auth declaration onto the OSS [`AuthScheme`].
+/// Only public config travels (names/handlers); OAuth/native handler *impls*
+/// stay in the OSS, keyed by the handler name. OAuth `params` are documentation
+/// in the registry (the OSS OAuth registry holds the live client config), so
+/// they are not carried onto the entry.
+fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError> {
+    let missing = |field: &str| LoadError::Snapshot {
+        message: format!(
+            "provider '{provider}' {:?} auth missing `{field}`",
+            auth.kind
+        ),
+    };
+    match auth.kind {
+        RegistryAuthKind::Bearer => Ok(AuthScheme::Bearer {
+            env: auth.env.clone().ok_or_else(|| missing("env"))?,
+        }),
+        RegistryAuthKind::Header => Ok(AuthScheme::Header {
+            header: auth.header.clone().ok_or_else(|| missing("header"))?,
+            env: auth.env.clone().ok_or_else(|| missing("env"))?,
+            extra_headers: auth.extra_headers.clone().unwrap_or_default(),
+        }),
+        RegistryAuthKind::Oauth => Ok(AuthScheme::Oauth {
+            handler: auth.handler.clone().ok_or_else(|| missing("handler"))?,
+            params: BTreeMap::new(),
+        }),
+        RegistryAuthKind::Native => Ok(AuthScheme::Native {
+            handler: auth.handler.clone().ok_or_else(|| missing("handler"))?,
+        }),
+    }
+}
+
+/// Derive the wire-protocol mapping. An `auto_discover` provider carries
+/// provider-level globs (kept in the dist); a curated provider's protocol was
+/// resolved onto its models, so reconstruct the mapping from them.
+fn derive_protocol_mapping(p: &RegistryProvider) -> ProtocolMapping {
+    let mut globs: BTreeMap<String, ProtocolList> = BTreeMap::new();
+    for entry in &p.api_protocol {
+        for (pattern, set) in entry {
+            globs.insert(pattern.clone(), set.to_protocol_list());
+        }
+    }
+    if !globs.is_empty() {
+        return single_or_per_model(globs);
+    }
+    // Curated provider: rebuild from the per-model resolved protocols.
+    let mut per_model: BTreeMap<String, ProtocolList> = BTreeMap::new();
+    for m in &p.models {
+        per_model.insert(m.id.clone(), m.api_protocol.to_protocol_list());
+    }
+    if per_model.is_empty() {
+        return ProtocolMapping::Single(ProtocolList(vec![ApiProtocol::ChatCompletions]));
+    }
+    // When every model shares one protocol set, collapse to a single `*`.
+    let mut values = per_model.values();
+    if let Some(first) = values.next()
+        && values.all(|v| v == first)
+    {
+        return ProtocolMapping::Single(first.clone());
+    }
+    ProtocolMapping::PerModel(per_model)
+}
+
+/// A lone `*` glob collapses to `Single`; anything else stays per-pattern.
+fn single_or_per_model(globs: BTreeMap<String, ProtocolList>) -> ProtocolMapping {
+    if globs.len() == 1
+        && let Some(list) = globs.get("*")
+    {
+        return ProtocolMapping::Single(list.clone());
+    }
+    ProtocolMapping::PerModel(globs)
+}
+
+/// Derive the routing-priority class from `kind` (falling back to `community`)
+/// and `billing`.
+fn derive_class(p: &RegistryProvider) -> ProviderClass {
+    let kind = p.kind.unwrap_or(if p.community {
+        RegistryKind::ThirdParty
+    } else {
+        RegistryKind::FirstParty
+    });
+    match kind {
+        RegistryKind::Cloud => ProviderClass::BitrouterCloud,
+        RegistryKind::Gateway => ProviderClass::GatewaySubscription,
+        RegistryKind::ThirdParty => ProviderClass::ThirdPartyApi,
+        RegistryKind::FirstParty => {
+            if p.billing == Billing::Subscription {
+                ProviderClass::FirstPartySubscription
+            } else {
+                ProviderClass::FirstPartyApi
+            }
+        }
+    }
 }
 
 #[cfg(test)]
