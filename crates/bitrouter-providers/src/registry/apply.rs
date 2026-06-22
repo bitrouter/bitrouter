@@ -410,7 +410,7 @@ mod tests {
     use crate::catalog::types::{CatalogModel, CatalogProvider};
     use crate::registry::types::{
         AutoSync, CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet,
-        RegistryAccess, RegistryModel, RegistryProtocol,
+        RegistryAccess, RegistryAuth, RegistryAuthKind, RegistryModel, RegistryProtocol,
     };
     use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
@@ -564,6 +564,62 @@ mod tests {
             assert!(
                 !config.providers.contains_key("regabsentprov"),
                 "no credential ⇒ provider must not be activated"
+            );
+        });
+    }
+
+    #[test]
+    fn listed_env_provider_without_key_is_marked_inactive() {
+        // A user lists an env-keyed provider bare (active by default) but has no
+        // key: the merge must drop it out of routing (the behaviour that moved
+        // here from `apply_builtin_defaults`), not leave a keyless active entry.
+        with_env("LISTEDENVPROV_API_KEY", None, || {
+            let mut config = Config::default();
+            config.providers.insert(
+                "listedenvprov".to_string(),
+                ProviderConfig {
+                    active: true,
+                    ..ProviderConfig::default()
+                },
+            );
+            apply_registry(
+                &mut config,
+                &data_with(vec![provider("listedenvprov")], vec![]),
+            );
+            assert!(
+                !config.providers["listedenvprov"].active,
+                "an env-keyed provider with no key must be marked inactive"
+            );
+        });
+    }
+
+    #[test]
+    fn listed_oauth_provider_without_key_stays_active() {
+        // An OAuth provider listed bare has no env key — it authenticates via a
+        // local login + request-time applier, so the merge must NOT mark it
+        // inactive (exempt from the keyless-inactive rule).
+        with_env("OAUTHPROV_API_KEY", None, || {
+            let mut config = Config::default();
+            config.providers.insert(
+                "oauthprov".to_string(),
+                ProviderConfig {
+                    active: true,
+                    ..ProviderConfig::default()
+                },
+            );
+            let mut p = provider("oauthprov");
+            p.auth = Some(RegistryAuth {
+                kind: RegistryAuthKind::Oauth,
+                env: None,
+                header: None,
+                extra_headers: None,
+                handler: Some("oauthprov".to_string()),
+                params: None,
+            });
+            apply_registry(&mut config, &data_with(vec![p], vec![]));
+            assert!(
+                config.providers["oauthprov"].active,
+                "an OAuth provider authenticates via login, so it stays active"
             );
         });
     }
