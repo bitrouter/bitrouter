@@ -2,21 +2,23 @@
 //! (`claude-code`).
 //!
 //! Two daemon-side responsibilities, both keyed on the `claude-code` provider
-//! id and the Claude Code identity system prompt:
+//! id and the Claude Code agent-profile beta:
 //!
 //! - [`ClaudeCodeRouter`] — an ingress [`PromptTransform`] that detects genuine
-//!   Claude Code traffic by its system prompt and routes it to the subscription
-//!   provider by provider-prefixing the model (`claude-code:<model>`).
+//!   Claude Code traffic by its `anthropic-beta: claude-code-…` header and
+//!   routes it to the subscription provider by provider-prefixing the model
+//!   (`claude-code:<model>`).
 //! - [`enable_if_logged_in`] — auto-add the `claude-code` provider to the
 //!   in-memory `providers:` map when the OAuth credential store holds a
 //!   `claude-code` credential (mirrors [`crate::cloud::enable_in_zero_config`]).
 //!
 //! These live in the app layer (not `bitrouter-providers`) because the routing
-//! decision reads the parsed canonical [`Prompt`],
-//! which only exists above the SDK ingress seam, and because the enable step
-//! mutates the assembled [`Config`].
+//! decision needs the ingress request (the parsed [`Prompt`] plus the inbound
+//! headers), which only exists above the SDK ingress seam, and because the
+//! enable step mutates the assembled [`Config`].
 
 use bitrouter_providers::oauth::credential_store::{Credential, CredentialStore, DEFAULT_LABEL};
+use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ProviderConfig};
 use bitrouter_sdk::language_model::types::Prompt;
@@ -29,13 +31,12 @@ const PROVIDER_ID: &str = "claude-code";
 /// Ingress [`PromptTransform`] that routes genuine Claude Code traffic to the
 /// Claude Pro/Max **subscription** provider.
 ///
-/// Genuine Claude Code traffic carries the Claude Code identity as its first
-/// system block: the SDK's Messages decoder flattens the inbound `system`
-/// blocks into one `\n`-joined string (identity first), so the canonical
-/// [`Prompt::system`] *starts with* [`CLAUDE_CODE_SYSTEM_PROMPT`]
-/// (`bitrouter_providers::anthropic::headers::CLAUDE_CODE_SYSTEM_PROMPT`). Such
-/// a request also targets a bare Claude model id (e.g.
-/// `claude-sonnet-4-5-20250929`).
+/// Genuine Claude Code traffic carries the Claude Code agent-profile beta —
+/// `anthropic-beta: claude-code-…` — the same marker the Pro/Max subscription
+/// endpoint keys on. It's sent identically by the CLI, the Agent SDK, and
+/// `bitrouter spawn`, and is stable across releases (unlike the
+/// version-dependent system-prompt text the older detection relied on). Such a
+/// request also targets a bare Claude model id (e.g. `claude-opus-4-8`).
 ///
 /// When both hold, the transform rewrites `prompt.model` to
 /// `claude-code:<model>`, which sends the request to the subscription provider
@@ -44,25 +45,46 @@ const PROVIDER_ID: &str = "claude-code";
 /// route wherever they already pointed (the pay-as-you-go `anthropic` provider
 /// for bare Claude models, or the explicit provider).
 ///
-/// The transform **only reads** the identity — it never adds it. The
-/// subscription applier separately *requires* the identity to be present and
-/// refuses to fabricate it, so this transform cannot be used to spoof arbitrary
-/// traffic as Claude Code.
-///
-/// [`CLAUDE_CODE_SYSTEM_PROMPT`]: bitrouter_providers::anthropic::headers::CLAUDE_CODE_SYSTEM_PROMPT
+/// The transform **only reads** the marker — it never adds it. The subscription
+/// applier separately *requires* the beta to be present and refuses to
+/// fabricate it, so this transform cannot be used to spoof arbitrary traffic as
+/// Claude Code.
 pub struct ClaudeCodeRouter;
 
 impl PromptTransform for ClaudeCodeRouter {
-    fn apply(&self, prompt: &mut Prompt) {
-        let is_cc = prompt.system.as_deref().is_some_and(|s| {
-            s.trim_start()
-                .starts_with(bitrouter_providers::anthropic::headers::CLAUDE_CODE_SYSTEM_PROMPT)
-        });
+    fn apply(&self, _prompt: &mut Prompt) {
+        // Detection needs the inbound `anthropic-beta` header, so all the work
+        // is in `apply_with_headers` (which the HTTP server always calls). With
+        // no headers there is nothing to decide, so this is a no-op.
+    }
+
+    fn apply_with_headers(&self, prompt: &mut Prompt, headers: &HeaderMap) {
+        // Genuine Claude Code carries the agent-profile beta
+        // (`anthropic-beta: claude-code-…`) — the same marker the subscription
+        // endpoint keys on, stable across Claude Code's CLI / Agent-SDK /
+        // `bitrouter spawn` shapes (unlike the version-dependent system prompt
+        // text). When it's present and the request targets a bare `claude-*`
+        // model, route to the subscription provider by prefixing the model.
+        // Non-Claude-Code traffic is left untouched (it falls to the
+        // pay-as-you-go `anthropic` provider). The transform only READS the
+        // marker — it never adds it, so it can't be used to spoof.
+        let is_cc = headers_indicate_claude_code(headers);
         if is_cc && prompt.model.starts_with("claude") && !prompt.model.starts_with("claude-code:")
         {
             prompt.model = format!("claude-code:{}", prompt.model);
         }
     }
+}
+
+/// Whether the inbound headers carry the Claude Code agent-profile beta. The
+/// `anthropic-beta` header is a comma-joined list; any token whose name starts
+/// with `claude-code` counts, so the match is stable across the dated suffix.
+fn headers_indicate_claude_code(headers: &HeaderMap) -> bool {
+    headers
+        .get_all("anthropic-beta")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.split(',').any(|b| b.trim().starts_with("claude-code")))
 }
 
 /// Insert the `claude-code` provider into `config.providers` when the OAuth
@@ -182,14 +204,17 @@ fn enable_if_logged_in_with_store(config: &mut Config, store: &CredentialStore) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_providers::anthropic::headers::CLAUDE_CODE_SYSTEM_PROMPT;
     use bitrouter_providers::oauth::credential_store::Credential;
     use bitrouter_sdk::language_model::types::{GenerationParams, ProviderMetadata};
 
-    fn prompt(model: &str, system: Option<&str>) -> Prompt {
+    /// A representative `anthropic-beta` value as genuine Claude Code sends it:
+    /// the agent-profile beta first, then feature betas.
+    const CC_BETA: &str = "claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07";
+
+    fn prompt(model: &str) -> Prompt {
         Prompt {
             model: model.to_string(),
-            system: system.map(str::to_string),
+            system: None,
             system_provider_metadata: ProviderMetadata::new(),
             messages: Vec::new(),
             tools: Vec::new(),
@@ -200,58 +225,71 @@ mod tests {
         }
     }
 
-    fn route(model: &str, system: Option<&str>) -> String {
-        let mut p = prompt(model, system);
-        ClaudeCodeRouter.apply(&mut p);
+    /// Drive the router with an optional inbound `anthropic-beta` header value,
+    /// returning the (possibly rewritten) model.
+    fn route(model: &str, anthropic_beta: Option<&str>) -> String {
+        let mut p = prompt(model);
+        let mut headers = HeaderMap::new();
+        if let Some(beta) = anthropic_beta {
+            headers.insert("anthropic-beta", beta.parse().unwrap());
+        }
+        ClaudeCodeRouter.apply_with_headers(&mut p, &headers);
         p.model
     }
 
     #[test]
-    fn cc_system_and_bare_claude_model_is_prefixed() {
-        let system = format!("{CLAUDE_CODE_SYSTEM_PROMPT}\nbe terse");
+    fn claude_code_beta_and_bare_claude_model_is_prefixed() {
         assert_eq!(
-            route("claude-sonnet-4-5-20250929", Some(&system)),
-            "claude-code:claude-sonnet-4-5-20250929"
+            route("claude-opus-4-8", Some(CC_BETA)),
+            "claude-code:claude-opus-4-8"
         );
     }
 
     #[test]
-    fn cc_system_and_non_claude_model_is_untouched() {
-        let system = format!("{CLAUDE_CODE_SYSTEM_PROMPT}\nbe terse");
-        assert_eq!(route("gpt-5", Some(&system)), "gpt-5");
+    fn claude_code_beta_and_non_claude_model_is_untouched() {
+        assert_eq!(route("gpt-5", Some(CC_BETA)), "gpt-5");
     }
 
     #[test]
-    fn non_cc_system_with_claude_model_is_untouched() {
-        // No system prompt at all.
+    fn no_claude_code_beta_leaves_claude_model_for_payg() {
+        // The key guarantee: non-Claude-Code traffic for a Claude model is NOT
+        // routed to the subscription — it falls to the pay-as-you-go provider.
+        assert_eq!(route("claude-opus-4-8", None), "claude-opus-4-8");
+        // A beta header that lacks the claude-code agent profile also doesn't route.
         assert_eq!(
-            route("claude-sonnet-4-5-20250929", None),
-            "claude-sonnet-4-5-20250929"
-        );
-        // A system prompt that is not the Claude Code identity.
-        assert_eq!(
-            route("claude-sonnet-4-5-20250929", Some("be terse")),
-            "claude-sonnet-4-5-20250929"
+            route(
+                "claude-opus-4-8",
+                Some("oauth-2025-04-20,context-1m-2025-08-07")
+            ),
+            "claude-opus-4-8"
         );
     }
 
     #[test]
     fn already_prefixed_claude_model_is_untouched() {
-        let system = format!("{CLAUDE_CODE_SYSTEM_PROMPT}\nbe terse");
         assert_eq!(
-            route("claude-code:claude-sonnet-4-5-20250929", Some(&system)),
-            "claude-code:claude-sonnet-4-5-20250929"
+            route("claude-code:claude-opus-4-8", Some(CC_BETA)),
+            "claude-code:claude-opus-4-8"
         );
     }
 
     #[test]
     fn idempotent_on_already_claude_code_prefixed_model() {
         // Running the transform twice must not double-prefix.
-        let system = format!("{CLAUDE_CODE_SYSTEM_PROMPT}\nbe terse");
-        let mut p = prompt("claude-sonnet-4-5-20250929", Some(&system));
+        let mut p = prompt("claude-opus-4-8");
+        let mut headers = HeaderMap::new();
+        headers.insert("anthropic-beta", CC_BETA.parse().unwrap());
+        ClaudeCodeRouter.apply_with_headers(&mut p, &headers);
+        ClaudeCodeRouter.apply_with_headers(&mut p, &headers);
+        assert_eq!(p.model, "claude-code:claude-opus-4-8");
+    }
+
+    #[test]
+    fn apply_without_headers_is_noop() {
+        // The header-less path can't detect Claude Code, so it must not route.
+        let mut p = prompt("claude-opus-4-8");
         ClaudeCodeRouter.apply(&mut p);
-        ClaudeCodeRouter.apply(&mut p);
-        assert_eq!(p.model, "claude-code:claude-sonnet-4-5-20250929");
+        assert_eq!(p.model, "claude-opus-4-8");
     }
 
     fn fresh_tmp_store() -> CredentialStore {

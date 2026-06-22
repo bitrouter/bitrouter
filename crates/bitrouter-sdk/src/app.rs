@@ -71,6 +71,20 @@ pub trait PromptTransform: Send + Sync {
     /// Rewrite the prompt in place. A transform that does not apply to this
     /// request leaves it untouched.
     fn apply(&self, prompt: &mut language_model::types::Prompt);
+
+    /// Like [`apply`](Self::apply), but with the inbound request headers
+    /// available. The default delegates to [`apply`](Self::apply), ignoring the
+    /// headers; transforms whose routing decision depends on a header the
+    /// client sent (e.g. detecting genuine Claude Code traffic by its
+    /// `anthropic-beta` agent-profile marker) override this instead. The HTTP
+    /// server always calls this method.
+    fn apply_with_headers(
+        &self,
+        prompt: &mut language_model::types::Prompt,
+        _headers: &http::HeaderMap,
+    ) {
+        self.apply(prompt);
+    }
 }
 
 /// A fully assembled application: one pipeline per enabled protocol, plus the

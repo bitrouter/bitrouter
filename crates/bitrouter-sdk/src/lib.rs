@@ -137,9 +137,12 @@ pub mod language_model;
 pub mod mcp;
 
 pub use app::{App, AppBuilder, Plugin, PromptTransform};
+// Re-exported so downstream `PromptTransform` impls can name the header map
+// passed to `apply_with_headers` without taking a direct `http` dependency.
 pub use caller::CallerContext;
 pub use error::{BitrouterError, Result};
 pub use event::{EventBus, PipelineEvent};
+pub use http::HeaderMap;
 pub use language_model::{
     FallbackPolicy, HookDecision, PreRequestHook, RoutingTable, RoutingTarget,
 };

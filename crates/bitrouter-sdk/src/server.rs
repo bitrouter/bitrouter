@@ -647,7 +647,7 @@ async fn handle(
             // alias): the prompt body is freely mutable here, before it enters
             // the pipeline that exposes it read-only downstream.
             for transform in &state.prompt_transforms {
-                transform.apply(&mut p);
+                transform.apply_with_headers(&mut p, &headers);
             }
             p
         }
