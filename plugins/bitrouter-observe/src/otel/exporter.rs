@@ -28,7 +28,7 @@
 //! `Mutex<HashMap>`. The previous draft held a process-wide mutex across every
 //! stream part on the hot path.
 
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -50,8 +50,8 @@ use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSIO
 use serde::{Deserialize, Serialize};
 
 use bitrouter_sdk::language_model::{
-    ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, Prompt, RequestOutcome,
-    RoutingTarget, StreamContext, StreamInterest, StreamPart,
+    Content, ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, Prompt,
+    RequestOutcome, RoutingTarget, StreamContext, StreamInterest, StreamPart,
 };
 
 use crate::otel::cardinality::CardinalityLimiter;
@@ -95,6 +95,16 @@ struct SpanEntry {
     context: Context,
     created_at: Instant,
     hop: Option<HopState>,
+    /// Assistant text assembled from streamed `TextDelta` parts. The streaming
+    /// path does not reconstruct response content in the IR (only usage is
+    /// folded back — see `PipelineContext::settlement_context`), so for a
+    /// streamed response this is the only source of `gen_ai.output.messages`.
+    /// Empty for non-streaming requests, whose content comes from the IR.
+    stream_text: Mutex<String>,
+    /// Reasoning / thinking text assembled from streamed `ReasoningDelta` parts.
+    /// Kept distinct from `stream_text` so it is rendered as a separate
+    /// `reasoning` block and never merged into the visible answer.
+    stream_reasoning: Mutex<String>,
 }
 
 /// In-flight per-hop span state — created on `on_hop_start`, consumed on
@@ -434,6 +444,8 @@ impl ObserveHook for OtelExporter {
                         context: cx,
                         created_at: Instant::now(),
                         hop: None,
+                        stream_text: Mutex::new(String::new()),
+                        stream_reasoning: Mutex::new(String::new()),
                     },
                 );
                 // Best-effort GC — only walks the map, not held across awaits.
@@ -639,6 +651,26 @@ impl ObserveHook for OtelExporter {
                         .span()
                         .set_attribute(KeyValue::new("gen_ai.response.id", id.clone()));
                 }
+                StreamPart::TextDelta { text }
+                    if self.config.content_capture == ContentCaptureMode::Full =>
+                {
+                    // The streaming path does not reconstruct response content
+                    // in the IR, so assemble the assistant text from the deltas
+                    // here; `on_request_end` renders it as
+                    // `gen_ai.output.messages` when the IR content is empty.
+                    if let Ok(mut buf) = entry.stream_text.lock() {
+                        buf.push_str(text);
+                    }
+                }
+                StreamPart::ReasoningDelta { text }
+                    if self.config.content_capture == ContentCaptureMode::Full =>
+                {
+                    // Reasoning is assembled separately so it renders as its own
+                    // `reasoning` block, never merged into the visible answer.
+                    if let Ok(mut buf) = entry.stream_reasoning.lock() {
+                        buf.push_str(text);
+                    }
+                }
                 _ => {
                     // Token usage from `StreamPart::Usage` is intentionally
                     // NOT written to the span here. The GenAI semconv does
@@ -663,6 +695,18 @@ impl ObserveHook for OtelExporter {
         };
 
         let _guard = entry.context.clone().attach();
+        // Assistant text / reasoning assembled from streamed deltas (empty for
+        // non-streaming requests, whose content is reconstructed in the IR).
+        let streamed_output = entry
+            .stream_text
+            .lock()
+            .map(|buf| buf.clone())
+            .unwrap_or_default();
+        let streamed_reasoning = entry
+            .stream_reasoning
+            .lock()
+            .map(|buf| buf.clone())
+            .unwrap_or_default();
         opentelemetry::trace::get_active_span(|span| {
             if let Some(result) = &ctx.execution_result {
                 span.set_attribute(KeyValue::new(
@@ -759,9 +803,44 @@ impl ObserveHook for OtelExporter {
                         truncate_utf8(json, self.config.content_attr_max_bytes),
                     ));
                 }
-                if let Some(result) = &ctx.execution_result
-                    && let Ok(json) = serde_json::to_string(&result.result.content)
-                {
+                // Response content. The non-streaming path reconstructs it in
+                // the IR (`execution_result.content`); the streaming path does
+                // not (only usage is folded back), so fall back to the assistant
+                // text assembled from the `TextDelta` / `ReasoningDelta` parts.
+                // Same wire shape in both cases: a JSON array of `Content` blocks.
+                //
+                // Streamed tool calls (`ToolCallDelta`) are not yet reassembled
+                // here, so a tool-call-only streamed turn carries no output
+                // content — a known follow-up (the non-streaming path emits a
+                // `Content::ToolCall` block for it).
+                let ir_content = ctx
+                    .execution_result
+                    .as_ref()
+                    .map(|result| result.result.content.as_slice())
+                    .unwrap_or_default();
+                let output_json = if !ir_content.is_empty() {
+                    serde_json::to_string(ir_content).ok()
+                } else if !streamed_output.is_empty() || !streamed_reasoning.is_empty() {
+                    // Reasoning first, then the answer — matching the IR's
+                    // `[Reasoning, Text]` ordering for the non-streaming path.
+                    let mut blocks: Vec<Content> = Vec::new();
+                    if !streamed_reasoning.is_empty() {
+                        blocks.push(Content::Reasoning {
+                            text: streamed_reasoning.clone(),
+                            provider_metadata: Default::default(),
+                        });
+                    }
+                    if !streamed_output.is_empty() {
+                        blocks.push(Content::Text {
+                            text: streamed_output.clone(),
+                            provider_metadata: Default::default(),
+                        });
+                    }
+                    serde_json::to_string(&blocks).ok()
+                } else {
+                    None
+                };
+                if let Some(json) = output_json {
                     span.set_attribute(KeyValue::new(
                         "gen_ai.output.messages",
                         truncate_utf8(json, self.config.content_attr_max_bytes),
@@ -1273,6 +1352,221 @@ mod hop_tests {
         );
         assert_eq!(i64_attr(root_chat, "gen_ai.usage.input_tokens"), Some(11));
         assert_eq!(i64_attr(root_chat, "gen_ai.usage.output_tokens"), Some(7));
+    }
+
+    #[tokio::test]
+    async fn streaming_output_content_assembled_from_stream_parts() {
+        // A streamed response folds usage back but does NOT reconstruct response
+        // content in the IR (see `PipelineContext::settlement_context` note), so
+        // `execution_result.content` is empty. The exporter must assemble
+        // `gen_ai.output.messages` from the text deltas seen on `on_stream_part`,
+        // otherwise every agent (streaming) turn is captured with blank content.
+        let config = OtelConfig {
+            content_capture: ContentCaptureMode::Full,
+            ..OtelConfig::default()
+        };
+        let (exporter, captured) = make_test_exporter_with(config);
+
+        let mut ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+
+        // Text arrives as streamed deltas (the real wire shape).
+        let sctx = ctx.stream_context();
+        exporter
+            .on_stream_part(
+                &sctx,
+                &StreamPart::TextDelta {
+                    text: "hello".into(),
+                },
+            )
+            .await;
+        exporter
+            .on_stream_part(
+                &sctx,
+                &StreamPart::TextDelta {
+                    text: " world".into(),
+                },
+            )
+            .await;
+
+        // Streaming execution result: provider/model present, content empty,
+        // usage folded as the upstream reported it (here zero) — the live case.
+        ctx.execution_result = Some(ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: GenerateResult {
+                content: Vec::new(),
+                usage: Some(Usage::default()),
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            latency_ms: 0,
+            generation_time_ms: 0,
+            server_tool_calls: Vec::new(),
+        });
+
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        let output = str_attr(root_chat, "gen_ai.output.messages")
+            .expect("streaming output content must be captured on the root chat span");
+        assert!(
+            output.contains("hello world"),
+            "assembled stream text must land in gen_ai.output.messages; got: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_reasoning_and_text_assembled_as_distinct_blocks() {
+        // Thinking-model streams emit reasoning deltas too. They must be
+        // captured as a distinct `reasoning` block (never merged into the
+        // visible text), ordered before the answer text — matching how the
+        // non-streaming IR carries `[Reasoning, Text]`.
+        let config = OtelConfig {
+            content_capture: ContentCaptureMode::Full,
+            ..OtelConfig::default()
+        };
+        let (exporter, captured) = make_test_exporter_with(config);
+
+        let mut ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+
+        let sctx = ctx.stream_context();
+        exporter
+            .on_stream_part(
+                &sctx,
+                &StreamPart::ReasoningDelta {
+                    text: "let me think".into(),
+                },
+            )
+            .await;
+        exporter
+            .on_stream_part(
+                &sctx,
+                &StreamPart::TextDelta {
+                    text: "the answer".into(),
+                },
+            )
+            .await;
+
+        ctx.execution_result = Some(ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: GenerateResult {
+                content: Vec::new(),
+                usage: Some(Usage::default()),
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            latency_ms: 0,
+            generation_time_ms: 0,
+            server_tool_calls: Vec::new(),
+        });
+
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        let output = str_attr(root_chat, "gen_ai.output.messages")
+            .expect("streaming output content must be captured");
+
+        let reasoning_at = output.find("let me think").expect("reasoning text present");
+        let text_at = output.find("the answer").expect("answer text present");
+        assert!(
+            output.contains("\"type\":\"reasoning\""),
+            "reasoning kept as a distinct block; got: {output}"
+        );
+        assert!(
+            output.contains("\"type\":\"text\""),
+            "answer kept as a text block; got: {output}"
+        );
+        assert!(
+            reasoning_at < text_at,
+            "reasoning must precede the answer text; got: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn content_capture_off_never_emits_streamed_text() {
+        // Leak guarantee: with content capture Off (the default), streamed
+        // assistant text must never surface — not as `gen_ai.output.messages`,
+        // and not anywhere else on the span.
+        let (exporter, captured) = make_test_exporter(); // default config: Off
+        let mut ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+
+        let sctx = ctx.stream_context();
+        exporter
+            .on_stream_part(
+                &sctx,
+                &StreamPart::TextDelta {
+                    text: "secret-token-xyz".into(),
+                },
+            )
+            .await;
+
+        ctx.execution_result = Some(ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: GenerateResult {
+                content: Vec::new(),
+                usage: Some(Usage::default()),
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            latency_ms: 0,
+            generation_time_ms: 0,
+            server_tool_calls: Vec::new(),
+        });
+
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        assert_eq!(
+            str_attr(root_chat, "gen_ai.output.messages"),
+            None,
+            "content capture Off must not emit output messages"
+        );
+        assert!(
+            !root_chat.attributes.iter().any(|kv| matches!(
+                &kv.value,
+                Value::String(s) if s.as_str().contains("secret-token-xyz")
+            )),
+            "streamed text must not leak onto any span attribute under Off"
+        );
     }
 
     #[tokio::test]
