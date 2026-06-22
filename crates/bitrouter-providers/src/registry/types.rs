@@ -4,17 +4,18 @@
 //! It publishes two deterministic JSON files under `dist/`, each an envelope
 //! `{ "data": [ … ] }`:
 //!
-//! - `providers.json` — one entry per provider: which canonical models it
-//!   serves, at what price, over which wire protocol. Mirrors the registry's
-//!   `ProviderFile` Zod schema (`scripts/schema.ts`).
-//! - `canonical.json` — the shared `<org>/<model>` model vocabulary. Mirrors
-//!   the registry's `CanonicalModel` Zod schema.
+//! - `providers.json` — the provider view: one entry per provider, each model
+//!   carrying its dist-resolved `api_protocol` + `rate_limits` (the source
+//!   YAML's glob patterns are expanded by the registry build, so bitrouter
+//!   reads concrete values and runs no glob engine).
+//! - `models.json` — the model view: one entry per canonical model. bitrouter
+//!   consumes only `data[].id` (the authoritative canonical vocabulary, used to
+//!   give the hosted gateway every model); the per-model `providers[]` reverse
+//!   index is for other consumers.
 //!
 //! The structs below model only the fields bitrouter consumes; unknown fields
 //! are ignored (no `deny_unknown_fields`) so the registry can add fields
 //! without breaking this consumer.
-
-use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
@@ -31,7 +32,7 @@ pub struct Envelope<T> {
 pub struct RegistryData {
     /// Every provider entry from `providers.json`.
     pub providers: Vec<RegistryProvider>,
-    /// Every canonical model from `canonical.json`.
+    /// Every canonical model id from `models.json`.
     pub canonical: Vec<CanonicalModel>,
 }
 
@@ -63,27 +64,18 @@ pub enum Billing {
     Subscription,
 }
 
-/// A single pattern→value entry as serialized by the registry: a one-key map,
-/// e.g. `{ "*": "openai" }` or `{ "claude-*": "anthropic" }`.
-pub type PatternEntry<T> = BTreeMap<String, T>;
-
-/// One provider entry from `providers.json`.
+/// One provider entry from `providers.json` (the provider view). The dist is
+/// fully resolved: the provider-level glob `api_protocol` / `rate_limits` of the
+/// source YAML are expanded onto each model, so no pattern fields appear here.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryProvider {
     /// Provider id (equals the registry filename stem and the `name` field).
     pub name: String,
     /// The provider's public upstream base URL (HTTPS).
     pub api_base: String,
-    /// Wire protocol per model-id glob (pattern → protocol). A bare `"*"` entry
-    /// is the provider-wide default.
-    #[serde(default)]
-    pub api_protocol: Vec<PatternEntry<RegistryProtocol>>,
-    /// Declared model entries (canonical id + upstream id + pricing/caps).
+    /// Declared model entries (canonical id + upstream id + resolved config).
     #[serde(default)]
     pub models: Vec<RegistryModel>,
-    /// Rate limits per model-id glob.
-    #[serde(default)]
-    pub rate_limits: Vec<PatternEntry<RegistryRateLimits>>,
     /// `active` | `staging` | `suspended` | `withdrawn` — only `active` routes.
     pub status: String,
     /// `true` marks an unaffiliated community reseller; `false` (default) is a
@@ -110,20 +102,20 @@ impl RegistryProvider {
 }
 
 /// One model a provider serves — a canonical id mapped to the provider's own
-/// upstream id, with optional per-model overrides.
+/// upstream id, with the dist-resolved per-(provider, model) config.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryModel {
     /// Canonical model id (`<org>/<model>`), the routing match key.
     pub id: String,
     /// The provider's own upstream model id (what is sent on the wire).
     pub provider_model_id: String,
-    /// Per-model protocol override.
-    #[serde(default)]
-    pub api_protocol: Option<RegistryProtocol>,
+    /// Resolved wire protocol for this (provider, model) pair — the dist
+    /// already expanded the provider's glob patterns, so this is concrete.
+    pub api_protocol: RegistryProtocol,
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<RegistryPricing>,
-    /// Per-model rate limits.
+    /// Resolved rate limits for this (provider, model) pair, if any.
     #[serde(default)]
     pub rate_limits: Option<RegistryRateLimits>,
 }
@@ -185,8 +177,9 @@ pub struct RegistryRateLimits {
     pub tokens_per_minute: Option<u32>,
 }
 
-/// One canonical model from `canonical.json`. bitrouter consumes the id (the
-/// authoritative model vocabulary); other descriptive fields are ignored.
+/// One entry from `models.json` (the model view). bitrouter consumes only the
+/// `id` (the authoritative model vocabulary); the descriptive metadata and the
+/// `providers[]` reverse index are ignored here.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct CanonicalModel {
     /// Canonical model id (`<org>/<model>`).
@@ -197,14 +190,14 @@ pub struct CanonicalModel {
 mod tests {
     use super::*;
 
-    /// A trimmed real-shape sample of `dist/providers.json`.
+    /// A trimmed real-shape sample of the resolved `dist/providers.json`: no
+    /// provider-level glob arrays; each model carries a concrete `api_protocol`.
     const PROVIDERS_FIXTURE: &str = r#"{
         "data": [
             {
                 "id": "anthropic",
                 "name": "anthropic",
                 "api_base": "https://api.anthropic.com/v1",
-                "api_protocol": [ { "*": "anthropic" } ],
                 "auth_scheme": "x-api-key",
                 "billing": "token",
                 "byok": true,
@@ -215,7 +208,9 @@ mod tests {
                     {
                         "id": "anthropic/claude-sonnet-4.6",
                         "provider_model_id": "claude-sonnet-4-6",
+                        "api_protocol": "anthropic",
                         "capabilities": ["reasoning", "tools"],
+                        "rate_limits": { "requests_per_minute": 60 },
                         "pricing": {
                             "input_tokens": { "no_cache": 3, "cache_read": 0.3 },
                             "output_tokens": { "text": 15 }
@@ -227,7 +222,6 @@ mod tests {
                 "id": "zai-coding-plan",
                 "name": "zai-coding-plan",
                 "api_base": "https://api.z.ai/api/coding/paas/v4",
-                "api_protocol": [ { "*": "openai" } ],
                 "billing": "subscription",
                 "status": "active",
                 "models": []
@@ -243,10 +237,14 @@ mod tests {
         ]
     }"#;
 
-    const CANONICAL_FIXTURE: &str = r#"{
+    /// A trimmed sample of the model-view `dist/models.json`; bitrouter reads
+    /// only `id`, ignoring metadata + the `providers[]` reverse index.
+    const MODELS_FIXTURE: &str = r#"{
         "data": [
-            { "id": "anthropic/claude-sonnet-4.6", "name": "Anthropic: Claude Sonnet 4.6", "max_input_tokens": 1000000 },
-            { "id": "deepseek/deepseek-v3.2", "open_weights": true }
+            { "id": "anthropic/claude-sonnet-4.6", "name": "Anthropic: Claude Sonnet 4.6",
+              "max_input_tokens": 1000000,
+              "providers": [ { "provider": "anthropic", "provider_model_id": "claude-sonnet-4-6", "api_protocol": "anthropic" } ] },
+            { "id": "deepseek/deepseek-v3.2", "open_weights": true, "providers": [] }
         ]
     }"#;
 
@@ -260,13 +258,15 @@ mod tests {
         assert!(anthropic.byok);
         assert!(!anthropic.community);
         assert_eq!(anthropic.billing, Billing::Token);
-        assert_eq!(
-            anthropic.api_protocol[0].get("*"),
-            Some(&RegistryProtocol::Anthropic)
-        );
         let m = &anthropic.models[0];
         assert_eq!(m.id, "anthropic/claude-sonnet-4.6");
         assert_eq!(m.provider_model_id, "claude-sonnet-4-6");
+        // Resolved per-model protocol + rate limits (no glob to resolve here).
+        assert_eq!(m.api_protocol, RegistryProtocol::Anthropic);
+        assert_eq!(
+            m.rate_limits.as_ref().and_then(|r| r.requests_per_minute),
+            Some(60)
+        );
         let pricing = m.pricing.as_ref().unwrap();
         assert_eq!(pricing.input_tokens.as_ref().unwrap().no_cache, Some(3.0));
         assert_eq!(pricing.output_tokens.as_ref().unwrap().text, Some(15.0));
@@ -278,8 +278,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_canonical_envelope() {
-        let env: Envelope<CanonicalModel> = serde_json::from_str(CANONICAL_FIXTURE).unwrap();
+    fn parses_models_envelope() {
+        let env: Envelope<CanonicalModel> = serde_json::from_str(MODELS_FIXTURE).unwrap();
         assert_eq!(env.data.len(), 2);
         assert_eq!(env.data[0].id, "anthropic/claude-sonnet-4.6");
         assert_eq!(env.data[1].id, "deepseek/deepseek-v3.2");

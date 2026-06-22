@@ -20,8 +20,8 @@
 //! [`apply_builtin_defaults`](crate::apply_builtin_defaults)).
 
 use bitrouter_sdk::config::{
-    Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
-    ProviderModel, RateLimit, RegistryConfig, env_lookup,
+    Config, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig, ProviderModel,
+    RateLimit, RegistryConfig, env_lookup,
 };
 use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
@@ -145,15 +145,11 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         if existing.models.is_empty() {
             existing.models = build_models(provider);
         }
-        // For a registry-only provider the user listed bare, supply the
-        // endpoint shape; a built-in's shape is left to `apply_builtin_defaults`.
-        if !has_builtin {
-            if existing.api_base.is_empty() {
-                existing.api_base = provider.api_base.clone();
-            }
-            if existing.api_protocol.is_empty() {
-                existing.api_protocol = build_protocol_map(provider);
-            }
+        // For a registry-only provider the user listed bare, supply the base
+        // URL; the wire protocol rides on each model (resolved by the dist), and
+        // a built-in's shape is left to `apply_builtin_defaults`.
+        if !has_builtin && existing.api_base.is_empty() {
+            existing.api_base = provider.api_base.clone();
         }
         return;
     }
@@ -170,12 +166,14 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         ..ProviderConfig::default()
     };
     if has_builtin {
-        // A built-in exists: leave `api_base` / `api_protocol` empty so the
-        // follow-up `apply_builtin_defaults` fills the authoritative shape
-        // (and any OAuth/header auth applier keys off the provider's presence).
+        // A built-in exists: leave `api_base` empty so the follow-up
+        // `apply_builtin_defaults` fills the authoritative shape (and any
+        // OAuth/header auth applier keys off the provider's presence).
     } else {
+        // Registry-only provider: take the base URL from the registry. The wire
+        // protocol is carried per-model (set by `build_models`), so no
+        // provider-level `api_protocol` map is needed.
         entry.api_base = provider.api_base.clone();
-        entry.api_protocol = build_protocol_map(provider);
     }
     config.providers.insert(id.to_string(), entry);
 }
@@ -212,23 +210,10 @@ fn map_protocol(p: RegistryProtocol) -> ApiProtocol {
     }
 }
 
-/// Build the provider-level `api_protocol` pattern map from the registry's
-/// pattern entries. Each registry entry maps one glob to a single protocol.
-fn build_protocol_map(provider: &RegistryProvider) -> PatternMap<ProtocolList> {
-    let mut map = PatternMap::new();
-    for entry in &provider.api_protocol {
-        for (pattern, protocol) in entry {
-            map.push(
-                Pattern::parse(pattern),
-                ProtocolList(vec![map_protocol(*protocol)]),
-            );
-        }
-    }
-    map
-}
-
 /// Translate the registry's per-model entries into `ProviderModel`s — the
-/// canonical id is the match key, `provider_model_id` the upstream dispatch id.
+/// canonical id is the match key, `provider_model_id` the upstream dispatch id,
+/// and the dist-resolved protocol becomes the model's (highest-precedence)
+/// protocol override, so no provider-level pattern map is needed.
 fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
     provider
         .models
@@ -236,7 +221,7 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
         .map(|m| ProviderModel {
             id: m.id.clone(),
             provider_model_id: Some(m.provider_model_id.clone()),
-            api_protocol: m.api_protocol.map(|p| ProtocolList(vec![map_protocol(p)])),
+            api_protocol: Some(ProtocolList(vec![map_protocol(m.api_protocol)])),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
         })
@@ -294,15 +279,10 @@ mod tests {
         RegistryProvider {
             name: name.to_string(),
             api_base: format!("https://{name}.example/v1"),
-            api_protocol: vec![
-                [("*".to_string(), RegistryProtocol::Openai)]
-                    .into_iter()
-                    .collect(),
-            ],
             models: vec![RegistryModel {
                 id: "deepseek/deepseek-v3.2".to_string(),
                 provider_model_id: "deepseek-v3.2".to_string(),
-                api_protocol: None,
+                api_protocol: RegistryProtocol::Openai,
                 pricing: Some(RegistryPricing {
                     input_tokens: Some(InputTokenPricing {
                         no_cache: Some(0.27),
@@ -312,7 +292,6 @@ mod tests {
                 }),
                 rate_limits: None,
             }],
-            rate_limits: Vec::new(),
             status: "active".to_string(),
             community: false,
             byok: true,

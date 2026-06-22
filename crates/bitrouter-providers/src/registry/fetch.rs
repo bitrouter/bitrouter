@@ -3,7 +3,8 @@
 //! Source: the public registry repo's generated `dist/` directory, served raw
 //! from GitHub. See <https://github.com/bitrouter/provider-registry>. Two files
 //! are read and merged into one [`RegistryData`]:
-//! `{base}/providers.json` and `{base}/canonical.json`.
+//! `{base}/providers.json` (provider view) and `{base}/models.json` (model
+//! view — bitrouter reads its `id`s for the canonical set).
 
 use crate::registry::types::{CanonicalModel, Envelope, RegistryData, RegistryProvider};
 
@@ -55,11 +56,11 @@ pub async fn fetch_registry(base: &str) -> Result<RegistryData, FetchError> {
     let base_trimmed = base.trim_end_matches('/');
     let providers: Envelope<RegistryProvider> =
         fetch_envelope(&client, base, &format!("{base_trimmed}/providers.json")).await?;
-    let canonical: Envelope<CanonicalModel> =
-        fetch_envelope(&client, base, &format!("{base_trimmed}/canonical.json")).await?;
+    let models: Envelope<CanonicalModel> =
+        fetch_envelope(&client, base, &format!("{base_trimmed}/models.json")).await?;
     Ok(RegistryData {
         providers: providers.data,
-        canonical: canonical.data,
+        canonical: models.data,
     })
 }
 

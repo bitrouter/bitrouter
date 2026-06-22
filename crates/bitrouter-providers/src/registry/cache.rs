@@ -168,9 +168,7 @@ mod tests {
             providers: vec![RegistryProvider {
                 name: "deepseek".into(),
                 api_base: "https://api.deepseek.com/v1".into(),
-                api_protocol: Vec::new(),
                 models: Vec::new(),
-                rate_limits: Vec::new(),
                 status: "active".into(),
                 community: false,
                 byok: true,
