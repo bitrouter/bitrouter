@@ -199,7 +199,10 @@ mod tests {
     #[test]
     fn account_bearer_returns_valid_stored_token() {
         let store = store_with_token("valid", "bra_live", "2999-01-01T00:00:00Z");
-        assert_eq!(account_bearer_from_store(&store).as_deref(), Some("bra_live"));
+        assert_eq!(
+            account_bearer_from_store(&store).as_deref(),
+            Some("bra_live")
+        );
     }
 
     #[test]
