@@ -1,14 +1,14 @@
-//! Compiled-in provider catalog.
+//! Provider integration glue.
 //!
-//! Built-in providers — the ones a fresh bitrouter binary already "knows how
-//! to talk to" — are **derived from the compiled-in registry snapshot**
-//! ([`registry::embedded`]): every provider in the snapshot that declares an
-//! `auth` scheme becomes a [`ProviderEntry`] (auth + wire protocol + base URL).
-//! The lone exception is the hosted `bitrouter` cloud gateway, kept as a TOML
-//! (`providers/bitrouter.toml`) because its id shadows the registry's pool
-//! entry. The provider list and per-provider model catalog (pricing, context
-//! length, …) come from the same registry distribution, fetched at runtime and
-//! merged in by [`registry`].
+//! The providers a fresh bitrouter binary "knows how to talk to" come from the
+//! provider registry, **fetched at runtime** (and disk-cached) and merged into
+//! the routing table by [`registry`] — auth scheme, wire protocol, base URL,
+//! model catalog, and pricing all travel in that data. Nothing is vendored into
+//! the binary. The lone compiled-in built-in is the hosted `bitrouter` cloud
+//! gateway, kept as a TOML (`providers/bitrouter.toml`) because its id shadows
+//! the registry's pool entry (see [`builtin`]). The same registry mapping is
+//! reused for a fetched provider on demand via [`builtin::entry_from_registry`]
+//! (e.g. `bitrouter login` resolving an OAuth handler + its public params).
 //!
 //! ## Where a new provider lives — `AuthApplier` vs `Executor`
 //!
@@ -42,22 +42,23 @@
 //!   handler that runs the device-code flow + applies a token; Native
 //!   references a handler in a sibling crate (e.g. `aws_sigv4` in
 //!   `bitrouter-bedrock`).
-//! - [`builtin`] — the compile-time registry: [`builtin::all`] returns the
-//!   parsed entries, [`builtin::find`] looks one up by id.
+//! - [`builtin`] — the lone compiled-in built-in (the `bitrouter` cloud
+//!   gateway): [`builtin::all`] / [`builtin::find`]. [`builtin::entry_from_registry`]
+//!   maps a fetched registry provider to the same shape on demand.
 //! - [`oauth`] — RFC 8628 device-code flow + on-disk token store.
 //! - [`copilot`] — `CopilotAuthApplier` + GitHub→Copilot token exchange,
 //!   the worked example of an OAuth-driven `AuthApplier`.
 //! - [`registry`] — runtime fetch + on-disk cache of the provider registry's
-//!   `dist/` artifacts (the provider list + canonical model catalog), and the
-//!   merge into a parsed config.
+//!   `dist/` artifacts (the provider definitions + canonical model catalog),
+//!   and the merge into a parsed config.
 //!
 //! ## Adding a provider
 //!
 //! For a **static-credential or OAuth provider** (the `AuthApplier` slot):
 //!
-//! 1. Add it to the provider registry with its `auth` block (and `doc_url`),
-//!    then refresh the compiled-in snapshot: `cargo xtask vendor-registry
-//!    --from <registry>/dist`. It becomes a built-in automatically.
+//! 1. Add it to the provider registry with its `auth` block (and `doc_url`).
+//!    Once released, it is fetched + merged automatically — nothing is vendored
+//!    into this binary.
 //! 2. For Bearer / Header schemes, no Rust code is needed. For OAuth or
 //!    anything stateful, add an `AuthApplier` impl in a sibling module
 //!    (see [`copilot`]) keyed by the registry `auth.handler` name, and
@@ -91,8 +92,8 @@ pub use entry::{AuthScheme, ProtocolMapping, ProviderEntry};
 /// Errors raised while loading the compile-time registry.
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
-    /// One of the embedded TOML files failed to parse. The string carries the
-    /// provider id + the underlying `toml` error.
+    /// The compiled-in `bitrouter.toml` failed to parse. The string carries
+    /// the provider id + the underlying `toml` error.
     #[error("failed to parse provider entry '{id}': {source}")]
     Parse {
         /// The id (filename stem) of the entry that failed.
@@ -101,19 +102,12 @@ pub enum LoadError {
         #[source]
         source: toml::de::Error,
     },
-    /// Two entries share the same `id` field.
-    #[error("duplicate provider id '{id}'")]
-    DuplicateId {
-        /// The duplicated id.
-        id: String,
-    },
-    /// The compiled-in registry snapshot failed to parse, or a provider in it
-    /// declared an auth scheme missing a required field (e.g. a `bearer` scheme
-    /// with no `env`). A build-time invariant — the vendored snapshot is
-    /// registry-validated and drift-checked.
-    #[error("invalid embedded registry snapshot: {message}")]
+    /// A registry provider could not be mapped to a [`ProviderEntry`] — e.g. it
+    /// declared no `auth` block, or an auth scheme missing a required field (a
+    /// `bearer` scheme with no `env`). Surfaced by [`builtin::entry_from_registry`].
+    #[error("invalid registry provider: {message}")]
     Snapshot {
-        /// What was wrong with the snapshot.
+        /// What was wrong with the provider.
         message: String,
     },
 }

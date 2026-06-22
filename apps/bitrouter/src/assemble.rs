@@ -475,9 +475,12 @@ pub async fn build_app_with_path(
 /// `api_protocol` / auth shape filled. No-op when the registry is disabled
 /// (`registry.enabled = false` or `inherit_defaults = false`).
 ///
-/// The data is the **fetched-or-cached** dist when reachable, else the
-/// compiled-in [`embedded`](bitrouter_providers::registry::embedded) snapshot —
-/// so the full registry (not just the built-ins) is routable offline.
+/// The data is the **fetched** dist when reachable, else the most recent
+/// **disk cache** (stale-fallback on a network outage). On a never-fetched host
+/// with no network there is no data: the merge is a no-op and the registry is
+/// empty, so only locally-configured providers (and the compiled-in `bitrouter`
+/// cloud gateway) are routable. Network to the registry is expected to be
+/// stable, so this empty state is a rare first-run edge.
 ///
 /// Called by the `serve` entry point (before [`build_app`]) and by
 /// [`crate::reload`], the two paths that build a production routing config.
@@ -489,16 +492,12 @@ pub async fn merge_registry_into(config: &mut Config) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
-    // Fetched/cached dist when reachable; otherwise the compiled-in snapshot.
-    let data = match bitrouter_providers::registry::apply::load_or_cached(&config.registry).await {
-        Some(data) => data,
-        None => match bitrouter_providers::registry::embedded::data() {
-            Ok(data) => data,
-            Err(e) => {
-                tracing::warn!(error = %e, "embedded registry snapshot failed to parse");
-                return;
-            }
-        },
+    // Fetched dist when reachable; otherwise the disk cache. `None` (never
+    // fetched + unreachable) means an empty registry — skip the merge entirely.
+    let Some(data) = bitrouter_providers::registry::apply::load_or_cached(&config.registry).await
+    else {
+        bitrouter_providers::apply_builtin_defaults(config);
+        return;
     };
     bitrouter_providers::registry::apply::apply_registry(config, &data);
     // Best-effort: pull the FULL catalog for `models_dev` auto-sync providers

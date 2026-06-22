@@ -2,9 +2,14 @@
 
 How to configure `providers:`, `models:`, `mcp_servers:`, and `agents:` in `bitrouter.yaml`. Reflects the v1 schema in `crates/bitrouter-sdk/src/config/mod.rs` — fields and strategies not listed here do not exist.
 
-## Built-in providers
+## Known providers
 
-These providers are "built in" — bitrouter already knows their `api_base`, `api_protocol`, and credential env var, so listing them with an empty body in `bitrouter.yaml` enables them. Their definitions come from a **compiled-in snapshot of the provider registry** (refreshed by the periodic fetch); the hosted `bitrouter` cloud gateway is the one exception, defined in-binary. Listing one with an empty body enables it — the snapshot fills the rest.
+bitrouter already knows how to talk to these providers — their `api_base`,
+`api_protocol`, and credential env var come from the **fetched provider
+registry** (below), so listing one with an empty body in `bitrouter.yaml`
+enables it and the registry fills the rest. The definitions are **not** vendored
+into the binary; they are fetched at startup and disk-cached (see the registry
+section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 
 | Provider id | Env var | Auth | Notes |
 |---|---|---|---|
@@ -12,22 +17,32 @@ These providers are "built in" — bitrouter already knows their `api_base`, `ap
 | `anthropic` | `ANTHROPIC_API_KEY` | Header `x-api-key` | Messages API |
 | `google` | `GEMINI_API_KEY` | Header `x-goog-api-key` | Generative Language API — **not** `GOOGLE_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
-| `github-copilot` | — (OAuth) | Device flow | `bitrouter login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
-| `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Curated models, per-family protocol routing |
+| `github-copilot` | — (local OAuth) | Device flow | `bitrouter login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
+| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter login openai-codex` |
+| `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 
-Zero-config mode auto-enables every built-in whose env var is present. A built-in without its credential gets `active: false` and falls out of the routing table — startup still succeeds.
+Zero-config mode auto-enables every API-key provider whose env var is present;
+an API-key provider without its credential gets `active: false` and falls out of
+the routing table. Local-OAuth/PKCE providers (`github-copilot`, `openai-codex`)
+are enabled by `bitrouter login`, not an env var. **First run with no network
+and no cache**: the registry is empty, so only fully-specified local providers
+and the in-binary `bitrouter` cloud gateway are available — the known-provider
+shorthand needs one prior successful fetch. Startup still succeeds.
 
 ## Provider registry (catalog + priority)
 
-Beyond the built-ins, BitRouter fetches the public provider registry
+BitRouter fetches the public provider registry
 (`https://github.com/bitrouter/provider-registry`) at startup and on reload: a
-curated, deterministic catalog of canonical models and the providers that serve
-them. It is fetched from the generated `dist/` artifacts, disk-cached under
+curated, deterministic catalog of the providers above (their transport + auth),
+the canonical models, and which providers serve them. It is fetched from the
+generated `dist/` artifacts, disk-cached under
 `$XDG_CACHE_HOME/bitrouter/provider-registry.json` (24h TTL, stale-fallback on a
-network outage), and merged into the routing table. The job of the merge is to
-route a **canonical** model id (e.g. `anthropic/claude-sonnet-4.6`) to a
-provider that serves it, translating to that provider's own upstream id.
+network outage), and merged into the routing table. If a fetch fails the cache
+is reused; with no cache (first run, offline) the registry is empty and only
+locally-configured providers route. The merge routes a **canonical** model id
+(e.g. `anthropic/claude-sonnet-4.6`) to a provider that serves it, translating
+to that provider's own upstream id.
 
 Rules:
 

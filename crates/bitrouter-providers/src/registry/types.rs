@@ -315,6 +315,30 @@ impl RegistryProvider {
             Some(AutoSyncFeed::V1Models)
         )
     }
+
+    /// The env var holding this provider's credential, or `None` when it does
+    /// not use one. `oauth` / `native` providers authenticate via a local
+    /// interactive login (a request-time `AuthApplier`), so they have no env
+    /// var; every other scheme (explicit `bearer` / `header`, or the
+    /// no-`auth`-block bearer default) reads the registry's declared `auth.env`
+    /// when present (so e.g. Google keeps `GEMINI_API_KEY`), else the convention
+    /// `{NAME}_API_KEY` (uppercased, hyphens → underscores).
+    pub fn env_credential_var(&self) -> Option<String> {
+        if matches!(
+            self.auth.as_ref().map(|a| a.kind),
+            Some(RegistryAuthKind::Oauth | RegistryAuthKind::Native)
+        ) {
+            return None;
+        }
+        Some(
+            self.auth
+                .as_ref()
+                .and_then(|a| a.env.clone())
+                .unwrap_or_else(|| {
+                    format!("{}_API_KEY", self.name.to_uppercase().replace('-', "_"))
+                }),
+        )
+    }
 }
 
 /// One model a provider serves — a canonical id mapped to the provider's own

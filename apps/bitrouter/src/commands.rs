@@ -410,12 +410,37 @@ fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMe
 pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
     use bitrouter_providers::builtin;
 
-    let entry = builtin::find(provider_id).ok_or_else(|| {
-        anyhow::anyhow!(
-            "unknown provider '{provider_id}' — try `bitrouter providers list` for the catalog"
-        )
-    })?;
-    let methods = available_methods(entry);
+    // The `bitrouter` cloud gateway is compiled in; every other provider's
+    // auth shape (handler + public OAuth params) comes from the fetched-or-
+    // cached registry — the same mapper the built-ins once used.
+    let entry: bitrouter_providers::ProviderEntry = match builtin::find(provider_id) {
+        Some(e) => e.clone(),
+        None => {
+            let data = bitrouter_providers::registry::apply::load_or_cached(
+                &bitrouter_sdk::config::RegistryConfig::default(),
+            )
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "could not load the provider registry (offline, and nothing cached) \
+                     to resolve '{provider_id}'"
+                )
+            })?;
+            let provider = data
+                .providers
+                .iter()
+                .find(|p| p.name == provider_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unknown provider '{provider_id}' — try `bitrouter providers list` \
+                         for the catalog"
+                    )
+                })?;
+            builtin::entry_from_registry(provider)
+                .with_context(|| format!("resolving the auth shape for '{provider_id}'"))?
+        }
+    };
+    let methods = available_methods(&entry);
     if methods.is_empty() {
         anyhow::bail!(
             "provider '{provider_id}' has no interactive login path \
@@ -438,7 +463,7 @@ pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
     let credential = match chosen {
         AuthMethod::PkceSubscription => run_pkce_subscription(provider_id).await?,
         AuthMethod::ImportFromCli => run_cli_import(provider_id)?,
-        AuthMethod::DeviceCode => run_device_code(provider_id, entry).await?,
+        AuthMethod::DeviceCode => run_device_code(provider_id, &entry).await?,
         AuthMethod::ApiKey => run_api_key_paste(&entry.display_name)?,
     };
 

@@ -16,17 +16,18 @@
 //! 5. A provider is activated **only if its credentials are present**.
 //!
 //! Precedence is conservative: the merge never overwrites a field the user set
-//! in `bitrouter.yaml`, and for a provider that also has a compiled-in
-//! [`ProviderEntry`](crate::ProviderEntry) it defers the endpoint/auth shape to
-//! that built-in (filled by a follow-up
-//! [`apply_builtin_defaults`](crate::apply_builtin_defaults)).
+//! in `bitrouter.yaml`. The providers it configures are no longer compiled-in
+//! built-ins (only the `bitrouter` cloud gateway is — see [`crate::builtin`]);
+//! the merge applies their full transport (base URL, protocol map,
+//! per-protocol endpoints), class, and env-resolved credential directly from
+//! the fetched-or-cached registry data.
 
 use bitrouter_sdk::config::{
-    Config, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig, ProviderModel,
-    RateLimit, RegistryConfig, env_lookup,
+    Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
+    ProviderModel, RateLimit, RegistryConfig, env_lookup,
 };
+use bitrouter_sdk::language_model::types::ProtocolList;
 
-use crate::builtin;
 use crate::catalog::types::{Catalog, CatalogCost};
 use crate::registry::cache::DiskCache;
 use crate::registry::fetch::fetch_registry;
@@ -78,6 +79,17 @@ pub async fn load_or_cached(registry: &RegistryConfig) -> Option<RegistryData> {
             cache.and_then(|c| c.read_any().ok().flatten())
         }
     }
+}
+
+/// Read the disk-cached registry **without** touching the network. Returns
+/// `None` when no readable cache exists. Used by the synchronous CLI paths (the
+/// onboarding env-var hint, `bitrouter reload --env`) that need the provider
+/// list but cannot await a fetch — on a never-fetched host they simply fall
+/// back to the compiled-in cloud gateway only.
+pub fn cached_registry() -> Option<RegistryData> {
+    DiskCache::default_path()
+        .ok()
+        .and_then(|c| c.read_any().ok().flatten())
 }
 
 /// Merge `data` into `config`. No-op when `inherit_defaults` or
@@ -132,63 +144,87 @@ fn apply_cloud_all_canonical(config: &mut Config, data: &RegistryData) {
     }
 }
 
-/// Merge one public (non-private) registry provider into the config.
+/// Merge one public (non-private) registry provider into the config. Fully
+/// configures it from the registry data — these providers are no longer
+/// compiled-in built-ins (only the `bitrouter` cloud gateway is), so the merge
+/// is the single place their transport, protocol map, and credential are
+/// applied.
 fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     let id = provider.name.as_str();
     let class = classify(provider);
-    let has_builtin = builtin::find(id).is_some();
+    let protocol_map = provider_protocol_map(provider);
 
     if let Some(existing) = config.providers.get_mut(id) {
-        // Already configured (user-written, zero-config, or a built-in fill).
-        // Respect the user's fields; only fill what's unset. Never flip `active`
-        // — an uncredentialed entry stays inactive (principle #5).
+        // Already in the config (user-written, zero-config, or a prior pass):
+        // only fill what is unset; never overwrite a user's field.
         if existing.class.is_none() {
             existing.class = Some(class);
         }
         if existing.models.is_empty() {
-            existing.models = build_models(provider, has_builtin);
+            existing.models = build_models(provider);
+        }
+        if existing.api_base.is_empty() {
+            existing.api_base = provider.api_base.clone();
+        }
+        // Provider-level protocol globs (the gateways) — used by discovered
+        // models, which carry no per-model protocol. Curated providers have no
+        // provider-level globs (resolved per-model), so this is skipped for them.
+        if existing.api_protocol.is_empty()
+            && let Some(map) = &protocol_map
+        {
+            existing.api_protocol = map.clone();
+        }
+        if existing.protocol_endpoints.is_empty() {
+            existing.protocol_endpoints = protocol_endpoints(provider);
         }
         // Runtime-discovered gateway (a `v1_models` feed, no curated models):
-        // turn on `/models` discovery so an explicitly-listed gateway populates
-        // its catalog the same way a zero-config one does. Never flip it off if
-        // the user set it, and never when curated models are present.
+        // probe `/models` so an explicitly-listed gateway populates its catalog
+        // the same way a zero-config one does. Never flip it off if the user set
+        // it, and never when curated models are present.
         if provider.probes_v1_models() && existing.models.is_empty() && !existing.auto_discover {
             existing.auto_discover = true;
         }
-        // For a registry-only provider the user listed bare, supply the base
-        // URL; the wire protocol rides on each model (resolved by the dist), and
-        // a built-in's shape is left to `apply_builtin_defaults`.
-        if !has_builtin && existing.api_base.is_empty() {
-            existing.api_base = provider.api_base.clone();
+        // Credential: an env-keyed provider resolves its key from the env var,
+        // and drops out of routing if the key is absent (so it doesn't emit
+        // broken upstream requests). OAuth / native providers authenticate via a
+        // local login + a request-time `AuthApplier` (no env var), so they are
+        // exempt — a listed-but-not-logged-in entry stays active and surfaces
+        // its own error.
+        if existing.accounts.is_empty()
+            && existing.api_key.is_empty()
+            && let Some(var) = provider.env_credential_var()
+        {
+            match env_lookup(&var).filter(|v| !v.is_empty()) {
+                Some(key) => existing.api_key = key,
+                None => existing.active = false,
+            }
         }
         return;
     }
 
-    // Not configured — activate only if a credential is present (principle #5).
-    let Some(api_key) = env_lookup(&env_var_for(provider)).filter(|v| !v.is_empty()) else {
+    // Not in the config. OAuth / native providers are never auto-added (they
+    // need a local `bitrouter login`); an env-keyed provider is auto-added only
+    // when its credential is present (principle #5).
+    let Some(var) = provider.env_credential_var() else {
         return;
     };
-    let models = build_models(provider, has_builtin);
+    let Some(api_key) = env_lookup(&var).filter(|v| !v.is_empty()) else {
+        return;
+    };
+    let models = build_models(provider);
     // A `v1_models` gateway has no curated models — probe `/models` at startup.
     let auto_discover = models.is_empty() && provider.probes_v1_models();
-    let mut entry = ProviderConfig {
+    let entry = ProviderConfig {
         api_key,
+        api_base: provider.api_base.clone(),
+        api_protocol: protocol_map.unwrap_or_default(),
+        protocol_endpoints: protocol_endpoints(provider),
         models,
         class: Some(class),
         active: true,
         auto_discover,
         ..ProviderConfig::default()
     };
-    if has_builtin {
-        // A built-in exists: leave `api_base` empty so the follow-up
-        // `apply_builtin_defaults` fills the authoritative shape (and any
-        // OAuth/header auth applier keys off the provider's presence).
-    } else {
-        // Registry-only provider: take the base URL from the registry. The wire
-        // protocol is carried per-model (set by `build_models`), so no
-        // provider-level `api_protocol` map is needed.
-        entry.api_base = provider.api_base.clone();
-    }
     config.providers.insert(id.to_string(), entry);
 }
 
@@ -204,42 +240,42 @@ fn classify(provider: &RegistryProvider) -> ProviderClass {
     }
 }
 
-/// The env var a registry-only provider's BYOK key is read from: the built-in
-/// entry's advertised var when one exists, else the convention
-/// `{NAME}_API_KEY` (uppercased, hyphens → underscores).
-fn env_var_for(provider: &RegistryProvider) -> String {
-    builtin::find(&provider.name)
-        .and_then(|e| e.auth.env_var())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{}_API_KEY", provider.name.to_uppercase().replace('-', "_")))
+/// The provider-level wire-protocol globs as the SDK's [`PatternMap`], or `None`
+/// when the provider declares none (a curated provider, whose protocol is
+/// resolved onto each model instead). Longest-match precedence is the SDK's.
+fn provider_protocol_map(provider: &RegistryProvider) -> Option<PatternMap<ProtocolList>> {
+    if provider.api_protocol.is_empty() {
+        return None;
+    }
+    let mut map = PatternMap::new();
+    for entry in &provider.api_protocol {
+        for (pattern, set) in entry {
+            map.push(Pattern::parse(pattern), set.to_protocol_list());
+        }
+    }
+    Some(map)
+}
+
+/// The provider's per-protocol base-URL overrides as the SDK config map.
+fn protocol_endpoints(provider: &RegistryProvider) -> std::collections::HashMap<String, String> {
+    provider
+        .protocol_endpoints
+        .as_ref()
+        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default()
 }
 
 /// Translate the registry's per-model entries into `ProviderModel`s — the
-/// canonical id is the match key, `provider_model_id` the upstream dispatch id.
-///
-/// `defer_protocol_to_builtin`: when the provider has a compiled-in
-/// [`ProviderEntry`](crate::ProviderEntry), that entry's protocol mapping is
-/// authoritative — it may advertise a multi-protocol set (e.g. OpenAI
-/// `[chat_completions, responses]`) or per-model globs that the registry's
-/// single resolved protocol can't express. In that case leave the per-model
-/// `api_protocol` unset so the built-in's provider-level mapping governs
-/// routing. Registry-only providers have no such mapping, so the dist-resolved
-/// protocol is their only source and is set as the per-model override.
-fn build_models(
-    provider: &RegistryProvider,
-    defer_protocol_to_builtin: bool,
-) -> Vec<ProviderModel> {
+/// canonical id is the match key, `provider_model_id` the upstream dispatch id,
+/// and the dist-resolved protocol set rides on each model.
+fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
     provider
         .models
         .iter()
         .map(|m| ProviderModel {
             id: m.id.clone(),
             provider_model_id: Some(m.provider_model_id.clone()),
-            api_protocol: if defer_protocol_to_builtin {
-                None
-            } else {
-                Some(m.api_protocol.to_protocol_list())
-            },
+            api_protocol: Some(m.api_protocol.to_protocol_list()),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
         })
@@ -496,12 +532,10 @@ mod tests {
     }
 
     #[test]
-    fn built_in_provider_keeps_its_own_protocol() {
-        // `openai` has a compiled-in entry advertising a multi-protocol set
-        // ([chat_completions, responses]) for native routing. The registry's
-        // single resolved protocol must NOT clobber it: the merge fills the
-        // model catalog but leaves the per-model `api_protocol` unset, so the
-        // built-in's provider-level mapping stays authoritative.
+    fn merged_provider_carries_per_model_protocol() {
+        // The providers are no longer compiled-in built-ins, so the merge is the
+        // sole source of their protocol: each model carries its dist-resolved
+        // protocol set (an ordered set like [chat, responses] is preserved).
         let mut config = Config::default();
         config.providers.insert(
             "openai".to_string(),
@@ -514,10 +548,10 @@ mod tests {
         apply_registry(&mut config, &data_with(vec![provider("openai")], vec![]));
         let openai = &config.providers["openai"];
         assert!(!openai.models.is_empty(), "registry catalog is merged in");
-        assert!(
-            openai.models[0].api_protocol.is_none(),
-            "a built-in provider's per-model protocol must defer to the built-in \
-             mapping, not be pinned to the registry's single resolved protocol"
+        assert_eq!(
+            openai.models[0].api_protocol,
+            Some(ProtocolList(vec![ApiProtocol::ChatCompletions])),
+            "the merge pins each model's dist-resolved protocol"
         );
     }
 

@@ -25,12 +25,12 @@
 //!   with a 24-hour freshness window and a stale-fallback read.
 //! - [`apply`] — fetch-or-cache orchestration and the merge of a
 //!   [`types::RegistryData`] into a parsed
-//!   [`Config`](bitrouter_sdk::config::Config), credential-gated.
-//! - [`embedded`] — the compiled-in dist snapshot (offline default + the source
-//!   the built-in [`ProviderEntry`](crate::ProviderEntry)s are derived from).
+//!   [`Config`](bitrouter_sdk::config::Config), credential-gated. When neither a
+//!   fetch nor a cache yields data the merge is skipped (empty registry), so a
+//!   never-fetched offline host routes only locally-configured providers plus
+//!   the compiled-in `bitrouter` cloud gateway.
 
 pub mod apply;
 pub mod cache;
-pub mod embedded;
 pub mod fetch;
 pub mod types;

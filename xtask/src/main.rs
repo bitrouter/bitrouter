@@ -6,11 +6,8 @@
 //!   serde structs and write it to `schemas/bitrouter.config.schema.json`.
 //! - `generate-schema --check` — regenerate in memory and fail if the committed
 //!   schema is stale (the CI drift guard).
-//! - `vendor-registry --from <dist-dir>` — refresh the compiled-in provider
-//!   snapshot (`crates/bitrouter-providers/embedded/{providers,models}.json`)
-//!   by copying a released registry's `dist/` artifacts.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
@@ -26,17 +23,11 @@ fn main() -> ExitCode {
     // equivalent).
     let task = args.iter().find(|a| !a.starts_with("--")).cloned();
     let check = args.iter().any(|a| a == "--check");
-    let from = args
-        .iter()
-        .position(|a| a == "--from")
-        .and_then(|i| args.get(i + 1))
-        .cloned();
     let result = match task.as_deref() {
         Some("generate-schema") => generate_schema(check),
-        Some("vendor-registry") => vendor_registry(from.as_deref()),
         Some(other) => Err(anyhow::anyhow!("unknown task '{other}'")),
         None => Err(anyhow::anyhow!(
-            "usage: cargo xtask <generate-schema [--check] | vendor-registry --from <dist-dir>>"
+            "usage: cargo xtask generate-schema [--check]"
         )),
     };
     match result {
@@ -46,35 +37,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// The compiled-in provider-registry snapshot directory
-/// (`crates/bitrouter-providers/embedded/`).
-fn embedded_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(|root| root.join("crates/bitrouter-providers/embedded"))
-        .unwrap_or_else(|| PathBuf::from("crates/bitrouter-providers/embedded"))
-}
-
-/// Refresh the vendored snapshot by copying `providers.json` + `models.json`
-/// from a released registry's `dist/` directory (check out the registry at the
-/// tag you want to pin, then point `--from` at its `dist/`).
-fn vendor_registry(from: Option<&str>) -> Result<()> {
-    let from = from.ok_or_else(|| {
-        anyhow::anyhow!("usage: cargo xtask vendor-registry --from <path-to-registry-dist>")
-    })?;
-    let from = Path::new(from);
-    let dest = embedded_dir();
-    std::fs::create_dir_all(&dest).with_context(|| format!("creating {}", dest.display()))?;
-    for file in ["providers.json", "models.json"] {
-        let src = from.join(file);
-        let bytes = std::fs::read(&src).with_context(|| format!("reading {}", src.display()))?;
-        let out = dest.join(file);
-        std::fs::write(&out, &bytes).with_context(|| format!("writing {}", out.display()))?;
-        println!("vendored {} ({} bytes)", out.display(), bytes.len());
-    }
-    Ok(())
 }
 
 /// Absolute path to `schemas/bitrouter.config.schema.json`, resolved from the
