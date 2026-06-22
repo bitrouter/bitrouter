@@ -27,10 +27,11 @@ use bitrouter_sdk::config::{
 };
 
 use crate::builtin;
+use crate::catalog::types::{Catalog, CatalogCost};
 use crate::registry::cache::DiskCache;
 use crate::registry::fetch::fetch_registry;
 use crate::registry::types::{
-    Billing, RegistryData, RegistryPricing, RegistryProvider, RegistryRateLimits,
+    AutoSyncFeed, Billing, RegistryData, RegistryPricing, RegistryProvider, RegistryRateLimits,
 };
 
 /// The provider id of the hosted bitrouter gateway. The pooled registry entry
@@ -285,11 +286,94 @@ fn map_pricing(p: &RegistryPricing) -> Option<PricingConfig> {
     })
 }
 
+/// Enrich `models_dev` auto-sync providers with their FULL models.dev catalog.
+///
+/// Improvement-1 "full catalog beyond canonical" for the `models_dev` feed: the
+/// registry curates these providers FROM models.dev, and the OSS reads the same
+/// channel at runtime to pull the rest of the catalog. For each public,
+/// `models_dev`-feed provider that the registry merge placed into `config`, add
+/// every models.dev model whose native id is not already represented — neither
+/// as one of the provider's existing OSS model ids nor as a curated model's
+/// `provider_model_id`. That keeps the curated canonical entries at the highest
+/// route priority and never duplicates an upstream model the registry already
+/// curates. (`v1_models` feeds discover via the SDK's `/models` probe instead.)
+///
+/// No-op when `inherit_defaults` / `registry.enabled` is false. Idempotent (the
+/// "already represented" set guards re-runs) and best-effort (an absent catalog
+/// or provider key simply leaves the curated models in place).
+pub fn apply_catalog(config: &mut Config, data: &RegistryData, catalog: &Catalog) {
+    if !config.inherit_defaults || !config.registry.enabled {
+        return;
+    }
+    for provider in &data.providers {
+        let Some(sync) = provider.discovery_feed() else {
+            continue;
+        };
+        if sync.feed != AutoSyncFeed::ModelsDev || !provider.is_mergeable() {
+            continue;
+        }
+        // Only enrich a provider the merge actually placed into the config.
+        let Some(entry) = config.providers.get_mut(&provider.name) else {
+            continue;
+        };
+        // models.dev provider key: the explicit override, else the provider name.
+        let key = sync.key.as_deref().unwrap_or(provider.name.as_str());
+        let Some(cat) = catalog.get(key) else {
+            continue;
+        };
+        // Canonical priority: never add an id already present as an OSS model id
+        // or as a curated model's upstream id.
+        let mut represented: std::collections::HashSet<String> = entry
+            .models
+            .iter()
+            .flat_map(|m| std::iter::once(m.id.clone()).chain(m.provider_model_id.clone()))
+            .collect();
+        let mut added = 0usize;
+        for (model_id, meta) in &cat.models {
+            if !represented.insert(model_id.clone()) {
+                continue;
+            }
+            entry.models.push(ProviderModel {
+                id: model_id.clone(),
+                // Native id == OSS id; no canonical translation.
+                provider_model_id: None,
+                // The provider-level mapping governs (a built-in's set, filled by
+                // `apply_builtin_defaults`, or the openai-compatible default).
+                api_protocol: None,
+                rate_limits: None,
+                pricing: meta.cost.as_ref().and_then(map_catalog_cost),
+            });
+            added += 1;
+        }
+        if added > 0 {
+            tracing::debug!(
+                provider = %provider.name,
+                added,
+                "enriched provider catalog from models.dev"
+            );
+        }
+    }
+}
+
+/// Map a models.dev per-1M-token cost onto the SDK pricing config (USD per 1M
+/// tokens == µUSD per token). Returns `None` when no rate is published.
+fn map_catalog_cost(cost: &CatalogCost) -> Option<PricingConfig> {
+    if cost.input.is_none() && cost.output.is_none() {
+        return None;
+    }
+    Some(PricingConfig {
+        input_micro_usd_per_token: cost.input.unwrap_or(0.0),
+        output_micro_usd_per_token: cost.output.unwrap_or(0.0),
+        context_tiers: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::types::{CatalogModel, CatalogProvider};
     use crate::registry::types::{
-        AutoSync, AutoSyncFeed, CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet,
+        AutoSync, CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet,
         RegistryAccess, RegistryModel, RegistryProtocol,
     };
     use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
@@ -506,6 +590,99 @@ mod tests {
             p.status = "staging".to_string();
             apply_registry(&mut config, &data_with(vec![p], vec![]));
             assert!(!config.providers.contains_key("stagingprov"));
+        });
+    }
+
+    fn catalog_with(provider: &str, models: Vec<(&str, Option<(f64, f64)>)>) -> Catalog {
+        let models = models
+            .into_iter()
+            .map(|(id, cost)| {
+                let cost = cost.map(|(input, output)| CatalogCost {
+                    input: Some(input),
+                    output: Some(output),
+                });
+                (id.to_owned(), CatalogModel { cost })
+            })
+            .collect();
+        [(provider.to_owned(), CatalogProvider { models })]
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn models_dev_catalog_enriches_beyond_canonical() {
+        with_env("DEEPSEEK_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            let mut p = provider("deepseek"); // curated: deepseek/deepseek-v3.2 → deepseek-v3.2
+            p.auto_sync = Some(AutoSync {
+                feed: AutoSyncFeed::ModelsDev,
+                key: None,
+                url: None,
+            });
+            let data = data_with(vec![p], vec!["deepseek/deepseek-v3.2"]);
+            apply_registry(&mut config, &data);
+            // The catalog re-lists the curated upstream id (must NOT duplicate)
+            // plus a genuinely new model (must be added, with pricing).
+            let catalog = catalog_with(
+                "deepseek",
+                vec![
+                    ("deepseek-v3.2", None),
+                    ("deepseek-coder", Some((0.14, 0.28))),
+                ],
+            );
+            apply_catalog(&mut config, &data, &catalog);
+
+            let entry = config.providers.get("deepseek").expect("merged");
+            let ids: Vec<&str> = entry.models.iter().map(|m| m.id.as_str()).collect();
+            assert!(
+                ids.contains(&"deepseek/deepseek-v3.2"),
+                "curated canonical model is kept (highest priority)"
+            );
+            assert!(
+                ids.contains(&"deepseek-coder"),
+                "a non-curated models.dev model is added (full catalog)"
+            );
+            assert!(
+                !ids.contains(&"deepseek-v3.2"),
+                "the curated model's upstream id is not re-added as a native duplicate"
+            );
+            let coder = entry
+                .models
+                .iter()
+                .find(|m| m.id == "deepseek-coder")
+                .unwrap();
+            let pricing = coder.pricing.as_ref().expect("priced from models.dev");
+            assert_eq!(pricing.input_micro_usd_per_token, 0.14);
+            assert_eq!(pricing.output_micro_usd_per_token, 0.28);
+
+            // Idempotent: a second pass adds nothing.
+            let before = entry.models.len();
+            apply_catalog(&mut config, &data, &catalog);
+            assert_eq!(config.providers["deepseek"].models.len(), before);
+        });
+    }
+
+    #[test]
+    fn v1_models_provider_is_not_models_dev_enriched() {
+        // A `v1_models` feed discovers via `/models`, never models.dev — even if
+        // a catalog entry happens to exist under the provider name.
+        with_env("GW2_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            let mut p = provider("gw2");
+            p.models = Vec::new();
+            p.auto_sync = Some(AutoSync {
+                feed: AutoSyncFeed::V1Models,
+                key: None,
+                url: None,
+            });
+            let data = data_with(vec![p], vec![]);
+            apply_registry(&mut config, &data);
+            let catalog = catalog_with("gw2", vec![("some-model", Some((1.0, 2.0)))]);
+            apply_catalog(&mut config, &data, &catalog);
+            assert!(
+                config.providers["gw2"].models.is_empty(),
+                "a v1_models provider must not be enriched from models.dev"
+            );
         });
     }
 

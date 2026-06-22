@@ -31,14 +31,24 @@ provider that serves it, translating to that provider's own upstream id.
 
 Rules:
 
-- **BYOK only.** Only providers open to bring-your-own-key are merged; pooled /
-  private registry entries are skipped.
-- **Credential-gated.** A registry provider becomes routable only when its key
+- **Public providers only.** Every public registry provider is merged; only
+  `private` ones (the pooled / invite-only entries, no public registration) are
+  skipped. The registry classifies each provider by how a caller obtains
+  access: `api_key` (a portable key), `local_oauth` / `local_pkce` (a local
+  interactive login — e.g. `github-copilot`, `openai-codex`), or `private`.
+- **Credential-gated.** An `api_key` provider becomes routable only when its key
   is present, read from the convention `${NAME}_API_KEY` (uppercased, hyphens →
   underscores — e.g. `DEEPSEEK_API_KEY`, `ZAI_CODING_PLAN_API_KEY`), or from the
   built-in's env var when the provider also has a built-in entry. No key ⇒ not
   enabled. Declare the provider explicitly with `api_key: ${MY_VAR}` to override
-  the env-var name.
+  the env-var name. A `local_oauth` / `local_pkce` provider is not env-gated —
+  it activates after `bitrouter login <provider>`.
+- **Full catalog via the sync channel.** A provider may declare an `auto_sync`
+  feed (the channel the registry itself curates from). BitRouter reads the same
+  channel to pull the provider's **full** catalog beyond the curated canonical
+  subset: a `v1_models` feed (the gateways) is probed at `GET {api_base}/models`
+  on startup; a `models_dev` feed pulls the provider's models from models.dev.
+  The curated canonical models keep the highest route priority.
 - **BitRouter Cloud serves everything.** When the `bitrouter` provider is
   active (env key or `bitrouter auth login`), it is populated with every model
   in the canonical list.
