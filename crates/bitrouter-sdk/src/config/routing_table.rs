@@ -363,6 +363,25 @@ pub fn resolve_route_chain(
         if !provider_matches_tags(provider, &prefs.require_tags) {
             continue;
         }
+        // Subscription providers (a caller's own plan, reached by a local OAuth
+        // login) are explicit-route-only: a `provider:model` route (Strategy 1)
+        // or an explicit `only` preference reaches them, but they never join the
+        // canonical auto-cascade — so a plain canonical request never silently
+        // bills a personal subscription. In particular the Claude Code
+        // subscription serves only genuine Claude Code traffic, which the ingress
+        // transform routes explicitly to `claude-code:<model>`; a non-Claude-Code
+        // request for the same canonical model must fall to the pay-as-you-go
+        // provider (or 404), never the subscription.
+        if matches!(
+            provider.class,
+            Some(
+                crate::config::ProviderClass::FirstPartySubscription
+                    | crate::config::ProviderClass::GatewaySubscription
+            )
+        ) && !prefs.only.contains(provider_id)
+        {
+            continue;
+        }
         if provider.models.iter().any(|m| m.id == clean) {
             chain.push((
                 provider_rank(provider, order),
@@ -604,6 +623,82 @@ providers:
         assert_eq!(chain.len(), 2);
         assert_eq!(chain[0].provider_name, "anthropic");
         assert_eq!(chain[1].provider_name, "openai");
+    }
+
+    // `shared-model` is served by a pay-as-you-go provider (`anthropic`,
+    // first-party-api) and a subscription provider (`claude-code`,
+    // first-party-subscription). The subscription must stay out of the
+    // auto-cascade.
+    const SUBSCRIPTION_CASCADE: &str = r#"
+providers:
+  anthropic:
+    api_base: https://api.anthropic.com/v1
+    api_key: k-anthropic
+    class: first-party-api
+    models: [{ id: shared-model }]
+  claude-code:
+    api_base: https://api.anthropic.com/v1
+    api_key: k-cc
+    class: first-party-subscription
+    models: [{ id: shared-model }]
+"#;
+
+    #[tokio::test]
+    async fn strategy_3_excludes_subscription_providers_from_cascade() {
+        // A bare canonical request must NOT cascade onto the subscription
+        // provider — only the pay-as-you-go one answers.
+        let t = table(SUBSCRIPTION_CASCADE);
+        let chain = t
+            .route_chain(
+                "shared-model",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        let order: Vec<&str> = chain.iter().map(|h| h.provider_name.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["anthropic"],
+            "a subscription provider must not join the canonical auto-cascade"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscription_provider_reachable_by_explicit_route_and_only() {
+        let t = table(SUBSCRIPTION_CASCADE);
+        // Strategy-1 `provider:model` reaches it directly (the transform's path).
+        let direct = t
+            .route_chain(
+                "claude-code:shared-model",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            direct
+                .iter()
+                .map(|h| h.provider_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["claude-code"]
+        );
+        // An explicit `only` preference also reaches it in the cascade.
+        let only = RoutingPrefs {
+            only: vec!["claude-code".to_string()],
+            ..Default::default()
+        };
+        let chain = t
+            .route_chain("shared-model", &only, &CallerContext::local())
+            .await
+            .unwrap();
+        assert_eq!(
+            chain
+                .iter()
+                .map(|h| h.provider_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["claude-code"]
+        );
     }
 
     #[tokio::test]
