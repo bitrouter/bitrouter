@@ -47,6 +47,10 @@ pub(crate) fn read_generic_password(_service: &str, _account: Option<&str>) -> O
 /// `"key"<blob>="value"` line per attribute; the generic-password item Claude
 /// Code writes carries the macOS login account name under `acct`. Pure so it is
 /// testable without touching a real Keychain.
+///
+/// macOS-only: it parses `security(1)` output and is only called by
+/// [`find_account`], so compiling it elsewhere would be dead code.
+#[cfg(target_os = "macos")]
 pub(crate) fn parse_account(attributes_output: &str) -> Option<String> {
     for line in attributes_output.lines() {
         let line = line.trim();
@@ -123,7 +127,8 @@ pub(crate) fn write_generic_password(_service: &str, _account: &str, _value: &st
     false
 }
 
-#[cfg(test)]
+// macOS-only: the only tests here exercise the macOS-gated `parse_account`.
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
