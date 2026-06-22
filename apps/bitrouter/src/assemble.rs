@@ -443,6 +443,15 @@ pub async fn build_app_with_path(
         Some(transform) => app.prompt_transform(transform),
         None => app,
     };
+    // The Claude Code subscription router: an ingress prompt transform that
+    // rewrites genuine Claude Code traffic (identity system prompt + a bare
+    // Claude model) onto the explicit `claude-code:<model>` route, sending it to
+    // the subscription provider. Registered unconditionally — it reads the
+    // prompt and no-ops on everything else. Transform order is irrelevant here
+    // (it and the fusion alias touch unrelated requests).
+    let app = app.prompt_transform(
+        Arc::new(crate::claude_code::ClaudeCodeRouter) as Arc<dyn PromptTransform>
+    );
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
     // had since v0.
@@ -636,9 +645,8 @@ fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
     // session). Registered under `claude-code`, distinct from the
     // Platform-API `anthropic` provider above.
     if config.providers.contains_key("claude-code") {
-        let applier =
-            bitrouter_providers::claude_code::ClaudeCodeAuthApplier::new(&store_path)
-                .context("building the claude-code AuthApplier")?;
+        let applier = bitrouter_providers::claude_code::ClaudeCodeAuthApplier::new(&store_path)
+            .context("building the claude-code AuthApplier")?;
         appliers.register("claude-code", Arc::new(applier));
     }
     if config.providers.contains_key("openai-codex") {

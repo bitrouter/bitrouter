@@ -855,6 +855,11 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         .with_context(|| format!("chdir to bitrouter home {}", home.display()))?;
 
     let mut cfg = bitrouter::paths::load_config(source).await?;
+    // Auto-enable the `claude-code` subscription provider when the user has
+    // signed in (a `claude-code` credential is in the OAuth store). Runs before
+    // the registry merge so the merge fills the inserted provider's
+    // `api_base` / `api_protocol` / auth from the fetched registry entry.
+    bitrouter::claude_code::enable_if_logged_in(&mut cfg);
     // Fetch + merge the provider registry (BYOK providers + the canonical model
     // catalog) before assembly, so the daemon routes every credentialed
     // provider's canonical models. Best-effort and cache-backed; a no-op when
