@@ -16,7 +16,8 @@
 //! Precedence is conservative: the merge never overwrites a field the user set
 //! in `bitrouter.yaml`, and for a provider that also has a compiled-in
 //! [`ProviderEntry`](crate::ProviderEntry) it defers the endpoint/auth shape to
-//! that built-in (filled by a follow-up [`apply_builtin_defaults`]).
+//! that built-in (filled by a follow-up
+//! [`apply_builtin_defaults`](crate::apply_builtin_defaults)).
 
 use bitrouter_sdk::config::{
     Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
@@ -508,8 +509,10 @@ mod tests {
     #[test]
     fn inherit_defaults_false_is_a_noop() {
         with_env("REGTESTPROV_API_KEY", Some("sk-test"), || {
-            let mut config = Config::default();
-            config.inherit_defaults = false;
+            let mut config = Config {
+                inherit_defaults: false,
+                ..Config::default()
+            };
             apply_registry(
                 &mut config,
                 &data_with(vec![provider("regtestprov")], vec![]),
