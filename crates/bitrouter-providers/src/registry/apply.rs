@@ -143,7 +143,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
             existing.class = Some(class);
         }
         if existing.models.is_empty() {
-            existing.models = build_models(provider);
+            existing.models = build_models(provider, has_builtin);
         }
         // For a registry-only provider the user listed bare, supply the base
         // URL; the wire protocol rides on each model (resolved by the dist), and
@@ -160,7 +160,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     };
     let mut entry = ProviderConfig {
         api_key,
-        models: build_models(provider),
+        models: build_models(provider, has_builtin),
         class: Some(class),
         active: true,
         ..ProviderConfig::default()
@@ -211,17 +211,31 @@ fn map_protocol(p: RegistryProtocol) -> ApiProtocol {
 }
 
 /// Translate the registry's per-model entries into `ProviderModel`s — the
-/// canonical id is the match key, `provider_model_id` the upstream dispatch id,
-/// and the dist-resolved protocol becomes the model's (highest-precedence)
-/// protocol override, so no provider-level pattern map is needed.
-fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
+/// canonical id is the match key, `provider_model_id` the upstream dispatch id.
+///
+/// `defer_protocol_to_builtin`: when the provider has a compiled-in
+/// [`ProviderEntry`](crate::ProviderEntry), that entry's protocol mapping is
+/// authoritative — it may advertise a multi-protocol set (e.g. OpenAI
+/// `[chat_completions, responses]`) or per-model globs that the registry's
+/// single resolved protocol can't express. In that case leave the per-model
+/// `api_protocol` unset so the built-in's provider-level mapping governs
+/// routing. Registry-only providers have no such mapping, so the dist-resolved
+/// protocol is their only source and is set as the per-model override.
+fn build_models(
+    provider: &RegistryProvider,
+    defer_protocol_to_builtin: bool,
+) -> Vec<ProviderModel> {
     provider
         .models
         .iter()
         .map(|m| ProviderModel {
             id: m.id.clone(),
             provider_model_id: Some(m.provider_model_id.clone()),
-            api_protocol: Some(ProtocolList(vec![map_protocol(m.api_protocol)])),
+            api_protocol: if defer_protocol_to_builtin {
+                None
+            } else {
+                Some(ProtocolList(vec![map_protocol(m.api_protocol)]))
+            },
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
         })
@@ -372,10 +386,42 @@ mod tests {
             let model = &merged.models[0];
             assert_eq!(model.id, "deepseek/deepseek-v3.2");
             assert_eq!(model.provider_model_id.as_deref(), Some("deepseek-v3.2"));
+            // Registry-only provider (no built-in): the dist-resolved protocol
+            // is the model's only source, set as the per-model override.
+            assert_eq!(
+                model.api_protocol,
+                Some(ProtocolList(vec![ApiProtocol::ChatCompletions]))
+            );
             let pricing = model.pricing.as_ref().expect("pricing mapped");
             assert_eq!(pricing.input_micro_usd_per_token, 0.27);
             assert_eq!(pricing.output_micro_usd_per_token, 0.41);
         });
+    }
+
+    #[test]
+    fn built_in_provider_keeps_its_own_protocol() {
+        // `openai` has a compiled-in entry advertising a multi-protocol set
+        // ([chat_completions, responses]) for native routing. The registry's
+        // single resolved protocol must NOT clobber it: the merge fills the
+        // model catalog but leaves the per-model `api_protocol` unset, so the
+        // built-in's provider-level mapping stays authoritative.
+        let mut config = Config::default();
+        config.providers.insert(
+            "openai".to_string(),
+            ProviderConfig {
+                active: true,
+                ..ProviderConfig::default()
+            },
+        );
+        // `provider("openai")`'s model resolves to `openai` (chat) in the dist.
+        apply_registry(&mut config, &data_with(vec![provider("openai")], vec![]));
+        let openai = &config.providers["openai"];
+        assert!(!openai.models.is_empty(), "registry catalog is merged in");
+        assert!(
+            openai.models[0].api_protocol.is_none(),
+            "a built-in provider's per-model protocol must defer to the built-in \
+             mapping, not be pinned to the registry's single resolved protocol"
+        );
     }
 
     #[test]
