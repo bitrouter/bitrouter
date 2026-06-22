@@ -111,6 +111,14 @@ pub enum Credential {
     },
     /// An OAuth credential plus optional refresh metadata.
     Oauth(OAuthToken),
+    /// A tokenless marker meaning "resolve the credential live from the Claude
+    /// Code CLI's own store (`~/.claude`) at request time, and write any
+    /// refresh back there". No token is copied into this store, so bitrouter
+    /// and Claude Code share one credential and can't refresh-rotate each other
+    /// out (RFC 6749 §6). Set by `bitrouter login anthropic`; consumed by the
+    /// Anthropic `AuthApplier`. Serialized as the unit-variant `{"type":
+    /// "claude_code_cli"}`.
+    ClaudeCodeCli,
 }
 
 impl std::fmt::Debug for Credential {
@@ -128,6 +136,7 @@ impl std::fmt::Debug for Credential {
                 )
                 .finish(),
             Credential::Oauth(token) => f.debug_tuple("Oauth").field(token).finish(),
+            Credential::ClaudeCodeCli => f.write_str("ClaudeCodeCli"),
         }
     }
 }
@@ -139,6 +148,9 @@ impl Credential {
         match self {
             Credential::ApiKey { .. } => true,
             Credential::Oauth(t) => t.is_valid(),
+            // Liveness is resolved at request time from the Claude Code store;
+            // the marker is never itself "expired".
+            Credential::ClaudeCodeCli => true,
         }
     }
 
@@ -158,7 +170,7 @@ impl Credential {
     pub fn as_oauth(&self) -> Option<&OAuthToken> {
         match self {
             Credential::Oauth(t) => Some(t),
-            Credential::ApiKey { .. } => None,
+            Credential::ApiKey { .. } | Credential::ClaudeCodeCli => None,
         }
     }
 
@@ -166,7 +178,7 @@ impl Credential {
     pub fn as_api_key(&self) -> Option<&str> {
         match self {
             Credential::ApiKey { value } => Some(value.as_str()),
-            Credential::Oauth(_) => None,
+            Credential::Oauth(_) | Credential::ClaudeCodeCli => None,
         }
     }
 
@@ -176,6 +188,7 @@ impl Credential {
         match self {
             Credential::ApiKey { .. } => "API key",
             Credential::Oauth(_) => "OAuth",
+            Credential::ClaudeCodeCli => "Claude Code session",
         }
     }
 }
@@ -489,6 +502,31 @@ mod tests {
         let reloaded = CredentialStore::load(&path).unwrap();
         let got = reloaded.get("anthropic", "work").unwrap();
         assert_eq!(got.as_api_key(), Some("sk-ant-api03-secret"));
+    }
+
+    #[test]
+    fn round_trip_claude_code_cli_marker() {
+        let dir = tmp_dir();
+        let path = dir.join("oauth-tokens.json");
+        {
+            let mut store = CredentialStore::load(&path).unwrap();
+            store
+                .set("anthropic", DEFAULT_LABEL, Credential::ClaudeCodeCli)
+                .unwrap();
+        }
+        let reloaded = CredentialStore::load(&path).unwrap();
+        let got = reloaded.get_any("anthropic", DEFAULT_LABEL).unwrap();
+        assert!(matches!(got, Credential::ClaudeCodeCli));
+        assert_eq!(got.kind_label(), "Claude Code session");
+        assert!(got.as_oauth().is_none());
+        assert!(got.as_api_key().is_none());
+        // The marker itself is always "valid"; whether a live session exists is
+        // decided at request time by the applier.
+        assert!(got.is_valid());
+        assert!(reloaded.get("anthropic", DEFAULT_LABEL).is_some());
+        // Serialized as the adjacently-tagged unit variant, no `data` payload.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("claude_code_cli"), "got: {raw}");
     }
 
     #[test]

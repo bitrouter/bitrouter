@@ -456,6 +456,36 @@
       },
       "type": "object"
     },
+    "ProviderClass": {
+      "description": "A provider's routing-preference class. Its position in\n[`RegistryConfig::provider_priority`] is its rank (earlier = preferred); the\ndefault ladder, highest first, is: first-party subscription ▸ gateway\nsubscription ▸ first-party token API ▸ bitrouter-cloud ▸ third-party token\nAPI.",
+      "oneOf": [
+        {
+          "const": "first-party-subscription",
+          "description": "A first-party / official upstream billed by flat-rate subscription\n(e.g. a first-party coding plan).",
+          "type": "string"
+        },
+        {
+          "const": "gateway-subscription",
+          "description": "A gateway / aggregator billed by subscription.",
+          "type": "string"
+        },
+        {
+          "const": "first-party-api",
+          "description": "A first-party / official upstream billed pay-as-you-go per token.",
+          "type": "string"
+        },
+        {
+          "const": "bitrouter-cloud",
+          "description": "The bitrouter hosted gateway.",
+          "type": "string"
+        },
+        {
+          "const": "third-party-api",
+          "description": "A third-party / community reseller billed pay-as-you-go per token.",
+          "type": "string"
+        }
+      ]
+    },
     "ProviderConfig": {
       "description": "One upstream provider entry — registry-style.\n\n`Debug` redacts `api_key` (v0 audit S9) so a future `tracing::error!(?config, …)`\ncan't dump the platform credential straight into structured logs.",
       "properties": {
@@ -494,6 +524,17 @@
           "description": "When `true` and `models` is empty, discover models from the provider's\n`/models` endpoint at startup and on reload.",
           "type": "boolean"
         },
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderClass"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Routing-preference class. Set by the provider-registry merge (or\ndirectly in config), then mapped to a numeric rank via\n[`RegistryConfig::provider_priority`]. `None` ⇒ unclassed: the provider\nsorts after every classed one in the auto-cascade (Strategy 3). Plain\nconfigs leave this `None`, preserving the alphabetical default order."
+        },
         "derives": {
           "default": null,
           "description": "Inherit defaults from another provider in this config (acceptance F20 /\nv0 `derives`). The named provider's `api_protocol`, `rate_limits`,\n`models`, `tags` and `auto_discover` flow into *this* provider's empty\nfields; explicit fields here win. Resolved by\n[`resolve_derivations`] after the config is parsed.",
@@ -508,6 +549,15 @@
             "$ref": "#/$defs/ProviderModel"
           },
           "type": "array"
+        },
+        "priority": {
+          "default": null,
+          "description": "Explicit routing priority (lower = preferred). When set it overrides the\nclass-derived rank, so an operator can pin one provider ahead of others\nregardless of class. `None` ⇒ derive the rank from [`class`](Self::class).",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "protocol_endpoints": {
           "additionalProperties": {
@@ -548,7 +598,7 @@
           "description": "Per-model protocol override (highest precedence) — an ordered set of\nsupported protocols, or a bare string for a single one."
         },
         "id": {
-          "description": "Model id at the provider.",
+          "description": "The id this model is addressed by — a canonical `<org>/<model>` id when\nthe entry comes from the provider registry, or the upstream id for a\nhand-written config. This is the **match key** the auto-cascade compares\nthe requested model against.",
           "type": "string"
         },
         "pricing": {
@@ -561,6 +611,14 @@
             }
           ],
           "description": "Per-model pricing."
+        },
+        "provider_model_id": {
+          "default": null,
+          "description": "The provider's own upstream model id — what is sent on the wire. When\n`None`, [`id`](Self::id) is used for both matching and dispatch (the\nhand-written-config case, where the two coincide). The registry merge\nsets this so a canonical [`id`](Self::id) routes to the provider's\nupstream name (e.g. `anthropic/claude-sonnet-4.6` → `claude-sonnet-4-6`).",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "rate_limits": {
           "anyOf": [
@@ -601,6 +659,29 @@
             "integer",
             "null"
           ]
+        }
+      },
+      "type": "object"
+    },
+    "RegistryConfig": {
+      "description": "Runtime provider-registry integration settings — the top-level `registry:`\nblock in `bitrouter.yaml`.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether to fetch the registry and merge its BYOK providers into the\nrouting table. Default `true`. Also gated by\n[`inherit_defaults`](Config::inherit_defaults) — either being false\ndisables the merge.",
+          "type": "boolean"
+        },
+        "provider_priority": {
+          "description": "Provider-class priority, highest first. A provider's auto-cascade rank\nis its class's index here; a per-provider [`ProviderConfig::priority`]\noverrides it, and a class absent from this list ranks last. Defaults to\n[`ProviderClass::default_priority`].",
+          "items": {
+            "$ref": "#/$defs/ProviderClass"
+          },
+          "type": "array"
+        },
+        "url": {
+          "default": "https://raw.githubusercontent.com/bitrouter/provider-registry/main/dist",
+          "description": "Base URL of the registry `dist/` artifacts. Defaults to\n[`DEFAULT_REGISTRY_URL`]. Point it at a pinned `reg-<timestamp>` tag or\nan internal mirror for reproducible deployments.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -872,6 +953,10 @@
       },
       "description": "Upstream providers, keyed by provider id.",
       "type": "object"
+    },
+    "registry": {
+      "$ref": "#/$defs/RegistryConfig",
+      "description": "Provider-registry integration: whether to fetch + merge the registry's\nBYOK providers, where to fetch it from, and the provider-class priority\nladder used to order the auto-cascade."
     },
     "server": {
       "$ref": "#/$defs/ServerConfig",

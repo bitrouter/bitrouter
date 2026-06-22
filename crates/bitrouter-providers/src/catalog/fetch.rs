@@ -1,48 +1,49 @@
-//! Fetch the live model catalog from <https://models.dev/api.json>.
+//! Fetch the public model catalog from <https://models.dev/api.json>.
+//!
+//! Used to enrich a `models_dev` auto-sync provider's catalog with its FULL
+//! model set (beyond the registry-curated canonical subset). Best-effort: a
+//! failure leaves the curated models in place (see the catalog apply step).
 
 use crate::catalog::types::Catalog;
 
-/// The canonical catalog endpoint. Documented at <https://models.dev/api>.
+/// The public catalog endpoint. Documented at <https://models.dev/api>.
 pub const CATALOG_URL: &str = "https://models.dev/api.json";
 
-/// User-agent string sent with catalog fetches — helps the upstream
-/// understand traffic patterns and isolate bitrouter calls in their logs.
+/// User-agent string sent with catalog fetches — helps the upstream isolate
+/// bitrouter traffic in their logs.
 const USER_AGENT: &str = concat!("bitrouter/", env!("CARGO_PKG_VERSION"));
 
 /// Errors that can arise while pulling the catalog over the network.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
     /// Transport-level failure (DNS, TCP, TLS, HTTP status, …).
-    #[error("network error fetching {CATALOG_URL}: {0}")]
-    Network(#[from] reqwest::Error),
-    /// HTTP succeeded but the body wasn't a valid catalog JSON.
-    #[error("malformed catalog JSON at {CATALOG_URL}: {0}")]
-    Parse(#[from] serde_json::Error),
+    #[error("network error fetching the model catalog from models.dev: {0}")]
+    Network(#[source] reqwest::Error),
+    /// HTTP succeeded but the body wasn't valid catalog JSON.
+    #[error("malformed catalog JSON from models.dev: {0}")]
+    Parse(#[source] serde_json::Error),
 }
 
 /// Download + parse the catalog from [`CATALOG_URL`].
 ///
-/// Plain `reqwest::get` with `rustls-tls` (the workspace's feature pin) and a
-/// per-call 30s timeout. Callers that want a longer-lived client should call
-/// [`fetch_catalog_with`] with their own [`reqwest::Client`].
+/// Bounded `connect_timeout` + overall `timeout` (`rustls-tls`, the workspace's
+/// feature pin) so an unreachable models.dev fails fast on a no-network host
+/// rather than stalling startup — mirrors the registry fetch policy.
 pub async fn fetch_catalog() -> Result<Catalog, FetchError> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-    fetch_catalog_with(&client).await
-}
-
-/// Fetch the catalog using a caller-owned [`reqwest::Client`]. Useful when
-/// the caller already runs a connection pool / proxy / mTLS setup.
-pub async fn fetch_catalog_with(client: &reqwest::Client) -> Result<Catalog, FetchError> {
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(FetchError::Network)?;
     let body = client
         .get(CATALOG_URL)
         .send()
-        .await?
-        .error_for_status()?
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(FetchError::Network)?
         .text()
-        .await?;
-    let catalog = serde_json::from_str(&body)?;
-    Ok(catalog)
+        .await
+        .map_err(FetchError::Network)?;
+    serde_json::from_str(&body).map_err(FetchError::Parse)
 }

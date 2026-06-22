@@ -12,6 +12,7 @@ use bitrouter_sdk::language_model::types::ProtocolList;
 
 use crate::builtin;
 use crate::entry::ProtocolMapping;
+use crate::oauth::credential_store::CredentialStore;
 
 /// Build the in-memory **zero-config** [`Config`] used when the user
 /// runs `bitrouter serve` with no `bitrouter.yaml` anywhere on the
@@ -30,17 +31,20 @@ use crate::entry::ProtocolMapping;
 ///   config for multi-tenant use.
 /// - `inherit_defaults = true` — built-in catalog fills empty fields.
 ///
-/// `github-copilot` is intentionally *not* auto-enabled: it requires a
-/// prior `bitrouter login github-copilot` OAuth flow, which the user
-/// has to run explicitly.
+/// Only the compiled-in `bitrouter` cloud gateway is auto-enabled here (when
+/// `BITROUTER_API_KEY` is set). Every other provider comes from the registry
+/// and is auto-enabled by the credential-gated registry merge
+/// ([`crate::registry::apply::apply_registry`]) at assembly time, so this
+/// function does not enumerate them.
 pub fn zero_config() -> Config {
     let mut config = Config::default();
     config.server.listen = "127.0.0.1:4356".to_string();
     config.server.skip_auth = true;
     config.inherit_defaults = true;
     for entry in builtin::all() {
-        // Only consider env-var-credentialed built-ins. OAuth-only
-        // providers (github-copilot) need an explicit user action.
+        // Only env-var-credentialed compiled-in built-ins (today: the cloud
+        // gateway). Its catalog is filled from the canonical list by the merge,
+        // so no `auto_discover` here.
         let Some(env_var) = entry.auth.env_var() else {
             continue;
         };
@@ -53,29 +57,38 @@ pub fn zero_config() -> Config {
             .map(|v| !v.is_empty())
             .unwrap_or(false)
         {
-            // `auto_discover: true` so the provider's `/models` endpoint
-            // populates the routable model list on startup — zero-config
-            // users haven't declared any models explicitly.
-            config.providers.insert(
-                entry.id.clone(),
-                ProviderConfig {
-                    auto_discover: true,
-                    ..ProviderConfig::default()
-                },
-            );
+            config
+                .providers
+                .insert(entry.id.clone(), ProviderConfig::default());
         }
     }
     config
 }
 
-/// The set of env-var-credentialed built-in provider ids — the ones
-/// that participate in [`zero_config`]'s auto-enable check. Stable
-/// order so callers can render a human-readable hint.
-pub fn zero_config_env_var_providers() -> Vec<(&'static str, &'static str)> {
-    builtin::all()
+/// Provider → credential-env-var pairs for every provider the OSS can
+/// env-authenticate: the compiled-in cloud gateway plus every env-keyed,
+/// mergeable provider in the **disk-cached** registry (OAuth / native providers
+/// have no env var and are omitted). Used by the onboarding hint and `bitrouter
+/// reload --env`. On a never-fetched host the cache is absent, so only the
+/// cloud gateway is listed until the first successful fetch populates it.
+pub fn zero_config_env_var_providers() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = builtin::all()
         .iter()
-        .filter_map(|e| e.auth.env_var().map(|v| (e.id.as_str(), v)))
-        .collect()
+        .filter_map(|e| e.auth.env_var().map(|v| (e.id.clone(), v.to_string())))
+        .collect();
+    if let Some(data) = crate::registry::apply::cached_registry() {
+        for p in &data.providers {
+            if !p.is_mergeable() {
+                continue;
+            }
+            if let Some(var) = p.env_credential_var()
+                && !out.iter().any(|(_, v)| v == &var)
+            {
+                out.push((p.name.clone(), var));
+            }
+        }
+    }
+    out
 }
 
 /// Fill every empty field on each `providers.<id>` entry whose id matches a
@@ -110,6 +123,12 @@ pub fn apply_builtin_defaults(config: &mut Config) {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
         }
+        // Routing-preference class for built-ins (gateways, the hosted cloud).
+        // Registry providers are classed by the registry merge instead; a
+        // user-set class wins over both.
+        if provider.class.is_none() {
+            provider.class = builtin.class;
+        }
         // A multi-account provider carries its credentials in `accounts`,
         // not the top-level `api_key`. Skip both the env-var fill and the
         // inactive guard for it — it is explicitly account-managed and
@@ -134,6 +153,27 @@ pub fn apply_builtin_defaults(config: &mut Config) {
         // (no `env_var`), so this guard doesn't touch it.
         if provider.api_key.is_empty() && builtin.auth.env_var().is_some() {
             provider.active = false;
+        }
+    }
+}
+
+/// Re-activate providers that hold a credential in the OAuth credential `store`
+/// even though they carry no inline / env-var api key.
+///
+/// Subscription (OAuth) and "use your Claude Code session" logins persist their
+/// credential in the store (`oauth-tokens.json`), not in the config — so
+/// [`apply_builtin_defaults`] marks a provider whose only catalog auth is an
+/// env-var key (e.g. `anthropic` with `ANTHROPIC_API_KEY`) inactive and drops it
+/// from the routing table. This pass restores it: a provider with at least one
+/// stored credential is usable, because the matching `AuthApplier` resolves that
+/// credential (the live Claude Code session, a stored OAuth token, or a pasted
+/// key) at request time. Idempotent; already-active providers are untouched, and
+/// providers with no stored credential stay as `apply_builtin_defaults` left
+/// them.
+pub fn activate_stored_credential_providers(config: &mut Config, store: &CredentialStore) {
+    for (id, provider) in config.providers.iter_mut() {
+        if !provider.active && !store.labels(id).is_empty() {
+            provider.active = true;
         }
     }
 }
@@ -225,99 +265,85 @@ mod tests {
         }
     }
 
+    // The only compiled-in built-in is the `bitrouter` cloud gateway; the rest
+    // come from the registry and are configured by the merge (tested in
+    // `registry::apply`). These tests cover `apply_builtin_defaults` /
+    // `zero_config` against that one built-in.
+
     #[test]
     fn fills_empty_api_base_and_protocol() {
-        let mut config = config_with("openai", ProviderConfig::default());
+        let mut config = config_with("bitrouter", ProviderConfig::default());
         apply_builtin_defaults(&mut config);
-        let p = &config.providers["openai"];
-        assert_eq!(p.api_base, "https://api.openai.com/v1");
+        let p = &config.providers["bitrouter"];
+        assert_eq!(p.api_base, "https://api.bitrouter.ai/v1");
         assert_eq!(
             p.api_protocol.resolve("gpt-4o"),
-            Some(&ProtocolList(vec![
-                ApiProtocol::ChatCompletions,
-                ApiProtocol::Responses
-            ]))
+            Some(&ProtocolList(vec![ApiProtocol::ChatCompletions]))
         );
     }
 
     #[test]
     fn does_not_overwrite_user_overrides() {
         let user = provider_with_base("https://gateway.internal.example/v1");
-        let mut config = config_with("openai", user);
+        let mut config = config_with("bitrouter", user);
         apply_builtin_defaults(&mut config);
-        let p = &config.providers["openai"];
+        let p = &config.providers["bitrouter"];
         // user-set api_base wins; api_protocol still gets the built-in default
         assert_eq!(p.api_base, "https://gateway.internal.example/v1");
         assert_eq!(
             p.api_protocol.resolve("gpt-4o"),
-            Some(&ProtocolList(vec![
-                ApiProtocol::ChatCompletions,
-                ApiProtocol::Responses
-            ]))
+            Some(&ProtocolList(vec![ApiProtocol::ChatCompletions]))
         );
     }
 
     #[test]
     fn resolves_env_var_when_present() {
-        with_env("OPENAI_API_KEY", Some("sk-from-env-xyz"), || {
-            let mut config = config_with("openai", ProviderConfig::default());
+        with_env("BITROUTER_API_KEY", Some("br-from-env-xyz"), || {
+            let mut config = config_with("bitrouter", ProviderConfig::default());
             apply_builtin_defaults(&mut config);
-            assert_eq!(config.providers["openai"].api_key, "sk-from-env-xyz");
+            assert_eq!(config.providers["bitrouter"].api_key, "br-from-env-xyz");
         });
     }
 
     #[test]
     fn leaves_api_key_empty_when_env_unset() {
-        with_env("OPENAI_API_KEY", None, || {
-            let mut config = config_with("openai", ProviderConfig::default());
+        with_env("BITROUTER_API_KEY", None, || {
+            let mut config = config_with("bitrouter", ProviderConfig::default());
             apply_builtin_defaults(&mut config);
-            assert!(config.providers["openai"].api_key.is_empty());
+            assert!(config.providers["bitrouter"].api_key.is_empty());
         });
     }
 
     #[test]
     fn no_op_when_inherit_defaults_false() {
-        let mut config = config_with("openai", ProviderConfig::default());
+        let mut config = config_with("bitrouter", ProviderConfig::default());
         config.inherit_defaults = false;
         apply_builtin_defaults(&mut config);
-        let p = &config.providers["openai"];
+        let p = &config.providers["bitrouter"];
         assert!(p.api_base.is_empty());
         assert!(p.api_protocol.is_empty());
     }
 
     #[test]
     fn ignores_unknown_provider_ids() {
-        let mut config = config_with("definitely-not-a-builtin", ProviderConfig::default());
+        // openai is no longer compiled in — it is a registry-merge provider, so
+        // `apply_builtin_defaults` (which only knows the cloud gateway) leaves
+        // it untouched.
+        let mut config = config_with("openai", ProviderConfig::default());
         apply_builtin_defaults(&mut config);
-        let p = &config.providers["definitely-not-a-builtin"];
+        let p = &config.providers["openai"];
         assert!(p.api_base.is_empty());
         assert!(p.api_protocol.is_empty());
     }
 
     #[test]
-    fn anthropic_carries_header_env_var() {
-        with_env("ANTHROPIC_API_KEY", Some("sk-ant-test"), || {
-            let mut config = config_with("anthropic", ProviderConfig::default());
-            apply_builtin_defaults(&mut config);
-            let p = &config.providers["anthropic"];
-            assert_eq!(p.api_base, "https://api.anthropic.com/v1");
-            assert_eq!(p.api_key, "sk-ant-test");
-            assert_eq!(
-                p.api_protocol.resolve("claude-opus-4-1"),
-                Some(&ProtocolList(vec![ApiProtocol::Messages]))
-            );
-        });
-    }
-
-    #[test]
     fn marks_provider_inactive_when_env_key_missing() {
-        // The zero-config story relies on this: a built-in entry with
-        // no usable credential drops out of routing instead of
-        // generating broken upstream requests.
-        with_env("OPENAI_API_KEY", None, || {
-            let mut config = config_with("openai", ProviderConfig::default());
+        // A built-in entry with no usable credential drops out of routing
+        // instead of generating broken upstream requests.
+        with_env("BITROUTER_API_KEY", None, || {
+            let mut config = config_with("bitrouter", ProviderConfig::default());
             apply_builtin_defaults(&mut config);
-            assert!(!config.providers["openai"].active);
+            assert!(!config.providers["bitrouter"].active);
         });
     }
 
@@ -325,57 +351,79 @@ mod tests {
     fn keeps_provider_active_when_user_supplied_key() {
         // A user who hard-codes `api_key` in YAML should stay active
         // regardless of env state.
-        with_env("OPENAI_API_KEY", None, || {
+        with_env("BITROUTER_API_KEY", None, || {
             let p = ProviderConfig {
-                api_key: "sk-hardcoded".to_string(),
+                api_key: "br-hardcoded".to_string(),
                 ..ProviderConfig::default()
             };
-            let mut config = config_with("openai", p);
+            let mut config = config_with("bitrouter", p);
             apply_builtin_defaults(&mut config);
-            assert!(config.providers["openai"].active);
+            assert!(config.providers["bitrouter"].active);
         });
     }
 
     #[test]
-    fn zero_config_skips_providers_without_env_vars() {
-        // Clear every env-var-credentialed built-in; result must be a
-        // Config with no providers at all (still valid — just routes
-        // nothing).
-        let pairs: Vec<(&str, Option<&str>)> = zero_config_env_var_providers()
-            .into_iter()
-            .map(|(_, var)| (var, None))
-            .collect();
-        with_envs(&pairs, || {
+    fn stored_credential_reactivates_keyless_provider() {
+        use crate::oauth::credential_store::{Credential, CredentialStore, DEFAULT_LABEL};
+        let dir = std::env::temp_dir().join(format!("br-activate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = CredentialStore::load(dir.join("oauth-tokens.json")).unwrap();
+        // A "use your Claude Code session" login persists this marker.
+        store
+            .set("anthropic", DEFAULT_LABEL, Credential::ClaudeCodeCli)
+            .unwrap();
+
+        let mut config = Config::default();
+        config.providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                active: false, // as the merge would leave a keyless Bearer provider
+                ..ProviderConfig::default()
+            },
+        );
+        config.providers.insert(
+            "openai".to_string(),
+            ProviderConfig {
+                active: false,
+                ..ProviderConfig::default()
+            },
+        );
+
+        activate_stored_credential_providers(&mut config, &store);
+        assert!(
+            config.providers["anthropic"].active,
+            "a stored credential must re-activate the provider for routing"
+        );
+        assert!(
+            !config.providers["openai"].active,
+            "a provider with no stored credential stays inactive"
+        );
+    }
+
+    #[test]
+    fn zero_config_skips_the_cloud_gateway_without_its_env_var() {
+        with_env("BITROUTER_API_KEY", None, || {
             let cfg = zero_config();
             assert!(cfg.server.skip_auth);
             assert!(cfg.inherit_defaults);
             assert_eq!(cfg.server.listen, "127.0.0.1:4356");
             assert!(
-                cfg.providers.is_empty(),
-                "expected no providers, got: {:?}",
-                cfg.providers.keys().collect::<Vec<_>>()
+                !cfg.providers.contains_key("bitrouter"),
+                "the cloud gateway must not be auto-enabled without its key"
             );
         });
     }
 
     #[test]
-    fn zero_config_auto_enables_providers_with_env_vars() {
-        // Wipe everyone, then set OPENAI_API_KEY.
-        let mut pairs: Vec<(&str, Option<&str>)> = zero_config_env_var_providers()
-            .into_iter()
-            .map(|(_, var)| (var, None))
-            .collect();
-        pairs.push(("OPENAI_API_KEY", Some("sk-from-env")));
-        with_envs(&pairs, || {
+    fn zero_config_auto_enables_the_cloud_gateway_with_its_env_var() {
+        with_env("BITROUTER_API_KEY", Some("br-from-env"), || {
             let mut cfg = zero_config();
-            assert!(cfg.providers.contains_key("openai"));
-            assert!(!cfg.providers.contains_key("anthropic"));
-            // After `apply_builtin_defaults` the inserted entry has its
-            // catalog defaults filled in.
+            assert!(cfg.providers.contains_key("bitrouter"));
             apply_builtin_defaults(&mut cfg);
-            let p = &cfg.providers["openai"];
-            assert_eq!(p.api_key, "sk-from-env");
-            assert_eq!(p.api_base, "https://api.openai.com/v1");
+            let p = &cfg.providers["bitrouter"];
+            assert_eq!(p.api_key, "br-from-env");
+            assert_eq!(p.api_base, "https://api.bitrouter.ai/v1");
             assert!(p.active);
         });
     }

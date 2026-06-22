@@ -1,256 +1,330 @@
-//! Compile-time registry of built-in provider entries.
+//! The compiled-in built-in: the hosted `bitrouter` cloud gateway.
 //!
-//! Each TOML under `providers/*.toml` is pulled in via `include_str!`. The
-//! list is hand-maintained (rather than a `build.rs`) so adding a provider
-//! is a single visible change in this file plus the TOML.
+//! The other known providers (openai/anthropic/google + the gateways) are NOT
+//! compiled in — they come from the fetched-or-cached provider registry and are
+//! configured by the registry merge ([`crate::registry::apply`]). Only the
+//! `bitrouter` hosted cloud *gateway* lives here: its id shadows the registry's
+//! pool entry and it is the cloud-applier / serves-all-canonical mechanism, so
+//! it cannot be a public-registry entry. [`entry_from_registry`] reuses the same
+//! mapper for a fetched registry provider when a consumer (e.g. `bitrouter
+//! login`) needs the auth/transport shape of one of those providers.
 
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use crate::LoadError;
-use crate::entry::ProviderEntry;
+use bitrouter_sdk::config::ProviderClass;
+use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
-/// One embedded TOML file: `(filename_stem, contents)`. The filename stem
-/// MUST match the `id` field inside the TOML (enforced at load time).
-///
-/// Order matters for user-facing output: callers that iterate this list to
-/// render a list of providers (e.g. the zero-config onboarding hint) take
-/// the first entry as the recommended default. `bitrouter` is deliberately
-/// first — it is the project's official hosted gateway and gives a new
-/// user one credential covering every supported model. The id is the
-/// short, brand-aligned form so model addressing reads naturally:
-/// `bitrouter:gpt-5.5`, `bitrouter:claude-sonnet-4.6`, …
-const EMBEDDED: &[(&str, &str)] = &[
-    ("bitrouter", include_str!("../providers/bitrouter.toml")),
-    ("openai", include_str!("../providers/openai.toml")),
-    (
-        "openai-codex",
-        include_str!("../providers/openai-codex.toml"),
-    ),
-    ("anthropic", include_str!("../providers/anthropic.toml")),
-    ("google", include_str!("../providers/google.toml")),
-    ("openrouter", include_str!("../providers/openrouter.toml")),
-    (
-        "github-copilot",
-        include_str!("../providers/github-copilot.toml"),
-    ),
-    (
-        "opencode-zen",
-        include_str!("../providers/opencode-zen.toml"),
-    ),
-    ("opencode-go", include_str!("../providers/opencode-go.toml")),
-];
+use crate::LoadError;
+use crate::entry::{AuthScheme, ProtocolMapping, ProviderEntry};
+use crate::registry::types::{
+    Billing, RegistryAuth, RegistryAuthKind, RegistryKind, RegistryProvider,
+};
+
+/// The hosted bitrouter cloud gateway — the sole compiled-in built-in. Its id
+/// shadows the registry's pool entry, so it is hand-authored here rather than
+/// taken from the registry.
+const BITROUTER_TOML: &str = include_str!("../providers/bitrouter.toml");
 
 static REGISTRY: OnceLock<Vec<ProviderEntry>> = OnceLock::new();
 
-/// Parse + return every built-in entry. Panics if a TOML fails to parse,
-/// duplicates an id, or its declared id differs from its filename — these are
-/// programming errors caught by `cargo test`, never user errors.
+/// Parse + return every compiled-in built-in entry (just the `bitrouter` cloud
+/// gateway). Panics only if the compiled-in TOML is malformed — a build-time
+/// invariant caught by `cargo test`, never a user error.
 pub fn all() -> &'static [ProviderEntry] {
     REGISTRY
-        .get_or_init(|| load_embedded().expect("built-in provider registry must parse"))
+        .get_or_init(|| load_builtins().expect("built-in provider registry must parse"))
         .as_slice()
 }
 
-/// Look up a built-in entry by `id`. Returns `None` for unknown ids.
+/// Look up a compiled-in built-in entry by `id`. Returns `None` for unknown
+/// ids — including the registry-sourced providers, which are not compiled in.
 pub fn find(id: &str) -> Option<&'static ProviderEntry> {
     all().iter().find(|e| e.id == id)
 }
 
-/// Parse the embedded slice. Separated from [`all`] so tests can assert on
-/// the `Result` instead of catching panics.
-pub fn load_embedded() -> Result<Vec<ProviderEntry>, LoadError> {
-    let mut out = Vec::with_capacity(EMBEDDED.len());
-    for (stem, body) in EMBEDDED {
-        let entry: ProviderEntry = toml::from_str(body).map_err(|source| LoadError::Parse {
-            id: (*stem).to_string(),
+/// Parse the compiled-in built-ins: just the `bitrouter` cloud gateway.
+/// Separated from [`all`] so tests can assert on the `Result`.
+pub fn load_builtins() -> Result<Vec<ProviderEntry>, LoadError> {
+    let bitrouter: ProviderEntry =
+        toml::from_str(BITROUTER_TOML).map_err(|source| LoadError::Parse {
+            id: "bitrouter".to_string(),
             source,
         })?;
-        if entry.id != *stem {
-            return Err(LoadError::IdMismatch {
-                declared: entry.id,
-                expected: (*stem).to_string(),
-            });
-        }
-        if out.iter().any(|e: &ProviderEntry| e.id == entry.id) {
-            return Err(LoadError::DuplicateId { id: entry.id });
-        }
-        out.push(entry);
+    Ok(vec![bitrouter])
+}
+
+/// Derive a [`ProviderEntry`] (auth + transport shape) from a registry provider
+/// — the same mapping the built-ins once used, now applied to a fetched-or-
+/// cached registry entry. Used where a consumer needs the auth shape of a
+/// registry-sourced provider without it being compiled in (e.g. `bitrouter
+/// login <provider>` resolving an OAuth handler + its public params). Errors if
+/// the provider declares no `auth` block.
+pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadError> {
+    let auth = p.auth.as_ref().ok_or_else(|| LoadError::Snapshot {
+        message: format!("provider '{}' has no auth", p.name),
+    })?;
+    Ok(ProviderEntry {
+        id: p.name.clone(),
+        display_name: p.display_name.clone().unwrap_or_else(|| p.name.clone()),
+        api_base: p.api_base.clone(),
+        api_protocol: derive_protocol_mapping(p),
+        protocol_endpoints: p.protocol_endpoints.clone().unwrap_or_default(),
+        auth: map_auth(&p.name, auth)?,
+        doc_url: p.doc_url.clone().unwrap_or_default(),
+        class: Some(derive_class(p)),
+    })
+}
+
+/// Map the registry's structured auth declaration onto the OSS [`AuthScheme`].
+/// Only public config travels (names/handlers); OAuth/native handler *impls*
+/// stay in the OSS, keyed by the handler name. OAuth `params` ARE carried onto
+/// the entry: PKCE providers (anthropic, openai-codex) ignore them (the OSS
+/// `oauth::registry` holds their client config), but device-code providers
+/// (github-copilot) keep their `client_id` / `device_authorization_endpoint` /
+/// `token_endpoint` / `scope` ONLY here, so dropping them breaks
+/// `bitrouter login github-copilot`. JSON values that TOML cannot represent
+/// (e.g. `null`) are skipped — login then surfaces a clear "missing param".
+fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError> {
+    let missing = |field: &str| LoadError::Snapshot {
+        message: format!(
+            "provider '{provider}' {:?} auth missing `{field}`",
+            auth.kind
+        ),
+    };
+    match auth.kind {
+        RegistryAuthKind::Bearer => Ok(AuthScheme::Bearer {
+            env: auth.env.clone().ok_or_else(|| missing("env"))?,
+        }),
+        RegistryAuthKind::Header => Ok(AuthScheme::Header {
+            header: auth.header.clone().ok_or_else(|| missing("header"))?,
+            env: auth.env.clone().ok_or_else(|| missing("env"))?,
+            extra_headers: auth.extra_headers.clone().unwrap_or_default(),
+        }),
+        RegistryAuthKind::Oauth => Ok(AuthScheme::Oauth {
+            handler: auth.handler.clone().ok_or_else(|| missing("handler"))?,
+            params: auth
+                .params
+                .as_ref()
+                .map(|params| {
+                    params
+                        .iter()
+                        // serde_json::Value → toml::Value via serde; drop any
+                        // value TOML can't represent (e.g. JSON null) rather
+                        // than fail the whole snapshot load.
+                        .filter_map(|(k, v)| {
+                            toml::Value::try_from(v).ok().map(|tv| (k.clone(), tv))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }),
+        RegistryAuthKind::Native => Ok(AuthScheme::Native {
+            handler: auth.handler.clone().ok_or_else(|| missing("handler"))?,
+        }),
     }
-    Ok(out)
+}
+
+/// Derive the wire-protocol mapping. A runtime-discovered provider carries
+/// provider-level globs (kept in the dist); a curated provider's protocol was
+/// resolved onto its models, so reconstruct the mapping from them.
+fn derive_protocol_mapping(p: &RegistryProvider) -> ProtocolMapping {
+    let mut globs: BTreeMap<String, ProtocolList> = BTreeMap::new();
+    for entry in &p.api_protocol {
+        for (pattern, set) in entry {
+            globs.insert(pattern.clone(), set.to_protocol_list());
+        }
+    }
+    if !globs.is_empty() {
+        return single_or_per_model(globs);
+    }
+    // Curated provider: rebuild from the per-model resolved protocols.
+    let mut per_model: BTreeMap<String, ProtocolList> = BTreeMap::new();
+    for m in &p.models {
+        per_model.insert(m.id.clone(), m.api_protocol.to_protocol_list());
+    }
+    if per_model.is_empty() {
+        return ProtocolMapping::Single(ProtocolList(vec![ApiProtocol::ChatCompletions]));
+    }
+    // When every model shares one protocol set, collapse to a single `*`.
+    let mut values = per_model.values();
+    if let Some(first) = values.next()
+        && values.all(|v| v == first)
+    {
+        return ProtocolMapping::Single(first.clone());
+    }
+    ProtocolMapping::PerModel(per_model)
+}
+
+/// A lone `*` glob collapses to `Single`; anything else stays per-pattern.
+fn single_or_per_model(globs: BTreeMap<String, ProtocolList>) -> ProtocolMapping {
+    if globs.len() == 1
+        && let Some(list) = globs.get("*")
+    {
+        return ProtocolMapping::Single(list.clone());
+    }
+    ProtocolMapping::PerModel(globs)
+}
+
+/// Derive the routing-priority class from `kind` (falling back to `community`)
+/// and `billing`.
+fn derive_class(p: &RegistryProvider) -> ProviderClass {
+    let kind = p.kind.unwrap_or(if p.community {
+        RegistryKind::ThirdParty
+    } else {
+        RegistryKind::FirstParty
+    });
+    match kind {
+        RegistryKind::Cloud => ProviderClass::BitrouterCloud,
+        RegistryKind::Gateway => ProviderClass::GatewaySubscription,
+        RegistryKind::ThirdParty => ProviderClass::ThirdPartyApi,
+        RegistryKind::FirstParty => {
+            if p.billing == Billing::Subscription {
+                ProviderClass::FirstPartySubscription
+            } else {
+                ProviderClass::FirstPartyApi
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitrouter_sdk::language_model::types::ApiProtocol;
 
     #[test]
-    fn embedded_registry_parses_cleanly() {
-        let entries = load_embedded().expect("embedded TOML files must parse");
-        // Bump this when adding a new provider — keeps the test honest about
-        // catalog growth.
-        assert_eq!(entries.len(), 9);
-    }
-
-    #[test]
-    fn bitrouter_is_first_for_onboarding_priority() {
-        let entries = load_embedded().expect("embedded TOML files must parse");
-        assert_eq!(
-            entries.first().map(|e| e.id.as_str()),
-            Some("bitrouter"),
-            "`bitrouter` must lead the catalog so the zero-config hint \
-             recommends the hosted gateway first"
-        );
+    fn only_the_cloud_gateway_is_compiled_in() {
+        let entries = load_builtins().expect("bitrouter.toml must parse");
+        assert_eq!(entries.len(), 1, "only the cloud gateway is compiled in");
+        assert_eq!(entries[0].id, "bitrouter");
     }
 
     #[test]
     fn bitrouter_parses_with_bearer_env_var() {
-        let entry = find("bitrouter").expect("`bitrouter` must be in the catalog");
+        let entry = find("bitrouter").expect("`bitrouter` must be compiled in");
         assert_eq!(entry.api_base, "https://api.bitrouter.ai/v1");
         assert_eq!(entry.auth.env_var(), Some("BITROUTER_API_KEY"));
-        use bitrouter_sdk::language_model::types::ApiProtocol;
         assert_eq!(
             entry.api_protocol.resolve("gpt-4o"),
             Some(vec![ApiProtocol::ChatCompletions])
         );
+        assert_eq!(entry.class, Some(ProviderClass::BitrouterCloud));
     }
 
     #[test]
-    fn openai_advertises_chat_and_responses() {
-        use bitrouter_sdk::language_model::types::ApiProtocol;
-        // OpenAI serves the same models over both Chat Completions and the
-        // Responses API at one base URL. Advertising the ordered set lets
-        // protocol-native routing honour an inbound Responses request without
-        // per-request config, while Chat Completions stays the preferred head
-        // (the default for any other inbound protocol).
-        let openai = find("openai").unwrap();
+    fn registry_providers_are_not_compiled_in() {
+        // The known upstreams + gateways now come from the fetched-or-cached
+        // registry and are configured by the merge — only the cloud gateway is
+        // compiled in, so `find` does not know them.
+        for id in [
+            "openai",
+            "anthropic",
+            "google",
+            "openai-codex",
+            "github-copilot",
+            "openrouter",
+            "opencode-zen",
+            "opencode-go",
+            "definitely-not-a-provider",
+        ] {
+            assert!(find(id).is_none(), "{id} must not be compiled in");
+        }
+    }
+
+    fn reg(json: serde_json::Value) -> RegistryProvider {
+        serde_json::from_value(json).expect("valid RegistryProvider fixture")
+    }
+
+    #[test]
+    fn entry_from_registry_maps_oauth_gateway() {
+        // A github-copilot-shaped registry provider: provider-level protocol
+        // globs + a device-code OAuth block whose `params` hold the only copy
+        // of the client config. `entry_from_registry` (used by `bitrouter
+        // login`) must reproduce the protocol map, the class, and — the
+        // regression — carry the device-code params (PKCE providers ignore
+        // them, device-code providers need them).
+        let provider = reg(serde_json::json!({
+            "name": "github-copilot",
+            "display_name": "GitHub Copilot",
+            "api_base": "https://api.githubcopilot.com",
+            "kind": "gateway",
+            "billing": "subscription",
+            "access": "local_oauth",
+            "status": "active",
+            "api_protocol": [
+                { "claude-*": "anthropic" },
+                { "gpt-5.5-codex": "responses" },
+                { "*": "openai" }
+            ],
+            "auth": {
+                "kind": "oauth",
+                "handler": "github-copilot",
+                "params": {
+                    "client_id": "Ov23xxx",
+                    "device_authorization_endpoint": "https://github.com/login/device/code",
+                    "token_endpoint": "https://github.com/login/oauth/access_token"
+                }
+            },
+            "models": []
+        }));
+        let entry = entry_from_registry(&provider).expect("maps");
+        assert_eq!(entry.id, "github-copilot");
+        assert_eq!(entry.class, Some(ProviderClass::GatewaySubscription));
+        // Provider-level globs resolve per model.
         assert_eq!(
-            openai.api_protocol.resolve("gpt-5.5"),
+            entry.api_protocol.resolve("claude-sonnet-4.6"),
+            Some(vec![ApiProtocol::Messages])
+        );
+        assert_eq!(
+            entry.api_protocol.resolve("gpt-5.5-codex"),
+            Some(vec![ApiProtocol::Responses])
+        );
+        assert_eq!(
+            entry.api_protocol.resolve("gpt-4o"),
+            Some(vec![ApiProtocol::ChatCompletions])
+        );
+        let AuthScheme::Oauth { params, .. } = &entry.auth else {
+            panic!("github-copilot must use an OAuth scheme");
+        };
+        assert!(params.contains_key("client_id"));
+        assert!(params.contains_key("device_authorization_endpoint"));
+        assert!(params.contains_key("token_endpoint"));
+    }
+
+    #[test]
+    fn entry_from_registry_collapses_per_model_protocol_set() {
+        // A curated provider (no provider-level globs) whose models carry the
+        // ordered [openai, responses] set: the mapping is reconstructed from
+        // the models, and the bearer env var + class are derived.
+        let provider = reg(serde_json::json!({
+            "name": "openai",
+            "api_base": "https://api.openai.com/v1",
+            "kind": "first_party",
+            "status": "active",
+            "auth": { "kind": "bearer", "env": "OPENAI_API_KEY" },
+            "models": [
+                { "id": "openai/gpt-5.5", "provider_model_id": "gpt-5.5",
+                  "api_protocol": ["openai", "responses"] }
+            ]
+        }));
+        let entry = entry_from_registry(&provider).expect("maps");
+        assert_eq!(entry.auth.env_var(), Some("OPENAI_API_KEY"));
+        assert_eq!(entry.class, Some(ProviderClass::FirstPartyApi));
+        assert_eq!(
+            entry.api_protocol.resolve("gpt-5.5"),
             Some(vec![ApiProtocol::ChatCompletions, ApiProtocol::Responses])
         );
     }
 
     #[test]
-    fn looks_up_by_id() {
-        assert!(find("bitrouter").is_some());
-        assert!(find("openai").is_some());
-        assert!(find("openai-codex").is_some());
-        assert!(find("anthropic").is_some());
-        assert!(find("google").is_some());
-        assert!(find("openrouter").is_some());
-        assert!(find("github-copilot").is_some());
-        assert!(find("opencode-zen").is_some());
-        assert!(find("opencode-go").is_some());
-        assert!(find("definitely-not-a-provider").is_none());
-    }
-
-    #[test]
-    fn opencode_zen_per_model_protocols() {
-        use bitrouter_sdk::language_model::types::ApiProtocol;
-        let zen = find("opencode-zen").unwrap();
-        // GPT family → Responses (zen serves them via /responses).
-        assert_eq!(
-            zen.api_protocol.resolve("opencode/gpt-5.5"),
-            Some(vec![ApiProtocol::Responses])
-        );
-        assert_eq!(
-            zen.api_protocol.resolve("opencode/gpt-5.3-codex"),
-            Some(vec![ApiProtocol::Responses])
-        );
-        // Claude family → Messages.
-        assert_eq!(
-            zen.api_protocol.resolve("opencode/claude-opus-4.7"),
-            Some(vec![ApiProtocol::Messages])
-        );
-        // Gemini family → Google.
-        assert_eq!(
-            zen.api_protocol.resolve("opencode/gemini-3.1-pro"),
-            Some(vec![ApiProtocol::GenerateContent])
-        );
-        // Everything else (qwen, glm, kimi, minimax, …) → Chat Completions.
-        assert_eq!(
-            zen.api_protocol.resolve("opencode/qwen3.6-plus"),
-            Some(vec![ApiProtocol::ChatCompletions])
-        );
-        assert_eq!(
-            zen.api_protocol.resolve("opencode/minimax-m2.7"),
-            Some(vec![ApiProtocol::ChatCompletions])
-        );
-    }
-
-    #[test]
-    fn opencode_go_per_model_protocols() {
-        use bitrouter_sdk::language_model::types::ApiProtocol;
-        let go = find("opencode-go").unwrap();
-        // MiniMax → Messages (go serves MiniMax via /messages).
-        assert_eq!(
-            go.api_protocol.resolve("opencode-go/minimax-m2.7"),
-            Some(vec![ApiProtocol::Messages])
-        );
-        // Everyone else (glm, kimi, deepseek, mimo, qwen) → Chat Completions.
-        assert_eq!(
-            go.api_protocol.resolve("opencode-go/glm-5.1"),
-            Some(vec![ApiProtocol::ChatCompletions])
-        );
-        assert_eq!(
-            go.api_protocol.resolve("opencode-go/kimi-k2.6"),
-            Some(vec![ApiProtocol::ChatCompletions])
-        );
-        assert_eq!(
-            go.api_protocol.resolve("opencode-go/deepseek-v4-pro"),
-            Some(vec![ApiProtocol::ChatCompletions])
-        );
-    }
-
-    #[test]
-    fn opencode_zen_and_go_share_one_env_var() {
-        // The user opens *one* opencode.ai account; both gateway tiers
-        // authenticate with the same `OPENCODE_ZEN_API_KEY`, so a
-        // subscriber to Go gets Zen pay-as-you-go billing fall-through
-        // (and vice versa) without juggling two creds.
-        assert_eq!(
-            find("opencode-zen").unwrap().auth.env_var(),
-            Some("OPENCODE_ZEN_API_KEY")
-        );
-        assert_eq!(
-            find("opencode-go").unwrap().auth.env_var(),
-            Some("OPENCODE_ZEN_API_KEY")
-        );
-    }
-
-    #[test]
-    fn github_copilot_per_model_protocols() {
-        use bitrouter_sdk::language_model::types::ApiProtocol;
-        let copilot = find("github-copilot").unwrap();
-        // Claude family → Messages.
-        assert_eq!(
-            copilot.api_protocol.resolve("claude-sonnet-4.6"),
-            Some(vec![ApiProtocol::Messages])
-        );
-        // GPT-5-codex → Responses (chat-completions returns 404 in
-        // Copilot for these models).
-        assert_eq!(
-            copilot.api_protocol.resolve("gpt-5.3-codex"),
-            Some(vec![ApiProtocol::Responses])
-        );
-        // Default → Chat Completions.
-        assert_eq!(
-            copilot.api_protocol.resolve("gpt-4o"),
-            Some(vec![ApiProtocol::ChatCompletions])
-        );
-        assert_eq!(
-            copilot.api_protocol.resolve("gemini-2.5-pro"),
-            Some(vec![ApiProtocol::ChatCompletions])
-        );
-    }
-
-    #[test]
-    fn every_entry_has_a_doc_url() {
-        for entry in all() {
-            assert!(
-                entry.doc_url.starts_with("https://"),
-                "{} missing https doc_url",
-                entry.id
-            );
-        }
+    fn entry_from_registry_rejects_provider_without_auth() {
+        let provider = reg(serde_json::json!({
+            "name": "noauth",
+            "api_base": "https://noauth.test/v1",
+            "status": "active",
+            "models": []
+        }));
+        assert!(entry_from_registry(&provider).is_err());
     }
 }

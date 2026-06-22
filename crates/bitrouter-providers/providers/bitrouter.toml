@@ -26,6 +26,7 @@
 
 id = "bitrouter"
 display_name = "BitRouter Cloud"
+class = "bitrouter-cloud"
 api_base = "https://api.bitrouter.ai/v1"
 api_protocol = "chat_completions"
 doc_url = "https://docs.bitrouter.ai"

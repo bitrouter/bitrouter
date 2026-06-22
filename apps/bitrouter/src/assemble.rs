@@ -176,6 +176,14 @@ pub async fn build_app_with_path(
     // (api_base / api_protocol / api_key-from-env). No-op when
     // `inherit_defaults: false`, and never overrides user-set fields.
     bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    // Subscription / "use your Claude Code session" logins persist their
+    // credential in the store (not the config), so apply_builtin_defaults would
+    // mark a keyless provider like `anthropic` inactive. Re-activate any
+    // provider that has a stored credential so it stays routable.
+    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+    {
+        bitrouter_providers::activate_stored_credential_providers(&mut resolved, &store);
+    }
     bitrouter_sdk::config::discover_models(&mut resolved).await;
     let routing_table = Arc::new(match config_path {
         Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),
@@ -470,6 +478,51 @@ pub async fn build_app_with_path(
         otel_exporter: otel_for_assembled,
         otel_init_error,
     })
+}
+
+/// Merge the provider registry into `config`, then re-apply built-in defaults
+/// so any provider the merge newly inserted gets its `api_base` /
+/// `api_protocol` / auth shape filled. No-op when the registry is disabled
+/// (`registry.enabled = false` or `inherit_defaults = false`).
+///
+/// The data is the **fetched** dist when reachable, else the most recent
+/// **disk cache** (stale-fallback on a network outage). On a never-fetched host
+/// with no network there is no data: the merge is a no-op and the registry is
+/// empty, so only locally-configured providers (and the compiled-in `bitrouter`
+/// cloud gateway) are routable. Network to the registry is expected to be
+/// stable, so this empty state is a rare first-run edge.
+///
+/// Called by the `serve` entry point (before [`build_app`]) and by
+/// [`crate::reload`], the two paths that build a production routing config.
+/// Kept out of `build_app` itself so that function stays free of network I/O —
+/// integration tests assemble explicit configs through it. Lives in the app
+/// layer (above `bitrouter-providers`) because the SDK's own routing table sits
+/// below the providers crate and cannot fetch the registry itself.
+pub async fn merge_registry_into(config: &mut Config) {
+    if !config.inherit_defaults || !config.registry.enabled {
+        return;
+    }
+    // Fetched dist when reachable; otherwise the disk cache. `None` (never
+    // fetched + unreachable) means an empty registry — skip the merge entirely.
+    let Some(data) = bitrouter_providers::registry::apply::load_or_cached(&config.registry).await
+    else {
+        bitrouter_providers::apply_builtin_defaults(config);
+        return;
+    };
+    bitrouter_providers::registry::apply::apply_registry(config, &data);
+    // Best-effort: pull the FULL catalog for `models_dev` auto-sync providers
+    // from models.dev (beyond the curated canonical subset the registry ships).
+    // A fetch failure leaves the curated models in place — they already route —
+    // so this never blocks startup on an offline host.
+    match bitrouter_providers::catalog::fetch::fetch_catalog().await {
+        Ok(catalog) => {
+            bitrouter_providers::registry::apply::apply_catalog(config, &data, &catalog);
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "models.dev catalog fetch failed; using curated models only");
+        }
+    }
+    bitrouter_providers::apply_builtin_defaults(config);
 }
 
 /// Build the server-side tool loop from `config.server_tools`. Returns `None`
