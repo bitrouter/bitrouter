@@ -2050,6 +2050,11 @@ struct MessagesStreamDecoder {
     /// for the block that just closed. `None` for an index never opened or for a
     /// block kind that carries no lifecycle marker (tool / web-search results).
     block_kinds: Vec<Option<BlockKind>>,
+    /// per content-block index → the thinking block's `signature`, accumulated
+    /// from its terminal `signature_delta` so `content_block_stop` can attach it
+    /// to the emitted [`StreamPart::ReasoningEnd`] (reasoning continuity — without
+    /// it a replayed thinking block is unsigned and Anthropic rejects it).
+    block_signatures: Vec<Option<String>>,
     usage: Usage,
 }
 
@@ -2213,6 +2218,21 @@ impl StreamDecoder for MessagesStreamDecoder {
                             });
                         }
                     }
+                    Some("signature_delta") => {
+                        // The thinking block's continuity signature, emitted just
+                        // before its `content_block_stop`. Stash it per-index so
+                        // the `ReasoningEnd` for this block can carry it; it does
+                        // not map to a delta part of its own.
+                        if let Some(sig) = delta
+                            .and_then(|d| d.get("signature"))
+                            .and_then(|s| s.as_str())
+                        {
+                            while self.block_signatures.len() <= index {
+                                self.block_signatures.push(None);
+                            }
+                            self.block_signatures[index] = Some(sig.to_string());
+                        }
+                    }
                     // any other delta type: ignore, do not error
                     _ => {}
                 }
@@ -2229,6 +2249,7 @@ impl StreamDecoder for MessagesStreamDecoder {
                     }),
                     Some(BlockKind::Thinking) => parts.push(StreamPart::ReasoningEnd {
                         id: index.to_string(),
+                        signature: self.block_signatures.get(index).cloned().flatten(),
                     }),
                     _ => {}
                 }
@@ -2626,9 +2647,32 @@ impl StreamEncoder for MessagesStreamEncoder {
             StreamPart::ReasoningStart { .. } => {
                 self.open_fresh_block(&mut frames, EncoderBlockKind::Thinking);
             }
-            StreamPart::TextEnd { .. } | StreamPart::ReasoningEnd { .. } => {
+            StreamPart::TextEnd { .. } => {
                 // Close the block the matching start opened; `close_block` is a
                 // no-op if nothing is open, so a stray end is harmless.
+                self.close_block(&mut frames);
+            }
+            StreamPart::ReasoningEnd { signature, .. } => {
+                // Re-emit the thinking block's continuity signature as a
+                // `signature_delta` (Anthropic's wire shape) just before its
+                // `content_block_stop`, so a streamed thinking block re-encodes
+                // signed and a follow-up turn replays it without an
+                // "Invalid `signature`" rejection. Only when a thinking block is
+                // actually open — a stray/empty reasoning-end stays a no-op.
+                // <https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking>
+                if let Some(sig) = signature
+                    && self.block_open
+                    && self.block_kind == Some(EncoderBlockKind::Thinking)
+                {
+                    frames.push(Self::ev(
+                        "content_block_delta",
+                        serde_json::json!({
+                            "type": "content_block_delta",
+                            "index": self.block_index,
+                            "delta": { "type": "signature_delta", "signature": sig },
+                        }),
+                    ));
+                }
                 self.close_block(&mut frames);
             }
             StreamPart::TextDelta { text } => {

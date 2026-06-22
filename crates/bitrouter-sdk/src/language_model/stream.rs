@@ -474,7 +474,10 @@ mod tests {
             StreamPart::TextStart { id: "0".into() },
             StreamPart::TextEnd { id: "0".into() },
             StreamPart::ReasoningStart { id: "1".into() },
-            StreamPart::ReasoningEnd { id: "1".into() },
+            StreamPart::ReasoningEnd {
+                id: "1".into(),
+                signature: None,
+            },
         ] {
             assert!(
                 !StreamInterest::all().matches(&marker),
@@ -494,7 +497,10 @@ mod tests {
             StreamPart::TextStart { id: "0".into() },
             StreamPart::TextEnd { id: "0".into() },
             StreamPart::ReasoningStart { id: "1".into() },
-            StreamPart::ReasoningEnd { id: "1".into() },
+            StreamPart::ReasoningEnd {
+                id: "1".into(),
+                signature: None,
+            },
         ] {
             acc.observe(&marker);
         }
