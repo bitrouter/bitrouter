@@ -19,6 +19,17 @@ use std::sync::Arc;
 use crate::daemon::DaemonReloader;
 use crate::policy::PolicyStore;
 
+/// Re-activate providers that have a credential in the OAuth store, loading the
+/// default store. Best-effort: an unreadable store is a no-op. Mirrors the
+/// startup pass in `assemble.rs` so a subscription / Claude Code session
+/// provider survives a hot-reload instead of dropping out of routing.
+fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Config) {
+    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+    {
+        bitrouter_providers::activate_stored_credential_providers(config, &store);
+    }
+}
+
 /// Whether the daemon is running against a `bitrouter.yaml` on disk
 /// (re-readable on reload) or a zero-config in-memory default
 /// (rebuilt by re-running [`bitrouter_providers::zero_config`]).
@@ -84,6 +95,12 @@ impl DaemonReloader for AppReloader {
                     // credentials (a `bitrouter reload --env` that exports a
                     // provider key activates that provider's canonical models).
                     crate::assemble::merge_registry_into(&mut fresh).await;
+                    // Then re-activate any provider that has an OAuth /
+                    // subscription credential in the store — those live outside
+                    // the config, so the registry's credential gate can't see
+                    // them and the merge's `apply_builtin_defaults` would leave a
+                    // keyless provider inactive. Runs after the merge.
+                    activate_stored_credential_providers(&mut fresh);
                     self.routing_table.replace_config(fresh).await
                 }
                 Err(e) => Err(e),
@@ -105,6 +122,10 @@ impl DaemonReloader for AppReloader {
                 // Merge the registry so the canonical catalog + every
                 // credentialed BYOK provider is routable after a reload too.
                 crate::assemble::merge_registry_into(&mut fresh).await;
+                // Then re-activate any provider with a stored OAuth / subscription
+                // credential (invisible to the registry's config/env credential
+                // gate), after the merge re-applies builtin defaults.
+                activate_stored_credential_providers(&mut fresh);
                 self.routing_table.replace_config(fresh).await
             }
         };

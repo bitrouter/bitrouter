@@ -129,10 +129,7 @@ pub async fn run(cfg: &bitrouter_sdk::config::Config, opts: SpawnOptions) -> Res
     };
 
     // Locate the binary; prompt-to-install when it's missing.
-    let binary = match resolve_binary(spec.binary) {
-        Some(path) => path,
-        None => ensure_installed(&spec, opts.no_install).await?,
-    };
+    let binary = ensure_agent_installed(opts.agent, opts.no_install).await?;
 
     // Best-effort reachability note — never blocks the launch. The agent
     // would fail on its own if the daemon is down; surfacing it up front is
@@ -330,6 +327,19 @@ fn home_dir() -> Option<PathBuf> {
     #[cfg(not(windows))]
     {
         std::env::var_os("HOME").map(PathBuf::from)
+    }
+}
+
+/// Ensure `agent`'s binary is installed — locating it on `PATH` (+
+/// `~/.local/bin`) and offering the official native installer when permitted —
+/// and return its path. Shared by `bitrouter spawn` and `bitrouter login
+/// anthropic` (which needs the `claude` CLI to sign the user in) so both go
+/// through one detect-and-install path.
+pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) -> Result<PathBuf> {
+    let spec = agent.spec();
+    match resolve_binary(spec.binary) {
+        Some(path) => Ok(path),
+        None => ensure_installed(&spec, no_install).await,
     }
 }
 
