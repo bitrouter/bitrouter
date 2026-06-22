@@ -605,8 +605,9 @@ fn build_server_tool_loop(
 /// `Transport::authorise` default — today: `bitrouter` (the official
 /// hosted gateway; OAuth from `bitrouter cloud login` with a
 /// `BITROUTER_API_KEY` fallback), GitHub Copilot (device-code OAuth +
-/// token exchange), Anthropic (dual API-key / Pro/Max subscription
-/// OAuth), OpenAI Codex (ChatGPT-subscription OAuth).
+/// token exchange), Anthropic Platform API (`x-api-key`), the Claude
+/// Pro/Max subscription (`claude-code`, OAuth / live `~/.claude` session),
+/// OpenAI Codex (ChatGPT-subscription OAuth).
 fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
     let mut appliers = AuthAppliers::new();
     let store_path = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
@@ -621,14 +622,24 @@ fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
             .context("building the github-copilot AuthApplier")?;
         appliers.register("github-copilot", Arc::new(applier));
     }
-    // The Anthropic applier is registered unconditionally when the
-    // provider is configured, so an existing `${ANTHROPIC_API_KEY}` user
-    // gets the same fallthrough behaviour as before — the applier
-    // forwards the inline key when no OAuth credential is in the store.
+    // The Anthropic Platform-API applier is registered when the provider is
+    // configured, so an existing `${ANTHROPIC_API_KEY}` user gets the same
+    // fallthrough behaviour as before — the applier forwards the inline key
+    // when no stored key is present. It is `x-api-key`-only; the Claude
+    // Pro/Max subscription lives in the separate `claude-code` provider below.
     if config.providers.contains_key("anthropic") {
-        let applier = bitrouter_providers::anthropic::AnthropicOAuthApplier::new(&store_path)
+        let applier = bitrouter_providers::anthropic::AnthropicApiKeyApplier::new(&store_path)
             .context("building the anthropic AuthApplier")?;
         appliers.register("anthropic", Arc::new(applier));
+    }
+    // The Claude Pro/Max subscription applier (OAuth / live `~/.claude`
+    // session). Registered under `claude-code`, distinct from the
+    // Platform-API `anthropic` provider above.
+    if config.providers.contains_key("claude-code") {
+        let applier =
+            bitrouter_providers::claude_code::ClaudeCodeAuthApplier::new(&store_path)
+                .context("building the claude-code AuthApplier")?;
+        appliers.register("claude-code", Arc::new(applier));
     }
     if config.providers.contains_key("openai-codex") {
         let applier = bitrouter_providers::codex::OpenAiCodexAuthApplier::new(&store_path)

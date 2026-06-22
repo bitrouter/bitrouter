@@ -78,6 +78,8 @@ mod apply;
 pub mod builtin;
 pub mod catalog;
 #[cfg(feature = "pkce")]
+pub mod claude_code;
+#[cfg(feature = "pkce")]
 pub mod codex;
 pub mod copilot;
 mod entry;

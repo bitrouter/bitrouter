@@ -55,7 +55,7 @@ pub struct OpenAiCodexAuthApplier {
     token_endpoint: String,
     cache: Arc<Mutex<std::collections::HashMap<String, OAuthToken>>>,
     /// Per-label single-flight gate around disk-read → refresh →
-    /// persist. See [`crate::anthropic::AnthropicOAuthApplier`] for the
+    /// persist. See [`crate::claude_code::ClaudeCodeAuthApplier`] for the
     /// rationale (concurrent refreshes can have the older refresh_token
     /// invalidated per RFC 6749 §6).
     refresh_gates: Arc<Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
