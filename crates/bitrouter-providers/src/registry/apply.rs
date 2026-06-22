@@ -6,8 +6,10 @@
 //! it. The rules (from the feature's principles):
 //!
 //! 1. Route a *canonical* model id to a provider that provides it.
-//! 2. Only merge **BYOK** registry providers — never private (`byok: false`)
-//!    ones (the pooled `bitrouter` provider among them).
+//! 2. Merge every **public** registry provider — never `private` ones
+//!    (`access: private`, the pooled `bitrouter` provider among them). Public
+//!    `local_oauth` / `local_pkce` providers ARE merged (the OSS authenticates
+//!    them with a local login); only the activation credential differs.
 //! 3. The built-in `bitrouter` provider is the hosted gateway and serves
 //!    **every** canonical model.
 //! 4. Providers carry a [`ProviderClass`]; the auto-cascade orders by it.
@@ -32,8 +34,8 @@ use crate::registry::types::{
 };
 
 /// The provider id of the hosted bitrouter gateway. The pooled registry entry
-/// of the same name is `byok: false` and so is filtered out of the merge — the
-/// gateway is served by the compiled-in [`ProviderEntry`](crate::ProviderEntry)
+/// of the same name is `access: private` and so is filtered out of the merge —
+/// the gateway is served by the compiled-in [`ProviderEntry`](crate::ProviderEntry)
 /// of this id instead, and serves the whole canonical list.
 const BITROUTER_CLOUD_ID: &str = "bitrouter";
 
@@ -87,10 +89,11 @@ pub fn apply_registry(config: &mut Config, data: &RegistryData) {
     }
     apply_cloud_all_canonical(config, data);
     for provider in &data.providers {
-        // Principle #2: only BYOK, active registry providers. The pooled
-        // `bitrouter` entry is `byok: false`, so it's filtered here even before
-        // the id guard below.
-        if !provider.is_active() || !provider.byok || provider.name == BITROUTER_CLOUD_ID {
+        // Principle #2: merge every public, active registry provider. The pooled
+        // `bitrouter` entry is `access: private`, so it's filtered here even
+        // before the id guard below.
+        if !provider.is_active() || !provider.is_mergeable() || provider.name == BITROUTER_CLOUD_ID
+        {
             continue;
         }
         merge_provider(config, provider);
@@ -128,7 +131,7 @@ fn apply_cloud_all_canonical(config: &mut Config, data: &RegistryData) {
     }
 }
 
-/// Merge one BYOK registry provider into the config.
+/// Merge one public (non-private) registry provider into the config.
 fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     let id = provider.name.as_str();
     let class = classify(provider);
@@ -144,6 +147,13 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         if existing.models.is_empty() {
             existing.models = build_models(provider, has_builtin);
         }
+        // Runtime-discovered gateway (a `v1_models` feed, no curated models):
+        // turn on `/models` discovery so an explicitly-listed gateway populates
+        // its catalog the same way a zero-config one does. Never flip it off if
+        // the user set it, and never when curated models are present.
+        if provider.probes_v1_models() && existing.models.is_empty() && !existing.auto_discover {
+            existing.auto_discover = true;
+        }
         // For a registry-only provider the user listed bare, supply the base
         // URL; the wire protocol rides on each model (resolved by the dist), and
         // a built-in's shape is left to `apply_builtin_defaults`.
@@ -157,11 +167,15 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     let Some(api_key) = env_lookup(&env_var_for(provider)).filter(|v| !v.is_empty()) else {
         return;
     };
+    let models = build_models(provider, has_builtin);
+    // A `v1_models` gateway has no curated models — probe `/models` at startup.
+    let auto_discover = models.is_empty() && provider.probes_v1_models();
     let mut entry = ProviderConfig {
         api_key,
-        models: build_models(provider, has_builtin),
+        models,
         class: Some(class),
         active: true,
+        auto_discover,
         ..ProviderConfig::default()
     };
     if has_builtin {
@@ -275,8 +289,8 @@ fn map_pricing(p: &RegistryPricing) -> Option<PricingConfig> {
 mod tests {
     use super::*;
     use crate::registry::types::{
-        CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet, RegistryModel,
-        RegistryProtocol,
+        AutoSync, AutoSyncFeed, CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet,
+        RegistryAccess, RegistryModel, RegistryProtocol,
     };
     use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
@@ -301,12 +315,13 @@ mod tests {
                 rate_limits: None,
             }],
             status: "active".to_string(),
-            auto_discover: false,
             kind: None,
             auth: None,
             doc_url: None,
             community: false,
-            byok: true,
+            access: Some(RegistryAccess::ApiKey),
+            byok: Some(true),
+            auto_sync: None,
             billing: Billing::Token,
         }
     }
@@ -436,15 +451,49 @@ mod tests {
     }
 
     #[test]
-    fn byok_false_provider_is_never_merged() {
+    fn private_provider_is_never_merged() {
         with_env("PRIVATEPROV_API_KEY", Some("sk-test"), || {
             let mut config = Config::default();
             let mut p = provider("privateprov");
-            p.byok = false;
+            p.access = Some(RegistryAccess::Private);
             apply_registry(&mut config, &data_with(vec![p], vec![]));
             assert!(
                 !config.providers.contains_key("privateprov"),
-                "byok=false ⇒ never merged, even with a credential set"
+                "access=private ⇒ never merged, even with a credential set"
+            );
+        });
+    }
+
+    #[test]
+    fn legacy_byok_false_still_resolves_to_private() {
+        // An older dist / cache carries the derived `byok` alias with no
+        // explicit `access`. `byok: false` must still be read as `private`.
+        let mut p = provider("legacyprivate");
+        p.access = None;
+        p.byok = Some(false);
+        assert_eq!(p.access(), RegistryAccess::Private);
+        assert!(!p.is_mergeable());
+    }
+
+    #[test]
+    fn v1_models_gateway_gets_auto_discover_on_merge() {
+        with_env("GATEWAYPROV_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            let mut p = provider("gatewayprov");
+            p.models = Vec::new(); // a gateway curates no models
+            p.auto_sync = Some(AutoSync {
+                feed: AutoSyncFeed::V1Models,
+                key: None,
+                url: None,
+            });
+            apply_registry(&mut config, &data_with(vec![p], vec![]));
+            let merged = config
+                .providers
+                .get("gatewayprov")
+                .expect("v1_models gateway with a credential is merged");
+            assert!(
+                merged.auto_discover,
+                "a v1_models gateway with no curated models must probe /models"
             );
         });
     }

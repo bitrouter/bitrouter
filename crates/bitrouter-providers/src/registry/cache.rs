@@ -161,7 +161,7 @@ fn default_cache_dir() -> Result<PathBuf, CacheError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::types::{CanonicalModel, RegistryProvider};
+    use crate::registry::types::{CanonicalModel, RegistryAccess, RegistryProvider};
 
     fn sample_data() -> RegistryData {
         RegistryData {
@@ -173,12 +173,13 @@ mod tests {
                 protocol_endpoints: None,
                 models: Vec::new(),
                 status: "active".into(),
-                auto_discover: false,
                 kind: None,
                 auth: None,
                 doc_url: None,
                 community: false,
-                byok: true,
+                access: Some(RegistryAccess::ApiKey),
+                byok: Some(true),
+                auto_sync: None,
                 billing: Default::default(),
             }],
             canonical: vec![CanonicalModel {

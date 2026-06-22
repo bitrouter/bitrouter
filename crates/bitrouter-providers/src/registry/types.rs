@@ -113,6 +113,60 @@ pub enum RegistryKind {
     ThirdParty,
 }
 
+/// How a caller obtains access to a provider — the registration / credential
+/// *obtainment* model (orthogonal to [`RegistryAuthKind`], which is the wire
+/// placement). Mirrors the registry `access` field; replaces the old `byok`
+/// boolean (now derived: `byok` iff [`RegistryAccess::ApiKey`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryAccess {
+    /// Public self-registration → a portable API key (the BYOK case). The OSS
+    /// auto-enables on the env key; the cloud may pool and offers it on its
+    /// BYOK page.
+    #[default]
+    ApiKey,
+    /// Public, but credentials are minted by a local browser/device OAuth flow
+    /// (no portable key) — e.g. GitHub Copilot. The OSS obtains it via
+    /// `bitrouter login <provider>`; not poolable / BYOK-able by the cloud.
+    LocalOauth,
+    /// Public, but credentials come from a local OAuth+PKCE flow — e.g. OpenAI
+    /// Codex against a ChatGPT subscription. Same consumer consequences as
+    /// [`RegistryAccess::LocalOauth`].
+    LocalPkce,
+    /// No public registration — platform-pooled / invite-only (the bitrouter
+    /// pool, an anonymous aggregator). Never BYOK; the OSS never merges it.
+    Private,
+}
+
+/// The upstream catalog feed a provider's models are synced/discovered from —
+/// mirrors the registry `auto_sync.feed`. A consumer reads this channel at
+/// runtime to pull the provider's FULL catalog (beyond the curated canonical
+/// subset); the canonical list keeps the highest route priority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoSyncFeed {
+    /// The public models.dev catalog (`https://models.dev/api.json`), keyed by
+    /// [`AutoSync::key`]. Carries pricing / capability metadata.
+    ModelsDev,
+    /// The provider's own `GET {url ?? api_base}/models` endpoint (ids only).
+    V1Models,
+}
+
+/// A provider's catalog feed — mirrors the registry `auto_sync` block.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct AutoSync {
+    /// Which feed the catalog comes from.
+    pub feed: AutoSyncFeed,
+    /// models.dev provider key (only meaningful for `models_dev`); defaults to
+    /// the provider name when absent.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Catalog base URL override (only meaningful for `v1_models`); defaults to
+    /// the provider's `api_base` when absent.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
 /// Outbound credential scheme declared by the registry — see the registry's
 /// `Auth`. Only public config (env/header/handler names + public params); never
 /// a secret. Maps onto the compiled-in [`AuthScheme`](crate::AuthScheme).
@@ -164,9 +218,10 @@ pub enum Billing {
 
 /// One provider entry from `providers.json` (the provider view). For a curated
 /// provider the source-YAML glob `api_protocol` / `rate_limits` are resolved
-/// onto each model (so the top-level globs are empty); for an `auto_discover`
-/// provider the catalog is runtime-discovered, so the provider-level
-/// `api_protocol` globs are kept here and applied to discovered models.
+/// onto each model (so the top-level globs are empty); for a runtime-discovered
+/// provider (one with an [`AutoSync`] feed and no curated models) the
+/// provider-level `api_protocol` globs are kept here and applied to discovered
+/// models.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryProvider {
     /// Provider id (equals the registry filename stem and the `name` field).
@@ -177,8 +232,8 @@ pub struct RegistryProvider {
     /// The provider's public upstream base URL (HTTPS).
     pub api_base: String,
     /// Provider-level wire-protocol globs (pattern → protocol set). Present only
-    /// for `auto_discover` providers; empty for curated providers (resolved onto
-    /// each model instead).
+    /// for runtime-discovered providers (an [`AutoSync`] feed + no curated
+    /// models); empty for curated providers (resolved onto each model instead).
     #[serde(default)]
     pub api_protocol: Vec<BTreeMap<String, ProtocolSet>>,
     /// Per-protocol base-URL override, keyed by protocol name.
@@ -189,9 +244,6 @@ pub struct RegistryProvider {
     pub models: Vec<RegistryModel>,
     /// `active` | `staging` | `suspended` | `withdrawn` — only `active` routes.
     pub status: String,
-    /// Transport+auth-only provider whose catalog is discovered at runtime.
-    #[serde(default)]
-    pub auto_discover: bool,
     /// Provider classification, if declared (drives the routing class). When
     /// absent the consumer derives it from `community`.
     #[serde(default)]
@@ -206,22 +258,62 @@ pub struct RegistryProvider {
     /// first-party / official upstream.
     #[serde(default)]
     pub community: bool,
-    /// Whether callers may bring their own key. Only BYOK providers are merged.
-    #[serde(default = "default_true")]
-    pub byok: bool,
+    /// How a caller obtains access to this provider — see [`RegistryAccess`].
+    /// `None` in an older dist that predates the field; resolve via
+    /// [`RegistryProvider::access`], which falls back to the derived `byok`.
+    #[serde(default)]
+    pub access: Option<RegistryAccess>,
+    /// Derived back-compat alias of `access` still emitted by the dist
+    /// (`byok` iff `access == api_key`). Only read as a fallback when `access`
+    /// is absent (an older dist / cache). `None` when neither is present.
+    #[serde(default)]
+    pub byok: Option<bool>,
+    /// The provider's catalog feed, if any — the channel a consumer reads at
+    /// runtime to pull the FULL model catalog (see [`AutoSync`]).
+    #[serde(default)]
+    pub auto_sync: Option<AutoSync>,
     /// How a caller pays this provider (`token` | `subscription`).
     #[serde(default)]
     pub billing: Billing,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl RegistryProvider {
     /// Whether this provider is routable (`status == "active"`).
     pub fn is_active(&self) -> bool {
         self.status == "active"
+    }
+
+    /// The credential-obtainment model — the explicit `access` when present,
+    /// else derived from the legacy `byok` alias (`byok: false` ⇒ private), else
+    /// the [`RegistryAccess::ApiKey`] default.
+    pub fn access(&self) -> RegistryAccess {
+        self.access.unwrap_or(match self.byok {
+            Some(false) => RegistryAccess::Private,
+            _ => RegistryAccess::ApiKey,
+        })
+    }
+
+    /// Whether the OSS merges this provider at all. Everything public is merged
+    /// (the OSS picks the right auth: env key for `api_key`, a local login for
+    /// `local_oauth` / `local_pkce`); only `private` (the pool) is skipped.
+    pub fn is_mergeable(&self) -> bool {
+        self.access() != RegistryAccess::Private
+    }
+
+    /// The catalog feed used for runtime full-catalog discovery, if declared.
+    pub fn discovery_feed(&self) -> Option<&AutoSync> {
+        self.auto_sync.as_ref()
+    }
+
+    /// Whether the OSS should probe `GET {url ?? api_base}/models` at startup to
+    /// pull this provider's catalog — true for a `v1_models` [`AutoSync`] feed
+    /// (the gateways). A `models_dev` feed is discovered from models.dev instead
+    /// (see the catalog fetch), so it does not set the SDK's `auto_discover`.
+    pub fn probes_v1_models(&self) -> bool {
+        matches!(
+            self.auto_sync.as_ref().map(|a| a.feed),
+            Some(AutoSyncFeed::V1Models)
+        )
     }
 }
 
@@ -325,10 +417,12 @@ mod tests {
                 "api_base": "https://api.anthropic.com/v1",
                 "auth_scheme": "x-api-key",
                 "billing": "token",
+                "access": "api_key",
                 "byok": true,
                 "community": false,
                 "status": "active",
                 "weight": 1,
+                "auto_sync": { "feed": "models_dev" },
                 "models": [
                     {
                         "id": "anthropic/claude-sonnet-4.6",
@@ -355,8 +449,20 @@ mod tests {
                 "id": "bitrouter",
                 "name": "bitrouter",
                 "api_base": "https://provider-api.bitrouter.ai/v1",
+                "access": "private",
                 "byok": false,
                 "status": "active",
+                "models": []
+            },
+            {
+                "id": "github-copilot",
+                "name": "github-copilot",
+                "api_base": "https://api.githubcopilot.com",
+                "access": "local_oauth",
+                "byok": false,
+                "status": "active",
+                "api_protocol": [ { "*": "openai" } ],
+                "auto_sync": { "feed": "v1_models" },
                 "models": []
             }
         ]
@@ -376,11 +482,12 @@ mod tests {
     #[test]
     fn parses_providers_envelope() {
         let env: Envelope<RegistryProvider> = serde_json::from_str(PROVIDERS_FIXTURE).unwrap();
-        assert_eq!(env.data.len(), 3);
+        assert_eq!(env.data.len(), 4);
         let anthropic = &env.data[0];
         assert_eq!(anthropic.name, "anthropic");
         assert!(anthropic.is_active());
-        assert!(anthropic.byok);
+        assert_eq!(anthropic.access(), RegistryAccess::ApiKey);
+        assert!(anthropic.is_mergeable());
         assert!(!anthropic.community);
         assert_eq!(anthropic.billing, Billing::Token);
         let m = &anthropic.models[0];
@@ -401,8 +508,16 @@ mod tests {
 
         // The coding-plan defaults to subscription billing.
         assert_eq!(env.data[1].billing, Billing::Subscription);
-        // The pool provider is byok=false → it will be filtered out at merge.
-        assert!(!env.data[2].byok);
+        // The pool provider is access=private → filtered out at merge.
+        assert_eq!(env.data[2].access(), RegistryAccess::Private);
+        assert!(!env.data[2].is_mergeable());
+        // The gateway is a v1_models runtime-discovered catalog with a local
+        // OAuth login — mergeable (the OSS logs in locally) and probes /models.
+        let copilot = &env.data[3];
+        assert_eq!(copilot.access(), RegistryAccess::LocalOauth);
+        assert!(copilot.is_mergeable());
+        assert!(copilot.probes_v1_models());
+        assert!(copilot.discovery_feed().is_some());
     }
 
     #[test]

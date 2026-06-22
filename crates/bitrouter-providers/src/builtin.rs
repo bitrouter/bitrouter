@@ -140,7 +140,7 @@ fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError
     }
 }
 
-/// Derive the wire-protocol mapping. An `auto_discover` provider carries
+/// Derive the wire-protocol mapping. A runtime-discovered provider carries
 /// provider-level globs (kept in the dist); a curated provider's protocol was
 /// resolved onto its models, so reconstruct the mapping from them.
 fn derive_protocol_mapping(p: &RegistryProvider) -> ProtocolMapping {
