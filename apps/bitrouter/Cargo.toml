@@ -30,6 +30,7 @@ sha2.workspace = true
 base64.workspace = true
 rand.workspace = true
 hex.workspace = true
+uuid = { workspace = true }
 serde-saphyr.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true

@@ -662,20 +662,32 @@ async fn e2e_full_stack_otel_span_hierarchy() {
     assert_eq!(hop_chat.trace_id, root_chat.trace_id);
     assert_eq!(settle.trace_id, root_chat.trace_id);
 
-    // Required GenAI attrs on the per-hop CLIENT span (current semconv:
-    // https://opentelemetry.io/docs/specs/semconv/gen-ai/).
+    // The single GenAI generation lives on the ROOT chat span (one generation
+    // per request); the per-hop CLIENT span is a plain HTTP span carrying only
+    // routing/destination detail. Marking the hop with `gen_ai.*` too would make
+    // a gen_ai-aware backend count two generations per request. Mirrors the unit
+    // test `hop_is_client_span_single_genai_generation_lives_on_root`.
+    // https://opentelemetry.io/docs/specs/semconv/gen-ai/
     assert_eq!(
-        span_str_attr(hop_chat, "gen_ai.operation.name"),
+        span_str_attr(root_chat, "gen_ai.operation.name"),
         Some("chat")
     );
     assert_eq!(
-        span_str_attr(hop_chat, "gen_ai.provider.name"),
+        span_str_attr(root_chat, "gen_ai.provider.name"),
         Some("mock"),
-        "the hop carries the provider id under the current spec name"
+        "the root generation carries the provider id under the current spec name"
     );
     assert_eq!(
-        span_str_attr(hop_chat, "gen_ai.request.model"),
+        span_str_attr(root_chat, "gen_ai.request.model"),
         Some("test-model")
+    );
+
+    // The hop is a plain HTTP CLIENT span: no gen_ai generation markers, just
+    // the destination address parsed from the target's api_base.
+    assert_eq!(
+        span_str_attr(hop_chat, "gen_ai.operation.name"),
+        None,
+        "the per-hop CLIENT span must not carry a gen_ai generation"
     );
     assert!(
         span_str_attr(hop_chat, "server.address").is_some(),

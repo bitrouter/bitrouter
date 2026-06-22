@@ -49,7 +49,25 @@ pub struct OtelConfig {
     /// Default [`ContentCaptureMode::Off`] — no message bodies leave the
     /// process. Override with `BITROUTER_OBSERVE_CONTENT_CAPTURE=full`.
     pub content_capture: ContentCaptureMode,
+
+    /// Maximum byte length for a single captured content attribute
+    /// (`gen_ai.input.messages` / `gen_ai.output.messages`) under
+    /// [`ContentCaptureMode::Full`]. A conservative cap so a pathological
+    /// prompt or response can't produce an oversized span the collector or
+    /// backend would reject. Defaults to [`DEFAULT_CONTENT_ATTR_MAX_BYTES`];
+    /// override with `BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES`.
+    pub content_attr_max_bytes: usize,
+
+    /// Optional bearer token. When set, an `Authorization: Bearer <token>`
+    /// header is injected into the OTLP request (see
+    /// [`OtelConfig::effective_headers`]), authenticating the exporter to a
+    /// collector that requires it. `None` leaves the request unauthenticated
+    /// (anonymous export).
+    pub bearer_token: Option<String>,
 }
+
+/// Default cap for a single captured content attribute (128 KiB).
+pub const DEFAULT_CONTENT_ATTR_MAX_BYTES: usize = 128 * 1024;
 
 /// Subset of OTel-spec sampler kinds the SDK actually supports. The default
 /// (`parentbased_always_on`) matches the OTel-spec default — every trace is
@@ -134,7 +152,33 @@ impl Default for OtelConfig {
             traces: TraceConfig::default(),
             metrics: MetricsConfig::default(),
             content_capture: ContentCaptureMode::Off,
+            content_attr_max_bytes: DEFAULT_CONTENT_ATTR_MAX_BYTES,
+            bearer_token: None,
         }
+    }
+}
+
+impl OtelConfig {
+    /// Headers handed to the OTLP transport: the configured [`headers`] plus an
+    /// `Authorization: Bearer <token>` entry when [`bearer_token`] is set. An
+    /// explicit `Authorization` header in [`headers`] is preserved (the bearer
+    /// only fills the slot when absent).
+    ///
+    /// [`headers`]: OtelConfig::headers
+    /// [`bearer_token`]: OtelConfig::bearer_token
+    pub fn effective_headers(&self) -> HashMap<String, String> {
+        let mut headers = self.headers.clone();
+        if let Some(token) = &self.bearer_token {
+            // Don't clobber an operator-supplied auth header — match the slot
+            // case-insensitively (HTTP header names are case-insensitive).
+            let has_auth = headers
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("authorization"));
+            if !has_auth {
+                headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+            }
+        }
+        headers
     }
 }
 
@@ -210,6 +254,12 @@ impl OtelConfig {
             && let Some(mode) = parse_content_capture(&s)
         {
             self.content_capture = mode;
+        }
+        if let Some(s) = lookup("BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES")
+            && let Ok(n) = s.parse::<usize>()
+            && n > 0
+        {
+            self.content_attr_max_bytes = n;
         }
         self
     }
@@ -293,6 +343,74 @@ mod tests {
             Some("secret")
         );
         assert_eq!(cfg.headers.get("x-team").map(String::as_str), Some("infra"));
+    }
+
+    #[test]
+    fn effective_headers_injects_bearer_when_set() {
+        // No token → headers unchanged.
+        let cfg = OtelConfig::default();
+        assert!(!cfg.effective_headers().contains_key("Authorization"));
+
+        // Token set → Authorization: Bearer <token> added.
+        let cfg = OtelConfig {
+            bearer_token: Some("bra_abc".to_string()),
+            ..OtelConfig::default()
+        };
+        assert_eq!(
+            cfg.effective_headers()
+                .get("Authorization")
+                .map(String::as_str),
+            Some("Bearer bra_abc")
+        );
+
+        // An explicit Authorization header wins over the bearer.
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer explicit".to_string());
+        let cfg = OtelConfig {
+            headers,
+            bearer_token: Some("bra_abc".to_string()),
+            ..OtelConfig::default()
+        };
+        assert_eq!(
+            cfg.effective_headers()
+                .get("Authorization")
+                .map(String::as_str),
+            Some("Bearer explicit")
+        );
+
+        // A lowercase custom auth header also blocks injection (case-insensitive).
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), "Bearer lower".to_string());
+        let cfg = OtelConfig {
+            headers,
+            bearer_token: Some("bra_abc".to_string()),
+            ..OtelConfig::default()
+        };
+        let eff = cfg.effective_headers();
+        assert!(!eff.contains_key("Authorization"));
+        assert_eq!(
+            eff.get("authorization").map(String::as_str),
+            Some("Bearer lower")
+        );
+    }
+
+    #[test]
+    fn content_attr_max_bytes_defaults_and_env_override() {
+        assert_eq!(
+            OtelConfig::default().content_attr_max_bytes,
+            DEFAULT_CONTENT_ATTR_MAX_BYTES
+        );
+        let cfg = OtelConfig::default().with_env_from(env(&[(
+            "BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES",
+            "262144",
+        )]));
+        assert_eq!(cfg.content_attr_max_bytes, 262_144);
+        // Invalid / zero leaves the default untouched.
+        let cfg = OtelConfig::default().with_env_from(env(&[(
+            "BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES",
+            "bogus",
+        )]));
+        assert_eq!(cfg.content_attr_max_bytes, DEFAULT_CONTENT_ATTR_MAX_BYTES);
     }
 
     #[test]

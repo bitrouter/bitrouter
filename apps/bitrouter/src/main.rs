@@ -861,6 +861,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // disabled or unreachable with no cache.
     bitrouter::merge_registry_into(&mut cfg).await;
     announce_zero_config(source, &cfg);
+    maybe_announce_telemetry(home);
     let listen = cfg.server.listen.clone();
     // For a `File` source we resolve the socket against the config
     // file's directory (preserves any user override). For `Default`
@@ -1158,6 +1159,45 @@ fn announce_zero_config(
 ///
 /// Rendered directly (not through `error_report::info`) because that helper
 /// is single-line by design.
+/// First-run telemetry notice, shown exactly once per install (guarded by a
+/// sentinel in the home). BitRouter ships telemetry **off by default**; this
+/// notice exists so opting in is an informed, one-time choice. Failure to write
+/// the sentinel is non-fatal — telemetry is never blocked on the notice.
+fn maybe_announce_telemetry(home: &std::path::Path) {
+    match bitrouter::paths::mark_telemetry_notice_shown(home) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(e) => {
+            tracing::debug!("telemetry notice sentinel: {e:#}");
+            return;
+        }
+    }
+    let p = bitrouter::style::Palette::for_stderr();
+    eprintln!(
+        "{cyan}{bold}info:{reset} optional usage telemetry is available — and OFF by default.",
+        cyan = p.cyan,
+        bold = p.bold,
+        reset = p.reset,
+    );
+    eprintln!();
+    eprintln!("  Nothing is sent unless you opt in. Two levels are offered:");
+    eprintln!(
+        "    • metadata — model, tokens, latency, finish reason, routing (no message content)"
+    );
+    eprintln!("    • full     — the above plus request + response message content");
+    eprintln!();
+    eprintln!("  Enable it under plugins.bitrouter-observe.telemetry in your config:");
+    eprintln!();
+    eprintln!("       plugins:");
+    eprintln!("         bitrouter-observe:");
+    eprintln!("           telemetry:");
+    eprintln!("             enabled: true");
+    eprintln!("             level: metadata   # or: full");
+    eprintln!();
+    eprintln!("  Remove the block (or set enabled: false) to turn it off again.");
+    eprintln!();
+}
+
 fn print_onboarding_hint() {
     let p = bitrouter::style::Palette::for_stderr();
     eprintln!(
