@@ -16,6 +16,7 @@
 
 id = "openai"
 display_name = "OpenAI"
+class = "first-party-api"
 api_base = "https://api.openai.com/v1"
 api_protocol = ["chat_completions", "responses"]
 doc_url = "https://platform.openai.com/docs/api-reference"

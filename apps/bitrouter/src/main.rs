@@ -854,7 +854,12 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     std::env::set_current_dir(home)
         .with_context(|| format!("chdir to bitrouter home {}", home.display()))?;
 
-    let cfg = bitrouter::paths::load_config(source).await?;
+    let mut cfg = bitrouter::paths::load_config(source).await?;
+    // Fetch + merge the provider registry (BYOK providers + the canonical model
+    // catalog) before assembly, so the daemon routes every credentialed
+    // provider's canonical models. Best-effort and cache-backed; a no-op when
+    // disabled or unreachable with no cache.
+    bitrouter::merge_registry_into(&mut cfg).await;
     announce_zero_config(source, &cfg);
     let listen = cfg.server.listen.clone();
     // For a `File` source we resolve the socket against the config

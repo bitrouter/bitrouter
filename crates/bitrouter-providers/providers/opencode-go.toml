@@ -13,6 +13,7 @@
 
 id = "opencode-go"
 display_name = "opencode go"
+class = "gateway-subscription"
 api_base = "https://opencode.ai/zen/go/v1"
 doc_url = "https://opencode.ai/docs/go/"
 

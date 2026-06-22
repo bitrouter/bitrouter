@@ -33,6 +33,7 @@
 
 id = "openai-codex"
 display_name = "OpenAI Codex"
+class = "first-party-subscription"
 api_base = "https://chatgpt.com/backend-api/codex"
 api_protocol = "responses"
 doc_url = "https://developers.openai.com/codex/auth"

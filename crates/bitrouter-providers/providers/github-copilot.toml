@@ -28,6 +28,7 @@
 
 id = "github-copilot"
 display_name = "GitHub Copilot"
+class = "gateway-subscription"
 api_base = "https://api.githubcopilot.com"
 doc_url = "https://docs.github.com/en/copilot/reference/api-reference/copilot-api-endpoints"
 

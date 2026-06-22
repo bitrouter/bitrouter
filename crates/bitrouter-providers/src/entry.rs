@@ -19,13 +19,14 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use bitrouter_sdk::config::ProviderClass;
 use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
 /// One built-in provider entry.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderEntry {
-    /// Provider id (the lookup key, matches `models.dev`'s provider key).
+    /// Provider id (the lookup key, matches the registry provider id).
     pub id: String,
     /// Human-readable name (display only).
     pub display_name: String,
@@ -47,6 +48,13 @@ pub struct ProviderEntry {
     /// Link to the provider's official API documentation. Required so future
     /// readers (and reviewers of this file) can verify the auth + URL shape.
     pub doc_url: String,
+    /// Routing-preference class for this built-in. Applied to a configured
+    /// provider's [`class`](bitrouter_sdk::config::ProviderConfig::class) when
+    /// it is unset, so gateways and the hosted cloud land in the right priority
+    /// tier even though they are not registry providers. Optional — a built-in
+    /// without a class stays unranked (sorts last in the auto-cascade).
+    #[serde(default)]
+    pub class: Option<ProviderClass>,
 }
 
 /// Either one protocol set for every model, or a glob → protocol-set map for

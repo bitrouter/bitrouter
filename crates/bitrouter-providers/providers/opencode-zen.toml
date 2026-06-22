@@ -19,6 +19,7 @@
 
 id = "opencode-zen"
 display_name = "opencode zen"
+class = "gateway-subscription"
 api_base = "https://opencode.ai/zen/v1"
 doc_url = "https://opencode.ai/docs/zen/"
 

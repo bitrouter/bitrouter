@@ -470,6 +470,27 @@ pub async fn build_app_with_path(
     })
 }
 
+/// Fetch the provider registry (best-effort, cached) and merge its BYOK
+/// providers into `config`, then re-apply built-in defaults so any provider the
+/// merge newly inserted gets its built-in `api_base` / `api_protocol` / auth
+/// shape filled. No-op when the registry is disabled (`registry.enabled =
+/// false` or `inherit_defaults = false`) or unreachable with no cache.
+///
+/// Called by the `serve` entry point (before [`build_app`]) and by
+/// [`crate::reload`], the two paths that build a production routing config.
+/// Kept out of `build_app` itself so that function stays free of network I/O —
+/// integration tests assemble explicit configs through it. Lives in the app
+/// layer (above `bitrouter-providers`) because the SDK's own routing table sits
+/// below the providers crate and cannot fetch the registry itself.
+pub async fn merge_registry_into(config: &mut Config) {
+    let Some(data) = bitrouter_providers::registry::apply::load_or_cached(&config.registry).await
+    else {
+        return;
+    };
+    bitrouter_providers::registry::apply::apply_registry(config, &data);
+    bitrouter_providers::apply_builtin_defaults(config);
+}
+
 /// Build the server-side tool loop from `config.server_tools`. Returns `None`
 /// when neither MCP server tools nor any nested server tool is configured.
 ///
