@@ -93,9 +93,13 @@ fn registry_provider_to_entry(p: &RegistryProvider) -> Result<ProviderEntry, Loa
 
 /// Map the registry's structured auth declaration onto the OSS [`AuthScheme`].
 /// Only public config travels (names/handlers); OAuth/native handler *impls*
-/// stay in the OSS, keyed by the handler name. OAuth `params` are documentation
-/// in the registry (the OSS OAuth registry holds the live client config), so
-/// they are not carried onto the entry.
+/// stay in the OSS, keyed by the handler name. OAuth `params` ARE carried onto
+/// the entry: PKCE providers (anthropic, openai-codex) ignore them (the OSS
+/// `oauth::registry` holds their client config), but device-code providers
+/// (github-copilot) keep their `client_id` / `device_authorization_endpoint` /
+/// `token_endpoint` / `scope` ONLY here, so dropping them breaks
+/// `bitrouter login github-copilot`. JSON values that TOML cannot represent
+/// (e.g. `null`) are skipped — login then surfaces a clear "missing param".
 fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError> {
     let missing = |field: &str| LoadError::Snapshot {
         message: format!(
@@ -114,7 +118,21 @@ fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError
         }),
         RegistryAuthKind::Oauth => Ok(AuthScheme::Oauth {
             handler: auth.handler.clone().ok_or_else(|| missing("handler"))?,
-            params: BTreeMap::new(),
+            params: auth
+                .params
+                .as_ref()
+                .map(|params| {
+                    params
+                        .iter()
+                        // serde_json::Value → toml::Value via serde; drop any
+                        // value TOML can't represent (e.g. JSON null) rather
+                        // than fail the whole snapshot load.
+                        .filter_map(|(k, v)| {
+                            toml::Value::try_from(v).ok().map(|tv| (k.clone(), tv))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }),
         RegistryAuthKind::Native => Ok(AuthScheme::Native {
             handler: auth.handler.clone().ok_or_else(|| missing("handler"))?,
@@ -346,6 +364,31 @@ mod tests {
         assert_eq!(
             copilot.api_protocol.resolve("gemini-2.5-pro"),
             Some(vec![ApiProtocol::ChatCompletions])
+        );
+    }
+
+    #[test]
+    fn github_copilot_oauth_params_survive_mapping() {
+        // Regression: github-copilot uses the device-code flow, whose client
+        // config lives ONLY in the registry `auth.params` (unlike PKCE
+        // providers, whose config is in the OSS oauth registry). If `map_auth`
+        // dropped these, `bitrouter login github-copilot` would report no
+        // interactive login path. Assert the device-code params are carried.
+        let copilot = find("github-copilot").unwrap();
+        let AuthScheme::Oauth { params, .. } = &copilot.auth else {
+            panic!("github-copilot must use an OAuth scheme");
+        };
+        assert!(
+            params.contains_key("client_id"),
+            "device-code login needs auth.params.client_id"
+        );
+        assert!(
+            params.contains_key("device_authorization_endpoint"),
+            "device-code login needs auth.params.device_authorization_endpoint"
+        );
+        assert!(
+            params.contains_key("token_endpoint"),
+            "device-code login needs auth.params.token_endpoint"
         );
     }
 

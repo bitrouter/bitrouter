@@ -106,15 +106,6 @@ pub enum LoadError {
         /// The duplicated id.
         id: String,
     },
-    /// The `id` field inside the TOML didn't match the filename (the
-    /// embedded-files registry uses the filename stem as a sanity check).
-    #[error("provider entry id '{declared}' does not match filename '{expected}'")]
-    IdMismatch {
-        /// The id declared inside the TOML file.
-        declared: String,
-        /// The filename stem (what we registered the entry as).
-        expected: String,
-    },
     /// The compiled-in registry snapshot failed to parse, or a provider in it
     /// declared an auth scheme missing a required field (e.g. a `bearer` scheme
     /// with no `env`). A build-time invariant — the vendored snapshot is
