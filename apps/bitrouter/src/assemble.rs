@@ -959,12 +959,11 @@ fn resolve_telemetry_bearer(
 /// startup.
 fn telemetry_account_bearer(attribution: TelemetryAttribution) -> Option<String> {
     if attribution == TelemetryAttribution::Anonymous {
+        // Never touch the credential store when the user has opted out of
+        // account attribution.
         return None;
     }
-    // Phase 2 reads the signed-in account token from the cloud credential store
-    // (`crate::cloud::current_account_bearer`); until then this is a no-op so the
-    // attribution policy + config can land and be reviewed on their own.
-    None
+    crate::cloud::current_account_bearer()
 }
 
 #[cfg(test)]
