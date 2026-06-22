@@ -42,7 +42,7 @@ pub enum FetchError {
 /// Bounded `connect_timeout` + overall `timeout` (`rustls-tls`, the workspace's
 /// feature pin) so an unreachable registry fails fast on a no-network host
 /// rather than stalling startup for the OS-level connect window. Reads
-/// `providers.json` then `canonical.json` under `base` and merges them.
+/// `providers.json` then `models.json` under `base` and merges them.
 pub async fn fetch_registry(base: &str) -> Result<RegistryData, FetchError> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)

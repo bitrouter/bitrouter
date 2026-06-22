@@ -10,9 +10,10 @@
 //! ## Source
 //!
 //! <https://github.com/bitrouter/provider-registry> publishes two deterministic
-//! JSON files under `dist/`: `providers.json` (the provider list + per-provider
-//! model catalog) and `canonical.json` (the `<org>/<model>` model vocabulary).
-//! This module fetches both, merges them into a [`types::RegistryData`], and
+//! JSON files under `dist/`: `providers.json` (the provider view — each model
+//! carrying its dist-resolved protocol + rate limits) and `models.json` (the
+//! model view; bitrouter reads its `id`s for the canonical vocabulary). This
+//! module fetches both, merges them into a [`types::RegistryData`], and
 //! disk-caches the result.
 //!
 //! ## Layout
