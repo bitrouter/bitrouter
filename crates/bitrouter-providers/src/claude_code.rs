@@ -115,7 +115,7 @@ impl ClaudeCodeAuthApplier {
     ///
     /// Note the asymmetry: the credential store is keyed by [`PROVIDER_ID`]
     /// (`"claude-code"`), but the OAuth client config is resolved under
-    /// [`OAUTH_CLIENT_ID`] (`"anthropic"`).
+    /// `OAUTH_CLIENT_ID` (`"anthropic"`).
     pub fn new(store_path: impl Into<std::path::PathBuf>) -> Result<Self> {
         let registry = crate::oauth::registry::find(OAUTH_CLIENT_ID).ok_or_else(|| {
             BitrouterError::internal(

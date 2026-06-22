@@ -12,9 +12,9 @@
 //!   `claude-code` credential (mirrors [`crate::cloud::enable_in_zero_config`]).
 //!
 //! These live in the app layer (not `bitrouter-providers`) because the routing
-//! decision reads the parsed canonical [`Prompt`](bitrouter_sdk::language_model::types::Prompt),
+//! decision reads the parsed canonical [`Prompt`],
 //! which only exists above the SDK ingress seam, and because the enable step
-//! mutates the assembled [`Config`](bitrouter_sdk::config::Config).
+//! mutates the assembled [`Config`].
 
 use bitrouter_providers::oauth::credential_store::{Credential, CredentialStore, DEFAULT_LABEL};
 use bitrouter_sdk::PromptTransform;
