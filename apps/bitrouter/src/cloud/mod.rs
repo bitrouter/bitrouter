@@ -99,6 +99,12 @@ pub fn register_if_configured(config: &Config, appliers: &mut AuthAppliers) -> R
 /// each export is a documented follow-up. In practice the token is minted fresh
 /// at `bitrouter cloud login` and long-lived, so the snapshot is valid for the
 /// daemon's session.
+///
+/// Note the snapshot is baked into a *static* `Authorization` header on the OTLP
+/// exporter: if the token expires mid-session the exporter keeps sending the now
+/// stale bearer (the ingest rejects it; telemetry is best-effort) until the
+/// daemon restarts and re-evaluates validity — it does not silently fall back to
+/// anonymous. This is the trade-off the deferred auto-refresh follow-up removes.
 pub fn current_account_bearer() -> Option<String> {
     let store = CredentialsStore::default_path().ok()?;
     account_bearer_from_store(&store)
@@ -220,5 +226,21 @@ mod tests {
         let path = fresh_tmp_creds_path("absent");
         let store = CredentialsStore::load(&path).unwrap();
         assert!(account_bearer_from_store(&store).is_none());
+    }
+
+    #[test]
+    fn malformed_credentials_file_is_swallowed_as_anonymous() {
+        // A corrupt credentials file makes `CredentialsStore::load` error; the
+        // `default_path().ok()?` in `current_account_bearer` swallows that into
+        // `None` so a broken file degrades to anonymous telemetry rather than
+        // breaking daemon startup. We can't drive the real default path here, so
+        // assert the load error that the `?` consumes.
+        let path = fresh_tmp_creds_path("malformed");
+        fs::write(&path, "{ not valid json").unwrap();
+        assert!(
+            CredentialsStore::load(&path).is_err(),
+            "a malformed credentials file must surface as a load error for \
+             `current_account_bearer` to swallow into anonymous"
+        );
     }
 }
