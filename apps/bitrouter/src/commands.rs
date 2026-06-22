@@ -325,11 +325,16 @@ impl AuthMethod {
 }
 
 /// The vendor CLI bitrouter can adopt an existing OAuth session from, for
-/// providers that ship one — `Claude Code` for `anthropic`, `Codex` for
-/// `openai-codex`. `None` for every other provider.
+/// providers that ship one — `Codex` for `openai-codex`. `None` for every
+/// other provider.
+///
+/// `anthropic` is **not** listed: it is now the platform / pay-as-you-go
+/// provider (`x-api-key` only). Adopting a Claude Code session is the
+/// `claude-code` subscription provider's job, handled by
+/// [`AuthMethod::ClaudeCodeSession`] (a *live* session read, not a one-shot
+/// token copy), so there is no vendor-CLI import for `anthropic`.
 fn import_cli_for(provider_id: &str) -> Option<&'static str> {
     match provider_id {
-        bitrouter_providers::anthropic::PROVIDER_ID => Some("Claude Code"),
         bitrouter_providers::codex::PROVIDER_ID => Some("Codex"),
         _ => None,
     }
@@ -340,22 +345,30 @@ fn import_cli_for(provider_id: &str) -> Option<&'static str> {
 fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMethod> {
     use bitrouter_providers::AuthScheme;
     let mut methods = Vec::new();
-    // Anthropic's preferred path: read the user's live Claude Code session and
-    // let the `claude` CLI own login. Listed first so it's the default on
-    // <enter> / non-interactive runs.
-    let is_anthropic = entry.id == bitrouter_providers::anthropic::PROVIDER_ID;
-    if is_anthropic {
+    // The Claude subscription's preferred (and only) path: read the user's live
+    // Claude Code session and let the `claude` CLI own login. It belongs to the
+    // dedicated `claude-code` subscription provider — `anthropic` is now the
+    // platform / pay-as-you-go provider and offers the API-key path only.
+    // Listed first so it's the default on <enter> / non-interactive runs.
+    let is_claude_code = entry.id == bitrouter_providers::claude_code::PROVIDER_ID;
+    if is_claude_code {
         methods.push(AuthMethod::ClaudeCodeSession);
     }
-    let has_pkce = bitrouter_providers::oauth::registry::has_pkce_flow(&entry.id);
+    // `anthropic` is platform / pay-as-you-go: offer the API-key path only. The
+    // PKCE registry still carries an `anthropic` entry (the Claude subscription
+    // browser flow), but that subscription path now belongs to the dedicated
+    // `claude-code` provider, so it must not be offered under `anthropic`.
+    let is_anthropic = entry.id == bitrouter_providers::anthropic::PROVIDER_ID;
+    let has_pkce = !is_anthropic && bitrouter_providers::oauth::registry::has_pkce_flow(&entry.id);
     if has_pkce {
         methods.push(AuthMethod::PkceSubscription);
     }
     // Providers with a sibling vendor CLI can adopt its existing session as a
-    // one-shot copy. For anthropic this is superseded by the live
-    // `ClaudeCodeSession` above (the copy is what risked the family-revoke), so
-    // it's offered only for the other CLI providers (Codex).
-    if import_cli_for(&entry.id).is_some() && !is_anthropic {
+    // one-shot copy — currently only Codex (`openai-codex`). `anthropic` has no
+    // such import: subscription sign-in moved to the `claude-code` provider via
+    // the live `ClaudeCodeSession` above (the one-shot copy is what risked the
+    // family-revoke), and `import_cli_for` no longer maps `anthropic`.
+    if import_cli_for(&entry.id).is_some() {
         methods.push(AuthMethod::ImportFromCli);
     }
     match &entry.auth {
@@ -502,7 +515,7 @@ pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
 }
 
 /// Adopt the user's existing Claude Code session as the live credential source
-/// for `anthropic`.
+/// for the `claude-code` subscription provider.
 ///
 /// Resolution order, mirroring how Claude Code users actually authenticate:
 /// 1. If a Claude Code session already exists in `~/.claude` (macOS Keychain /
@@ -514,13 +527,20 @@ pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
 ///
 /// Returns a [`Credential::ClaudeCodeCli`] marker — no token is copied into
 /// bitrouter's own store, so bitrouter and Claude Code share one credential and
-/// can't refresh-rotate each other out (RFC 6749 §6).
+/// can't refresh-rotate each other out (RFC 6749 §6). `login_provider` stores
+/// this marker under the `provider_id` it was invoked with, so
+/// `bitrouter providers login claude-code` lands it under `claude-code`.
 async fn run_claude_code_session()
 -> Result<bitrouter_providers::oauth::credential_store::Credential> {
     use std::io::IsTerminal;
 
     use bitrouter_providers::import::claude_code::ClaudeCodeStore;
     use bitrouter_providers::oauth::credential_store::Credential;
+
+    // Adopt a legacy #590 marker stored under `anthropic` before checking the
+    // live session, so a returning user's existing sign-in is recognised under
+    // the new `claude-code` provider.
+    crate::claude_code::migrate_legacy_anthropic_marker_default();
 
     let store = ClaudeCodeStore::system().ok_or_else(|| {
         anyhow::anyhow!(
@@ -545,7 +565,7 @@ async fn run_claude_code_session()
         anyhow::bail!(
             "not signed in to Claude Code. Run `claude auth login` (install the CLI first with \
              `curl -fsSL https://claude.ai/install.sh | bash`), then re-run \
-             `bitrouter login anthropic`."
+             `bitrouter providers login claude-code`."
         );
     }
 
@@ -563,7 +583,8 @@ async fn run_claude_code_session()
         .context("running `claude auth login`")?;
     if !status.success() {
         anyhow::bail!(
-            "`claude auth login` didn't complete — sign in, then re-run `bitrouter login anthropic`."
+            "`claude auth login` didn't complete — sign in, then re-run \
+             `bitrouter providers login claude-code`."
         );
     }
 
@@ -693,15 +714,17 @@ async fn run_device_code(
 }
 
 /// Adopt an existing OAuth session from the provider's sibling vendor CLI
-/// (Claude Code for `anthropic`, Codex for `openai-codex`) by reading its
-/// on-disk / Keychain credential. Errors when no such session is found.
+/// (Codex for `openai-codex`) by reading its on-disk / Keychain credential.
+/// Errors when no such session is found.
+///
+/// `anthropic` is intentionally absent: it is the platform / pay-as-you-go
+/// provider now, and the Claude Code session is adopted *live* by the
+/// `claude-code` provider via [`run_claude_code_session`] — not copied in here
+/// (the one-shot copy is what risked the RFC 6749 §6 family-revoke).
 fn run_cli_import(
     provider_id: &str,
 ) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
     let imported = match provider_id {
-        bitrouter_providers::anthropic::PROVIDER_ID => {
-            bitrouter_providers::import::claude_code::import()
-        }
         bitrouter_providers::codex::PROVIDER_ID => bitrouter_providers::import::codex::import(),
         other => anyhow::bail!("no vendor-CLI import is available for provider '{other}'"),
     }
@@ -1113,7 +1136,33 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_prefers_claude_code_session_first() {
+    fn claude_code_prefers_claude_code_session_first() {
+        // The `claude-code` subscription provider — the live Claude Code session
+        // is its default (and the marker lands under `claude-code`).
+        let entry = entry_for(serde_json::json!({
+            "name": "claude-code",
+            "api_base": "https://api.anthropic.com/v1",
+            "status": "active",
+            "auth": { "kind": "oauth", "handler": "claude-code" },
+            "models": []
+        }));
+        let methods = available_methods(&entry);
+        assert_eq!(
+            methods.first(),
+            Some(&AuthMethod::ClaudeCodeSession),
+            "the live Claude Code session must be the default for claude-code"
+        );
+        assert!(
+            !methods.contains(&AuthMethod::ImportFromCli),
+            "claude-code uses the live session, not the one-shot copy that can family-revoke"
+        );
+    }
+
+    #[test]
+    fn anthropic_offers_api_key_only() {
+        // `anthropic` is now platform / pay-as-you-go: API-key paste only — no
+        // Claude Code session, no subscription PKCE, no vendor-CLI import. The
+        // subscription path moved to the `claude-code` provider.
         let entry = entry_for(serde_json::json!({
             "name": "anthropic",
             "api_base": "https://api.anthropic.com/v1",
@@ -1123,18 +1172,13 @@ mod tests {
         }));
         let methods = available_methods(&entry);
         assert_eq!(
-            methods.first(),
-            Some(&AuthMethod::ClaudeCodeSession),
-            "the live Claude Code session must be the default for anthropic"
+            methods,
+            vec![AuthMethod::ApiKey],
+            "anthropic must offer the API-key path only"
         );
-        assert!(
-            !methods.contains(&AuthMethod::ImportFromCli),
-            "anthropic uses the live session, not the one-shot copy that can family-revoke"
-        );
-        assert!(
-            methods.contains(&AuthMethod::PkceSubscription),
-            "PKCE stays available as an explicit fallback"
-        );
+        assert!(!methods.contains(&AuthMethod::ClaudeCodeSession));
+        assert!(!methods.contains(&AuthMethod::PkceSubscription));
+        assert!(!methods.contains(&AuthMethod::ImportFromCli));
     }
 
     #[test]
