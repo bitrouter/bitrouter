@@ -562,4 +562,35 @@ mod tests {
         let env: Envelope<RegistryProvider> = serde_json::from_str(src).unwrap();
         assert_eq!(env.data[0].name, "x");
     }
+
+    #[test]
+    fn env_credential_var_prefers_declared_env_then_convention() {
+        let reg = |json: serde_json::Value| -> RegistryProvider {
+            serde_json::from_value(json).expect("valid provider")
+        };
+        // Header auth with a declared env: Google uses GEMINI_API_KEY, NOT the
+        // GOOGLE_API_KEY convention — a known, easy-to-regress gotcha.
+        let google = reg(serde_json::json!({
+            "name": "google", "api_base": "https://x.test/v1", "status": "active",
+            "models": [], "auth": { "kind": "header", "header": "x-goog-api-key", "env": "GEMINI_API_KEY" }
+        }));
+        assert_eq!(
+            google.env_credential_var().as_deref(),
+            Some("GEMINI_API_KEY")
+        );
+        // No `auth` block → the bearer-default `{NAME}_API_KEY` convention.
+        let deepseek = reg(serde_json::json!({
+            "name": "deepseek", "api_base": "https://x.test/v1", "status": "active", "models": []
+        }));
+        assert_eq!(
+            deepseek.env_credential_var().as_deref(),
+            Some("DEEPSEEK_API_KEY")
+        );
+        // OAuth / native authenticate via a local login — no env var.
+        let copilot = reg(serde_json::json!({
+            "name": "github-copilot", "api_base": "https://x.test/v1", "status": "active",
+            "models": [], "auth": { "kind": "oauth", "handler": "github-copilot" }
+        }));
+        assert_eq!(copilot.env_credential_var(), None);
+    }
 }
