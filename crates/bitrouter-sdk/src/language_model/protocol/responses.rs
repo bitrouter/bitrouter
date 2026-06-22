@@ -2252,7 +2252,13 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     let item_id = block_marker_id(item, &json);
                     match item_type {
                         "message" => parts.push(StreamPart::TextEnd { id: item_id }),
-                        "reasoning" => parts.push(StreamPart::ReasoningEnd { id: item_id }),
+                        "reasoning" => parts.push(StreamPart::ReasoningEnd {
+                            id: item_id,
+                            // Responses reasoning continuity (encrypted_content) is
+                            // not carried on this slot; only the Anthropic Messages
+                            // wire populates the thinking `signature`.
+                            signature: None,
+                        }),
                         _ => {}
                     }
                 }

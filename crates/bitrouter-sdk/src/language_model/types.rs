@@ -1651,6 +1651,14 @@ pub enum StreamPart {
     ReasoningEnd {
         /// Reasoning-block id, matching the opening [`Self::ReasoningStart`].
         id: String,
+        /// The reasoning block's opaque continuity signature, when the upstream
+        /// emitted one — Anthropic's thinking-block `signature`, carried on the
+        /// terminal `signature_delta`. Preserved verbatim so a streamed thinking
+        /// block re-encodes signed and a follow-up turn that replays it validates
+        /// (without it Anthropic rejects the unsigned block). `None` on wires or
+        /// blocks that carry no signature.
+        /// <https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking>
+        signature: Option<String>,
     },
     /// An incremental chunk of a tool call's arguments.
     ToolCallDelta {

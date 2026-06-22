@@ -1849,7 +1849,10 @@ fn text_reasoning_text_reencodes_with_three_distinct_blocks() {
         StreamPart::ReasoningDelta {
             text: "ponder".into(),
         },
-        StreamPart::ReasoningEnd { id: "b".into() },
+        StreamPart::ReasoningEnd {
+            id: "b".into(),
+            signature: None,
+        },
         StreamPart::TextStart { id: "c".into() },
         StreamPart::TextDelta {
             text: "outro".into(),
@@ -1906,6 +1909,115 @@ fn text_reasoning_text_reencodes_with_three_distinct_blocks() {
 }
 
 #[test]
+fn anthropic_thinking_signature_survives_stream_roundtrip() {
+    // A streamed Anthropic thinking block carries its `signature` as a
+    // `signature_delta` event before `content_block_stop`. Decoding the upstream
+    // stream and re-encoding it for the client must preserve that signature —
+    // otherwise the client replays an unsigned thinking block on the next turn
+    // and Anthropic rejects it ("Invalid `signature` in `thinking` block").
+    // <https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking>
+    let upstream = [
+        (
+            "content_block_start",
+            serde_json::json!({
+                "type": "content_block_start", "index": 0,
+                "content_block": { "type": "thinking", "thinking": "" }
+            }),
+        ),
+        (
+            "content_block_delta",
+            serde_json::json!({
+                "type": "content_block_delta", "index": 0,
+                "delta": { "type": "thinking_delta", "thinking": "let me think" }
+            }),
+        ),
+        (
+            "content_block_delta",
+            serde_json::json!({
+                "type": "content_block_delta", "index": 0,
+                "delta": { "type": "signature_delta", "signature": "SIG-roundtrip-xyz" }
+            }),
+        ),
+        (
+            "content_block_stop",
+            serde_json::json!({ "type": "content_block_stop", "index": 0 }),
+        ),
+    ];
+    let parts = decode_stream(ApiProtocol::Messages, &upstream);
+    let reencoded = encode_stream_events(ApiProtocol::Messages, &parts);
+    let sig = reencoded.iter().find_map(|(name, data)| {
+        if name == "content_block_delta"
+            && data.pointer("/delta/type").and_then(|t| t.as_str()) == Some("signature_delta")
+        {
+            data.pointer("/delta/signature")
+                .and_then(|s| s.as_str())
+                .map(str::to_string)
+        } else {
+            None
+        }
+    });
+    assert_eq!(
+        sig.as_deref(),
+        Some("SIG-roundtrip-xyz"),
+        "thinking signature must survive decode->encode; got {reencoded:?}"
+    );
+}
+
+#[test]
+fn anthropic_stream_decoder_lifts_thinking_signature_onto_reasoning_end() {
+    // The IR contract: a streamed `signature_delta` is lifted onto the block's
+    // `ReasoningEnd` (not surfaced as a stray part, never merged into the
+    // reasoning text), so downstream re-encoding can replay it.
+    let events = [
+        (
+            "content_block_start",
+            serde_json::json!({
+                "type": "content_block_start", "index": 0,
+                "content_block": { "type": "thinking", "thinking": "" }
+            }),
+        ),
+        (
+            "content_block_delta",
+            serde_json::json!({
+                "type": "content_block_delta", "index": 0,
+                "delta": { "type": "thinking_delta", "thinking": "ponder" }
+            }),
+        ),
+        (
+            "content_block_delta",
+            serde_json::json!({
+                "type": "content_block_delta", "index": 0,
+                "delta": { "type": "signature_delta", "signature": "SIG-decode-1" }
+            }),
+        ),
+        (
+            "content_block_stop",
+            serde_json::json!({ "type": "content_block_stop", "index": 0 }),
+        ),
+    ];
+    let parts = decode_stream(ApiProtocol::Messages, &events);
+    let sig = parts
+        .iter()
+        .find_map(|p| match p {
+            StreamPart::ReasoningEnd { signature, .. } => Some(signature.clone()),
+            _ => None,
+        })
+        .expect("a ReasoningEnd part");
+    assert_eq!(
+        sig.as_deref(),
+        Some("SIG-decode-1"),
+        "decoder must lift signature_delta onto ReasoningEnd; got {parts:?}"
+    );
+    assert!(
+        !parts.iter().any(|p| matches!(
+            p,
+            StreamPart::ReasoningDelta { text } if text.contains("SIG-decode-1")
+        )),
+        "signature must not leak into the reasoning text: {parts:?}"
+    );
+}
+
+#[test]
 fn coarse_wires_drop_block_markers_and_emit_only_deltas() {
     // Chat Completions and Generate Content frame no content blocks, so the
     // block-lifecycle markers re-encode to NOTHING — a bare start/end emits zero
@@ -1921,7 +2033,10 @@ fn coarse_wires_drop_block_markers_and_emit_only_deltas() {
             StreamPart::TextStart { id: "0".into() },
             StreamPart::TextEnd { id: "0".into() },
             StreamPart::ReasoningStart { id: "1".into() },
-            StreamPart::ReasoningEnd { id: "1".into() },
+            StreamPart::ReasoningEnd {
+                id: "1".into(),
+                signature: None,
+            },
         ] {
             assert!(
                 encoder.encode(&marker).unwrap().is_empty(),
