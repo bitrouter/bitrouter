@@ -239,14 +239,14 @@ providers:
 }
 
 /// Regression: the production `AppReloader` must re-apply the built-in
-/// provider catalog on a file reload. `openai` here is declared with no
-/// `api_base` — it comes from the compiled-in catalog at assembly time.
-/// If the reload path swapped in a bare file re-read (skipping
-/// `apply_builtin_defaults`), the provider would come back with an empty
-/// `api_base`, and an `auto_discover` provider would then silently drop
-/// every model. The SDK's own `RoutingTable::reload` cannot fix this — it
-/// sits below `bitrouter-providers` — so the reloader rebuilds the config
-/// in the app layer.
+/// provider catalog on a file reload. The `bitrouter` cloud gateway here is
+/// declared with no `api_base` — it is the one compiled-in built-in, filled
+/// from the catalog at assembly time. (The other known providers come from the
+/// fetched registry, not a compiled-in snapshot.) If the reload path swapped in
+/// a bare file re-read (skipping `apply_builtin_defaults`), the provider would
+/// come back with an empty `api_base`. The SDK's own `RoutingTable::reload`
+/// cannot fix this — it sits below `bitrouter-providers` — so the reloader
+/// rebuilds the config in the app layer.
 #[tokio::test]
 async fn reload_re_applies_builtin_provider_catalog() {
     use bitrouter::daemon::DaemonReloader;
@@ -255,8 +255,9 @@ async fn reload_re_applies_builtin_provider_catalog() {
     let dir = tempdir("reload-builtin");
     tokio::fs::create_dir_all(&dir).await.unwrap();
     let cfg_path = dir.join("bitrouter.yaml");
-    // `openai` is a built-in: `api_base` is omitted and must be filled
-    // from the catalog. Explicit `models` keep discovery off the network.
+    // `bitrouter` is the compiled-in cloud gateway: `api_base` is omitted and
+    // must be filled from the catalog. Explicit `models` keep the canonical
+    // backfill (and any discovery) off the network.
     let yaml = r#"
 server:
   listen: "127.0.0.1:0"
@@ -265,7 +266,7 @@ database:
   url: "sqlite::memory:"
 inherit_defaults: true
 providers:
-  openai:
+  bitrouter:
     api_key: k1
     models: [{ id: gpt-5 }]
 "#;
@@ -276,8 +277,8 @@ providers:
 
     // Sanity: assembly already filled the catalog `api_base`.
     assert_eq!(
-        assembled.routing_table.snapshot_config().providers["openai"].api_base,
-        "https://api.openai.com/v1",
+        assembled.routing_table.snapshot_config().providers["bitrouter"].api_base,
+        "https://api.bitrouter.ai/v1",
     );
 
     let reloader = AppReloader::new(
@@ -291,13 +292,16 @@ providers:
     // `api_protocol` — the reload re-applies `apply_builtin_defaults`,
     // not just a bare file re-read.
     let after = assembled.routing_table.snapshot_config();
-    let openai = after.providers.get("openai").expect("openai still present");
+    let gateway = after
+        .providers
+        .get("bitrouter")
+        .expect("bitrouter still present");
     assert_eq!(
-        openai.api_base, "https://api.openai.com/v1",
+        gateway.api_base, "https://api.bitrouter.ai/v1",
         "built-in `api_base` must survive a file reload",
     );
     assert!(
-        !openai.api_protocol.is_empty(),
+        !gateway.api_protocol.is_empty(),
         "built-in `api_protocol` must survive a file reload",
     );
 

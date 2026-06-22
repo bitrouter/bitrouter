@@ -2,9 +2,14 @@
 
 How to configure `providers:`, `models:`, `mcp_servers:`, and `agents:` in `bitrouter.yaml`. Reflects the v1 schema in `crates/bitrouter-sdk/src/config/mod.rs` — fields and strategies not listed here do not exist.
 
-## Built-in providers
+## Known providers
 
-Seven providers ship in the binary. Each has a baked-in `api_base`, `api_protocol`, and credential env var. Listing them with an empty body in `bitrouter.yaml` enables them — built-in defaults fill the rest.
+bitrouter already knows how to talk to these providers — their `api_base`,
+`api_protocol`, and credential env var come from the **fetched provider
+registry** (below), so listing one with an empty body in `bitrouter.yaml`
+enables it and the registry fills the rest. The definitions are **not** vendored
+into the binary; they are fetched at startup and disk-cached (see the registry
+section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 
 | Provider id | Env var | Auth | Notes |
 |---|---|---|---|
@@ -12,33 +17,53 @@ Seven providers ship in the binary. Each has a baked-in `api_base`, `api_protoco
 | `anthropic` | `ANTHROPIC_API_KEY` | Header `x-api-key` | Messages API |
 | `google` | `GEMINI_API_KEY` | Header `x-goog-api-key` | Generative Language API — **not** `GOOGLE_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
-| `github-copilot` | — (OAuth) | Device flow | `bitrouter login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
-| `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Curated models, per-family protocol routing |
+| `github-copilot` | — (local OAuth) | Device flow | `bitrouter login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
+| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter login openai-codex` |
+| `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 
-Zero-config mode auto-enables every built-in whose env var is present. A built-in without its credential gets `active: false` and falls out of the routing table — startup still succeeds.
+Zero-config mode auto-enables every API-key provider whose env var is present;
+an API-key provider without its credential gets `active: false` and falls out of
+the routing table. Local-OAuth/PKCE providers (`github-copilot`, `openai-codex`)
+are enabled by `bitrouter login`, not an env var. **First run with no network
+and no cache**: the registry is empty, so only fully-specified local providers
+and the in-binary `bitrouter` cloud gateway are available — the known-provider
+shorthand needs one prior successful fetch. Startup still succeeds.
 
 ## Provider registry (catalog + priority)
 
-Beyond the built-ins, BitRouter fetches the public provider registry
+BitRouter fetches the public provider registry
 (`https://github.com/bitrouter/provider-registry`) at startup and on reload: a
-curated, deterministic catalog of canonical models and the providers that serve
-them. It is fetched from the generated `dist/` artifacts, disk-cached under
+curated, deterministic catalog of the providers above (their transport + auth),
+the canonical models, and which providers serve them. It is fetched from the
+generated `dist/` artifacts, disk-cached under
 `$XDG_CACHE_HOME/bitrouter/provider-registry.json` (24h TTL, stale-fallback on a
-network outage), and merged into the routing table. The job of the merge is to
-route a **canonical** model id (e.g. `anthropic/claude-sonnet-4.6`) to a
-provider that serves it, translating to that provider's own upstream id.
+network outage), and merged into the routing table. If a fetch fails the cache
+is reused; with no cache (first run, offline) the registry is empty and only
+locally-configured providers route. The merge routes a **canonical** model id
+(e.g. `anthropic/claude-sonnet-4.6`) to a provider that serves it, translating
+to that provider's own upstream id.
 
 Rules:
 
-- **BYOK only.** Only providers open to bring-your-own-key are merged; pooled /
-  private registry entries are skipped.
-- **Credential-gated.** A registry provider becomes routable only when its key
+- **Public providers only.** Every public registry provider is merged; only
+  `private` ones (the pooled / invite-only entries, no public registration) are
+  skipped. The registry classifies each provider by how a caller obtains
+  access: `api_key` (a portable key), `local_oauth` / `local_pkce` (a local
+  interactive login — e.g. `github-copilot`, `openai-codex`), or `private`.
+- **Credential-gated.** An `api_key` provider becomes routable only when its key
   is present, read from the convention `${NAME}_API_KEY` (uppercased, hyphens →
   underscores — e.g. `DEEPSEEK_API_KEY`, `ZAI_CODING_PLAN_API_KEY`), or from the
   built-in's env var when the provider also has a built-in entry. No key ⇒ not
   enabled. Declare the provider explicitly with `api_key: ${MY_VAR}` to override
-  the env-var name.
+  the env-var name. A `local_oauth` / `local_pkce` provider is not env-gated —
+  it activates after `bitrouter login <provider>`.
+- **Full catalog via the sync channel.** A provider may declare an `auto_sync`
+  feed (the channel the registry itself curates from). BitRouter reads the same
+  channel to pull the provider's **full** catalog beyond the curated canonical
+  subset: a `v1_models` feed (the gateways) is probed at `GET {api_base}/models`
+  on startup; a `models_dev` feed pulls the provider's models from models.dev.
+  The curated canonical models keep the highest route priority.
 - **BitRouter Cloud serves everything.** When the `bitrouter` provider is
   active (env key or `bitrouter auth login`), it is populated with every model
   in the canonical list.

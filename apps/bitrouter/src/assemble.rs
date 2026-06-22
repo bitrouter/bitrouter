@@ -478,11 +478,17 @@ pub async fn build_app_with_path(
     })
 }
 
-/// Fetch the provider registry (best-effort, cached) and merge its BYOK
-/// providers into `config`, then re-apply built-in defaults so any provider the
-/// merge newly inserted gets its built-in `api_base` / `api_protocol` / auth
-/// shape filled. No-op when the registry is disabled (`registry.enabled =
-/// false` or `inherit_defaults = false`) or unreachable with no cache.
+/// Merge the provider registry into `config`, then re-apply built-in defaults
+/// so any provider the merge newly inserted gets its `api_base` /
+/// `api_protocol` / auth shape filled. No-op when the registry is disabled
+/// (`registry.enabled = false` or `inherit_defaults = false`).
+///
+/// The data is the **fetched** dist when reachable, else the most recent
+/// **disk cache** (stale-fallback on a network outage). On a never-fetched host
+/// with no network there is no data: the merge is a no-op and the registry is
+/// empty, so only locally-configured providers (and the compiled-in `bitrouter`
+/// cloud gateway) are routable. Network to the registry is expected to be
+/// stable, so this empty state is a rare first-run edge.
 ///
 /// Called by the `serve` entry point (before [`build_app`]) and by
 /// [`crate::reload`], the two paths that build a production routing config.
@@ -491,11 +497,29 @@ pub async fn build_app_with_path(
 /// layer (above `bitrouter-providers`) because the SDK's own routing table sits
 /// below the providers crate and cannot fetch the registry itself.
 pub async fn merge_registry_into(config: &mut Config) {
+    if !config.inherit_defaults || !config.registry.enabled {
+        return;
+    }
+    // Fetched dist when reachable; otherwise the disk cache. `None` (never
+    // fetched + unreachable) means an empty registry — skip the merge entirely.
     let Some(data) = bitrouter_providers::registry::apply::load_or_cached(&config.registry).await
     else {
+        bitrouter_providers::apply_builtin_defaults(config);
         return;
     };
     bitrouter_providers::registry::apply::apply_registry(config, &data);
+    // Best-effort: pull the FULL catalog for `models_dev` auto-sync providers
+    // from models.dev (beyond the curated canonical subset the registry ships).
+    // A fetch failure leaves the curated models in place — they already route —
+    // so this never blocks startup on an offline host.
+    match bitrouter_providers::catalog::fetch::fetch_catalog().await {
+        Ok(catalog) => {
+            bitrouter_providers::registry::apply::apply_catalog(config, &data, &catalog);
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "models.dev catalog fetch failed; using curated models only");
+        }
+    }
     bitrouter_providers::apply_builtin_defaults(config);
 }
 

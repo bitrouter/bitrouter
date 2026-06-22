@@ -1197,7 +1197,7 @@ fn print_onboarding_hint() {
 fn other_provider_env_var_hints() -> Vec<String> {
     let mut vars: Vec<String> = bitrouter_providers::zero_config_env_var_providers()
         .into_iter()
-        .map(|(_, env)| env.to_string())
+        .map(|(_, env)| env)
         .filter(|v| v != "BITROUTER_API_KEY")
         .collect();
     vars.sort();
@@ -1316,10 +1316,10 @@ async fn reload(socket: &Path) -> Result<()> {
     let env: Vec<(String, String)> = bitrouter_providers::zero_config_env_var_providers()
         .into_iter()
         .filter_map(|(_, var)| {
-            std::env::var(var)
+            std::env::var(&var)
                 .ok()
                 .filter(|v| !v.is_empty())
-                .map(|v| (var.to_string(), v))
+                .map(|v| (var, v))
         })
         .collect();
     match daemon::send_command(socket, &DaemonCommand::Reload { env }).await? {

@@ -161,17 +161,25 @@ fn default_cache_dir() -> Result<PathBuf, CacheError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::types::{CanonicalModel, RegistryProvider};
+    use crate::registry::types::{CanonicalModel, RegistryAccess, RegistryProvider};
 
     fn sample_data() -> RegistryData {
         RegistryData {
             providers: vec![RegistryProvider {
                 name: "deepseek".into(),
+                display_name: None,
                 api_base: "https://api.deepseek.com/v1".into(),
+                api_protocol: Vec::new(),
+                protocol_endpoints: None,
                 models: Vec::new(),
                 status: "active".into(),
+                kind: None,
+                auth: None,
+                doc_url: None,
                 community: false,
-                byok: true,
+                access: Some(RegistryAccess::ApiKey),
+                byok: Some(true),
+                auto_sync: None,
                 billing: Default::default(),
             }],
             canonical: vec![CanonicalModel {
