@@ -69,16 +69,21 @@ impl ServerToolLoop {
     ///
     /// A caller may *declare* a router tool as a provider-defined tool (e.g. an
     /// `{type: "<provider>:<tool>"}` server-tool entry). Such declarations are
-    /// dropped from the working prompt for any name the registry *owns*: the
-    /// toolset re-advertises that tool as an executable function tool, and the
-    /// raw provider-defined form must not reach the upstream — it has no
-    /// portable wire form and a same-protocol upstream would reject an unknown
-    /// server tool. Dropping them also avoids a spurious self-collision below.
+    /// dropped from the working prompt for any tool the registry is actually
+    /// advertising this request: the toolset re-advertises that tool as an
+    /// executable function tool, and the raw provider-defined form must not reach
+    /// the upstream — it has no portable wire form and a same-protocol upstream
+    /// would reject an unknown server tool. Dropping them also avoids a spurious
+    /// self-collision below.
     ///
-    /// Ownership (`registry.resolve`), not the set of advertised names, is the
-    /// strip predicate: a toolset may own a declaration under a namespaced name
-    /// (e.g. `bitrouter:fusion`) while advertising the bare executable name
-    /// (`fusion`), and the namespaced declaration must still be stripped.
+    /// The strip predicate is membership in the advertised set (`owned`), matched
+    /// by the declaration's tail name: a toolset may own a declaration under a
+    /// namespaced name (e.g. `bitrouter:fusion`) while advertising the bare
+    /// executable (`fusion`), and the namespaced declaration must still be
+    /// stripped. Crucially, a provider-defined tool the registry *could* own but
+    /// is **not** advertising this request (e.g. a caller's native `web_search`
+    /// when `bitrouter:web_search` was not declared) is left untouched, so the
+    /// caller never silently loses a genuine provider tool.
     pub(crate) async fn inject(
         &self,
         base: &Prompt,
@@ -87,8 +92,7 @@ impl ServerToolLoop {
         let (injected, owned) = self.registry.list_all(ctx).await?;
         let mut working = base.clone();
         working.tools.retain(|t| {
-            !(matches!(t, Tool::ProviderDefined { .. })
-                && self.registry.resolve(t.name()).is_some())
+            !(matches!(t, Tool::ProviderDefined { .. }) && owned.contains(tool_tail(t.name())))
         });
         for tool in &injected {
             if working.tools.iter().any(|t| t.name() == tool.name()) {
@@ -247,6 +251,14 @@ impl ServerToolLoop {
 
 /// Append the model's tool-call turn and the tool-result turn to the working
 /// prompt so the next upstream call sees the results.
+/// The bare tail of a (possibly namespaced) tool name: the final `:`/`.`
+/// segment. Matches a `bitrouter:fusion` declaration against the advertised
+/// bare `fusion`, while leaving an unrelated provider tail (e.g.
+/// `web_search_20250305`) distinct from `web_search`.
+fn tool_tail(name: &str) -> &str {
+    name.rsplit([':', '.']).next().unwrap_or(name)
+}
+
 fn append_turn(working: &mut Prompt, assistant_content: Vec<Content>, tool_results: Vec<Content>) {
     working.messages.push(Message {
         role: Role::Assistant,
@@ -532,6 +544,57 @@ mod tests {
         assert!(
             matches!(&working.tools[0], Tool::Function { name, .. } if name == "fusion"),
             "namespaced declaration stripped; executable function advertised"
+        );
+    }
+
+    #[tokio::test]
+    async fn inject_keeps_caller_provider_tool_the_registry_is_not_advertising() {
+        // A toolset that *owns* `search` by tail-match but advertises nothing
+        // this request (e.g. a declaration-gated tool like web_search with no
+        // declaration). A caller's genuine provider-defined `search` must NOT be
+        // stripped — otherwise the caller silently loses a real provider tool.
+        struct SilentOwner;
+        #[async_trait]
+        impl RouterToolset for SilentOwner {
+            async fn list_tools(&self, _c: &ToolContext) -> Result<Vec<Tool>> {
+                Ok(Vec::new())
+            }
+            async fn call_tool(
+                &self,
+                _n: &str,
+                _a: &str,
+                _c: &ToolContext,
+            ) -> Result<ToolResultOutput> {
+                Ok(ToolResultOutput::Text {
+                    value: "x".to_string(),
+                })
+            }
+            fn owns(&self, name: &str) -> bool {
+                name.rsplit([':', '.']).next().unwrap_or(name) == "search"
+            }
+        }
+
+        let loop_ = ServerToolLoop::new(
+            ToolsetRegistry::new(vec![Arc::new(SilentOwner)]),
+            ServerToolLoopConfig::default(),
+            Arc::new(AllowAll),
+        );
+        let mut base = base_prompt();
+        base.tools.push(Tool::ProviderDefined {
+            id: "demo.search".to_string(),
+            name: "search".to_string(),
+            args: serde_json::json!({}),
+            provider_metadata: ProviderMetadata::new(),
+        });
+        let (working, owned) = loop_.inject(&base, &tool_ctx()).await.unwrap();
+        assert!(owned.is_empty(), "nothing advertised this request");
+        assert_eq!(
+            working.tools.len(),
+            1,
+            "caller's provider tool is preserved"
+        );
+        assert!(
+            matches!(&working.tools[0], Tool::ProviderDefined { name, .. } if name == "search")
         );
     }
 

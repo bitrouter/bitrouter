@@ -32,6 +32,15 @@ impl HttpEngine {
         }
     }
 
+    /// The conventional environment variable holding this engine's BYOK key.
+    pub fn env_var(self) -> &'static str {
+        match self {
+            Self::Parallel => "PARALLEL_API_KEY",
+            Self::Exa => "EXA_API_KEY",
+            Self::Firecrawl => "FIRECRAWL_API_KEY",
+        }
+    }
+
     /// The default search endpoint (overridable per backend).
     fn default_base(self) -> &'static str {
         match self {

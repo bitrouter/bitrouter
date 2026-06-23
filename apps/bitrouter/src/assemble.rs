@@ -668,43 +668,47 @@ fn build_web_search_backends(
     settings: &WebSearchSettings,
     nested_runner: &Option<Arc<dyn NestedRunner>>,
 ) -> Vec<Arc<dyn WebSearchBackend>> {
-    // One shared HTTP client for the BYOK search APIs, with a request timeout
-    // below the loop's per-tool budget so a stuck call fails over promptly.
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .unwrap_or_default();
+    // A shared HTTP client for the BYOK search APIs, built only when an HTTP
+    // backend is configured so a config with only nested (Perplexity / native)
+    // backends pays nothing. The request timeout sits below the loop's per-tool
+    // budget so a stuck call fails over promptly.
+    let needs_http = settings.backends.iter().any(|b| {
+        matches!(
+            b,
+            WebSearchBackendConfig::Parallel { .. }
+                | WebSearchBackendConfig::Exa { .. }
+                | WebSearchBackendConfig::Firecrawl { .. }
+        )
+    });
+    let http = needs_http.then(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .unwrap_or_default()
+    });
 
     let mut backends: Vec<Arc<dyn WebSearchBackend>> = Vec::new();
     for entry in &settings.backends {
         match entry {
-            WebSearchBackendConfig::Parallel { api_key, api_base } => {
-                if let Some(key) = resolve_search_key(api_key, "PARALLEL_API_KEY", "parallel") {
+            // The three HTTP engines share one construction path, differing only
+            // in the engine tag (which also names the conventional key env var).
+            WebSearchBackendConfig::Parallel { api_key, api_base }
+            | WebSearchBackendConfig::Exa { api_key, api_base }
+            | WebSearchBackendConfig::Firecrawl { api_key, api_base } => {
+                let engine = match entry {
+                    WebSearchBackendConfig::Exa { .. } => HttpEngine::Exa,
+                    WebSearchBackendConfig::Firecrawl { .. } => HttpEngine::Firecrawl,
+                    _ => HttpEngine::Parallel,
+                };
+                if let (Some(client), Some(key)) = (
+                    &http,
+                    resolve_search_key(api_key, engine.env_var(), engine.name()),
+                ) {
                     backends.push(Arc::new(HttpSearchBackend::new(
-                        HttpEngine::Parallel,
+                        engine,
                         key,
                         api_base.clone(),
-                        http.clone(),
-                    )));
-                }
-            }
-            WebSearchBackendConfig::Exa { api_key, api_base } => {
-                if let Some(key) = resolve_search_key(api_key, "EXA_API_KEY", "exa") {
-                    backends.push(Arc::new(HttpSearchBackend::new(
-                        HttpEngine::Exa,
-                        key,
-                        api_base.clone(),
-                        http.clone(),
-                    )));
-                }
-            }
-            WebSearchBackendConfig::Firecrawl { api_key, api_base } => {
-                if let Some(key) = resolve_search_key(api_key, "FIRECRAWL_API_KEY", "firecrawl") {
-                    backends.push(Arc::new(HttpSearchBackend::new(
-                        HttpEngine::Firecrawl,
-                        key,
-                        api_base.clone(),
-                        http.clone(),
+                        client.clone(),
                     )));
                 }
             }

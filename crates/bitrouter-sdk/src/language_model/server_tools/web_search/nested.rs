@@ -64,12 +64,16 @@ impl WebSearchBackend for NestedSearchBackend {
     async fn search(
         &self,
         query: &str,
-        _opts: &SearchOptions,
+        opts: &SearchOptions,
         ctx: &ToolContext,
     ) -> std::result::Result<WebSearchResults, String> {
+        // An answer engine returns one synthesized answer, so `max_results`
+        // can't cap a result list; thread it through as a soft cap on how many
+        // sources to consult/cite rather than silently ignoring it.
+        let system = format!("{SEARCH_SYSTEM} Cite up to {} sources.", opts.max_results);
         let request = NestedRequest {
             model: self.model.clone(),
-            system: Some(SEARCH_SYSTEM.to_string()),
+            system: Some(system),
             user: query.to_string(),
             tools: self.tools.clone(),
             response_format: None,
