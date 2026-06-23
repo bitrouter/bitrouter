@@ -18,6 +18,7 @@ use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
 use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
 use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
 use bitrouter_sdk::language_model::server_tools::declarations::ServerToolDeclarationsHook;
+use bitrouter_sdk::language_model::server_tools::declarations::forwarded_tools;
 use bitrouter_sdk::language_model::server_tools::fusion::FusionToolset;
 use bitrouter_sdk::language_model::server_tools::fusion::alias::FusionAliasConfig;
 use bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop;
@@ -25,6 +26,15 @@ use bitrouter_sdk::language_model::server_tools::mcp_toolset::McpRouterToolset;
 use bitrouter_sdk::language_model::server_tools::nested::{NestedRunner, PipelineNestedRunner};
 use bitrouter_sdk::language_model::server_tools::sub_agent::SubAgentToolset;
 use bitrouter_sdk::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
+use bitrouter_sdk::language_model::server_tools::web_search::backend::WebSearchBackend;
+use bitrouter_sdk::language_model::server_tools::web_search::config::{
+    DEFAULT_MAX_RESULTS, WebSearchBackendConfig, WebSearchSettings,
+};
+use bitrouter_sdk::language_model::server_tools::web_search::http::{
+    HttpEngine, HttpSearchBackend,
+};
+use bitrouter_sdk::language_model::server_tools::web_search::nested::NestedSearchBackend;
+use bitrouter_sdk::language_model::server_tools::web_search::toolset::WebSearchToolset;
 use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts, PipelineBuilder};
 use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
 use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
@@ -358,7 +368,8 @@ pub async fn build_app_with_path(
     // already-authorised request, and the parent principal rides the caller).
     let server_tools_enabled = config.server_tools.fusion.is_some()
         || config.server_tools.advisor
-        || config.server_tools.subagent;
+        || config.server_tools.subagent
+        || config.server_tools.web_search.is_some();
     let nested_runner: Option<Arc<dyn NestedRunner>> = if server_tools_enabled {
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
@@ -606,7 +617,7 @@ fn build_server_tool_loop(
     // Nested server tools (advisor / sub-agent / fusion) over the shared runner.
     // Each toolset advertises only when the request declares it, so it is safe
     // to register every enabled one.
-    if let Some(runner) = nested_runner {
+    if let Some(runner) = &nested_runner {
         if settings.advisor {
             sets.push(Arc::new(AdvisorToolset::new(runner.clone())));
         }
@@ -614,7 +625,22 @@ fn build_server_tool_loop(
             sets.push(Arc::new(SubAgentToolset::new(runner.clone())));
         }
         if settings.fusion.is_some() {
-            sets.push(Arc::new(FusionToolset::new(runner)));
+            sets.push(Arc::new(FusionToolset::new(runner.clone())));
+        }
+    }
+
+    // Built-in web_search server tool, backed by the configured BYOK search
+    // backends. Advertised per-request only when the caller declares it.
+    if let Some(web_search) = &settings.web_search {
+        let backends = build_web_search_backends(web_search, &nested_runner);
+        if backends.is_empty() {
+            tracing::warn!(
+                "server_tools.web_search is set but no backend resolved (missing API keys?); \
+                 web_search is disabled"
+            );
+        } else {
+            let max_results = web_search.max_results.unwrap_or(DEFAULT_MAX_RESULTS);
+            sets.push(Arc::new(WebSearchToolset::new(backends, max_results)));
         }
     }
 
@@ -630,6 +656,106 @@ fn build_server_tool_loop(
         loop_config,
         Arc::new(AllowAll),
     )))
+}
+
+/// Build the live `web_search` backends from `settings`, in the configured
+/// preference/failover order. HTTP backends resolve their BYOK key from the
+/// explicit `api_key` (with `${VAR}` already substituted at config load) or the
+/// engine's conventional environment variable; one whose key cannot be resolved
+/// is skipped with a warning. The Perplexity / native backends reuse the shared
+/// nested runner (so they are skipped when none was built).
+fn build_web_search_backends(
+    settings: &WebSearchSettings,
+    nested_runner: &Option<Arc<dyn NestedRunner>>,
+) -> Vec<Arc<dyn WebSearchBackend>> {
+    // One shared HTTP client for the BYOK search APIs, with a request timeout
+    // below the loop's per-tool budget so a stuck call fails over promptly.
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .unwrap_or_default();
+
+    let mut backends: Vec<Arc<dyn WebSearchBackend>> = Vec::new();
+    for entry in &settings.backends {
+        match entry {
+            WebSearchBackendConfig::Parallel { api_key, api_base } => {
+                if let Some(key) = resolve_search_key(api_key, "PARALLEL_API_KEY", "parallel") {
+                    backends.push(Arc::new(HttpSearchBackend::new(
+                        HttpEngine::Parallel,
+                        key,
+                        api_base.clone(),
+                        http.clone(),
+                    )));
+                }
+            }
+            WebSearchBackendConfig::Exa { api_key, api_base } => {
+                if let Some(key) = resolve_search_key(api_key, "EXA_API_KEY", "exa") {
+                    backends.push(Arc::new(HttpSearchBackend::new(
+                        HttpEngine::Exa,
+                        key,
+                        api_base.clone(),
+                        http.clone(),
+                    )));
+                }
+            }
+            WebSearchBackendConfig::Firecrawl { api_key, api_base } => {
+                if let Some(key) = resolve_search_key(api_key, "FIRECRAWL_API_KEY", "firecrawl") {
+                    backends.push(Arc::new(HttpSearchBackend::new(
+                        HttpEngine::Firecrawl,
+                        key,
+                        api_base.clone(),
+                        http.clone(),
+                    )));
+                }
+            }
+            WebSearchBackendConfig::Perplexity { model } => {
+                if let Some(runner) = nested_runner {
+                    backends.push(Arc::new(NestedSearchBackend::new(
+                        "perplexity".to_string(),
+                        runner.clone(),
+                        model
+                            .clone()
+                            .unwrap_or_else(|| "perplexity/sonar".to_string()),
+                        Vec::new(),
+                    )));
+                } else {
+                    tracing::warn!("web_search perplexity backend needs a nested runner; skipping");
+                }
+            }
+            WebSearchBackendConfig::Native { name, model, tool } => {
+                if let Some(runner) = nested_runner {
+                    backends.push(Arc::new(NestedSearchBackend::new(
+                        name.clone().unwrap_or_else(|| "native".to_string()),
+                        runner.clone(),
+                        model.clone(),
+                        forwarded_tools(std::slice::from_ref(tool)),
+                    )));
+                } else {
+                    tracing::warn!("web_search native backend needs a nested runner; skipping");
+                }
+            }
+        }
+    }
+    backends
+}
+
+/// Resolve a search backend's BYOK key: the explicit value if non-empty, else
+/// the conventional environment variable. Logs and returns `None` when unset.
+fn resolve_search_key(explicit: &Option<String>, env_var: &str, backend: &str) -> Option<String> {
+    if let Some(key) = explicit.as_ref().filter(|k| !k.is_empty()) {
+        return Some(key.clone());
+    }
+    match bitrouter_sdk::config::env_lookup(env_var) {
+        Some(key) if !key.is_empty() => Some(key),
+        _ => {
+            tracing::warn!(
+                backend,
+                env_var,
+                "web_search backend has no API key (set the env var or `api_key`); skipping"
+            );
+            None
+        }
+    }
 }
 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
@@ -1423,5 +1549,37 @@ mod server_tools_tests {
         let config = Config::default();
         let runner: Arc<dyn NestedRunner> = Arc::new(NoopRunner);
         assert!(build_server_tool_loop(&config, &None, &None, Some(runner)).is_none());
+    }
+
+    #[test]
+    fn web_search_nested_backend_builds_loop() {
+        use bitrouter_sdk::language_model::server_tools::web_search::config::{
+            WebSearchBackendConfig, WebSearchSettings,
+        };
+        // A Perplexity (nested) backend resolves over the runner and builds the loop.
+        let mut cfg = Config::default();
+        cfg.server_tools.web_search = Some(WebSearchSettings {
+            backends: vec![WebSearchBackendConfig::Perplexity { model: None }],
+            max_results: None,
+        });
+        let runner: Arc<dyn NestedRunner> = Arc::new(NoopRunner);
+        assert!(build_server_tool_loop(&cfg, &None, &None, Some(runner)).is_some());
+    }
+
+    #[test]
+    fn web_search_http_backend_with_explicit_key_builds_loop_without_runner() {
+        use bitrouter_sdk::language_model::server_tools::web_search::config::{
+            WebSearchBackendConfig, WebSearchSettings,
+        };
+        // An HTTP backend with an explicit key resolves with no nested runner.
+        let mut cfg = Config::default();
+        cfg.server_tools.web_search = Some(WebSearchSettings {
+            backends: vec![WebSearchBackendConfig::Exa {
+                api_key: Some("explicit-key".to_string()),
+                api_base: None,
+            }],
+            max_results: Some(3),
+        });
+        assert!(build_server_tool_loop(&cfg, &None, &None, None).is_some());
     }
 }
