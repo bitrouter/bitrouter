@@ -37,6 +37,46 @@ models:
     upstream_id: "anthropic/claude-haiku-4-5"
 ```
 
+### Override models with `bitrouter spawn`
+
+When launching Claude Code through `bitrouter spawn`, you can point it at other
+BitRouter models without editing `~/.claude`. The selection is expressed over
+three generic capability tiers — `high` / `mid` / `low`, which map to Claude's
+`opus` / `sonnet` / `haiku` slots (those names also work as aliases) — and
+delivered as `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, so the whole alias
+ladder (and the picker's Default) is remapped while Claude keeps its tiered
+behaviour (heavy work → high, default → mid, background → low). Use the
+`provider/model` ids from `bitrouter models`.
+
+```bash
+# Everything on one cheap model:
+bitrouter spawn -a claude -m opencode-go/glm-5.1 -- -p "summarize"
+
+# Per-tier: keep a strong main model, cheap background:
+bitrouter spawn -a claude -m mid=anthropic/claude-sonnet-4-6 \
+  -m low=opencode-go/glm-5.1-air -- -p "refactor"
+
+# A named preset from bitrouter.yaml:
+bitrouter spawn -a claude --preset cheap -- -p "tidy imports"
+```
+
+```yaml
+# bitrouter.yaml — a default plan applied to every spawn, plus named presets.
+spawn:
+  model:                       # default tier→model plan (optional)
+    low: opencode-go/glm-5.1-air
+  presets:
+    cheap:
+      high: opencode-go/glm-5.1
+      mid: opencode-go/glm-5.1
+      low: opencode-go/glm-5.1-air
+```
+
+Sources merge per tier, lowest priority first: `spawn.model` →
+`BITROUTER_SPAWN_PRESET` → `BITROUTER_SPAWN_MODEL` (a bare id → every tier) →
+`--preset` → `--model`. With none set, Claude Code's own default models are used.
+See `references/cli.md` for the full flag/env reference.
+
 ## Verify
 
 ```bash

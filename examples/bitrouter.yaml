@@ -47,3 +47,16 @@ models:
         service_id: claude-sonnet-4-6
       - provider: openai
         service_id: gpt-4o
+
+# `bitrouter spawn` model overrides. Maps generic capability tiers
+# (`high`/`mid`/`low`) to BitRouter model ids; for Claude Code these become the
+# opus/sonnet/haiku slots. Optional — omit `spawn:` to keep each harness's own
+# default models. CLI flags (`--preset`, `--model`) override these per tier.
+# spawn:
+#   model:                      # default plan applied to every `bitrouter spawn`
+#     low: openai/gpt-4o-mini
+#   presets:                    # named tier→model maps, selected with --preset
+#     powerful:
+#       high: anthropic/claude-sonnet-4-6
+#       mid: anthropic/claude-sonnet-4-6
+#       low: openai/gpt-4o

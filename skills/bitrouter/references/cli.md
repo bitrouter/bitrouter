@@ -85,6 +85,21 @@ Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter
 |---|---|
 | `bitrouter agent-proxy <agent> [--config PATH]` | Stdio bridge between an ACP-aware editor and an upstream agent declared under `agents:`. Editor spawns this binary as a subprocess. Routes JSON-RPC newline-framed over stdio. |
 
+## Harness launcher (`bitrouter spawn`)
+
+| Command | Effect |
+|---|---|
+| `bitrouter spawn -a <agent> [--config PATH] [--base-url URL] [--no-install] [--no-start] [--preset NAME] [--model SPEC]… -- <agent args…>` | Launch a coding-agent harness (`-a claude` for Claude Code) as a child process with its gateway env pointed at BitRouter (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`) — the agent's own config files are untouched. Everything after `--` is forwarded to the agent verbatim. Auto-starts a local daemon when one isn't running (`--no-start` opts out). |
+
+**Model overrides.** By default Claude Code uses its bare `claude-*` models (routed to the subscription). Override them across three generic tiers — `high` / `mid` / `low` (Claude aliases: `opus` / `sonnet` / `haiku`):
+
+- `--model <id>` → every tier; `--model <tier>=<id>` → one tier (repeatable), e.g. `--model low=opencode-go/glm-5.1-air`.
+- `--preset <name>` → a named tier→model map from the `spawn.presets` config block.
+- Env: `BITROUTER_SPAWN_PRESET` (preset name), `BITROUTER_SPAWN_MODEL` (bare id → every tier).
+- Config: `spawn.model` (default plan) + `spawn.presets` (named maps) in `bitrouter.yaml`.
+
+Sources merge per tier, lowest first: `spawn.model` → `BITROUTER_SPAWN_PRESET` → `BITROUTER_SPAWN_MODEL` → `--preset` → `--model`. For Claude these become `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`. Model ids pass through faithfully (no client-side validation); use the `provider/model` form from `bitrouter models`.
+
 ## Unimplemented in v1.0
 
 These print `not implemented in v1.0` today and are unlikely to land in the proxy binary:

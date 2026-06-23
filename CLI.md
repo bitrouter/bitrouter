@@ -178,12 +178,21 @@ Stdio bridge between an ACP-aware editor and a configured upstream agent. The ed
 ### `bitrouter spawn`
 
 ```
-bitrouter spawn -a <agent> [-c <path>] [--base-url <url>] [--no-install] [--no-start] -- <agent args…>
+bitrouter spawn -a <agent> [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--preset <name>] [--model <spec>]… -- <agent args…>
 ```
 
-Launches a coding-agent harness (`-a claude` for Claude Code) as a child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files** — only the child process environment is set (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions`.
+Launches a coding-agent harness (`-a claude` for Claude Code) as a child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files** — only the child process environment is set (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, plus any model overrides). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions`.
 
 The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing agent binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines).
+
+**Model overrides.** By default the harness uses its own default models (Claude Code's bare `claude-*` ids, which the daemon routes to the subscription). To run it on other BitRouter models — e.g. cheaper open-weight ones — supply a model plan over three generic capability tiers, `high` / `mid` / `low` (for Claude these map to the `opus` / `sonnet` / `haiku` slots; those names are accepted as aliases):
+
+- `--model <id>` sets **every** tier to `<id>`; `--model <tier>=<id>` sets one tier (repeatable), e.g. `--model low=opencode-go/glm-5.1-air`.
+- `--preset <name>` applies a named tier→model map from the `spawn.presets` config block.
+- Environment: `BITROUTER_SPAWN_PRESET` (a preset name) and `BITROUTER_SPAWN_MODEL` (a bare id → every tier).
+- Config: a `spawn.model` default plan and `spawn.presets` named maps in `bitrouter.yaml`.
+
+Sources merge **per tier**, lowest priority first: `spawn.model` → `BITROUTER_SPAWN_PRESET` → `BITROUTER_SPAWN_MODEL` → `--preset` → `--model`. With nothing set, no model env vars are injected and routing is unchanged. For Claude these become `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, which remap what each alias and the picker's Default resolve to (see <https://code.claude.com/docs/en/model-config#environment-variables>).
 
 When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `spawn` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
 
