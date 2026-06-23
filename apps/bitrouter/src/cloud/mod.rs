@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bitrouter_cloud_sdk::BitrouterCloudAuthApplier;
-use bitrouter_cloud_sdk::auth::credentials::default_credentials_path;
+use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, default_credentials_path};
 use bitrouter_cloud_sdk::provider::PROVIDER_ID;
 use bitrouter_sdk::config::{Config, ProviderConfig};
 use bitrouter_sdk::language_model::{AuthApplier, auth::AuthAppliers};
@@ -84,6 +84,40 @@ pub fn register_if_configured(config: &Config, appliers: &mut AuthAppliers) -> R
     let applier = build_auth_applier()?;
     appliers.register(PROVIDER_ID, applier);
     Ok(())
+}
+
+/// The signed-in account's access token, for attributing telemetry exports to
+/// the account that ran `bitrouter cloud login`. `None` when not signed in.
+///
+/// Best-effort: a missing or unreadable credential store, or no stored session,
+/// yields `None` (the export stays anonymous) rather than an error — resolving
+/// the bearer must never break daemon startup.
+///
+/// This reads the **stored** token without refreshing — a synchronous snapshot
+/// taken once at config-assembly time. An expired stored token is treated as
+/// "not signed in" (returns `None`); live re-attachment with auto-refresh on
+/// each export is a documented follow-up. In practice the token is minted fresh
+/// at `bitrouter cloud login` and long-lived, so the snapshot is valid for the
+/// daemon's session.
+///
+/// Note the snapshot is baked into a *static* `Authorization` header on the OTLP
+/// exporter: if the token expires mid-session the exporter keeps sending the now
+/// stale bearer (the ingest rejects it; telemetry is best-effort) until the
+/// daemon restarts and re-evaluates validity — it does not silently fall back to
+/// anonymous. This is the trade-off the deferred auto-refresh follow-up removes.
+pub fn current_account_bearer() -> Option<String> {
+    let store = CredentialsStore::default_path().ok()?;
+    account_bearer_from_store(&store)
+}
+
+/// Pure form of [`current_account_bearer`]: extract a still-valid access token
+/// from an already-loaded store. Factored out so the validity gate is
+/// unit-testable without touching the default credentials path.
+fn account_bearer_from_store(store: &CredentialsStore) -> Option<String> {
+    let creds = store.current()?;
+    creds
+        .access_token_valid()
+        .then(|| creds.access_token.clone())
 }
 
 #[cfg(test)]
@@ -148,6 +182,65 @@ mod tests {
             config.providers.get(PROVIDER_ID).unwrap().api_base,
             "https://example.invalid",
             "existing entry must not be overwritten"
+        );
+    }
+
+    /// Write a credentials JSON file with the given access token and RFC 3339
+    /// `expires_at`, then load it into a store. The remaining required fields
+    /// are filled with placeholders — only the token + expiry matter here.
+    fn store_with_token(label: &str, access_token: &str, expires_at: &str) -> CredentialsStore {
+        let path = fresh_tmp_creds_path(label);
+        let json = serde_json::json!({
+            "access_token": access_token,
+            "expires_at": expires_at,
+            "token_type": "Bearer",
+            "scope": "telemetry:write",
+            "client_id": "bitrouter-cli",
+            "authorization_server": "https://api.bitrouter.ai",
+        });
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        CredentialsStore::load(&path).unwrap()
+    }
+
+    #[test]
+    fn account_bearer_returns_valid_stored_token() {
+        let store = store_with_token("valid", "bra_live", "2999-01-01T00:00:00Z");
+        assert_eq!(
+            account_bearer_from_store(&store).as_deref(),
+            Some("bra_live")
+        );
+    }
+
+    #[test]
+    fn account_bearer_none_when_token_expired() {
+        let store = store_with_token("expired", "bra_old", "2000-01-01T00:00:00Z");
+        assert!(
+            account_bearer_from_store(&store).is_none(),
+            "an expired stored token must be treated as not signed in"
+        );
+    }
+
+    #[test]
+    fn account_bearer_none_when_not_signed_in() {
+        // Empty store (no credentials file) → no bearer.
+        let path = fresh_tmp_creds_path("absent");
+        let store = CredentialsStore::load(&path).unwrap();
+        assert!(account_bearer_from_store(&store).is_none());
+    }
+
+    #[test]
+    fn malformed_credentials_file_is_swallowed_as_anonymous() {
+        // A corrupt credentials file makes `CredentialsStore::load` error; the
+        // `default_path().ok()?` in `current_account_bearer` swallows that into
+        // `None` so a broken file degrades to anonymous telemetry rather than
+        // breaking daemon startup. We can't drive the real default path here, so
+        // assert the load error that the `?` consumes.
+        let path = fresh_tmp_creds_path("malformed");
+        fs::write(&path, "{ not valid json").unwrap();
+        assert!(
+            CredentialsStore::load(&path).is_err(),
+            "a malformed credentials file must surface as a load error for \
+             `current_account_bearer` to swallow into anonymous"
         );
     }
 }
