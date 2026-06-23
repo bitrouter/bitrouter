@@ -113,14 +113,23 @@ pub struct SpawnOptions {
     /// When true, never offer to install a missing agent — error instead.
     /// (Set by `--no-install`, or implied when stdin is not a TTY.)
     pub no_install: bool,
+    /// When true, never auto-start a local daemon when none is running — just
+    /// warn. (Set by `--no-start`.) Has no effect for a non-local / `--base-url`
+    /// target, which is never auto-started regardless.
+    pub no_start: bool,
 }
 
 /// Run `bitrouter spawn`. Resolves the base URL from `cfg`, locates the agent
-/// binary (offering to install it if missing and permitted), then execs the
-/// agent with the routing environment injected. On success this **does not
-/// return** — it exits the process with the agent's exit code, the way a
-/// launcher like `git <subcommand>` propagates its child's status.
-pub async fn run(cfg: &bitrouter_sdk::config::Config, opts: SpawnOptions) -> Result<()> {
+/// binary (offering to install it if missing and permitted), ensures the local
+/// daemon is up (auto-starting it when down), then execs the agent with the
+/// routing environment injected. On success this **does not return** — it exits
+/// the process with the agent's exit code, the way a launcher like
+/// `git <subcommand>` propagates its child's status.
+pub async fn run(
+    source: &crate::paths::ConfigSource,
+    cfg: &bitrouter_sdk::config::Config,
+    opts: SpawnOptions,
+) -> Result<()> {
     let spec = opts.agent.spec();
 
     let base_url = match &opts.base_url {
@@ -131,10 +140,20 @@ pub async fn run(cfg: &bitrouter_sdk::config::Config, opts: SpawnOptions) -> Res
     // Locate the binary; prompt-to-install when it's missing.
     let binary = ensure_agent_installed(opts.agent, opts.no_install).await?;
 
-    // Best-effort reachability note — never blocks the launch. The agent
-    // would fail on its own if the daemon is down; surfacing it up front is
-    // friendlier than a wall of HTTP errors inside the agent.
-    warn_if_daemon_unreachable(&cfg.server.listen);
+    // Make sure the daemon the agent will talk to is up. For the local daemon
+    // we own (derived base URL + a loopback/wildcard bind), probe its control
+    // socket and auto-start it when down; for an explicit `--base-url` or a
+    // non-local bind we can only warn — we can't start someone else's daemon.
+    if opts.base_url.is_none() && listen_is_local(&cfg.server.listen) {
+        ensure_local_daemon(source, cfg, opts.no_start).await;
+    } else {
+        let target = opts
+            .base_url
+            .as_deref()
+            .and_then(listen_from_base_url)
+            .unwrap_or_else(|| cfg.server.listen.clone());
+        warn_if_daemon_unreachable(&target);
+    }
 
     // Auth-token precedence (highest first): an auth token the user already
     // exported for this agent → the BitRouter API key → a local placeholder.
@@ -244,6 +263,109 @@ fn rewrite_host(host: &str) -> &str {
         "0.0.0.0" | "" => "127.0.0.1",
         "::" | "[::]" => "[::1]",
         other => other,
+    }
+}
+
+/// True when `listen` binds a loopback / wildcard address — i.e. a daemon on
+/// *this* host that `bitrouter spawn` may auto-start. A remote or LAN host is
+/// someone else's daemon, which we can only warn about. Exact-match only:
+/// `127.0.0.0/8` aliases (e.g. `127.0.0.2`) and IPv4-mapped IPv6 fall through to
+/// the warn path — the fail-safe direction (never a wrong auto-start).
+fn listen_is_local(listen: &str) -> bool {
+    let (host, _port) = split_listen(listen);
+    matches!(
+        host,
+        "127.0.0.1" | "0.0.0.0" | "" | "::1" | "[::1]" | "::" | "[::]" | "localhost"
+    )
+}
+
+/// Extract the `host[:port]` authority from a base URL for a best-effort
+/// reachability note. Returns `None` when there is no authority to probe.
+fn listen_from_base_url(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url);
+    let authority = rest.split('/').next().unwrap_or(rest);
+    (!authority.is_empty()).then(|| authority.to_string())
+}
+
+/// Ensure the local BitRouter daemon is up before launching the agent. Probes
+/// the control socket; when nothing is listening (and `--no-start` was not
+/// given) it prints a hint and auto-starts a detached `serve`, waiting for
+/// readiness. Best-effort throughout: on any failure it warns and returns so
+/// the agent still launches (and surfaces its own connection error) — matching
+/// spawn's "never block the launch" stance.
+async fn ensure_local_daemon(
+    source: &crate::paths::ConfigSource,
+    cfg: &bitrouter_sdk::config::Config,
+    no_start: bool,
+) {
+    let socket = crate::daemon::socket_path_for(source, cfg);
+    match crate::daemon::probe_status(&socket).await {
+        // Already running — nothing to do.
+        Ok(Some(_)) => {}
+        // Definitively not reachable — auto-start unless opted out.
+        Ok(None) => {
+            let p = Palette::for_stderr();
+            if no_start {
+                warn_if_daemon_unreachable(&cfg.server.listen);
+                return;
+            }
+            eprintln!(
+                "{cyan}note:{reset} no BitRouter daemon is running — starting one…",
+                cyan = p.cyan,
+                reset = p.reset,
+            );
+            let log_path = source.home().join("bitrouter.log");
+            match crate::daemon::start_and_wait(
+                source,
+                &log_path,
+                Some(&socket),
+                crate::daemon::DAEMON_READY_TIMEOUT,
+            )
+            .await
+            {
+                Ok(crate::daemon::DaemonStartOutcome::Ready(info)) => {
+                    eprintln!(
+                        "{cyan}note:{reset} BitRouter daemon ready (pid {})",
+                        info.pid,
+                        cyan = p.cyan,
+                        reset = p.reset,
+                    );
+                }
+                Ok(crate::daemon::DaemonStartOutcome::NotReadyInTime { pid }) => {
+                    eprintln!(
+                        "{cyan}note:{reset} daemon started (pid {pid}) but is not ready yet — \
+                         the agent may need a moment; logs at {}",
+                        log_path.display(),
+                        cyan = p.cyan,
+                        reset = p.reset,
+                    );
+                }
+                Ok(crate::daemon::DaemonStartOutcome::Exited { status, log_tail }) => {
+                    eprintln!(
+                        "{cyan}note:{reset} daemon exited during startup ({status}) — \
+                         launching the agent anyway",
+                        cyan = p.cyan,
+                        reset = p.reset,
+                    );
+                    crate::daemon::eprint_failure_log(&log_path, &log_tail);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{cyan}note:{reset} could not start the daemon ({e:#}) — \
+                         launching the agent anyway",
+                        cyan = p.cyan,
+                        reset = p.reset,
+                    );
+                }
+            }
+        }
+        // Reachable but the exchange errored — assume it's up; don't double-start.
+        Err(e) => {
+            tracing::debug!(error = %e, "daemon status probe errored; assuming up");
+        }
     }
 }
 
@@ -521,6 +643,46 @@ impl InstallCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listen_is_local_classifies_loopback_and_wildcard() {
+        for local in [
+            "127.0.0.1:4356",
+            "0.0.0.0:4356",
+            "[::1]:4356",
+            "[::]:4356",
+            "localhost:4356",
+            "127.0.0.1",
+        ] {
+            assert!(listen_is_local(local), "{local} should be local");
+        }
+        for remote in [
+            "router.internal:8080",
+            "192.168.1.5:4356",
+            "10.0.0.3:4356",
+            "example.com:443",
+        ] {
+            assert!(!listen_is_local(remote), "{remote} should be remote");
+        }
+    }
+
+    #[test]
+    fn listen_from_base_url_extracts_authority() {
+        assert_eq!(
+            listen_from_base_url("http://127.0.0.1:4356").as_deref(),
+            Some("127.0.0.1:4356")
+        );
+        assert_eq!(
+            listen_from_base_url("https://router.example.com/v1").as_deref(),
+            Some("router.example.com")
+        );
+        // No scheme → treated as a bare authority.
+        assert_eq!(
+            listen_from_base_url("127.0.0.1:4356").as_deref(),
+            Some("127.0.0.1:4356")
+        );
+        assert_eq!(listen_from_base_url(""), None);
+    }
 
     #[test]
     fn base_url_rewrites_wildcard_bind_to_loopback() {

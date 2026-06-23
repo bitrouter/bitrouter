@@ -228,6 +228,11 @@ enum Command {
         /// command instead. (Auto-implied when stdin is not a TTY.)
         #[arg(long)]
         no_install: bool,
+        /// Never auto-start a local BitRouter daemon when none is running —
+        /// just warn. (A `--base-url` or non-local target is never auto-started
+        /// regardless.)
+        #[arg(long)]
+        no_start: bool,
         /// Arguments forwarded verbatim to the agent binary. Everything after
         /// `--` lands here.
         #[arg(last = true, allow_hyphen_values = true)]
@@ -593,17 +598,20 @@ async fn run() -> Result<()> {
             config,
             base_url,
             no_install,
+            no_start,
             agent_args,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             bitrouter::spawn::run(
+                &source,
                 &cfg,
                 bitrouter::spawn::SpawnOptions {
                     agent,
                     agent_args,
                     base_url,
                     no_install,
+                    no_start,
                 },
             )
             .await
