@@ -37,6 +37,8 @@ bitrouter start [-c <path>] [--log <path>]
 
 Logs default to `bitrouter.log` next to the config file (e.g. `~/.bitrouter/bitrouter.log` when the config resolved to `~/.bitrouter/bitrouter.yaml`). Refuses to start if a daemon is already running.
 
+Waits until the daemon answers on its control socket before reporting `✓ … started` (up to 15s), then prints the listen address and routable-model count — so a follow-up command can rely on the daemon being up. If the daemon crashes during startup, the tail of its log is printed and the command exits non-zero; if it is alive but still not ready after 15s, a note is printed and the command exits 0 (the daemon keeps coming up).
+
 ### `bitrouter stop`
 
 ```
@@ -173,9 +175,17 @@ bitrouter agent-proxy claude-code [-c <path>]
 
 Stdio bridge between an ACP-aware editor and a configured upstream agent. The editor spawns this as a child process; `agent-proxy` routes JSON-RPC over the `acp` pipeline and relays notifications back.
 
----
+### `bitrouter spawn`
 
-## Auth and keys
+```
+bitrouter spawn -a <agent> [-c <path>] [--base-url <url>] [--no-install] [--no-start] -- <agent args…>
+```
+
+Launches a coding-agent harness (`-a claude` for Claude Code) as a child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files** — only the child process environment is set (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions`.
+
+The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing agent binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines).
+
+When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `spawn` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
 
 ### `bitrouter key sign`
 
