@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.18](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.17...v1.0.0-alpha.18)
+
+
+### ⛰️ Features
+
+- *(claude-code)* Route Claude Code traffic to a dedicated subscription provider ([#593](https://github.com/bitrouter/bitrouter/pull/593)) - ([15fde63](https://github.com/bitrouter/bitrouter/commit/15fde6346c209e4f864d0b35e573006588765022))
+- *(messages)* Preserve thinking-block signature through the streaming round-trip ([#592](https://github.com/bitrouter/bitrouter/pull/592)) - ([4d76676](https://github.com/bitrouter/bitrouter/commit/4d766767a29cc90149c919a3197e24d47bebad4a))
+- *(observe)* Opt-in first-party telemetry export ([#588](https://github.com/bitrouter/bitrouter/pull/588)) - ([e95977f](https://github.com/bitrouter/bitrouter/commit/e95977f4fc4e484aa1311d17510a97ae26a67dca))
+- *(providers)* Source built-ins from the registry snapshot ([#591](https://github.com/bitrouter/bitrouter/pull/591)) - ([e58c623](https://github.com/bitrouter/bitrouter/commit/e58c62332d74e402553ebba78939634dc5212f9b))
+- *(registry)* Registry-backed model resolution ([#589](https://github.com/bitrouter/bitrouter/pull/589)) - ([fa4083e](https://github.com/bitrouter/bitrouter/commit/fa4083ec5789cb970a5e291786609ef9f8005e00))
+- *(spawn)* Launch coding agents through BitRouter via `bitrouter spawn` ([#584](https://github.com/bitrouter/bitrouter/pull/584)) - ([5ca7ac8](https://github.com/bitrouter/bitrouter/commit/5ca7ac8c823d0b5d7f85f89d8d18b1dbcdc0cef0))
+- *(telemetry)* Account-authenticated exports + anonymous opt-out ([#596](https://github.com/bitrouter/bitrouter/pull/596)) - ([d6406dd](https://github.com/bitrouter/bitrouter/commit/d6406ddfbb939beddb9e5cb9f4b504eb7f62f4ab))
+- Read the existing Claude Code session for Claude subscription auth ([#590](https://github.com/bitrouter/bitrouter/pull/590)) - ([a720eb2](https://github.com/bitrouter/bitrouter/commit/a720eb231faab462de5c9b8929f67323772b0d3f))
+
+### 🐛 Bug Fixes
+
+- *(claude-code)* Detect subscription traffic by the agent-profile beta ([#594](https://github.com/bitrouter/bitrouter/pull/594)) - ([d528b47](https://github.com/bitrouter/bitrouter/commit/d528b47420dc941e77484cb1f8f8c9155a680858))
+
+
 ## [1.0.0-alpha.17](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.15...v1.0.0-alpha.17)
 
 

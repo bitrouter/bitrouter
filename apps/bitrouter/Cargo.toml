@@ -24,7 +24,7 @@ bitrouter-providers = { workspace = true, features = ["pkce"] }
 bitrouter-skills.workspace = true
 bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true, features = ["otel-http"] }
-bitrouter-mcp = { path = "../../mcp", version = "1.0.0-alpha.17" }
+bitrouter-mcp = { path = "../../mcp", version = "1.0.0-alpha.18" }
 chrono.workspace = true
 sha2.workspace = true
 base64.workspace = true

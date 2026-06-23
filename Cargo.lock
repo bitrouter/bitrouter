@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -784,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-attestation"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "async-trait",
  "dcap-qvl",
@@ -803,7 +803,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-attestation-plugin"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "async-trait",
  "bitrouter-attestation",
@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-bedrock"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -829,7 +829,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-cloud-sdk"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -849,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-guardrails"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "async-trait",
  "bitrouter-sdk",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-mcp"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-observe"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "async-trait",
  "axum 0.8.9",
@@ -909,7 +909,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-providers"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -929,7 +929,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-sdk"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-skills"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
@@ -6344,7 +6344,7 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "xtask"
-version = "1.0.0-alpha.17"
+version = "1.0.0-alpha.18"
 dependencies = [
  "anyhow",
  "bitrouter-sdk",
