@@ -77,6 +77,10 @@ pub struct Config {
     /// BYOK providers, where to fetch it from, and the provider-class priority
     /// ladder used to order the auto-cascade.
     pub registry: RegistryConfig,
+    /// `bitrouter spawn` model overrides: a default tier→model plan and named
+    /// presets fed to a launched coding-agent harness. Consumed by the `spawn`
+    /// CLI; empty by default (the harness then uses its own default models).
+    pub spawn: SpawnConfig,
 }
 
 impl Default for Config {
@@ -95,8 +99,29 @@ impl Default for Config {
             agents: HashMap::new(),
             inherit_defaults: true,
             registry: RegistryConfig::default(),
+            spawn: SpawnConfig::default(),
         }
     }
+}
+
+/// `bitrouter spawn` model-override configuration — the top-level `spawn:`
+/// block in `bitrouter.yaml`.
+///
+/// Holds only raw `tier-label → model-id` string maps. The tier vocabulary and
+/// its mapping to a harness's concrete model env vars (the agent-model IR) live
+/// in the `spawn` CLI (`apps/bitrouter`), so the SDK config layer stays free of
+/// agent-specific knowledge. Both fields default to empty — `spawn:` is
+/// optional, and an empty block reproduces the historical spawn behavior (no
+/// model env vars injected, the harness uses its own defaults).
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct SpawnConfig {
+    /// Default tier→model plan applied to every `bitrouter spawn`, keyed by
+    /// tier label (e.g. `high` / `mid` / `low`). Empty ⇒ no default plan.
+    pub model: HashMap<String, String>,
+    /// Named presets: preset name → (tier label → model id). Selected with
+    /// `--preset <name>` or `BITROUTER_SPAWN_PRESET`. Empty ⇒ no presets.
+    pub presets: HashMap<String, HashMap<String, String>>,
 }
 
 /// Default base URL for the provider-registry `dist/` artifacts — the raw files

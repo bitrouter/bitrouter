@@ -456,3 +456,57 @@ fn primary_api_key_prefers_top_level_then_first_account() {
     };
     assert_eq!(p2.primary_api_key(), "second");
 }
+
+#[test]
+fn spawn_config_defaults_empty() {
+    // The `spawn:` block is optional; a config without it parses with empty
+    // model + presets maps, so spawn injects no model env vars (historical
+    // behavior).
+    let cfg = Config::default();
+    assert!(cfg.spawn.model.is_empty());
+    assert!(cfg.spawn.presets.is_empty());
+
+    let cfg = parse("providers: {}\n").unwrap();
+    assert!(cfg.spawn.model.is_empty());
+    assert!(cfg.spawn.presets.is_empty());
+}
+
+#[test]
+fn parses_spawn_model_and_presets() {
+    let yaml = r#"
+spawn:
+  model:
+    mid: opencode-go/glm-5.1
+    low: opencode-go/glm-5.1-air
+  presets:
+    cheap:
+      high: opencode-go/glm-5.1
+      mid: opencode-go/glm-5.1
+      low: opencode-go/glm-5.1-air
+    powerful:
+      high: anthropic/claude-opus-4-8
+"#;
+    let cfg = parse(yaml).unwrap();
+    // Default tier→model plan.
+    assert_eq!(
+        cfg.spawn.model.get("mid").map(String::as_str),
+        Some("opencode-go/glm-5.1")
+    );
+    assert_eq!(
+        cfg.spawn.model.get("low").map(String::as_str),
+        Some("opencode-go/glm-5.1-air")
+    );
+    // Named presets, including a partial one.
+    let cheap = cfg.spawn.presets.get("cheap").unwrap();
+    assert_eq!(
+        cheap.get("high").map(String::as_str),
+        Some("opencode-go/glm-5.1")
+    );
+    assert_eq!(cheap.len(), 3);
+    let powerful = cfg.spawn.presets.get("powerful").unwrap();
+    assert_eq!(
+        powerful.get("high").map(String::as_str),
+        Some("anthropic/claude-opus-4-8")
+    );
+    assert_eq!(powerful.len(), 1, "partial presets are allowed");
+}

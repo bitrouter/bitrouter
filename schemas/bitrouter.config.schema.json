@@ -819,6 +819,31 @@
         }
       ]
     },
+    "SpawnConfig": {
+      "description": "`bitrouter spawn` model-override configuration — the top-level `spawn:`\nblock in `bitrouter.yaml`.\n\nHolds only raw `tier-label → model-id` string maps. The tier vocabulary and\nits mapping to a harness's concrete model env vars (the agent-model IR) live\nin the `spawn` CLI (`apps/bitrouter`), so the SDK config layer stays free of\nagent-specific knowledge. Both fields default to empty — `spawn:` is\noptional, and an empty block reproduces the historical spawn behavior (no\nmodel env vars injected, the harness uses its own defaults).",
+      "properties": {
+        "model": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Default tier→model plan applied to every `bitrouter spawn`, keyed by\ntier label (e.g. `high` / `mid` / `low`). Empty ⇒ no default plan.",
+          "type": "object"
+        },
+        "presets": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "default": {},
+          "description": "Named presets: preset name → (tier label → model id). Selected with\n`--preset <name>` or `BITROUTER_SPAWN_PRESET`. Empty ⇒ no presets.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "VariantConfig": {
       "description": "A `:variant` definition — a routing modifier only.",
       "properties": {
@@ -965,6 +990,10 @@
     "server_tools": {
       "$ref": "#/$defs/ServerToolsConfig",
       "description": "Server-side tool loop: MCP server ids whose tools BitRouter injects into\nLLM requests and executes itself. Empty by default — the pipeline stays\nsingle-shot."
+    },
+    "spawn": {
+      "$ref": "#/$defs/SpawnConfig",
+      "description": "`bitrouter spawn` model overrides: a default tier→model plan and named\npresets fed to a launched coding-agent harness. Consumed by the `spawn`\nCLI; empty by default (the harness then uses its own default models)."
     },
     "variants": {
       "additionalProperties": {
