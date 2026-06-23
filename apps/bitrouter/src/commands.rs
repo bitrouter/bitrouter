@@ -569,9 +569,10 @@ async fn run_claude_code_session()
         );
     }
 
-    let claude = crate::spawn::ensure_agent_installed(crate::spawn::SpawnAgent::Claude, false)
-        .await
-        .context("locating the claude CLI to sign you in")?;
+    let claude =
+        crate::spawn::agent::ensure_agent_installed(crate::spawn::agent::SpawnAgent::Claude, false)
+            .await
+            .context("locating the claude CLI to sign you in")?;
 
     eprintln!("  You're not signed in to Claude Code yet — launching `claude auth login`.");
     let status = tokio::process::Command::new(&claude)

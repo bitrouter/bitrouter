@@ -17,6 +17,17 @@
 //!
 //! Everything after `--` is handed to the agent binary verbatim.
 //!
+//! ## Model overrides
+//!
+//! By default the launched agent uses its own default models (for Claude Code,
+//! the bare `claude-*` ids that the daemon routes to the subscription). A user
+//! can instead point the agent at arbitrary BitRouter models — expressed as
+//! generic capability tiers ([`model_plan::ModelTier`]) and supplied via the
+//! config file, environment variables, or `--preset` / `--model` flags. The
+//! selection (the [`model_plan`] IR) is resolved independently of how it reaches
+//! a given harness ([`agent::AgentSpec::tier_env`]), so the feature is generic
+//! across agents.
+//!
 //! ## Claude Code integration
 //!
 //! - `ANTHROPIC_BASE_URL` redirects the Anthropic SDK Claude Code uses to an
@@ -25,72 +36,27 @@
 //! - Install commands are the official native installers documented in the
 //!   Claude Code quickstart: <https://code.claude.com/docs/en/quickstart>.
 
-use std::ffi::OsString;
-use std::io::IsTerminal;
-use std::path::PathBuf;
+pub mod agent;
+pub mod model_plan;
 
 use anyhow::{Context, Result};
-use clap::ValueEnum;
 
+use crate::spawn::agent::{AgentSpec, SpawnAgent, ensure_agent_installed};
+use crate::spawn::model_plan::ModelPlan;
 use crate::style::Palette;
-
-/// The coding-agent harnesses `bitrouter spawn` can launch. v1 ships Claude
-/// Code only; the enum is the extension point for `codex` / `gemini` later, so
-/// the dispatch, env-injection, and install machinery is written against the
-/// [`AgentSpec`] metadata rather than hard-coded to one agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum SpawnAgent {
-    /// Anthropic's Claude Code CLI (`claude`).
-    Claude,
-}
-
-impl SpawnAgent {
-    /// Static metadata describing how to find, route, and install this agent.
-    pub fn spec(self) -> AgentSpec {
-        match self {
-            SpawnAgent::Claude => AgentSpec {
-                agent: self,
-                // The display id matches the `--agent` value.
-                id: "claude",
-                // The executable name looked up on `PATH`.
-                binary: "claude",
-                // Claude Code reads its gateway endpoint from
-                // `ANTHROPIC_BASE_URL`, and authenticates to that gateway with
-                // `ANTHROPIC_AUTH_TOKEN` (sent as the `Authorization: Bearer`
-                // header) — this is the documented way to route Claude Code
-                // through a custom LLM gateway, and `Authorization: Bearer` is
-                // exactly the inbound credential BitRouter expects (`brk_…`).
-                // `ANTHROPIC_API_KEY` would instead be sent as `x-api-key`, the
-                // first-party Anthropic header, which is not BitRouter's inbound
-                // scheme — so we deliberately set the auth token, not the API key.
-                // https://code.claude.com/docs/en/llm-gateway#authentication-methods
-                base_url_env: "ANTHROPIC_BASE_URL",
-                auth_token_env: "ANTHROPIC_AUTH_TOKEN",
-            },
-        }
-    }
-}
-
-/// Resolved, per-agent static facts used by the spawn machinery.
-#[derive(Debug, Clone, Copy)]
-pub struct AgentSpec {
-    /// Which agent this describes.
-    pub agent: SpawnAgent,
-    /// Catalog id / `--agent` value.
-    pub id: &'static str,
-    /// Executable name searched for on `PATH`.
-    pub binary: &'static str,
-    /// Env var the agent reads its gateway base URL from.
-    pub base_url_env: &'static str,
-    /// Env var the agent reads its gateway bearer token from (sent as
-    /// `Authorization: Bearer`), which is BitRouter's inbound auth scheme.
-    pub auth_token_env: &'static str,
-}
 
 /// BitRouter's own API-key env var (`brk_…`). When set, we forward it to the
 /// agent as the gateway bearer token so the agent authenticates to BitRouter
 /// with the user's real credential instead of the placeholder.
 const BITROUTER_API_KEY_ENV: &str = "BITROUTER_API_KEY";
+
+/// Environment variable naming a `spawn.presets` entry to apply (overrides the
+/// config default plan, overridden by the `--preset` flag).
+const SPAWN_PRESET_ENV: &str = "BITROUTER_SPAWN_PRESET";
+
+/// Environment variable holding a single model id applied to every tier
+/// (overrides a preset, overridden by `--model`).
+const SPAWN_MODEL_ENV: &str = "BITROUTER_SPAWN_MODEL";
 
 /// A sentinel placeholder credential, injected into the agent's environment
 /// only when the user has neither set the agent's auth-token var nor exported a
@@ -117,13 +83,19 @@ pub struct SpawnOptions {
     /// warn. (Set by `--no-start`.) Has no effect for a non-local / `--base-url`
     /// target, which is never auto-started regardless.
     pub no_start: bool,
+    /// `--preset <name>`: a `spawn.presets` entry to apply on top of the config
+    /// default plan / environment overrides. `None` when not given.
+    pub preset: Option<String>,
+    /// `--model <SPEC>` flags (repeatable): a bare `<id>` sets every tier; a
+    /// `<tier>=<id>` sets one tier. Applied last (highest priority).
+    pub models: Vec<String>,
 }
 
-/// Run `bitrouter spawn`. Resolves the base URL from `cfg`, locates the agent
-/// binary (offering to install it if missing and permitted), ensures the local
-/// daemon is up (auto-starting it when down), then execs the agent with the
-/// routing environment injected. On success this **does not return** — it exits
-/// the process with the agent's exit code, the way a launcher like
+/// Run `bitrouter spawn`. Resolves the base URL and the model plan, locates the
+/// agent binary (offering to install it if missing and permitted), ensures the
+/// local daemon is up (auto-starting it when down), then execs the agent with
+/// the routing environment injected. On success this **does not return** — it
+/// exits the process with the agent's exit code, the way a launcher like
 /// `git <subcommand>` propagates its child's status.
 pub async fn run(
     source: &crate::paths::ConfigSource,
@@ -136,6 +108,17 @@ pub async fn run(
         Some(explicit) => explicit.clone(),
         None => derive_base_url(&cfg.server.listen),
     };
+
+    // Resolve the model plan before anything with side effects (install /
+    // daemon start), so a typo in a preset name or `--model` flag fails fast.
+    let plan = model_plan::resolve(
+        opts.agent,
+        &cfg.spawn,
+        nonempty_env(SPAWN_PRESET_ENV),
+        nonempty_env(SPAWN_MODEL_ENV),
+        opts.preset.as_deref(),
+        &opts.models,
+    )?;
 
     // Locate the binary; prompt-to-install when it's missing.
     let binary = ensure_agent_installed(opts.agent, opts.no_install).await?;
@@ -159,7 +142,7 @@ pub async fn run(
     // exported for this agent → the BitRouter API key → a local placeholder.
     let parent_auth = nonempty_env(spec.auth_token_env);
     let bitrouter_key = nonempty_env(BITROUTER_API_KEY_ENV);
-    let env = build_child_env(&spec, &base_url, parent_auth, bitrouter_key);
+    let env = build_child_env(&spec, &base_url, parent_auth, bitrouter_key, &plan);
 
     let p = Palette::for_stderr();
     eprintln!(
@@ -170,6 +153,15 @@ pub async fn run(
         bold = p.bold,
         reset = p.reset,
     );
+    if !plan.is_empty() {
+        let overrides: Vec<String> = plan.iter().map(|(t, m)| format!("{t}={m}")).collect();
+        eprintln!(
+            "{cyan}spawn:{reset} model overrides — {}",
+            overrides.join(", "),
+            cyan = p.cyan,
+            reset = p.reset,
+        );
+    }
 
     let mut cmd = tokio::process::Command::new(&binary);
     cmd.args(&opts.agent_args);
@@ -194,30 +186,41 @@ pub async fn run(
 }
 
 /// Build the environment overrides layered on top of the inherited parent
-/// environment: always force the routing base URL, and resolve the gateway
-/// bearer token by precedence.
+/// environment: always force the routing base URL, resolve the gateway bearer
+/// token by precedence, and append any model-plan tier overrides.
 ///
 /// Returned as an explicit list (rather than mutating the global env) so the
 /// logic is unit-testable. `parent_auth` is any auth token the user already
 /// exported for the agent; `bitrouter_key` is the value of `BITROUTER_API_KEY`.
-/// Precedence: `parent_auth` → `bitrouter_key` → placeholder. We always set the
-/// auth token (never just inherit) so that an inherited `ANTHROPIC_API_KEY`
+/// Auth precedence: `parent_auth` → `bitrouter_key` → placeholder. We always set
+/// the auth token (never just inherit) so that an inherited `ANTHROPIC_API_KEY`
 /// (which in this repo is the *upstream* Anthropic provider key, not a valid
-/// BitRouter inbound credential) cannot accidentally become the auth Claude
-/// Code sends to the router.
+/// BitRouter inbound credential) cannot accidentally become the auth Claude Code
+/// sends to the router. An empty `plan` adds no model vars — the harness then
+/// uses its own default models.
 fn build_child_env(
     spec: &AgentSpec,
     base_url: &str,
     parent_auth: Option<String>,
     bitrouter_key: Option<String>,
+    plan: &ModelPlan,
 ) -> Vec<(&'static str, String)> {
     let token = parent_auth
         .or(bitrouter_key)
         .unwrap_or_else(|| PLACEHOLDER_API_KEY.to_string());
-    vec![
+    let mut env = vec![
         (spec.base_url_env, base_url.to_string()),
         (spec.auth_token_env, token),
-    ]
+    ];
+    // Layer the resolved model plan on top: each selected tier becomes the
+    // agent's corresponding model env var. A tier the agent does not model
+    // (tier_env → None) is skipped.
+    for (tier, model) in plan.iter() {
+        if let Some(var) = spec.tier_env(tier) {
+            env.push((var, model.to_string()));
+        }
+    }
+    env
 }
 
 /// Read an environment variable, treating an unset *or empty* value as absent.
@@ -369,168 +372,6 @@ async fn ensure_local_daemon(
     }
 }
 
-/// Locate an executable on `PATH`. Pure-`std` (no `which` crate) so the
-/// `#![forbid(unsafe_code)]` lib stays dependency-light: split `$PATH` and
-/// probe each entry. Returns the first match.
-fn resolve_binary(name: &str) -> Option<PathBuf> {
-    find_on_path(name, std::env::var_os("PATH"), &extra_search_dirs())
-}
-
-/// Core of [`resolve_binary`], factored out for testing. Searches `path` (an
-/// `OsString` of `PATH`-separated dirs) followed by `extra` directories —
-/// the latter covers the native installer's target (`~/.local/bin`), which is
-/// often not yet on `PATH` in the shell that just ran the install.
-fn find_on_path(name: &str, path: Option<OsString>, extra: &[PathBuf]) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(path) = path {
-        dirs.extend(std::env::split_paths(&path));
-    }
-    dirs.extend(extra.iter().cloned());
-    for dir in dirs {
-        let candidate = dir.join(name);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
-        // On Windows, executables carry an extension. We probe the common
-        // launcher extensions rather than parsing the full `%PATHEXT%` set —
-        // agent CLIs ship as `.exe` or an npm `.cmd`/`.bat` shim, which these
-        // cover; an exotic `%PATHEXT%` entry (`.com`, `.ps1`) would be missed.
-        #[cfg(windows)]
-        {
-            for ext in ["exe", "cmd", "bat"] {
-                let with_ext = dir.join(format!("{name}.{ext}"));
-                if is_executable_file(&with_ext) {
-                    return Some(with_ext);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Directories to probe in addition to `PATH`. The Claude Code native
-/// installer drops the binary in `~/.local/bin`, which a freshly-installed
-/// shell session may not have on `PATH` yet.
-fn extra_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(home) = home_dir() {
-        dirs.push(home.join(".local").join("bin"));
-    }
-    dirs
-}
-
-/// True when `path` is a regular file we can plausibly execute. On Unix this
-/// checks the executable permission bit; on other platforms, file existence.
-fn is_executable_file(path: &std::path::Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-/// Resolve the user's home directory without pulling in a crate: `$HOME` on
-/// Unix, `%USERPROFILE%` on Windows.
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
-}
-
-/// Ensure `agent`'s binary is installed — locating it on `PATH` (+
-/// `~/.local/bin`) and offering the official native installer when permitted —
-/// and return its path. Shared by `bitrouter spawn` and `bitrouter login
-/// anthropic` (which needs the `claude` CLI to sign the user in) so both go
-/// through one detect-and-install path.
-pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) -> Result<PathBuf> {
-    let spec = agent.spec();
-    match resolve_binary(spec.binary) {
-        Some(path) => Ok(path),
-        None => ensure_installed(&spec, no_install).await,
-    }
-}
-
-/// The agent binary is missing. Offer to install it via the official native
-/// installer when stdin is interactive and `--no-install` was not set;
-/// otherwise return an actionable error listing the install command.
-async fn ensure_installed(spec: &AgentSpec, no_install: bool) -> Result<PathBuf> {
-    let install = InstallCommand::for_agent(spec.agent);
-
-    let may_prompt = !no_install && std::io::stdin().is_terminal();
-    if !may_prompt {
-        anyhow::bail!(
-            "agent '{}' is not installed (no `{}` on PATH).\n  Install it with:\n    {}",
-            spec.id,
-            spec.binary,
-            install.display(),
-        );
-    }
-
-    if !confirm_install(spec, &install)? {
-        anyhow::bail!("aborted — '{}' was not installed", spec.id);
-    }
-
-    install.run().await?;
-
-    // Re-resolve after install. The installer may have landed the binary in
-    // `~/.local/bin` (covered by `extra_search_dirs`) even when that dir is
-    // not on the current shell's `PATH`.
-    resolve_binary(spec.binary).ok_or_else(|| {
-        anyhow::anyhow!(
-            "installed '{}' but still cannot find `{}` on PATH or in ~/.local/bin — \
-             open a new shell (or add the install dir to PATH) and re-run",
-            spec.id,
-            spec.binary,
-        )
-    })
-}
-
-/// Print the install prompt and read a Y/n answer. Defaults to yes on a bare
-/// <enter>. A closed stdin (EOF) is treated as "no" so we never hang.
-fn confirm_install(spec: &AgentSpec, install: &InstallCommand) -> Result<bool> {
-    use std::io::{BufRead, Write};
-    let p = Palette::for_stderr();
-    eprintln!(
-        "{cyan}{bold}info:{reset} agent `{}` is not installed on this machine.",
-        spec.id,
-        cyan = p.cyan,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    eprintln!("  Installer: {}", install.display());
-    eprint!("Proceed to install? [Y/n]: ");
-    std::io::stderr().flush().ok();
-
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-    let n = stdin
-        .lock()
-        .read_line(&mut line)
-        .context("reading install confirmation from stdin")?;
-    if n == 0 {
-        // EOF — non-interactive; decline rather than block.
-        eprintln!();
-        return Ok(false);
-    }
-    let answer = line.trim().to_ascii_lowercase();
-    Ok(answer.is_empty() || answer == "y" || answer == "yes")
-}
-
 /// Best-effort TCP reachability probe against the daemon's listen address.
 /// Prints a one-line warning when nothing is listening; never errors.
 fn warn_if_daemon_unreachable(listen: &str) {
@@ -557,86 +398,6 @@ fn warn_if_daemon_unreachable(listen: &str) {
             cyan = p.cyan,
             reset = p.reset,
         );
-    }
-}
-
-/// A platform-specific install command for an agent. Conditional compilation
-/// makes exactly one variant visible per platform, so the help text and the
-/// executed command never disagree with the host.
-#[derive(Debug, Clone)]
-pub struct InstallCommand {
-    /// Program to run (`bash` / `powershell`).
-    program: &'static str,
-    /// Arguments to that program.
-    args: Vec<String>,
-    /// Human-readable one-liner, e.g. `curl -fsSL … | bash`.
-    human: String,
-}
-
-impl InstallCommand {
-    /// The official native installer for `agent` on the *current* platform.
-    ///
-    /// Sources (Claude Code quickstart, "Native Install"):
-    /// <https://code.claude.com/docs/en/quickstart>
-    /// - macOS / Linux: `curl -fsSL https://claude.ai/install.sh | bash`
-    /// - Windows:       `irm https://claude.ai/install.ps1 | iex`
-    pub fn for_agent(agent: SpawnAgent) -> Self {
-        match agent {
-            SpawnAgent::Claude => Self::claude(),
-        }
-    }
-
-    #[cfg(not(windows))]
-    fn claude() -> Self {
-        let human = "curl -fsSL https://claude.ai/install.sh | bash".to_string();
-        Self {
-            program: "bash",
-            args: vec![
-                "-c".to_string(),
-                "curl -fsSL https://claude.ai/install.sh | bash".to_string(),
-            ],
-            human,
-        }
-    }
-
-    #[cfg(windows)]
-    fn claude() -> Self {
-        let human = "irm https://claude.ai/install.ps1 | iex".to_string();
-        Self {
-            program: "powershell",
-            args: vec![
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                "irm https://claude.ai/install.ps1 | iex".to_string(),
-            ],
-            human,
-        }
-    }
-
-    /// The human-readable one-liner shown in prompts and error messages.
-    pub fn display(&self) -> &str {
-        &self.human
-    }
-
-    /// Execute the installer, inheriting stdio so the user sees its progress.
-    /// Errors when the installer exits non-zero.
-    async fn run(&self) -> Result<()> {
-        let p = Palette::for_stderr();
-        eprintln!(
-            "{cyan}spawn:{reset} installing — {}",
-            self.human,
-            cyan = p.cyan,
-            reset = p.reset,
-        );
-        let status = tokio::process::Command::new(self.program)
-            .args(&self.args)
-            .status()
-            .await
-            .with_context(|| format!("running installer: {}", self.human))?;
-        if !status.success() {
-            anyhow::bail!("installer exited with {status}: {}", self.human);
-        }
-        Ok(())
     }
 }
 
@@ -708,10 +469,15 @@ mod tests {
         assert_eq!(derive_base_url("[::1]"), "http://[::1]:4356");
     }
 
+    /// A default (empty) model plan — the common case where no override is set.
+    fn empty_plan() -> ModelPlan {
+        ModelPlan::default()
+    }
+
     #[test]
     fn child_env_always_sets_base_url() {
         let spec = SpawnAgent::Claude.spec();
-        let env = build_child_env(&spec, "http://127.0.0.1:4356", None, None);
+        let env = build_child_env(&spec, "http://127.0.0.1:4356", None, None, &empty_plan());
         assert!(
             env.iter()
                 .any(|(k, v)| *k == "ANTHROPIC_BASE_URL" && v == "http://127.0.0.1:4356")
@@ -735,15 +501,22 @@ mod tests {
             "http://x:1",
             Some("user-token".into()),
             Some("brk_key".into()),
+            &empty_plan(),
         );
         assert_eq!(auth_token(&explicit).as_deref(), Some("user-token"));
 
         // No explicit token → fall back to the BitRouter API key.
-        let from_key = build_child_env(&spec, "http://x:1", None, Some("brk_key".into()));
+        let from_key = build_child_env(
+            &spec,
+            "http://x:1",
+            None,
+            Some("brk_key".into()),
+            &empty_plan(),
+        );
         assert_eq!(auth_token(&from_key).as_deref(), Some("brk_key"));
 
         // Neither set → the local placeholder so the harness still starts.
-        let placeholder = build_child_env(&spec, "http://x:1", None, None);
+        let placeholder = build_child_env(&spec, "http://x:1", None, None, &empty_plan());
         assert_eq!(
             auth_token(&placeholder).as_deref(),
             Some(PLACEHOLDER_API_KEY)
@@ -755,75 +528,43 @@ mod tests {
         // The auth token is ALWAYS set explicitly, so a stray inherited
         // ANTHROPIC_API_KEY can never silently become the inbound credential.
         let spec = SpawnAgent::Claude.spec();
-        let env = build_child_env(&spec, "http://x:1", None, None);
+        let env = build_child_env(&spec, "http://x:1", None, None, &empty_plan());
         assert!(env.iter().any(|(k, _)| *k == "ANTHROPIC_AUTH_TOKEN"));
         assert!(env.iter().all(|(k, _)| *k != "ANTHROPIC_API_KEY"));
     }
 
     #[test]
-    fn claude_spec_uses_anthropic_env_vars() {
+    fn empty_plan_adds_only_base_url_and_auth() {
         let spec = SpawnAgent::Claude.spec();
-        assert_eq!(spec.binary, "claude");
-        assert_eq!(spec.base_url_env, "ANTHROPIC_BASE_URL");
-        assert_eq!(spec.auth_token_env, "ANTHROPIC_AUTH_TOKEN");
+        let env = build_child_env(&spec, "http://x:1", None, None, &empty_plan());
+        assert_eq!(env.len(), 2, "no model vars for an empty plan");
     }
 
     #[test]
-    fn install_command_is_the_official_native_installer() {
-        let cmd = InstallCommand::for_agent(SpawnAgent::Claude);
-        // Same canonical URL on every platform; the transport differs.
-        assert!(cmd.display().contains("claude.ai/install"));
-        #[cfg(not(windows))]
-        {
-            assert!(cmd.display().contains("install.sh"));
-            assert!(cmd.display().contains("| bash"));
-        }
-        #[cfg(windows)]
-        {
-            assert!(cmd.display().contains("install.ps1"));
-        }
-    }
-
-    #[test]
-    fn find_on_path_locates_executable_in_listed_dir() {
-        let dir = std::env::temp_dir().join(format!("bitrouter-spawn-path-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("fake-agent");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let path = std::env::join_paths([dir.as_os_str()]).unwrap();
-        let found = find_on_path("fake-agent", Some(path), &[]);
-        assert_eq!(found.as_deref(), Some(bin.as_path()));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn find_on_path_returns_none_when_absent() {
-        let path = std::env::join_paths([std::env::temp_dir().as_os_str()]).unwrap();
-        assert!(find_on_path("definitely-not-a-real-binary-xyz", Some(path), &[]).is_none());
-    }
-
-    #[test]
-    fn find_on_path_falls_back_to_extra_dirs() {
-        // The post-install re-resolution relies on `extra` (e.g. ~/.local/bin)
-        // even when PATH is empty — exercise that path explicitly.
-        let dir =
-            std::env::temp_dir().join(format!("bitrouter-spawn-extra-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("fake-agent");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        // PATH is None entirely; the binary is only reachable via `extra`.
-        let found = find_on_path("fake-agent", None, std::slice::from_ref(&dir));
-        assert_eq!(found.as_deref(), Some(bin.as_path()));
-        let _ = std::fs::remove_dir_all(&dir);
+    fn child_env_appends_resolved_model_plan() {
+        let spec = SpawnAgent::Claude.spec();
+        let plan = model_plan::resolve(
+            SpawnAgent::Claude,
+            &bitrouter_sdk::config::SpawnConfig::default(),
+            None,
+            None,
+            None,
+            &["low=prov/air".to_string(), "high=prov/big".to_string()],
+        )
+        .unwrap();
+        let env = build_child_env(&spec, "http://x:1", None, None, &plan);
+        assert!(
+            env.iter()
+                .any(|(k, v)| *k == "ANTHROPIC_DEFAULT_HAIKU_MODEL" && v == "prov/air")
+        );
+        assert!(
+            env.iter()
+                .any(|(k, v)| *k == "ANTHROPIC_DEFAULT_OPUS_MODEL" && v == "prov/big")
+        );
+        // The unset `mid` tier must not produce a sonnet var.
+        assert!(
+            env.iter()
+                .all(|(k, _)| *k != "ANTHROPIC_DEFAULT_SONNET_MODEL")
+        );
     }
 }

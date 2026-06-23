@@ -212,7 +212,7 @@ enum Command {
     Spawn {
         /// Which agent harness to launch.
         #[arg(short, long, value_enum)]
-        agent: bitrouter::spawn::SpawnAgent,
+        agent: bitrouter::spawn::agent::SpawnAgent,
         /// Path to `bitrouter.yaml` (used to derive the daemon base URL).
         /// When omitted, the binary resolves in this order: `./bitrouter.yaml`
         /// → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml`
@@ -233,6 +233,19 @@ enum Command {
         /// regardless.)
         #[arg(long)]
         no_start: bool,
+        /// Apply a named preset from the `spawn.presets` config block, e.g.
+        /// `--preset cheap`. A preset is a tier→model combination; individual
+        /// `--model` flags override it per tier. Overrides the config default
+        /// plan and `BITROUTER_SPAWN_PRESET`.
+        #[arg(long)]
+        preset: Option<String>,
+        /// Override the agent's model for one or all capability tiers
+        /// (repeatable, highest priority). `--model <id>` sets every tier to
+        /// `<id>`; `--model <tier>=<id>` sets one tier — `high`/`mid`/`low`, or
+        /// the Claude aliases `opus`/`sonnet`/`haiku` — e.g.
+        /// `--model low=opencode-go/glm-5.1-air`.
+        #[arg(short = 'm', long = "model", value_name = "SPEC")]
+        models: Vec<String>,
         /// Arguments forwarded verbatim to the agent binary. Everything after
         /// `--` lands here.
         #[arg(last = true, allow_hyphen_values = true)]
@@ -599,6 +612,8 @@ async fn run() -> Result<()> {
             base_url,
             no_install,
             no_start,
+            preset,
+            models,
             agent_args,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -612,6 +627,8 @@ async fn run() -> Result<()> {
                     base_url,
                     no_install,
                     no_start,
+                    preset,
+                    models,
                 },
             )
             .await
