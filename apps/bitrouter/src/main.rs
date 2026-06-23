@@ -1041,10 +1041,10 @@ async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Resu
     // log file (the user wouldn't see it).
     let cfg_socket_path: Option<PathBuf> = match source {
         bitrouter::paths::ConfigSource::File(path) => match config::load(path).await {
-            Ok(cfg) => Some(daemon::resolve_socket_path(
-                path,
-                &cfg.server.control_socket,
-            )),
+            Ok(cfg) => Some(daemon::socket_path_for(source, &cfg)),
+            // Best-effort: a broken/env-incomplete config can't locate the
+            // socket, but `serve` would fail the same way → the child-death
+            // check below still surfaces it.
             Err(_) => None,
         },
         bitrouter::paths::ConfigSource::Default { home } => Some(home.join("bitrouter.sock")),
@@ -1062,71 +1062,51 @@ async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Resu
         }
     }
 
-    let exe = std::env::current_exe().context("locating current bitrouter binary")?;
-    // Capture the log's pre-spawn size so we can quote *this run's*
-    // output back to the user on early death instead of slurping
-    // stale content from prior runs (the log is opened append-only).
-    let log_size_before = std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0);
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .with_context(|| format!("opening daemon log {}", log_path.display()))?;
-    let log_err = log
-        .try_clone()
-        .context("duplicating log handle for stderr")?;
+    // Launch the detached `serve` and poll its control socket until it is
+    // actually serving — so "started" only prints once the daemon can answer
+    // (config load + DB migrations + registry fetch all complete first).
+    let outcome = daemon::start_and_wait(
+        source,
+        log_path,
+        cfg_socket_path.as_deref(),
+        daemon::DAEMON_READY_TIMEOUT,
+    )
+    .await?;
 
-    // Detach the child so the launcher's console / terminal lifecycle does not
-    // take the daemon down with it. On Unix that means a new process group so
-    // the parent shell's SIGHUP (terminal close) does not propagate — otherwise
-    // closing the tab would kill the daemon. Pattern from
-    // https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.process_group
-    // On Windows the equivalent is DETACHED_PROCESS (the child gets no inherited
-    // console) plus CREATE_NEW_PROCESS_GROUP (a Ctrl-C / Ctrl-Break in the
-    // launcher's console is not delivered to the daemon).
-    let mut cmd = std::process::Command::new(&exe);
-    cmd.arg("serve");
-    // For a `File` source pass `--config <abs path>` so the child
-    // loads the same file even though it'll chdir to the home. For
-    // `Default` (zero-config) skip the flag — the child re-runs
-    // `resolve_config`, finds no file, and arrives at the same
-    // zero-config state.
-    if let bitrouter::paths::ConfigSource::File(path) = source {
-        cmd.arg("--config").arg(path);
+    match outcome {
+        daemon::DaemonStartOutcome::Ready(info) => {
+            let p = bitrouter::style::Palette::for_stdout();
+            println!(
+                "{green}✓{reset} bitrouter daemon started (pid {pid}) — \
+                 listening on {listen}, {models} models — logs at {log}",
+                green = p.green,
+                reset = p.reset,
+                pid = info.pid,
+                listen = info.listen,
+                models = info.models,
+                log = log_path.display(),
+            );
+            Ok(())
+        }
+        // The process is alive but slow to answer — don't kill it; the daemon
+        // may still be migrating / fetching the registry. Report and exit 0.
+        daemon::DaemonStartOutcome::NotReadyInTime { pid } => {
+            let p = bitrouter::style::Palette::for_stderr();
+            eprintln!(
+                "{cyan}note:{reset} bitrouter daemon started (pid {pid}) but has not become \
+                 ready after {secs}s — check logs at {log}",
+                cyan = p.cyan,
+                reset = p.reset,
+                secs = daemon::DAEMON_READY_TIMEOUT.as_secs(),
+                log = log_path.display(),
+            );
+            Ok(())
+        }
+        daemon::DaemonStartOutcome::Exited { status, log_tail } => {
+            daemon::eprint_failure_log(log_path, &log_tail);
+            anyhow::bail!("daemon exited during startup ({status})")
+        }
     }
-    cmd.stdout(std::process::Stdio::from(log))
-        .stderr(std::process::Stdio::from(log_err))
-        .stdin(std::process::Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // Winbase.h constants — avoid pulling in a `windows`/`winapi` crate.
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-    }
-    let mut child = cmd.spawn().context("spawning detached `bitrouter serve`")?;
-
-    // Liveness grace period: if the child explodes immediately (bad config,
-    // port already in use, …) we want the user to know now, not in the log.
-    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    if let Ok(Some(status)) = child.try_wait() {
-        let tail = read_log_since(log_path, log_size_before).await;
-        eprint_failure_log(log_path, &tail);
-        anyhow::bail!("daemon exited immediately ({status})");
-    }
-
-    println!(
-        "bitrouter daemon started (pid {}) — logs at {}",
-        child.id(),
-        log_path.display()
-    );
-    Ok(())
 }
 
 /// Tell the operator they're running zero-config — and exactly which
@@ -1243,46 +1223,6 @@ fn other_provider_env_var_hints() -> Vec<String> {
     vars.sort();
     vars.dedup();
     vars
-}
-
-/// Read the daemon log from `offset` to end. Used to recover the
-/// freshly-written failure output when the spawned child dies during
-/// the liveness grace period — the pre-spawn offset captured by
-/// [`start`] ensures we only quote *this* run's content even though
-/// the log is opened append-only and may carry history.
-///
-/// Returns an empty string on any read failure (missing file, permission
-/// error, decode hiccup) so the caller can fall back to a path-only
-/// hint without panicking on the user's worst day.
-async fn read_log_since(path: &Path, offset: u64) -> String {
-    let bytes = match tokio::fs::read(path).await {
-        Ok(b) => b,
-        Err(_) => return String::new(),
-    };
-    let start = (offset as usize).min(bytes.len());
-    String::from_utf8_lossy(&bytes[start..]).into_owned()
-}
-
-/// Print the daemon's tail-of-log to stderr as an indented, captioned
-/// block so the user sees the actual failure inline instead of being
-/// pointed at a log file they have to open separately. Silent no-op
-/// when there is nothing useful to show.
-fn eprint_failure_log(log_path: &Path, content: &str) {
-    let trimmed = content.trim_end();
-    if trimmed.is_empty() {
-        return;
-    }
-    let p = bitrouter::style::Palette::for_stderr();
-    eprintln!(
-        "{dim}daemon log ({path}):{reset}",
-        dim = p.dim,
-        path = log_path.display(),
-        reset = p.reset,
-    );
-    for line in trimmed.lines() {
-        eprintln!("  {line}");
-    }
-    eprintln!();
 }
 
 async fn stop(socket: &Path) -> Result<()> {

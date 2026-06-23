@@ -794,6 +794,169 @@ pub async fn remove_pid_file(path: &Path) {
     let _ = tokio::fs::remove_file(path).await;
 }
 
+// ===== launch + readiness wait =====
+
+/// How long [`start_and_wait`] polls for readiness before giving up. Sized for
+/// a cold registry fetch + DB migrations on first run; the daemon keeps running
+/// past this — the timeout only bounds how long the launcher blocks.
+pub const DAEMON_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Poll cadence for the readiness loop.
+const READY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The result of launching a detached daemon and waiting for it to come up.
+#[derive(Debug)]
+pub enum DaemonStartOutcome {
+    /// The daemon answered `Status` within the timeout. Carries its self-report.
+    Ready(ReadyInfo),
+    /// The process is alive but did not become ready before the deadline.
+    NotReadyInTime {
+        /// The launched child's process id.
+        pid: u32,
+    },
+    /// The process exited during startup. Carries the exit-status string and
+    /// the fresh tail of the daemon log (this run's output only).
+    Exited {
+        /// Rendered `ExitStatus`.
+        status: String,
+        /// Daemon log content written since launch.
+        log_tail: String,
+    },
+}
+
+/// Spawn `bitrouter serve` as a detached background process writing to
+/// `log_path` (append). Returns the child handle and the log's pre-spawn byte
+/// length so the caller can quote only this run's output on early death.
+///
+/// Detach rationale: a new process group on Unix so the launcher shell's
+/// SIGHUP (terminal close) does not propagate; DETACHED_PROCESS +
+/// CREATE_NEW_PROCESS_GROUP on Windows so a console Ctrl-C is not delivered.
+/// <https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.process_group>
+fn spawn_detached_serve(
+    source: &crate::paths::ConfigSource,
+    log_path: &Path,
+) -> Result<(std::process::Child, u64)> {
+    let exe = std::env::current_exe().context("locating current bitrouter binary")?;
+    // Capture the log's pre-spawn size so we can quote *this run's* output back
+    // to the user on early death instead of slurping stale content from prior
+    // runs (the log is opened append-only).
+    let log_size_before = std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0);
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .with_context(|| format!("opening daemon log {}", log_path.display()))?;
+    let log_err = log
+        .try_clone()
+        .context("duplicating log handle for stderr")?;
+
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.arg("serve");
+    // For a `File` source pass `--config <abs path>` so the child loads the same
+    // file even though it'll chdir to the home. For `Default` (zero-config) skip
+    // the flag — the child re-runs `resolve_config` and lands on the same state.
+    if let crate::paths::ConfigSource::File(path) = source {
+        cmd.arg("--config").arg(path);
+    }
+    cmd.stdout(std::process::Stdio::from(log))
+        .stderr(std::process::Stdio::from(log_err))
+        .stdin(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Winbase.h constants — avoid pulling in a `windows`/`winapi` crate.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    let child = cmd.spawn().context("spawning detached `bitrouter serve`")?;
+    Ok((child, log_size_before))
+}
+
+/// Read the daemon log from `offset` to end. Returns "" on any read failure so
+/// callers can fall back to a path-only hint. The pre-spawn `offset` ensures
+/// only this run's content is quoted even though the log is append-only.
+async fn read_log_tail(path: &Path, offset: u64) -> String {
+    let bytes = match tokio::fs::read(path).await {
+        Ok(b) => b,
+        Err(_) => return String::new(),
+    };
+    let start = (offset as usize).min(bytes.len());
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
+/// Print the daemon's tail-of-log to stderr as an indented, captioned block so
+/// the user sees the actual failure inline instead of being pointed at a log
+/// file they have to open separately. No-op when there is nothing useful to
+/// show. Shared by `start` and `spawn`.
+pub fn eprint_failure_log(log_path: &Path, content: &str) {
+    let trimmed = content.trim_end();
+    if trimmed.is_empty() {
+        return;
+    }
+    let p = crate::style::Palette::for_stderr();
+    eprintln!(
+        "{dim}daemon log ({path}):{reset}",
+        dim = p.dim,
+        path = log_path.display(),
+        reset = p.reset,
+    );
+    for line in trimmed.lines() {
+        eprintln!("  {line}");
+    }
+    eprintln!();
+}
+
+/// Launch a detached `bitrouter serve` and poll the control socket until it
+/// answers `Status`, the process dies, or `timeout` elapses. The daemon keeps
+/// running regardless of the outcome — this only reports what the launcher
+/// observed. `socket` is the control-socket path to poll; pass `None` when it
+/// could not be resolved (then only process-death is detectable).
+///
+/// Ensures the bitrouter home exists (the log lives inside it) but never chdirs
+/// the calling process — only the child `serve` chdirs into the home.
+pub async fn start_and_wait(
+    source: &crate::paths::ConfigSource,
+    log_path: &Path,
+    socket: Option<&Path>,
+    timeout: std::time::Duration,
+) -> Result<DaemonStartOutcome> {
+    crate::paths::ensure_home_directory(source.home())?;
+    let (mut child, log_size_before) = spawn_detached_serve(source, log_path)?;
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        // Early-death: a bad config / port-in-use kills the child fast; surface
+        // it with the log tail rather than waiting out the whole timeout. Any
+        // exit before readiness means the daemon isn't serving, so the status
+        // code is reported verbatim and treated as a startup failure by callers
+        // (`serve` never exits 0 before it binds the control socket).
+        if let Ok(Some(status)) = child.try_wait() {
+            let log_tail = read_log_tail(log_path, log_size_before).await;
+            return Ok(DaemonStartOutcome::Exited {
+                status: status.to_string(),
+                log_tail,
+            });
+        }
+        if let Some(socket) = socket {
+            match probe_status(socket).await {
+                Ok(Some(info)) => return Ok(DaemonStartOutcome::Ready(info)),
+                Ok(None) => {}
+                Err(e) => tracing::debug!(error = %e, "readiness probe failed; retrying"),
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(DaemonStartOutcome::NotReadyInTime { pid: child.id() });
+        }
+        tokio::time::sleep(READY_POLL_INTERVAL).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
