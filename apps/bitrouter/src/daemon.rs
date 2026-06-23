@@ -274,6 +274,59 @@ pub fn is_not_reachable(err: &anyhow::Error) -> bool {
     })
 }
 
+/// The daemon's self-reported readiness snapshot, returned by
+/// [`probe_status`]. A successful probe means the control socket is bound
+/// and the app is assembled (the model count is populated), which is exactly
+/// the signal `bitrouter status` reports.
+#[derive(Debug, Clone)]
+pub struct ReadyInfo {
+    /// The daemon's process id.
+    pub pid: u32,
+    /// The HTTP listen address.
+    pub listen: String,
+    /// Count of routable models.
+    pub models: usize,
+}
+
+/// Resolve the control-socket path for a `(source, cfg)` pair. For a `File`
+/// source the configured `server.control_socket` is resolved against the
+/// config file's directory; for a `Default` source the socket lives at
+/// `<home>/bitrouter.sock`. Single source of truth shared by `serve`,
+/// `start`, and `spawn`.
+pub fn socket_path_for(
+    source: &crate::paths::ConfigSource,
+    cfg: &bitrouter_sdk::config::Config,
+) -> PathBuf {
+    match source {
+        crate::paths::ConfigSource::File(path) => {
+            resolve_socket_path(path, &cfg.server.control_socket)
+        }
+        crate::paths::ConfigSource::Default { home } => home.join("bitrouter.sock"),
+    }
+}
+
+/// One-shot readiness probe: send `Status` and classify the reply.
+/// `Ok(Some(_))` = the daemon answered (it is up); `Ok(None)` = nothing is
+/// listening yet (not reachable — keep waiting); `Err` = a daemon is there but
+/// the exchange failed (a real error worth surfacing).
+pub async fn probe_status(socket: &Path) -> Result<Option<ReadyInfo>> {
+    match send_command(socket, &DaemonCommand::Status).await {
+        Ok(DaemonResponse::Status {
+            pid,
+            listen,
+            models,
+        }) => Ok(Some(ReadyInfo {
+            pid,
+            listen,
+            models,
+        })),
+        Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
+        Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
+        Err(e) if is_not_reachable(&e) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 // ===== server side =====
 
 /// Run the control listener until a `Stop` command is received (then it

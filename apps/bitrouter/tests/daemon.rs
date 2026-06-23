@@ -178,6 +178,50 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
 }
 
 #[tokio::test]
+async fn probe_status_reports_ready_when_daemon_is_up() {
+    let dir = tempdir("probe-up");
+    let cfg_path = write_config(&dir, "sqlite::memory:").await;
+    let cfg = config::load(&cfg_path).await.unwrap();
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    let app = Arc::new(assembled.app);
+
+    let socket = dir.join("bitrouter.sock");
+    let server = tokio::spawn(daemon::run_control_socket(
+        socket.clone(),
+        app.clone(),
+        "127.0.0.1:1234".to_string(),
+        Arc::new(NoopReloader),
+        Arc::new(NoopObserveStatus { compiled_in: false }),
+    ));
+    wait_until_ready(&socket).await;
+
+    // A daemon is up → the probe returns its self-report.
+    let info = daemon::probe_status(&socket)
+        .await
+        .unwrap()
+        .expect("probe should see the running daemon");
+    assert_eq!(info.listen, "127.0.0.1:1234");
+    assert_eq!(info.models, 2, "gpt-5 + shared");
+
+    let stop = daemon::send_command(&socket, &DaemonCommand::Stop)
+        .await
+        .unwrap();
+    assert!(matches!(stop, DaemonResponse::Ok));
+    server.await.unwrap().unwrap();
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+}
+
+#[tokio::test]
+async fn probe_status_reports_none_when_nothing_listens() {
+    let dir = tempdir("probe-down");
+    // The socket path is never bound — the probe must classify this as
+    // "not reachable" (Ok(None)), not an error.
+    let socket = dir.join("bitrouter.sock");
+    assert!(daemon::probe_status(&socket).await.unwrap().is_none());
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+}
+
+#[tokio::test]
 async fn reload_re_reads_the_config_file() {
     let dir = tempdir("reload");
     let cfg_path = write_config(&dir, "sqlite::memory:").await;

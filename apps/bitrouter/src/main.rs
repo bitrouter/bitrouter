@@ -868,15 +868,10 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     announce_zero_config(source, &cfg);
     maybe_announce_telemetry(home);
     let listen = cfg.server.listen.clone();
-    // For a `File` source we resolve the socket against the config
-    // file's directory (preserves any user override). For `Default`
-    // the socket lives at `<home>/bitrouter.sock` directly.
-    let socket_path = match source {
-        bitrouter::paths::ConfigSource::File(path) => {
-            daemon::resolve_socket_path(path, &cfg.server.control_socket)
-        }
-        bitrouter::paths::ConfigSource::Default { home } => home.join("bitrouter.sock"),
-    };
+    // For a `File` source the socket is resolved against the config file's
+    // directory (preserves any user override); for `Default` it lives at
+    // `<home>/bitrouter.sock`. Shared with `start`/`spawn` via `socket_path_for`.
+    let socket_path = daemon::socket_path_for(source, &cfg);
     let pid_path = pid_path_for(&socket_path);
 
     let config_path_for_reload = match source {
