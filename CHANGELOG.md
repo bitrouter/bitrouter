@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.19](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.18...v1.0.0-alpha.19)
+
+
+### ⛰️ Features
+
+- *(cli)* Wait for daemon readiness on start; auto-start it on spawn ([#597](https://github.com/bitrouter/bitrouter/pull/597)) - ([7d6c85d](https://github.com/bitrouter/bitrouter/commit/7d6c85d5f06ce718dbe63c68f0a9c0ff5d7d1f2f))
+- *(telemetry)* Live account-bearer refresh + $lib/$screen_name attributes ([#598](https://github.com/bitrouter/bitrouter/pull/598)) - ([b0f45e8](https://github.com/bitrouter/bitrouter/commit/b0f45e827e787d031d92d8f61770f636a1136475))
+
+
 ## [1.0.0-alpha.18](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.17...v1.0.0-alpha.18)
 
 
