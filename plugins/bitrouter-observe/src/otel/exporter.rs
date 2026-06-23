@@ -149,7 +149,18 @@ impl OtelExporter {
     /// Create a new exporter, install the W3C propagator globally, and build
     /// a per-exporter `TracerProvider` (not installed globally — we hand out
     /// our own `BoxedTracer`).
-    pub fn new(mut config: OtelConfig) -> Result<Self, Box<dyn std::error::Error>> {
+    ///
+    /// `bearer` is an optional live-bearer source for account-attributed
+    /// telemetry: when `Some`, the OTLP/HTTP transport resolves a fresh
+    /// `Authorization` per export (refreshing as needed), so attribution
+    /// survives access-token expiry without a daemon restart. `None` keeps the
+    /// static-header behaviour (an explicit `config.bearer_token`, or anonymous).
+    /// The bearer is HTTP-only — under the gRPC transport it is ignored (see
+    /// `crate::otel::transport`).
+    pub fn new(
+        mut config: OtelConfig,
+        bearer: Option<Arc<dyn crate::otel::TelemetryBearer>>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         config = config.with_env_overrides();
 
         // Install the W3C TraceContext propagator so inbound `traceparent`
@@ -161,7 +172,7 @@ impl OtelExporter {
 
         // Transport (OTLP/HTTP vs OTLP/gRPC) is chosen at compile time by the
         // crate's feature flags — see `crate::otel::transport`.
-        let span_exporter = crate::otel::transport::span_exporter(&config)?;
+        let span_exporter = crate::otel::transport::span_exporter(&config, bearer)?;
 
         let batch_config = BatchConfigBuilder::default()
             .with_max_queue_size(config.traces.batch.max_queue_size)

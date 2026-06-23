@@ -45,6 +45,16 @@ dashmap = { version = "6", optional = true }
 # directly solely for `tonic::metadata::MetadataMap`, used to forward the
 # configured headers as gRPC request metadata.
 tonic = { version = "0.12", optional = true, default-features = false }
+# Custom OTLP/HTTP client that injects a freshly-resolved bearer per export
+# (`otel::auth_client`). Only compiled under `otel-http`. We implement
+# `opentelemetry_http::HttpClient` over a `reqwest::Client`, so we depend on
+# `opentelemetry-http` (with its `reqwest` impl), `reqwest` itself (matching the
+# rustls TLS the `otel-http` otlp stack pins, NOT default-tls), and `bytes` for
+# the trait's `Response<Bytes>` body type.
+# https://docs.rs/opentelemetry-http/0.27/opentelemetry_http/trait.HttpClient.html
+opentelemetry-http = { version = "0.27", optional = true, features = ["reqwest"] }
+reqwest = { workspace = true, optional = true }
+bytes = { version = "1", optional = true }
 
 [features]
 default = []
@@ -69,12 +79,18 @@ otel-base = [
 ]
 
 # OTLP/HTTP + protobuf transport over reqwest with rustls. Maps to upstream
-# `opentelemetry-otlp/{http-proto,reqwest-client,reqwest-rustls}`.
+# `opentelemetry-otlp/{http-proto,reqwest-client,reqwest-rustls}`. The
+# `dep:opentelemetry-http` / `dep:reqwest` / `dep:bytes` entries pull in the
+# custom `AuthRefreshClient` (`otel::auth_client`) that injects a live bearer
+# per export — HTTP-only, since the cloud/default telemetry path is OTLP/HTTP.
 otel-http = [
     "otel-base",
     "opentelemetry-otlp/http-proto",
     "opentelemetry-otlp/reqwest-client",
     "opentelemetry-otlp/reqwest-rustls",
+    "dep:opentelemetry-http",
+    "dep:reqwest",
+    "dep:bytes",
 ]
 
 # OTLP/gRPC transport over tonic with rustls (native trust roots). Maps to

@@ -29,7 +29,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use bitrouter_cloud_sdk::BitrouterCloudAuthApplier;
 use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, default_credentials_path};
+use bitrouter_cloud_sdk::auth::metadata::AsMetadata;
 use bitrouter_cloud_sdk::provider::PROVIDER_ID;
+use bitrouter_observe::otel::TelemetryBearer;
 use bitrouter_sdk::config::{Config, ProviderConfig};
 use bitrouter_sdk::language_model::{AuthApplier, auth::AuthAppliers};
 
@@ -86,38 +88,80 @@ pub fn register_if_configured(config: &Config, appliers: &mut AuthAppliers) -> R
     Ok(())
 }
 
-/// The signed-in account's access token, for attributing telemetry exports to
-/// the account that ran `bitrouter cloud login`. `None` when not signed in.
+/// Live [`TelemetryBearer`] backed by the signed-in account's credential store.
 ///
-/// Best-effort: a missing or unreadable credential store, or no stored session,
-/// yields `None` (the export stays anonymous) rather than an error — resolving
-/// the bearer must never break daemon startup.
+/// Resolves the account bearer **on every OTLP export** (not once at startup),
+/// transparently refreshing the short-lived access token via the store's
+/// [`CredentialsStore::current_token`] — which refreshes-if-near-expiry,
+/// single-flights, and writes the rotated token back to disk. This is what keeps
+/// account-attributed telemetry alive across token expiry without a daemon
+/// restart, replacing the old startup-snapshot baked into a static header.
 ///
-/// This reads the **stored** token without refreshing — a synchronous snapshot
-/// taken once at config-assembly time. An expired stored token is treated as
-/// "not signed in" (returns `None`); live re-attachment with auto-refresh on
-/// each export is a documented follow-up. In practice the token is minted fresh
-/// at `bitrouter cloud login` and long-lived, so the snapshot is valid for the
-/// daemon's session.
-///
-/// Note the snapshot is baked into a *static* `Authorization` header on the OTLP
-/// exporter: if the token expires mid-session the exporter keeps sending the now
-/// stale bearer (the ingest rejects it; telemetry is best-effort) until the
-/// daemon restarts and re-evaluates validity — it does not silently fall back to
-/// anonymous. This is the trade-off the deferred auto-refresh follow-up removes.
-pub fn current_account_bearer() -> Option<String> {
-    let store = CredentialsStore::default_path().ok()?;
-    account_bearer_from_store(&store)
+/// Best-effort: any resolution failure maps to `None`, so the export degrades to
+/// anonymous rather than being dropped.
+pub struct CloudBearer {
+    /// The store is mutated by `current_token` (it writes the refreshed token
+    /// back), so it sits behind an async mutex shared across concurrent exports.
+    /// In practice the OTLP batch processor exports serially, but the mutex makes
+    /// the refresh-and-persist single-flight correct regardless.
+    store: tokio::sync::Mutex<CredentialsStore>,
+    /// Client used for the RFC 6749 §6 refresh exchange.
+    client: reqwest::Client,
+    /// Cached AS metadata (token endpoint, etc.), fetched once at construction.
+    metadata: AsMetadata,
 }
 
-/// Pure form of [`current_account_bearer`]: extract a still-valid access token
-/// from an already-loaded store. Factored out so the validity gate is
-/// unit-testable without touching the default credentials path.
-fn account_bearer_from_store(store: &CredentialsStore) -> Option<String> {
+impl std::fmt::Debug for CloudBearer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never render the store (it holds the bearer / refresh token) — redact.
+        f.debug_struct("CloudBearer")
+            .field("store", &"<redacted>")
+            .field("metadata", &self.metadata)
+            .finish()
+    }
+}
+
+#[async_trait::async_trait]
+impl TelemetryBearer for CloudBearer {
+    async fn bearer(&self) -> Option<String> {
+        // `current_token` refreshes-if-near-expiry, single-flights, and persists
+        // the rotated token. Any error (no stored creds, refresh failure, …) is
+        // swallowed to `None` so the export stays anonymous — best-effort.
+        let mut store = self.store.lock().await;
+        store.current_token(&self.client, &self.metadata).await.ok()
+    }
+}
+
+/// Build a live telemetry-bearer source from the signed-in account, or `None`
+/// when not signed in (or the AS metadata can't be fetched).
+///
+/// Best-effort: every failure (no credential store, no current credential,
+/// metadata fetch failure) yields `None` so telemetry exports anonymously and
+/// daemon startup is never broken. The caller decides whether to build a source
+/// at all — `attribution: anonymous` must never call this (it would read the
+/// credential store).
+pub async fn cloud_bearer_source() -> Option<Arc<dyn TelemetryBearer>> {
+    let store = CredentialsStore::default_path().ok()?;
+    cloud_bearer_source_from_store(store).await
+}
+
+/// Inner form of [`cloud_bearer_source`] taking an already-loaded store, so the
+/// "not signed in ⇒ None" decision is testable without the default path or a
+/// live AS-metadata fetch. Requires a current credential (else `None`), then
+/// fetches the AS metadata its `authorization_server` advertises.
+async fn cloud_bearer_source_from_store(
+    store: CredentialsStore,
+) -> Option<Arc<dyn TelemetryBearer>> {
     let creds = store.current()?;
-    creds
-        .access_token_valid()
-        .then(|| creds.access_token.clone())
+    let client = reqwest::Client::new();
+    let metadata = bitrouter_cloud_sdk::auth::metadata::fetch(&client, &creds.authorization_server)
+        .await
+        .ok()?;
+    Some(Arc::new(CloudBearer {
+        store: tokio::sync::Mutex::new(store),
+        client,
+        metadata,
+    }))
 }
 
 #[cfg(test)]
@@ -202,36 +246,47 @@ mod tests {
         CredentialsStore::load(&path).unwrap()
     }
 
-    #[test]
-    fn account_bearer_returns_valid_stored_token() {
-        let store = store_with_token("valid", "bra_live", "2999-01-01T00:00:00Z");
-        assert_eq!(
-            account_bearer_from_store(&store).as_deref(),
-            Some("bra_live")
-        );
-    }
-
-    #[test]
-    fn account_bearer_none_when_token_expired() {
-        let store = store_with_token("expired", "bra_old", "2000-01-01T00:00:00Z");
-        assert!(
-            account_bearer_from_store(&store).is_none(),
-            "an expired stored token must be treated as not signed in"
-        );
-    }
-
-    #[test]
-    fn account_bearer_none_when_not_signed_in() {
-        // Empty store (no credentials file) → no bearer.
+    #[tokio::test]
+    async fn cloud_bearer_source_none_when_not_signed_in() {
+        // Empty store (no credentials file) → no live source, and crucially no
+        // AS-metadata network call (the `store.current()?` short-circuits first).
         let path = fresh_tmp_creds_path("absent");
         let store = CredentialsStore::load(&path).unwrap();
-        assert!(account_bearer_from_store(&store).is_none());
+        assert!(store.current().is_none(), "precondition: empty store");
+        assert!(
+            cloud_bearer_source_from_store(store).await.is_none(),
+            "an empty credential store must not build a live bearer source"
+        );
+    }
+
+    #[test]
+    fn cloud_bearer_debug_redacts_store() {
+        // The `Debug` impl must never render the store (it holds the bearer /
+        // refresh token). A signed-in store would be `Some(creds)`; just prove
+        // the field is redacted on a constructed value.
+        let store = store_with_token("dbg", "bra_secret", "2999-01-01T00:00:00Z");
+        let bearer = CloudBearer {
+            store: tokio::sync::Mutex::new(store),
+            client: reqwest::Client::new(),
+            metadata: AsMetadata {
+                issuer: Some("https://api.bitrouter.ai".to_string()),
+                device_authorization_endpoint: "https://api.bitrouter.ai/device".to_string(),
+                token_endpoint: "https://api.bitrouter.ai/token".to_string(),
+                revocation_endpoint: None,
+            },
+        };
+        let rendered = format!("{bearer:?}");
+        assert!(
+            !rendered.contains("bra_secret"),
+            "bearer token leaked in Debug: {rendered}"
+        );
+        assert!(rendered.contains("<redacted>"));
     }
 
     #[test]
     fn malformed_credentials_file_is_swallowed_as_anonymous() {
         // A corrupt credentials file makes `CredentialsStore::load` error; the
-        // `default_path().ok()?` in `current_account_bearer` swallows that into
+        // `default_path().ok()?` in `cloud_bearer_source` swallows that into
         // `None` so a broken file degrades to anonymous telemetry rather than
         // breaking daemon startup. We can't drive the real default path here, so
         // assert the load error that the `?` consumes.
@@ -240,7 +295,7 @@ mod tests {
         assert!(
             CredentialsStore::load(&path).is_err(),
             "a malformed credentials file must surface as a load error for \
-             `current_account_bearer` to swallow into anonymous"
+             `cloud_bearer_source` to swallow into anonymous"
         );
     }
 }

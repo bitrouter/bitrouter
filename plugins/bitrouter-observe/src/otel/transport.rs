@@ -22,11 +22,14 @@
 //! HTTP carries the headers as HTTP headers; gRPC carries them as request
 //! metadata (the wire equivalent).
 
+use crate::otel::bearer::TelemetryBearer;
 use crate::otel::config::OtelConfig;
 
 #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
 mod imp {
-    use super::OtelConfig;
+    use std::sync::Arc;
+
+    use super::{OtelConfig, TelemetryBearer};
 
     use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig, WithTonicConfig};
     use tonic::metadata::MetadataMap;
@@ -50,6 +53,12 @@ mod imp {
 
     pub(crate) fn span_exporter(
         config: &OtelConfig,
+        // The gRPC transport does NOT support the live bearer: the cloud /
+        // default telemetry path is OTLP/HTTP, so the refresh-aware client lives
+        // only in the HTTP `imp`. A `Some(_)` source is intentionally ignored
+        // here (static headers via `effective_headers()` only); gRPC stays on
+        // the snapshot-bearer behaviour it had before.
+        _bearer: Option<Arc<dyn TelemetryBearer>>,
     ) -> Result<SpanExporter, Box<dyn std::error::Error>> {
         Ok(SpanExporter::builder()
             .with_tonic()
@@ -71,18 +80,38 @@ mod imp {
 
 #[cfg(feature = "otel-http")]
 mod imp {
-    use super::OtelConfig;
+    use std::sync::Arc;
+
+    use super::{OtelConfig, TelemetryBearer};
 
     use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig, WithHttpConfig};
 
+    use crate::otel::auth_client::AuthRefreshClient;
+
     pub(crate) fn span_exporter(
         config: &OtelConfig,
+        bearer: Option<Arc<dyn TelemetryBearer>>,
     ) -> Result<SpanExporter, Box<dyn std::error::Error>> {
-        Ok(SpanExporter::builder()
+        let builder = SpanExporter::builder()
             .with_http()
             .with_endpoint(&config.endpoint)
-            .with_headers(config.effective_headers())
-            .build()?)
+            // Static non-auth headers (vendor keys, an explicit `bearer_token`)
+            // always ride as headers. When a live bearer source is present, the
+            // custom client fills the `Authorization` slot per export *if it is
+            // not already set here* — so an explicit static bearer still wins.
+            .with_headers(config.effective_headers());
+        let builder = match bearer {
+            // Refresh-aware account attribution: a custom HTTP client resolves a
+            // fresh bearer on every export, surviving access-token expiry without
+            // a daemon restart.
+            Some(source) => {
+                builder.with_http_client(AuthRefreshClient::new(reqwest::Client::new(), source))
+            }
+            // No live source → keep the exact prior behaviour (default reqwest
+            // client, static headers only).
+            None => builder,
+        };
+        Ok(builder.build()?)
     }
 
     pub(crate) fn metric_exporter(

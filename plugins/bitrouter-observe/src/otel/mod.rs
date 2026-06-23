@@ -11,6 +11,12 @@
 //! See the `transport` module for the selection rules. Both traces and metrics
 //! ride the same chosen transport.
 
+// The custom OTLP/HTTP client that injects a live bearer per export. HTTP-only
+// — the cloud/default telemetry path is OTLP/HTTP; the gRPC transport keeps the
+// static-header behaviour (see `transport`).
+#[cfg(feature = "otel-http")]
+mod auth_client;
+mod bearer;
 mod cardinality;
 mod config;
 mod exporter;
@@ -19,6 +25,7 @@ mod metrics;
 mod span_attributes;
 mod transport;
 
+pub use bearer::TelemetryBearer;
 pub use cardinality::CardinalityLimiter;
 pub use config::{
     BatchConfig, ContentCaptureMode, DEFAULT_CONTENT_ATTR_MAX_BYTES, MetricsConfig, OtelConfig,

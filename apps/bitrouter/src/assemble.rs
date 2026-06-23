@@ -234,13 +234,36 @@ pub async fn build_app_with_path(
     // surfaces this once the subscriber is up.
     let (otel_exporter, otel_init_error): (Option<Arc<OtelExporter>>, Option<String>) =
         match build_otel_config(config)? {
-            Some(c) => match OtelExporter::new(c) {
-                Ok(exporter) => (Some(Arc::new(exporter)), None),
-                Err(e) => (
-                    None,
-                    Some(format!("failed to initialise OpenTelemetry: {e}")),
-                ),
-            },
+            Some(plan) => {
+                // Resolve the LIVE account-bearer source per the plan. Only the
+                // telemetry opt-in with `attribution: auto`/`account` and no
+                // explicit token wants one; `anonymous` (and every other
+                // exporter path) is `StaticOnly` and never reads the credential
+                // store. Best-effort: a `None` source means the export proceeds
+                // anonymously — for `account` we additionally warn.
+                let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> =
+                    match plan.bearer_plan {
+                        BearerPlan::LiveSource { warn_if_unmet } => {
+                            let source = crate::cloud::cloud_bearer_source().await;
+                            if source.is_none() && warn_if_unmet {
+                                tracing::warn!(
+                                    "telemetry: attribution=account but no signed-in session is \
+                                     available — exporting anonymously (sign in with \
+                                     `bitrouter cloud login`)"
+                                );
+                            }
+                            source
+                        }
+                        BearerPlan::StaticOnly => None,
+                    };
+                match OtelExporter::new(plan.config, bearer) {
+                    Ok(exporter) => (Some(Arc::new(exporter)), None),
+                    Err(e) => (
+                        None,
+                        Some(format!("failed to initialise OpenTelemetry: {e}")),
+                    ),
+                }
+            }
             None => (None, None),
         };
     let observe_provider: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
@@ -722,13 +745,45 @@ impl MetricsRenderer for EmptyMetricsRenderer {
     }
 }
 
+/// Whether the OTLP exporter should resolve its account bearer LIVE per export
+/// (refresh-aware) and, if so, whether to warn when no credential is available.
+///
+/// Only the first-party telemetry opt-in (`attribution: auto`/`account` with no
+/// explicit token) wants a live source. Every other exporter path — an explicit
+/// static `bearer_token`, `attribution: anonymous`, or the generic `otel` /
+/// legacy / env opt-ins — uses the static header path (`StaticOnly`) and never
+/// reads the credential store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BearerPlan {
+    /// Build a live account-bearer source (resolved per export, refresh-aware).
+    /// `warn_if_unmet` is set for `attribution: account` so the call site logs
+    /// the "exporting anonymously" warning when the source resolves to `None`.
+    LiveSource { warn_if_unmet: bool },
+    /// No live source — static `Authorization` header (or anonymous). The
+    /// credential store is never read.
+    StaticOnly,
+}
+
+/// An exporter config plus the account-bearer resolution plan for it. Returned
+/// by [`build_otel_config`] so the async `OtelExporter::new` call site can decide
+/// whether to build a live bearer source (which needs `.await` + network I/O,
+/// neither appropriate inside this pure config builder).
+struct OtelConfigPlan {
+    config: OtelConfig,
+    bearer_plan: BearerPlan,
+}
+
 /// Build OpenTelemetry configuration from the app config. Returns `None` when
 /// neither YAML nor env vars opt the exporter in.
 ///
 /// Precedence: env vars > `plugins.bitrouter-observe.otel` > the legacy flat
 /// `plugins.bitrouter-observe.otlp_endpoint` shim (v0 carry-over; will be
 /// removed in v1.1).
-fn build_otel_config(config: &Config) -> Result<Option<OtelConfig>> {
+///
+/// This stays pure (no credential-store / network I/O): the account bearer is no
+/// longer snapshotted here — it is resolved live per export by a bearer source
+/// the async call site builds according to the returned [`BearerPlan`].
+fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
     let observe = config.plugins.get("bitrouter-observe");
 
     // Env-var overrides are *not* applied here — `OtelExporter::new` runs
@@ -751,15 +806,20 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfig>> {
             let install_id = crate::paths::install_id()
                 .map_err(|e| tracing::warn!("telemetry: could not resolve install id: {e:#}"))
                 .ok();
-            // The signed-in account token is resolved and attached below (the
-            // `account_bearer` argument) so `attribution: auto`/`account` can
-            // authenticate the export when the user is logged in.
-            let account_bearer = telemetry_account_bearer(opt_in.attribution);
-            return Ok(Some(build_telemetry_otel_config(
-                opt_in,
-                install_id,
-                account_bearer,
-            )));
+            // Decide the live-bearer plan from attribution + whether an explicit
+            // static token is present. The account bearer is NOT snapshotted
+            // here anymore — when no explicit token is set and attribution is
+            // auto/account, the call site builds a live source that refreshes
+            // per export. `build_telemetry_otel_config` resolves the explicit
+            // token itself into the static `bearer_token`.
+            let has_explicit =
+                opt_in.bearer_token.is_some() || std::env::var("BITROUTER_TELEMETRY_TOKEN").is_ok();
+            let bearer_plan = telemetry_bearer_plan(opt_in.attribution, has_explicit);
+            let cfg = build_telemetry_otel_config(opt_in, install_id);
+            return Ok(Some(OtelConfigPlan {
+                config: cfg,
+                bearer_plan,
+            }));
         }
     }
 
@@ -770,7 +830,10 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfig>> {
     if let Some(otel_value) = observe.and_then(|c| c.get("otel")) {
         let cfg = serde_json::from_value::<OtelConfig>(otel_value.clone())
             .context("plugins.bitrouter-observe.otel failed to parse")?;
-        return Ok(Some(cfg));
+        return Ok(Some(OtelConfigPlan {
+            config: cfg,
+            bearer_plan: BearerPlan::StaticOnly,
+        }));
     }
 
     // 2. Legacy flat `otlp_endpoint` shim — drops the cardinality / sampler /
@@ -786,15 +849,45 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfig>> {
         tracing::warn!(
             "plugins.bitrouter-observe.otlp_endpoint is deprecated; switch to plugins.bitrouter-observe.otel",
         );
-        return Ok(Some(cfg));
+        return Ok(Some(OtelConfigPlan {
+            config: cfg,
+            bearer_plan: BearerPlan::StaticOnly,
+        }));
     }
 
     // 3. Env-var-only opt-in.
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
-        return Ok(Some(OtelConfig::default()));
+        return Ok(Some(OtelConfigPlan {
+            config: OtelConfig::default(),
+            bearer_plan: BearerPlan::StaticOnly,
+        }));
     }
 
     Ok(None)
+}
+
+/// Decide the live-bearer [`BearerPlan`] from the attribution mode and whether an
+/// explicit static token is set. Pure (no I/O) so the policy is unit-testable.
+///
+/// - `anonymous` → never read the credential store: `StaticOnly`.
+/// - an explicit token is set → use the static header: `StaticOnly`.
+/// - `auto` / `account` with no explicit token → `LiveSource`; `account`
+///   additionally asks the call site to warn when no credential is available.
+fn telemetry_bearer_plan(attribution: TelemetryAttribution, has_explicit: bool) -> BearerPlan {
+    match attribution {
+        // Never touch the credential store when the user opted out of account
+        // attribution.
+        TelemetryAttribution::Anonymous => BearerPlan::StaticOnly,
+        // An explicit token wins and rides as a static header (the live source
+        // would otherwise never fill the slot anyway).
+        _ if has_explicit => BearerPlan::StaticOnly,
+        TelemetryAttribution::Auto => BearerPlan::LiveSource {
+            warn_if_unmet: false,
+        },
+        TelemetryAttribution::Account => BearerPlan::LiveSource {
+            warn_if_unmet: true,
+        },
+    }
 }
 
 /// BitRouter's first-party telemetry endpoint. A neutral, overridable default
@@ -871,34 +964,37 @@ fn otlp_traces_endpoint(endpoint: &str) -> String {
 
 /// Turn an enabled [`TelemetryOptIn`] into an [`OtelConfig`]: point at the
 /// (default or overridden) traces endpoint, map the level onto a content-capture
-/// mode, attach the bearer (config or `BITROUTER_TELEMETRY_TOKEN`), and stamp the
-/// stable anonymous install id so exports can be attributed without an account.
+/// mode, attach the EXPLICIT bearer (config or `BITROUTER_TELEMETRY_TOKEN`), and
+/// stamp the stable anonymous install id so exports can be attributed without an
+/// account.
+///
+/// Only the **static** explicit token lands in `OtelConfig.bearer_token` here.
+/// The signed-in account bearer is NO LONGER snapshotted into the config — it is
+/// resolved live per export by a [`bitrouter_observe::otel::TelemetryBearer`]
+/// source the async call site builds (refresh-aware), so account attribution
+/// survives token expiry without a daemon restart. `attribution: anonymous`
+/// still drops even the explicit token (the opt-out guarantee).
 ///
 /// Telemetry is **traces-only**: metrics export is disabled so the opt-in never
 /// POSTs a metrics payload to a traces ingest.
-fn build_telemetry_otel_config(
-    opt_in: TelemetryOptIn,
-    install_id: Option<String>,
-    account_bearer: Option<String>,
-) -> OtelConfig {
+fn build_telemetry_otel_config(opt_in: TelemetryOptIn, install_id: Option<String>) -> OtelConfig {
     let content_capture = match opt_in.level {
         TelemetryLevel::Metadata => ContentCaptureMode::Off,
         TelemetryLevel::Full => ContentCaptureMode::Full,
     };
-    // Explicit token (config / env) takes precedence; the signed-in account
-    // token (`account_bearer`) is the auto-attached fallback. `attribution`
-    // gates the whole thing — `anonymous` forces no bearer regardless.
+    // Resolve the EXPLICIT static token (config `bearer_token`, else the
+    // `BITROUTER_TELEMETRY_TOKEN` env var). `attribution: anonymous` forces no
+    // bearer regardless — even an explicit token is dropped (the opt-out
+    // guarantee). The account bearer is NO LONGER snapshotted here: when wanted
+    // (auto/account, no explicit token) it is the live source the call site
+    // attaches, refreshed per export.
     let explicit = opt_in
         .bearer_token
         .or_else(|| std::env::var("BITROUTER_TELEMETRY_TOKEN").ok());
-    let (bearer_token, account_requested_but_unmet) =
-        resolve_telemetry_bearer(opt_in.attribution, explicit, account_bearer);
-    if account_requested_but_unmet {
-        tracing::warn!(
-            "telemetry: attribution=account but no signed-in session or bearer token is \
-             available — exporting anonymously (sign in with `bitrouter cloud login`)"
-        );
-    }
+    let bearer_token = match opt_in.attribution {
+        TelemetryAttribution::Anonymous => None,
+        TelemetryAttribution::Auto | TelemetryAttribution::Account => explicit,
+    };
     let mut resource_attributes = std::collections::HashMap::new();
     if let Some(id) = install_id {
         resource_attributes.insert("bitrouter.install_id".to_string(), id);
@@ -930,48 +1026,6 @@ fn build_telemetry_otel_config(
     }
 }
 
-/// Decide the telemetry export bearer from the attribution mode and the
-/// available credentials. Pure (no I/O / env) so the attribution policy is
-/// unit-testable in isolation.
-///
-/// - `anonymous` → never authenticate (no bearer), even if one is available.
-/// - `auto` / `account` → prefer the `explicit` token (config / env), else the
-///   signed-in `account` token.
-///
-/// Returns `(bearer, account_requested_but_unmet)`: `bearer == None` means the
-/// export stays anonymous, and the bool is `true` only when `account` was asked
-/// for but no credential was available (so the caller can warn — the export
-/// still proceeds anonymously, since telemetry is best-effort).
-fn resolve_telemetry_bearer(
-    attribution: TelemetryAttribution,
-    explicit: Option<String>,
-    account: Option<String>,
-) -> (Option<String>, bool) {
-    match attribution {
-        TelemetryAttribution::Anonymous => (None, false),
-        TelemetryAttribution::Auto => (explicit.or(account), false),
-        TelemetryAttribution::Account => {
-            let bearer = explicit.or(account);
-            let unmet = bearer.is_none();
-            (bearer, unmet)
-        }
-    }
-}
-
-/// Resolve the signed-in account's bearer for telemetry attribution, or `None`
-/// when not signed in (or when `attribution` is `anonymous`, in which case the
-/// credential store is never touched). Best-effort: any failure to read the
-/// store yields `None` (anonymous), never an error — telemetry must not break
-/// startup.
-fn telemetry_account_bearer(attribution: TelemetryAttribution) -> Option<String> {
-    if attribution == TelemetryAttribution::Anonymous {
-        // Never touch the credential store when the user has opted out of
-        // account attribution.
-        return None;
-    }
-    crate::cloud::current_account_bearer()
-}
-
 #[cfg(test)]
 mod telemetry_opt_in_tests {
     use super::*;
@@ -985,7 +1039,7 @@ mod telemetry_opt_in_tests {
             bearer_token: Some("bra_x".to_string()),
             attribution: TelemetryAttribution::Auto,
         };
-        let cfg = build_telemetry_otel_config(opt_in, Some("inst-1".to_string()), None);
+        let cfg = build_telemetry_otel_config(opt_in, Some("inst-1".to_string()));
         // The default base is normalized to the OTLP traces path — the exporter
         // does not append `/v1/traces` for us.
         assert_eq!(
@@ -1013,7 +1067,7 @@ mod telemetry_opt_in_tests {
             bearer_token: None,
             attribution: TelemetryAttribution::Auto,
         };
-        let cfg = build_telemetry_otel_config(opt_in, None, None);
+        let cfg = build_telemetry_otel_config(opt_in, None);
         // A bare override host is normalized to the traces path too.
         assert_eq!(cfg.endpoint, "https://otel.example/v1/traces");
         assert_eq!(cfg.content_capture, ContentCaptureMode::Off);
@@ -1030,7 +1084,7 @@ mod telemetry_opt_in_tests {
             bearer_token: None,
             attribution: TelemetryAttribution::Auto,
         };
-        let cfg = build_telemetry_otel_config(opt_in, None, None);
+        let cfg = build_telemetry_otel_config(opt_in, None);
         // PostHog renders `$lib` as the sending client library. Pin it to
         // `bitrouter <version>` so OSS-sent events are attributable to the
         // daemon and its version, even for anonymous exports.
@@ -1093,54 +1147,62 @@ mod telemetry_opt_in_tests {
     }
 
     #[test]
-    fn resolve_bearer_anonymous_never_authenticates() {
-        // Even with both an explicit token and a signed-in account token.
+    fn bearer_plan_anonymous_is_static_only_even_with_explicit() {
+        // `anonymous` must never build a live source (which would read the
+        // credential store) — even when an explicit token is set.
         assert_eq!(
-            resolve_telemetry_bearer(
-                TelemetryAttribution::Anonymous,
-                Some("explicit".into()),
-                Some("account".into())
-            ),
-            (None, false)
+            telemetry_bearer_plan(TelemetryAttribution::Anonymous, true),
+            BearerPlan::StaticOnly
+        );
+        assert_eq!(
+            telemetry_bearer_plan(TelemetryAttribution::Anonymous, false),
+            BearerPlan::StaticOnly
         );
     }
 
     #[test]
-    fn resolve_bearer_auto_prefers_explicit_then_account_then_anonymous() {
+    fn bearer_plan_explicit_token_is_static_only() {
+        // An explicit static token wins and rides as a header — no live source
+        // under either auto or account.
         assert_eq!(
-            resolve_telemetry_bearer(
-                TelemetryAttribution::Auto,
-                Some("e".into()),
-                Some("a".into())
-            ),
-            (Some("e".into()), false)
+            telemetry_bearer_plan(TelemetryAttribution::Auto, true),
+            BearerPlan::StaticOnly
         );
         assert_eq!(
-            resolve_telemetry_bearer(TelemetryAttribution::Auto, None, Some("a".into())),
-            (Some("a".into()), false)
-        );
-        // Not signed in, no explicit token → anonymous, no warning.
-        assert_eq!(
-            resolve_telemetry_bearer(TelemetryAttribution::Auto, None, None),
-            (None, false)
+            telemetry_bearer_plan(TelemetryAttribution::Account, true),
+            BearerPlan::StaticOnly
         );
     }
 
     #[test]
-    fn resolve_bearer_account_warns_only_when_no_credential() {
+    fn bearer_plan_auto_builds_live_source_no_warn() {
+        // `auto`, no explicit token → live source, and no warning when unmet
+        // (signing in is optional under auto).
         assert_eq!(
-            resolve_telemetry_bearer(TelemetryAttribution::Account, None, Some("a".into())),
-            (Some("a".into()), false)
-        );
-        // account requested but nothing available → anonymous + warn flag set.
-        assert_eq!(
-            resolve_telemetry_bearer(TelemetryAttribution::Account, None, None),
-            (None, true)
+            telemetry_bearer_plan(TelemetryAttribution::Auto, false),
+            BearerPlan::LiveSource {
+                warn_if_unmet: false
+            }
         );
     }
 
     #[test]
-    fn build_config_attaches_account_bearer_under_auto() {
+    fn bearer_plan_account_builds_live_source_and_warns_when_unmet() {
+        // `account`, no explicit token → live source, and warn when the source
+        // resolves to None (the misconfiguration must be visible).
+        assert_eq!(
+            telemetry_bearer_plan(TelemetryAttribution::Account, false),
+            BearerPlan::LiveSource {
+                warn_if_unmet: true
+            }
+        );
+    }
+
+    #[test]
+    fn build_config_no_explicit_token_leaves_bearer_unset() {
+        // With no explicit `bearer_token` and no env token, the static bearer is
+        // unset — the account bearer is now a live source attached at the call
+        // site, never baked into the config here.
         let opt_in = TelemetryOptIn {
             enabled: true,
             endpoint: None,
@@ -1148,14 +1210,14 @@ mod telemetry_opt_in_tests {
             bearer_token: None,
             attribution: TelemetryAttribution::Auto,
         };
-        let cfg = build_telemetry_otel_config(opt_in, None, Some("acct-token".into()));
-        assert_eq!(cfg.bearer_token.as_deref(), Some("acct-token"));
+        let cfg = build_telemetry_otel_config(opt_in, None);
+        assert!(cfg.bearer_token.is_none());
     }
 
     #[test]
-    fn build_config_anonymous_drops_bearer_even_when_signed_in() {
-        // Both an explicit token and a signed-in account token are present, yet
-        // `anonymous` must export with no bearer — the opt-out guarantee.
+    fn build_config_anonymous_drops_explicit_bearer() {
+        // An explicit token is present, yet `anonymous` must export with no
+        // bearer — the opt-out guarantee.
         let opt_in = TelemetryOptIn {
             enabled: true,
             endpoint: None,
@@ -1163,14 +1225,14 @@ mod telemetry_opt_in_tests {
             bearer_token: Some("explicit".into()),
             attribution: TelemetryAttribution::Anonymous,
         };
-        let cfg = build_telemetry_otel_config(opt_in, None, Some("acct".into()));
+        let cfg = build_telemetry_otel_config(opt_in, None);
         assert!(cfg.bearer_token.is_none());
     }
 
     #[test]
-    fn build_config_explicit_token_wins_over_account() {
-        // An operator-set `bearer_token` takes precedence over the signed-in
-        // account token.
+    fn build_config_explicit_token_lands_as_static_bearer() {
+        // An operator-set `bearer_token` lands in the static `OtelConfig`
+        // bearer (the static-header path), under auto.
         let opt_in = TelemetryOptIn {
             enabled: true,
             endpoint: None,
@@ -1178,15 +1240,16 @@ mod telemetry_opt_in_tests {
             bearer_token: Some("explicit".into()),
             attribution: TelemetryAttribution::Auto,
         };
-        let cfg = build_telemetry_otel_config(opt_in, None, Some("acct".into()));
+        let cfg = build_telemetry_otel_config(opt_in, None);
         assert_eq!(cfg.bearer_token.as_deref(), Some("explicit"));
     }
 
     #[test]
-    fn build_config_account_required_but_unmet_exports_anonymously() {
-        // `attribution: account` with no explicit token and no signed-in
-        // account must still produce a config (best-effort) — just with no
-        // bearer. The warning is a side effect we don't assert here.
+    fn build_config_account_no_token_exports_anonymously() {
+        // `attribution: account` with no explicit token must still produce a
+        // config (best-effort) — with no static bearer. The live source (and
+        // its warn-when-unmet) is decided by `telemetry_bearer_plan` + the call
+        // site, not here.
         let opt_in = TelemetryOptIn {
             enabled: true,
             endpoint: None,
@@ -1194,15 +1257,8 @@ mod telemetry_opt_in_tests {
             bearer_token: None,
             attribution: TelemetryAttribution::Account,
         };
-        let cfg = build_telemetry_otel_config(opt_in, None, None);
+        let cfg = build_telemetry_otel_config(opt_in, None);
         assert!(cfg.bearer_token.is_none());
-    }
-
-    #[test]
-    fn telemetry_account_bearer_anonymous_never_reads_store() {
-        // The opt-out short-circuits before the credential store is ever
-        // consulted, so this is hermetic regardless of the host's login state.
-        assert!(telemetry_account_bearer(TelemetryAttribution::Anonymous).is_none());
     }
 }
 
@@ -1252,7 +1308,7 @@ mod sqlite_path_tests {
 
 #[cfg(test)]
 mod otel_config_tests {
-    use super::{Config, build_otel_config};
+    use super::{BearerPlan, Config, build_otel_config};
 
     /// Build a `Config` carrying a single `bitrouter-observe` plugin value.
     /// Constructed directly (no YAML round-trip) so the test never touches
@@ -1284,10 +1340,12 @@ mod otel_config_tests {
         let config = config_with_observe(serde_json::json!({
             "otel": { "endpoint": "http://collector:4318" }
         }));
-        let cfg = build_otel_config(&config)
+        let plan = build_otel_config(&config)
             .expect("valid otel block is Ok")
             .expect("valid otel block yields Some");
-        assert_eq!(cfg.endpoint, "http://collector:4318");
+        assert_eq!(plan.config.endpoint, "http://collector:4318");
+        // The generic `otel` block never reads the credential store.
+        assert_eq!(plan.bearer_plan, BearerPlan::StaticOnly);
     }
 
     #[test]
@@ -1295,10 +1353,11 @@ mod otel_config_tests {
         let config = config_with_observe(serde_json::json!({
             "otlp_endpoint": "http://legacy:4318"
         }));
-        let cfg = build_otel_config(&config)
+        let plan = build_otel_config(&config)
             .expect("legacy shim is Ok")
             .expect("legacy shim yields Some");
-        assert_eq!(cfg.endpoint, "http://legacy:4318");
+        assert_eq!(plan.config.endpoint, "http://legacy:4318");
+        assert_eq!(plan.bearer_plan, BearerPlan::StaticOnly);
     }
 }
 
