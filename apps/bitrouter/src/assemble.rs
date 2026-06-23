@@ -903,6 +903,13 @@ fn build_telemetry_otel_config(
     if let Some(id) = install_id {
         resource_attributes.insert("bitrouter.install_id".to_string(), id);
     }
+    // PostHog surfaces `$lib` as the sending client library. Pin it to
+    // `bitrouter <version>` so OSS-exported events are attributable to the
+    // daemon (and its version), regardless of account vs anonymous attribution.
+    resource_attributes.insert(
+        "$lib".to_string(),
+        concat!("bitrouter ", env!("CARGO_PKG_VERSION")).to_string(),
+    );
     let endpoint = otlp_traces_endpoint(
         opt_in
             .endpoint
@@ -1010,7 +1017,27 @@ mod telemetry_opt_in_tests {
         // A bare override host is normalized to the traces path too.
         assert_eq!(cfg.endpoint, "https://otel.example/v1/traces");
         assert_eq!(cfg.content_capture, ContentCaptureMode::Off);
-        assert!(cfg.resource_attributes.is_empty());
+        // No install id → no anonymous-identity attr, but `$lib` is always set.
+        assert!(!cfg.resource_attributes.contains_key("bitrouter.install_id"));
+    }
+
+    #[test]
+    fn build_config_sets_lib_resource_attribute() {
+        let opt_in = TelemetryOptIn {
+            enabled: true,
+            endpoint: None,
+            level: TelemetryLevel::Full,
+            bearer_token: None,
+            attribution: TelemetryAttribution::Auto,
+        };
+        let cfg = build_telemetry_otel_config(opt_in, None, None);
+        // PostHog renders `$lib` as the sending client library. Pin it to
+        // `bitrouter <version>` so OSS-sent events are attributable to the
+        // daemon and its version, even for anonymous exports.
+        assert_eq!(
+            cfg.resource_attributes.get("$lib").map(String::as_str),
+            Some(concat!("bitrouter ", env!("CARGO_PKG_VERSION")))
+        );
     }
 
     #[test]
