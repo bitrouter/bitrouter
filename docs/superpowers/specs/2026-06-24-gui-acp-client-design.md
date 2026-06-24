@@ -66,7 +66,7 @@ otherwise untouched.
 | Upstream migration | Deferred | Asymmetric benefit (proxy routes opaque payloads); v1.0.0 is brand-new; separate blast radius. Revisit as its own design |
 | `AcpFeed` location | `bitrouter-gui` app crate (next to `ai.rs`) | Keeps `bitrouter-gui-core` pure/threadless/deterministic |
 | Async model | Dedicated thread running a tokio runtime, bridged to the `Feed`'s `futures` channels | Mirrors the existing `ai.rs` pattern; ACP stdio I/O needs a real runtime |
-| Binary/agent discovery | `bitrouter` on `PATH` (override `BITROUTER_BIN`); single agent id from `BITROUTER_GUI_AGENT` (default e.g. `claude-code`) | Convention + minimal config; least magic, still real |
+| Binary/agent discovery | `bitrouter` on `PATH` (override `BITROUTER_BIN`); single agent id from `BITROUTER_GUI_AGENT` (default `claude-acp`, the catalog id) | Convention + minimal config; least magic, still real |
 | `model` field | Display-only; BitRouter routes | Base ACP `session/new` has no model field |
 | Streaming | Stream live; coalesce chunks in `reduce` | Streaming is a core reason to be an ACP client; the core change is small and bounded |
 
@@ -115,7 +115,7 @@ dedicated thread (the `ai.rs` pattern). `connect()` returns a `FeedHandle` whose
 
 **Startup (on the tokio thread):**
 1. Resolve the `bitrouter` binary (`BITROUTER_BIN` or `PATH`) and agent id
-   (`BITROUTER_GUI_AGENT`, default `claude-code`).
+   (`BITROUTER_GUI_AGENT`, default `claude-acp`).
 2. Spawn `bitrouter agent-proxy <agent_id>` via `agent-client-protocol-tokio`.
 3. Run ACP `initialize`, advertising minimal client capabilities (permission
    handling; `fs`/`terminal` deferred).
@@ -170,6 +170,19 @@ build:** whether rust-sdk v1.0's `initialize` capability negotiation interoperat
 cleanly with bitrouter's hand-rolled proxy (protocol-version skew). A clean
 handshake is the precondition; a mismatch becomes the strongest argument for
 aligning both on the SDK sooner.
+
+> **Verification result (2026-06-24, alpha.4):** A live headless handshake —
+> `echo '{…"method":"initialize","params":{"protocolVersion":1}}' | bitrouter
+> agent-proxy claude-acp` — returned `protocolVersion: 1` plus full
+> `agentCapabilities`. The rust-sdk client (`ProtocolVersion::V1`) and bitrouter's
+> hand-rolled proxy agree on the wire; **no protocol skew.** So the upstream-SDK
+> migration is not forced — it stays a deliberate, lower-urgency follow-up.
+>
+> **Agent id correction:** the bitrouter catalog id is **`claude-acp`** (Zed's
+> `claude-code-acp` under the hood), confirmed via `bitrouter agents list`. The
+> `AcpFeed` default was changed from `claude-code` → `claude-acp` accordingly.
+> A real prompt turn requires `claude /login` (the agent advertises a
+> `claude-login` auth method); the `initialize` handshake itself needs no auth.
 
 ## 10. Testing
 
