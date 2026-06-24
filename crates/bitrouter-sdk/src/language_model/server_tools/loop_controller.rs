@@ -249,8 +249,6 @@ impl ServerToolLoop {
     }
 }
 
-/// Append the model's tool-call turn and the tool-result turn to the working
-/// prompt so the next upstream call sees the results.
 /// The bare tail of a (possibly namespaced) tool name: the final `:`/`.`
 /// segment. Matches a `bitrouter:fusion` declaration against the advertised
 /// bare `fusion`, while leaving an unrelated provider tail (e.g.
@@ -259,6 +257,8 @@ fn tool_tail(name: &str) -> &str {
     name.rsplit([':', '.']).next().unwrap_or(name)
 }
 
+/// Append the model's tool-call turn and the tool-result turn to the working
+/// prompt so the next upstream call sees the results.
 fn append_turn(working: &mut Prompt, assistant_content: Vec<Content>, tool_results: Vec<Content>) {
     working.messages.push(Message {
         role: Role::Assistant,
