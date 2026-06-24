@@ -1,8 +1,17 @@
 use crate::protocol::*;
 use futures::channel::mpsc;
+use futures::Stream;
+use std::collections::VecDeque;
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
+
+/// Inbound event stream. A boxed [`Stream`] so any feed (mock, or the real
+/// daemon feed later) can drive it on whatever executor polls it — no feed owns
+/// a background thread, which keeps it deterministic under gpui's test scheduler.
+pub type EventStream = Pin<Box<dyn Stream<Item = Event> + Send>>;
 
 pub struct FeedHandle {
-    pub events: mpsc::UnboundedReceiver<Event>,
+    pub events: EventStream,
     pub commands: mpsc::UnboundedSender<Command>,
 }
 
@@ -10,6 +19,43 @@ pub struct FeedHandle {
 /// feed implements this same trait at upstream integration.
 pub trait Feed {
     fn connect(self) -> FeedHandle;
+}
+
+/// Threadless mock event stream: replays a scripted burst, then synthesizes a
+/// reply for each `SendPrompt` it receives. Driven entirely by the poller.
+struct MockStream {
+    queued: VecDeque<Event>,
+    commands: mpsc::UnboundedReceiver<Command>,
+}
+
+impl Stream for MockStream {
+    type Item = Event;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(ev) = this.queued.pop_front() {
+            return Poll::Ready(Some(ev));
+        }
+        loop {
+            match Pin::new(&mut this.commands).poll_next(cx) {
+                Poll::Ready(Some(Command::SendPrompt {
+                    target: Target::Session { id },
+                    text,
+                })) => {
+                    return Poll::Ready(Some(Event::SessionUpdate {
+                        session: id,
+                        update: SessionUpdateKind::Message {
+                            text: format!("» {text}"),
+                        },
+                    }));
+                }
+                // Other commands have no scripted reply; keep draining.
+                Poll::Ready(Some(_)) => continue,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
 }
 
 pub struct MockFeed {
@@ -80,36 +126,13 @@ impl MockFeed {
 
 impl Feed for MockFeed {
     fn connect(self) -> FeedHandle {
-        let (ev_tx, ev_rx) = mpsc::unbounded::<Event>();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded::<Command>();
-
-        for ev in self.script {
-            let _ = ev_tx.unbounded_send(ev);
-        }
-
-        std::thread::spawn(move || {
-            use futures::executor::block_on;
-            use futures::StreamExt;
-            block_on(async move {
-                while let Some(cmd) = cmd_rx.next().await {
-                    if let Command::SendPrompt {
-                        target: Target::Session { id },
-                        text,
-                    } = cmd
-                    {
-                        let _ = ev_tx.unbounded_send(Event::SessionUpdate {
-                            session: id,
-                            update: SessionUpdateKind::Message {
-                                text: format!("» {text}"),
-                            },
-                        });
-                    }
-                }
-            });
-        });
-
+        let (cmd_tx, cmd_rx) = mpsc::unbounded::<Command>();
+        let stream = MockStream {
+            queued: self.script.into_iter().collect(),
+            commands: cmd_rx,
+        };
         FeedHandle {
-            events: ev_rx,
+            events: Box::pin(stream),
             commands: cmd_tx,
         }
     }
