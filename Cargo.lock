@@ -129,6 +129,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-client-protocol"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e981a7d0207a0e9eb67d0faafc04e8c6601dea572d67a3163798897c0024521d"
+dependencies = [
+ "agent-client-protocol-derive",
+ "agent-client-protocol-schema",
+ "async-process",
+ "blocking",
+ "futures",
+ "futures-concurrency",
+ "rustc-hash 2.1.2",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "shell-words",
+ "tracing",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "agent-client-protocol-derive"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d589c28cbe2978c76f8714cc304bc08355ee2f05d120806717725d9ffa12143"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "agent-client-protocol-schema"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac542aba230234b1591ace7286a47c0514fe3efc3037d43296bde31ba7ee5728"
+dependencies = [
+ "anyhow",
+ "derive_more",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "strum 0.28.0",
+ "tracing",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -771,6 +819,7 @@ dependencies = [
 name = "bitrouter-gui"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol",
  "alacritty_terminal",
  "anyhow",
  "bitrouter-gui-core",
@@ -782,6 +831,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -6318,6 +6368,12 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shellexpand"
