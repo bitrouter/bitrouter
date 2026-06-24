@@ -267,7 +267,9 @@ impl Render for CommandPalette {
             return outer;
         }
 
-        let input_entity = self.input.clone().expect("input initialised above");
+        let Some(input_entity) = self.input.clone() else {
+            return outer;
+        };
 
         let text = self.current_text(cx);
         let filtered = filter_actions(ACTIONS, &text);
