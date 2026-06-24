@@ -13,11 +13,11 @@ pub fn translate(update: SessionUpdate) -> Option<SessionUpdateKind> {
     match update {
         SessionUpdate::AgentMessageChunk(c) => Some(SessionUpdateKind::MessageChunk {
             message_id: c.message_id.map(|m| m.0.to_string()),
-            text: text_of(&c.content),
+            text: block_text(&c.content),
         }),
         SessionUpdate::AgentThoughtChunk(c) => Some(SessionUpdateKind::ThoughtChunk {
             message_id: c.message_id.map(|m| m.0.to_string()),
-            text: text_of(&c.content),
+            text: block_text(&c.content),
         }),
         SessionUpdate::ToolCall(tc) => Some(SessionUpdateKind::ToolCall {
             id: tc.tool_call_id.0.to_string(),
@@ -41,8 +41,8 @@ pub fn map_status(s: ToolCallStatus) -> ToolStatus {
         ToolCallStatus::InProgress => ToolStatus::Running,
         ToolCallStatus::Completed => ToolStatus::Ok,
         ToolCallStatus::Failed => ToolStatus::Failed,
-        // #[non_exhaustive] — future variants fall back to Pending
-        _ => ToolStatus::Pending,
+        // Unknown future status: surface as Failed rather than masking it as not-started.
+        _ => ToolStatus::Failed,
     }
 }
 
@@ -66,7 +66,7 @@ pub fn select_option(
     }
 }
 
-fn text_of(b: &ContentBlock) -> String {
+fn block_text(b: &ContentBlock) -> String {
     match b {
         ContentBlock::Text(t) => t.text.clone(),
         _ => String::new(),
@@ -78,7 +78,7 @@ pub fn render_diff(content: &[ToolCallContent]) -> Option<String> {
     content.iter().find_map(|c| match c {
         ToolCallContent::Diff(d) => {
             let old = d.old_text.clone().unwrap_or_default();
-            Some(format!("{}\n--- old\n{}\n+++ new\n{}", d.path.display(), old, d.new_text))
+            Some(format!("{}\n[old]\n{}\n[new]\n{}", d.path.display(), old, d.new_text))
         }
         _ => None,
     })
