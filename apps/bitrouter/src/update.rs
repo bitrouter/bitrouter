@@ -67,6 +67,30 @@ pub fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
     }
 }
 
+/// Options parsed from the `bitrouter update` flags.
+#[derive(Debug)]
+pub struct UpdateOptions {
+    pub check: bool,
+    pub tag: Option<String>,
+    pub stable: bool,
+    pub restart: bool,
+    pub yes: bool,
+}
+
+/// What the dispatch layer must still do after `run` returns.
+#[derive(Debug)]
+pub struct RunOutcome {
+    /// A running daemon needs restarting to pick up the new binary.
+    pub restart_needed: bool,
+}
+
+/// Stub — real implementation in a later task.
+pub async fn run(_opts: UpdateOptions, _socket: &Path) -> Result<RunOutcome> {
+    Ok(RunOutcome {
+        restart_needed: false,
+    })
+}
+
 /// Filename of the persisted update-check cache inside the bitrouter home.
 const CACHE_FILENAME: &str = "update-check.json";
 
