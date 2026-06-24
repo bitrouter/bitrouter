@@ -14,7 +14,11 @@ pub struct StatusBar {
 
 impl StatusBar {
     /// Create a new [`StatusBar`] backed by `model`.
-    pub fn new(model: Entity<AppModel>) -> Self {
+    ///
+    /// Observes `model` so the view re-renders whenever the backing entity
+    /// is updated by the feed pump.
+    pub fn new(model: Entity<AppModel>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&model, |_, _, cx| cx.notify()).detach();
         Self { model }
     }
 }

@@ -52,13 +52,18 @@ pub struct Root {
 
 impl Root {
     /// Construct the root shell backed by `model`.
+    ///
+    /// Observes `model` directly (for the cost label in the title bar) and
+    /// passes `cx` to each child view so they can set up their own observations.
     pub fn new(model: Entity<AppModel>, cx: &mut Context<Self>) -> Self {
-        let sidebar = cx.new(|_cx| SidebarView::new(model.clone()));
-        let center = cx.new(|_cx| Center::new(model.clone()));
-        let status_bar = cx.new(|_cx| StatusBar::new(model.clone()));
-        let command_palette = cx.new(|_cx| CommandPalette::new(model.clone()));
-        let broadcast_bar = cx.new(|_cx| BroadcastBar::new(model.clone()));
-        let dashboard = cx.new(|_cx| Dashboard::new(model.clone()));
+        // Root reads cost from model in its own render; observe it directly.
+        cx.observe(&model, |_, _, cx| cx.notify()).detach();
+        let sidebar = cx.new(|cx| SidebarView::new(model.clone(), cx));
+        let center = cx.new(|cx| Center::new(model.clone(), cx));
+        let status_bar = cx.new(|cx| StatusBar::new(model.clone(), cx));
+        let command_palette = cx.new(|cx| CommandPalette::new(model.clone(), cx));
+        let broadcast_bar = cx.new(|cx| BroadcastBar::new(model.clone(), cx));
+        let dashboard = cx.new(|cx| Dashboard::new(model.clone(), cx));
         Self {
             model,
             sidebar,

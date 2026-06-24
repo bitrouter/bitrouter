@@ -41,7 +41,11 @@ pub struct BroadcastBar {
 
 impl BroadcastBar {
     /// Create a new [`BroadcastBar`] backed by `model`.
-    pub fn new(model: Entity<AppModel>) -> Self {
+    ///
+    /// Observes `model` so the view re-renders whenever the backing entity
+    /// is updated by the feed pump.
+    pub fn new(model: Entity<AppModel>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&model, |_, _, cx| cx.notify()).detach();
         Self {
             model,
             input: None,
@@ -206,7 +210,7 @@ mod tests {
         cx.run_until_parked();
 
         cx.update(|cx| {
-            let _ = cx.new(|_cx| BroadcastBar::new(model.clone()));
+            let _ = cx.new(|cx| BroadcastBar::new(model.clone(), cx));
         });
     }
 
@@ -243,7 +247,7 @@ mod tests {
 
         // Build the broadcast bar — it should be constructible without panic.
         cx.update(|cx| {
-            let _ = cx.new(|_cx| BroadcastBar::new(model.clone()));
+            let _ = cx.new(|cx| BroadcastBar::new(model.clone(), cx));
         });
     }
 }

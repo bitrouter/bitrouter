@@ -23,6 +23,8 @@ pub struct TerminalView {
 
 impl TerminalView {
     pub fn new(terminal: Entity<Terminal>, cx: &mut Context<Self>) -> Self {
+        // Observe the terminal entity so PTY output triggers a repaint.
+        cx.observe(&terminal, |_, _, cx| cx.notify()).detach();
         Self {
             terminal,
             focus_handle: cx.focus_handle(),

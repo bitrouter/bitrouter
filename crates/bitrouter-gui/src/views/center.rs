@@ -35,7 +35,11 @@ pub struct Center {
 
 impl Center {
     /// Create a [`Center`] view backed by `model`.
-    pub fn new(model: Entity<AppModel>) -> Self {
+    ///
+    /// Observes `model` so the view re-renders whenever the backing entity
+    /// is updated by the feed pump.
+    pub fn new(model: Entity<AppModel>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&model, |_, _, cx| cx.notify()).detach();
         Self {
             model,
             terminal_cache: HashMap::new(),
@@ -245,7 +249,7 @@ mod tests {
         cx.run_until_parked();
 
         cx.update(|cx| {
-            let _ = cx.new(|_cx| Center::new(model.clone()));
+            let _ = cx.new(|cx| Center::new(model.clone(), cx));
         });
     }
 
@@ -260,7 +264,7 @@ mod tests {
         assert!(focused.is_some(), "expected a focused session");
 
         cx.update(|cx| {
-            let _ = cx.new(|_cx| Center::new(model.clone()));
+            let _ = cx.new(|cx| Center::new(model.clone(), cx));
         });
     }
 }
