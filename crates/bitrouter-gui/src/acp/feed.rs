@@ -63,8 +63,6 @@ impl AcpFeed {
         }
     }
 
-    // Wired in Task 5 (main.rs construction from env).
-    #[allow(dead_code)]
     pub fn from_env() -> Self {
         let bin = std::env::var("BITROUTER_BIN").unwrap_or_else(|_| "bitrouter".into());
         let agent = std::env::var("BITROUTER_GUI_AGENT").unwrap_or_else(|_| "claude-code".into());
