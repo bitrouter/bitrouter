@@ -1,14 +1,28 @@
-use crate::protocol::{Event, Route, Session, SessionId, SessionStatus, SessionUpdateKind, ToolStatus};
+use crate::protocol::{
+    Event, Route, Session, SessionId, SessionStatus, SessionUpdateKind, ToolStatus,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptItem {
-    Message { text: String },
-    Thought { text: String },
-    ToolCall { title: String, status: ToolStatus, diff: Option<String> },
+    Message {
+        text: String,
+    },
+    Thought {
+        text: String,
+    },
+    ToolCall {
+        title: String,
+        status: ToolStatus,
+        diff: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Permission { pub request_id: String, pub summary: String, pub diff: Option<String> }
+pub struct Permission {
+    pub request_id: String,
+    pub summary: String,
+    pub diff: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionView {
@@ -25,8 +39,17 @@ pub struct SessionView {
 
 impl SessionView {
     fn new(session: Session) -> Self {
-        Self { session, transcript: Vec::new(), pending: None, cost_micro_usd: 0,
-            tokens_in: 0, tokens_out: 0, last_route: None, failovers: 0, latencies_ms: Vec::new() }
+        Self {
+            session,
+            transcript: Vec::new(),
+            pending: None,
+            cost_micro_usd: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+            last_route: None,
+            failovers: 0,
+            latencies_ms: Vec::new(),
+        }
     }
 }
 
@@ -57,10 +80,20 @@ impl State {
         self.sessions.iter().map(|v| v.cost_micro_usd).sum()
     }
     pub fn hud(&self) -> Hud {
-        let mut lat: Vec<u32> = self.sessions.iter().flat_map(|v| v.latencies_ms.iter().copied()).collect();
+        let mut lat: Vec<u32> = self
+            .sessions
+            .iter()
+            .flat_map(|v| v.latencies_ms.iter().copied())
+            .collect();
         lat.sort_unstable();
-        let p50 = if lat.is_empty() { None } else { Some(lat[lat.len() / 2]) };
-        let route = self.focus.as_ref()
+        let p50 = if lat.is_empty() {
+            None
+        } else {
+            Some(lat[lat.len() / 2])
+        };
+        let route = self
+            .focus
+            .as_ref()
             .and_then(|id| self.sessions.iter().find(|v| &v.session.id == id))
             .and_then(|v| v.last_route.clone());
         Hud {
@@ -76,37 +109,72 @@ impl State {
 pub fn reduce(state: &mut State, event: Event) {
     match event {
         Event::AgentSpawned { session } => {
-            if state.focus.is_none() { state.focus = Some(session.id.clone()); }
-            if state.session(&session.id.0).is_none() { state.sessions.push(SessionView::new(session)); }
+            if state.focus.is_none() {
+                state.focus = Some(session.id.clone());
+            }
+            if state.session(&session.id.0).is_none() {
+                state.sessions.push(SessionView::new(session));
+            }
         }
-        Event::RequestCompleted { session, prompt_tokens, completion_tokens, cost_micro_usd, latency_ms, failed_over, .. } => {
+        Event::RequestCompleted {
+            session,
+            prompt_tokens,
+            completion_tokens,
+            cost_micro_usd,
+            latency_ms,
+            failed_over,
+            ..
+        } => {
             if let Some(v) = state.session_mut(&session) {
                 v.cost_micro_usd += cost_micro_usd;
                 v.tokens_in += prompt_tokens;
                 v.tokens_out += completion_tokens;
                 v.latencies_ms.push(latency_ms);
-                if failed_over { v.failovers += 1; }
+                if failed_over {
+                    v.failovers += 1;
+                }
             }
         }
         Event::RoutingDecided { session, route } => {
-            if let Some(v) = state.session_mut(&session) { v.last_route = Some(route); }
+            if let Some(v) = state.session_mut(&session) {
+                v.last_route = Some(route);
+            }
         }
         Event::AgentExited { session, .. } => {
-            if let Some(v) = state.session_mut(&session) { v.session.status = SessionStatus::Exited; }
+            if let Some(v) = state.session_mut(&session) {
+                v.session.status = SessionStatus::Exited;
+            }
         }
         Event::SessionUpdate { session, update } => {
             if let Some(v) = state.session_mut(&session) {
                 v.transcript.push(match update {
                     SessionUpdateKind::Message { text } => TranscriptItem::Message { text },
                     SessionUpdateKind::Thought { text } => TranscriptItem::Thought { text },
-                    SessionUpdateKind::ToolCall { title, status, diff } => TranscriptItem::ToolCall { title, status, diff },
+                    SessionUpdateKind::ToolCall {
+                        title,
+                        status,
+                        diff,
+                    } => TranscriptItem::ToolCall {
+                        title,
+                        status,
+                        diff,
+                    },
                 });
             }
         }
-        Event::PermissionRequested { session, request_id, summary, diff } => {
+        Event::PermissionRequested {
+            session,
+            request_id,
+            summary,
+            diff,
+        } => {
             if let Some(v) = state.session_mut(&session) {
                 v.session.status = SessionStatus::WaitingPermission;
-                v.pending = Some(Permission { request_id, summary, diff });
+                v.pending = Some(Permission {
+                    request_id,
+                    summary,
+                    diff,
+                });
             }
         }
     }
@@ -118,20 +186,40 @@ mod tests {
     use crate::protocol::*;
 
     fn sess(id: &str) -> Session {
-        Session { id: SessionId(id.into()), name: id.into(), tab: TabId("t".into()),
-            harness: "claude-code".into(), model: "claude".into(),
-            status: SessionStatus::Running, render_mode: RenderMode::Terminal }
+        Session {
+            id: SessionId(id.into()),
+            name: id.into(),
+            tab: TabId("t".into()),
+            harness: "claude-code".into(),
+            model: "claude".into(),
+            status: SessionStatus::Running,
+            render_mode: RenderMode::Terminal,
+        }
     }
 
     #[test]
     fn spawn_then_complete_accumulates() -> anyhow::Result<()> {
         let mut st = State::default();
-        reduce(&mut st, Event::AgentSpawned { session: sess("s1") });
+        reduce(
+            &mut st,
+            Event::AgentSpawned {
+                session: sess("s1"),
+            },
+        );
         assert_eq!(st.sessions.len(), 1);
         assert_eq!(st.focus, Some(SessionId("s1".into())));
-        reduce(&mut st, Event::RequestCompleted { session: SessionId("s1".into()),
-            model: "claude".into(), prompt_tokens: 10, completion_tokens: 5,
-            cost_micro_usd: 4_000, latency_ms: 800, failed_over: true });
+        reduce(
+            &mut st,
+            Event::RequestCompleted {
+                session: SessionId("s1".into()),
+                model: "claude".into(),
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                cost_micro_usd: 4_000,
+                latency_ms: 800,
+                failed_over: true,
+            },
+        );
         let v = st.session("s1").ok_or_else(|| anyhow::anyhow!("missing"))?;
         assert_eq!(v.cost_micro_usd, 4_000);
         assert_eq!(v.failovers, 1);
@@ -142,11 +230,25 @@ mod tests {
     #[test]
     fn hud_reports_p50() -> anyhow::Result<()> {
         let mut st = State::default();
-        reduce(&mut st, Event::AgentSpawned { session: sess("s1") });
+        reduce(
+            &mut st,
+            Event::AgentSpawned {
+                session: sess("s1"),
+            },
+        );
         for ms in [400u32, 800, 1200] {
-            reduce(&mut st, Event::RequestCompleted { session: SessionId("s1".into()),
-                model: "m".into(), prompt_tokens: 0, completion_tokens: 0,
-                cost_micro_usd: 0, latency_ms: ms, failed_over: false });
+            reduce(
+                &mut st,
+                Event::RequestCompleted {
+                    session: SessionId("s1".into()),
+                    model: "m".into(),
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    cost_micro_usd: 0,
+                    latency_ms: ms,
+                    failed_over: false,
+                },
+            );
         }
         assert_eq!(st.hud().p50_ms, Some(800));
         Ok(())
