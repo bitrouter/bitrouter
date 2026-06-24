@@ -12,7 +12,7 @@ use std::path::Path;
 /// How the running `bitrouter` binary was installed, used to pick the right
 /// upgrade path when there is no cargo-dist receipt to self-update from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstallMethod {
+enum InstallMethod {
     Homebrew,
     Cargo,
     Unknown,
@@ -21,7 +21,7 @@ pub enum InstallMethod {
 /// Best-effort classification from the executable path and the resolved Cargo
 /// home. Homebrew installs live under a `Cellar/bitrouter/...` path; `cargo
 /// install` places the binary in `<CARGO_HOME>/bin`.
-pub fn detect_install_method(exe: &Path, cargo_home: Option<&Path>) -> InstallMethod {
+fn detect_install_method(exe: &Path, cargo_home: Option<&Path>) -> InstallMethod {
     let exe_str = exe.to_string_lossy();
     if exe_str.contains("/Cellar/bitrouter/") || exe_str.contains("/homebrew/") {
         return InstallMethod::Homebrew;
@@ -34,7 +34,7 @@ pub fn detect_install_method(exe: &Path, cargo_home: Option<&Path>) -> InstallMe
 
 /// The exact command a user should run to upgrade a package-manager-managed
 /// install. Unknown installs get the generic re-run-the-installer hint.
-pub fn delegation_command(method: InstallMethod) -> String {
+fn delegation_command(method: InstallMethod) -> String {
     match method {
         InstallMethod::Homebrew => "brew upgrade bitrouter".to_string(),
         InstallMethod::Cargo => "cargo install bitrouter --force".to_string(),
@@ -50,7 +50,7 @@ pub fn delegation_command(method: InstallMethod) -> String {
 /// decision is unit-testable. Converted to an `axoupdater::UpdateRequest` by
 /// `to_request`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VersionSpec {
+enum VersionSpec {
     /// Newest stable (non-prerelease) release.
     Latest,
     /// Newest release including prereleases — the default while pre-1.0.
@@ -61,7 +61,7 @@ pub enum VersionSpec {
 
 /// `--tag` always wins; otherwise `--stable` selects stable-only, and the
 /// default follows prereleases (the project currently ships only `alpha.*`).
-pub fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
+fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
     match tag {
         Some(t) => VersionSpec::Tag(t.to_string()),
         None if stable => VersionSpec::Latest,
@@ -145,6 +145,10 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
 
     // 2. Channel / pin.
     let spec = choose_spec(opts.tag.as_deref(), opts.stable);
+    let target_label = match &spec {
+        VersionSpec::Tag(t) => format!("version {t}"),
+        _ => "the latest release".to_string(),
+    };
     if let VersionSpec::Tag(_) = spec {
         updater.always_update(true);
     }
@@ -155,7 +159,7 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
         if updater.is_update_needed().await? {
             match updater.query_new_version().await? {
                 Some(v) => println!("update available: {current} -> {v}"),
-                None => println!("up to date ({current})"),
+                None => println!("update available (target version unknown)"),
             }
         } else {
             println!("up to date ({current})");
@@ -166,7 +170,7 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
     }
 
     // 4. Confirm + swap.
-    if !opts.yes && !confirm(&p, current)? {
+    if !opts.yes && !confirm(&p, current, &target_label)? {
         println!("aborted");
         return Ok(RunOutcome {
             restart_needed: false,
@@ -201,10 +205,10 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
 }
 
 /// Interactive y/N confirmation. Defaults to no on empty input or non-tty EOF.
-fn confirm(p: &style::Palette, current: &str) -> Result<bool> {
+fn confirm(p: &style::Palette, current: &str, target: &str) -> Result<bool> {
     use std::io::Write;
     print!(
-        "Update bitrouter from {bold}{current}{reset} to the latest release? [y/N] ",
+        "Update bitrouter from {bold}{current}{reset} to {target}? [y/N] ",
         bold = p.bold,
         reset = p.reset,
     );
@@ -224,16 +228,16 @@ const CACHE_FILENAME: &str = "update-check.json";
 
 /// Persisted record of the last passive update check.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateCache {
+struct UpdateCache {
     /// Unix seconds of the last network check.
-    pub checked_at: i64,
+    checked_at: i64,
     /// Latest version string seen at that check, if any.
-    pub latest: Option<String>,
+    latest: Option<String>,
 }
 
 /// Whether the passive nudge should perform a fresh network check now. True
 /// when never checked, or when more than `ttl_secs` have elapsed.
-pub fn should_check(now: i64, last_checked: Option<i64>, ttl_secs: i64) -> bool {
+fn should_check(now: i64, last_checked: Option<i64>, ttl_secs: i64) -> bool {
     match last_checked {
         None => true,
         Some(prev) => now - prev >= ttl_secs,
@@ -242,13 +246,13 @@ pub fn should_check(now: i64, last_checked: Option<i64>, ttl_secs: i64) -> bool 
 
 /// Read the cache from `<home>/update-check.json`. Any error (missing,
 /// malformed) is treated as "no cache" — the nudge is best-effort.
-pub fn read_cache(home: &Path) -> Option<UpdateCache> {
+fn read_cache(home: &Path) -> Option<UpdateCache> {
     let bytes = std::fs::read(home.join(CACHE_FILENAME)).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
 /// Persist the cache to `<home>/update-check.json`, creating the home if needed.
-pub fn write_cache(home: &Path, cache: &UpdateCache) -> Result<()> {
+fn write_cache(home: &Path, cache: &UpdateCache) -> Result<()> {
     crate::paths::ensure_home_directory(home)?;
     let bytes = serde_json::to_vec(cache)?;
     std::fs::write(home.join(CACHE_FILENAME), bytes)?;
