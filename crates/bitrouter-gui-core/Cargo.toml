@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 serde.workspace = true
 futures.workspace = true
-thiserror.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -1,12 +1,6 @@
 use crate::protocol::*;
 use futures::channel::mpsc;
 
-#[derive(Debug, thiserror::Error)]
-pub enum FeedError {
-    #[error("feed disconnected")]
-    Disconnected,
-}
-
 pub struct FeedHandle {
     pub events: mpsc::UnboundedReceiver<Event>,
     pub commands: mpsc::UnboundedSender<Command>,

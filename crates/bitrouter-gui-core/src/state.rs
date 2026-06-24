@@ -126,12 +126,12 @@ pub fn reduce(state: &mut State, event: Event) {
             ..
         } => {
             if let Some(v) = state.session_mut(&session) {
-                v.cost_micro_usd += cost_micro_usd;
-                v.tokens_in += prompt_tokens;
-                v.tokens_out += completion_tokens;
+                v.cost_micro_usd = v.cost_micro_usd.saturating_add(cost_micro_usd);
+                v.tokens_in = v.tokens_in.saturating_add(prompt_tokens);
+                v.tokens_out = v.tokens_out.saturating_add(completion_tokens);
                 v.latencies_ms.push(latency_ms);
                 if failed_over {
-                    v.failovers += 1;
+                    v.failovers = v.failovers.saturating_add(1);
                 }
             }
         }
@@ -251,6 +251,43 @@ mod tests {
             );
         }
         assert_eq!(st.hud().p50_ms, Some(800));
+        Ok(())
+    }
+
+    #[test]
+    fn dedup_spawn_and_ignore_unknown_session() -> anyhow::Result<()> {
+        let mut st = State::default();
+        reduce(
+            &mut st,
+            Event::AgentSpawned {
+                session: sess("s1"),
+            },
+        );
+        // A duplicate spawn must not add a second session or move focus.
+        reduce(
+            &mut st,
+            Event::AgentSpawned {
+                session: sess("s1"),
+            },
+        );
+        assert_eq!(st.sessions.len(), 1);
+        assert_eq!(st.focus, Some(SessionId("s1".into())));
+
+        // An event for an unknown session is a no-op, not a panic.
+        reduce(
+            &mut st,
+            Event::RequestCompleted {
+                session: SessionId("ghost".into()),
+                model: "m".into(),
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                cost_micro_usd: 1,
+                latency_ms: 1,
+                failed_over: true,
+            },
+        );
+        assert_eq!(st.sessions.len(), 1);
+        assert_eq!(st.session_cost_micro_usd(), 0);
         Ok(())
     }
 }
