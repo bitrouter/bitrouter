@@ -731,6 +731,8 @@ dependencies = [
  "gpui",
  "gpui-component",
  "gpui_platform",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

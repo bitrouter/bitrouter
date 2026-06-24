@@ -20,6 +20,8 @@ gpui_platform = { workspace = true }
 gpui-component = { workspace = true }
 alacritty_terminal = { workspace = true }
 bitrouter-gui-core = { path = "../bitrouter-gui-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

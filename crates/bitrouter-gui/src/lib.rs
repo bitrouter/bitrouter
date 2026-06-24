@@ -1,3 +1,5 @@
 //! BitRouter GUI library: GPUI views and the PTY-backed terminal.
 
+pub mod app_model;
 pub mod terminal;
+pub mod theme;
