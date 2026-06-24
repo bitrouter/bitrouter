@@ -4,14 +4,20 @@
 //! the host's `tower-http` `TraceLayer` and is the parent of `chat` below):
 //!
 //! ```text
-//! chat <inbound-model>          (INTERNAL — full request lifetime)
+//! chat <inbound-model>          (INTERNAL — full request lifetime; the gen_ai generation)
 //! ├── route                     (INTERNAL — routing decision, brief)
-//! ├── chat <upstream-model>     (CLIENT   — hop #1, full GenAI attrs)
+//! ├── chat <upstream-model>     (CLIENT   — hop #1, routing/destination attrs)
 //! ├── chat <upstream-model>     (CLIENT   — failover hop, etc.)
 //! └── settle                    (INTERNAL — settlement summary, brief)
 //! ```
 //!
 //! Span names follow the GenAI semconv: `{gen_ai.operation.name} {gen_ai.request.model}`.
+//!
+//! The single gen_ai *generation* per request lives on the root `chat` span:
+//! only it carries `gen_ai.*` attributes. The auxiliary spans (`route`, the
+//! per-hop CLIENT spans, `settle`) carry only `bitrouter.*` / `server.*`
+//! attributes. This keeps a gen_ai-aware backend from rendering an auxiliary
+//! span as its own event and double-counting per-request telemetry.
 //!
 //! W3C `traceparent` propagation:
 //! - **Inbound**: extracted from request headers at `PreRequest` (the registered
@@ -495,8 +501,19 @@ impl ObserveHook for OtelExporter {
                 // span did, with one span per upstream attempt. No work here.
             }
             Phase::Settlement => {
-                // Brief INTERNAL span recording the settlement summary.
-                // Parented to the root `chat` span.
+                // Brief INTERNAL span recording the settlement summary (the
+                // resolved provider / model / account). Parented to the root
+                // `chat` span.
+                //
+                // This span carries only `bitrouter.*` attributes — never
+                // `gen_ai.*`. The single gen_ai generation per request lives on
+                // the root `chat` span, which already records the aggregate
+                // `gen_ai.usage.*` in `on_request_end`. A gen_ai-aware backend
+                // keeps any span whose attribute keys start with `gen_ai.` and
+                // renders it as its own event; stamping usage here too would
+                // surface `settle` as a spurious second event and double the
+                // per-request telemetry cost. Same invariant as the per-hop
+                // CLIENT span (see `build_hop_client_attrs`).
                 if let Some(entry) = self.active_spans.get(ctx.request_id())
                     && let Some(result) = &ctx.execution_result
                 {
@@ -515,16 +532,6 @@ impl ObserveHook for OtelExporter {
                     ));
                     if let Some(label) = &result.account_label {
                         span.set_attribute(KeyValue::new("bitrouter.account_label", label.clone()));
-                    }
-                    if let Some(usage) = &result.result.usage {
-                        span.set_attribute(KeyValue::new(
-                            "gen_ai.usage.input_tokens",
-                            usage.prompt_tokens as i64,
-                        ));
-                        span.set_attribute(KeyValue::new(
-                            "gen_ai.usage.output_tokens",
-                            usage.completion_tokens as i64,
-                        ));
                     }
                     span.end();
                 }
@@ -1802,10 +1809,21 @@ mod hop_tests {
             str_attr(route, "bitrouter.route_head_provider"),
             Some("openai")
         );
-        // settle carries the per-request usage and provider.
+        // settle carries the resolved provider summary — and NO `gen_ai.*`
+        // attribute, so a gen_ai-aware backend drops it instead of rendering it
+        // as a spurious second event. The per-request usage lives on the root
+        // chat generation span (see `on_request_end`), not here.
         assert_eq!(str_attr(settle, "bitrouter.provider_id"), Some("openai"));
-        assert_eq!(i64_attr(settle, "gen_ai.usage.input_tokens"), Some(11));
-        assert_eq!(i64_attr(settle, "gen_ai.usage.output_tokens"), Some(7));
+        assert_eq!(str_attr(settle, "bitrouter.model_id"), Some("test-model"));
+        assert_eq!(i64_attr(settle, "gen_ai.usage.input_tokens"), None);
+        assert_eq!(i64_attr(settle, "gen_ai.usage.output_tokens"), None);
+        assert!(
+            settle
+                .attributes
+                .iter()
+                .all(|kv| !kv.key.as_str().starts_with("gen_ai.")),
+            "settle must carry no gen_ai.* attribute — auxiliary spans are not generations"
+        );
     }
 
     #[tokio::test]
