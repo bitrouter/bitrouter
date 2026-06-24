@@ -19,5 +19,6 @@ genai = "0.6"
 # NOTE (Task 2.1): pin gpui + gpui-component to a MATCHING pair — reuse the exact
 # `gpui` rev that gpui-component's own Cargo.toml depends on, so there is exactly
 # one gpui in the tree. Fill REV_GPUI / REV_GPUIC during 2.1.
-gpui = { git = "https://github.com/zed-industries/zed", rev = "REV_GPUI" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "REV_GPUIC" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "a0ae3a37b960b732801782dd8c27cb993ff57b59" }
