@@ -62,6 +62,24 @@ impl AppModel {
             view.session.render_mode = mode;
         }
     }
+
+    /// Set the focused session. This is local view state only and does not
+    /// go through the feed.
+    pub fn set_focus(&mut self, id: &SessionId) {
+        if self.state.sessions.iter().any(|v| &v.session.id == id) {
+            self.state.focus = Some(id.clone());
+        }
+    }
+
+    /// Toggle selection of a session (add if absent, remove if present).
+    /// This is local view state only and does not go through the feed.
+    pub fn toggle_selection(&mut self, id: &SessionId) {
+        if let Some(pos) = self.state.selection.iter().position(|s| s == id) {
+            self.state.selection.remove(pos);
+        } else if self.state.sessions.iter().any(|v| &v.session.id == id) {
+            self.state.selection.push(id.clone());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -82,6 +100,37 @@ mod tests {
 
         let session_count = model.read_with(cx, |m, _| m.state.sessions.len());
         assert_eq!(session_count, 3);
+    }
+
+    /// `set_focus` must update `state.focus` without going through the feed.
+    #[gpui::test]
+    fn set_focus_updates_focus(cx: &mut TestAppContext) {
+        let model = cx.update(|cx| cx.new(|cx| AppModel::new(MockFeed::scenario(), cx)));
+        cx.run_until_parked();
+
+        let id = SessionId("refactor-api".into());
+        model.update(cx, |m, _| m.set_focus(&id));
+
+        let focus = model.read_with(cx, |m, _| m.state.focus.clone());
+        assert!(matches!(focus, Some(ref f) if f.0 == "refactor-api"));
+    }
+
+    /// `toggle_selection` must add an id on first call and remove it on the second.
+    #[gpui::test]
+    fn toggle_selection_adds_then_removes(cx: &mut TestAppContext) {
+        let model = cx.update(|cx| cx.new(|cx| AppModel::new(MockFeed::scenario(), cx)));
+        cx.run_until_parked();
+
+        let id = SessionId("auth-fix".into());
+        model.update(cx, |m, _| m.toggle_selection(&id));
+
+        let len_after_add = model.read_with(cx, |m, _| m.state.selection.len());
+        assert_eq!(len_after_add, 1);
+
+        model.update(cx, |m, _| m.toggle_selection(&id));
+
+        let len_after_remove = model.read_with(cx, |m, _| m.state.selection.len());
+        assert_eq!(len_after_remove, 0);
     }
 
     /// `set_render_mode` must mutate the matching session without going through

@@ -3,3 +3,4 @@
 pub mod app_model;
 pub mod terminal;
 pub mod theme;
+pub mod views;
