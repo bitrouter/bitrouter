@@ -65,7 +65,10 @@ impl AcpFeed {
 
     pub fn from_env() -> Self {
         let bin = std::env::var("BITROUTER_BIN").unwrap_or_else(|_| "bitrouter".into());
-        let agent = std::env::var("BITROUTER_GUI_AGENT").unwrap_or_else(|_| "claude-code".into());
+        // `claude-acp` is the bitrouter catalog id for Anthropic Claude (Zed's
+        // `claude-code-acp`); verified against `bitrouter agents list`. Override
+        // with BITROUTER_GUI_AGENT for any other configured agent.
+        let agent = std::env::var("BITROUTER_GUI_AGENT").unwrap_or_else(|_| "claude-acp".into());
         Self::new(&bin, &agent)
     }
 }
