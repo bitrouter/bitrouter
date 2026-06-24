@@ -1,0 +1,29 @@
+[package]
+name = "bitrouter-gui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "bitrouter_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bitrouter-gui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+futures = { workspace = true }
+gpui = { workspace = true }
+gpui_platform = { workspace = true }
+gpui-component = { workspace = true }
+alacritty_terminal = { workspace = true }
+bitrouter-gui-core = { path = "../bitrouter-gui-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+genai.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
