@@ -10,7 +10,7 @@ use gpui::{
     LayoutId, Pixels, Point, Style, TextAlign, TextRun, Window,
 };
 
-use crate::terminal::terminal::{Cell, Color, TerminalSnapshot};
+use crate::terminal::entity::{Cell, Color, TerminalSnapshot};
 
 /// Measured monospace cell geometry plus the base font for shaping.
 #[derive(Clone)]

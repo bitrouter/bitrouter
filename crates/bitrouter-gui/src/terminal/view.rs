@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use crate::terminal::element::{GridMetrics, TerminalElement};
-use crate::terminal::terminal::Terminal;
+use crate::terminal::entity::Terminal;
 
 /// Monospace font size used to render the grid.
 fn font_size() -> Pixels {

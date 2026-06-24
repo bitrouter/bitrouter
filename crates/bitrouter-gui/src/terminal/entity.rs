@@ -352,6 +352,14 @@ impl Terminal {
     }
 }
 
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        if let Some(tx) = self.loop_tx.as_ref() {
+            let _ = tx.send(Msg::Shutdown);
+        }
+    }
+}
+
 /// Resolve an alacritty [`AnsiColor`] to a concrete RGB triple using a small
 /// built-in palette. We don't theme the terminal, so named/default colors map
 /// to fixed values and indexed colors use the xterm 256-color cube.

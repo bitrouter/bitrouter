@@ -1,4 +1,4 @@
-use bitrouter_gui::terminal::terminal::Terminal;
+use bitrouter_gui::terminal::entity::Terminal;
 use bitrouter_gui::terminal::view::TerminalView;
 use gpui::{
     div, px, size, AppContext, Context, IntoElement, ParentElement, Render, Styled, Window,
