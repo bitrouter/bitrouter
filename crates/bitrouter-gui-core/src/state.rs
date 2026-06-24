@@ -5,12 +5,17 @@ use crate::protocol::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptItem {
     Message {
+        /// Coalescing key from ACP `ContentChunk.message_id`; `None` for
+        /// non-streamed (mock) messages.
+        message_id: Option<String>,
         text: String,
     },
     Thought {
+        message_id: Option<String>,
         text: String,
     },
     ToolCall {
+        id: String,
         title: String,
         status: ToolStatus,
         diff: Option<String>,
@@ -147,26 +152,43 @@ pub fn reduce(state: &mut State, event: Event) {
         }
         Event::SessionUpdate { session, update } => {
             if let Some(v) = state.session_mut(&session) {
-                v.transcript.push(match update {
-                    SessionUpdateKind::Message { text } => TranscriptItem::Message { text },
-                    SessionUpdateKind::Thought { text } => TranscriptItem::Thought { text },
-                    SessionUpdateKind::ToolCall {
-                        id: _, // Task 2 will use this id
-                        title,
-                        status,
-                        diff,
-                    } => TranscriptItem::ToolCall {
-                        title,
-                        status,
-                        diff,
-                    },
-                    SessionUpdateKind::MessageChunk { .. }
-                    | SessionUpdateKind::ThoughtChunk { .. }
-                    | SessionUpdateKind::ToolCallUpdate { .. } => {
-                        // Task 2 will coalesce these streaming variants
-                        return;
+                match update {
+                    SessionUpdateKind::Message { text } => {
+                        v.transcript.push(TranscriptItem::Message { message_id: None, text });
                     }
-                });
+                    SessionUpdateKind::Thought { text } => {
+                        v.transcript.push(TranscriptItem::Thought { message_id: None, text });
+                    }
+                    SessionUpdateKind::MessageChunk { message_id, text } => {
+                        match v.transcript.last_mut() {
+                            Some(TranscriptItem::Message { message_id: last, text: body })
+                                if *last == message_id => body.push_str(&text),
+                            _ => v.transcript.push(TranscriptItem::Message { message_id, text }),
+                        }
+                    }
+                    SessionUpdateKind::ThoughtChunk { message_id, text } => {
+                        match v.transcript.last_mut() {
+                            Some(TranscriptItem::Thought { message_id: last, text: body })
+                                if *last == message_id => body.push_str(&text),
+                            _ => v.transcript.push(TranscriptItem::Thought { message_id, text }),
+                        }
+                    }
+                    SessionUpdateKind::ToolCall { id, title, status, diff } => {
+                        v.transcript.push(TranscriptItem::ToolCall { id, title, status, diff });
+                    }
+                    SessionUpdateKind::ToolCallUpdate { id, status, title, diff } => {
+                        if let Some(TranscriptItem::ToolCall {
+                            title: t, status: s, diff: d, ..
+                        }) = v.transcript.iter_mut().rev().find(
+                            |it| matches!(it, TranscriptItem::ToolCall { id: tid, .. } if *tid == id),
+                        ) {
+                            if let Some(ns) = status { *s = ns; }
+                            if let Some(nt) = title { *t = nt; }
+                            if let Some(nd) = diff { *d = Some(nd); }
+                        }
+                        // Unknown id: no-op (mirrors unknown-session discipline).
+                    }
+                }
             }
         }
         Event::PermissionRequested {
@@ -295,6 +317,67 @@ mod tests {
         );
         assert_eq!(st.sessions.len(), 1);
         assert_eq!(st.session_cost_micro_usd(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn message_chunks_coalesce_by_message_id() -> anyhow::Result<()> {
+        let mut st = State::default();
+        reduce(&mut st, Event::AgentSpawned { session: sess("s1") });
+        for part in ["Hel", "lo ", "world"] {
+            reduce(&mut st, Event::SessionUpdate {
+                session: SessionId("s1".into()),
+                update: SessionUpdateKind::MessageChunk {
+                    message_id: Some("m1".into()), text: part.into(),
+                },
+            });
+        }
+        let v = st.session("s1").ok_or_else(|| anyhow::anyhow!("missing"))?;
+        assert_eq!(v.transcript.len(), 1);
+        assert!(matches!(&v.transcript[0],
+            TranscriptItem::Message { text, .. } if text == "Hello world"));
+        Ok(())
+    }
+
+    #[test]
+    fn new_message_id_starts_new_bubble() -> anyhow::Result<()> {
+        let mut st = State::default();
+        reduce(&mut st, Event::AgentSpawned { session: sess("s1") });
+        for (mid, t) in [("m1", "a"), ("m2", "b")] {
+            reduce(&mut st, Event::SessionUpdate {
+                session: SessionId("s1".into()),
+                update: SessionUpdateKind::MessageChunk {
+                    message_id: Some(mid.into()), text: t.into(),
+                },
+            });
+        }
+        let v = st.session("s1").ok_or_else(|| anyhow::anyhow!("missing"))?;
+        assert_eq!(v.transcript.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn tool_call_update_mutates_by_id() -> anyhow::Result<()> {
+        let mut st = State::default();
+        reduce(&mut st, Event::AgentSpawned { session: sess("s1") });
+        reduce(&mut st, Event::SessionUpdate {
+            session: SessionId("s1".into()),
+            update: SessionUpdateKind::ToolCall {
+                id: "t1".into(), title: "WRITE x".into(),
+                status: ToolStatus::Pending, diff: None,
+            },
+        });
+        reduce(&mut st, Event::SessionUpdate {
+            session: SessionId("s1".into()),
+            update: SessionUpdateKind::ToolCallUpdate {
+                id: "t1".into(), status: Some(ToolStatus::Ok),
+                title: None, diff: Some("d".into()),
+            },
+        });
+        let v = st.session("s1").ok_or_else(|| anyhow::anyhow!("missing"))?;
+        assert_eq!(v.transcript.len(), 1);
+        assert!(matches!(&v.transcript[0],
+            TranscriptItem::ToolCall { status: ToolStatus::Ok, diff: Some(d), .. } if d == "d"));
         Ok(())
     }
 }

@@ -40,7 +40,7 @@ pub fn render_transcript<'a>(
         .transcript
         .iter()
         .map(|item| match item {
-            TranscriptItem::Message { text } => div()
+            TranscriptItem::Message { text, .. } => div()
                 .w_full()
                 .px_3()
                 .py_1()
@@ -49,7 +49,7 @@ pub fn render_transcript<'a>(
                 .child(text.clone())
                 .into_any_element(),
 
-            TranscriptItem::Thought { text } => div()
+            TranscriptItem::Thought { text, .. } => div()
                 .w_full()
                 .px_3()
                 .py_1()
@@ -63,6 +63,7 @@ pub fn render_transcript<'a>(
                 title,
                 status,
                 diff,
+                ..
             } => {
                 let glyph = tool_status_glyph(*status);
                 let title_row = div()
