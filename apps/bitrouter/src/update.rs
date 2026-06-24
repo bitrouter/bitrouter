@@ -3,7 +3,9 @@
 //! nudge-cache TTL) lives in small pure functions so it can be unit-tested
 //! without touching the network or replacing the running binary.
 
+use crate::{daemon, style};
 use anyhow::Result;
+use axoupdater::{AxoUpdater, UpdateRequest};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -45,8 +47,8 @@ pub fn delegation_command(method: InstallMethod) -> String {
 }
 
 /// Resolved release target, decoupled from axoupdater's own request type so the
-/// decision is unit-testable. Converted to an `axoupdater::UpdateRequest` at the
-/// call site (a later task).
+/// decision is unit-testable. Converted to an `axoupdater::UpdateRequest` by
+/// `to_request`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionSpec {
     /// Newest stable (non-prerelease) release.
@@ -84,11 +86,137 @@ pub struct RunOutcome {
     pub restart_needed: bool,
 }
 
-/// Stub — real implementation in a later task.
-pub async fn run(_opts: UpdateOptions, _socket: &Path) -> Result<RunOutcome> {
+/// Current binary version, baked in at compile time.
+fn current_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Resolve `$CARGO_HOME`, falling back to `~/.cargo`, for install detection.
+fn cargo_home() -> Option<std::path::PathBuf> {
+    if let Some(h) = std::env::var_os("CARGO_HOME") {
+        return Some(std::path::PathBuf::from(h));
+    }
+    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cargo"))
+}
+
+/// Translate our channel decision into axoupdater's request type.
+fn to_request(spec: VersionSpec) -> UpdateRequest {
+    match spec {
+        VersionSpec::Latest => UpdateRequest::Latest,
+        VersionSpec::LatestPrerelease => UpdateRequest::LatestMaybePrerelease,
+        VersionSpec::Tag(t) => UpdateRequest::SpecificTag(t),
+    }
+}
+
+/// Configure an axoupdater for the `bitrouter` app. Prefers the dist install
+/// receipt; if absent, returns `None` so the caller can delegate.
+fn build_updater() -> Option<AxoUpdater> {
+    let mut updater = AxoUpdater::new_for("bitrouter");
+    if let Err(e) = updater.load_receipt() {
+        tracing::debug!(error = %e, "no install receipt; delegating to package manager");
+        return None;
+    }
+    Some(updater)
+}
+
+pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
+    let p = style::Palette::for_stdout();
+    let current = current_version();
+
+    // 1. No receipt -> package-manager install; delegate, never clobber.
+    let Some(mut updater) = build_updater() else {
+        let exe = std::env::current_exe().unwrap_or_default();
+        let method = detect_install_method(&exe, cargo_home().as_deref());
+        println!(
+            "{dim}bitrouter looks installed via {how}. Update with:{reset}\n    {cmd}",
+            dim = p.dim,
+            reset = p.reset,
+            how = match method {
+                InstallMethod::Homebrew => "Homebrew",
+                InstallMethod::Cargo => "Cargo",
+                InstallMethod::Unknown => "your package manager",
+            },
+            cmd = delegation_command(method),
+        );
+        return Ok(RunOutcome {
+            restart_needed: false,
+        });
+    };
+
+    // 2. Channel / pin.
+    let spec = choose_spec(opts.tag.as_deref(), opts.stable);
+    if let VersionSpec::Tag(_) = spec {
+        updater.always_update(true);
+    }
+    updater.configure_version_specifier(to_request(spec));
+
+    // 3. Dry run.
+    if opts.check {
+        if updater.is_update_needed().await? {
+            match updater.query_new_version().await? {
+                Some(v) => println!("update available: {current} -> {v}"),
+                None => println!("up to date ({current})"),
+            }
+        } else {
+            println!("up to date ({current})");
+        }
+        return Ok(RunOutcome {
+            restart_needed: false,
+        });
+    }
+
+    // 4. Confirm + swap.
+    if !opts.yes && !confirm(&p, current)? {
+        println!("aborted");
+        return Ok(RunOutcome {
+            restart_needed: false,
+        });
+    }
+    let Some(result) = updater.run().await? else {
+        println!("already up to date ({current})");
+        return Ok(RunOutcome {
+            restart_needed: false,
+        });
+    };
+    println!(
+        "{green}✓{reset} updated {current} -> {new}",
+        green = p.green,
+        reset = p.reset,
+        new = result.new_version,
+    );
+
+    // 5. Daemon awareness.
+    let daemon_running = daemon::endpoint_in_use(socket);
+    if daemon_running && !opts.restart {
+        println!(
+            "{dim}A daemon is running the old binary. Run `bitrouter restart` to serve {new}.{reset}",
+            dim = p.dim,
+            reset = p.reset,
+            new = result.new_version,
+        );
+    }
     Ok(RunOutcome {
-        restart_needed: false,
+        restart_needed: daemon_running && opts.restart,
     })
+}
+
+/// Interactive y/N confirmation. Defaults to no on empty input or non-tty EOF.
+fn confirm(p: &style::Palette, current: &str) -> Result<bool> {
+    use std::io::Write;
+    print!(
+        "Update bitrouter from {bold}{current}{reset} to the latest release? [y/N] ",
+        bold = p.bold,
+        reset = p.reset,
+    );
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line)? == 0 {
+        return Ok(false);
+    }
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Filename of the persisted update-check cache inside the bitrouter home.
