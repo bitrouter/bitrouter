@@ -1375,21 +1375,19 @@ async fn status(socket: &Path) -> Result<()> {
             pid,
             listen,
             models,
-        }) => {
-            print_status_running(&p, pid, &listen, models, socket);
-            Ok(())
-        }
-        Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
-        Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
+        }) => print_status_running(&p, pid, &listen, models, socket),
+        Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
+        Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
         // No daemon listening on the socket → report stopped, not error.
         // Anything else (permission denied, malformed response, …) is a
         // real failure and bubbles to the pretty reporter.
-        Err(e) if daemon::is_not_reachable(&e) => {
-            print_status_stopped(&p, socket);
-            Ok(())
-        }
-        Err(e) => Err(e),
+        Err(e) if daemon::is_not_reachable(&e) => print_status_stopped(&p, socket),
+        Err(e) => return Err(e),
     }
+    if let Ok(source) = bitrouter::paths::resolve_config(None) {
+        bitrouter::update::maybe_nudge(source.home(), &p).await;
+    }
+    Ok(())
 }
 
 /// Render the running-daemon status block. Modelled on `systemctl

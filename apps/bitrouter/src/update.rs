@@ -255,6 +255,89 @@ pub fn write_cache(home: &Path, cache: &UpdateCache) -> Result<()> {
     Ok(())
 }
 
+/// Env var that disables the passive update nudge entirely.
+const NUDGE_DISABLE_ENV: &str = "BITROUTER_NO_UPDATE_CHECK";
+/// Nudge network check cadence: once per day.
+const NUDGE_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// Best-effort "update available" line for `bitrouter status`. Never returns an
+/// error and never blocks meaningfully: it respects the opt-out env var, checks
+/// the network at most once per `NUDGE_TTL_SECS` (cached under `home`), and
+/// swallows every failure.
+pub async fn maybe_nudge(home: &Path, p: &style::Palette) {
+    if std::env::var_os(NUDGE_DISABLE_ENV).is_some() {
+        return;
+    }
+    let now = chrono::Utc::now().timestamp();
+    let cache = read_cache(home);
+    let last = cache.as_ref().map(|c| c.checked_at);
+
+    let latest: Option<String> = if should_check(now, last, NUDGE_TTL_SECS) {
+        match query_latest().await {
+            Some(v) => {
+                let _ = write_cache(
+                    home,
+                    &UpdateCache {
+                        checked_at: now,
+                        latest: Some(v.clone()),
+                    },
+                );
+                Some(v)
+            }
+            None => {
+                // Record the attempt so we don't hammer the network on failure.
+                let _ = write_cache(
+                    home,
+                    &UpdateCache {
+                        checked_at: now,
+                        latest: None,
+                    },
+                );
+                cache.and_then(|c| c.latest)
+            }
+        }
+    } else {
+        cache.and_then(|c| c.latest)
+    };
+
+    if let Some(latest) = latest.filter(|l| is_newer(l, current_version())) {
+        println!();
+        println!(
+            "  {dim}↑ {latest} available — run `bitrouter update`{reset}",
+            dim = p.dim,
+            reset = p.reset,
+        );
+    }
+}
+
+/// Query the newest version tag, prereleases included, with a short timeout.
+/// Returns `None` on any error or timeout — the nudge is strictly best-effort.
+async fn query_latest() -> Option<String> {
+    let mut updater = build_updater()?;
+    updater.configure_version_specifier(UpdateRequest::LatestMaybePrerelease);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        updater.query_new_version(),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .flatten()
+    .map(|v| v.to_string())
+}
+
+/// True when `candidate` is a strictly greater semver than `current`. Parse
+/// failures yield `false` so a malformed tag never nags the user.
+fn is_newer(candidate: &str, current: &str) -> bool {
+    match (
+        semver::Version::parse(candidate),
+        semver::Version::parse(current),
+    ) {
+        (Ok(c), Ok(cur)) => c > cur,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +411,14 @@ mod tests {
     #[test]
     fn checks_again_after_ttl_elapsed() {
         assert!(should_check(1_000_000 + DAY + 1, Some(1_000_000), DAY));
+    }
+
+    #[test]
+    fn is_newer_compares_prerelease_semver() {
+        assert!(is_newer("1.0.0-alpha.20", "1.0.0-alpha.19"));
+        assert!(!is_newer("1.0.0-alpha.19", "1.0.0-alpha.19"));
+        assert!(!is_newer("1.0.0-alpha.18", "1.0.0-alpha.19"));
+        assert!(!is_newer("garbage", "1.0.0-alpha.19"));
     }
 
     #[test]
