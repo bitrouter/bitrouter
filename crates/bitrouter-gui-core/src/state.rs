@@ -159,6 +159,11 @@ pub fn reduce(state: &mut State, event: Event) {
                     SessionUpdateKind::Thought { text } => {
                         v.transcript.push(TranscriptItem::Thought { message_id: None, text });
                     }
+                    // Coalesce onto the trailing same-kind bubble when message_id matches.
+                    // Two `None` ids match by design: an agent that streams chunks without
+                    // message_ids still produces one bubble per turn — a new bubble starts only
+                    // when message_id changes or a non-Message item (tool call, thought) breaks
+                    // the run.
                     SessionUpdateKind::MessageChunk { message_id, text } => {
                         match v.transcript.last_mut() {
                             Some(TranscriptItem::Message { message_id: last, text: body })
@@ -166,6 +171,7 @@ pub fn reduce(state: &mut State, event: Event) {
                             _ => v.transcript.push(TranscriptItem::Message { message_id, text }),
                         }
                     }
+                    // Same coalescing logic as MessageChunk — see comment above.
                     SessionUpdateKind::ThoughtChunk { message_id, text } => {
                         match v.transcript.last_mut() {
                             Some(TranscriptItem::Thought { message_id: last, text: body })
@@ -378,6 +384,62 @@ mod tests {
         assert_eq!(v.transcript.len(), 1);
         assert!(matches!(&v.transcript[0],
             TranscriptItem::ToolCall { status: ToolStatus::Ok, diff: Some(d), .. } if d == "d"));
+        Ok(())
+    }
+
+    #[test]
+    fn none_id_chunks_coalesce_into_one_bubble() -> anyhow::Result<()> {
+        let mut st = State::default();
+        reduce(&mut st, Event::AgentSpawned { session: sess("s1") });
+        for part in ["a", "b", "c"] {
+            reduce(&mut st, Event::SessionUpdate {
+                session: SessionId("s1".into()),
+                update: SessionUpdateKind::MessageChunk { message_id: None, text: part.into() },
+            });
+        }
+        let v = st.session("s1").ok_or_else(|| anyhow::anyhow!("missing"))?;
+        assert_eq!(v.transcript.len(), 1);
+        assert!(matches!(&v.transcript[0],
+            TranscriptItem::Message { text, .. } if text == "abc"));
+        Ok(())
+    }
+
+    #[test]
+    fn tool_call_chunk_break_starts_new_message_bubble() -> anyhow::Result<()> {
+        // A tool call between two None-id message chunks must break coalescing.
+        let mut st = State::default();
+        reduce(&mut st, Event::AgentSpawned { session: sess("s1") });
+        reduce(&mut st, Event::SessionUpdate {
+            session: SessionId("s1".into()),
+            update: SessionUpdateKind::MessageChunk { message_id: None, text: "before".into() },
+        });
+        reduce(&mut st, Event::SessionUpdate {
+            session: SessionId("s1".into()),
+            update: SessionUpdateKind::ToolCall {
+                id: "t1".into(), title: "x".into(), status: ToolStatus::Pending, diff: None,
+            },
+        });
+        reduce(&mut st, Event::SessionUpdate {
+            session: SessionId("s1".into()),
+            update: SessionUpdateKind::MessageChunk { message_id: None, text: "after".into() },
+        });
+        let v = st.session("s1").ok_or_else(|| anyhow::anyhow!("missing"))?;
+        assert_eq!(v.transcript.len(), 3); // message, tool call, message
+        Ok(())
+    }
+
+    #[test]
+    fn tool_call_update_unknown_id_is_noop() -> anyhow::Result<()> {
+        let mut st = State::default();
+        reduce(&mut st, Event::AgentSpawned { session: sess("s1") });
+        reduce(&mut st, Event::SessionUpdate {
+            session: SessionId("s1".into()),
+            update: SessionUpdateKind::ToolCallUpdate {
+                id: "ghost".into(), status: Some(ToolStatus::Ok), title: None, diff: None,
+            },
+        });
+        let v = st.session("s1").ok_or_else(|| anyhow::anyhow!("missing"))?;
+        assert!(v.transcript.is_empty());
         Ok(())
     }
 }
