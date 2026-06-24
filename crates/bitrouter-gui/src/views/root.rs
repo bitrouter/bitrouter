@@ -1,13 +1,20 @@
 //! [`Root`] — top-level shell: title bar + sidebar + center + status bar.
 
 use gpui::{
-    div, px, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
+    div, px, AppContext, ClickEvent, Context, Entity, IntoElement, ParentElement, Render, Styled,
+    Window,
 };
-use gpui_component::{h_flex, v_flex, ActiveTheme, StyledExt};
+use gpui_component::{
+    button::{Button, ButtonVariants},
+    h_flex, v_flex, ActiveTheme, StyledExt,
+};
 
 use crate::{
     app_model::AppModel,
-    views::{center::Center, sidebar::SidebarView, status_bar::StatusBar},
+    views::{
+        center::Center, command_palette::CommandPalette, sidebar::SidebarView,
+        status_bar::StatusBar,
+    },
 };
 
 /// Format a micro-USD total cost as `$X.XX`.
@@ -25,6 +32,7 @@ pub struct Root {
     sidebar: Entity<SidebarView>,
     center: Entity<Center>,
     status_bar: Entity<StatusBar>,
+    command_palette: Entity<CommandPalette>,
 }
 
 impl Root {
@@ -33,11 +41,13 @@ impl Root {
         let sidebar = cx.new(|_cx| SidebarView::new(model.clone()));
         let center = cx.new(|_cx| Center::new(model.clone()));
         let status_bar = cx.new(|_cx| StatusBar::new(model.clone()));
+        let command_palette = cx.new(|_cx| CommandPalette::new(model.clone()));
         Self {
             model,
             sidebar,
             center,
             status_bar,
+            command_palette,
         }
     }
 }
@@ -46,6 +56,17 @@ impl Render for Root {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let cost = self.model.read(cx).state.session_cost_micro_usd();
         let cost_label = format!("session {}", format_cost(cost));
+
+        // ⌘K button — temporary trigger; real key binding is task 2.12.
+        let palette_entity = self.command_palette.clone();
+        let open_palette_btn = Button::new(gpui::ElementId::Name("open-palette".into()))
+            .ghost()
+            .label("⌘K")
+            .on_click(move |_: &ClickEvent, _window, cx| {
+                palette_entity.update(cx, |palette, cx| {
+                    palette.open(cx);
+                });
+            });
 
         // Title bar
         let title_bar = h_flex()
@@ -64,6 +85,7 @@ impl Render for Root {
                     .child("BitRouter"),
             )
             .child(div().flex_1())
+            .child(open_palette_btn)
             .child(
                 div()
                     .text_xs()
@@ -88,13 +110,19 @@ impl Render for Root {
             )
             .child(self.center.clone());
 
-        // Full-window column
-        v_flex()
+        // Full-window column with palette overlay on top
+        div()
             .size_full()
+            .relative()
             .bg(cx.theme().background)
-            .child(title_bar)
-            .child(content_row)
-            .child(self.status_bar.clone())
+            .child(
+                v_flex()
+                    .size_full()
+                    .child(title_bar)
+                    .child(content_row)
+                    .child(self.status_bar.clone()),
+            )
+            .child(self.command_palette.clone())
     }
 }
 
