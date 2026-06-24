@@ -42,6 +42,29 @@ pub fn delegation_command(method: InstallMethod) -> String {
     }
 }
 
+/// Resolved release target, decoupled from axoupdater's own request type so the
+/// decision is unit-testable. Converted to an `axoupdater::UpdateRequest` at the
+/// call site (a later task).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionSpec {
+    /// Newest stable (non-prerelease) release.
+    Latest,
+    /// Newest release including prereleases — the default while pre-1.0.
+    LatestPrerelease,
+    /// A specific pinned tag (enables downgrade/rollback).
+    Tag(String),
+}
+
+/// `--tag` always wins; otherwise `--stable` selects stable-only, and the
+/// default follows prereleases (the project currently ships only `alpha.*`).
+pub fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
+    match tag {
+        Some(t) => VersionSpec::Tag(t.to_string()),
+        None if stable => VersionSpec::Latest,
+        None => VersionSpec::LatestPrerelease,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +103,23 @@ mod tests {
             "cargo install bitrouter --force"
         );
         assert!(delegation_command(InstallMethod::Unknown).contains("bitrouter-installer.sh"));
+    }
+
+    #[test]
+    fn tag_takes_precedence_over_channel() {
+        assert_eq!(
+            choose_spec(Some("1.0.0-alpha.18"), true),
+            VersionSpec::Tag("1.0.0-alpha.18".to_string())
+        );
+    }
+
+    #[test]
+    fn default_channel_includes_prereleases() {
+        assert_eq!(choose_spec(None, false), VersionSpec::LatestPrerelease);
+    }
+
+    #[test]
+    fn stable_flag_excludes_prereleases() {
+        assert_eq!(choose_spec(None, true), VersionSpec::Latest);
     }
 }
