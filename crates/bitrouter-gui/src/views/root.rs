@@ -1,4 +1,4 @@
-//! [`Root`] — top-level shell: title bar + sidebar + center placeholder + status bar.
+//! [`Root`] — top-level shell: title bar + sidebar + center + status bar.
 
 use gpui::{
     div, px, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
@@ -7,7 +7,7 @@ use gpui_component::{h_flex, v_flex, ActiveTheme, StyledExt};
 
 use crate::{
     app_model::AppModel,
-    views::{sidebar::SidebarView, status_bar::StatusBar},
+    views::{center::Center, sidebar::SidebarView, status_bar::StatusBar},
 };
 
 /// Format a micro-USD total cost as `$X.XX`.
@@ -23,6 +23,7 @@ pub fn format_cost(micro_usd: u64) -> String {
 pub struct Root {
     model: Entity<AppModel>,
     sidebar: Entity<SidebarView>,
+    center: Entity<Center>,
     status_bar: Entity<StatusBar>,
 }
 
@@ -30,10 +31,12 @@ impl Root {
     /// Construct the root shell backed by `model`.
     pub fn new(model: Entity<AppModel>, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|_cx| SidebarView::new(model.clone()));
+        let center = cx.new(|_cx| Center::new(model.clone()));
         let status_bar = cx.new(|_cx| StatusBar::new(model.clone()));
         Self {
             model,
             sidebar,
+            center,
             status_bar,
         }
     }
@@ -68,20 +71,6 @@ impl Render for Root {
                     .child(cost_label),
             );
 
-        // Center placeholder (real pane comes in task 2.8)
-        let center = v_flex()
-            .flex_1()
-            .h_full()
-            .items_center()
-            .justify_center()
-            .bg(cx.theme().background)
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("select an agent"),
-            );
-
         // Sidebar + center row
         let content_row = h_flex()
             .flex_1()
@@ -97,7 +86,7 @@ impl Render for Root {
                     .bg(cx.theme().secondary)
                     .child(self.sidebar.clone()),
             )
-            .child(center);
+            .child(self.center.clone());
 
         // Full-window column
         v_flex()

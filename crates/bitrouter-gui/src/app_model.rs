@@ -80,6 +80,19 @@ impl AppModel {
             self.state.selection.push(id.clone());
         }
     }
+
+    /// Clear the pending permission for a session and restore its status to
+    /// `Running`. Called locally after dispatching `ResolvePending` so the
+    /// modal closes immediately without waiting for a feed event.
+    pub fn resolve_pending(&mut self, id: &SessionId) {
+        use bitrouter_gui_core::protocol::SessionStatus;
+        if let Some(v) = self.state.sessions.iter_mut().find(|v| &v.session.id == id) {
+            v.pending = None;
+            if v.session.status == SessionStatus::WaitingPermission {
+                v.session.status = SessionStatus::Running;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -131,6 +144,27 @@ mod tests {
 
         let len_after_remove = model.read_with(cx, |m, _| m.state.selection.len());
         assert_eq!(len_after_remove, 0);
+    }
+
+    /// `resolve_pending` clears the pending permission and sets status to Running.
+    #[gpui::test]
+    fn resolve_pending_clears_permission(cx: &mut TestAppContext) {
+        let model = cx.update(|cx| cx.new(|cx| AppModel::new(MockFeed::scenario(), cx)));
+        cx.run_until_parked();
+
+        // After the scenario, "refactor-api" has a pending permission.
+        let id = SessionId("refactor-api".into());
+        let has_pending_before = model.read_with(cx, |m, _| {
+            m.state.session("refactor-api").map(|v| v.pending.is_some())
+        });
+        assert!(matches!(has_pending_before, Some(true)));
+
+        model.update(cx, |m, _| m.resolve_pending(&id));
+
+        let pending_after = model.read_with(cx, |m, _| {
+            m.state.session("refactor-api").map(|v| v.pending.clone())
+        });
+        assert!(matches!(pending_after, Some(None)));
     }
 
     /// `set_render_mode` must mutate the matching session without going through
