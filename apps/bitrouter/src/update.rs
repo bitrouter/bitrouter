@@ -3,6 +3,8 @@
 //! nudge-cache TTL) lives in small pure functions so it can be unit-tested
 //! without touching the network or replacing the running binary.
 
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// How the running `bitrouter` binary was installed, used to pick the right
@@ -65,6 +67,42 @@ pub fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
     }
 }
 
+/// Filename of the persisted update-check cache inside the bitrouter home.
+const CACHE_FILENAME: &str = "update-check.json";
+
+/// Persisted record of the last passive update check.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCache {
+    /// Unix seconds of the last network check.
+    pub checked_at: i64,
+    /// Latest version string seen at that check, if any.
+    pub latest: Option<String>,
+}
+
+/// Whether the passive nudge should perform a fresh network check now. True
+/// when never checked, or when more than `ttl_secs` have elapsed.
+pub fn should_check(now: i64, last_checked: Option<i64>, ttl_secs: i64) -> bool {
+    match last_checked {
+        None => true,
+        Some(prev) => now - prev >= ttl_secs,
+    }
+}
+
+/// Read the cache from `<home>/update-check.json`. Any error (missing,
+/// malformed) is treated as "no cache" — the nudge is best-effort.
+pub fn read_cache(home: &Path) -> Option<UpdateCache> {
+    let bytes = std::fs::read(home.join(CACHE_FILENAME)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Persist the cache to `<home>/update-check.json`, creating the home if needed.
+pub fn write_cache(home: &Path, cache: &UpdateCache) -> Result<()> {
+    crate::paths::ensure_home_directory(home)?;
+    let bytes = serde_json::to_vec(cache)?;
+    std::fs::write(home.join(CACHE_FILENAME), bytes)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +159,37 @@ mod tests {
     #[test]
     fn stable_flag_excludes_prereleases() {
         assert_eq!(choose_spec(None, true), VersionSpec::Latest);
+    }
+
+    const DAY: i64 = 24 * 60 * 60;
+
+    #[test]
+    fn checks_when_never_checked_before() {
+        assert!(should_check(1_000_000, None, DAY));
+    }
+
+    #[test]
+    fn skips_when_within_ttl() {
+        assert!(!should_check(1_000_000 + 100, Some(1_000_000), DAY));
+    }
+
+    #[test]
+    fn checks_again_after_ttl_elapsed() {
+        assert!(should_check(1_000_000 + DAY + 1, Some(1_000_000), DAY));
+    }
+
+    #[test]
+    fn cache_round_trips_through_disk() {
+        let dir = std::env::temp_dir().join(format!("brupd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cache = UpdateCache {
+            checked_at: 42,
+            latest: Some("1.0.0-alpha.20".to_string()),
+        };
+        write_cache(&dir, &cache).unwrap();
+        let read = read_cache(&dir).expect("cache present");
+        assert_eq!(read.checked_at, 42);
+        assert_eq!(read.latest.as_deref(), Some("1.0.0-alpha.20"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
