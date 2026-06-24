@@ -84,7 +84,19 @@ impl Feed for AcpFeed {
                 .build()
             {
                 Ok(rt) => rt,
-                Err(_) => return,
+                Err(e) => {
+                    let _ = event_tx.unbounded_send(Event::SessionUpdate {
+                        session: SessionId(GUI_SESSION.into()),
+                        update: SessionUpdateKind::Message {
+                            text: format!("failed to start ACP runtime: {e}"),
+                        },
+                    });
+                    let _ = event_tx.unbounded_send(Event::AgentExited {
+                        session: SessionId(GUI_SESSION.into()),
+                        code: 1,
+                    });
+                    return;
+                }
             };
             rt.block_on(run(agent_command, agent_id, event_tx, cmd_rx));
         });
@@ -198,7 +210,8 @@ async fn drive(
                     // Park the wait + respond OUTSIDE the dispatch loop so other
                     // messages keep flowing while the user decides.
                     let options = request.options.clone();
-                    connection.spawn({
+                    let request_id_for_cleanup = request_id.clone();
+                    if let Err(e) = connection.spawn({
                         let perm_pending = perm_pending.clone();
                         async move {
                             // Default to Deny if the oneshot is dropped (GUI gone).
@@ -212,7 +225,18 @@ async fn drive(
                             let outcome = select_option(outcome, &options);
                             responder.respond(RequestPermissionResponse::new(outcome))
                         }
-                    })?;
+                    }) {
+                        // Spawn failed: remove the entry we just inserted so the map
+                        // does not leak a resolver that will never be fulfilled.
+                        // NOTE: unresolved permission entries are otherwise reaped only
+                        // when the session/connection tears down (no per-turn-cancel
+                        // cleanup in v1).
+                        perm_pending
+                            .lock()
+                            .expect("pending mutex poisoned")
+                            .remove(&request_id_for_cleanup);
+                        return Err(e);
+                    }
                     Ok(())
                 }
             },
@@ -256,14 +280,24 @@ async fn drive(
                         // responsive to `ResolvePending` mid-turn — see module docs.
                         let turn_connection = connection.clone();
                         let acp_session_id = acp_session_id.clone();
+                        let turn_events = event_tx.clone();
                         connection.spawn(async move {
-                            let _ = turn_connection
+                            if let Err(e) = turn_connection
                                 .send_request(PromptRequest::new(
                                     acp_session_id,
                                     vec![ContentBlock::Text(TextContent::new(text))],
                                 ))
                                 .block_task()
-                                .await;
+                                .await
+                            {
+                                let _ = turn_events.unbounded_send(Event::SessionUpdate {
+                                    session: SessionId(GUI_SESSION.into()),
+                                    update: SessionUpdateKind::Message {
+                                        text: format!("prompt failed: {e}"),
+                                    },
+                                });
+                            }
+                            // Returning Err here would shut down the whole connection (SDK contract); surface it as a transcript message instead.
                             Ok(())
                         })?;
                     }
@@ -316,7 +350,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_env_builds_proxy_command() {
+    fn new_builds_proxy_command() {
         let feed = AcpFeed::new("bitrouter", "claude-code");
         assert_eq!(feed.agent_command, "bitrouter agent-proxy claude-code");
     }
