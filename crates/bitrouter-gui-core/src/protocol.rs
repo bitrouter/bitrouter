@@ -86,15 +86,34 @@ pub enum ToolStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "update", rename_all = "snake_case")]
 pub enum SessionUpdateKind {
-    Message {
+    /// A complete (non-streamed) assistant message — used by the mock feed.
+    Message { text: String },
+    /// A complete (non-streamed) thought — used by the mock feed.
+    Thought { text: String },
+    /// A streamed assistant-message delta. Chunks sharing a `message_id`
+    /// coalesce into one transcript bubble.
+    MessageChunk {
+        message_id: Option<String>,
         text: String,
     },
-    Thought {
+    /// A streamed thought delta.
+    ThoughtChunk {
+        message_id: Option<String>,
         text: String,
     },
+    /// A new tool call. `id` keys later `ToolCallUpdate`s.
     ToolCall {
+        id: String,
         title: String,
         status: ToolStatus,
+        diff: Option<String>,
+    },
+    /// An update to an existing tool call, addressed by `id`. Absent fields
+    /// leave the prior value unchanged.
+    ToolCallUpdate {
+        id: String,
+        status: Option<ToolStatus>,
+        title: Option<String>,
         diff: Option<String>,
     },
 }
@@ -156,6 +175,27 @@ mod tests {
         };
         let back: Command = serde_json::from_str(&serde_json::to_string(&cmd)?)?;
         assert_eq!(cmd, back);
+        Ok(())
+    }
+
+    #[test]
+    fn streaming_update_kinds_round_trip() -> anyhow::Result<()> {
+        let kinds = vec![
+            SessionUpdateKind::MessageChunk { message_id: Some("m1".into()), text: "hel".into() },
+            SessionUpdateKind::ThoughtChunk { message_id: None, text: "hmm".into() },
+            SessionUpdateKind::ToolCall {
+                id: "t1".into(), title: "WRITE x".into(),
+                status: ToolStatus::Pending, diff: None,
+            },
+            SessionUpdateKind::ToolCallUpdate {
+                id: "t1".into(), status: Some(ToolStatus::Ok),
+                title: None, diff: Some("x\n+++ new\nv".into()),
+            },
+        ];
+        for k in kinds {
+            let back: SessionUpdateKind = serde_json::from_str(&serde_json::to_string(&k)?)?;
+            assert_eq!(k, back);
+        }
         Ok(())
     }
 

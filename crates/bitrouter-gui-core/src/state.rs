@@ -151,6 +151,7 @@ pub fn reduce(state: &mut State, event: Event) {
                     SessionUpdateKind::Message { text } => TranscriptItem::Message { text },
                     SessionUpdateKind::Thought { text } => TranscriptItem::Thought { text },
                     SessionUpdateKind::ToolCall {
+                        id: _, // Task 2 will use this id
                         title,
                         status,
                         diff,
@@ -159,6 +160,12 @@ pub fn reduce(state: &mut State, event: Event) {
                         status,
                         diff,
                     },
+                    SessionUpdateKind::MessageChunk { .. }
+                    | SessionUpdateKind::ThoughtChunk { .. }
+                    | SessionUpdateKind::ToolCallUpdate { .. } => {
+                        // Task 2 will coalesce these streaming variants
+                        return;
+                    }
                 });
             }
         }
