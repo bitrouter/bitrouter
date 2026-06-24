@@ -1,4 +1,5 @@
 use bitrouter_gui::app_model::AppModel;
+use bitrouter_gui::keymap;
 use bitrouter_gui::views::root::Root;
 use bitrouter_gui_core::feed::MockFeed;
 use gpui::{px, size, AppContext as _};
@@ -7,6 +8,8 @@ use gpui_component::Root as ComponentRoot;
 fn main() {
     gpui_platform::application().run(move |cx| {
         gpui_component::init(cx);
+        // Register global key bindings (⌘K, ⌘N, ⌘1–⌘9).
+        keymap::register(cx);
 
         cx.spawn(async move |cx| {
             let window_opts = gpui::WindowOptions {
