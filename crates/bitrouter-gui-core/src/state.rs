@@ -20,6 +20,11 @@ pub enum TranscriptItem {
         status: ToolStatus,
         diff: Option<String>,
     },
+    /// A prompt the user typed, echoed locally on send. Never produced by
+    /// `reduce` from a feed `Event` — only by `AppModel::append_user_message`.
+    UserPrompt {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

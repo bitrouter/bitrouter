@@ -81,6 +81,16 @@ impl AppModel {
         }
     }
 
+    /// Append a user-typed prompt to `id`'s transcript as a local echo. No feed
+    /// traffic — mirrors `resolve_pending`'s local-mutation pattern. No-op for an
+    /// unknown id.
+    pub fn append_user_message(&mut self, id: &SessionId, text: String) {
+        use bitrouter_gui_core::state::TranscriptItem;
+        if let Some(v) = self.state.sessions.iter_mut().find(|v| &v.session.id == id) {
+            v.transcript.push(TranscriptItem::UserPrompt { text });
+        }
+    }
+
     /// Clear the pending permission for a session and restore its status to
     /// `Running`. Called locally after dispatching `ResolvePending` so the
     /// modal closes immediately without waiting for a feed event.
@@ -165,6 +175,33 @@ mod tests {
             m.state.session("refactor-api").map(|v| v.pending.clone())
         });
         assert!(matches!(pending_after, Some(None)));
+    }
+
+    #[gpui::test]
+    fn append_user_message_pushes_user_prompt(cx: &mut TestAppContext) {
+        use bitrouter_gui_core::state::TranscriptItem;
+        let model = cx.update(|cx| cx.new(|cx| AppModel::new(MockFeed::scenario(), cx)));
+        cx.run_until_parked();
+
+        let id = SessionId("auth-fix".into());
+        model.update(cx, |m, _| m.append_user_message(&id, "hello agent".into()));
+
+        let last = model.read_with(cx, |m, _| {
+            m.state.session("auth-fix").and_then(|v| v.transcript.last().cloned())
+        });
+        assert!(matches!(last, Some(TranscriptItem::UserPrompt { text }) if text == "hello agent"));
+    }
+
+    #[gpui::test]
+    fn append_user_message_unknown_id_is_noop(cx: &mut TestAppContext) {
+        let model = cx.update(|cx| cx.new(|cx| AppModel::new(MockFeed::scenario(), cx)));
+        cx.run_until_parked();
+
+        let total = |m: &AppModel| m.state.sessions.iter().map(|v| v.transcript.len()).sum::<usize>();
+        let before = model.read_with(cx, |m, _| total(m));
+        model.update(cx, |m, _| m.append_user_message(&SessionId("ghost".into()), "x".into()));
+        let after = model.read_with(cx, |m, _| total(m));
+        assert_eq!(before, after);
     }
 
     /// `set_render_mode` must mutate the matching session without going through
