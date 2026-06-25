@@ -21,9 +21,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
+use bitrouter::output::Output;
+use bitrouter::output::reports::config::{InitReport, UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
     DaemonActionReport, RouteHopView, RouteReport, StatusReport,
 };
+use bitrouter::output::reports::routing::{ModelRow, ModelsReport, ProviderRow, ProvidersReport};
 use bitrouter_sdk::config;
 
 /// BitRouter — an LLM API router.
@@ -594,18 +597,30 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             output.emit(&route(&model, &source, &socket).await?)?;
             Ok(())
         }
-        Command::Init { config } => init(&config).await,
-        Command::Config { action } => config_cmd(action).await,
+        Command::Init { config } => {
+            output.emit(&init(&config).await?)?;
+            Ok(())
+        }
+        Command::Config { action } => {
+            let report = config_cmd(action).await?;
+            output.emit(&report)?;
+            if report.valid {
+                Ok(())
+            } else {
+                std::process::exit(1)
+            }
+        }
         Command::Key { action } => key(action).await,
         Command::Models { config, provider } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            models(&source, provider.as_deref()).await
+            output.emit(&models(&source, provider.as_deref()).await?)?;
+            Ok(())
         }
         Command::Verify { model } => verify_attestation(&model).await,
         Command::Tools { action } => tools(action).await,
         Command::Observe { action } => observe(action).await,
         Command::Policy { action } => policy(action).await,
-        Command::Providers { action } => providers(action).await,
+        Command::Providers { action } => providers(action, output).await,
         Command::Agents { action } => agents_cmd(action).await,
         Command::AgentProxy { agent, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -642,7 +657,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
 // ===== `bitrouter config …` (config tooling) =====
 
-async fn config_cmd(action: ConfigAction) -> Result<()> {
+async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
     match action {
         ConfigAction::Validate { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -667,7 +682,7 @@ async fn config_cmd(action: ConfigAction) -> Result<()> {
 /// value is **not authoritative** — it must be re-checked at runtime once the
 /// real value is known. Whole-value `${VAR}` (the common case) is unaffected.
 /// Unresolved variables are listed as warnings.
-async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<()> {
+async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<ValidateReport> {
     use bitrouter::paths::ConfigSource;
     let path = match source {
         ConfigSource::File(p) => p,
@@ -693,30 +708,21 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<()> 
     let missing = missing.into_inner();
 
     match parsed {
-        Ok(cfg) => {
-            println!("✓ {} is valid", path.display());
-            println!(
-                "  providers: {}  models: {}  presets: {}  variants: {}",
-                cfg.providers.len(),
-                cfg.models.len(),
-                cfg.presets.len(),
-                cfg.variants.len(),
-            );
-            if !missing.is_empty() {
-                println!(
-                    "\n  note: {} unset environment variable(s) substituted with a \
-                     placeholder for validation (a value that embeds one mid-string, \
-                     e.g. an env-composed api_base, is not authoritatively checked — \
-                     re-validate at runtime):",
-                    missing.len()
-                );
-                for name in &missing {
-                    println!("    - ${{{name}}}");
-                }
-            }
-            Ok(())
-        }
-        Err(e) => anyhow::bail!("✗ {} is invalid: {e}", path.display()),
+        Ok(cfg) => Ok(ValidateReport::valid(
+            path.display().to_string(),
+            cfg.providers.len(),
+            cfg.models.len(),
+            cfg.presets.len(),
+            cfg.variants.len(),
+            missing
+                .into_iter()
+                .map(|name| UnsetVar { unset_env: name })
+                .collect(),
+        )),
+        Err(e) => Ok(ValidateReport::invalid(
+            path.display().to_string(),
+            e.to_string(),
+        )),
     }
 }
 
@@ -1581,11 +1587,13 @@ async fn verify_attestation(model: &str) -> Result<()> {
 
 // ===== management commands =====
 
-async fn init(config_path: &Path) -> Result<()> {
+async fn init(config_path: &Path) -> Result<InitReport> {
     commands::init(config_path).await?;
-    println!("wrote starter config to {}", config_path.display());
-    println!("  (skip_auth is on — credential-less local requests are admitted)");
-    Ok(())
+    Ok(InitReport {
+        action: "init",
+        path: config_path.display().to_string(),
+        skip_auth: true,
+    })
 }
 
 async fn key(action: KeyAction) -> Result<()> {
@@ -1602,22 +1610,18 @@ async fn key(action: KeyAction) -> Result<()> {
     }
 }
 
-async fn models(source: &bitrouter::paths::ConfigSource, provider: Option<&str>) -> Result<()> {
+async fn models(
+    source: &bitrouter::paths::ConfigSource,
+    provider: Option<&str>,
+) -> Result<ModelsReport> {
     let cfg = bitrouter::paths::load_config(source).await?;
     let models = commands::list_models(&cfg, provider).await?;
-    if models.is_empty() {
-        match (provider, source.is_default()) {
-            (Some(p), _) => println!("(no routable models for provider '{p}')"),
-            (None, true) => {
-                println!("(no routable models — zero-config mode and no provider env vars are set)")
-            }
-            (None, false) => println!("(no routable models — configure providers in your config)"),
-        }
-    }
-    for (id, providers) in models {
-        println!("{id}\t{}", providers.join(", "));
-    }
-    Ok(())
+    Ok(ModelsReport {
+        models: models
+            .into_iter()
+            .map(|(id, providers)| ModelRow { id, providers })
+            .collect(),
+    })
 }
 
 async fn policy(action: PolicyAction) -> Result<()> {
@@ -1632,31 +1636,21 @@ async fn policy(action: PolicyAction) -> Result<()> {
     }
 }
 
-async fn providers(action: ProviderAction) -> Result<()> {
+async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
     match action {
         ProviderAction::List { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let providers = commands::list_providers(&cfg);
-            if providers.is_empty() {
-                if source.is_default() {
-                    println!("(no providers — zero-config mode and no provider env vars set)");
-                } else {
-                    println!("(no providers configured)");
-                }
-                return Ok(());
-            }
-            // header
-            println!("{:<20} {:<8} {:<6} API_BASE", "ID", "MODELS", "ACTIVE");
-            for p in providers {
-                println!(
-                    "{:<20} {:<8} {:<6} {}",
-                    p.id,
-                    p.model_count,
-                    if p.active { "yes" } else { "no" },
-                    p.api_base
-                );
-            }
+            let providers = commands::list_providers(&cfg)
+                .into_iter()
+                .map(|p| ProviderRow {
+                    id: p.id,
+                    models: p.model_count,
+                    active: p.active,
+                    api_base: p.api_base,
+                })
+                .collect();
+            output.emit(&ProvidersReport { providers })?;
             Ok(())
         }
         ProviderAction::Login { provider, label } => {
