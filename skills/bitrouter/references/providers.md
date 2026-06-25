@@ -272,6 +272,22 @@ server_tools:
 
 HTTP backends (`parallel` / `exa` / `firecrawl` / `tavily`) take an optional `api_key` (supports `${VAR}`) and `api_base`; a backend with no resolvable key is skipped. The `native` backend runs a nested completion (so it needs a routable model) — it forwards a provider's own search tool, making one provider's native web search usable from models that lack it.
 
+### Built-in web fetch (BYOK)
+
+The `web_fetch` server tool gives any model routed through BitRouter the ability to fetch and read a specific URL's full content, served by a BYOK extraction backend. Advertised only when the caller declares `{"type":"bitrouter:web_fetch"}` (optionally with `backend` / `max_content_tokens` overrides). The model calls `web_fetch` with a `url`; BitRouter fetches it and returns `{status, backend, url, title?, content, published?}`.
+
+```yaml
+server_tools:
+  web_fetch:
+    max_content_tokens: 25000   # default per-fetch content cap (caller may lower)
+    backends:                   # preference / failover order
+      - kind: exa               # POST /contents, key from api_key or EXA_API_KEY
+      - kind: firecrawl         # POST /v2/scrape, key from api_key or FIRECRAWL_API_KEY
+      - kind: tavily            # POST /extract, key from api_key or TAVILY_API_KEY
+```
+
+BYOK extraction happens on the provider's infrastructure (BitRouter does not dereference the URL itself), so the backends own the fetch safety surface.
+
 ## ACP agents
 
 ```yaml
