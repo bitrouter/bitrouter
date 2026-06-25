@@ -8,3 +8,4 @@
 //! downstream reaches types directly (e.g. `web_fetch::backend::WebFetchBackend`).
 
 pub mod backend;
+pub mod config;
