@@ -79,8 +79,14 @@ mod tests {
         assert_eq!(s.backends.len(), 3);
         assert_eq!(s.max_content_tokens, Some(1000));
         assert!(matches!(s.backends[0], WebFetchBackendConfig::Exa { .. }));
-        assert!(matches!(s.backends[1], WebFetchBackendConfig::Firecrawl { .. }));
-        assert!(matches!(s.backends[2], WebFetchBackendConfig::Tavily { .. }));
+        assert!(matches!(
+            s.backends[1],
+            WebFetchBackendConfig::Firecrawl { .. }
+        ));
+        assert!(matches!(
+            s.backends[2],
+            WebFetchBackendConfig::Tavily { .. }
+        ));
     }
 
     #[test]

@@ -663,8 +663,9 @@ fn build_server_tool_loop(
                  web_fetch is disabled"
             );
         } else {
-            let max_content_tokens =
-                web_fetch.max_content_tokens.unwrap_or(DEFAULT_MAX_CONTENT_TOKENS);
+            let max_content_tokens = web_fetch
+                .max_content_tokens
+                .unwrap_or(DEFAULT_MAX_CONTENT_TOKENS);
             sets.push(Arc::new(WebFetchToolset::new(backends, max_content_tokens)));
         }
     }

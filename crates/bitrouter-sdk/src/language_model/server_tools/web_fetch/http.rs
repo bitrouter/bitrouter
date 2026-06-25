@@ -143,7 +143,9 @@ impl HttpFetchBackend {
                         .and_then(|v| str_at(v, "url"))
                         .unwrap_or_else(|| requested_url.to_string()),
                     title: None,
-                    content: first.and_then(|v| str_at(v, "raw_content")).unwrap_or_default(),
+                    content: first
+                        .and_then(|v| str_at(v, "raw_content"))
+                        .unwrap_or_default(),
                     published: None,
                 }
             }
@@ -231,7 +233,9 @@ mod tests {
 
     #[test]
     fn request_bodies_use_each_engines_field_names() {
-        let opts = FetchOptions { max_content_tokens: 1000 };
+        let opts = FetchOptions {
+            max_content_tokens: 1000,
+        };
 
         let e = backend(HttpFetchEngine::Exa).request_body("https://a", &opts);
         assert_eq!(e["urls"][0], "https://a");
@@ -249,7 +253,9 @@ mod tests {
 
     #[test]
     fn exa_max_characters_is_capped_at_engine_ceiling() {
-        let opts = FetchOptions { max_content_tokens: 1_000_000 };
+        let opts = FetchOptions {
+            max_content_tokens: 1_000_000,
+        };
         let e = backend(HttpFetchEngine::Exa).request_body("https://a", &opts);
         assert_eq!(e["text"]["maxCharacters"], 10_000);
     }
@@ -309,14 +315,18 @@ mod tests {
 
     #[test]
     fn truncate_content_trims_to_char_budget() {
-        let opts = FetchOptions { max_content_tokens: 2 };
+        let opts = FetchOptions {
+            max_content_tokens: 2,
+        };
         let trimmed = truncate_content("0123456789".to_string(), &opts);
         assert_eq!(trimmed, "01234567");
     }
 
     #[test]
     fn truncate_content_leaves_short_content_untouched() {
-        let opts = FetchOptions { max_content_tokens: 2 };
+        let opts = FetchOptions {
+            max_content_tokens: 2,
+        };
         assert_eq!(truncate_content("abc".to_string(), &opts), "abc");
     }
 }
