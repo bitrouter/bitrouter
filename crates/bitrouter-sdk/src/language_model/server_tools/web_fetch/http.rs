@@ -329,4 +329,62 @@ mod tests {
         };
         assert_eq!(truncate_content("abc".to_string(), &opts), "abc");
     }
+
+    /// Live smoke test against the real extraction APIs. Ignored by default; run
+    /// explicitly with the BYOK keys in the environment:
+    ///   EXA_API_KEY=… FIRECRAWL_API_KEY=… TAVILY_API_KEY=… \
+    ///   cargo test -p bitrouter-sdk --all-features live_fetch_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "hits live extraction APIs; requires BYOK keys in env"]
+    async fn live_fetch_smoke() {
+        use crate::caller::CallerContext;
+
+        let ctx = ToolContext::new(CallerContext::local(), Default::default());
+        let opts = FetchOptions {
+            max_content_tokens: 2000,
+        };
+        let client = reqwest::Client::new();
+        let url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
+
+        let mut failures = Vec::new();
+        for engine in [
+            HttpFetchEngine::Exa,
+            HttpFetchEngine::Firecrawl,
+            HttpFetchEngine::Tavily,
+        ] {
+            let key = std::env::var(engine.env_var())
+                .ok()
+                .filter(|k| !k.is_empty());
+            let Some(key) = key else {
+                println!("SKIP {:<10} (no {})", engine.name(), engine.env_var());
+                continue;
+            };
+            let backend = HttpFetchBackend::new(engine, key, None, client.clone());
+            match backend.fetch(url, &opts, &ctx).await {
+                Ok(r) => {
+                    println!(
+                        "\nOK   {:<10} {} chars  title={:?}  url={}",
+                        r.backend,
+                        r.content.chars().count(),
+                        r.title.as_deref().unwrap_or("—"),
+                        r.url,
+                    );
+                    println!("      {}", r.content.chars().take(160).collect::<String>());
+                    // The cap is 2000 tokens ≈ 8000 chars; content must be trimmed
+                    // to that budget and non-empty.
+                    if r.content.is_empty() {
+                        failures.push(format!("{}: empty content", engine.name()));
+                    }
+                    if r.content.chars().count() > 2000 * CHARS_PER_TOKEN as usize {
+                        failures.push(format!("{}: content exceeded the cap", engine.name()));
+                    }
+                }
+                Err(e) => {
+                    println!("\nFAIL {:<10} {e}", engine.name());
+                    failures.push(format!("{}: {e}", engine.name()));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "live fetch failures: {failures:?}");
+    }
 }
