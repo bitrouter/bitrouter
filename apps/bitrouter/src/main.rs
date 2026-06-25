@@ -22,6 +22,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
 use bitrouter::output::Output;
+use bitrouter::output::reports::admin::{
+    KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
+};
 use bitrouter::output::reports::agents::{
     AgentCheckRow, AgentInstallReport, AgentRow, AgentsCheckReport, AgentsListReport,
 };
@@ -617,7 +620,10 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 std::process::exit(1)
             }
         }
-        Command::Key { action } => key(action).await,
+        Command::Key { action } => {
+            output.emit(&key(action).await?)?;
+            Ok(())
+        }
         Command::Models { config, provider } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             output.emit(&models(&source, provider.as_deref()).await?)?;
@@ -626,7 +632,10 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Verify { model } => verify_attestation(&model).await,
         Command::Tools { action } => tools(action, output).await,
         Command::Observe { action } => observe(action).await,
-        Command::Policy { action } => policy(action).await,
+        Command::Policy { action } => {
+            output.emit(&policy(action).await?)?;
+            Ok(())
+        }
         Command::Providers { action } => providers(action, output).await,
         Command::Agents { action } => agents_cmd(action, output).await,
         Command::AgentProxy { agent, config } => {
@@ -812,6 +821,9 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 /// except `serve` — see [`init_serve_tracing_subscriber`].
 fn init_basic_tracing_subscriber() {
     tracing_subscriber::fmt()
+        // Diagnostics MUST go to stderr so stdout stays a pure JSON result
+        // surface (`tracing_subscriber::fmt()` otherwise defaults to stdout).
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -1603,16 +1615,17 @@ async fn init(config_path: &Path) -> Result<InitReport> {
     })
 }
 
-async fn key(action: KeyAction) -> Result<()> {
+async fn key(action: KeyAction) -> Result<KeySignReport> {
     match action {
         KeyAction::Sign { user, db, policy } => {
             let key = commands::key_sign(&db, &user, policy.as_deref()).await?;
-            println!("created virtual key {} for user '{user}'", key.id);
-            println!();
-            println!("  {}", key.secret);
-            println!();
-            println!("This secret is shown ONCE — only its SHA-256 hash is stored.");
-            Ok(())
+            Ok(KeySignReport {
+                id: key.id,
+                user,
+                secret: key.secret,
+                policy,
+                hash_stored: true,
+            })
         }
     }
 }
@@ -1631,14 +1644,15 @@ async fn models(
     })
 }
 
-async fn policy(action: PolicyAction) -> Result<()> {
+async fn policy(action: PolicyAction) -> Result<PolicyCreateReport> {
     match action {
         PolicyAction::Create { id, dir } => {
             let path = commands::create_policy(&dir, &id).await?;
-            println!("wrote starter policy to {}", path.display());
-            println!("  edit, then bind to a key with:");
-            println!("    bitrouter key sign --user <id> --policy {id}");
-            Ok(())
+            Ok(PolicyCreateReport {
+                id,
+                path: path.display().to_string(),
+                created: true,
+            })
         }
     }
 }
@@ -1672,7 +1686,15 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                 })
                 .await
             } else {
-                bitrouter::commands::login_provider(&provider, &label).await
+                let outcome = bitrouter::commands::login_provider(&provider, &label).await?;
+                output.emit(&ProviderLoginReport {
+                    provider: outcome.provider,
+                    label: outcome.label,
+                    method: outcome.method,
+                    credential: "saved",
+                    path: outcome.path,
+                })?;
+                Ok(())
             }
         }
         ProviderAction::Logout { provider } => {
@@ -1683,7 +1705,9 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                 })
                 .await
             } else {
-                bitrouter::commands::logout_provider(&provider).await
+                let removed = bitrouter::commands::logout_provider(&provider).await?;
+                output.emit(&ProviderLogoutReport { provider, removed })?;
+                Ok(())
             }
         }
     }

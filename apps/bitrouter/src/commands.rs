@@ -439,7 +439,16 @@ fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMe
 /// there's more than one, runs the chosen flow, and persists the
 /// resulting [`bitrouter_providers::oauth::credential_store::Credential`]
 /// under `(provider_id, label)`.
-pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
+/// What `login_provider` accomplished — surfaced as the CLI's JSON result while
+/// the interactive prompts and confirmation go to stderr.
+pub struct LoginOutcome {
+    pub provider: String,
+    pub label: String,
+    pub method: String,
+    pub path: String,
+}
+
+pub async fn login_provider(provider_id: &str, label: &str) -> Result<LoginOutcome> {
     use bitrouter_providers::builtin;
 
     // The `bitrouter` cloud gateway is compiled in; every other provider's
@@ -511,7 +520,12 @@ pub async fn login_provider(provider_id: &str, label: &str) -> Result<()> {
         store.path().display()
     );
     eprintln!();
-    Ok(())
+    Ok(LoginOutcome {
+        provider: provider_id.to_string(),
+        label: label.to_string(),
+        method: kind.to_string(),
+        path: store.path().display().to_string(),
+    })
 }
 
 /// Adopt the user's existing Claude Code session as the live credential source
@@ -811,7 +825,7 @@ impl bitrouter_providers::oauth::login::LoginUx for StderrLoginUx {
 
 /// `bitrouter logout <provider>` — drop every stored credential for the
 /// provider (subscription OAuth or pasted API key), if any.
-pub async fn logout_provider(provider_id: &str) -> Result<()> {
+pub async fn logout_provider(provider_id: &str) -> Result<usize> {
     let mut store = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
         .context("opening credential store")?;
     let removed = store
@@ -821,7 +835,7 @@ pub async fn logout_provider(provider_id: &str) -> Result<()> {
         0 => eprintln!("  No stored credentials for {provider_id}; nothing to remove."),
         n => eprintln!("  ✓ Removed {n} stored credential(s) for {provider_id}."),
     }
-    Ok(())
+    Ok(removed)
 }
 
 // ===== skills (client installer) =====
