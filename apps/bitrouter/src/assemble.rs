@@ -377,7 +377,8 @@ pub async fn build_app_with_path(
     let server_tools_enabled = config.server_tools.fusion.is_some()
         || config.server_tools.advisor
         || config.server_tools.subagent
-        || config.server_tools.web_search.is_some();
+        || config.server_tools.web_search.is_some()
+        || config.server_tools.web_fetch.is_some();
     let nested_runner: Option<Arc<dyn NestedRunner>> = if server_tools_enabled {
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
@@ -1641,6 +1642,26 @@ mod server_tools_tests {
                 api_base: None,
             }],
             max_results: Some(3),
+        });
+        assert!(build_server_tool_loop(&cfg, &None, &None, None).is_some());
+    }
+
+    #[test]
+    fn web_fetch_http_backend_with_explicit_key_builds_loop_without_runner() {
+        use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
+            WebFetchBackendConfig, WebFetchSettings,
+        };
+        // A web_fetch-only config (no advisor/subagent/fusion/web_search) must
+        // still build the server-tool loop, proving server_tools_enabled covers
+        // web_fetch. An HTTP backend with an explicit key resolves without a
+        // nested runner.
+        let mut cfg = Config::default();
+        cfg.server_tools.web_fetch = Some(WebFetchSettings {
+            backends: vec![WebFetchBackendConfig::Exa {
+                api_key: Some("explicit-key".to_string()),
+                api_base: None,
+            }],
+            max_content_tokens: None,
         });
         assert!(build_server_tool_loop(&cfg, &None, &None, None).is_some());
     }
