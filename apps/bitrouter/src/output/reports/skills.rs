@@ -154,3 +154,28 @@ impl CliReport for SkillsUpdateReport {
         if self.failed.is_empty() { 0 } else { 1 }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::CliReport;
+
+    #[test]
+    fn skills_update_exit_code() {
+        let clean = SkillsUpdateReport {
+            updated: vec![],
+            skipped: vec![],
+            failed: vec![],
+        };
+        assert_eq!(clean.exit_code(), 0);
+        let failed = SkillsUpdateReport {
+            updated: vec![],
+            skipped: vec![],
+            failed: vec![FailedSkill {
+                name: "x".into(),
+                error: "e".into(),
+            }],
+        };
+        assert_eq!(failed.exit_code(), 1);
+    }
+}

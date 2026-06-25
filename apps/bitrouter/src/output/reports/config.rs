@@ -118,3 +118,22 @@ impl CliReport for ValidateReport {
         if self.valid { 0 } else { 1 }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::CliReport;
+
+    #[test]
+    fn validate_exit_code_and_shape() {
+        let ok = ValidateReport::valid("p".into(), 1, 2, 0, 0, vec![]);
+        assert_eq!(ok.exit_code(), 0);
+        let bad = ValidateReport::invalid("p".into(), "boom".into());
+        assert_eq!(bad.exit_code(), 1);
+        let v = serde_json::to_value(&bad).unwrap();
+        assert_eq!(v["valid"], false);
+        assert_eq!(v["errors"][0], "boom");
+        // valid report omits the empty errors array.
+        assert!(serde_json::to_value(&ok).unwrap().get("errors").is_none());
+    }
+}
