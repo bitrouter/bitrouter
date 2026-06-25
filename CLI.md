@@ -2,6 +2,32 @@
 
 `bitrouter <subcommand> [flags]`
 
+## Output format
+
+Every command prints a single **formatted JSON object** to **stdout** — success or failure — so output is machine-parseable by default (agent-native first). Global flags, accepted on any subcommand:
+
+- `-j`, `--json` — force JSON (the default).
+- `-H`, `--human` — render a human-readable view to stdout instead of JSON.
+- `-h`, `--help` — unchanged (`-h` is **not** human output; that's `-H`).
+
+All diagnostics — progress, warnings, internal logs, and a human echo of errors — go to **stderr** (colored when stderr is a TTY; honors `NO_COLOR`). So:
+
+```
+bitrouter <cmd> 2>/dev/null | jq .
+```
+
+always yields one clean JSON value. A failed command emits a uniform error envelope to stdout and exits non-zero:
+
+```json
+{ "error": { "kind": "not_found", "message": "…", "context": ["…"], "hint": "…" } }
+```
+
+`kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
+
+> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `agent-proxy` is a stdio JSON-RPC bridge, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result.
+
+Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
+
 ## Config resolution
 
 All subcommands accept an optional `-c / --config <path>` flag. When omitted the binary walks this order:
