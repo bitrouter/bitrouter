@@ -796,6 +796,17 @@
           "description": "Enable the `subagent` server tool (delegate a task to a worker model).\nAdvertised per-request only when the caller declares `bitrouter:subagent`.",
           "type": "boolean"
         },
+        "web_fetch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebFetchSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Built-in `web_fetch` server tool (BYOK). When set, the\n`bitrouter:web_fetch` tool is enabled, served by the configured fetch\nbackends. Advertised per-request only when the caller declares it."
+        },
         "web_search": {
           "anyOf": [
             {
@@ -903,6 +914,121 @@
           "type": "string"
         }
       ]
+    },
+    "WebFetchBackendConfig": {
+      "description": "One configured extraction backend. The `kind` tag selects the engine; the\nBYOK key resolves from `api_key` (supports `${VAR}` substitution) or, when\nomitted, the engine's conventional environment variable.",
+      "oneOf": [
+        {
+          "description": "exa.ai `/contents` — key `api_key` or `EXA_API_KEY`.",
+          "properties": {
+            "api_base": {
+              "default": null,
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "api_key": {
+              "default": null,
+              "description": "Explicit API key (else `EXA_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "exa",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "firecrawl.dev `/v2/scrape` — key `api_key` or `FIRECRAWL_API_KEY`.",
+          "properties": {
+            "api_base": {
+              "default": null,
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "api_key": {
+              "default": null,
+              "description": "Explicit API key (else `FIRECRAWL_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "firecrawl",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "tavily.com `/extract` — key `api_key` or `TAVILY_API_KEY`.",
+          "properties": {
+            "api_base": {
+              "default": null,
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "api_key": {
+              "default": null,
+              "description": "Explicit API key (else `TAVILY_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "tavily",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WebFetchSettings": {
+      "description": "The `server_tools.web_fetch` section. Its presence enables the\n`bitrouter:web_fetch` server tool (advertised only when a request declares\nit). An empty `backends` list leaves the tool effectively off.",
+      "properties": {
+        "backends": {
+          "description": "Extraction backends in preference/failover order; the first that resolves\na key is the default.",
+          "items": {
+            "$ref": "#/$defs/WebFetchBackendConfig"
+          },
+          "type": "array"
+        },
+        "max_content_tokens": {
+          "default": null,
+          "description": "Default cap on returned content per fetch, in tokens (caller may lower\nit). Defaults to [`DEFAULT_MAX_CONTENT_TOKENS`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "WebSearchBackendConfig": {
       "description": "One configured search backend. The `kind` tag selects the engine; the BYOK\nkey resolves from `api_key` (supports `${VAR}` substitution) or, when\nomitted, the engine's conventional environment variable.",
