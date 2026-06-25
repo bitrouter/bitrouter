@@ -255,6 +255,30 @@ enum Command {
         #[command(subcommand)]
         action: McpAction,
     },
+    /// Update the installed `bitrouter` binary in place to the latest release.
+    /// Follows prereleases by default while pre-1.0. For Homebrew / `cargo
+    /// install` installs it prints the right upgrade command instead.
+    Update {
+        /// Report whether a newer version exists, then exit without changing
+        /// anything.
+        #[arg(long)]
+        check: bool,
+        /// Update (or downgrade) to a specific release tag, e.g.
+        /// `1.0.0-alpha.18`. Named `--tag` to avoid clashing with the global
+        /// `--version` flag.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Only consider stable (non-prerelease) releases.
+        #[arg(long)]
+        stable: bool,
+        /// After a successful update, restart a running daemon so it serves the
+        /// new binary.
+        #[arg(long)]
+        restart: bool,
+        /// Skip the confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -619,6 +643,30 @@ async fn run() -> Result<()> {
         Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action).await,
         Command::Mcp { action } => mcp_cmd(action).await,
+        Command::Update {
+            check,
+            tag,
+            stable,
+            restart: restart_after,
+            yes,
+        } => {
+            let source = bitrouter::paths::resolve_config(None)?;
+            let socket = resolve_client_socket_from(&source, None).await?;
+            let opts = bitrouter::update::UpdateOptions {
+                check,
+                tag,
+                stable,
+                restart: restart_after,
+                yes,
+            };
+            let outcome = bitrouter::update::run(opts, &socket).await?;
+            if outcome.restart_needed {
+                let log_path = resolve_log_path(source.home(), None);
+                restart(&source, &socket, &log_path).await
+            } else {
+                Ok(())
+            }
+        }
     }
 }
 
@@ -1327,21 +1375,19 @@ async fn status(socket: &Path) -> Result<()> {
             pid,
             listen,
             models,
-        }) => {
-            print_status_running(&p, pid, &listen, models, socket);
-            Ok(())
-        }
-        Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
-        Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
+        }) => print_status_running(&p, pid, &listen, models, socket),
+        Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
+        Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
         // No daemon listening on the socket → report stopped, not error.
         // Anything else (permission denied, malformed response, …) is a
         // real failure and bubbles to the pretty reporter.
-        Err(e) if daemon::is_not_reachable(&e) => {
-            print_status_stopped(&p, socket);
-            Ok(())
-        }
-        Err(e) => Err(e),
+        Err(e) if daemon::is_not_reachable(&e) => print_status_stopped(&p, socket),
+        Err(e) => return Err(e),
     }
+    if let Ok(source) = bitrouter::paths::resolve_config(None) {
+        bitrouter::update::maybe_nudge(source.home(), &p).await;
+    }
+    Ok(())
 }
 
 /// Render the running-daemon status block. Modelled on `systemctl
@@ -2048,4 +2094,38 @@ async fn force_kill(pid: u32) {
         .stderr(std::process::Stdio::null())
         .status()
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        use clap::CommandFactory;
+        // Panics if clap detects a conflict (e.g. `--tag` vs global `--version`).
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn update_flags_parse() {
+        use clap::Parser;
+        let cli =
+            Cli::try_parse_from(["bitrouter", "update", "--check", "--tag", "1.0.0-alpha.18"])
+                .expect("parse");
+        match cli.command {
+            Command::Update {
+                check,
+                tag,
+                stable,
+                restart,
+                yes,
+            } => {
+                assert!(check);
+                assert_eq!(tag.as_deref(), Some("1.0.0-alpha.18"));
+                assert!(!stable && !restart && !yes);
+            }
+            _ => panic!("expected Update"),
+        }
+    }
 }

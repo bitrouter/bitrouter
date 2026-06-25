@@ -43,6 +43,8 @@ serde_json.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
 anyhow = "1"
+axoupdater = { version = "0.9", default-features = false, features = ["github_releases"] }
+semver = "1"
 thiserror.workspace = true
 
 [dev-dependencies]

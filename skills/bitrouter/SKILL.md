@@ -92,6 +92,7 @@ export OPENCODE_ZEN_API_KEY=...        # opencode-zen AND opencode-go (shared)
 
 bitrouter start          # detached daemon, logs to ~/.bitrouter/bitrouter.log
 bitrouter status         # green dot + pid / listen / model count
+bitrouter update         # self-update the binary (prereleases by default); --check to dry-run
 ```
 
 The daemon writes its runtime files (`bitrouter.sock`, `bitrouter.pid`, `bitrouter.log`, optional `bitrouter.db`) into `~/.bitrouter/`.
@@ -178,6 +179,7 @@ Read these on demand — don't load them all upfront.
 | `references/harness-hermes-agent.md` | Wiring Hermes Agent |
 | `references/harness-openclaw.md` | Wiring OpenClaw |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
+| `references/updating.md` | `bitrouter update`, channels, package-manager delegation, the status nudge |
 
 ## 7. Gotchas
 
