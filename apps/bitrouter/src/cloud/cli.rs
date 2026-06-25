@@ -627,7 +627,8 @@ pub struct JsonFlag {
 // =====================================================================
 
 /// Entry point dispatched by `apps/bitrouter/src/main.rs`.
-pub async fn run(action: CloudAction) -> Result<()> {
+pub async fn run(action: CloudAction, format: crate::output::Format) -> Result<()> {
+    let _ = CLOUD_FORMAT.set(format);
     let result = run_inner(action).await;
     match result {
         Ok(()) => Ok(()),
@@ -645,24 +646,33 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
             authorization_server,
             client_id,
             scope,
-        } => login(LoginInputs {
-            authorization_server,
-            client_id,
-            scope,
-        })
-        .await
-        .map(|_| ())
-        .map_err(SdkError::Auth),
+        } => {
+            login(LoginInputs {
+                authorization_server,
+                client_id,
+                scope,
+            })
+            .await
+            .map_err(SdkError::Auth)?;
+            emit(false, &serde_json::json!({ "signed_in": true }), |_| {
+                "signed in".to_string()
+            })
+        }
         CloudAction::Logout {
             authorization_server,
             client_id,
-        } => logout(LoginInputs {
-            authorization_server,
-            client_id,
-            scope: None,
-        })
-        .await
-        .map_err(SdkError::Auth),
+        } => {
+            logout(LoginInputs {
+                authorization_server,
+                client_id,
+                scope: None,
+            })
+            .await
+            .map_err(SdkError::Auth)?;
+            emit(false, &serde_json::json!({ "signed_out": true }), |_| {
+                "signed out".to_string()
+            })
+        }
         CloudAction::Namespace { action } => run_namespace(action).await,
         CloudAction::Keys { action } => run_keys(action).await,
         CloudAction::Usage(args) => run_usage(args).await,
@@ -681,26 +691,39 @@ fn client() -> std::result::Result<ManagementClient, SdkError> {
 }
 
 async fn whoami() -> std::result::Result<(), SdkError> {
-    // Doesn't hit the network — reads the local credentials file so
-    // it works offline. Mirrors `bitrouter cloud whoami` but adds the
-    // base URL `bitrouter cloud …` will target.
+    // Offline — reads the local credentials file (works without network).
     let client = client()?;
-    println!("cloud base URL: {}", client.base_url());
-    println!(
-        "namespace:      {}",
-        client.namespace_id().unwrap_or("(none)")
-    );
     let store = CredentialsStore::default_path().map_err(SdkError::Auth)?;
-    if let Some(creds) = store.current() {
-        println!("scope:          {}", creds.scope);
-        if let Some(sub) = creds.subject.as_deref() {
-            println!("subject:        {sub}");
+    let scope = store.current().map(|c| c.scope.clone());
+    let subject = store.current().and_then(|c| c.subject.clone());
+    let signed_in = store.current().is_some();
+    let body = serde_json::json!({
+        "signed_in": signed_in,
+        "base_url": client.base_url(),
+        "namespace": client.namespace_id(),
+        "scope": scope.clone(),
+        "subject": subject.clone(),
+        "credentials_path": store.path().display().to_string(),
+    });
+    emit(false, &body, |_| {
+        let mut out = format!(
+            "cloud base URL: {}\nnamespace:      {}",
+            client.base_url(),
+            client.namespace_id().unwrap_or("(none)")
+        );
+        if signed_in {
+            if let Some(s) = &scope {
+                out.push_str(&format!("\nscope:          {s}"));
+            }
+            if let Some(sub) = &subject {
+                out.push_str(&format!("\nsubject:        {sub}"));
+            }
+            out.push_str(&format!("\ncredentials:    {}", store.path().display()));
+        } else {
+            out.push_str("\n(not signed in — run `bitrouter cloud login`)");
         }
-        println!("credentials:    {}", store.path().display());
-    } else {
-        println!("(not signed in — run `bitrouter cloud login`)");
-    }
-    Ok(())
+        out
+    })
 }
 
 // ----- Namespace -----
@@ -718,7 +741,7 @@ async fn run_namespace(action: NamespaceAction) -> std::result::Result<(), SdkEr
         NamespaceAction::Current(flag) => {
             // Offline — the namespace is baked into the local credential.
             let nsid = client.namespace_id();
-            if flag.json {
+            if effective_json(flag.json) {
                 let body = serde_json::json!({ "namespace_id": nsid });
                 println!("{}", serde_json::to_string_pretty(&body)?);
             } else {
@@ -1381,12 +1404,27 @@ fn format_oauth_client_register(c: &oauth_clients::RegisterOauthClientResponse) 
 // Output + error helpers
 // =====================================================================
 
-fn emit<T, F>(json: bool, value: &T, fmt: F) -> std::result::Result<(), SdkError>
+/// The global output format, set once at the start of [`run`]. `emit` consults
+/// it so cloud leaves default to JSON (agent-native) and switch to the human
+/// formatter only under the global `--human` flag.
+static CLOUD_FORMAT: std::sync::OnceLock<crate::output::Format> = std::sync::OnceLock::new();
+
+/// Whether a cloud leaf should print JSON. JSON by default; the global
+/// `--human` flag selects the human formatter; a per-leaf `--json` still forces
+/// JSON.
+fn effective_json(leaf_json: bool) -> bool {
+    if leaf_json {
+        return true;
+    }
+    !matches!(CLOUD_FORMAT.get(), Some(crate::output::Format::Human))
+}
+
+fn emit<T, F>(leaf_json: bool, value: &T, fmt: F) -> std::result::Result<(), SdkError>
 where
     T: serde::Serialize,
     F: FnOnce(&T) -> String,
 {
-    if json {
+    if effective_json(leaf_json) {
         let pretty = serde_json::to_string_pretty(value)?;
         println!("{pretty}");
     } else {

@@ -667,7 +667,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             )
             .await
         }
-        Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
+        Command::Cloud { action } => bitrouter::cloud::cli::run(action, output.format()).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action, output).await,
         Command::Mcp { action } => mcp_cmd(action).await,
     }
@@ -1648,11 +1648,14 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
             // OAuth credential, so logging into it IS the cloud sign-in
             // (`cloud login`); other providers use the per-provider store.
             if provider == "bitrouter" {
-                bitrouter::cloud::cli::run(bitrouter::cloud::cli::CloudAction::Login {
-                    authorization_server: None,
-                    client_id: None,
-                    scope: None,
-                })
+                bitrouter::cloud::cli::run(
+                    bitrouter::cloud::cli::CloudAction::Login {
+                        authorization_server: None,
+                        client_id: None,
+                        scope: None,
+                    },
+                    output.format(),
+                )
                 .await
             } else {
                 let outcome = bitrouter::commands::login_provider(&provider, &label).await?;
@@ -1668,10 +1671,13 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
         }
         ProviderAction::Logout { provider } => {
             if provider == "bitrouter" {
-                bitrouter::cloud::cli::run(bitrouter::cloud::cli::CloudAction::Logout {
-                    authorization_server: None,
-                    client_id: None,
-                })
+                bitrouter::cloud::cli::run(
+                    bitrouter::cloud::cli::CloudAction::Logout {
+                        authorization_server: None,
+                        client_id: None,
+                    },
+                    output.format(),
+                )
                 .await
             } else {
                 let removed = bitrouter::commands::logout_provider(&provider).await?;

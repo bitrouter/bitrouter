@@ -61,7 +61,16 @@ impl Output {
     /// `--json` (or neither) is JSON. The two are mutually exclusive at the
     /// clap layer; the `&& !json` is belt-and-suspenders.
     pub fn from_flags(json: bool, human: bool) -> Self {
-        Self::new(if human && !json { Format::Human } else { Format::Json })
+        Self::new(if human && !json {
+            Format::Human
+        } else {
+            Format::Json
+        })
+    }
+
+    /// The active output format.
+    pub fn format(&self) -> Format {
+        self.fmt
     }
 
     /// Emit a report to stdout in the active format.
@@ -73,7 +82,8 @@ impl Output {
     /// Render to a buffer with an empty palette — the testable seam.
     pub fn render_to_vec(&self, r: &dyn CliReport) -> Vec<u8> {
         let mut v = Vec::new();
-        self.write(&mut v, Theme::none(), r).expect("render to vec is infallible");
+        self.write(&mut v, Theme::none(), r)
+            .expect("render to vec is infallible");
         v
     }
 
