@@ -760,6 +760,7 @@ dependencies = [
  "bitrouter-skills",
  "chrono",
  "clap",
+ "erased-serde",
  "futures",
  "hex",
  "http 1.4.0",
