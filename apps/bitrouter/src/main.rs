@@ -32,11 +32,13 @@ use bitrouter::output::reports::config::{InitReport, UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
     DaemonActionReport, RouteHopView, RouteReport, StatusReport,
 };
+use bitrouter::output::reports::observe::ObserveStatusReport;
 use bitrouter::output::reports::routing::{ModelRow, ModelsReport, ProviderRow, ProvidersReport};
 use bitrouter::output::reports::tools::{
     ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
     ToolsStatusReport,
 };
+use bitrouter::output::reports::verify::{Check, VerifyReport};
 use bitrouter_sdk::config;
 
 /// BitRouter — an LLM API router.
@@ -422,9 +424,6 @@ enum ObserveAction {
         /// Explicit control socket path. Overrides the config-derived path.
         #[arg(long)]
         socket: Option<PathBuf>,
-        /// Emit the snapshot as JSON instead of the human-readable block.
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -629,9 +628,12 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             output.emit(&models(&source, provider.as_deref()).await?)?;
             Ok(())
         }
-        Command::Verify { model } => verify_attestation(&model).await,
+        Command::Verify { model } => {
+            output.emit(&verify_attestation(&model).await?)?;
+            Ok(())
+        }
         Command::Tools { action } => tools(action, output).await,
-        Command::Observe { action } => observe(action).await,
+        Command::Observe { action } => observe(action, output).await,
         Command::Policy { action } => {
             output.emit(&policy(action).await?)?;
             Ok(())
@@ -1383,17 +1385,6 @@ async fn status(socket: &Path) -> Result<StatusReport> {
     }
 }
 
-/// One indented `label  value` row in a status block. The label column
-/// is left-padded to 8 chars so columns line up for the typical labels
-/// (`pid` / `listen` / `models` / `socket`).
-fn print_status_row(p: &bitrouter::style::Palette, label: &str, value: &str) {
-    println!(
-        "  {dim}{label:<8}{reset}  {value}",
-        dim = p.dim,
-        reset = p.reset,
-    );
-}
-
 async fn route(
     model: &str,
     source: &bitrouter::paths::ConfigSource,
@@ -1458,7 +1449,7 @@ fn route_report(model: &str, resolved_via: &str, chain: Vec<RouteHop>) -> RouteR
 /// - `NEAR_BASE_MEASUREMENTS` — accepted base bundle(s), comma-separated; each
 ///   the hex of `MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2` (192 bytes). Required (issue #567)
 /// - `NVIDIA_EAT_KEY_PEM` — path to NVIDIA's NRAS EAT key (EC public PEM)
-async fn verify_attestation(model: &str) -> Result<()> {
+async fn verify_attestation(model: &str) -> Result<VerifyReport> {
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1525,83 +1516,61 @@ async fn verify_attestation(model: &str) -> Result<()> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let verdict = verifier.attestation_cached(model, now).await?;
 
-    let p = bitrouter::style::Palette::for_stdout();
-    let mark = |ok: bool| {
-        if ok {
-            format!("{}✓{}", p.green, p.reset)
-        } else {
-            format!("{}✗{}", p.red, p.reset)
-        }
-    };
-    let opt_mark = |v: Option<bool>| match v {
-        Some(true) => format!("{}✓{}", p.green, p.reset),
-        Some(false) => format!("{}✗{}", p.red, p.reset),
-        None => format!("{}-{}", p.dim, p.reset),
-    };
-
-    println!(
-        "{bold}{model}{reset}  (trust boundary: {})",
-        if verdict.trust_boundary.is_empty() {
-            "unreachable"
-        } else {
-            &verdict.trust_boundary
-        },
-        bold = p.bold,
-        reset = p.reset,
-    );
     let c = &verdict.checks;
-    println!("  {} GPU NRAS attestation", mark(c.gpu_nras_pass));
-    println!("  {} Intel TDX DCAP quote", mark(c.dcap_quote_valid));
-    println!(
-        "  {} report_data binds key + nonce",
-        mark(c.report_data_binds_key_and_nonce)
-    );
-    println!(
-        "  {} compose matches measured config",
-        mark(c.compose_matches_mr_config)
-    );
-    println!(
-        "  {} event-log RTMR3 anchors policy fields",
-        opt_mark(c.event_log_rtmr_ok)
-    );
-    println!(
-        "  {} base measurements match pin (MRTD/RTMR0-2)",
-        mark(c.base_measurements_match)
-    );
-    println!(
-        "  {} policy accepts (KMS root + image/workload pin)",
-        mark(c.policy_accepts)
-    );
-    println!("  {} TD debug disabled", mark(c.debug_disabled));
-    println!(
-        "  {} TCB level acceptable{}",
-        mark(c.tcb_level_acceptable),
-        match &c.tcb_status {
-            Some(s) => format!(" ({s})"),
-            None => String::new(),
-        }
-    );
-    if !verdict.attested_addresses.is_empty() {
-        println!(
-            "  {dim}attested signer(s): {}{reset}",
-            verdict.attested_addresses.join(", "),
-            dim = p.dim,
-            reset = p.reset,
-        );
-    }
-    println!();
-    if verdict.verified {
-        println!(
-            "{}VERIFIED{} — genuine, policy-pinned TEE",
-            p.green, p.reset
-        );
-    } else {
-        println!(
-            "{}UNVERIFIED{} — not a confirmed legitimate TEE (see failing checks above)",
-            p.red, p.reset
-        );
-    }
-    Ok(())
+    let st = |b: bool| if b { "pass" } else { "fail" };
+    let opt_st = |v: Option<bool>| match v {
+        Some(true) => "pass",
+        Some(false) => "fail",
+        None => "skip",
+    };
+    let checks = vec![
+        Check {
+            name: "GPU NRAS attestation".into(),
+            status: st(c.gpu_nras_pass),
+        },
+        Check {
+            name: "Intel TDX DCAP quote".into(),
+            status: st(c.dcap_quote_valid),
+        },
+        Check {
+            name: "report_data binds key + nonce".into(),
+            status: st(c.report_data_binds_key_and_nonce),
+        },
+        Check {
+            name: "compose matches measured config".into(),
+            status: st(c.compose_matches_mr_config),
+        },
+        Check {
+            name: "event-log RTMR3 anchors policy fields".into(),
+            status: opt_st(c.event_log_rtmr_ok),
+        },
+        Check {
+            name: "base measurements match pin (MRTD/RTMR0-2)".into(),
+            status: st(c.base_measurements_match),
+        },
+        Check {
+            name: "policy accepts (KMS root + image/workload pin)".into(),
+            status: st(c.policy_accepts),
+        },
+        Check {
+            name: "TD debug disabled".into(),
+            status: st(c.debug_disabled),
+        },
+        Check {
+            name: match &c.tcb_status {
+                Some(s) => format!("TCB level acceptable ({s})"),
+                None => "TCB level acceptable".into(),
+            },
+            status: st(c.tcb_level_acceptable),
+        },
+    ];
+    Ok(VerifyReport {
+        model: model.to_string(),
+        trust_boundary: verdict.trust_boundary,
+        verified: verdict.verified,
+        checks,
+        signers: verdict.attested_addresses,
+    })
 }
 
 // ===== management commands =====
@@ -1791,15 +1760,12 @@ async fn agent_proxy_cmd(agent: &str, source: &bitrouter::paths::ConfigSource) -
 
 // ===== observe =====
 
-async fn observe(action: ObserveAction) -> Result<()> {
+async fn observe(action: ObserveAction, output: &Output) -> Result<()> {
     match action {
-        ObserveAction::Status {
-            config,
-            socket,
-            json,
-        } => {
+        ObserveAction::Status { config, socket } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            observe_status(&socket, json).await
+            output.emit(&observe_status(&socket).await?)?;
+            Ok(())
         }
     }
 }
@@ -1809,111 +1775,25 @@ async fn observe(action: ObserveAction) -> Result<()> {
 /// daemon is reachable, fall back to a "stopped" report that still
 /// carries the compile-time `OTEL_ENABLED` flag so the user can tell
 /// "feature off" from "daemon down."
-async fn observe_status(socket: &Path, as_json: bool) -> Result<()> {
+async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
     use bitrouter_observe::OTEL_ENABLED;
 
-    let payload = match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {
-        Ok(DaemonResponse::ObserveStatus { payload }) => Some(payload),
-        Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
-        Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
-        Err(e) if daemon::is_not_reachable(&e) => None,
-        Err(e) => return Err(e),
-    };
-
-    if as_json {
-        let snapshot =
-            payload.unwrap_or_else(|| daemon::ObserveStatusPayload::unwired(OTEL_ENABLED));
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&snapshot).context("rendering observe status as JSON")?
-        );
-        return Ok(());
-    }
-
-    let p = bitrouter::style::Palette::for_stdout();
-    match payload {
-        Some(s) => print_observe_running(&p, &s, socket),
-        None => print_observe_stopped(&p, socket),
-    }
-    Ok(())
-}
-
-fn print_observe_running(
-    p: &bitrouter::style::Palette,
-    s: &daemon::ObserveStatusPayload,
-    socket: &Path,
-) {
-    let (bullet, headline) = if s.exporter_wired {
-        (
-            format!("{green}●{reset}", green = p.green, reset = p.reset),
-            "OTel exporter is wired",
-        )
-    } else if s.compiled_in {
-        (
-            format!("{dim}○{reset}", dim = p.dim, reset = p.reset),
-            "OTel feature compiled in, exporter not configured",
-        )
-    } else {
-        (
-            format!("{dim}○{reset}", dim = p.dim, reset = p.reset),
-            "OTel feature not compiled in",
-        )
-    };
-    println!(
-        "{bullet} bitrouter observe — {bold}{headline}{reset}",
-        bold = p.bold,
-        reset = p.reset,
-    );
-    println!();
-    print_status_row(p, "compiled", if s.compiled_in { "yes" } else { "no" });
-    print_status_row(p, "wired", if s.exporter_wired { "yes" } else { "no" });
-    if let Some(endpoint) = &s.endpoint {
-        print_status_row(p, "endpoint", endpoint);
-    }
-    if let Some(service) = &s.service_name {
-        print_status_row(p, "service", service);
-    }
-    if let Some(sampler) = &s.sampler {
-        let val = match s.sampler_arg {
-            Some(arg) => format!("{sampler} (arg={arg})"),
-            None => sampler.clone(),
+    let (snapshot, daemon_reachable) =
+        match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {
+            Ok(DaemonResponse::ObserveStatus { payload }) => (payload, true),
+            Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
+            Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
+            Err(e) if daemon::is_not_reachable(&e) => {
+                (daemon::ObserveStatusPayload::unwired(OTEL_ENABLED), false)
+            }
+            Err(e) => return Err(e),
         };
-        print_status_row(p, "sampler", &val);
-    }
-    print_status_row(p, "metrics", if s.metrics_enabled { "on" } else { "off" });
-    print_status_row(p, "headers", &s.header_count.to_string());
-    print_status_row(p, "res-attrs", &s.resource_attribute_count.to_string());
-    print_status_row(
-        p,
-        "api-keys",
-        &format!("{} / {}", s.api_key_count, s.api_key_cap),
-    );
-    print_status_row(
-        p,
-        "users",
-        &format!("{} / {}", s.user_id_count, s.user_id_cap),
-    );
-    print_status_row(p, "in-flight", &s.active_spans.to_string());
-    print_status_row(p, "socket", &socket.display().to_string());
-}
 
-fn print_observe_stopped(p: &bitrouter::style::Palette, socket: &Path) {
-    use bitrouter_observe::OTEL_ENABLED;
-    println!(
-        "{dim}○{reset} bitrouter observe — {bold}daemon stopped{reset}",
-        dim = p.dim,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    println!();
-    print_status_row(p, "compiled", if OTEL_ENABLED { "yes" } else { "no" });
-    print_status_row(p, "socket", &socket.display().to_string());
-    println!();
-    println!(
-        "  {dim}Run `bitrouter start` to launch the daemon, then re-run this command.{reset}",
-        dim = p.dim,
-        reset = p.reset,
-    );
+    Ok(ObserveStatusReport {
+        daemon_reachable,
+        snapshot,
+        socket: socket.display().to_string(),
+    })
 }
 
 async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
