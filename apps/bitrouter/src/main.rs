@@ -1253,9 +1253,9 @@ fn print_onboarding_hint() {
     eprintln!();
     eprintln!("  3. Or use a provider you already pay for, locally:");
     eprintln!();
-    eprintln!("       bitrouter login anthropic            # Claude Pro/Max subscription");
-    eprintln!("       bitrouter login github-copilot       # GitHub Copilot subscription");
-    eprintln!("       bitrouter login openai-codex         # ChatGPT subscription");
+    eprintln!("       bitrouter providers login anthropic       # Claude Pro/Max subscription");
+    eprintln!("       bitrouter providers login github-copilot  # GitHub Copilot subscription");
+    eprintln!("       bitrouter providers login openai-codex    # ChatGPT subscription");
     eprintln!();
     eprintln!("     …or set an API-key env var:");
     eprintln!();

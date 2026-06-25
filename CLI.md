@@ -227,36 +227,36 @@ Mints a scoped `brvk_` virtual key for a user. The plaintext secret is printed o
 | `--db` | `sqlite://./bitrouter.db` | Database URL — `sqlite://`, `postgres://`, or `mysql://` |
 | `--policy` | *(none)* | Policy id to bind to the key |
 
-### `bitrouter login <provider>`
+### `bitrouter providers login <provider>`
 
 ```
-bitrouter login anthropic            # Claude Pro/Max subscription PKCE flow
-bitrouter login openai-codex         # ChatGPT subscription PKCE flow
-bitrouter login github-copilot       # GitHub device-code flow
+bitrouter providers login anthropic       # Claude Pro/Max subscription PKCE flow
+bitrouter providers login openai-codex    # ChatGPT subscription PKCE flow
+bitrouter providers login github-copilot  # GitHub device-code flow
 ```
 
 Runs the provider's OAuth flow (PKCE in a browser or device-code, depending on provider) and stores the token in `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The slot is keyed by `(provider_id, label)` — pass `--label <name>` (defaults to `default`) to keep multiple accounts of the same provider side by side. Other providers fall back to a pasted API key.
 
 For `anthropic` and `openai-codex`, the login menu also offers **"Import an existing session from the vendor CLI"** — bitrouter reads the credential the matching first-party CLI already stored (Claude Code from the macOS Keychain or `~/.claude/.credentials.json`; Codex from the macOS Keychain or `$CODEX_HOME/auth.json`) and adopts it, with no fresh browser sign-in. The imported token refreshes automatically like any other.
 
-For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter auth login`](#bitrouter-auth-login--logout--whoami) below.
+For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami) below.
 
-### `bitrouter logout <provider>`
+### `bitrouter providers logout <provider>`
 
 ```
-bitrouter logout github-copilot
+bitrouter providers logout github-copilot
 ```
 
 Removes every stored credential for the provider (subscription OAuth tokens and pasted API keys alike).
 
-### `bitrouter auth login` / `logout` / `whoami`
+### `bitrouter cloud login` / `logout` / `whoami`
 
-Cloud sign-in, distinct from the per-provider `bitrouter login` flow above. Signs the CLI into your BitRouter Cloud account via the RFC 8628 OAuth Device Authorization Grant. The browser approval page asks you to pick which workspace to grant the CLI access to — the resulting credential is **namespace-baked** (workspace-baked), and all subsequent `bitrouter cloud` calls target that workspace implicitly. To switch workspaces, re-run `bitrouter auth login`. The credential is auto-refreshed on use; rotation preserves the namespace binding.
+Cloud sign-in, distinct from the per-provider `bitrouter providers login` flow above. Signs the CLI into your BitRouter Cloud account via the RFC 8628 OAuth Device Authorization Grant. The browser approval page asks you to pick which workspace to grant the CLI access to — the resulting credential is **namespace-baked** (workspace-baked), and all subsequent `bitrouter cloud` calls target that workspace implicitly. To switch workspaces, re-run `bitrouter cloud login`. The credential is auto-refreshed on use; rotation preserves the namespace binding.
 
 ```
-bitrouter auth login [--oauth-as <URL>] [--client-id <ID>] [--scope <SCOPE>]
-bitrouter auth logout [--oauth-as <URL>] [--client-id <ID>]
-bitrouter auth whoami
+bitrouter cloud login [--oauth-as <URL>] [--client-id <ID>] [--scope <SCOPE>]
+bitrouter cloud logout [--oauth-as <URL>] [--client-id <ID>]
+bitrouter cloud whoami
 ```
 
 | Flag | Default | Description |

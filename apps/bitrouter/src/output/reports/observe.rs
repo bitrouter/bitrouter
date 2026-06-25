@@ -14,7 +14,6 @@ pub struct ObserveStatusReport {
     pub daemon_reachable: bool,
     #[serde(flatten)]
     pub snapshot: ObserveStatusPayload,
-    #[serde(skip)]
     pub socket: String,
 }
 

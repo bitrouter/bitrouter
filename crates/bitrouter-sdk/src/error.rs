@@ -281,14 +281,20 @@ mod tests {
     #[test]
     fn envelope_message_strips_status_prefix_for_payload_variants() {
         assert_eq!(
-            BitrouterError::bad_request("nope").to_envelope().error.message,
-            "nope"
-        );
-        assert_eq!(
-            BitrouterError::Upstream { status: 502, message: "boom".into() }
+            BitrouterError::bad_request("nope")
                 .to_envelope()
                 .error
                 .message,
+            "nope"
+        );
+        assert_eq!(
+            BitrouterError::Upstream {
+                status: 502,
+                message: "boom".into()
+            }
+            .to_envelope()
+            .error
+            .message,
             "upstream error (502): boom"
         );
     }

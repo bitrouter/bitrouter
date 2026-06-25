@@ -37,17 +37,32 @@ impl Theme {
     /// Empty palette — every field is `""`. Used for redirected streams,
     /// `NO_COLOR`, and tests.
     pub fn none() -> Self {
-        Self { red: "", green: "", cyan: "", bold: "", dim: "", reset: "" }
+        Self {
+            red: "",
+            green: "",
+            cyan: "",
+            bold: "",
+            dim: "",
+            reset: "",
+        }
     }
 
     /// Palette for stdout (the human result surface). Plain when piped.
     pub fn for_stdout() -> Self {
-        if no_color() || !std::io::stdout().is_terminal() { Self::none() } else { Self::ansi() }
+        if no_color() || !std::io::stdout().is_terminal() {
+            Self::none()
+        } else {
+            Self::ansi()
+        }
     }
 
     /// Palette for stderr (diagnostics / error echoes).
     pub fn for_stderr() -> Self {
-        if no_color() || !std::io::stderr().is_terminal() { Self::none() } else { Self::ansi() }
+        if no_color() || !std::io::stderr().is_terminal() {
+            Self::none()
+        } else {
+            Self::ansi()
+        }
     }
 }
 
@@ -83,7 +98,10 @@ impl Table {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        Self { headers: headers.into_iter().map(Into::into).collect(), rows: Vec::new() }
+        Self {
+            headers: headers.into_iter().map(Into::into).collect(),
+            rows: Vec::new(),
+        }
     }
 
     /// Append a data row (builder form).
@@ -149,7 +167,13 @@ impl<'a> Human<'a> {
 
     /// A `systemctl`-style health headline followed by a blank line.
     pub fn status_block(&mut self, health: Health, headline: &str) -> std::io::Result<()> {
-        let Theme { green, dim, bold, reset, .. } = self.theme;
+        let Theme {
+            green,
+            dim,
+            bold,
+            reset,
+            ..
+        } = self.theme;
         let glyph = match health {
             Health::Up => format!("{green}●{reset}"),
             Health::Down => format!("{dim}○{reset}"),
@@ -242,13 +266,18 @@ mod tests {
 
     #[test]
     fn status_block_down_uses_hollow_glyph() {
-        let s = render(|h| h.status_block(Health::Down, "bitrouter is stopped").unwrap());
+        let s = render(|h| {
+            h.status_block(Health::Down, "bitrouter is stopped")
+                .unwrap()
+        });
         assert!(s.contains("○ bitrouter is stopped"), "{s:?}");
     }
 
     #[test]
     fn table_pads_columns_and_trims_last() {
-        let t = Table::new(["ID", "MODELS"]).row(["openai", "42"]).row(["x", "1"]);
+        let t = Table::new(["ID", "MODELS"])
+            .row(["openai", "42"])
+            .row(["x", "1"]);
         let s = render(|h| h.table(&t).unwrap());
         assert!(s.starts_with("ID      MODELS"), "{s:?}");
         assert!(s.contains("openai  42"), "{s:?}");

@@ -37,7 +37,10 @@ impl CliReport for ErrorEnvelope {
 /// layers → `context` (outermost first), and a recognised remediation `hint`.
 pub fn envelope_from_anyhow(err: &anyhow::Error) -> ErrorEnvelope {
     let chain: Vec<String> = err.chain().map(|e| e.to_string()).collect();
-    let root_raw = chain.last().map(String::as_str).unwrap_or("(unknown error)");
+    let root_raw = chain
+        .last()
+        .map(String::as_str)
+        .unwrap_or("(unknown error)");
     let root = strip_status_prefix(root_raw);
 
     let kind = err
@@ -56,7 +59,12 @@ pub fn envelope_from_anyhow(err: &anyhow::Error) -> ErrorEnvelope {
     };
 
     ErrorEnvelope {
-        error: ErrorBody { kind, message: root.to_string(), context, hint: hint_for(root) },
+        error: ErrorBody {
+            kind,
+            message: root.to_string(),
+            context,
+            hint: hint_for(root),
+        },
     }
 }
 
@@ -74,7 +82,10 @@ mod tests {
             env.error.message,
             "config references undefined environment variable 'FOO'"
         );
-        assert_eq!(env.error.context, vec!["loading /tmp/bitrouter.yaml".to_string()]);
+        assert_eq!(
+            env.error.context,
+            vec!["loading /tmp/bitrouter.yaml".to_string()]
+        );
         assert!(env.error.hint.as_deref().unwrap().contains("export FOO"));
         assert_eq!(env.exit_code(), 1);
     }
@@ -92,6 +103,9 @@ mod tests {
     fn error_envelope_human_block() {
         let env = envelope_from_anyhow(&anyhow::anyhow!("boom").context("doing x"));
         let buf = Output::new(Format::Human).render_to_vec(&env);
-        assert_eq!(String::from_utf8(buf).unwrap(), "error: boom\n  while: doing x\n");
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            "error: boom\n  while: doing x\n"
+        );
     }
 }

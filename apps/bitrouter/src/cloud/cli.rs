@@ -654,9 +654,16 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
             })
             .await
             .map_err(SdkError::Auth)?;
-            emit(false, &serde_json::json!({ "signed_in": true }), |_| {
-                "signed in".to_string()
-            })
+            let client = client()?;
+            let store = CredentialsStore::default_path().map_err(SdkError::Auth)?;
+            let body = serde_json::json!({
+                "signed_in": true,
+                "namespace": client.namespace_id(),
+                "subject": store.current().and_then(|c| c.subject.clone()),
+                "scope": store.current().map(|c| c.scope.clone()),
+                "credentials_path": store.path().display().to_string(),
+            });
+            emit(false, &body, |_| "signed in".to_string())
         }
         CloudAction::Logout {
             authorization_server,
