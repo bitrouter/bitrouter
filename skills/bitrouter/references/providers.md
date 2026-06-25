@@ -253,7 +253,7 @@ Setting `fusion:` also enables the `bitrouter/fusion` model alias, which expands
 
 ### Built-in web search (BYOK)
 
-The `web_search` server tool gives *any* model routed through BitRouter a web search, served by a search backend you bring keys for. Advertised only when the caller declares `{"type":"bitrouter:web_search"}` (optionally with `backend` / `max_results` overrides). The model calls `web_search` with a `query`; BitRouter runs it and returns `{backend, answer?, results:[{url,title?,snippet?,content?,published?,score?}]}` — `answer` is present only for answer-engine backends (Perplexity / native).
+The `web_search` server tool gives *any* model routed through BitRouter a web search, served by a search backend you bring keys for. Advertised only when the caller declares `{"type":"bitrouter:web_search"}` (optionally with `backend` / `max_results` overrides). The model calls `web_search` with a `query`; BitRouter runs it and returns `{backend, answer?, results:[{url,title?,snippet?,content?,published?,score?}]}` — `answer` is present only for the answer-engine `native` backend.
 
 ```yaml
 server_tools:
@@ -263,15 +263,14 @@ server_tools:
       - kind: parallel         # HTTP, key from api_key or PARALLEL_API_KEY
       - kind: exa              # HTTP, key from api_key or EXA_API_KEY
       - kind: firecrawl        # HTTP, key from api_key or FIRECRAWL_API_KEY
-      - kind: perplexity       # nested completion; model defaults to perplexity/sonar (BYOK via provider key)
-        model: perplexity/sonar
+      - kind: tavily           # HTTP, key from api_key or TAVILY_API_KEY
       - kind: native           # reuse a provider's NATIVE search for every model
         name: native           # backend id a caller pins (default "native")
         model: anthropic/claude-opus-4.8
         tool: { type: "anthropic:web_search_20250305" }
 ```
 
-HTTP backends (`parallel` / `exa` / `firecrawl`) take an optional `api_key` (supports `${VAR}`) and `api_base`; a backend with no resolvable key is skipped. The `perplexity` and `native` backends run a nested completion (so they need a routable model) — `native` forwards a provider's own search tool, making one provider's native web search usable from models that lack it.
+HTTP backends (`parallel` / `exa` / `firecrawl` / `tavily`) take an optional `api_key` (supports `${VAR}`) and `api_base`; a backend with no resolvable key is skipped. The `native` backend runs a nested completion (so it needs a routable model) — it forwards a provider's own search tool, making one provider's native web search usable from models that lack it.
 
 ## ACP agents
 

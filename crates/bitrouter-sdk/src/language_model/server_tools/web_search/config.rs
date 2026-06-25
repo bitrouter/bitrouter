@@ -57,13 +57,14 @@ pub enum WebSearchBackendConfig {
         #[serde(default)]
         api_base: Option<String>,
     },
-    /// A search-grounded model (e.g. `perplexity/sonar`) reached through a
-    /// nested completion. BYOK rides the normal provider mechanism (the model's
-    /// provider key), so no key lives here.
-    Perplexity {
-        /// Nested model (defaults to `perplexity/sonar`).
+    /// tavily.com — key `api_key` or `TAVILY_API_KEY`.
+    Tavily {
+        /// Explicit API key (else `TAVILY_API_KEY`).
         #[serde(default)]
-        model: Option<String>,
+        api_key: Option<String>,
+        /// Endpoint override (else the engine default).
+        #[serde(default)]
+        api_base: Option<String>,
     },
     /// A web-search-capable model whose *native* search tool is forwarded, made
     /// available to every model routed through BitRouter.

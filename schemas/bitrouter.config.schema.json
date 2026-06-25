@@ -995,19 +995,27 @@
           "type": "object"
         },
         {
-          "description": "A search-grounded model (e.g. `perplexity/sonar`) reached through a\nnested completion. BYOK rides the normal provider mechanism (the model's\nprovider key), so no key lives here.",
+          "description": "tavily.com — key `api_key` or `TAVILY_API_KEY`.",
           "properties": {
-            "kind": {
-              "const": "perplexity",
-              "type": "string"
-            },
-            "model": {
+            "api_base": {
               "default": null,
-              "description": "Nested model (defaults to `perplexity/sonar`).",
+              "description": "Endpoint override (else the engine default).",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "api_key": {
+              "default": null,
+              "description": "Explicit API key (else `TAVILY_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "tavily",
+              "type": "string"
             }
           },
           "required": [

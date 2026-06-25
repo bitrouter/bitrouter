@@ -8,8 +8,9 @@
 //!
 //! Backends come in two flavors behind one [`backend::WebSearchBackend`] seam:
 //! BYOK HTTP search APIs ([`http::HttpSearchBackend`] — Parallel / Exa /
-//! Firecrawl) and nested model completions ([`nested::NestedSearchBackend`] —
-//! Perplexity, or a provider's native search reused for every model).
+//! Firecrawl / Tavily) and a nested model completion
+//! ([`nested::NestedSearchBackend`] — a provider's native search reused for
+//! every model).
 //!
 //! Per crate guideline 2, this module does not `pub use` from its submodules;
 //! downstream reaches types directly (e.g. `web_search::toolset::WebSearchToolset`).
