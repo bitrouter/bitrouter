@@ -93,7 +93,7 @@ impl HttpFetchBackend {
                 "formats": ["markdown"],
                 "onlyMainContent": true,
             }),
-            HttpFetchEngine::Tavily => json!({ "urls": url, "format": "markdown" }),
+            HttpFetchEngine::Tavily => json!({ "urls": [url], "format": "markdown" }),
         }
     }
 
@@ -185,6 +185,8 @@ impl WebFetchBackend for HttpFetchBackend {
         let parsed: Value = serde_json::from_str(&text)
             .map_err(|e| format!("{} returned non-JSON: {e}", self.engine.name()))?;
         let mut result = self.parse_response(&parsed, url);
+        // A blank extraction is treated as a failed fetch so the toolset fails
+        // over to the next backend (see `WebFetchResult`: content is required).
         if result.content.is_empty() {
             return Err(format!("{}: no content for {url}", self.engine.name()));
         }
@@ -241,7 +243,7 @@ mod tests {
         assert_eq!(f["onlyMainContent"], true);
 
         let t = backend(HttpFetchEngine::Tavily).request_body("https://a", &opts);
-        assert_eq!(t["urls"], "https://a");
+        assert_eq!(t["urls"][0], "https://a");
         assert_eq!(t["format"], "markdown");
     }
 
