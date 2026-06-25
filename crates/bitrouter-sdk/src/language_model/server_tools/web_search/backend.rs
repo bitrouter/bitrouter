@@ -2,8 +2,8 @@
 //! `web_search` server tool returns to the calling model.
 //!
 //! A backend is the *engine* behind one `web_search` call — a BYOK HTTP search
-//! API (Parallel / Exa / Firecrawl) or a nested model completion (Perplexity, or
-//! a provider's native web search reused for every model). The toolset composes
+//! API (Parallel / Exa / Firecrawl / Tavily) or a nested model completion (a
+//! provider's native web search reused for every model). The toolset composes
 //! several backends as an ordered preference/failover list and selects one per
 //! call. The result schema is deliberately minimal and stable: every per-result
 //! field is optional because no single engine fills them all, and a future
@@ -23,8 +23,8 @@ pub struct SearchOptions {
 }
 
 /// One normalized search hit. Every field beyond `url` is optional because the
-/// backends disagree on what they return (Perplexity citations carry only a
-/// URL; Exa adds a score and highlights; Firecrawl a description; …).
+/// backends disagree on what they return (Exa and Tavily add a score; Firecrawl
+/// a description; Parallel excerpts; …).
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct WebSearchResult {
     /// The result URL.
@@ -48,8 +48,8 @@ pub struct WebSearchResult {
 }
 
 /// The normalized output of one `web_search` call. `answer` is the synthesized
-/// text an *answer engine* (Perplexity / native provider search) returns; pure
-/// search engines leave it `None` and populate `results` only.
+/// text an *answer engine* (the native provider search) returns; pure search
+/// engines leave it `None` and populate `results` only.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct WebSearchResults {
     /// Which backend served this call (failover/observability transparency).

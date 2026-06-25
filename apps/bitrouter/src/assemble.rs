@@ -662,22 +662,23 @@ fn build_server_tool_loop(
 /// preference/failover order. HTTP backends resolve their BYOK key from the
 /// explicit `api_key` (with `${VAR}` already substituted at config load) or the
 /// engine's conventional environment variable; one whose key cannot be resolved
-/// is skipped with a warning. The Perplexity / native backends reuse the shared
-/// nested runner (so they are skipped when none was built).
+/// is skipped with a warning. The native backend reuses the shared nested runner
+/// (so it is skipped when none was built).
 fn build_web_search_backends(
     settings: &WebSearchSettings,
     nested_runner: &Option<Arc<dyn NestedRunner>>,
 ) -> Vec<Arc<dyn WebSearchBackend>> {
     // A shared HTTP client for the BYOK search APIs, built only when an HTTP
-    // backend is configured so a config with only nested (Perplexity / native)
-    // backends pays nothing. The request timeout sits below the loop's per-tool
-    // budget so a stuck call fails over promptly.
+    // backend is configured so a config with only the nested (native) backend
+    // pays nothing. The request timeout sits below the loop's per-tool budget so
+    // a stuck call fails over promptly.
     let needs_http = settings.backends.iter().any(|b| {
         matches!(
             b,
             WebSearchBackendConfig::Parallel { .. }
                 | WebSearchBackendConfig::Exa { .. }
                 | WebSearchBackendConfig::Firecrawl { .. }
+                | WebSearchBackendConfig::Tavily { .. }
         )
     });
     let http = needs_http.then(|| {
@@ -690,14 +691,16 @@ fn build_web_search_backends(
     let mut backends: Vec<Arc<dyn WebSearchBackend>> = Vec::new();
     for entry in &settings.backends {
         match entry {
-            // The three HTTP engines share one construction path, differing only
-            // in the engine tag (which also names the conventional key env var).
+            // The HTTP engines share one construction path, differing only in
+            // the engine tag (which also names the conventional key env var).
             WebSearchBackendConfig::Parallel { api_key, api_base }
             | WebSearchBackendConfig::Exa { api_key, api_base }
-            | WebSearchBackendConfig::Firecrawl { api_key, api_base } => {
+            | WebSearchBackendConfig::Firecrawl { api_key, api_base }
+            | WebSearchBackendConfig::Tavily { api_key, api_base } => {
                 let engine = match entry {
                     WebSearchBackendConfig::Exa { .. } => HttpEngine::Exa,
                     WebSearchBackendConfig::Firecrawl { .. } => HttpEngine::Firecrawl,
+                    WebSearchBackendConfig::Tavily { .. } => HttpEngine::Tavily,
                     _ => HttpEngine::Parallel,
                 };
                 if let (Some(client), Some(key)) = (
@@ -710,20 +713,6 @@ fn build_web_search_backends(
                         api_base.clone(),
                         client.clone(),
                     )));
-                }
-            }
-            WebSearchBackendConfig::Perplexity { model } => {
-                if let Some(runner) = nested_runner {
-                    backends.push(Arc::new(NestedSearchBackend::new(
-                        "perplexity".to_string(),
-                        runner.clone(),
-                        model
-                            .clone()
-                            .unwrap_or_else(|| "perplexity/sonar".to_string()),
-                        Vec::new(),
-                    )));
-                } else {
-                    tracing::warn!("web_search perplexity backend needs a nested runner; skipping");
                 }
             }
             WebSearchBackendConfig::Native { name, model, tool } => {
@@ -1560,10 +1549,14 @@ mod server_tools_tests {
         use bitrouter_sdk::language_model::server_tools::web_search::config::{
             WebSearchBackendConfig, WebSearchSettings,
         };
-        // A Perplexity (nested) backend resolves over the runner and builds the loop.
+        // A native (nested) backend resolves over the runner and builds the loop.
         let mut cfg = Config::default();
         cfg.server_tools.web_search = Some(WebSearchSettings {
-            backends: vec![WebSearchBackendConfig::Perplexity { model: None }],
+            backends: vec![WebSearchBackendConfig::Native {
+                name: None,
+                model: "anthropic/claude-opus-4.8".to_string(),
+                tool: serde_json::json!({ "type": "anthropic:web_search_20250305" }),
+            }],
             max_results: None,
         });
         let runner: Arc<dyn NestedRunner> = Arc::new(NoopRunner);

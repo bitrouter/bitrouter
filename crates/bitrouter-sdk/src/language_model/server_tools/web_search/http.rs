@@ -1,4 +1,4 @@
-//! BYOK HTTP search backends: Parallel, Exa, and Firecrawl. Each maps the
+//! BYOK HTTP search backends: Parallel, Exa, Firecrawl, and Tavily. Each maps the
 //! shared [`WebSearchBackend`] call onto the provider's REST search endpoint and
 //! normalizes its response into [`WebSearchResults`]. Responses are parsed
 //! defensively through [`serde_json::Value`] so a provider adding or renaming a
@@ -20,6 +20,8 @@ pub enum HttpEngine {
     Exa,
     /// firecrawl.dev — `POST /v2/search`, bearer auth, results under `data.web`.
     Firecrawl,
+    /// tavily.com — `POST /search`, bearer auth, results under `results`.
+    Tavily,
 }
 
 impl HttpEngine {
@@ -29,6 +31,7 @@ impl HttpEngine {
             Self::Parallel => "parallel",
             Self::Exa => "exa",
             Self::Firecrawl => "firecrawl",
+            Self::Tavily => "tavily",
         }
     }
 
@@ -38,6 +41,7 @@ impl HttpEngine {
             Self::Parallel => "PARALLEL_API_KEY",
             Self::Exa => "EXA_API_KEY",
             Self::Firecrawl => "FIRECRAWL_API_KEY",
+            Self::Tavily => "TAVILY_API_KEY",
         }
     }
 
@@ -47,6 +51,7 @@ impl HttpEngine {
             Self::Parallel => "https://api.parallel.ai/v1/search",
             Self::Exa => "https://api.exa.ai/search",
             Self::Firecrawl => "https://api.firecrawl.dev/v2/search",
+            Self::Tavily => "https://api.tavily.com/search",
         }
     }
 }
@@ -80,12 +85,13 @@ impl HttpSearchBackend {
     fn request_body(&self, query: &str, opts: &SearchOptions) -> Value {
         let n = opts.max_results;
         match self.engine {
-            // Parallel takes a natural-language `objective` plus keyword queries;
-            // we mirror the user query into both and ask for excerpts.
+            // Parallel takes a natural-language `objective` plus keyword queries
+            // and returns excerpted results. Its `/v1/search` rejects extra body
+            // fields (`max_results` and friends), so the cap is applied to the
+            // response instead (see `search`).
             HttpEngine::Parallel => json!({
                 "objective": query,
                 "search_queries": [query],
-                "max_results": n,
             }),
             // Exa: ask for highlights (short excerpts) rather than full `text`,
             // keeping the tool result within budget.
@@ -100,6 +106,12 @@ impl HttpSearchBackend {
                 "query": query,
                 "limit": n,
             }),
+            // Tavily: a basic search; `content` carries the relevant snippet per
+            // result, so no answer or raw content is requested.
+            HttpEngine::Tavily => json!({
+                "query": query,
+                "max_results": n,
+            }),
         }
     }
 
@@ -107,7 +119,7 @@ impl HttpSearchBackend {
     fn authorize(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match self.engine {
             HttpEngine::Parallel | HttpEngine::Exa => req.header("x-api-key", &self.api_key),
-            HttpEngine::Firecrawl => req.bearer_auth(&self.api_key),
+            HttpEngine::Firecrawl | HttpEngine::Tavily => req.bearer_auth(&self.api_key),
         }
     }
 
@@ -120,6 +132,7 @@ impl HttpSearchBackend {
                 body.get("data").and_then(|d| d.get("web")),
                 firecrawl_result,
             ),
+            HttpEngine::Tavily => map_array(body.get("results"), tavily_result),
         };
         WebSearchResults {
             backend: self.engine.name().to_string(),
@@ -162,7 +175,11 @@ impl WebSearchBackend for HttpSearchBackend {
         }
         let parsed: Value = serde_json::from_str(&text)
             .map_err(|e| format!("{} returned non-JSON: {e}", self.engine.name()))?;
-        Ok(self.parse_response(&parsed))
+        let mut results = self.parse_response(&parsed);
+        // Enforce the cap on the response too: some engines (Parallel) take no
+        // result-count parameter, so trim to what the caller asked for.
+        results.results.truncate(opts.max_results as usize);
+        Ok(results)
     }
 }
 
@@ -221,6 +238,18 @@ fn firecrawl_result(v: &Value) -> WebSearchResult {
     }
 }
 
+fn tavily_result(v: &Value) -> WebSearchResult {
+    WebSearchResult {
+        url: str_at(v, "url").unwrap_or_default(),
+        title: str_at(v, "title"),
+        // Tavily's `content` is the relevant snippet, not the full page.
+        snippet: str_at(v, "content"),
+        content: None,
+        published: str_at(v, "published_date"),
+        score: v.get("score").and_then(|s| s.as_f64()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,7 +264,7 @@ mod tests {
         let p = backend(HttpEngine::Parallel).request_body("rust async", &opts);
         assert_eq!(p["objective"], "rust async");
         assert_eq!(p["search_queries"][0], "rust async");
-        assert_eq!(p["max_results"], 5);
+        assert!(p.get("max_results").is_none()); // Parallel rejects extra fields
 
         let e = backend(HttpEngine::Exa).request_body("rust async", &opts);
         assert_eq!(e["query"], "rust async");
@@ -245,6 +274,10 @@ mod tests {
         let f = backend(HttpEngine::Firecrawl).request_body("rust async", &opts);
         assert_eq!(f["query"], "rust async");
         assert_eq!(f["limit"], 5);
+
+        let t = backend(HttpEngine::Tavily).request_body("rust async", &opts);
+        assert_eq!(t["query"], "rust async");
+        assert_eq!(t["max_results"], 5);
     }
 
     #[test]
@@ -293,8 +326,97 @@ mod tests {
     }
 
     #[test]
+    fn parses_tavily_results_with_score() {
+        let body = json!({
+            "query": "rust",
+            "results": [
+                { "url": "https://t", "title": "T", "content": "snippet",
+                  "score": 0.42, "published_date": "2025-03-03" },
+                { "missing": "url and the rest" }
+            ]
+        });
+        let out = backend(HttpEngine::Tavily).parse_response(&body);
+        assert_eq!(out.backend, "tavily");
+        assert!(out.answer.is_none());
+        assert_eq!(out.results.len(), 2);
+        assert_eq!(out.results[0].url, "https://t");
+        assert_eq!(out.results[0].title.as_deref(), Some("T"));
+        assert_eq!(out.results[0].snippet.as_deref(), Some("snippet"));
+        assert_eq!(out.results[0].published.as_deref(), Some("2025-03-03"));
+        assert_eq!(out.results[0].score, Some(0.42));
+        assert!(out.results[0].content.is_none());
+    }
+
+    #[test]
     fn missing_arrays_yield_no_results() {
         let out = backend(HttpEngine::Exa).parse_response(&json!({}));
         assert!(out.results.is_empty());
+    }
+
+    /// Live smoke test against the real search APIs. Ignored by default; run
+    /// explicitly with the BYOK keys in the environment:
+    ///   PARALLEL_API_KEY=… EXA_API_KEY=… FIRECRAWL_API_KEY=… TAVILY_API_KEY=… \
+    ///   cargo test -p bitrouter-sdk --all-features live_search_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "hits live search APIs; requires BYOK keys in env"]
+    async fn live_search_smoke() {
+        use crate::caller::CallerContext;
+
+        let ctx = ToolContext::new(CallerContext::local(), Default::default());
+        let opts = SearchOptions { max_results: 3 };
+        let client = reqwest::Client::new();
+        let query = "latest stable Rust programming language release";
+
+        let mut failures = Vec::new();
+        for engine in [
+            HttpEngine::Parallel,
+            HttpEngine::Exa,
+            HttpEngine::Firecrawl,
+            HttpEngine::Tavily,
+        ] {
+            let key = std::env::var(engine.env_var())
+                .ok()
+                .filter(|k| !k.is_empty());
+            let Some(key) = key else {
+                println!("SKIP {:<10} (no {})", engine.name(), engine.env_var());
+                continue;
+            };
+            let backend = HttpSearchBackend::new(engine, key, None, client.clone());
+            match backend.search(query, &opts, &ctx).await {
+                Ok(r) => {
+                    println!(
+                        "\nOK   {:<10} {} result(s){}",
+                        r.backend,
+                        r.results.len(),
+                        r.answer
+                            .as_deref()
+                            .map(|a| format!(
+                                "  answer: {}…",
+                                &a.chars().take(60).collect::<String>()
+                            ))
+                            .unwrap_or_default(),
+                    );
+                    for (i, res) in r.results.iter().take(3).enumerate() {
+                        println!(
+                            "  [{i}] {}  ({})  score={:?}",
+                            res.title.as_deref().unwrap_or("—"),
+                            res.url,
+                            res.score
+                        );
+                        if let Some(s) = &res.snippet {
+                            println!("      {}", s.chars().take(120).collect::<String>());
+                        }
+                    }
+                    if r.results.is_empty() && r.answer.is_none() {
+                        failures.push(format!("{}: empty response", engine.name()));
+                    }
+                }
+                Err(e) => {
+                    println!("\nFAIL {:<10} {e}", engine.name());
+                    failures.push(format!("{}: {e}", engine.name()));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "live search failures: {failures:?}");
     }
 }

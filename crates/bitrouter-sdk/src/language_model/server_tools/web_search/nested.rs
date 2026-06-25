@@ -1,13 +1,14 @@
 //! The nested-completion web-search backend: turns a *model* into a search
-//! engine for the `web_search` tool. Two configurations share this one impl:
+//! engine for the `web_search` tool, used by the **native** config —
 //!
-//! * **Perplexity** — route a nested completion to a search-grounded model
-//!   (e.g. `perplexity/sonar`); the model searches and synthesizes the answer.
 //! * **Native provider search** — pin a web-search-capable model and forward
 //!   its native server tool (e.g. `anthropic:web_search_20250305`). This is how
 //!   one provider's native search becomes usable by *every* model routed through
 //!   BitRouter: a model with no web search of its own calls `bitrouter:web_search`
 //!   and BitRouter serves it from the configured search-capable model.
+//!
+//! The impl is engine-agnostic — it runs any nested model, with or without a
+//! forwarded tool — so a search-grounded model could be wired in the same way.
 //!
 //! This first cut follows "option A": the synthesized text is returned as
 //! [`WebSearchResults::answer`] with an empty `results` list (the answer already
@@ -33,7 +34,7 @@ pub struct NestedSearchBackend {
     runner: Arc<dyn NestedRunner>,
     model: String,
     /// Native server tools forwarded to the nested completion. Empty for a
-    /// search-grounded model (e.g. Perplexity) that searches on its own.
+    /// search-grounded model that searches on its own.
     tools: Vec<Tool>,
 }
 
@@ -120,9 +121,9 @@ mod tests {
             seen: Mutex::new(Vec::new()),
         });
         let backend = NestedSearchBackend::new(
-            "perplexity".into(),
+            "native".into(),
             runner.clone(),
-            "perplexity/sonar".into(),
+            "anthropic/claude-opus-4.8".into(),
             Vec::new(),
         );
         let out = backend
@@ -133,11 +134,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(out.backend, "perplexity");
+        assert_eq!(out.backend, "native");
         assert_eq!(out.answer.as_deref(), Some("the synthesized answer"));
         assert!(out.results.is_empty());
         let seen = runner.seen.lock().unwrap();
-        assert_eq!(seen[0].model, "perplexity/sonar");
+        assert_eq!(seen[0].model, "anthropic/claude-opus-4.8");
         assert_eq!(seen[0].user, "latest rust release");
     }
 
