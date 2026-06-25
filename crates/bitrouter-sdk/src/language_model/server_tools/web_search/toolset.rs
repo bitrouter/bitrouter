@@ -38,15 +38,20 @@ impl WebSearchToolset {
     /// Candidate backends for a call, honoring a `backend` override: the named
     /// backend first (if configured), then the rest in configured order. An
     /// unknown name is ignored, falling back to the configured order.
+    ///
+    /// The pinned entry is excluded from the tail by *index*, not by name, so
+    /// two backends that happen to share a name (e.g. two `native` backends
+    /// left at the default name) both stay in the failover chain instead of
+    /// collapsing to the first.
     fn candidates(&self, override_name: Option<&str>) -> Vec<&Arc<dyn WebSearchBackend>> {
+        let pinned =
+            override_name.and_then(|name| self.backends.iter().position(|b| b.name() == name));
         let mut ordered: Vec<&Arc<dyn WebSearchBackend>> = Vec::with_capacity(self.backends.len());
-        if let Some(name) = override_name
-            && let Some(pinned) = self.backends.iter().find(|b| b.name() == name)
-        {
-            ordered.push(pinned);
+        if let Some(i) = pinned {
+            ordered.push(&self.backends[i]);
         }
-        for b in &self.backends {
-            if !ordered.iter().any(|o| o.name() == b.name()) {
+        for (i, b) in self.backends.iter().enumerate() {
+            if Some(i) != pinned {
                 ordered.push(b);
             }
         }
@@ -104,13 +109,18 @@ impl RouterToolset for WebSearchToolset {
         let Some(query) = args.get("query").and_then(|v| v.as_str()) else {
             return Ok(error_output("web_search call is missing required `query`"));
         };
-        // Result cap precedence: call arg → declaration → deployment default.
+        // Result cap, narrowing from the deployment default through the
+        // declaration to this call's argument: each layer may only *lower* the
+        // cap, never raise it above what the deployment configured. The
+        // deployment `default_max_results` is the hard ceiling so a model can't
+        // inflate cost by requesting more than the operator allowed.
+        let ceiling = self.default_max_results;
+        let ceiling = decl.max_results.map_or(ceiling, |d| d.min(ceiling));
         let max_results = args
             .get("max_results")
             .and_then(|v| v.as_u64())
-            .map(|n| n.min(u32::MAX as u64) as u32)
-            .or(decl.max_results)
-            .unwrap_or(self.default_max_results)
+            .map(|n| (n.min(ceiling as u64)) as u32)
+            .unwrap_or(ceiling)
             .max(1);
         let opts = SearchOptions { max_results };
 
@@ -188,6 +198,48 @@ mod tests {
                 Err(format!("{} failed", self.name))
             }
         }
+    }
+
+    /// A backend that records the `max_results` it was handed, so a test can
+    /// assert the cap that actually reaches the engine.
+    struct CapturingBackend {
+        name: String,
+        seen_max_results: std::sync::Mutex<Option<u32>>,
+    }
+    #[async_trait]
+    impl WebSearchBackend for CapturingBackend {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        async fn search(
+            &self,
+            _query: &str,
+            opts: &SearchOptions,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<WebSearchResults, String> {
+            *self.seen_max_results.lock().unwrap() = Some(opts.max_results);
+            Ok(WebSearchResults {
+                backend: self.name.clone(),
+                answer: None,
+                results: Vec::new(),
+            })
+        }
+    }
+
+    /// Run one call through a `CapturingBackend` and return the `max_results`
+    /// the backend saw.
+    async fn capped_max_results(default_max: u32, decl: WebSearchDeclaration, args: &str) -> u32 {
+        let backend = Arc::new(CapturingBackend {
+            name: "cap".to_string(),
+            seen_max_results: std::sync::Mutex::new(None),
+        });
+        let backends: Vec<Arc<dyn WebSearchBackend>> = vec![backend.clone()];
+        let ts = WebSearchToolset::new(backends, default_max);
+        ts.call_tool("web_search", args, &ctx_with(Some(decl)))
+            .await
+            .unwrap();
+        let seen = *backend.seen_max_results.lock().unwrap();
+        seen.expect("backend was called")
     }
 
     fn ctx_with(decl: Option<WebSearchDeclaration>) -> ToolContext {
@@ -315,5 +367,64 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(&out, ToolResultOutput::Json { value } if value["status"] == "error"));
+    }
+
+    #[tokio::test]
+    async fn max_results_clamps_to_the_deployment_ceiling() {
+        // A call arg above the deployment default is clamped down to it (the
+        // model can't inflate the cap past what the operator configured).
+        assert_eq!(
+            capped_max_results(
+                5,
+                WebSearchDeclaration::default(),
+                r#"{"query":"q","max_results":100}"#
+            )
+            .await,
+            5
+        );
+        // A lower call arg is honored.
+        assert_eq!(
+            capped_max_results(
+                5,
+                WebSearchDeclaration::default(),
+                r#"{"query":"q","max_results":2}"#
+            )
+            .await,
+            2
+        );
+        // The declaration only lowers the ceiling, and the call arg cannot
+        // exceed that (now lower) declaration cap.
+        let decl = WebSearchDeclaration {
+            backend: None,
+            max_results: Some(2),
+        };
+        assert_eq!(
+            capped_max_results(5, decl.clone(), r#"{"query":"q","max_results":100}"#).await,
+            2
+        );
+        // The declaration cap also applies when the call omits `max_results`.
+        assert_eq!(capped_max_results(5, decl, r#"{"query":"q"}"#).await, 2);
+    }
+
+    #[tokio::test]
+    async fn same_named_backends_stay_in_the_failover_chain() {
+        // Two backends share the name "dup"; the first errors. Failover must
+        // still reach the second instead of the two collapsing by name.
+        let ts = WebSearchToolset::new(
+            vec![
+                Arc::new(StubBackend::err("dup")),
+                Arc::new(StubBackend::ok("dup")),
+            ],
+            5,
+        );
+        let out = ts
+            .call_tool(
+                "web_search",
+                r#"{"query":"q"}"#,
+                &ctx_with(Some(WebSearchDeclaration::default())),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(&out, ToolResultOutput::Json { value } if value["status"] == "ok"));
     }
 }

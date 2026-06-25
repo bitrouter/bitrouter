@@ -160,13 +160,31 @@ enum Kind {
 
 /// Recognise an advisor / sub-agent / web-search declaration by tool name: the
 /// bare name or a namespaced form whose final `:`/`.` segment is the name.
+///
+/// `web_search` is the exception. Unlike the bitrouter-invented
+/// `advisor` / `subagent` / `fusion` names, `web_search` is also a real
+/// *native* tool name on several providers (e.g. OpenAI's Responses
+/// `web_search`). Matching it bare would hijack a caller's genuine native tool,
+/// so it is recognised only under the explicit `bitrouter` namespace
+/// (`{"type":"bitrouter:web_search"}`, the documented declaration form); a bare
+/// or foreign-namespaced `web_search` is left untouched for the upstream.
 fn server_tool_kind(name: &str) -> Option<Kind> {
     match name.rsplit([':', '.']).next().unwrap_or(name) {
         ADVISOR_TOOL => Some(Kind::Advisor),
         SUBAGENT_TOOL => Some(Kind::SubAgent),
-        WEB_SEARCH_TOOL => Some(Kind::WebSearch),
+        WEB_SEARCH_TOOL if is_bitrouter_namespaced(name) => Some(Kind::WebSearch),
         _ => None,
     }
+}
+
+/// Whether `name` carries the explicit `bitrouter:` / `bitrouter.` namespace —
+/// the documented `{"type":"bitrouter:<tool>"}` declaration form, as opposed to
+/// a bare or foreign-namespaced tool a provider defines itself. The inbound
+/// decoders keep the namespace in the canonical tool `name` (a typeless tool
+/// defaults its `name` to the full `type`), so the prefix is visible here.
+fn is_bitrouter_namespaced(name: &str) -> bool {
+    name.split_once([':', '.'])
+        .is_some_and(|(namespace, _)| namespace == "bitrouter")
 }
 
 /// Read a string field from a config object, tolerating an OpenRouter-style
@@ -319,6 +337,31 @@ mod tests {
         let ws = decls.web_search.expect("web_search parsed");
         assert_eq!(ws.backend.as_deref(), Some("exa"));
         assert_eq!(ws.max_results, Some(3));
+    }
+
+    #[test]
+    fn bare_web_search_is_a_native_tool_not_a_declaration() {
+        // A provider's own native `web_search` (no `bitrouter` namespace) must
+        // NOT be taken over by the built-in tool — otherwise the caller silently
+        // loses their model's native search.
+        let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![provider_tool(
+            "web_search",
+            serde_json::json!({}),
+        )]));
+        assert!(decls.web_search.is_none());
+        assert!(decls.is_empty());
+    }
+
+    #[test]
+    fn foreign_namespaced_web_search_is_not_a_declaration() {
+        // Only the explicit `bitrouter` namespace declares the built-in tool;
+        // another provider's namespaced `web_search` is left for the upstream.
+        let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![provider_tool(
+            "openai:web_search",
+            serde_json::json!({}),
+        )]));
+        assert!(decls.web_search.is_none());
+        assert!(decls.is_empty());
     }
 
     #[test]
