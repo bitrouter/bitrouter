@@ -21,6 +21,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
+use bitrouter::output::reports::daemon::{
+    DaemonActionReport, RouteHopView, RouteReport, StatusReport,
+};
 use bitrouter_sdk::config;
 
 /// BitRouter — an LLM API router.
@@ -520,7 +523,7 @@ async fn main() {
     // `bitrouter <cmd> 2>/dev/null | jq` always sees one clean JSON value.
     let cli = Cli::parse();
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human);
-    match run(cli).await {
+    match run(cli, &output).await {
         Ok(()) => {}
         Err(e) => {
             let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
@@ -529,7 +532,7 @@ async fn main() {
     }
 }
 
-async fn run(cli: Cli) -> Result<()> {
+async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // Subscriber init splits by command: the long-running `serve` defers
     // its init until after the OTel exporter has installed a real tracer
     // provider globally (see `serve` below). Every other command — and
@@ -552,11 +555,13 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Start { config, log } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let log_path = resolve_log_path(source.home(), log.as_deref());
-            start(&source, &log_path).await
+            output.emit(&start(&source, &log_path, "start").await?)?;
+            Ok(())
         }
         Command::Stop { config, socket } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            stop(&socket).await
+            output.emit(&stop(&socket).await?)?;
+            Ok(())
         }
         Command::Restart {
             config,
@@ -566,15 +571,18 @@ async fn run(cli: Cli) -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             let log_path = resolve_log_path(source.home(), log.as_deref());
-            restart(&source, &socket, &log_path).await
+            output.emit(&restart(&source, &socket, &log_path).await?)?;
+            Ok(())
         }
         Command::Reload { config, socket } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            reload(&socket).await
+            output.emit(&reload(&socket).await?)?;
+            Ok(())
         }
         Command::Status { config, socket } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            status(&socket).await
+            output.emit(&status(&socket).await?)?;
+            Ok(())
         }
         Command::Route {
             model,
@@ -583,7 +591,8 @@ async fn run(cli: Cli) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
-            route(&model, &source, &socket).await
+            output.emit(&route(&model, &source, &socket).await?)?;
+            Ok(())
         }
         Command::Init { config } => init(&config).await,
         Command::Config { action } => config_cmd(action).await,
@@ -1047,7 +1056,11 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     result
 }
 
-async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Result<()> {
+async fn start(
+    source: &bitrouter::paths::ConfigSource,
+    log_path: &Path,
+    action: &'static str,
+) -> Result<DaemonActionReport> {
     // Make sure the bitrouter home exists *before* we open the log
     // file inside it. (Zero-config first-run lands here with the home
     // not yet created on disk.)
@@ -1091,20 +1104,14 @@ async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Resu
     .await?;
 
     match outcome {
-        daemon::DaemonStartOutcome::Ready(info) => {
-            let p = bitrouter::style::Palette::for_stdout();
-            println!(
-                "{green}✓{reset} bitrouter daemon started (pid {pid}) — \
-                 listening on {listen}, {models} models — logs at {log}",
-                green = p.green,
-                reset = p.reset,
-                pid = info.pid,
-                listen = info.listen,
-                models = info.models,
-                log = log_path.display(),
-            );
-            Ok(())
-        }
+        daemon::DaemonStartOutcome::Ready(info) => Ok(DaemonActionReport::started(
+            action,
+            "started",
+            info.pid,
+            info.listen,
+            info.models,
+            log_path.display().to_string(),
+        )),
         // The process is alive but slow to answer — don't kill it; the daemon
         // may still be migrating / fetching the registry. Report and exit 0.
         daemon::DaemonStartOutcome::NotReadyInTime { pid } => {
@@ -1117,7 +1124,11 @@ async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Resu
                 secs = daemon::DAEMON_READY_TIMEOUT.as_secs(),
                 log = log_path.display(),
             );
-            Ok(())
+            Ok(DaemonActionReport::not_ready(
+                action,
+                pid,
+                log_path.display().to_string(),
+            ))
         }
         daemon::DaemonStartOutcome::Exited { status, log_tail } => {
             daemon::eprint_failure_log(log_path, &log_tail);
@@ -1242,12 +1253,9 @@ fn other_provider_env_var_hints() -> Vec<String> {
     vars
 }
 
-async fn stop(socket: &Path) -> Result<()> {
+async fn stop(socket: &Path) -> Result<DaemonActionReport> {
     match daemon::send_command(socket, &DaemonCommand::Stop).await? {
-        DaemonResponse::Ok => {
-            println!("daemon stopped");
-            Ok(())
-        }
+        DaemonResponse::Ok => Ok(DaemonActionReport::simple("stop", "stopped")),
         DaemonResponse::Error { message } => Err(anyhow::anyhow!(message)),
         other => Err(anyhow::anyhow!("unexpected response: {other:?}")),
     }
@@ -1257,14 +1265,14 @@ async fn restart(
     source: &bitrouter::paths::ConfigSource,
     socket: &Path,
     log_path: &Path,
-) -> Result<()> {
+) -> Result<DaemonActionReport> {
     // Stop is best-effort — a missing daemon is fine, we just go straight to
     // start. Any other error from the running daemon is fatal. `endpoint_in_use`
     // abstracts "is a daemon bound here?" across the Unix socket file and the
     // Windows named pipe.
     if daemon::endpoint_in_use(socket) {
         match daemon::send_command(socket, &DaemonCommand::Stop).await {
-            Ok(DaemonResponse::Ok) => println!("daemon stopped"),
+            Ok(DaemonResponse::Ok) => {}
             Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
             Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
             Err(e) => tracing::warn!(error = %e, "stop failed — proceeding to start"),
@@ -1285,7 +1293,7 @@ async fn restart(
             daemon::remove_pid_file(&pid_path).await;
         }
     }
-    start(source, log_path).await
+    start(source, log_path, "restart").await
 }
 
 /// Poll until the control endpoint is released (the old daemon drops the Unix
@@ -1302,7 +1310,7 @@ async fn wait_for_socket_release(socket: &Path, timeout: std::time::Duration) ->
     !daemon::endpoint_in_use(socket)
 }
 
-async fn reload(socket: &Path) -> Result<()> {
+async fn reload(socket: &Path) -> Result<DaemonActionReport> {
     // Snapshot every env-var-credentialed built-in provider's key from
     // *this* (CLI) process and hand them to the daemon along with the
     // reload command, so `export OPENAI_API_KEY=…; bitrouter reload`
@@ -1320,81 +1328,34 @@ async fn reload(socket: &Path) -> Result<()> {
         })
         .collect();
     match daemon::send_command(socket, &DaemonCommand::Reload { env }).await? {
-        DaemonResponse::Ok => {
-            println!("config reloaded");
-            Ok(())
-        }
+        DaemonResponse::Ok => Ok(DaemonActionReport::simple("reload", "reloaded")),
         DaemonResponse::Error { message } => Err(anyhow::anyhow!(message)),
         other => Err(anyhow::anyhow!("unexpected response: {other:?}")),
     }
 }
 
-async fn status(socket: &Path) -> Result<()> {
-    let p = bitrouter::style::Palette::for_stdout();
+async fn status(socket: &Path) -> Result<StatusReport> {
     match daemon::send_command(socket, &DaemonCommand::Status).await {
         Ok(DaemonResponse::Status {
             pid,
             listen,
             models,
-        }) => {
-            print_status_running(&p, pid, &listen, models, socket);
-            Ok(())
-        }
+        }) => Ok(StatusReport::running(
+            pid,
+            listen,
+            models,
+            socket.display().to_string(),
+        )),
         Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
         Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
         // No daemon listening on the socket → report stopped, not error.
         // Anything else (permission denied, malformed response, …) is a
         // real failure and bubbles to the pretty reporter.
         Err(e) if daemon::is_not_reachable(&e) => {
-            print_status_stopped(&p, socket);
-            Ok(())
+            Ok(StatusReport::stopped(socket.display().to_string()))
         }
         Err(e) => Err(e),
     }
-}
-
-/// Render the running-daemon status block. Modelled on `systemctl
-/// status` — a coloured bullet + headline, then a short indented list
-/// of facts. Labels are dim so values are what the eye lands on.
-fn print_status_running(
-    p: &bitrouter::style::Palette,
-    pid: u32,
-    listen: &str,
-    models: usize,
-    socket: &Path,
-) {
-    println!(
-        "{green}●{reset} bitrouter is {bold}running{reset}",
-        green = p.green,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    println!();
-    print_status_row(p, "pid", &pid.to_string());
-    print_status_row(p, "listen", listen);
-    print_status_row(p, "models", &format!("{models} routable"));
-    print_status_row(p, "socket", &socket.display().to_string());
-}
-
-/// Render the stopped-daemon status block. Hollow bullet (dim) +
-/// headline, the socket we *would* connect to, and a one-line next
-/// step. Exit code remains 0 — "stopped" is the answer to the
-/// question, not a failure.
-fn print_status_stopped(p: &bitrouter::style::Palette, socket: &Path) {
-    println!(
-        "{dim}○{reset} bitrouter is {bold}stopped{reset}",
-        dim = p.dim,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    println!();
-    print_status_row(p, "socket", &socket.display().to_string());
-    println!();
-    println!(
-        "  {dim}Run `bitrouter start` to launch the daemon.{reset}",
-        dim = p.dim,
-        reset = p.reset,
-    );
 }
 
 /// One indented `label  value` row in a status block. The label column
@@ -1408,7 +1369,11 @@ fn print_status_row(p: &bitrouter::style::Palette, label: &str, value: &str) {
     );
 }
 
-async fn route(model: &str, source: &bitrouter::paths::ConfigSource, socket: &Path) -> Result<()> {
+async fn route(
+    model: &str,
+    source: &bitrouter::paths::ConfigSource,
+    socket: &Path,
+) -> Result<RouteReport> {
     // Try the running daemon first — its routing table reflects any `reload`s.
     if daemon::endpoint_in_use(socket) {
         match daemon::send_command(
@@ -1420,8 +1385,7 @@ async fn route(model: &str, source: &bitrouter::paths::ConfigSource, socket: &Pa
         .await
         {
             Ok(DaemonResponse::Route { chain }) => {
-                print_route_chain(model, &chain, "live daemon");
-                return Ok(());
+                return Ok(route_report(model, "live daemon", chain));
             }
             Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
             Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
@@ -1439,24 +1403,22 @@ async fn route(model: &str, source: &bitrouter::paths::ConfigSource, socket: &Pa
     } else {
         "config"
     };
-    print_route_chain(model, &chain, label);
-    Ok(())
+    Ok(route_report(model, label, chain))
 }
 
-fn print_route_chain(model: &str, chain: &[RouteHop], source: &str) {
-    println!("model: {model}  (resolved via: {source})");
-    if chain.is_empty() {
-        println!("  (empty chain — no provider declares this model)");
-        return;
-    }
-    for (i, hop) in chain.iter().enumerate() {
-        println!(
-            "  {}. {} → {} ({})",
-            i + 1,
-            hop.provider,
-            hop.service_id,
-            hop.api_protocol
-        );
+/// Build a [`RouteReport`] from a resolved hop chain (wire-safe `RouteHop`s).
+fn route_report(model: &str, resolved_via: &str, chain: Vec<RouteHop>) -> RouteReport {
+    RouteReport {
+        model: model.to_string(),
+        resolved_via: resolved_via.to_string(),
+        chain: chain
+            .into_iter()
+            .map(|h| RouteHopView {
+                provider: h.provider,
+                service_id: h.service_id,
+                protocol: h.api_protocol,
+            })
+            .collect(),
     }
 }
 
