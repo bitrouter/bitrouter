@@ -11,8 +11,9 @@ use serde::Serialize;
 use crate::language_model::server_tools::toolset::ToolContext;
 
 /// Characters per token, the estimate used to turn a `max_content_tokens` cap
-/// into a character budget. Mirrors the SDK's existing
-/// `CHARS_PER_TOKEN_ESTIMATE` convention (see `language_model::stream`).
+/// into a character budget. This is the first public export of the SDK-internal
+/// value `4` (mirrored privately in `language_model::stream` /
+/// `language_model::context`); prefer importing this constant over hard-coding it.
 pub const CHARS_PER_TOKEN: u64 = 4;
 
 /// Per-call fetch options the toolset derives from the tool arguments and the
@@ -84,5 +85,6 @@ mod tests {
         assert_eq!(v["content"], "hello");
         assert!(v.get("title").is_none());
         assert!(v.get("published").is_none());
+        assert_eq!(v.as_object().unwrap().len(), 3);
     }
 }
