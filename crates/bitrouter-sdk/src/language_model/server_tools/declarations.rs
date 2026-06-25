@@ -472,4 +472,16 @@ mod tests {
         assert!(decls.web_fetch.is_none());
         assert!(decls.is_empty());
     }
+
+    #[test]
+    fn foreign_namespaced_web_fetch_is_not_a_declaration() {
+        // Only the explicit `bitrouter` namespace declares the built-in tool;
+        // another provider's namespaced `web_fetch` is left for the upstream.
+        let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![provider_tool(
+            "openai:web_fetch",
+            serde_json::json!({}),
+        )]));
+        assert!(decls.web_fetch.is_none());
+        assert!(decls.is_empty());
+    }
 }
