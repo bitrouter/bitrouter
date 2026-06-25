@@ -1078,6 +1078,19 @@ mod tests {
         assert!(key.id.starts_with("brvk_id_"));
     }
 
+    /// Regression for the out-of-the-box `bitrouter init` → `start` failure:
+    /// the starter config ships a *commented* `opencode-go` example that
+    /// references `${OPENCODE_GO_KEY_A/B}`. The loader expands `${VAR}` over the
+    /// raw text before YAML parsing, so it used to error on those unset vars
+    /// even though they live in a comment. With comment-aware substitution the
+    /// starter config must load with **no** environment variables set.
+    #[test]
+    fn starter_config_loads_with_all_env_vars_unset() {
+        let cfg = bitrouter_sdk::config::parse_with(STARTER_CONFIG, |_| None)
+            .expect("starter config must load with no env vars set");
+        assert!(cfg.server.skip_auth);
+    }
+
     /// Regression: the `mcp_servers:` and `agents:` blocks in
     /// `STARTER_CONFIG` are commented out by default, but if a user
     /// uncomments them the result must still parse against the current
