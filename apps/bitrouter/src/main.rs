@@ -27,6 +27,12 @@ use bitrouter_sdk::config;
 #[derive(Parser)]
 #[command(name = "bitrouter", version, about)]
 struct Cli {
+    /// Force JSON output (the default; agent-native). Conflicts with `--human`.
+    #[arg(short = 'j', long, global = true, conflicts_with = "human")]
+    json: bool,
+    /// Render the human-readable view to stdout instead of JSON.
+    #[arg(short = 'H', long, global = true)]
+    human: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -507,20 +513,23 @@ enum ProviderAction {
 
 #[tokio::main]
 async fn main() {
-    // Defer to `run` for the actual dispatch so the entry point can
-    // route the resulting `Result` through `error_report::report` instead
-    // of leaking anyhow's verbose `Debug` formatter to end users.
-    match run().await {
+    // Parse once here so the global `--json` / `--human` flags are available to
+    // render the *result* — a success report or the error envelope — through the
+    // single `Output` driver. Diagnostics during execution go to stderr; the
+    // result (this match) goes to stdout in the selected format, so
+    // `bitrouter <cmd> 2>/dev/null | jq` always sees one clean JSON value.
+    let cli = Cli::parse();
+    let output = bitrouter::output::Output::from_flags(cli.json, cli.human);
+    match run(cli).await {
         Ok(()) => {}
         Err(e) => {
-            bitrouter::error_report::report(&e);
+            let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
             std::process::exit(1);
         }
     }
 }
 
-async fn run() -> Result<()> {
-    let cli = Cli::parse();
+async fn run(cli: Cli) -> Result<()> {
     // Subscriber init splits by command: the long-running `serve` defers
     // its init until after the OTel exporter has installed a real tracer
     // provider globally (see `serve` below). Every other command — and

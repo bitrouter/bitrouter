@@ -58,9 +58,10 @@ impl Output {
     }
 
     /// Pick the format from the global flags. `--human` selects the human view;
-    /// otherwise (including `--json`) JSON.
-    pub fn from_flags(human: bool) -> Self {
-        Self::new(if human { Format::Human } else { Format::Json })
+    /// `--json` (or neither) is JSON. The two are mutually exclusive at the
+    /// clap layer; the `&& !json` is belt-and-suspenders.
+    pub fn from_flags(json: bool, human: bool) -> Self {
+        Self::new(if human && !json { Format::Human } else { Format::Json })
     }
 
     /// Emit a report to stdout in the active format.
