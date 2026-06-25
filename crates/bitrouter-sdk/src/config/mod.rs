@@ -690,35 +690,102 @@ pub struct VariantConfig {
 
 // ===== `${VAR}` substitution + loader =====
 
-/// Replace every `${VAR}` occurrence with the value resolved by `lookup`. An
-/// unresolved variable is an error (config F8: `${VAR}` substitution).
+/// Replace every `${VAR}` reference with the value resolved by `lookup`, an
+/// unresolved variable being an error (config F8: `${VAR}` substitution).
+///
+/// Substitution is **YAML-comment-aware**: a `${VAR}` that falls inside a `#`
+/// comment is left literal and never looked up — so a commented-out example
+/// (e.g. the `bitrouter init` starter config) that references an unset variable
+/// does not break loading. A `#` begins a comment only when it is at the start
+/// of a line or preceded by whitespace and is not inside a quoted scalar
+/// (matching YAML), so URL fragments (`host/p#x`) and quoted `#` stay literal
+/// value text and any `${VAR}` around them is still substituted. References in
+/// real values — quoted or plain — are substituted exactly as before.
+///
+/// Limitations (acceptable for config files): quoted-scalar state is tracked
+/// per line (reset at each newline), and block scalars (`|` / `>`) are not
+/// modelled, so a `#` inside multi-line block-scalar content could be mistaken
+/// for a comment.
 pub fn substitute_with<F>(input: &str, lookup: F) -> Result<String>
 where
     F: Fn(&str) -> Option<String>,
 {
     let mut out = String::with_capacity(input.len());
-    let mut rest = input;
-    while let Some(start) = rest.find("${") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 2..];
-        match after.find('}') {
-            Some(end) => {
-                let name = &after[..end];
-                let value = lookup(name).ok_or_else(|| {
-                    BitrouterError::bad_request(format!(
-                        "config references undefined environment variable '{name}'"
-                    ))
-                })?;
-                out.push_str(&value);
-                rest = &after[end + 1..];
-            }
-            None => {
-                out.push_str("${");
-                rest = after;
+    let mut iter = input.char_indices().peekable();
+    // Whether the previous char was a line break / start-of-input or inline
+    // whitespace — the precondition for a `#` to begin a comment.
+    let mut after_ws = true;
+    let mut in_squote = false;
+    let mut in_dquote = false;
+    let mut in_comment = false;
+
+    while let Some((idx, c)) = iter.next() {
+        // Any line break ends a comment / quoted scalar for this scanner —
+        // `\n`, `\r\n`, and a lone `\r` (old-Mac) all reset state.
+        if c == '\n' || c == '\r' {
+            out.push(c);
+            in_comment = false;
+            in_squote = false;
+            in_dquote = false;
+            after_ws = true;
+            continue;
+        }
+        if in_comment {
+            out.push(c);
+            continue;
+        }
+        // `${...}` reference — substituted everywhere except inside a comment,
+        // including inside quoted scalars. `$` and `{` are ASCII (1 byte each),
+        // so the variable name begins at `idx + 2`.
+        if c == '$' && matches!(iter.peek(), Some((_, '{'))) {
+            let after_brace = &input[idx + 2..];
+            match after_brace.find('}') {
+                Some(rel) => {
+                    let name = &after_brace[..rel];
+                    let value = lookup(name).ok_or_else(|| {
+                        BitrouterError::bad_request(format!(
+                            "config references undefined environment variable '{name}'"
+                        ))
+                    })?;
+                    out.push_str(&value);
+                    // Advance the iterator past `{name}` (up to and including `}`).
+                    let resume = idx + 2 + rel + 1;
+                    while let Some(&(j, _)) = iter.peek() {
+                        if j < resume {
+                            iter.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    after_ws = false;
+                    continue;
+                }
+                None => {
+                    // No closing brace anywhere — emit `$` literally and keep
+                    // scanning (the `{` and following chars copy normally),
+                    // matching the historical passthrough of a dangling `${`.
+                    out.push('$');
+                    after_ws = false;
+                    continue;
+                }
             }
         }
+        // Comment start: `#` at line start / after whitespace, outside quotes.
+        if c == '#' && after_ws && !in_squote && !in_dquote {
+            in_comment = true;
+            out.push(c);
+            continue;
+        }
+        // Track quoted-scalar state so a `#` inside quotes isn't read as a
+        // comment. (Substitution still happens inside quotes — handled above.)
+        if c == '\'' && !in_dquote {
+            in_squote = !in_squote;
+        } else if c == '"' && !in_squote {
+            in_dquote = !in_dquote;
+        }
+        out.push(c);
+        after_ws = matches!(c, ' ' | '\t');
     }
-    out.push_str(rest);
     Ok(out)
 }
 

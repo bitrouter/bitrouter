@@ -36,6 +36,83 @@ fn env_substitution_handles_multiple_and_literals() {
     assert_eq!(substitute_with("x ${oops", |_| None).unwrap(), "x ${oops");
 }
 
+// ===== comment-aware substitution (a `${VAR}` in a YAML comment must NOT be
+// expanded, and an unset var referenced only from a comment must NOT error) =====
+
+#[test]
+fn env_substitution_skips_full_line_comments() {
+    // The reference is in a `#` comment → left literal, no lookup, no error,
+    // even though the var is unset.
+    let out = substitute_with("# api_key: ${MISSING}\nlisten: x", |_| None).unwrap();
+    assert_eq!(out, "# api_key: ${MISSING}\nlisten: x");
+}
+
+#[test]
+fn env_substitution_skips_indented_comments() {
+    // Mirrors the `bitrouter init` starter config: a commented example deep in
+    // the file referencing an unset var must not break loading.
+    let yaml = "providers:\n  # opencode: { key: \"${OPENCODE_KEY_A}\" }\n  openai: {}";
+    let out = substitute_with(yaml, |_| None).unwrap();
+    assert_eq!(out, yaml);
+}
+
+#[test]
+fn env_substitution_still_runs_before_an_inline_comment() {
+    // The real value is substituted; the `${X}` in the trailing comment is not.
+    let out = substitute_with("api_key: ${REAL}  # fallback ${UNUSED}", |n| {
+        (n == "REAL").then(|| "sk-123".to_string())
+    })
+    .unwrap();
+    assert_eq!(out, "api_key: sk-123  # fallback ${UNUSED}");
+}
+
+#[test]
+fn env_substitution_treats_hash_in_value_as_literal_not_comment() {
+    // A `#` that is NOT preceded by whitespace (e.g. a URL fragment) is part of
+    // the value, so a following `${VAR}` is still substituted.
+    let out = substitute_with("url: https://h/p#x=${TOK}", |n| {
+        (n == "TOK").then(|| "t".to_string())
+    })
+    .unwrap();
+    assert_eq!(out, "url: https://h/p#x=t");
+}
+
+#[test]
+fn env_substitution_handles_crlf_line_endings() {
+    // Windows CRLF: real values on either side of a commented line are still
+    // substituted, and the commented `${C}` is skipped — i.e. comment/quote
+    // state resets across the line break, not just a bare `\n`.
+    let out =
+        substitute_with("a: ${V}\r\n# c ${C}\r\nb: ${W}", |n| Some(format!("<{n}>"))).unwrap();
+    assert_eq!(out, "a: <V>\r\n# c ${C}\r\nb: <W>");
+}
+
+#[test]
+fn env_substitution_inside_quotes_ignores_hash() {
+    // A `#` preceded by a space but *inside* a quoted scalar is literal, so the
+    // `${VAR}` after it is still substituted.
+    let out = substitute_with("note: \"a # b ${V}\"", |n| {
+        (n == "V").then(|| "z".to_string())
+    })
+    .unwrap();
+    assert_eq!(out, "note: \"a # b z\"");
+}
+
+#[test]
+fn env_substitution_in_comment_never_calls_lookup() {
+    // Stronger than "no error": the lookup must not even be consulted for a
+    // commented reference (so validate-style callers don't record it as missing).
+    // `substitute_with` takes `Fn`, so interior mutability is needed to record.
+    let seen = std::cell::RefCell::new(Vec::<String>::new());
+    let out = substitute_with("k: ${REAL} # ${COMMENTED}", |n| {
+        seen.borrow_mut().push(n.to_string());
+        Some(format!("<{n}>"))
+    })
+    .unwrap();
+    assert_eq!(out, "k: <REAL> # ${COMMENTED}");
+    assert_eq!(seen.into_inner(), vec!["REAL".to_string()]);
+}
+
 #[test]
 fn parses_registry_style_provider() {
     let yaml = r#"
