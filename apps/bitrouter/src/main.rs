@@ -666,7 +666,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             .await
         }
         Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
-        Command::Skills { action } => bitrouter::skills::cli::run(action).await,
+        Command::Skills { action } => bitrouter::skills::cli::run(action, output).await,
         Command::Mcp { action } => mcp_cmd(action).await,
     }
 }

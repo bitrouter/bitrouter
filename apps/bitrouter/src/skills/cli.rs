@@ -105,38 +105,59 @@ pub struct UpdateArgs {
 }
 
 /// Entry point dispatched by `apps/bitrouter/src/main.rs`.
-pub async fn run(action: SkillsAction) -> Result<()> {
+pub async fn run(action: SkillsAction, output: &crate::output::Output) -> Result<()> {
     match action {
         SkillsAction::Add(args) => {
-            commands::skills_add(
-                &args.source,
-                args.skill.as_deref(),
-                args.global,
-                args.yes,
-                args.registry.as_deref(),
-                args.namespace.as_deref(),
-            )
-            .await
+            output.emit(
+                &commands::skills_add(
+                    &args.source,
+                    args.skill.as_deref(),
+                    args.global,
+                    args.yes,
+                    args.registry.as_deref(),
+                    args.namespace.as_deref(),
+                )
+                .await?,
+            )?;
+            Ok(())
         }
-        SkillsAction::List(args) => commands::skills_list(args.global),
-        SkillsAction::Remove(args) => commands::skills_remove(&args.name, args.global),
+        SkillsAction::List(args) => {
+            output.emit(&commands::skills_list(args.global)?)?;
+            Ok(())
+        }
+        SkillsAction::Remove(args) => {
+            output.emit(&commands::skills_remove(&args.name, args.global)?)?;
+            Ok(())
+        }
         SkillsAction::Find(args) => {
-            commands::skills_find(
-                &args.query,
-                args.registry.as_deref(),
-                args.namespace.as_deref(),
-            )
-            .await
+            output.emit(
+                &commands::skills_find(
+                    &args.query,
+                    args.registry.as_deref(),
+                    args.namespace.as_deref(),
+                )
+                .await?,
+            )?;
+            Ok(())
         }
-        SkillsAction::Init(args) => commands::skills_init(&args.name, &args.output),
+        SkillsAction::Init(args) => {
+            output.emit(&commands::skills_init(&args.name, &args.output)?)?;
+            Ok(())
+        }
         SkillsAction::Update(args) => {
-            commands::skills_update(
+            let report = commands::skills_update(
                 args.name.as_deref(),
                 args.global,
                 args.registry.as_deref(),
                 args.namespace.as_deref(),
             )
-            .await
+            .await?;
+            output.emit(&report)?;
+            // Parity with the legacy behavior: a partial-failure run exits 1.
+            if !report.failed.is_empty() {
+                std::process::exit(1);
+            }
+            Ok(())
         }
     }
 }
