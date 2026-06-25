@@ -1,7 +1,7 @@
 //! The uniform error envelope as a [`CliReport`], plus normalizers from the
 //! CLI's error sources into it.
 //!
-//! Every failed command renders [`ErrorEnvelope`] through the same [`Output`]
+//! Every failed command renders [`ErrorEnvelope`] through the same [`Output`](super::Output)
 //! driver as a success: JSON `{"error": {"kind", "message", …}}` on stdout by
 //! default, or the human `error:` / `while:` / `hint:` block under `--human`.
 

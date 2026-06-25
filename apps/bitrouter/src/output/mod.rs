@@ -2,7 +2,7 @@
 //!
 //! Every CLI command computes a strongly-typed **report** that implements
 //! [`CliReport`] — it is both `Serialize` (the JSON view) and renderable to a
-//! human view via [`Human`](human::Human). The [`Output`] driver is the single
+//! human view via [`Human`]. The [`Output`] driver is the single
 //! place that writes the result to stdout, picking the format from the global
 //! `--json` / `--human` flags.
 //!
