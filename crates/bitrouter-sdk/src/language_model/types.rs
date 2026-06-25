@@ -1920,6 +1920,12 @@ pub struct PipelineRequest {
     /// lossy cross-protocol translation. `None` for callers that build a
     /// request directly (no native preference is then applied).
     pub inbound_protocol: Option<ApiProtocol>,
+    /// Session correlation key — internal only, NEVER forwarded to upstream
+    /// providers. Derived from the inbound `x-bitrouter-session-id` header
+    /// (injected by `bitrouter spawn`) when present, otherwise a content-derived
+    /// fallback hash. Used by the telemetry layer to group related requests
+    /// into the same session.
+    pub session_key: Option<String>,
 }
 
 impl PipelineRequest {
@@ -1933,6 +1939,7 @@ impl PipelineRequest {
             headers: http::HeaderMap::new(),
             prompt,
             inbound_protocol: None,
+            session_key: None,
         }
     }
 }

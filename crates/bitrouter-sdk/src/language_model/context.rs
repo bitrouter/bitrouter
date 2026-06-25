@@ -67,6 +67,9 @@ pub struct PipelineContext {
     /// a native, same-protocol upstream. `None` when the request was built
     /// without a known inbound protocol.
     inbound_protocol: Option<ApiProtocol>,
+    /// Session correlation key — internal only, NEVER forwarded to upstream
+    /// providers. See [`PipelineRequest::session_key`] for derivation details.
+    session_key: Option<String>,
 
     // ===== accumulated: written per stage, readable downstream =====
     /// The resolved fallback chain (Stage 2).
@@ -108,6 +111,7 @@ impl PipelineContext {
             headers: req.headers,
             prompt: req.prompt,
             inbound_protocol: req.inbound_protocol,
+            session_key: req.session_key,
             route_chain: None,
             execution_result: None,
             metadata: HashMap::new(),
@@ -178,6 +182,23 @@ impl PipelineContext {
     /// resolution uses it to prefer a native (same-protocol) upstream.
     pub fn inbound_protocol(&self) -> Option<ApiProtocol> {
         self.inbound_protocol.clone()
+    }
+
+    /// The session correlation key for this request. Set at ingress from the
+    /// `x-bitrouter-session-id` header (explicit) or a content-derived SHA-256
+    /// hash (fallback). `None` when neither path ran (e.g. a request built
+    /// directly without an HTTP server). NEVER forwarded to upstream providers.
+    pub fn session_key(&self) -> Option<&str> {
+        self.session_key.as_deref()
+    }
+
+    /// Set the session correlation key. Called at most once, during the
+    /// `PreRequest` phase by the session correlation hook. Subsequent calls
+    /// (e.g. in nested pipelines) are no-ops when the key is already set.
+    pub fn set_session_key(&mut self, key: String) {
+        if self.session_key.is_none() {
+            self.session_key = Some(key);
+        }
     }
 
     /// Replace the canonical model name (used after preset/variant stripping).
@@ -458,6 +479,7 @@ mod tests {
             headers: http::HeaderMap::new(),
             prompt,
             inbound_protocol: None,
+            session_key: None,
         };
         PipelineContext::new(req)
     }
