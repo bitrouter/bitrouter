@@ -22,11 +22,18 @@ use clap::{Parser, Subcommand, ValueEnum};
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
 use bitrouter::output::Output;
+use bitrouter::output::reports::agents::{
+    AgentCheckRow, AgentInstallReport, AgentRow, AgentsCheckReport, AgentsListReport,
+};
 use bitrouter::output::reports::config::{InitReport, UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
     DaemonActionReport, RouteHopView, RouteReport, StatusReport,
 };
 use bitrouter::output::reports::routing::{ModelRow, ModelsReport, ProviderRow, ProvidersReport};
+use bitrouter::output::reports::tools::{
+    ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
+    ToolsStatusReport,
+};
 use bitrouter_sdk::config;
 
 /// BitRouter — an LLM API router.
@@ -617,11 +624,11 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             Ok(())
         }
         Command::Verify { model } => verify_attestation(&model).await,
-        Command::Tools { action } => tools(action).await,
+        Command::Tools { action } => tools(action, output).await,
         Command::Observe { action } => observe(action).await,
         Command::Policy { action } => policy(action).await,
         Command::Providers { action } => providers(action, output).await,
-        Command::Agents { action } => agents_cmd(action).await,
+        Command::Agents { action } => agents_cmd(action, output).await,
         Command::AgentProxy { agent, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             agent_proxy_cmd(&agent, &source).await
@@ -1682,68 +1689,61 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
     }
 }
 
-async fn tools(action: ToolsAction) -> Result<()> {
+async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
     use bitrouter::tools as tools_cmd;
 
     match action {
         ToolsAction::List { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            if cfg.mcp_servers.is_empty() {
-                println!("(no MCP servers configured)");
-                println!("  add an `mcp_servers:` block to your bitrouter.yaml —");
-                println!("  see the commented stub in the starter config written by");
-                println!("  `bitrouter init`.");
-                return Ok(());
-            }
-            let rows = tools_cmd::list(&cfg).await;
-            for row in rows {
-                match row.outcome {
-                    Ok(tools) if tools.is_empty() => {
-                        println!("{} (no tools advertised)", row.server);
-                    }
-                    Ok(tools) => {
-                        println!("{} ({})", row.server, tools.len());
-                        for t in tools {
-                            if t.description.is_empty() {
-                                println!("  {}", t.name);
-                            } else {
-                                println!("  {} — {}", t.name, t.description);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("{}: ERROR — {e}", row.server);
-                    }
-                }
-            }
+            let servers = tools_cmd::list(&cfg)
+                .await
+                .into_iter()
+                .map(|row| match row.outcome {
+                    Ok(tools) => ServerToolsView {
+                        server: row.server,
+                        tools: Some(
+                            tools
+                                .into_iter()
+                                .map(|t| ToolInfo {
+                                    name: t.name,
+                                    description: t.description,
+                                })
+                                .collect(),
+                        ),
+                        error: None,
+                    },
+                    Err(e) => ServerToolsView {
+                        server: row.server,
+                        tools: None,
+                        error: Some(e),
+                    },
+                })
+                .collect();
+            output.emit(&ToolsListReport { servers })?;
             Ok(())
         }
         ToolsAction::Status { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            if cfg.mcp_servers.is_empty() {
-                println!("(no MCP servers configured)");
-                return Ok(());
-            }
-            let rows = tools_cmd::status(&cfg).await;
-            println!(
-                "{:<24} {:<8} {:<12} TRANSPORT",
-                "SERVER", "STATUS", "LATENCY"
-            );
-            for row in rows {
-                let (status, latency) = match row.outcome {
-                    Ok(d) => ("ok".to_string(), format!("{}ms", d.as_millis())),
-                    Err(_) => ("FAIL".to_string(), "-".to_string()),
-                };
-                println!(
-                    "{:<24} {:<8} {:<12} {}",
-                    row.server, status, latency, row.transport
-                );
-                if let Err(e) = row.outcome.as_ref() {
-                    eprintln!("  ↳ {e}");
-                }
-            }
+            let servers = tools_cmd::status(&cfg)
+                .await
+                .into_iter()
+                .map(|row| {
+                    let (ok, latency_ms, error) = match row.outcome {
+                        Ok(d) => (true, Some(d.as_millis()), None),
+                        Err(e) => (false, None, Some(e)),
+                    };
+                    ServerStatusView {
+                        server: row.server,
+                        ok,
+                        latency_ms,
+                        transport: row.transport,
+                        error,
+                    }
+                })
+                .collect();
+            output.emit(&ToolsStatusReport { servers })?;
             Ok(())
         }
         ToolsAction::Discover { server, config } => {
@@ -1751,7 +1751,7 @@ async fn tools(action: ToolsAction) -> Result<()> {
             let cfg = bitrouter::paths::load_config(&source).await?;
             match tools_cmd::discover(&cfg, &server).await {
                 Ok(yaml) => {
-                    print!("{yaml}");
+                    output.emit(&ToolsDiscoverReport { server, yaml })?;
                     Ok(())
                 }
                 Err(e) => anyhow::bail!("discover '{server}': {e}"),
@@ -1892,53 +1892,50 @@ fn print_observe_stopped(p: &bitrouter::style::Palette, socket: &Path) {
     );
 }
 
-async fn agents_cmd(action: AgentsAction) -> Result<()> {
+async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     use bitrouter::agents as agents_cmd;
 
     match action {
         AgentsAction::List { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let rows = agents_cmd::list(&cfg);
-            println!(
-                "{:<16} {:<12} {:<10} DESCRIPTION",
-                "ID", "CONFIGURED", "CATALOG"
-            );
-            for row in rows {
-                println!(
-                    "{:<16} {:<12} {:<10} {}",
-                    row.id,
-                    if row.configured { "yes" } else { "no" },
-                    if row.in_catalog { "yes" } else { "no" },
-                    row.description,
-                );
-            }
+            let agents = agents_cmd::list(&cfg)
+                .into_iter()
+                .map(|row| AgentRow {
+                    id: row.id,
+                    configured: row.configured,
+                    in_catalog: row.in_catalog,
+                    description: row.description,
+                })
+                .collect();
+            output.emit(&AgentsListReport { agents })?;
             Ok(())
         }
         AgentsAction::Check { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            if cfg.agents.is_empty() {
-                println!("(no agents configured)");
-                println!("  install one with: bitrouter agents install <id>");
-                return Ok(());
-            }
-            let rows = agents_cmd::check(&cfg).await;
-            println!("{:<24} {:<8} LATENCY/ERROR", "AGENT", "STATUS");
-            for row in rows {
-                match row.outcome {
-                    Ok(d) => println!("{:<24} {:<8} {}ms", row.id, "ok", d.as_millis()),
-                    Err(e) => {
-                        println!("{:<24} {:<8} -", row.id, "FAIL");
-                        eprintln!("  ↳ {e}");
+            let agents = agents_cmd::check(&cfg)
+                .await
+                .into_iter()
+                .map(|row| {
+                    let (ok, latency_ms, error) = match row.outcome {
+                        Ok(d) => (true, Some(d.as_millis()), None),
+                        Err(e) => (false, None, Some(e)),
+                    };
+                    AgentCheckRow {
+                        id: row.id,
+                        ok,
+                        latency_ms,
+                        error,
                     }
-                }
-            }
+                })
+                .collect();
+            output.emit(&AgentsCheckReport { agents })?;
             Ok(())
         }
         AgentsAction::Install { id } => match agents_cmd::install(&id) {
             Ok(yaml) => {
-                print!("{yaml}");
+                output.emit(&AgentInstallReport { id, yaml })?;
                 Ok(())
             }
             Err(e) => anyhow::bail!(e),

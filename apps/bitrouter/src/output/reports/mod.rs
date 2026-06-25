@@ -4,6 +4,8 @@
 //! report structs and their [`CliReport`](crate::output::CliReport)
 //! implementations. Submodules are added as groups are converted.
 
+pub mod agents;
 pub mod config;
 pub mod daemon;
 pub mod routing;
+pub mod tools;
