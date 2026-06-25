@@ -32,9 +32,13 @@ impl WebFetchToolset {
     }
 
     /// Candidate backends for a call, honoring a `backend` override: the named
-    /// backend first (if configured), then the rest in configured order. An
-    /// unknown name is ignored. Excludes the pinned entry from the tail by index
-    /// (not name) so two same-named backends both stay in the failover chain.
+    /// backend comes first (if configured), then the rest in configured order.
+    /// An unknown name is ignored, falling back to the configured order.
+    ///
+    /// The pinned entry is excluded from the tail by *index*, not by name, so
+    /// two backends that happen to share a name (e.g. two `native` backends
+    /// left at the default name) both stay in the failover chain instead of
+    /// collapsing to the first.
     fn candidates(&self, override_name: Option<&str>) -> Vec<&Arc<dyn WebFetchBackend>> {
         let pinned =
             override_name.and_then(|name| self.backends.iter().position(|b| b.name() == name));
@@ -140,8 +144,8 @@ impl RouterToolset for WebFetchToolset {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::backend::WebFetchResult;
+    use super::*;
     use crate::caller::CallerContext;
     use crate::language_model::server_tools::declarations::{
         WebFetchDeclaration, declarations_plugin_id,
@@ -179,10 +183,64 @@ mod tests {
     }
 
     fn ok(name: &str) -> Arc<dyn WebFetchBackend> {
-        Arc::new(StubBackend { name: name.to_string(), ok: true })
+        Arc::new(StubBackend {
+            name: name.to_string(),
+            ok: true,
+        })
     }
     fn err(name: &str) -> Arc<dyn WebFetchBackend> {
-        Arc::new(StubBackend { name: name.to_string(), ok: false })
+        Arc::new(StubBackend {
+            name: name.to_string(),
+            ok: false,
+        })
+    }
+
+    /// A backend that records the `max_content_tokens` it was handed, so a
+    /// test can assert the cap that actually reaches the engine.
+    struct CapturingBackend {
+        name: String,
+        seen_max_content_tokens: std::sync::Mutex<Option<u32>>,
+    }
+    #[async_trait]
+    impl WebFetchBackend for CapturingBackend {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        async fn fetch(
+            &self,
+            url: &str,
+            opts: &FetchOptions,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<WebFetchResult, String> {
+            *self.seen_max_content_tokens.lock().unwrap() = Some(opts.max_content_tokens);
+            Ok(WebFetchResult {
+                backend: self.name.clone(),
+                url: url.to_string(),
+                title: None,
+                content: "page".to_string(),
+                published: None,
+            })
+        }
+    }
+
+    /// Run one call through a `CapturingBackend` and return the
+    /// `max_content_tokens` the backend saw.
+    async fn capped_max_content_tokens(
+        default_max: u32,
+        decl: WebFetchDeclaration,
+        args: &str,
+    ) -> u32 {
+        let backend = Arc::new(CapturingBackend {
+            name: "cap".to_string(),
+            seen_max_content_tokens: std::sync::Mutex::new(None),
+        });
+        let backends: Vec<Arc<dyn WebFetchBackend>> = vec![backend.clone()];
+        let ts = WebFetchToolset::new(backends, default_max);
+        ts.call_tool("web_fetch", args, &ctx_with(Some(decl)))
+            .await
+            .unwrap();
+        let seen = *backend.seen_max_content_tokens.lock().unwrap();
+        seen.expect("backend was called")
     }
 
     fn ctx_with(decl: Option<WebFetchDeclaration>) -> ToolContext {
@@ -219,7 +277,11 @@ mod tests {
     async fn missing_url_is_an_error_result() {
         let ts = WebFetchToolset::new(vec![ok("exa")], 5);
         let out = ts
-            .call_tool("web_fetch", "{}", &ctx_with(Some(WebFetchDeclaration::default())))
+            .call_tool(
+                "web_fetch",
+                "{}",
+                &ctx_with(Some(WebFetchDeclaration::default())),
+            )
             .await
             .unwrap();
         assert!(matches!(&out, ToolResultOutput::Json { value } if value["status"] == "error"));
@@ -254,7 +316,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(matches!(&out, ToolResultOutput::Json { value } if value["backend"] == "secondary"));
+        assert!(
+            matches!(&out, ToolResultOutput::Json { value } if value["backend"] == "secondary")
+        );
     }
 
     #[tokio::test]
@@ -284,5 +348,66 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(&out, ToolResultOutput::Json { value } if value["status"] == "error"));
+    }
+
+    #[tokio::test]
+    async fn max_content_tokens_clamps_to_the_deployment_ceiling() {
+        // A call arg above the deployment default is clamped down to it (the
+        // model can't inflate the cap past what the operator configured).
+        assert_eq!(
+            capped_max_content_tokens(
+                5,
+                WebFetchDeclaration::default(),
+                r#"{"url":"https://a","max_content_tokens":100}"#
+            )
+            .await,
+            5
+        );
+        // A lower call arg is honored.
+        assert_eq!(
+            capped_max_content_tokens(
+                5,
+                WebFetchDeclaration::default(),
+                r#"{"url":"https://a","max_content_tokens":2}"#
+            )
+            .await,
+            2
+        );
+        // The declaration only lowers the ceiling, and the call arg cannot
+        // exceed that (now lower) declaration cap.
+        let decl = WebFetchDeclaration {
+            backend: None,
+            max_content_tokens: Some(2),
+        };
+        assert_eq!(
+            capped_max_content_tokens(
+                5,
+                decl.clone(),
+                r#"{"url":"https://a","max_content_tokens":100}"#
+            )
+            .await,
+            2
+        );
+        // The declaration cap also applies when the call omits `max_content_tokens`.
+        assert_eq!(
+            capped_max_content_tokens(5, decl, r#"{"url":"https://a"}"#).await,
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn same_named_backends_stay_in_the_failover_chain() {
+        // Two backends share the name "dup"; the first errors. Failover must
+        // still reach the second instead of the two collapsing by name.
+        let ts = WebFetchToolset::new(vec![err("dup"), ok("dup")], 5);
+        let out = ts
+            .call_tool(
+                "web_fetch",
+                r#"{"url":"https://a"}"#,
+                &ctx_with(Some(WebFetchDeclaration::default())),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(&out, ToolResultOutput::Json { value } if value["status"] == "ok"));
     }
 }
