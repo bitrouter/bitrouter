@@ -12,8 +12,9 @@ serde_json = "1"
 thiserror = "2"
 anyhow = "1"
 futures = "0.3"
+uuid = { version = "1", features = ["v4"] }
 # gui-only:
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }   # genai runtime
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }   # genai runtime
 alacritty_terminal = "0.26"
 genai = "0.6"
 # NOTE (Task 2.1): pin gpui + gpui-component to a MATCHING pair — reuse the exact

@@ -13,12 +13,32 @@ use std::collections::HashMap;
 use bitrouter_gui_core::protocol::{RenderMode, SessionId};
 use gpui::{
     div, prelude::FluentBuilder as _, AppContext as _, ClickEvent, Context, Entity, IntoElement,
-    ParentElement, Render, Styled, Window,
+    ParentElement, Render, Styled, Subscription, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
-    h_flex, v_flex, ActiveTheme, StyledExt,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex, ActiveTheme, StyledExt,
 };
+
+/// Build the `SendPrompt` command for the focused session, or `None` when there
+/// is no focus or the text is blank. Pure so the send branching is testable
+/// without driving gpui events.
+pub fn compose_command(
+    focus: Option<&SessionId>,
+    text: &str,
+) -> Option<bitrouter_gui_core::protocol::Command> {
+    use bitrouter_gui_core::protocol::{Command, Target};
+    let trimmed = text.trim();
+    match (focus, trimmed.is_empty()) {
+        (Some(id), false) => Some(Command::SendPrompt {
+            target: Target::Session { id: id.clone() },
+            text: trimmed.to_string(),
+        }),
+        _ => None,
+    }
+}
 
 use crate::{
     app_model::AppModel,
@@ -31,6 +51,10 @@ pub struct Center {
     model: Entity<AppModel>,
     /// One `TerminalView` entity per session, lazily constructed on first focus.
     terminal_cache: HashMap<SessionId, Entity<TerminalView>>,
+    /// Lazily-created prompt composer (shared across focus; ACP mode only).
+    composer: Option<Entity<InputState>>,
+    /// Retains the composer's `PressEnter` subscription (drops if not held).
+    _subscriptions: Vec<Subscription>,
 }
 
 impl Center {
@@ -43,6 +67,8 @@ impl Center {
         Self {
             model,
             terminal_cache: HashMap::new(),
+            composer: None,
+            _subscriptions: Vec::new(),
         }
     }
 
@@ -64,10 +90,35 @@ impl Center {
         self.terminal_cache.insert(id.clone(), view.clone());
         view
     }
+
+    /// Echo the composer's text into the focused session and dispatch a
+    /// `SendPrompt`, then clear the input. No-op when blank or unfocused.
+    fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self
+            .composer
+            .as_ref()
+            .map(|i| i.read(cx).value().to_string())
+            .unwrap_or_default();
+        let focus = self.model.read(cx).state.focus.clone();
+        let Some(cmd) = compose_command(focus.as_ref(), &text) else {
+            return;
+        };
+        // `compose_command` returned `Some`, so focus is `Some` and text non-blank.
+        let focus_id = focus.expect("focus present when compose_command is Some");
+        let echo = text.trim().to_string();
+        self.model.update(cx, |m, _| {
+            m.append_user_message(&focus_id, echo);
+            m.dispatch(cmd);
+        });
+        if let Some(input) = &self.composer {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        cx.notify();
+    }
 }
 
 impl Render for Center {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // ── Snapshot state before any mutable work ────────────────────────
         //
         // Read everything from the model while holding only an immutable borrow,
@@ -212,6 +263,56 @@ impl Render for Center {
             }
         };
 
+        // ── Prompt composer (ACP mode only) ───────────────────────────────
+        let composer_bar = if matches!(render_mode, RenderMode::Acp) {
+            // Lazily create the input + its PressEnter subscription.
+            if self.composer.is_none() {
+                // Static placeholder: the composer is shared across focus, so a
+                // per-agent name would freeze to the first-focused agent.
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .multi_line(true)
+                        .auto_grow(1, 6)
+                        .placeholder("Message the focused agent…")
+                });
+                let sub = cx.subscribe_in(
+                    &input,
+                    window,
+                    |this: &mut Center, _input, event: &InputEvent, window, cx| {
+                        // Plain Enter sends; Shift+Enter inserts a newline (handled
+                        // by the component, so we ignore shift==true).
+                        if let InputEvent::PressEnter { shift: false, .. } = event {
+                            this.send_prompt(window, cx);
+                        }
+                    },
+                );
+                self.composer = Some(input);
+                self._subscriptions.push(sub);
+            }
+
+            let input_entity = self.composer.clone();
+            input_entity.map(|input| {
+                let this_entity = cx.entity().clone();
+                let send_btn = Button::new(gpui::ElementId::Name("composer-send".into()))
+                    .label("Send")
+                    .on_click(move |_: &ClickEvent, window, cx| {
+                        this_entity.update(cx, |c, cx| c.send_prompt(window, cx));
+                    });
+                h_flex()
+                    .w_full()
+                    .p_2()
+                    .gap_x_2()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .items_end()
+                    .child(div().flex_1().child(Input::new(&input)))
+                    .child(send_btn)
+            })
+        } else {
+            None
+        };
+
         // ── Permission modal overlay ───────────────────────────────────────
         let model_for_modal = self.model.clone();
         let maybe_modal = pending
@@ -225,7 +326,8 @@ impl Render for Center {
             .size_full()
             .bg(cx.theme().background)
             .child(header)
-            .child(body);
+            .child(body)
+            .when_some(composer_bar, |el, bar| el.child(bar));
 
         outer
             .child(content)
@@ -237,6 +339,33 @@ impl Render for Center {
 
 #[cfg(test)]
 mod tests {
+    use super::compose_command;
+    use bitrouter_gui_core::protocol::{Command, SessionId, Target};
+
+    #[test]
+    fn compose_command_focus_and_text_builds_session_prompt() {
+        let id = SessionId("s1".into());
+        let cmd = compose_command(Some(&id), "  hi  ");
+        match cmd {
+            Some(Command::SendPrompt { target: Target::Session { id }, text }) => {
+                assert_eq!(id.0, "s1");
+                assert_eq!(text, "hi"); // trimmed
+            }
+            other => panic!("expected Session SendPrompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compose_command_no_focus_is_none() {
+        assert!(compose_command(None, "hi").is_none());
+    }
+
+    #[test]
+    fn compose_command_blank_text_is_none() {
+        let id = SessionId("s1".into());
+        assert!(compose_command(Some(&id), "   ").is_none());
+    }
+
     use super::Center;
     use crate::app_model::AppModel;
     use bitrouter_gui_core::feed::MockFeed;
@@ -262,6 +391,22 @@ mod tests {
 
         let focused = model.read_with(cx, |m, _| m.state.focus.clone());
         assert!(focused.is_some(), "expected a focused session");
+
+        cx.update(|cx| {
+            let _ = cx.new(|cx| Center::new(model.clone(), cx));
+        });
+    }
+
+    /// Force the focused session into ACP mode so the composer branch builds and
+    /// renders without panic.
+    #[gpui::test]
+    fn center_acp_mode_builds_composer_without_panic(cx: &mut TestAppContext) {
+        use bitrouter_gui_core::protocol::RenderMode;
+        let model = cx.update(|cx| cx.new(|cx| AppModel::new(MockFeed::scenario(), cx)));
+        cx.run_until_parked();
+
+        let focused = model.read_with(cx, |m, _| m.state.focus.clone()).expect("focus");
+        model.update(cx, |m, _| m.set_render_mode(&focused, RenderMode::Acp));
 
         cx.update(|cx| {
             let _ = cx.new(|cx| Center::new(model.clone(), cx));

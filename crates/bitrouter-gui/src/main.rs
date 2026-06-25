@@ -27,7 +27,12 @@ fn main() {
             };
 
             if let Err(err) = cx.open_window(window_opts, |window, cx| {
-                let model = cx.new(|cx| AppModel::new(MockFeed::scenario(), cx));
+                // Real ACP feed by default; BITROUTER_GUI_MOCK=1 forces the scripted mock.
+                let model = if std::env::var("BITROUTER_GUI_MOCK").is_ok() {
+                    cx.new(|cx| AppModel::new(MockFeed::scenario(), cx))
+                } else {
+                    cx.new(|cx| AppModel::new(bitrouter_gui::acp::feed::AcpFeed::from_env(), cx))
+                };
                 let root_view = cx.new(|cx| Root::new(model, cx));
                 cx.new(|cx| ComponentRoot::new(root_view, window, cx))
             }) {

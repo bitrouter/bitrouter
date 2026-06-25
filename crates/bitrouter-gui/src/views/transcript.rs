@@ -4,6 +4,7 @@
 //! - `Message` → normal text block
 //! - `Thought` → dim, italic (muted_foreground)
 //! - `ToolCall` → title + status glyph, optional diff block
+//! - `UserPrompt` → right-aligned user bubble
 //!
 //! [`PermissionModal`] — overlay dialog for pending permission requests.
 
@@ -12,7 +13,7 @@ use bitrouter_gui_core::{
     state::{SessionView, TranscriptItem},
 };
 use gpui::{div, prelude::FluentBuilder as _, IntoElement, ParentElement, Styled};
-use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme, StyledExt};
+use gpui_component::{h_flex, scroll::ScrollableElement, v_flex, ActiveTheme, StyledExt};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ pub fn render_transcript<'a>(
         .transcript
         .iter()
         .map(|item| match item {
-            TranscriptItem::Message { text } => div()
+            TranscriptItem::Message { text, .. } => div()
                 .w_full()
                 .px_3()
                 .py_1()
@@ -49,7 +50,7 @@ pub fn render_transcript<'a>(
                 .child(text.clone())
                 .into_any_element(),
 
-            TranscriptItem::Thought { text } => div()
+            TranscriptItem::Thought { text, .. } => div()
                 .w_full()
                 .px_3()
                 .py_1()
@@ -63,6 +64,7 @@ pub fn render_transcript<'a>(
                 title,
                 status,
                 diff,
+                ..
             } => {
                 let glyph = tool_status_glyph(*status);
                 let title_row = div()
@@ -97,6 +99,23 @@ pub fn render_transcript<'a>(
                     .when_some(diff_block, |el, block| el.child(block))
                     .into_any_element()
             }
+
+            TranscriptItem::UserPrompt { text } => h_flex()
+                .w_full()
+                .px_3()
+                .py_1()
+                .justify_end()
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded(cx.theme().radius)
+                        .bg(cx.theme().secondary)
+                        .text_sm()
+                        .text_color(cx.theme().foreground)
+                        .child(text.clone()),
+                )
+                .into_any_element(),
         })
         .collect();
 
