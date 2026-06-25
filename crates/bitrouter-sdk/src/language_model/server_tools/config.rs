@@ -55,4 +55,8 @@ pub struct ServerToolsConfig {
     /// Multi-model deliberation (Fusion). When set, the `bitrouter:fusion`
     /// server tool and the `bitrouter/fusion` model alias are enabled.
     pub fusion: Option<super::fusion::config::FusionSettings>,
+    /// Built-in `web_search` server tool (BYOK). When set, the
+    /// `bitrouter:web_search` tool is enabled, served by the configured search
+    /// backends. Advertised per-request only when the caller declares it.
+    pub web_search: Option<super::web_search::config::WebSearchSettings>,
 }

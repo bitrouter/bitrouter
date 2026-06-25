@@ -28,6 +28,8 @@ use crate::plugin::PluginId;
 pub const ADVISOR_TOOL: &str = "advisor";
 /// Router-tool name the model calls to delegate a task to a worker model.
 pub const SUBAGENT_TOOL: &str = "subagent";
+/// Router-tool name the model calls to search the web.
+pub const WEB_SEARCH_TOOL: &str = "web_search";
 
 /// Plugin id under which [`ServerToolDeclarations`] is stashed on the request
 /// context by the pre-request hook, for the toolsets to read back.
@@ -48,6 +50,18 @@ pub struct AdvisorConfig {
     /// form; forwarded to the nested completion (see [`forwarded_tools`]).
     #[serde(default)]
     pub tools: Vec<serde_json::Value>,
+}
+
+/// Per-request Web-search config. Both fields are optional overrides: `backend`
+/// pins one of the configured search backends by name (else the default), and
+/// `max_results` lowers the per-call result cap. The query itself rides the
+/// tool call's arguments, not the declaration.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WebSearchDeclaration {
+    /// Pin a configured backend by name (else the deployment default).
+    pub backend: Option<String>,
+    /// Cap on results for this request (else the deployment default).
+    pub max_results: Option<u32>,
 }
 
 /// Per-request Sub-agent config (worker model + instructions + tools).
@@ -72,6 +86,8 @@ pub struct ServerToolDeclarations {
     pub subagent: Option<SubAgentConfig>,
     /// The fusion declaration, if any (already resolved against `parent_model`).
     pub fusion: Option<FusionConfig>,
+    /// The web-search declaration, if any.
+    pub web_search: Option<WebSearchDeclaration>,
     /// The outer request model — the default nested model.
     pub parent_model: String,
 }
@@ -108,6 +124,12 @@ impl ServerToolDeclarations {
                         tools: array_field(args, "tools"),
                     });
                 }
+                Some(Kind::WebSearch) => {
+                    decls.web_search = Some(WebSearchDeclaration {
+                        backend: str_field(args, "backend"),
+                        max_results: u32_field(args, "max_results"),
+                    });
+                }
                 None => {}
             }
         }
@@ -123,23 +145,46 @@ impl ServerToolDeclarations {
 
     /// Whether the request declared no server tool.
     pub fn is_empty(&self) -> bool {
-        self.advisor.is_none() && self.subagent.is_none() && self.fusion.is_none()
+        self.advisor.is_none()
+            && self.subagent.is_none()
+            && self.fusion.is_none()
+            && self.web_search.is_none()
     }
 }
 
 enum Kind {
     Advisor,
     SubAgent,
+    WebSearch,
 }
 
-/// Recognise an advisor / sub-agent declaration by tool name: the bare name or a
-/// namespaced form whose final `:`/`.` segment is the name.
+/// Recognise an advisor / sub-agent / web-search declaration by tool name: the
+/// bare name or a namespaced form whose final `:`/`.` segment is the name.
+///
+/// `web_search` is the exception. Unlike the bitrouter-invented
+/// `advisor` / `subagent` / `fusion` names, `web_search` is also a real
+/// *native* tool name on several providers (e.g. OpenAI's Responses
+/// `web_search`). Matching it bare would hijack a caller's genuine native tool,
+/// so it is recognised only under the explicit `bitrouter` namespace
+/// (`{"type":"bitrouter:web_search"}`, the documented declaration form); a bare
+/// or foreign-namespaced `web_search` is left untouched for the upstream.
 fn server_tool_kind(name: &str) -> Option<Kind> {
     match name.rsplit([':', '.']).next().unwrap_or(name) {
         ADVISOR_TOOL => Some(Kind::Advisor),
         SUBAGENT_TOOL => Some(Kind::SubAgent),
+        WEB_SEARCH_TOOL if is_bitrouter_namespaced(name) => Some(Kind::WebSearch),
         _ => None,
     }
+}
+
+/// Whether `name` carries the explicit `bitrouter:` / `bitrouter.` namespace —
+/// the documented `{"type":"bitrouter:<tool>"}` declaration form, as opposed to
+/// a bare or foreign-namespaced tool a provider defines itself. The inbound
+/// decoders keep the namespace in the canonical tool `name` (a typeless tool
+/// defaults its `name` to the full `type`), so the prefix is visible here.
+fn is_bitrouter_namespaced(name: &str) -> bool {
+    name.split_once([':', '.'])
+        .is_some_and(|(namespace, _)| namespace == "bitrouter")
 }
 
 /// Read a string field from a config object, tolerating an OpenRouter-style
@@ -149,6 +194,15 @@ fn str_field(args: &serde_json::Value, key: &str) -> Option<String> {
         .or_else(|| args.get("parameters").and_then(|p| p.get(key)))
         .and_then(|v| v.as_str())
         .map(str::to_string)
+}
+
+/// Read a `u32` field from a config object (same `parameters`-wrapper tolerance
+/// as [`str_field`]).
+fn u32_field(args: &serde_json::Value, key: &str) -> Option<u32> {
+    args.get(key)
+        .or_else(|| args.get("parameters").and_then(|p| p.get(key)))
+        .and_then(|v| v.as_u64())
+        .map(|n| n.min(u32::MAX as u64) as u32)
 }
 
 /// Read an array field from a config object (same `parameters`-wrapper tolerance
@@ -274,6 +328,43 @@ mod tests {
     }
 
     #[test]
+    fn parses_web_search_declaration() {
+        let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![provider_tool(
+            "bitrouter:web_search",
+            serde_json::json!({ "backend": "exa", "max_results": 3 }),
+        )]));
+        assert!(!decls.is_empty());
+        let ws = decls.web_search.expect("web_search parsed");
+        assert_eq!(ws.backend.as_deref(), Some("exa"));
+        assert_eq!(ws.max_results, Some(3));
+    }
+
+    #[test]
+    fn bare_web_search_is_a_native_tool_not_a_declaration() {
+        // A provider's own native `web_search` (no `bitrouter` namespace) must
+        // NOT be taken over by the built-in tool — otherwise the caller silently
+        // loses their model's native search.
+        let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![provider_tool(
+            "web_search",
+            serde_json::json!({}),
+        )]));
+        assert!(decls.web_search.is_none());
+        assert!(decls.is_empty());
+    }
+
+    #[test]
+    fn foreign_namespaced_web_search_is_not_a_declaration() {
+        // Only the explicit `bitrouter` namespace declares the built-in tool;
+        // another provider's namespaced `web_search` is left for the upstream.
+        let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![provider_tool(
+            "openai:web_search",
+            serde_json::json!({}),
+        )]));
+        assert!(decls.web_search.is_none());
+        assert!(decls.is_empty());
+    }
+
+    #[test]
     fn ignores_function_and_unrelated_tools() {
         let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![
             Tool::Function {
@@ -283,7 +374,7 @@ mod tests {
                 strict: None,
                 provider_metadata: ProviderMetadata::new(),
             },
-            provider_tool("web_search", serde_json::json!({})),
+            provider_tool("code_interpreter", serde_json::json!({})),
         ]));
         assert!(decls.is_empty());
     }
