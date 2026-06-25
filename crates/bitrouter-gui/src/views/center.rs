@@ -267,12 +267,13 @@ impl Render for Center {
         let composer_bar = if matches!(render_mode, RenderMode::Acp) {
             // Lazily create the input + its PressEnter subscription.
             if self.composer.is_none() {
-                let placeholder = format!("Message {name}…");
+                // Static placeholder: the composer is shared across focus, so a
+                // per-agent name would freeze to the first-focused agent.
                 let input = cx.new(|cx| {
                     InputState::new(window, cx)
                         .multi_line(true)
                         .auto_grow(1, 6)
-                        .placeholder(placeholder)
+                        .placeholder("Message the focused agent…")
                 });
                 let sub = cx.subscribe_in(
                     &input,
