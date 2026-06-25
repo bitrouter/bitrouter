@@ -810,7 +810,7 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
             tracing::warn!(
                 backend,
                 env_var,
-                "web_search backend has no API key (set the env var or `api_key`); skipping"
+                "server-tool backend has no API key (set the env var or `api_key`); skipping"
             );
             None
         }
