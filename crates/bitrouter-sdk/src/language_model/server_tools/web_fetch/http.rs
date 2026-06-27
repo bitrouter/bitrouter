@@ -11,17 +11,22 @@ use serde_json::{Value, json};
 use super::backend::{CHARS_PER_TOKEN, FetchOptions, WebFetchBackend, WebFetchResult};
 use crate::language_model::server_tools::toolset::ToolContext;
 
-/// Exa's `/contents` caps `text.maxCharacters` at 10000.
+/// Exa's `/contents` caps `text.maxCharacters` at 10000 (per the API schema's
+/// documented maximum). See <https://docs.exa.ai/reference/get-contents>.
 const EXA_MAX_CHARACTERS: u64 = 10_000;
 
-/// The HTTP extraction providers BitRouter speaks natively.
+/// The HTTP extraction providers BitRouter speaks natively. Each request/response
+/// shape below is mapped from the provider's official extract-endpoint docs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HttpFetchEngine {
     /// exa.ai — `POST /contents`, `x-api-key`, content under `results[].text`.
+    /// Docs: <https://docs.exa.ai/reference/get-contents>.
     Exa,
     /// firecrawl.dev — `POST /v2/scrape`, bearer, content under `data.markdown`.
+    /// Docs: <https://docs.firecrawl.dev/api-reference/endpoint/scrape>.
     Firecrawl,
     /// tavily.com — `POST /extract`, bearer, content under `results[].raw_content`.
+    /// Docs: <https://docs.tavily.com/documentation/api-reference/endpoint/extract>.
     Tavily,
 }
 
@@ -112,7 +117,7 @@ impl HttpFetchBackend {
             HttpFetchEngine::Exa => {
                 let first = first_result(body);
                 WebFetchResult {
-                    backend: "exa".to_string(),
+                    backend: self.engine.name().to_string(),
                     url: first
                         .and_then(|v| str_at(v, "url"))
                         .unwrap_or_else(|| requested_url.to_string()),
@@ -125,7 +130,7 @@ impl HttpFetchBackend {
                 let data = body.get("data");
                 let meta = data.and_then(|d| d.get("metadata"));
                 WebFetchResult {
-                    backend: "firecrawl".to_string(),
+                    backend: self.engine.name().to_string(),
                     url: meta
                         .and_then(|m| str_at(m, "url"))
                         .or_else(|| meta.and_then(|m| str_at(m, "sourceURL")))
@@ -138,7 +143,7 @@ impl HttpFetchBackend {
             HttpFetchEngine::Tavily => {
                 let first = first_result(body);
                 WebFetchResult {
-                    backend: "tavily".to_string(),
+                    backend: self.engine.name().to_string(),
                     url: first
                         .and_then(|v| str_at(v, "url"))
                         .unwrap_or_else(|| requested_url.to_string()),
@@ -215,11 +220,13 @@ fn str_at(v: &Value, key: &str) -> Option<String> {
 /// so the cap is always enforced here too.
 fn truncate_content(content: String, opts: &FetchOptions) -> String {
     let max_chars = opts.max_content_tokens as usize * CHARS_PER_TOKEN as usize;
-    if content.chars().count() > max_chars {
-        content.chars().take(max_chars).collect()
-    } else {
-        content
+    // Byte length is an upper bound on the char count, so content that fits the
+    // budget in bytes also fits in chars — skip the full char scan for the common
+    // in-budget case (only over-budget content pays for the counting pass).
+    if content.len() <= max_chars {
+        return content;
     }
+    content.chars().take(max_chars).collect()
 }
 
 #[cfg(test)]
