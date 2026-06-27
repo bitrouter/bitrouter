@@ -35,7 +35,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use agent_client_protocol_schema::v1::{
-    ContentBlock, PromptRequest, PromptResponse, SessionId, TextContent,
+    ContentBlock, PromptRequest, PromptResponse, SessionId, SessionUpdate, TextContent,
 };
 use async_trait::async_trait;
 use bitrouter_sdk::acp::{
@@ -255,6 +255,14 @@ impl Session {
     /// independent stream from the current point onward.
     pub fn updates(&self) -> Pin<Box<dyn Stream<Item = SessionUpdateKind> + Send>> {
         self.conn.subscribe_updates()
+    }
+
+    /// Stream of **raw** ACP `session/update` notifications, untranslated. Each
+    /// call yields an independent stream from the current point onward. The
+    /// down-facing `SessionAgent` uses this to forward upstream updates to its
+    /// manager verbatim.
+    pub fn raw_updates(&self) -> Pin<Box<dyn Stream<Item = SessionUpdate> + Send>> {
+        self.conn.subscribe_raw_updates()
     }
 
     /// Stream of pending permission requests. Single-consumer: the first call

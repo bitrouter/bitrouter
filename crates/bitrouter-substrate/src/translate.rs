@@ -111,6 +111,31 @@ pub fn select_option(
     }
 }
 
+/// Inverse of [`select_option`]: map a manager's `RequestPermissionOutcome`
+/// back to a substrate [`PermissionOutcome`] using the option set originally
+/// offered.
+///
+/// `Cancelled` and an unrecognized option id both map to
+/// [`PermissionOutcome::Deny`] (the safe default). A recognized id maps by its
+/// `kind`; `RejectOnce` / `RejectAlways` collapse to `Deny`.
+pub fn outcome_from_selection(
+    outcome: &RequestPermissionOutcome,
+    options: &[PermissionOption],
+) -> PermissionOutcome {
+    let RequestPermissionOutcome::Selected(selected) = outcome else {
+        return PermissionOutcome::Deny;
+    };
+    let kind = options
+        .iter()
+        .find(|o| o.option_id == selected.option_id)
+        .map(|o| o.kind);
+    match kind {
+        Some(PermissionOptionKind::AllowOnce) => PermissionOutcome::AllowOnce,
+        Some(PermissionOptionKind::AllowAlways) => PermissionOutcome::AllowAlways,
+        _ => PermissionOutcome::Deny,
+    }
+}
+
 fn block_text(b: &ContentBlock) -> String {
     match b {
         ContentBlock::Text(t) => t.text.clone(),
@@ -138,7 +163,8 @@ pub fn render_diff(content: &[ToolCallContent]) -> Option<String> {
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{
-        ContentChunk, Diff, MessageId, PermissionOptionId, TextContent, ToolCall, ToolCallId,
+        ContentChunk, Diff, MessageId, PermissionOptionId, SelectedPermissionOutcome, TextContent,
+        ToolCall, ToolCallId,
     };
 
     fn chunk(text: &str, mid: Option<&str>) -> ContentChunk {
@@ -209,5 +235,42 @@ mod tests {
             RequestPermissionOutcome::Selected(s) => assert_eq!(&*s.option_id.0, "r1"),
             _ => panic!("expected Selected"),
         }
+    }
+
+    #[test]
+    fn outcome_from_selection_maps_kind_cancel_and_unknown() {
+        let opts = vec![
+            opt(PermissionOptionKind::AllowOnce, "a1"),
+            opt(PermissionOptionKind::AllowAlways, "a2"),
+            opt(PermissionOptionKind::RejectOnce, "r1"),
+        ];
+        let sel = |id: &str| {
+            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                PermissionOptionId::new(id),
+            ))
+        };
+        assert_eq!(
+            outcome_from_selection(&sel("a1"), &opts),
+            PermissionOutcome::AllowOnce
+        );
+        assert_eq!(
+            outcome_from_selection(&sel("a2"), &opts),
+            PermissionOutcome::AllowAlways
+        );
+        // Reject kind → Deny.
+        assert_eq!(
+            outcome_from_selection(&sel("r1"), &opts),
+            PermissionOutcome::Deny
+        );
+        // Unknown id → Deny.
+        assert_eq!(
+            outcome_from_selection(&sel("nope"), &opts),
+            PermissionOutcome::Deny
+        );
+        // Cancelled → Deny.
+        assert_eq!(
+            outcome_from_selection(&RequestPermissionOutcome::Cancelled, &opts),
+            PermissionOutcome::Deny
+        );
     }
 }

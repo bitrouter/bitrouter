@@ -12,8 +12,13 @@
 //!
 //! ## Callback plane
 //!
-//! - `session/update` notifications → [`translate`] → a `tokio` broadcast of
-//!   [`SessionUpdateKind`], exposed as a `Stream` by [`UpstreamConnection::subscribe_updates`].
+//! - `session/update` notifications fan out on two `tokio` broadcasts from the
+//!   same handler: the **translated** [`SessionUpdateKind`] stream (for the GUI /
+//!   telemetry consumers), exposed by [`UpstreamConnection::subscribe_updates`],
+//!   and the **raw** ACP [`SessionUpdate`] stream, exposed by
+//!   [`UpstreamConnection::subscribe_raw_updates`]. The raw stream exists so the
+//!   down-facing `SessionAgent` can forward each upstream update to its manager
+//!   verbatim, with no lossy reverse-mapping.
 //! - upstream `session/request_permission` requests → a [`PendingPermission`]
 //!   (summary + diff + resolver) pushed onto a `futures` mpsc, exposed by
 //!   [`UpstreamConnection::subscribe_permissions`].
@@ -42,8 +47,9 @@ use std::collections::HashMap;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, EnvVariable, InitializeRequest, McpServer, McpServerStdio,
-    NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
-    RequestPermissionResponse, SessionId, SessionNotification, TextContent,
+    NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionRequest,
+    RequestPermissionResponse, SessionId, SessionNotification, SessionUpdate, TextContent,
+    ToolCallUpdate,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder};
 use futures::channel::{mpsc, oneshot};
@@ -80,6 +86,14 @@ pub struct PendingPermission {
     pub summary: String,
     /// Rendered diff for the tool call, if it carries one.
     pub diff: Option<String>,
+    /// The verbatim tool-call payload from the upstream `request_permission`.
+    /// The down-facing `SessionAgent` re-issues it to its manager unchanged.
+    pub tool_call: ToolCallUpdate,
+    /// The verbatim permission options from the upstream `request_permission`.
+    /// Carried so a consumer that re-issues the request (the down-facing agent)
+    /// forwards the same options and can map the manager's chosen `optionId`
+    /// back to a [`PermissionOutcome`] by the option's `kind`.
+    pub options: Vec<PermissionOption>,
     resolver: oneshot::Sender<PermissionOutcome>,
 }
 
@@ -118,6 +132,10 @@ pub struct UpstreamConnection {
     cmd_tx: mpsc::UnboundedSender<Command>,
     /// Source of [`SessionUpdateKind`]s; cloned per `subscribe_updates`.
     updates_tx: broadcast::Sender<SessionUpdateKind>,
+    /// Source of raw ACP [`SessionUpdate`]s; cloned per `subscribe_raw_updates`.
+    /// Fed from the same `session/update` handler as `updates_tx`, so the
+    /// down-facing agent can forward updates to its manager verbatim.
+    raw_updates_tx: broadcast::Sender<SessionUpdate>,
     /// Single permissions receiver, handed out once by `subscribe_permissions`.
     permissions_rx: Mutex<Option<mpsc::UnboundedReceiver<PendingPermission>>>,
     /// Keeps the driver thread alive for the connection's lifetime.
@@ -163,10 +181,12 @@ impl UpstreamConnection {
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded::<Command>();
         let (updates_tx, _) = broadcast::channel::<SessionUpdateKind>(UPDATE_CHANNEL_CAPACITY);
+        let (raw_updates_tx, _) = broadcast::channel::<SessionUpdate>(UPDATE_CHANNEL_CAPACITY);
         let (perm_tx, perm_rx) = mpsc::unbounded::<PendingPermission>();
         let (handshake_tx, handshake_rx) = oneshot::channel::<anyhow::Result<Handshake>>();
 
         let updates_for_thread = updates_tx.clone();
+        let raw_updates_for_thread = raw_updates_tx.clone();
         let thread = std::thread::Builder::new()
             .name("bitrouter-substrate-up".to_string())
             .spawn(move || {
@@ -186,6 +206,7 @@ impl UpstreamConnection {
                     session_cwd,
                     cmd_rx,
                     updates_for_thread,
+                    raw_updates_for_thread,
                     perm_tx,
                     handshake_tx,
                 ));
@@ -200,6 +221,7 @@ impl UpstreamConnection {
             agent_session_id: handshake.agent_session_id,
             cmd_tx,
             updates_tx,
+            raw_updates_tx,
             permissions_rx: Mutex::new(Some(perm_rx)),
             _thread: thread,
         })
@@ -232,6 +254,24 @@ impl UpstreamConnection {
         // seeing an error item in the stream.
         Box::pin(
             BroadcastStream::new(self.updates_tx.subscribe()).filter_map(|r| async move { r.ok() }),
+        )
+    }
+
+    /// Subscribe to the stream of **raw** ACP `session/update` notifications,
+    /// untranslated. Each call yields an independent stream from the current
+    /// point onward. The down-facing `SessionAgent` uses this to forward each
+    /// upstream update to its manager verbatim (no lossy reverse-mapping).
+    ///
+    /// **Lossy under lag**, exactly like [`subscribe_updates`](Self::subscribe_updates):
+    /// rides the same bounded [`UPDATE_CHANNEL_CAPACITY`] broadcast and silently
+    /// skips ahead (filters the `Lagged` marker) for a subscriber that falls
+    /// behind.
+    pub fn subscribe_raw_updates(
+        &self,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = SessionUpdate> + Send>> {
+        Box::pin(
+            BroadcastStream::new(self.raw_updates_tx.subscribe())
+                .filter_map(|r| async move { r.ok() }),
         )
     }
 
@@ -292,10 +332,12 @@ async fn drive(
     session_cwd: PathBuf,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     updates_tx: broadcast::Sender<SessionUpdateKind>,
+    raw_updates_tx: broadcast::Sender<SessionUpdate>,
     perm_tx: mpsc::UnboundedSender<PendingPermission>,
     handshake_tx: oneshot::Sender<anyhow::Result<Handshake>>,
 ) {
     let notif_updates = updates_tx.clone();
+    let notif_raw_updates = raw_updates_tx.clone();
     let handler_perm_tx = perm_tx.clone();
 
     // The handshake oneshot is consumed exactly once. The `connect_with`
@@ -313,8 +355,14 @@ async fn drive(
         .on_receive_notification(
             move |notification: SessionNotification, _cx| {
                 let notif_updates = notif_updates.clone();
+                let notif_raw_updates = notif_raw_updates.clone();
                 async move {
-                    if let Some(update) = translate(notification.update) {
+                    let raw = notification.update;
+                    // Forward the raw ACP update verbatim (down-facing agent), and
+                    // — when it maps to one — the translated kind (GUI/telemetry).
+                    // A `send` error just means no subscriber is attached yet.
+                    let _ = notif_raw_updates.send(raw.clone());
+                    if let Some(update) = translate(raw) {
                         let _ = notif_updates.send(update);
                     }
                     Ok(())
@@ -348,10 +396,18 @@ async fn drive(
                     // `PendingPermission` without resolving, the sender drops and
                     // the receiver yields `Err`, which we map to `Deny`.
                     let (item_tx, item_rx) = oneshot::channel::<PermissionOutcome>();
+                    // `options` is needed both by the emitted item (so a consumer
+                    // can re-issue the request and map the chosen option back) and
+                    // by the parked task below (to `select_option` onto the chosen
+                    // id). Clone once for the parked task; move the rest into the
+                    // item.
+                    let options = request.options.clone();
                     let pending_item = PendingPermission {
                         request_id,
                         summary,
                         diff,
+                        tool_call: request.tool_call,
+                        options: request.options,
                         resolver: item_tx,
                     };
                     // If no one is listening on the permissions stream the item
@@ -360,7 +416,6 @@ async fn drive(
 
                     // Park the wait + respond OUTSIDE the dispatch loop so other
                     // messages keep flowing while the decision is pending.
-                    let options = request.options.clone();
                     connection.spawn(async move {
                         // Default to Deny if the resolver is dropped (the consumer
                         // dropped the `PendingPermission`) so the upstream never
@@ -610,11 +665,11 @@ mod tests {
         // The echoed update proves the client answered with the reject option.
         let mut saw_reject = false;
         for _ in 0..4 {
-            if let Some(ev) = updates.next().await {
-                if format!("{ev:?}").contains("chose:rej") {
-                    saw_reject = true;
-                    break;
-                }
+            if let Some(ev) = updates.next().await
+                && format!("{ev:?}").contains("chose:rej")
+            {
+                saw_reject = true;
+                break;
             }
         }
         assert!(
