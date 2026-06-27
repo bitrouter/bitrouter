@@ -25,20 +25,22 @@ use anyhow::{Result, anyhow};
 use tokio::sync::{mpsc, oneshot};
 
 /// A job sent from `submit`/`try_submit` to the worker.
-struct Job {
+struct Job<T> {
     label: String,
-    reply: oneshot::Sender<Result<()>>,
+    reply: oneshot::Sender<Result<T>>,
 }
 
 /// Per-session single-writer turn queue.
 ///
-/// Generic over the turn-runner closure so it is unit-testable without a live
-/// upstream pipeline.
-pub struct TurnController {
-    tx: mpsc::Sender<Job>,
+/// Generic over the turn output `T` (and over the turn-runner closure) so it is
+/// unit-testable without a live upstream pipeline. The engine instantiates it as
+/// `TurnController<PromptResponse>` so each turn yields the upstream's typed
+/// prompt result.
+pub struct TurnController<T> {
+    tx: mpsc::Sender<Job<T>>,
 }
 
-impl TurnController {
+impl<T: Send + 'static> TurnController<T> {
     /// Create a new controller.
     ///
     /// - `bound`: maximum number of turns that may be queued at once.
@@ -47,9 +49,9 @@ impl TurnController {
     pub fn new<F, Fut>(bound: usize, run_turn: F) -> Self
     where
         F: Fn(String) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+        Fut: std::future::Future<Output = Result<T>> + Send + 'static,
     {
-        let (tx, mut rx) = mpsc::channel::<Job>(bound);
+        let (tx, mut rx) = mpsc::channel::<Job<T>>(bound);
 
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
@@ -67,7 +69,7 @@ impl TurnController {
     /// On a full channel this does **not** panic; it returns a receiver that
     /// immediately resolves to `Err("turn queue full")` so the caller can still
     /// `.await` the handle uniformly.
-    pub fn submit(&self, label: String) -> oneshot::Receiver<Result<()>> {
+    pub fn submit(&self, label: String) -> oneshot::Receiver<Result<T>> {
         match self.enqueue(label) {
             Ok(rx) => rx,
             Err(_full) => {
@@ -82,13 +84,13 @@ impl TurnController {
     ///
     /// Use this for backpressure: the engine can report the rejection to the
     /// client rather than silently queuing without bound.
-    pub fn try_submit(&self, label: String) -> Result<oneshot::Receiver<Result<()>>> {
+    pub fn try_submit(&self, label: String) -> Result<oneshot::Receiver<Result<T>>> {
         self.enqueue(label)
     }
 
     // --- internal ---
 
-    fn enqueue(&self, label: String) -> Result<oneshot::Receiver<Result<()>>> {
+    fn enqueue(&self, label: String) -> Result<oneshot::Receiver<Result<T>>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let job = Job {
             label,
