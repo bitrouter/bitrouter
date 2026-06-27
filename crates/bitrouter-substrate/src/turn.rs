@@ -14,17 +14,14 @@
 //!
 //! # Cancellation
 //!
-//! [`TurnController::cancel`] sets an `AtomicBool` flag that the worker checks
-//! between turns: any turns still in the queue are drained and their reply
-//! channels are resolved with `Err("cancelled")`.  The flag is also exposed via
-//! [`TurnController::cancel_flag`] so the engine can pass it into the
-//! `run_turn` closure for in-flight upstream cancellation via `session/cancel`.
+//! The controller is pure FIFO serialization and does **not** itself cancel.
+//! Turn cancellation is handled at the upstream level: the engine's
+//! `Session::cancel` calls ACP `session/cancel` on the upstream connection,
+//! which makes the in-flight turn complete cooperatively (`StopReason::Cancelled`).
+//! v1 semantic: cancel affects the *active* turn (via upstream), not the queued
+//! backlog — queued turns proceed normally once the active one finishes.
 
 use anyhow::{Result, anyhow};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 use tokio::sync::{mpsc, oneshot};
 
 /// A job sent from `submit`/`try_submit` to the worker.
@@ -39,11 +36,6 @@ struct Job {
 /// upstream pipeline.
 pub struct TurnController {
     tx: mpsc::Sender<Job>,
-    /// Shared cancellation flag.  `cancel()` sets this; the worker checks it
-    /// between turns and drains remaining queued jobs with `Err("cancelled")`.
-    /// The engine can pass `Arc::clone(&cancel_flag)` into `run_turn` to
-    /// propagate in-flight upstream cancellation via `session/cancel`.
-    cancel_flag: Arc<AtomicBool>,
 }
 
 impl TurnController {
@@ -58,28 +50,16 @@ impl TurnController {
         Fut: std::future::Future<Output = Result<()>> + Send + 'static,
     {
         let (tx, mut rx) = mpsc::channel::<Job>(bound);
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        let flag = cancel_flag.clone();
 
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                if flag.load(Ordering::Acquire) {
-                    // Cancellation was requested: reject this job and drain
-                    // the rest of the queue.
-                    let _ = job.reply.send(Err(anyhow!("cancelled")));
-                    while let Ok(pending) = rx.try_recv() {
-                        let _ = pending.reply.send(Err(anyhow!("cancelled")));
-                    }
-                    break;
-                }
-
                 let result = run_turn(job.label).await;
                 // Ignore send error: the caller may have dropped the receiver.
                 let _ = job.reply.send(result);
             }
         });
 
-        Self { tx, cancel_flag }
+        Self { tx }
     }
 
     /// Enqueue a turn.
@@ -104,24 +84,6 @@ impl TurnController {
     /// client rather than silently queuing without bound.
     pub fn try_submit(&self, label: String) -> Result<oneshot::Receiver<Result<()>>> {
         self.enqueue(label)
-    }
-
-    /// Signal cancellation.
-    ///
-    /// Sets the shared `AtomicBool` flag.  The worker checks this flag between
-    /// turns and will drain remaining queued jobs with `Err("cancelled")`.
-    ///
-    /// The engine should also pass `Arc::clone` of the flag (obtained via
-    /// [`TurnController::cancel_flag`]) into `run_turn` so the in-flight turn's
-    /// upstream `session/cancel` call can be triggered while it is running.
-    pub fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::Release);
-    }
-
-    /// Expose the cancellation flag so the engine can wire in-flight upstream
-    /// cancellation (`session/cancel`) inside `run_turn`.
-    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
-        self.cancel_flag.clone()
     }
 
     // --- internal ---
@@ -179,33 +141,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_drains_pending_turns() {
-        use std::sync::{Arc, Mutex};
-        // Slow runner: yields many times so that A is still in flight when we cancel.
-        let started = Arc::new(Mutex::new(false));
-        let started2 = started.clone();
-        let c = TurnController::new(4, move |_label: String| {
-            let s = started2.clone();
-            async move {
-                *s.lock().unwrap() = true;
-                // Yield so the test can cancel while A is running.
-                for _ in 0..10 {
-                    tokio::task::yield_now().await;
-                }
-                Ok::<(), anyhow::Error>(())
-            }
-        });
-        let _h_a = c.submit("A".into());
-        // Let the worker pick up A.
-        tokio::task::yield_now().await;
-        let h_b = c.submit("B".into());
-        c.cancel();
-        // B should resolve to an error (cancelled or queue-full — either means rejected).
-        let result = h_b.await.unwrap();
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn submit_on_full_queue_returns_err_receiver() {
         // bound=1; A occupies worker, B fills the single queue slot,
         // C submitted via submit() (not try_submit) must return an Err receiver.
@@ -218,5 +153,25 @@ mod tests {
         let c_rx = c.submit("C".into()); // full — must not panic
         let result = c_rx.await.unwrap();
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn controller_accepts_turns_after_one_completes() {
+        // Guards that the worker survives across turns: submit A, await it,
+        // then submit B, await it. The old `break`-on-cancel worker would have
+        // been fine here, but a worker that exits on any signal would not be.
+        use std::sync::{Arc, Mutex};
+        let order = Arc::new(Mutex::new(Vec::<String>::new()));
+        let o = order.clone();
+        let c = TurnController::new(4, move |label: String| {
+            let o = o.clone();
+            async move {
+                o.lock().unwrap().push(label);
+                Ok::<(), anyhow::Error>(())
+            }
+        });
+        c.submit("A".into()).await.unwrap().unwrap();
+        c.submit("B".into()).await.unwrap().unwrap();
+        assert_eq!(*order.lock().unwrap(), vec!["A", "B"]);
     }
 }
