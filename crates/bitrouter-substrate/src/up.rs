@@ -37,9 +37,11 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use std::collections::HashMap;
+
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, McpServer, McpServerStdio,
+    CancelNotification, ContentBlock, EnvVariable, InitializeRequest, McpServer, McpServerStdio,
     NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
     RequestPermissionResponse, SessionId, SessionNotification, TextContent,
 };
@@ -122,6 +124,27 @@ pub struct UpstreamConnection {
     _thread: std::thread::JoinHandle<()>,
 }
 
+/// Build an [`AcpAgent`] that spawns `command args` with `env` applied to the
+/// child process. Shared by [`UpstreamConnection::spawn`] and [`health_check`]
+/// so both spawn paths pass the configured agent environment identically —
+/// `AcpAgent::spawn_process` forwards each [`EnvVariable`] to the child via
+/// `Command::env`.
+fn build_agent(command: &str, args: &[String], env: &HashMap<String, String>) -> AcpAgent {
+    let name = std::path::Path::new(command)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("agent")
+        .to_string();
+    let env_vars: Vec<EnvVariable> = env
+        .iter()
+        .map(|(k, v)| EnvVariable::new(k.clone(), v.clone()))
+        .collect();
+    let server = McpServerStdio::new(name, command)
+        .args(args.to_vec())
+        .env(env_vars);
+    AcpAgent::new(McpServer::Stdio(server))
+}
+
 impl UpstreamConnection {
     /// Spawn the agent process, connect as an ACP `Client`, and run
     /// `initialize` + `session/new`. Returns once the handshake completes and
@@ -129,17 +152,12 @@ impl UpstreamConnection {
     pub async fn spawn(
         command: &str,
         args: &[String],
+        env: &HashMap<String, String>,
         cwd: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         // `AcpAgent::spawn_process` does not set the child's working directory;
         // ACP carries the session cwd at the protocol level via `NewSessionRequest`.
-        let name = std::path::Path::new(command)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("agent")
-            .to_string();
-        let server = McpServerStdio::new(name, command).args(args.to_vec());
-        let agent = AcpAgent::new(McpServer::Stdio(server));
+        let agent = build_agent(command, args, env);
         let session_cwd =
             cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
 
@@ -439,10 +457,18 @@ const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// Spawn the agent, run ACP `initialize` only (no session), return elapsed on
 /// success or an error string. Used by `bitrouter agents check`.
 ///
+/// `env` is applied to the spawned child process (same plumbing as
+/// [`UpstreamConnection::spawn`]) so an agent that needs API-key vars answers
+/// the health-check.
+///
 /// Tears the connection down (drops) immediately after `initialize` succeeds
 /// or after [`HEALTH_CHECK_TIMEOUT`] elapses.
-pub async fn health_check(command: &str, args: &[String]) -> Result<std::time::Duration, String> {
-    tokio::time::timeout(HEALTH_CHECK_TIMEOUT, health_check_inner(command, args))
+pub async fn health_check(
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<std::time::Duration, String> {
+    tokio::time::timeout(HEALTH_CHECK_TIMEOUT, health_check_inner(command, args, env))
         .await
         .unwrap_or_else(|_| {
             Err(format!(
@@ -451,14 +477,12 @@ pub async fn health_check(command: &str, args: &[String]) -> Result<std::time::D
         })
 }
 
-async fn health_check_inner(command: &str, args: &[String]) -> Result<std::time::Duration, String> {
-    let name = std::path::Path::new(command)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("agent")
-        .to_string();
-    let server = McpServerStdio::new(name, command).args(args.to_vec());
-    let agent = AcpAgent::new(McpServer::Stdio(server));
+async fn health_check_inner(
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<std::time::Duration, String> {
+    let agent = build_agent(command, args, env);
 
     let (result_tx, result_rx) =
         futures::channel::oneshot::channel::<Result<std::time::Duration, String>>();
@@ -523,9 +547,10 @@ mod tests {
               esac
             done
         "#;
-        let conn = UpstreamConnection::spawn("bash", &["-c".into(), script.into()], None)
-            .await
-            .expect("spawn");
+        let conn =
+            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new(), None)
+                .await
+                .expect("spawn");
         let usid = conn.acp_session_id().to_string();
         assert_eq!(usid, "u1");
         let mut updates = conn.subscribe_updates();
@@ -565,9 +590,10 @@ mod tests {
               esac
             done
         "#;
-        let conn = UpstreamConnection::spawn("bash", &["-c".into(), script.into()], None)
-            .await
-            .expect("spawn");
+        let conn =
+            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new(), None)
+                .await
+                .expect("spawn");
         let usid = conn.acp_session_id().to_string();
         let mut updates = conn.subscribe_updates();
         let mut perms = conn.subscribe_permissions();
@@ -613,7 +639,7 @@ mod tests {
               esac
             done
         "#;
-        let result = health_check("bash", &["-c".into(), script.into()]).await;
+        let result = health_check("bash", &["-c".into(), script.into()], &HashMap::new()).await;
         assert!(result.is_ok(), "expected Ok, got: {result:?}");
     }
 
@@ -631,7 +657,45 @@ mod tests {
               esac
             done
         "#;
-        let result = health_check("bash", &["-c".into(), script.into()]).await;
+        let result = health_check("bash", &["-c".into(), script.into()], &HashMap::new()).await;
         assert!(result.is_err(), "expected Err, got: {result:?}");
+    }
+
+    /// health_check: env vars reach the spawned child. The stub answers
+    /// `initialize` with success ONLY when `$HEALTHVAR` is set, otherwise it
+    /// returns a JSON-RPC error. Run twice: once with the var (expect Ok),
+    /// once with empty env (expect Err). Proves env plumbing end-to-end and
+    /// gives mixed success/failure coverage.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn health_check_passes_env_to_child() {
+        let script = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)
+                  if [ -n "$HEALTHVAR" ]; then
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id"
+                  else
+                    printf '{"jsonrpc":"2.0","id":"%s","error":{"code":-32000,"message":"HEALTHVAR unset"}}\n' "$id"
+                  fi;;
+              esac
+            done
+        "#;
+        let args = ["-c".to_string(), script.to_string()];
+
+        let mut env = HashMap::new();
+        env.insert("HEALTHVAR".to_string(), "1".to_string());
+        let with_env = health_check("bash", &args, &env).await;
+        assert!(
+            with_env.is_ok(),
+            "expected Ok with env set, got: {with_env:?}"
+        );
+
+        let without_env = health_check("bash", &args, &HashMap::new()).await;
+        assert!(
+            without_env.is_err(),
+            "expected Err without env, got: {without_env:?}"
+        );
     }
 }

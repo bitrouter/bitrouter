@@ -42,7 +42,7 @@ The SDK keeps its default dependency tree minimal — capabilities that pull wei
 | `server`       | axum, tower, tower-http               | The HTTP server, SSE handlers, admin endpoints                |
 | `config_file`  | serde-saphyr, `tokio::fs`             | YAML `bitrouter.yaml` loading                                 |
 | `mcp`          | rmcp                                  | The bundled `RmcpExecutor` for the `mcp` pipeline             |
-| `acp`          | `tokio` process / io-util             | The bundled `AcpStdioExecutor` for the `acp` pipeline         |
+| `acp`          | `tokio` process / io-util             | `ConfigAcpRoutingTable` for the pure-routing `acp` pipeline    |
 
 Without `mcp` / `acp`, the SDK still exposes those pipelines, hook traits, and transport enums — a consumer can plug in a custom `Executor` without pulling rmcp or the stdio bridge.
 

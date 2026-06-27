@@ -144,8 +144,8 @@ pub async fn check(config: &Config) -> Vec<CheckRow> {
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     for (id, cfg) in sorted {
         let outcome = match &cfg.transport {
-            AcpTransport::Stdio { command, args, .. } => {
-                bitrouter_substrate::up::health_check(command, args).await
+            AcpTransport::Stdio { command, args, env } => {
+                bitrouter_substrate::up::health_check(command, args, env).await
             }
         };
         out.push(CheckRow {
