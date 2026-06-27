@@ -20,7 +20,7 @@
 //!   down-facing `SessionAgent` can forward each upstream update to its manager
 //!   verbatim, with no lossy reverse-mapping.
 //! - upstream `session/request_permission` requests → a [`PendingPermission`]
-//!   (summary + diff + resolver) pushed onto a `futures` mpsc, exposed by
+//!   (raw tool-call + options + resolver) pushed onto a `futures` mpsc, exposed by
 //!   [`UpstreamConnection::subscribe_permissions`].
 //!
 //! ## Deadlock avoidance
@@ -57,9 +57,7 @@ use futures::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
-use crate::translate::{
-    PermissionOutcome, SessionUpdateKind, render_diff, select_option, translate,
-};
+use crate::translate::{PermissionOutcome, SessionUpdateKind, select_option, translate};
 
 /// Capacity of the broadcast channel that fans `session/update`-derived
 /// [`SessionUpdateKind`]s out to subscribers. Sized to absorb a streaming burst
@@ -67,8 +65,8 @@ use crate::translate::{
 /// `Lagged` skip, which [`UpstreamConnection::subscribe_updates`] filters out.
 const UPDATE_CHANNEL_CAPACITY: usize = 1024;
 
-/// A permission request awaiting a decision. Carries enough context to render a
-/// prompt plus a one-shot [`resolve`](PendingPermission::resolve) to answer it.
+/// A permission request awaiting a decision. Carries the raw tool-call payload
+/// and permission options plus a one-shot [`resolve`](PendingPermission::resolve) to answer it.
 ///
 /// There is exactly **one** resolver per request — the one carried here. A
 /// consumer that cannot answer should simply **drop** the `PendingPermission`:
@@ -82,10 +80,6 @@ const UPDATE_CHANNEL_CAPACITY: usize = 1024;
 pub struct PendingPermission {
     /// Id we minted for this request; stable for the life of the request.
     pub request_id: String,
-    /// Human-readable summary (the tool call's title, when present).
-    pub summary: String,
-    /// Rendered diff for the tool call, if it carries one.
-    pub diff: Option<String>,
     /// The verbatim tool-call payload from the upstream `request_permission`.
     /// The down-facing `SessionAgent` re-issues it to its manager unchanged.
     pub tool_call: ToolCallUpdate,
@@ -377,18 +371,6 @@ async fn drive(
                 let perm_tx = handler_perm_tx.clone();
                 async move {
                     let request_id = uuid::Uuid::new_v4().to_string();
-                    let summary = request
-                        .tool_call
-                        .fields
-                        .title
-                        .clone()
-                        .unwrap_or_else(|| "permission requested".to_string());
-                    let diff = request
-                        .tool_call
-                        .fields
-                        .content
-                        .as_deref()
-                        .and_then(render_diff);
 
                     // Exactly one resolver per request: the oneshot sender carried
                     // by the emitted `PendingPermission`. The parked task below
@@ -404,8 +386,6 @@ async fn drive(
                     let options = request.options.clone();
                     let pending_item = PendingPermission {
                         request_id,
-                        summary,
-                        diff,
                         tool_call: request.tool_call,
                         options: request.options,
                         resolver: item_tx,
@@ -659,7 +639,7 @@ mod tests {
 
         // Receive the pending permission and DROP it without resolving.
         let pending = perms.next().await.expect("permission request");
-        assert_eq!(pending.summary, "do thing");
+        assert_eq!(pending.tool_call.fields.title.as_deref(), Some("do thing"));
         drop(pending);
 
         // The echoed update proves the client answered with the reject option.

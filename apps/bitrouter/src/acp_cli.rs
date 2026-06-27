@@ -43,6 +43,7 @@ use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
+use bitrouter_substrate::telemetry::RequestCompleted;
 use bitrouter_substrate::translate::SessionUpdateKind;
 
 // ── NDJSON helpers ────────────────────────────────────────────────────────────
@@ -84,11 +85,21 @@ where
 pub async fn serve(config: Config, agent_id: &str, worktree: Option<&str>) -> Result<()> {
     let catalog = catalog_from_config(&config)?;
     let base_repo = std::env::current_dir().context("resolving current directory")?;
-    let session = Arc::new(
+    let session =
         bitrouter_substrate::engine::Session::launch(&catalog, agent_id, base_repo, worktree)
             .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))?,
-    );
+            .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    // Take the telemetry receiver BEFORE wrapping in Arc so we don't need &mut
+    // through the shared reference. Drain-and-log to stderr; tracing already
+    // goes to stderr for both acp modes so stdout (ACP JSON-RPC) stays clean.
+    if let Some(mut rx) = session.telemetry() {
+        tokio::spawn(async move {
+            while let Some(r) = rx.recv().await {
+                drain_telemetry_record(r);
+            }
+        });
+    }
+    let session = Arc::new(session);
     bitrouter_substrate::down::serve(session)
         .await
         .map_err(|e| anyhow::anyhow!("acp serve: {e}"))
@@ -123,6 +134,16 @@ where
         bitrouter_substrate::engine::Session::launch(&catalog, agent_id, base_repo, worktree)
             .await
             .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    // Drain telemetry records to stderr (tracing → stderr) so stdout stays clean
+    // (NDJSON output). The task ends naturally when the session/pipeline drops,
+    // closing the sender and causing `recv()` to return `None`.
+    if let Some(mut rx) = session.telemetry() {
+        tokio::spawn(async move {
+            while let Some(r) = rx.recv().await {
+                drain_telemetry_record(r);
+            }
+        });
+    }
 
     if no_wait {
         // v1 no-wait: emit ack, then shut down immediately. The agent child is
@@ -201,6 +222,17 @@ where
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+/// Emit one telemetry record to stderr via tracing. Stdout must stay clean
+/// (ACP JSON-RPC for `serve`, NDJSON for `prompt`), so telemetry goes to
+/// `tracing::info!` which the acp CLI routes to stderr.
+fn drain_telemetry_record(r: RequestCompleted) {
+    tracing::info!(
+        agent = %r.agent,
+        stop_reason = %r.stop_reason,
+        "acp turn completed"
+    );
+}
 
 /// Build a [`ConfigAcpRoutingTable`] from the `agents` section of `config`.
 fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTable> {
