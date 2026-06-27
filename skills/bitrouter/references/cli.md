@@ -79,12 +79,6 @@ Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter
 | `bitrouter cloud byok list/set/delete` | BYOK provider keys. `set` takes already-sealed ciphertext (`--ciphertext-b64` + `--kek-id` matching the cloud's current X25519 public key). Scope: `byok:read` / `byok:write`. |
 | `bitrouter cloud oauth-client list/register/update/delete` | Registered OAuth clients on the account. Confidential clients return `client_secret` exactly once at `register`. Scope: `clients:read` / `clients:write` (opt-in via `--scope`). |
 
-## ACP bridge
-
-| Command | Effect |
-|---|---|
-| `bitrouter agent-proxy <agent> [--config PATH]` | Stdio bridge between an ACP-aware editor and an upstream agent declared under `agents:`. Editor spawns this binary as a subprocess. Routes JSON-RPC newline-framed over stdio. |
-
 ## Unimplemented in v1.0
 
 These print `not implemented in v1.0` today and are unlikely to land in the proxy binary:

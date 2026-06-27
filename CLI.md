@@ -167,14 +167,6 @@ bitrouter agents install claude-code
 
 Prints a YAML stub for the named catalog agent. Paste the output under `agents:` in `bitrouter.yaml`.
 
-### `bitrouter agent-proxy <id>`
-
-```
-bitrouter agent-proxy claude-code [-c <path>]
-```
-
-Stdio bridge between an ACP-aware editor and a configured upstream agent. The editor spawns this as a child process; `agent-proxy` routes JSON-RPC over the `acp` pipeline and relays notifications back.
-
 ### `bitrouter spawn`
 
 ```

@@ -3,7 +3,7 @@
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `route` / `init` / `key sign` / `models` / `tools` /
 //! `policy create` / `providers (list|login|logout)` / `agents` /
-//! `agent-proxy` / `spawn` / `cloud` / `skills`. Cloud-account sign-in lives under
+//! `spawn` / `cloud` / `skills`. Cloud-account sign-in lives under
 //! `cloud (login|logout|whoami)`; per-provider credentials under
 //! `providers (login|logout)`. Daemon control runs over a local IPC endpoint
 //! (a Unix domain socket, or a Windows named pipe) — `start` spawns `serve`
@@ -178,25 +178,10 @@ enum Command {
     // match arm in `run` when wiring OWS in.
     // Wallet,
     /// ACP agent lifecycle — list the catalog, check configured agents,
-    /// print install stubs. `bitrouter agent-proxy <id>` is the separate
-    /// stdio bridge an editor spawns.
+    /// print install stubs.
     Agents {
         #[command(subcommand)]
         action: AgentsAction,
-    },
-    /// Stdio bridge between an ACP-aware editor and a configured upstream
-    /// agent. Routes inbound JSON-RPC requests through the `acp` pipeline,
-    /// relays upstream notifications back to the editor.
-    #[command(name = "agent-proxy")]
-    AgentProxy {
-        /// Agent id (must exist under `agents:` in the config).
-        agent: String,
-        /// Path to `bitrouter.yaml`. When omitted, the binary resolves
-        /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
-        /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
-        #[arg(short, long)]
-        config: Option<PathBuf>,
     },
     /// Launch a coding-agent harness (Claude Code) as a child process with
     /// its API base URL pointed at the local BitRouter daemon — no agent
@@ -613,10 +598,6 @@ async fn run() -> Result<()> {
         Command::Policy { action } => policy(action).await,
         Command::Providers { action } => providers(action).await,
         Command::Agents { action } => agents_cmd(action).await,
-        Command::AgentProxy { agent, config } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            agent_proxy_cmd(&agent, &source).await
-        }
         Command::Spawn {
             agent,
             config,
@@ -1839,11 +1820,6 @@ async fn tools(action: ToolsAction) -> Result<()> {
             }
         }
     }
-}
-
-async fn agent_proxy_cmd(agent: &str, source: &bitrouter::paths::ConfigSource) -> Result<()> {
-    let cfg = bitrouter::paths::load_config(source).await?;
-    bitrouter::agent_proxy::run(cfg, agent).await
 }
 
 // ===== observe =====

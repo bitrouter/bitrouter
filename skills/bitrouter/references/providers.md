@@ -291,7 +291,7 @@ agents:
       args: ["-y", "@zed-industries/codex-acp@latest"]
 ```
 
-Editors spawn the bridge with `bitrouter agent-proxy <id>`. `bitrouter agents list` shows the bundled catalog (use `bitrouter agents install <id>` to print a paste-ready stub).
+`bitrouter agents list` shows the bundled catalog (use `bitrouter agents install <id>` to print a paste-ready stub); `bitrouter agents check` verifies each configured agent answers `initialize`.
 
 ## Apply changes
 
