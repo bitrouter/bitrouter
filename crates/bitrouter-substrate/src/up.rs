@@ -18,17 +18,22 @@
 //!   (summary + diff + resolver) pushed onto a `futures` mpsc, exposed by
 //!   [`UpstreamConnection::subscribe_permissions`].
 //!
-//! ## Deadlock avoidance & lock discipline
+//! ## Deadlock avoidance
 //!
 //! The command loop never blocks on a prompt turn to completion: each prompt is
 //! driven inside `connection.spawn(...)` so the loop returns to selecting on the
 //! command channel immediately (mirrors `feed.rs`). The permission handler does
 //! its parked wait + respond inside `connection.spawn(...)` too, never in the
-//! dispatch callback. The `std::sync::Mutex` guarding the pending-permission map
-//! is only ever held for the synchronous insert/remove — never across an
-//! `.await`.
+//! dispatch callback, so it never blocks the SDK's message-dispatch loop.
+//!
+//! ## Single permission resolver
+//!
+//! Each `session/request_permission` has exactly **one** resolver: the oneshot
+//! sender carried by the emitted [`PendingPermission`]. The parked handler task
+//! awaits the matching receiver and defaults to [`PermissionOutcome::Deny`] if
+//! the sender is dropped (i.e. the consumer dropped the `PendingPermission`
+//! without resolving), so the upstream never hangs.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -40,7 +45,7 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder};
 use futures::channel::{mpsc, oneshot};
-use futures::{FutureExt, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -54,12 +59,17 @@ use crate::translate::{
 /// `Lagged` skip, which [`UpstreamConnection::subscribe_updates`] filters out.
 const UPDATE_CHANNEL_CAPACITY: usize = 1024;
 
-/// Shared registry of in-flight permission requests, keyed by the id we mint.
-/// The sender resolves the parked permission handler with the caller's outcome.
-type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<PermissionOutcome>>>>;
-
 /// A permission request awaiting a decision. Carries enough context to render a
 /// prompt plus a one-shot [`resolve`](PendingPermission::resolve) to answer it.
+///
+/// There is exactly **one** resolver per request — the one carried here. A
+/// consumer that cannot answer should simply **drop** the `PendingPermission`:
+/// dropping the resolver makes the parked upstream handler respond
+/// [`PermissionOutcome::Deny`], so the upstream never hangs.
+///
+/// Unresolved permissions are otherwise reaped only when the connection tears
+/// down — ACP v1 has no per-turn-cancel cleanup for in-flight permission
+/// requests — so a consumer must always resolve or drop each `PendingPermission`.
 #[derive(Debug)]
 pub struct PendingPermission {
     /// Id we minted for this request; stable for the life of the request.
@@ -72,8 +82,9 @@ pub struct PendingPermission {
 }
 
 impl PendingPermission {
-    /// Answer this permission request. Consumes the pending item; a dropped
-    /// [`PendingPermission`] defaults to [`PermissionOutcome::Deny`] upstream.
+    /// Answer this permission request. Consumes the pending item; if the
+    /// `PendingPermission` is instead **dropped** without calling this, the
+    /// upstream handler defaults the response to [`PermissionOutcome::Deny`].
     pub fn resolve(self, outcome: PermissionOutcome) {
         let _ = self.resolver.send(outcome);
     }
@@ -88,11 +99,6 @@ enum Command {
     },
     /// Send a `session/cancel` notification for `session_id`.
     Cancel { session_id: String },
-    /// A caller-side resolution for a pending permission request.
-    ResolvePermission {
-        request_id: String,
-        outcome: PermissionOutcome,
-    },
 }
 
 /// What the handshake reports back to [`UpstreamConnection::spawn`] before the
@@ -194,6 +200,13 @@ impl UpstreamConnection {
 
     /// Subscribe to the stream of translated `session/update` notifications.
     /// Each call yields an independent stream from the current point onward.
+    ///
+    /// **Lossy under lag.** Updates ride a bounded `tokio` broadcast: a
+    /// subscriber that falls more than [`UPDATE_CHANNEL_CAPACITY`] messages
+    /// behind silently skips the dropped chunks (the broadcast's `Lagged` marker
+    /// is filtered out, not surfaced as an error). A consumer that needs a
+    /// complete transcript must subscribe immediately after
+    /// [`spawn`](Self::spawn) and keep up with the stream.
     pub fn subscribe_updates(
         &self,
     ) -> std::pin::Pin<Box<dyn Stream<Item = SessionUpdateKind> + Send>> {
@@ -252,16 +265,6 @@ impl UpstreamConnection {
             })
             .map_err(|_| anyhow::anyhow!("upstream command loop closed"))
     }
-
-    /// Resolve a pending permission request by id with the caller's outcome.
-    /// Used when a consumer answers via the connection rather than holding the
-    /// [`PendingPermission`] directly.
-    pub fn resolve_permission(&self, request_id: &str, outcome: PermissionOutcome) {
-        let _ = self.cmd_tx.unbounded_send(Command::ResolvePermission {
-            request_id: request_id.to_string(),
-            outcome,
-        });
-    }
 }
 
 /// Build the ACP client, perform the handshake (reporting it back over
@@ -274,11 +277,8 @@ async fn drive(
     perm_tx: mpsc::UnboundedSender<PendingPermission>,
     handshake_tx: oneshot::Sender<anyhow::Result<Handshake>>,
 ) {
-    let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
-
     let notif_updates = updates_tx.clone();
     let handler_perm_tx = perm_tx.clone();
-    let handler_pending = pending.clone();
 
     // The handshake oneshot is consumed exactly once. The `connect_with`
     // closure reports `Ok` on success then enters the command loop; if the
@@ -309,7 +309,6 @@ async fn drive(
                   responder: Responder<RequestPermissionResponse>,
                   connection: ConnectionTo<Agent>| {
                 let perm_tx = handler_perm_tx.clone();
-                let pending = handler_pending.clone();
                 async move {
                     let request_id = uuid::Uuid::new_v4().to_string();
                     let summary = request
@@ -325,61 +324,33 @@ async fn drive(
                         .as_deref()
                         .and_then(render_diff);
 
-                    // Register the resolver BEFORE emitting the item so a fast
-                    // resolve can never race ahead of the insert.
-                    let (tx, rx) = oneshot::channel::<PermissionOutcome>();
-                    {
-                        // Lock held only for the insert — never across an await.
-                        let mut guard = match pending.lock() {
-                            Ok(g) => g,
-                            Err(p) => p.into_inner(),
-                        };
-                        guard.insert(request_id.clone(), tx);
-                    }
-
+                    // Exactly one resolver per request: the oneshot sender carried
+                    // by the emitted `PendingPermission`. The parked task below
+                    // awaits its receiver; if the consumer drops the
+                    // `PendingPermission` without resolving, the sender drops and
+                    // the receiver yields `Err`, which we map to `Deny`.
                     let (item_tx, item_rx) = oneshot::channel::<PermissionOutcome>();
                     let pending_item = PendingPermission {
-                        request_id: request_id.clone(),
+                        request_id,
                         summary,
                         diff,
                         resolver: item_tx,
                     };
                     // If no one is listening on the permissions stream the item
-                    // is dropped and `item_rx` resolves to `Cancelled`/`Deny`.
+                    // is dropped immediately and `item_rx` resolves to `Deny`.
                     let _ = perm_tx.unbounded_send(pending_item);
 
                     // Park the wait + respond OUTSIDE the dispatch loop so other
                     // messages keep flowing while the decision is pending.
                     let options = request.options.clone();
-                    let cleanup_id = request_id.clone();
-                    let cleanup_pending = pending.clone();
-                    if let Err(e) = connection.spawn(async move {
-                        // Resolve from EITHER the held `PendingPermission`
-                        // (`item_rx`) OR the by-id channel (`rx`). Default to
-                        // Deny if both senders drop.
-                        let outcome = futures::select! {
-                            o = item_rx.fuse() => o.unwrap_or(PermissionOutcome::Deny),
-                            o = rx.fuse() => o.unwrap_or(PermissionOutcome::Deny),
-                        };
-                        {
-                            let mut guard = match cleanup_pending.lock() {
-                                Ok(g) => g,
-                                Err(p) => p.into_inner(),
-                            };
-                            guard.remove(&cleanup_id);
-                        }
+                    connection.spawn(async move {
+                        // Default to Deny if the resolver is dropped (the consumer
+                        // dropped the `PendingPermission`) so the upstream never
+                        // hangs waiting on this permission request.
+                        let outcome = item_rx.await.unwrap_or(PermissionOutcome::Deny);
                         let outcome = select_option(outcome, &options);
                         responder.respond(RequestPermissionResponse::new(outcome))
-                    }) {
-                        // Spawn failed: drop the resolver we inserted so the map
-                        // does not leak an entry that can never be fulfilled.
-                        let mut guard = match pending.lock() {
-                            Ok(g) => g,
-                            Err(p) => p.into_inner(),
-                        };
-                        guard.remove(&request_id);
-                        return Err(e);
-                    }
+                    })?;
                     Ok(())
                 }
             },
@@ -418,7 +389,8 @@ async fn drive(
 
             // ── Command loop ───────────────────────────────────────────────
             // Never blocks on a prompt turn: each prompt runs in its own task so
-            // the loop stays responsive to `ResolvePermission` mid-turn.
+            // the loop stays responsive while a turn (and its mid-turn permission
+            // requests) is in flight.
             while let Some(cmd) = cmd_rx.next().await {
                 match cmd {
                     Command::Prompt { req, reply } => {
@@ -439,21 +411,6 @@ async fn drive(
                     Command::Cancel { session_id } => {
                         let _ = connection
                             .send_notification(CancelNotification::new(SessionId::new(session_id)));
-                    }
-                    Command::ResolvePermission {
-                        request_id,
-                        outcome,
-                    } => {
-                        let sender = {
-                            let mut guard = match pending.lock() {
-                                Ok(g) => g,
-                                Err(p) => p.into_inner(),
-                            };
-                            guard.remove(&request_id)
-                        };
-                        if let Some(sender) = sender {
-                            let _ = sender.send(outcome);
-                        }
                     }
                 }
             }
@@ -503,5 +460,70 @@ mod tests {
         assert!(format!("{resp:?}").contains("EndTurn"));
         let ev = updates.next().await.expect("update");
         assert!(format!("{ev:?}").contains("hi"), "unexpected: {ev:?}");
+    }
+
+    /// Safety invariant: dropping a [`PendingPermission`] without resolving it
+    /// must make the upstream handler answer `Deny`, so the agent never hangs.
+    ///
+    /// The stub sends a `session/request_permission` whose only option is a
+    /// `reject_once` kind (id `rej`). The test subscribes to permissions,
+    /// receives the [`PendingPermission`], and **drops** it. `select_option`
+    /// maps the defaulted `Deny` onto the `reject_once` option, so the client's
+    /// response selects `rej`. The stub reads that response line, echoes the
+    /// chosen optionId back as a `session/update`, and completes the prompt; the
+    /// test asserts the echoed id is `rej`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_pending_permission_defaults_to_deny() {
+        let script = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*)
+                    # Ask for permission; the only option is a reject_once kind.
+                    printf '{"jsonrpc":"2.0","id":"99","method":"session/request_permission","params":{"sessionId":"u1","toolCall":{"toolCallId":"tc1","title":"do thing"},"options":[{"optionId":"rej","name":"Reject","kind":"reject_once"}]}}\n'
+                    # Read the client's permission response and echo its optionId.
+                    read resp
+                    chosen=$(echo "$resp" | sed -n 's/.*"optionId":"\([^"]*\)".*/\1/p')
+                    printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"chose:%s"}}}}\n' "$chosen"
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+        let conn = UpstreamConnection::spawn("bash", &["-c".into(), script.into()], None)
+            .await
+            .expect("spawn");
+        let usid = conn.acp_session_id().to_string();
+        let mut updates = conn.subscribe_updates();
+        let mut perms = conn.subscribe_permissions();
+
+        // Drive the prompt concurrently; it completes only after the permission
+        // round-trip finishes.
+        let prompt = tokio::spawn(async move { conn.prompt(&usid, "do X").await });
+
+        // Receive the pending permission and DROP it without resolving.
+        let pending = perms.next().await.expect("permission request");
+        assert_eq!(pending.summary, "do thing");
+        drop(pending);
+
+        // The echoed update proves the client answered with the reject option.
+        let mut saw_reject = false;
+        for _ in 0..4 {
+            if let Some(ev) = updates.next().await {
+                if format!("{ev:?}").contains("chose:rej") {
+                    saw_reject = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            saw_reject,
+            "dropped permission did not default to Deny/reject"
+        );
+
+        let resp = prompt.await.expect("join").expect("prompt");
+        assert!(format!("{resp:?}").contains("EndTurn"));
     }
 }
